@@ -6,6 +6,7 @@ import {
   fetchWatchlistEntries,
   fetchWatchlistMatches,
   promoteWatchlistDestinations,
+  setWatchlistEnabled,
   setWatchlistObserving,
   updateWatchlistEntry,
   type WatchlistEntryRequest,
@@ -73,6 +74,17 @@ class WatchlistState {
 
   async setObserving(id: string, observing: boolean): Promise<string | null> {
     const result = await setWatchlistObserving(id, observing)
+    if (typeof result === 'string') return result
+    await this.refresh()
+    return null
+  }
+
+  // Pause/resume (#676's ratified "pause watch"/"resume watch"): the
+  // same enabled flag the broken-ring predicate and stateLabel already
+  // read, flipped from the drawer rather than only from the add/edit
+  // form (which never exposed a plain toggle for it).
+  async setEnabled(id: string, enabled: boolean): Promise<string | null> {
+    const result = await setWatchlistEnabled(id, enabled)
     if (typeof result === 'string') return result
     await this.refresh()
     return null

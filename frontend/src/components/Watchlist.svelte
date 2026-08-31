@@ -20,12 +20,24 @@
   // need no gate of their own, the same argument the tab comment makes.
   // The owner-level neighbours it used to sit beside, Audit and
   // Exclusions, stay admin.
+  //
+  // The "Watchlist" tab panel below carries two surfaces (#676): the
+  // ratified round-29 docket table (watch · boundary · window · state ·
+  // last event, drawers with a story/verbatim line/actions) at the top,
+  // and this component's own pre-existing add/edit/invert/observe/
+  // promote workflow underneath it, headed "Manage entries." The
+  // ratified design describes only the former; #676 keeps the latter
+  // reachable rather than removing it -- see the ratified table's own
+  // script section, below, for what it could and couldn't honestly
+  // carry from today's data.
   import { onMount, tick } from 'svelte'
+  import { appState } from '../lib/state.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { suggestState } from '../lib/suggest.svelte'
   import { matchesState } from '../lib/matches.svelte'
-  import { compareText, matchesFilter } from '../lib/sortFilter'
+  import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
+  import { formatRelative } from '../lib/format'
   import TabList from './TabList.svelte'
   import Suggestions from './Suggestions.svelte'
   import MatchesTab from './MatchesTab.svelte'
@@ -34,6 +46,12 @@
   onMount(() => {
     watchlistState.refresh()
     suggestState.refresh()
+    // The ratified table's "last event" column and drawer (#676) read
+    // matchesState's own bulk feed (GET /api/matches?entries=all) --
+    // the same one the Matches tab already loads on arrival there. Loaded
+    // here too so the column and drawer have an answer without requiring
+    // a detour through that tab first.
+    matchesState.load()
   })
 
   // Suggestions is a tab of Watchlist (#547) and Matches is a third
@@ -354,6 +372,211 @@
     })
     return list
   })
+
+  // --- The ratified table (#676, round 29's "watch · boundary · window
+  // · state · last event") ---------------------------------------------
+  //
+  // This is a second read of the same entries the card list above
+  // manages -- the round-29 docket scene's own surface, not a
+  // replacement for it. Add/edit/remove and the invert/observe/promote
+  // workflow (the "Manage entries" section below) are a different, real
+  // feature the ratified design doesn't describe; #676 leaves it
+  // reachable rather than folding or deleting it. See this component's
+  // own module comment and the issue for the full account.
+  //
+  // "window" has no answer: no watchlist entry carries a time-of-day
+  // schedule today, so every row honestly reads "always" rather than a
+  // fabricated range. The seven-night strip the record also shows is
+  // not built for the same reason, one level deeper -- matchlog
+  // collapses repeats of the same (entry, destination, port) into one
+  // record spanning firstSeen..lastSeen (see internal/matchlog's own
+  // doc comment), so there is no per-night presence/absence to read
+  // back, only "it matched somewhere in this span." Answering "five
+  // kept nights, two empty" honestly would need a new persisted nightly
+  // counter (and a schedule to call "night" against), which is a data
+  // model decision, not a rendering one -- reported on #676 rather than
+  // invented here. Likewise "mend — widen window" has nothing to widen
+  // without a window, so it is not offered.
+
+  // Most recent match for one entry, from matchesState's own bulk
+  // "recent across every entry" feed (loaded in onMount above) --
+  // avoids an N+1 fetch per row for a table this is meant to render
+  // plainly. Only the newest MATCHES_PAGE_SIZE (100) matches network-wide
+  // are held, so a genuinely stale entry can read "—" even though older
+  // matches exist further back than this page reaches; honest given
+  // what's loaded, not a claim the entry has never matched.
+  function lastMatchFor(entryId: string): WatchlistMatch | undefined {
+    let best: WatchlistMatch | undefined
+    for (const m of matchesState.records) {
+      if (m.entryId !== entryId) continue
+      if (!best || new Date(m.lastSeen) > new Date(best.lastSeen)) best = m
+    }
+    return best
+  }
+
+  // The ratified vocabulary (◉ watching / ○ ring broken), grounded in
+  // what this entry can actually be said about today -- enabled and
+  // coverage, the same two facts stateLabel() above already reads. The
+  // reason text for a broken ring is the truth mikroview has (no rule is
+  // logging this pathway), not the record's own window-silence wording,
+  // which requires a schedule this entry doesn't have.
+  function watchState(e: WatchlistEntry): { glyph: string; text: string; broken: boolean } {
+    if (!e.enabled) return { glyph: '○', text: 'paused', broken: false }
+    if (watchlistState.coverage[e.id] === 'no-logging') {
+      return { glyph: '○', text: 'ring broken — no logging visible', broken: true }
+    }
+    return { glyph: '◉', text: 'watching', broken: false }
+  }
+
+  function boundaryLabel(e: WatchlistEntry): string {
+    const dest = e.destIp ? e.destIp : e.invert ? 'its observed destinations' : 'any destination'
+    return `${sourceLabel(e)} → ${dest}`
+  }
+
+  // The drawer's standalone headline plus the rest of the paragraph
+  // (round 29's own idiom) -- composed from real facts only: enabled,
+  // coverage, and the most recent match this page has loaded. No
+  // invented specifics ("inside the window," "usual size") that would
+  // need the window/schedule concept this entry doesn't carry.
+  function watchStory(e: WatchlistEntry, lastMatch: WatchlistMatch | undefined): { headline: string; body: string } {
+    if (!e.enabled) {
+      return {
+        headline: 'Paused.',
+        body: `This watch is turned off, so mikroview is not recording anything for ${sourceLabel(e)} right now.`,
+      }
+    }
+    if (watchlistState.coverage[e.id] === 'no-logging') {
+      return {
+        headline: 'The ring is broken.',
+        body: 'No firewall rule mikroview can see is logging this pathway, so nothing here can be recorded until a rule that covers it turns logging on.',
+      }
+    }
+    if (lastMatch) {
+      return {
+        headline: 'Watching.',
+        body: `${sourceLabel(e)} last matched ${formatRelative(lastMatch.lastSeen, appState.now)}, reaching ${lastMatch.tuple.destIp}:${lastMatch.tuple.port}.`,
+      }
+    }
+    return {
+      headline: 'Watching.',
+      body: `${sourceLabel(e)} is being watched. Nothing has matched in the recent log yet.`,
+    }
+  }
+
+  let watchDrawerId: string | null = $state(null)
+  let pausingId = $state<string | null>(null)
+  let wtError = $state<string | null>(null)
+
+  function toggleWatchDrawer(id: string) {
+    watchDrawerId = watchDrawerId === id ? null : id
+  }
+
+  // "pause watch" / "resume watch" (#676): the plain enable toggle the
+  // add/edit form never exposed on its own -- see
+  // watchlistState.setEnabled's own doc comment for why this is the
+  // generic definition PUT rather than a new route.
+  async function togglePause(e: WatchlistEntry) {
+    wtError = null
+    pausingId = e.id
+    try {
+      const err = await watchlistState.setEnabled(e.id, !e.enabled)
+      if (err) wtError = err
+    } finally {
+      pausingId = null
+    }
+  }
+
+  // "open in stream ▸" (#676): same filter-to-live pattern Flags.svelte's
+  // filterToTarget uses -- only offered for a scoped entry (a mac or ip
+  // to filter on), same reason isFilterable() gates Flags' own version.
+  function openWatchInStream(e: WatchlistEntry) {
+    const q = e.source?.mac || e.source?.ip
+    if (!q) return
+    appState.setFilter('srcQuery', q)
+    appState.view = 'live'
+  }
+
+  type WatchTableSortKey = 'watch' | 'boundary' | 'window' | 'state' | 'lastEvent'
+  let wtSortKey = $state<WatchTableSortKey>('watch')
+  let wtSortDir = $state<SortDir>('asc')
+  let wtFilters = $state({ watch: '', boundary: '', window: '', state: '', lastEvent: '' })
+
+  function wtToggleSort(key: WatchTableSortKey) {
+    if (wtSortKey === key) {
+      wtSortDir = wtSortDir === 'asc' ? 'desc' : 'asc'
+    } else {
+      wtSortKey = key
+      wtSortDir = 'asc'
+    }
+  }
+
+  function wtDirGlyph(key: WatchTableSortKey): string {
+    if (wtSortKey !== key) return ''
+    return wtSortDir === 'asc' ? '▲' : '▼'
+  }
+
+  type WatchRow = {
+    entry: WatchlistEntry
+    boundary: string
+    window: string
+    stateGlyph: string
+    stateText: string
+    broken: boolean
+    lastMatch: WatchlistMatch | undefined
+    lastEventLabel: string
+  }
+
+  const watchRows = $derived.by((): WatchRow[] =>
+    watchlistState.entries.map((e) => {
+      const lastMatch = lastMatchFor(e.id)
+      const st = watchState(e)
+      return {
+        entry: e,
+        boundary: boundaryLabel(e),
+        // No entry carries a schedule today -- see the section comment
+        // above for why this is an honest constant, not a placeholder.
+        window: 'always',
+        stateGlyph: st.glyph,
+        stateText: st.text,
+        broken: st.broken,
+        lastMatch,
+        lastEventLabel: lastMatch ? formatRelative(lastMatch.lastSeen, appState.now) : '—',
+      }
+    }),
+  )
+
+  const filteredWatchRows = $derived(
+    watchRows.filter(
+      (r) =>
+        matchesFilter(r.entry.name || '(unnamed)', wtFilters.watch) &&
+        matchesFilter(r.boundary, wtFilters.boundary) &&
+        matchesFilter(r.window, wtFilters.window) &&
+        matchesFilter(r.stateText, wtFilters.state) &&
+        matchesFilter(r.lastEventLabel, wtFilters.lastEvent),
+    ),
+  )
+
+  const sortedWatchRows = $derived.by((): WatchRow[] => {
+    const list = [...filteredWatchRows]
+    list.sort((a, b) => {
+      switch (wtSortKey) {
+        case 'watch':
+          return compareText(a.entry.name || '(unnamed)', b.entry.name || '(unnamed)', wtSortDir)
+        case 'boundary':
+          return compareText(a.boundary, b.boundary, wtSortDir)
+        case 'window':
+          return compareText(a.window, b.window, wtSortDir)
+        case 'state':
+          return compareText(a.stateText, b.stateText, wtSortDir)
+        case 'lastEvent': {
+          const ta = a.lastMatch ? new Date(a.lastMatch.lastSeen).getTime() : 0
+          const tb = b.lastMatch ? new Date(b.lastMatch.lastSeen).getTime() : 0
+          return compareNumeric(ta, tb, wtSortDir)
+        }
+      }
+    })
+    return list
+  })
 </script>
 
 <div class="watchlist-page">
@@ -366,6 +589,121 @@
     tabindex="0"
     hidden={activeTab !== 'watchlist'}
   >
+  <!-- The ratified table (#676, round 29's docket scene: watch ·
+       boundary · window · state · last event, rows opening as drawers
+       like the flags tab). Reads the same entries the "Manage entries"
+       section below edits -- see the script's own section comment for
+       what "window" and the seven-night strip could not honestly carry,
+       and why. -->
+  <section class="section watch-table-section" aria-labelledby="watch-heading">
+    <h3 id="watch-heading" class="section-title">Watches</h3>
+    {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
+    {#if watchlistState.entries.length === 0}
+      <p class="empty">No watches yet -- add one below.</p>
+    {:else}
+      <div class="sortbar" role="row">
+        <button class="sorth" class:on={wtSortKey === 'watch'} onclick={() => wtToggleSort('watch')}>
+          watch <span class="dir">{wtDirGlyph('watch')}</span>
+        </button>
+        <button class="sorth" class:on={wtSortKey === 'boundary'} onclick={() => wtToggleSort('boundary')}>
+          boundary <span class="dir">{wtDirGlyph('boundary')}</span>
+        </button>
+        <button class="sorth" class:on={wtSortKey === 'window'} onclick={() => wtToggleSort('window')}>
+          window <span class="dir">{wtDirGlyph('window')}</span>
+        </button>
+        <button class="sorth" class:on={wtSortKey === 'state'} onclick={() => wtToggleSort('state')}>
+          state <span class="dir">{wtDirGlyph('state')}</span>
+        </button>
+        <button class="sorth" class:on={wtSortKey === 'lastEvent'} onclick={() => wtToggleSort('lastEvent')}>
+          last event <span class="dir">{wtDirGlyph('lastEvent')}</span>
+        </button>
+      </div>
+      <div class="filterbar" role="row">
+        <input bind:value={wtFilters.watch} placeholder="filter watch…" aria-label="Filter watches by watch name" />
+        <input bind:value={wtFilters.boundary} placeholder="filter boundary…" aria-label="Filter watches by boundary" />
+        <input bind:value={wtFilters.window} placeholder="filter window…" aria-label="Filter watches by window" />
+        <input bind:value={wtFilters.state} placeholder="filter state…" aria-label="Filter watches by state" />
+        <input
+          bind:value={wtFilters.lastEvent}
+          placeholder="filter last event…"
+          aria-label="Filter watches by last event"
+        />
+      </div>
+      {#if sortedWatchRows.length === 0}
+        <p class="empty">No watches match these filters.</p>
+      {:else}
+        <table class="watch-table">
+          <thead>
+            <tr>
+              <th>watch</th>
+              <th>boundary</th>
+              <th>window</th>
+              <th>state</th>
+              <th>last event</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each sortedWatchRows as row (row.entry.id)}
+              {@const story = watchStory(row.entry, row.lastMatch)}
+              <tr
+                class="wt-row"
+                class:watching={!row.broken && row.entry.enabled}
+                class:ring-broken={row.broken}
+                onclick={() => toggleWatchDrawer(row.entry.id)}
+              >
+                <td class="k">{row.entry.name || '(unnamed)'}</td>
+                <td>{row.boundary}</td>
+                <td class="t">{row.window}</td>
+                <td><span class="wchip2" class:broken={row.broken}>{row.stateGlyph} {row.stateText}</span></td>
+                <td class="t">{row.lastEventLabel}</td>
+                <td>
+                  <button
+                    class="openc"
+                    aria-expanded={watchDrawerId === row.entry.id}
+                    aria-label="{watchDrawerId === row.entry.id ? 'Close' : 'Open'} the drawer for {row.entry.name ||
+                      'this watch'}"
+                    onclick={(ev) => {
+                      ev.stopPropagation()
+                      toggleWatchDrawer(row.entry.id)
+                    }}
+                  >
+                    ▸
+                  </button>
+                </td>
+              </tr>
+              {#if watchDrawerId === row.entry.id}
+                <tr class="wt-drawer" class:ring-broken={row.broken}>
+                  <td colspan="6">
+                    <div class="dwr">
+                      <div class="dcol">
+                        <p class="story"><b>{story.headline}</b> {story.body}</p>
+                        <div class="lines">{row.lastMatch ? row.lastMatch.event.raw : 'No matching line in the recent log.'}</div>
+                      </div>
+                      <div class="side">
+                        <span class="lab">the pathway</span>
+                        <p class="ep-note">{detailLabel(row.entry)}</p>
+                      </div>
+                      <div class="dwr-acts">
+                        <button class="act" disabled={pausingId === row.entry.id} onclick={() => togglePause(row.entry)}>
+                          {pausingId === row.entry.id ? 'Saving…' : row.entry.enabled ? 'pause watch' : 'resume watch'}
+                        </button>
+                        {#if row.entry.source?.mac || row.entry.source?.ip}
+                          <button class="act quiet" onclick={() => openWatchInStream(row.entry)}>open in stream ▸</button>
+                        {/if}
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              {/if}
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+    {/if}
+  </section>
+
+  <h3 class="section-title manage-heading">Manage entries</h3>
   <p class="intro">
     Watch attempts against specific ports (<strong>record</strong>), or flip an
     entry around to watch what one device does (<strong>invert</strong>): "this device should only ever reach X" --
@@ -435,7 +773,7 @@
     </div>
   </form>
 
-  <section class="section">
+  <section class="section" id="entries-section">
     <h3 class="section-title">Entries</h3>
     {#if watchlistState.entries.length === 0}
       <p class="empty">No watchlist entries yet -- add one above.</p>
@@ -1052,5 +1390,209 @@
   .dest-meta {
     color: var(--fg-dim);
     flex: 1 1 auto;
+  }
+
+  /* The ratified table (#676, round 29): watch · boundary · window ·
+     state · last event. The drawer reuses Flags.svelte's own class
+     names for the parts they share (.dwr/.dcol/.side/.lab/.lines/
+     .dwr-acts/.act) -- scoped separately per component the same way
+     .card/.sortbar/.filterbar already are across this file and that
+     one -- plus .story for the standalone headline the round-29 record
+     adds, which Flags' own drawer doesn't carry. */
+  .watch-table-section {
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .manage-heading {
+    margin-top: 2px;
+  }
+
+  .watch-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .watch-table th,
+  .watch-table td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .watch-table thead th {
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .watch-table td.k {
+    color: var(--fg);
+  }
+
+  .watch-table td.t {
+    color: var(--fg-dim);
+  }
+
+  .wt-row {
+    cursor: pointer;
+  }
+
+  .wt-row:hover td {
+    background: var(--bg-hover);
+  }
+
+  /* Same stripe idiom the "Manage entries" card list gives its own
+     rows below (.card.watching/.card.ring-broken): the watchers'
+     purple for a healthy watch, the alarm ink where the ring is
+     broken, nothing for a paused one. */
+  .wt-row.watching td:first-child {
+    box-shadow: inset 3px 0 0 var(--marked);
+  }
+
+  .wt-row.ring-broken td:first-child {
+    box-shadow: inset 3px 0 0 var(--alarm);
+  }
+
+  .wt-drawer td {
+    padding: 0 12px 14px;
+  }
+
+  .wt-drawer.ring-broken td {
+    box-shadow: inset 3px 0 0 var(--alarm);
+  }
+
+  .wchip2 {
+    font: 600 10.5px var(--font-mono);
+    color: var(--marked);
+    border: 1px solid color-mix(in srgb, var(--marked) 40%, transparent);
+    background: color-mix(in srgb, var(--marked) 10%, transparent);
+    border-radius: 9px;
+    padding: 1px 10px;
+    white-space: nowrap;
+  }
+
+  .wchip2.broken {
+    color: var(--alarm);
+    border-color: color-mix(in srgb, var(--alarm) 45%, transparent);
+    background: color-mix(in srgb, var(--alarm) 10%, transparent);
+  }
+
+  .openc {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    font-size: 13px;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: transform 0.2s;
+  }
+
+  .openc[aria-expanded='true'] {
+    transform: rotate(90deg);
+  }
+
+  /* The drawer (round 29, same grammar as Flags.svelte's): the story
+     and the verbatim last-matching line on the left, one labelled
+     detail panel on the right (the pathway, in place of the seven-night
+     strip the record shows -- see the script's own comment for why),
+     actions across the foot. */
+  .dwr {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    gap: 10px 32px;
+    padding: 10px 0 4px;
+  }
+
+  .dwr .dcol {
+    grid-column: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .dwr .story {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    line-height: 1.55;
+  }
+
+  .dwr .story b {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .dwr .lines {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .dwr .side {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    min-width: 0;
+  }
+
+  .dwr .side .lab {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .dwr .side .ep-note {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--fg-muted);
+  }
+
+  .dwr .dwr-acts {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .dwr .act {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 16px;
+    cursor: pointer;
+  }
+
+  .dwr .act:hover {
+    border-color: var(--accent);
+  }
+
+  .dwr .act.quiet {
+    color: var(--fg-dim);
+  }
+
+  .dwr .act:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .openc {
+      transition: none;
+    }
   }
 </style>
