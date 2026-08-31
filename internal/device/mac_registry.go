@@ -23,6 +23,15 @@ type MACEntry struct {
 	MAC       string    `json:"mac"`
 	FirstSeen time.Time `json:"firstSeen"`
 	LastSeen  time.Time `json:"lastSeen"`
+	// LastIP is the source IP this MAC was last paired with on an event
+	// (issue #675) -- an observation, not an identity: DHCP can hand the
+	// same MAC a different address later, so this is "where to find it
+	// now," not a claim the pairing is permanent. Set by NoteIP, entirely
+	// separate from Seen's first/last-seen bookkeeping so a caller that
+	// only wants "is this MAC new" is unaffected by whether IP pairing is
+	// tracked at all. Empty until the first event carrying both a MAC and
+	// an IP arrives for it.
+	LastIP string `json:"lastIp,omitempty"`
 }
 
 // maxMACRegistryEntries bounds the registry the same way every other
@@ -177,6 +186,32 @@ func (r *MACRegistry) Seen(mac string, now time.Time) bool {
 	r.pruneLocked()
 	r.persistLocked()
 	return isNew
+}
+
+// NoteIP records that mac was last paired with ip (issue #675: the
+// Entities page's named-things table needs a way to show a host's MAC
+// and its persisted first/last-seen history side by side with the
+// entity, which is keyed on IP, not MAC). A no-op unless the registry
+// already holds mac -- Seen always runs first at every call site this
+// has today, so an absent entry means an empty mac, and there is
+// nothing to pair an IP against. Also a no-op when ip is already the
+// stored LastIP, so a steady stream from an unmoving device doesn't
+// dirty the write-behind writer on every single packet.
+func (r *MACRegistry) NoteIP(mac, ip string) {
+	if mac == "" || ip == "" {
+		return
+	}
+	key := normalizeMAC(mac)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	e, ok := r.byMAC[key]
+	if !ok || e.LastIP == ip {
+		return
+	}
+	e.LastIP = ip
+	r.persistLocked()
 }
 
 // List returns a snapshot of every known MAC entry, most-recently-seen

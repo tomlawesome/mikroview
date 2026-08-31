@@ -36,6 +36,25 @@ rewritten.
   decision left to the issue, not invented here. "Mend — widen window"
   is withheld for the same reason: there is no window to widen.
 
+- **Entities, built to round 29's ratified scene** (#675). Router cards
+  lead the page -- one per pushing device, its live/quiet state, RouterOS
+  version, rule/zone counts, and either its current push rate or a plain
+  "quiet is a fact, not a fault" -- followed by a dashed invite card for
+  the next router, carrying the standing promise (mikroview only ever
+  receives, never connects out) behind a disclosure of the real RouterOS
+  lines to paste. Below that, one table of every named and
+  discovered-but-unnamed host -- lane, address, mac (elided; `private`
+  when none is known), first seen, last seen, and the docket's own marks
+  (new talker, watched, flagged, ring broken) -- renamed inline by
+  clicking the name (Enter saves, Esc cancels). Replaces #647's page
+  wholesale: the old add-entity form and the separate discovered-rules/
+  -ports sections are gone, since the ratified scene has exactly one
+  table and no other CRUD surface. mac/first-seen/last-seen had no
+  existing source, so `device.MACRegistry` gained `NoteIP` (pairing a
+  MAC with the IP it last answered to) and a new read route,
+  `GET /api/devices/macs`; `GET /api/devices` gained each device's
+  reported RouterOS version. Lane reuses the topography's own
+  boundary-derived zones unchanged.
 - **Per-hour top talker and top port, answered by the ring itself**
   (#644). `Store.HourTops` computes each axis minute's winning source
   and destination port from the events the ring actually holds, under
