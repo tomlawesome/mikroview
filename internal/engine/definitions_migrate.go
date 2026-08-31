@@ -673,6 +673,12 @@ var watchlistNonInvertedParamSchema = []ParamSchema{
 		Description: "Router address-list name this expectation's live address-list scoping refers to, if any."},
 	{Name: "createdAt", Type: ParamTypeStringList, Max: floatBound(1),
 		Description: "When this expectation was originally created (RFC 3339), carried over from the watchlist entry it was migrated from."},
+	{Name: "windowJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded watchlist.Window -- when this expectation is expected to see traffic (clock range, days, IANA zone). Absent means no window: watched at every hour."},
+	{Name: "nightsJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded []watchlist.Night -- the last seven occurrences of the window and what happened in each (kept, empty, not observed). Recorded rather than derived: the match log keeps 48 hours, so a healthy watch would read as empty nights if this were rebuilt from it."},
+	{Name: "ringJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded watchlist.Ring -- the recorded break in this expectation's run of kept nights, written at the moment it broke."},
 }
 
 // watchlistInvertedParamSchema is what an inverted watchlist entry ("this
@@ -703,6 +709,12 @@ var watchlistInvertedParamSchema = []ParamSchema{
 		Description: "JSON-encoded []watchlist.ObservedDest -- destinations seen during this expectation's observe period, not yet promoted or dismissed, carried over verbatim. An in-progress observation period is not reset by migration."},
 	{Name: "createdAt", Type: ParamTypeStringList, Max: floatBound(1),
 		Description: "When this expectation was originally created (RFC 3339), carried over from the watchlist entry it was migrated from."},
+	{Name: "windowJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded watchlist.Window -- when this expectation is expected to see traffic (clock range, days, IANA zone). Absent means no window: watched at every hour."},
+	{Name: "nightsJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded []watchlist.Night -- the last seven occurrences of the window and what happened in each (kept, empty, not observed). Recorded rather than derived: the match log keeps 48 hours, so a healthy watch would read as empty nights if this were rebuilt from it."},
+	{Name: "ringJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded watchlist.Ring -- the recorded break in this expectation's run of kept nights, written at the moment it broke."},
 }
 
 // convertWatchlistEntries converts every watchlist entry into an
@@ -739,7 +751,65 @@ func convertWatchlistEntry(e *watchlist.Entry) (Definition, error) {
 	return convertNonInvertedEntry(e, name)
 }
 
+// watchHistoryParams encodes the window and the nightly history an entry
+// carries (#680) into the three JSON-in-a-string params both watchlist
+// schemas above declare.
+//
+// JSON rather than structured param types for the same reason
+// permittedJSON/observedJSON are: there is no ParamType shaped like "a
+// clock range with a zone" or "a list of (instant, state, count)" (see
+// params.go's type menu). Each is omitted entirely when it holds nothing,
+// so an entry with no window adds no params at all and the stored
+// definition for every existing entry is byte-identical to what it was.
+//
+// This is a field addition inside the definitions blob, not a schema
+// change: there is no migration to run. It is not downgrade-safe, though
+// -- #404's raw-JSON preservation covers unknown definition *types*, not
+// unknown params on a known one, so an older binary that rewrote one of
+// these definitions would drop the window and the nights silently.
+// addWatchHistoryParams sets each of the three only when it holds
+// something. An absent key rather than a null value, deliberately: an
+// entry with no window then converts to exactly the definition it
+// converted to before #680, byte for byte, so the field addition costs
+// existing deployments nothing on disk and nothing in review.
+func addWatchHistoryParams(params Params, windowJSON, nightsJSON, ringJSON string) {
+	for name, value := range map[string]string{"windowJSON": windowJSON, "nightsJSON": nightsJSON, "ringJSON": ringJSON} {
+		if value != "" {
+			params[name] = []string{value}
+		}
+	}
+}
+
+func watchHistoryParams(e *watchlist.Entry) (windowJSON, nightsJSON, ringJSON string, err error) {
+	if e.Window.Defined() {
+		b, err := json.Marshal(e.Window)
+		if err != nil {
+			return "", "", "", fmt.Errorf("encoding the watch window: %w", err)
+		}
+		windowJSON = string(b)
+	}
+	if len(e.Nights) > 0 {
+		b, err := json.Marshal(e.Nights)
+		if err != nil {
+			return "", "", "", fmt.Errorf("encoding the nightly history: %w", err)
+		}
+		nightsJSON = string(b)
+	}
+	if e.Ring.Broken {
+		b, err := json.Marshal(e.Ring)
+		if err != nil {
+			return "", "", "", fmt.Errorf("encoding the ring state: %w", err)
+		}
+		ringJSON = string(b)
+	}
+	return windowJSON, nightsJSON, ringJSON, nil
+}
+
 func convertNonInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
+	windowJSON, nightsJSON, ringJSON, err := watchHistoryParams(e)
+	if err != nil {
+		return Definition{}, err
+	}
 	params := Params{
 		"ports":            e.Ports,
 		"destIp":           optionalStringList(e.DestIP),
@@ -749,6 +819,7 @@ func convertNonInvertedEntry(e *watchlist.Entry, name string) (Definition, error
 		"sourceListList":   optionalStringList(e.SourceList.List),
 		"createdAt":        optionalStringList(formatTime(e.CreatedAt)),
 	}
+	addWatchHistoryParams(params, windowJSON, nightsJSON, ringJSON)
 	normalized, err := ValidateParams(watchlistNonInvertedParamSchema, params)
 	if err != nil {
 		return Definition{}, fmt.Errorf("converting to a declarative expectation definition: %w", err)
@@ -771,6 +842,10 @@ func convertNonInvertedEntry(e *watchlist.Entry, name string) (Definition, error
 }
 
 func convertInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
+	windowJSON, nightsJSON, ringJSON, err := watchHistoryParams(e)
+	if err != nil {
+		return Definition{}, err
+	}
 	permittedJSON, err := json.Marshal(e.Permitted)
 	if err != nil {
 		return Definition{}, fmt.Errorf("encoding permitted destinations: %w", err)
@@ -789,6 +864,7 @@ func convertInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
 		"observedJSON":           []string{string(observedJSON)},
 		"createdAt":              optionalStringList(formatTime(e.CreatedAt)),
 	}
+	addWatchHistoryParams(params, windowJSON, nightsJSON, ringJSON)
 	normalized, err := ValidateParams(watchlistInvertedParamSchema, params)
 	if err != nil {
 		return Definition{}, fmt.Errorf("converting to a programmatic expectation definition: %w", err)
