@@ -1475,11 +1475,13 @@
       var nr = document.createElement('tr'), nd = document.createElement('tr');
       nr.className = 'frow fx ' + Array.prototype.filter.call(r.classList, function (c) { return /^ft-/.test(c); }).join(' ');
       nr.dataset.d = id;
-      nr.innerHTML = '<td class="fmark">' + type + '</td><td class="k">' + where + '</td><td>never again — just now, you</td><td class="num">—</td><td class="t">now</td><td class="vc"><span class="openc">▸</span></td>';
+      nr.innerHTML = '<td class="fmark"></td><td class="k">' + where + '</td><td>never again — just now, you</td><td class="num">—</td><td class="t">now</td><td class="vc"><span class="openc">▸</span></td>';
       nd.className = 'drawer fx'; nd.id = id;
       nd.innerHTML = '<td colspan="6"><div class="dwr"><div class="dwr-in"><div class="story"><b>Told never to flag this again</b> just now, by you. Nothing about the pair is counted or held now — mikroview simply does not look. The audit log has this line.</div>'
-        + '<div class="side"><span class="lab">the pair</span><ul class="seen facts"><li><span>flag</span><b>' + typeOf(r) + '</b></li><li><span>target</span><b>' + r.cells[1].textContent.trim() + '</b></li><li><span>since</span><b>13:58</b></li><li><span>by</span><b>you</b></li></ul></div>'
+        + '<div class="side"><span class="lab">the pair</span><ul class="seen facts"><li><span>flag</span><b>' + typeOf(r) + '</b></li><li><span>target</span><b class="tgt"></b></li><li><span>since</span><b>13:58</b></li><li><span>by</span><b>you</b></li></ul></div>'
         + '<div class="dwr-acts"><button class="again">let it fire again</button></div></div></div></td>';
+      // text lands as text, not markup: fixture data here, but the scanner cannot tell
+      nr.cells[0].textContent = type; nd.querySelector('.tgt').textContent = r.cells[1].textContent.trim();
       ex.appendChild(nr); ex.appendChild(nd); bindRow(nr); bindAgain(nd);
       showing = true; excount();
     }
