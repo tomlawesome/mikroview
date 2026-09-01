@@ -71,9 +71,19 @@ type Night struct {
 // pathway this entry watches. A watch nothing logs cannot be judged on
 // nightly presence at all, so its nights are recorded "not observed",
 // never "empty".
+//
+// Silent is the sticky record MarkSilent accumulates (issue #730): the
+// Open instant of every occurrence found to have gone through a tick
+// where the device behind this entry's pathway was stale, whether or not
+// it has recovered since. Consulted here rather than by asking "is the
+// device stale right now" at fill time, because fill can run long after
+// the occurrence closed -- by which point a router that was quiet for
+// four hours and came back before the window shut would look perfectly
+// live again. The sticky mark is what remembers the outage was real.
 type Observation struct {
 	Since   time.Time
 	Covered bool
+	Silent  []time.Time
 }
 
 // stateFor decides what an occurrence nothing matched in gets recorded as.
@@ -81,7 +91,59 @@ func (obs Observation) stateFor(o Occurrence) NightState {
 	if !obs.Covered || obs.Since.IsZero() || o.Open.Before(obs.Since) {
 		return NightUnobserved
 	}
+	if wasMarkedSilent(obs.Silent, o.Open) {
+		return NightUnobserved
+	}
 	return NightEmpty
+}
+
+// wasMarkedSilent reports whether open appears in marks -- see
+// Observation.Silent and MarkSilent.
+func wasMarkedSilent(marks []time.Time, open time.Time) bool {
+	for _, m := range marks {
+		if m.Equal(open) {
+			return true
+		}
+	}
+	return false
+}
+
+// MarkSilent records, sticky, that the device behind w's pathway was
+// found stale at the tick occurring at "at" -- the caller (internal/
+// engine's watch-liveness ticker) calls this on every tick while w may be
+// open, reusing internal/engine/shipped_device_silence.go's own
+// definition of stale rather than a fresh one (issue #730).
+//
+// This must be sticky rather than a check performed once, at window
+// close, because the whole point is catching an outage that has already
+// healed by the time anything gets around to filling the night: a router
+// quiet for four hours that comes back before the window shuts must still
+// close as NightUnobserved, and the only way to know that later is to
+// have written it down while it was still true.
+//
+// A no-op outside every occurrence of w (undefined window, or "at"
+// between windows) and idempotent within one (marking the same occurrence
+// twice changes nothing). Bounded at MaxNights entries, the same cap
+// Night history itself carries, so a fill cadence slower than the tick
+// cadence cannot grow this without bound; the oldest mark is dropped, on
+// the same "matchlog does not go back far enough to reconstruct this
+// anyway" reasoning Night's own doc comment gives.
+func MarkSilent(marks []time.Time, w Window, at time.Time) []time.Time {
+	o, ok := w.OccurrenceAt(at)
+	if !ok {
+		return marks
+	}
+	for _, m := range marks {
+		if m.Equal(o.Open) {
+			return marks
+		}
+	}
+	marks = append(marks, o.Open)
+	sort.SliceStable(marks, func(i, j int) bool { return marks[i].Before(marks[j]) })
+	if len(marks) > MaxNights {
+		marks = append([]time.Time(nil), marks[len(marks)-MaxNights:]...)
+	}
+	return marks
 }
 
 // lastOpened is the newest night already recorded, or the zero time.
