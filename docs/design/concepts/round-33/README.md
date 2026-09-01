@@ -87,4 +87,10 @@ nothing new to check.
 
 ## Verdicts
 
-None yet.
+2026-09-01, owner: "But yes, I like it over all. It's approved."
+
+Noted while viewing: the owner could not find `watch it`, `not this`,
+`show them` or `start over` at first. The first two sit at the foot of a
+suggested row's drawer; the last two are the quiet links on the
+suggestions heading. Whether those two links should carry more weight
+is an open question, answered on #691.
