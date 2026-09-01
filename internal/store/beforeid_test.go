@@ -59,8 +59,11 @@ func TestQueryBeforeIDPagesWithoutOverlapOrGaps(t *testing.T) {
 // accident. Eviction only ever removes from the oldest end, so if the
 // cursor's own event is gone, every event older than it (everything the
 // next page would have asked for) is gone too: the correct answer is an
-// empty, final page, not stale data and not a panic from an out-of-range
-// ring computation.
+// empty page, not stale data and not a panic from an out-of-range ring
+// computation. But an empty page is not the same fact as "there was
+// nothing left to read" -- CursorEvicted must say which one this is, so
+// a caller (MemoryCorpus.Replay) can tell a short result from a complete
+// one instead of the two being silently indistinguishable.
 func TestQueryBeforeIDStaleCursorAfterEvictionReturnsEmpty(t *testing.T) {
 	const capacity = 10
 	s := New(capacity, time.Hour)
@@ -84,6 +87,9 @@ func TestQueryBeforeIDStaleCursorAfterEvictionReturnsEmpty(t *testing.T) {
 	}
 	if res.HasMore {
 		t.Fatalf("HasMore = true for a fully-evicted cursor, want false -- nothing left for a caller to page through")
+	}
+	if !res.CursorEvicted {
+		t.Fatalf("CursorEvicted = false for a cursor whose own event was evicted, want true -- an empty page here means data was lost to eviction, not that history genuinely ended")
 	}
 }
 

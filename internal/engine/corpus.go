@@ -75,13 +75,21 @@ type CorpusWindow struct {
 	Start, End time.Time
 	// Count is how many events were visited.
 	Count int
-	// Truncated reports whether this Corpus's own bounded-read policy
-	// (see maxCorpusEvents) stopped the pass before every available
-	// event was visited -- distinct from a definition's own Receipt
-	// declining for being shorter than its window (replay.go's
-	// Decline): a corpus can be simultaneously truncated (more history
-	// existed than this call was willing to hold) and still long enough
-	// to satisfy a given definition's window.
+	// Truncated reports whether this pass stopped before every event
+	// currently retained was visited, for either of two distinct
+	// reasons: this Corpus's own bounded-read policy (see
+	// maxCorpusEvents) chose to stop, or ring eviction raced the pass
+	// itself and took the event MemoryCorpus.Replay's resume cursor was
+	// about to ask for (store.Result.CursorEvicted -- see Replay's own
+	// handling). Both get reported the same way: a caller cannot act
+	// differently on "this call declined to read further" versus "the
+	// data this call wanted to read is gone," so there is nothing a
+	// finer-grained signal would let a caller do that this one doesn't
+	// already cover. Distinct from a definition's own Receipt declining
+	// for being shorter than its window (replay.go's Decline): a corpus
+	// can be simultaneously truncated (more history existed than this
+	// call was willing or able to read) and still long enough to
+	// satisfy a given definition's window.
 	Truncated bool
 }
 
@@ -184,8 +192,10 @@ var maxCorpusEvents = 1_000_000
 // overlap -- no per-page dedup is needed (contrast the old Until-based
 // version's seen map). See BenchmarkMemoryCorpusReplayManyPages for the
 // measured before/after difference and
-// TestStoreQueryBeforeIDScanCostDoesNotGrowWithDepth for the pinned
-// per-page cost bound.
+// TestQueryBeforeIDScanCostDoesNotGrowWithDepth (internal/store) for the
+// pinned per-page cost bound. What a resume cursor evicted mid-pass
+// means is a separate, deliberate decision -- see CorpusWindow.Truncated
+// and store.Result.CursorEvicted's own doc comments.
 type MemoryCorpus struct {
 	store *store.Store
 }
@@ -194,6 +204,17 @@ type MemoryCorpus struct {
 func NewMemoryCorpus(s *store.Store) *MemoryCorpus {
 	return &MemoryCorpus{store: s}
 }
+
+// afterReplayPageForTest, if non-nil, is called once per page immediately
+// after Query returns, before Replay acts on the result. Test-only
+// instrumentation (nil in production, so the cost is one nil check per
+// page): it lets a test deterministically insert events between two
+// pages of a Replay pass -- forcing the resume cursor's own event to be
+// evicted before the next page reads it -- without depending on a
+// timing race between two goroutines, which is exactly the kind of test
+// this codebase's own history (#501, #744) says not to write. See
+// TestMemoryCorpusReplayReportsTruncatedWhenCursorIsEvicted.
+var afterReplayPageForTest func()
 
 // Replay satisfies Corpus. See MemoryCorpus's own doc comment for the
 // snapshot-vs-iterate reasoning and the concurrency guarantee this
@@ -220,6 +241,21 @@ func (c *MemoryCorpus) Replay(visit func(store.Event)) CorpusWindow {
 			q.Until = until
 		}
 		res := c.store.Query(q)
+		if afterReplayPageForTest != nil {
+			afterReplayPageForTest()
+		}
+		if res.CursorEvicted {
+			// The event our resume cursor named has been evicted since
+			// the previous page read it -- ring eviction only removes
+			// from the oldest end, so everything from that point down
+			// (and, since the previous page's own HasMore was true,
+			// there was more to read) is gone. This pass cannot report
+			// everything currently retained; it must say so rather than
+			// stopping silently the same way it would at a genuine,
+			// uncontended end of history.
+			truncated = true
+			break
+		}
 		if len(res.Events) == 0 {
 			break
 		}
@@ -240,11 +276,7 @@ func (c *MemoryCorpus) Replay(visit func(store.Event)) CorpusWindow {
 		// res.Events is oldest-first within the page (Query's own
 		// contract); its first entry's ID becomes the next page's
 		// exclusive upper bound, so the next call resumes exactly where
-		// this one left off instead of re-scanning it. If that event
-		// gets evicted before the next call runs, Query's BeforeID
-		// handling (internal/store/query.go) treats it as having
-		// reached the start of retained history -- an empty page with
-		// HasMore false, the same terminal case as above, not an error.
+		// this one left off instead of re-scanning it.
 		beforeID = res.Events[0].ID
 	}
 

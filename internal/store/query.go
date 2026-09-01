@@ -104,20 +104,44 @@ type Query struct {
 	// (see MemoryCorpus.Replay in internal/engine/corpus.go, the caller
 	// this was added for, and its own doc comment for the measurement).
 	// If BeforeID names an ID no longer held (evicted since it was
-	// issued), the scan simply finds nothing older than it to return --
-	// see this field's handling below for why that is the correct
-	// terminal case, not an error. Zero means unset, same convention as
-	// every other Query field.
+	// issued), the scan finds nothing older than it to return -- but
+	// that is not the same fact as "there is nothing left in history,"
+	// so it does not get folded into an ordinary empty/HasMore=false
+	// result: see Result.CursorEvicted, which this case sets, for why
+	// the distinction is a caller-visible one. Zero means unset, same
+	// convention as every other Query field.
 	BeforeID uint64
 	Limit    int
 }
 
 // Result is the response to a Query.
 type Result struct {
-	Events      []Event   `json:"events"`
-	HasMore     bool      `json:"hasMore"`
-	WindowStart time.Time `json:"windowStart"`
-	ServerTime  time.Time `json:"serverTime"`
+	Events  []Event `json:"events"`
+	HasMore bool    `json:"hasMore"`
+	// CursorEvicted reports whether a BeforeID cursor (see Query.BeforeID)
+	// named an event this call could not find among what the ring
+	// currently holds. Eviction only ever removes from the oldest end,
+	// so this means everything from that event downward -- and, if the
+	// page that produced this cursor itself had HasMore set, possibly
+	// more history beyond what any page ever got to read -- is gone.
+	// Always false for a query that left BeforeID unset, and for one
+	// whose cursor was still held.
+	//
+	// This is deliberately a separate signal from HasMore=false: "I
+	// walked to the end of retained history" and "the ring evicted the
+	// rest while I was reading it" are different facts about what a
+	// caller received, and collapsing them into one silent "no more
+	// events" result is exactly the kind of unmarked gap this codebase
+	// otherwise refuses to present as an ordinary empty outcome (compare
+	// a declined Receipt, issue #730's "not observed" watch night). A
+	// caller resuming a paged walk via BeforeID that sees this set must
+	// treat the walk as possibly short, not complete -- see
+	// MemoryCorpus.Replay's own handling, which sets
+	// CorpusWindow.Truncated on it rather than reporting an ordinary
+	// end-of-history stop.
+	CursorEvicted bool      `json:"cursorEvicted"`
+	WindowStart   time.Time `json:"windowStart"`
+	ServerTime    time.Time `json:"serverTime"`
 }
 
 // Query returns the most recent events matching q, newest constrained to
@@ -204,20 +228,22 @@ func (s *Store) Query(q Query) Result {
 	// already covered, rather than reaching the same position by
 	// skipping one entry at a time the way Until does.
 	remaining := s.count
+	cursorEvicted := false
 	if q.BeforeID != 0 {
 		oldestHeldID := uint64(0)
 		if s.count > 0 {
 			oldestHeldID = s.nextID - uint64(s.count) + 1
 		}
 		if s.count == 0 || q.BeforeID <= oldestHeldID {
-			// Nothing currently held is old enough to match -- either
-			// the cursor's own event has since been evicted (eviction
-			// only removes from the oldest end, so if BeforeID's event
-			// is gone, everything older than it is gone too), or it
-			// legitimately named the oldest held event already. Either
-			// way there is nothing left to walk: treat it exactly like
-			// reaching the start of retained history, not an error.
+			// Nothing currently held is old enough to match: BeforeID's
+			// own event is not among what's held (eviction only removes
+			// from the oldest end, so if BeforeID's event is gone,
+			// everything older than it is gone too). Report that via
+			// CursorEvicted rather than folding it into an ordinary
+			// empty result -- see that field's own doc comment for why
+			// a caller needs to be able to tell the two apart.
 			remaining = 0
+			cursorEvicted = true
 		} else {
 			startID := q.BeforeID - 1 // the newest ID this call may return
 			if startID > s.nextID {
@@ -271,7 +297,7 @@ func (s *Store) Query(q Query) Result {
 		matched[l], matched[r] = matched[r], matched[l]
 	}
 
-	return Result{Events: matched, HasMore: hasMore, WindowStart: windowStart, ServerTime: now}
+	return Result{Events: matched, HasMore: hasMore, CursorEvicted: cursorEvicted, WindowStart: windowStart, ServerTime: now}
 }
 
 func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP, ruleRe *regexp.Regexp) bool {
