@@ -33,6 +33,15 @@ const (
 // rather than a const so tests can shrink it.
 var maxScannedPerQuery = 50_000
 
+// queryScanHook, if non-nil, is called once per ring entry Query's scan
+// loop examines, whether or not that entry ends up matched. Test-only
+// instrumentation (nil in production, so the cost is one nil check per
+// entry): it lets a test pin *how many* entries a Query call examines
+// without depending on wall-clock timing, which #501 and #744 already
+// showed is unreliable on a loaded CI runner -- see
+// TestStoreQueryBeforeIDScanCostDoesNotGrowWithDepth.
+var queryScanHook func()
+
 // clampLimit maps a caller-supplied limit onto [1, maxLimit] -- see
 // internal/audit/query.go's identical helper for why this is written as
 // plain comparisons.
@@ -81,7 +90,26 @@ type Query struct {
 	// convention as every other Query field.
 	Until   time.Time
 	SinceID uint64 // only return events with ID > SinceID
-	Limit   int
+	// BeforeID is an optional resume cursor for backward pagination
+	// (issue #759): if nonzero, only events with ID < BeforeID are
+	// considered, and the scan starts at that event's own ring position
+	// directly instead of always walking from the newest held event.
+	// IDs are assigned sequentially by Insert and never reused, so that
+	// position is one O(1) computation from BeforeID's offset behind the
+	// newest held ID (s.nextID) -- unlike Until, which can only *skip*
+	// events newer than the bound one at a time while still starting the
+	// walk from the newest event every call, making a caller that pages
+	// backward by re-issuing a narrower Until on each call pay a scan
+	// cost that grows with how many pages it has already paged through
+	// (see MemoryCorpus.Replay in internal/engine/corpus.go, the caller
+	// this was added for, and its own doc comment for the measurement).
+	// If BeforeID names an ID no longer held (evicted since it was
+	// issued), the scan simply finds nothing older than it to return --
+	// see this field's handling below for why that is the correct
+	// terminal case, not an error. Zero means unset, same convention as
+	// every other Query field.
+	BeforeID uint64
+	Limit    int
 }
 
 // Result is the response to a Query.
@@ -169,10 +197,47 @@ func (s *Store) Query(q Query) Result {
 	if idx < 0 {
 		idx = s.capacity - 1
 	}
-	for i := 0; i < s.count; i++ {
+	// remaining is how many currently-held entries this call will walk,
+	// starting from idx. Ordinarily that's every held entry (s.count),
+	// but a BeforeID cursor (see its own doc comment) moves idx and
+	// shrinks remaining in O(1) to start past whatever an earlier page
+	// already covered, rather than reaching the same position by
+	// skipping one entry at a time the way Until does.
+	remaining := s.count
+	if q.BeforeID != 0 {
+		oldestHeldID := uint64(0)
+		if s.count > 0 {
+			oldestHeldID = s.nextID - uint64(s.count) + 1
+		}
+		if s.count == 0 || q.BeforeID <= oldestHeldID {
+			// Nothing currently held is old enough to match -- either
+			// the cursor's own event has since been evicted (eviction
+			// only removes from the oldest end, so if BeforeID's event
+			// is gone, everything older than it is gone too), or it
+			// legitimately named the oldest held event already. Either
+			// way there is nothing left to walk: treat it exactly like
+			// reaching the start of retained history, not an error.
+			remaining = 0
+		} else {
+			startID := q.BeforeID - 1 // the newest ID this call may return
+			if startID > s.nextID {
+				startID = s.nextID // defensive: a cursor this store never issued
+			}
+			offset := int(s.nextID - startID)
+			idx -= offset
+			for idx < 0 {
+				idx += s.capacity
+			}
+			remaining = s.count - offset
+		}
+	}
+	for i := 0; i < remaining; i++ {
 		if i >= maxScannedPerQuery {
 			hasMore = true
 			break
+		}
+		if queryScanHook != nil {
+			queryScanHook()
 		}
 		e := s.buf[idx]
 		idx--

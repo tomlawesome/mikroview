@@ -96,8 +96,8 @@ type CorpusWindow struct {
 // doc comment on internal/audit/query.go's identical helper).
 //
 // A var, not a const, so a test can shrink it to exercise multi-page
-// pagination (dedup at page boundaries, the descending Until cursor)
-// without needing thousands of events -- same convention as
+// pagination (the BeforeID cursor, and reassembly into chronological
+// order) without needing thousands of events -- same convention as
 // queueSize/maxTrackedKeys elsewhere in this package.
 var corpusPageSize = 5000
 
@@ -159,10 +159,33 @@ var maxCorpusEvents = 1_000_000
 // Query's own backward-from-newest design (walking from "now" towards
 // the past, per its own doc comment) means the first page this type
 // reads back is always the corpus's newest slice, not its oldest --
-// Replay pages backward via a descending Until cursor, deduplicating by
-// event ID at page boundaries (Until is an inclusive bound), then sorts
-// everything it collected into forward-chronological order before
-// handing events to the caller's visit function, exactly once each.
+// Replay pages backward via Query's BeforeID cursor (issue #759), each
+// page's exclusive upper bound being the previous page's own oldest
+// event ID, then sorts everything it collected into forward-
+// chronological order before handing events to the caller's visit
+// function, exactly once each.
+//
+// The cursor is an ID, not a timestamp, because of what that costs per
+// page. Before #759, this paged with a descending Until cursor instead:
+// Until is an inclusive bound, so it only *narrows what a page keeps* --
+// Query still has to walk from the newest held event on every call, so
+// each successive page repaid the scan cost of every page already
+// collected, and the *last* page of a multi-page pass (the one that
+// finally reaches the oldest held event) ended up scanning close to the
+// whole corpus in one RLock hold: precisely the single-lock-spans-the-
+// pass failure mode this type exists to rule out, just reached via
+// pagination instead of a single Snapshot call. Confirmed by
+// instrumenting per-page Query durations: a final, nearly-empty page
+// routinely cost as much as an earlier page that returned a full 5,000
+// events. BeforeID fixes this by moving where the scan *starts*, not
+// just what it keeps: Query resumes at the cursor's own ring position in
+// O(1) (see BeforeID's doc comment in internal/store), so each page only
+// ever examines that page's own share of the corpus, and pages never
+// overlap -- no per-page dedup is needed (contrast the old Until-based
+// version's seen map). See BenchmarkMemoryCorpusReplayManyPages for the
+// measured before/after difference and
+// TestStoreQueryBeforeIDScanCostDoesNotGrowWithDepth for the pinned
+// per-page cost bound.
 type MemoryCorpus struct {
 	store *store.Store
 }
@@ -177,29 +200,35 @@ func NewMemoryCorpus(s *store.Store) *MemoryCorpus {
 // method is built to uphold.
 func (c *MemoryCorpus) Replay(visit func(store.Event)) CorpusWindow {
 	var all []store.Event
-	seen := make(map[uint64]struct{})
 
-	until := time.Now() // fixed once, so concurrent ingest during this
-	// call never grows the window this pass covers -- a replay always
-	// answers against a stable, well-defined upper bound, not a moving
-	// target that depends on how long the pass itself takes.
+	until := time.Now() // fixed once, for the first page only, so the
+	// pass never grows to include events inserted after this call
+	// started -- a replay always answers against a stable, well-defined
+	// upper bound, not a moving target that depends on how long the pass
+	// itself takes. Later pages don't use this: they cursor off the
+	// previous page's own oldest event ID instead (beforeID below), an
+	// exclusive, gap-free bound Until can't give per-page (see this
+	// type's own doc comment for why that matters for per-page cost).
+	var beforeID uint64
 	truncated := false
 
 	for {
-		res := c.store.Query(store.Query{Until: until, Limit: corpusPageSize})
+		q := store.Query{Limit: corpusPageSize}
+		if beforeID != 0 {
+			q.BeforeID = beforeID
+		} else {
+			q.Until = until
+		}
+		res := c.store.Query(q)
 		if len(res.Events) == 0 {
 			break
 		}
 
-		newInPage := 0
-		for _, e := range res.Events {
-			if _, ok := seen[e.ID]; ok {
-				continue // already collected via an earlier, overlapping page
-			}
-			seen[e.ID] = struct{}{}
-			all = append(all, e)
-			newInPage++
-		}
+		// No dedup needed: BeforeID is an exclusive bound derived from
+		// the previous page's own oldest ID, so pages never overlap
+		// (contrast the old Until-based version, which needed a seen
+		// map because Until is inclusive).
+		all = append(all, res.Events...)
 
 		if len(all) >= maxCorpusEvents {
 			truncated = true
@@ -208,21 +237,15 @@ func (c *MemoryCorpus) Replay(visit func(store.Event)) CorpusWindow {
 		if !res.HasMore {
 			break // reached the start of what's currently retained
 		}
-		if newInPage == 0 {
-			// No progress possible from this page (every event in it
-			// was already collected) -- stop rather than loop forever.
-			// Only reachable if Query's own Until-inclusive boundary
-			// returns exactly the same page twice, which res.HasMore
-			// being true after zero new events would mean; guarding it
-			// explicitly costs nothing and turns a theoretical infinite
-			// loop into a defined stop.
-			break
-		}
 		// res.Events is oldest-first within the page (Query's own
-		// contract); its first entry is this page's oldest event, which
-		// becomes the next page's upper bound so the next call walks
-		// strictly further back in history.
-		until = res.Events[0].ReceivedAt
+		// contract); its first entry's ID becomes the next page's
+		// exclusive upper bound, so the next call resumes exactly where
+		// this one left off instead of re-scanning it. If that event
+		// gets evicted before the next call runs, Query's BeforeID
+		// handling (internal/store/query.go) treats it as having
+		// reached the start of retained history -- an empty page with
+		// HasMore false, the same terminal case as above, not an error.
+		beforeID = res.Events[0].ID
 	}
 
 	sort.Slice(all, func(i, j int) bool {
