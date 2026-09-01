@@ -395,6 +395,10 @@ plain language.
 
 ## Issues
 
+**Open does not mean undone.** `Closes #N` fires only on the default branch,
+so an issue built on a feature branch stays open until that branch merges.
+Check the branch before picking one up.
+
 Issue-body, decision-recording and supersession rules follow the global
 agent instructions. Project-specific: `.github/ISSUE_TEMPLATE/work-item.md`
 puts the current plan at the top for new issues; existing issues get
