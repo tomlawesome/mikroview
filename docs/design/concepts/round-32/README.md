@@ -80,4 +80,7 @@ the `ok` ink for ingest and the alarm ink for an armed verb are round
 
 ## Verdicts
 
-Awaiting the owner.
+Owner, 2026-09-01, on all six placements (keys, mint, the reveal,
+revoke, people, let someone in, remove): *"Approved."* Round 32 is
+ratified as drawn and is the surface the two doors' build is faithful
+to.
