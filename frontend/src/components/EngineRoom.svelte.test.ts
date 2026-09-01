@@ -152,15 +152,21 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
   })
 
-  it("a viewer's shelf carries six cards -- no Entities, absent rather than disabled", async () => {
+  // #657: Entities carries `edit: true` (#653's widening to the user
+  // tier), and this page is itself gated to the same tier -- so a
+  // `user` who reaches Settings at all sees the same seven cards an
+  // admin does. Named for the role it actually renders, unlike the
+  // pre-#657 version of this test, which called that tier "viewer"
+  // when only `user` and `admin` can ever reach this page.
+  it("a user's shelf carries all seven cards, same as an admin's", async () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(EngineRoom)
     await settle()
 
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
-    expect(within(shelf).getAllByRole('button')).toHaveLength(6)
-    expect(within(shelf).queryByText('Entities')).toBeNull()
+    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    expect(within(shelf).getByText('Entities')).toBeTruthy()
     expect(within(shelf).getByText('Settings')).toBeTruthy()
   })
 
@@ -221,7 +227,12 @@ describe('The settings shelf (#633)', () => {
     // Round 30 (#700/#691): neither side door is mounted for any role,
     // so a viewer sees no tokens door and no users door -- not the old
     // "tokens readable, users admin-only" split. TOKENS_DOOR_ENABLED /
-    // USERS_DOOR_ENABLED are both false in EngineRoomDoors.svelte.
+    // USERS_DOOR_ENABLED are both false in EngineRoomDoors.svelte. When
+    // a future round remounts them, #657's own gate (both doors
+    // admin-only -- see EngineRoomDoors.svelte's isAdmin check, and
+    // internal/api/tokens_test.go's TestTokensListAdminOnly for the
+    // route it depends on) has to hold for the `user` tier too, not
+    // only `viewer`.
     expect(screen.queryByText('rb5009-ingest')).toBeNull()
     expect(screen.queryByText(/ingest: rb5009/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()

@@ -8,9 +8,12 @@
 //   test asserting the badge renders `flagsState.activeCount` passes
 //   whatever that number is, including wrong -- the regression worth
 //   catching is the badge and /api/flags disagreeing.
-// - Zero renders as no badge at all, not a "0": the badge is conditional
-//   DOM, and only a real server whose flag count actually moves can
-//   drive it through both states.
+// - Zero renders as "⚑ 0", a real ok-coloured state, not as no badge at
+//   all -- #683 (round 29) ratified both markers showing even at zero
+//   (AlarmCluster.svelte's own comment, ported from the-whole.html's
+//   "clear all" demo), so only a real server whose flag count actually
+//   moves can drive the badge's own zero/non-zero styling through both
+//   states.
 // - Clicking the badge is a deep link into the deck -- it has to roll
 //   the Flags card to centre from wherever the operator is, which is
 //   App/Deck wiring no component test sees.
@@ -24,8 +27,10 @@ feedSyslog(40, 'scene-badge')
 const { page, consoleErrors } = await session({ waitForEvents: 20 })
 
 // The active card's own scene bar -- the deck also mounts the
-// neighbouring cards, each with a bar of its own.
-const BADGE = '.card[aria-hidden="false"] .scene-bar .flag-badge'
+// neighbouring cards, each with a bar of its own. Renamed from
+// .flag-badge to .fmk by #683 (AlarmCluster.svelte:22), ported
+// field-for-field from the mockup's own class name.
+const BADGE = '.card[aria-hidden="false"] .scene-bar .fmk'
 
 /**
  * Polls the badge and /api/flags together until they agree, so the feed
@@ -45,10 +50,12 @@ async function settledCount(timeoutMs = 15000) {
       const el = document.querySelector(sel)
       return { open, badge: el ? el.textContent.trim() : null }
     }, BADGE)
-    // No badge is the correct rendering of zero: the bar carries the
-    // count only when it has something to say -- a permanent "0" is the
-    // failure, not the goal.
-    const shown = last.badge === null ? 0 : Number(last.badge)
+    // The badge is unconditional DOM since #683 -- "⚑ {count}", present at
+    // zero as well as above it (AlarmCluster.svelte:20-28) -- so a missing
+    // badge is never a legitimate zero any more; it just has not agreed
+    // with the server yet. Pull the digits out of "⚑ N" rather than
+    // Number()-ing the whole string, which would be NaN against the glyph.
+    const shown = last.badge === null ? null : Number((last.badge.match(/\d+/) ?? [])[0])
     if (last.open >= 0 && shown === last.open) return last.open
     await new Promise((r) => setTimeout(r, 250))
   }
@@ -78,13 +85,15 @@ if (raised.ok) {
     )
 
     // It travels with the chrome: the neighbouring cards' bars carry the
-    // same count, so no scene is blind to the alarm.
-    const metricsBadge = await page
-      .$eval('.card[data-card="metrics"] .scene-bar .flag-badge', (el) => el.textContent.trim())
+    // same count, so no scene is blind to the alarm. Read as "⚑ N", same
+    // as the active card's own badge above.
+    const metricsBadgeText = await page
+      .$eval('.card[data-card="metrics"] .scene-bar .fmk', (el) => el.textContent.trim())
       .catch(() => null)
+    const metricsBadge = metricsBadgeText === null ? null : Number((metricsBadgeText.match(/\d+/) ?? [])[0])
     check(
-      metricsBadge === String(open),
-      `the Metrics card's bar carries the same count -- got ${JSON.stringify(metricsBadge)}`,
+      metricsBadge === open,
+      `the Metrics card's bar carries the same count -- got ${JSON.stringify(metricsBadgeText)}`,
     )
 
     // --- Clicking the badge lands on the Flags card ----------------------

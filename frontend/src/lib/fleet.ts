@@ -44,3 +44,31 @@ export function recentCount(events: readonly ClientEvent[], deviceId: string, no
   }
   return n
 }
+
+// The router card's status vocabulary (#675's fstate, hoisted here for
+// #657/#706 so Entities' router row and the viewer's Fleet card
+// literally share it rather than keeping copies that could drift): a
+// mark plus a written label, never colour alone (#616's honesty rule),
+// and "quiet" rather than an alarm word -- a silent router is a fact to
+// read, not a fault to shout.
+export interface DeviceStateMark {
+  mark: string
+  cls: 'ok' | 'quiet'
+  text: string
+}
+
+export function deviceState(d: Device, nowMs: number): DeviceStateMark {
+  if (d.status === 'live') return { mark: '●', cls: 'ok', text: 'LIVE' }
+  if (d.status === 'never_seen') return { mark: '◌', cls: 'quiet', text: STATUS_LABEL.never_seen.toUpperCase() }
+  const days = Math.floor((nowMs - new Date(d.lastSeen).getTime()) / 86_400_000)
+  return { mark: '◌', cls: 'quiet', text: `QUIET${days >= 1 ? ` · ${days} d` : ''}` }
+}
+
+// Fixed to one decimal rather than lib/format's formatEps (whole number
+// at >=1 events/s, one decimal below it): two router cards showing "1"
+// and "1.0" side by side read as inconsistent even though each is
+// individually correct under formatEps's own rule (#718). Hoisted with
+// deviceState above, for the same no-drift reason.
+export function ratePerSecond(events: readonly ClientEvent[], deviceId: string, nowMs: number): string {
+  return (recentCount(events, deviceId, nowMs) / (RECENT_WINDOW_MS / 1000)).toFixed(1)
+}
