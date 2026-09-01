@@ -85,7 +85,7 @@
   import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatRelative, formatHM } from '../lib/format'
-  import { STATUS_LABEL, sortedDevices, recentCount as recentCountOf, RECENT_WINDOW_MS } from '../lib/fleet'
+  import { deviceState, sortedDevices, ratePerSecond } from '../lib/fleet'
   import { syslogCommands, instanceAddress, portOf } from '../lib/setupsteps'
   import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
 
@@ -168,24 +168,10 @@
     }
   })
 
-  function fstate(d: (typeof routerRows)[number]): { mark: string; cls: string; text: string } {
-    if (d.status === 'live') return { mark: '●', cls: 'ok', text: 'LIVE' }
-    if (d.status === 'never_seen') return { mark: '◌', cls: 'quiet', text: STATUS_LABEL.never_seen.toUpperCase() }
-    const days = Math.floor((appState.now - new Date(d.lastSeen).getTime()) / 86_400_000)
-    return { mark: '◌', cls: 'quiet', text: `QUIET${days >= 1 ? ` · ${days} d` : ''}` }
-  }
-
-  // Fixed to one decimal rather than lib/format's formatEps (whole
-  // number at >=1 events/s, one decimal below it): two router cards
-  // showing "1" and "1.0" side by side read as inconsistent even though
-  // each is individually correct under formatEps's own rule (#718).
-  // formatEps is shared by several other pages' own single-number
-  // readouts, so the fix stays local to this page's per-card metric
-  // rather than changing that shared rule.
-  function routerRate(deviceId: string): string {
-    const n = recentCountOf(appState.events, deviceId, appState.now)
-    return (n / (RECENT_WINDOW_MS / 1000)).toFixed(1)
-  }
+  // fstate/routerRate moved to lib/fleet.ts (deviceState/ratePerSecond)
+  // when #706 put the viewer's Fleet card back on the deck: the two
+  // surfaces draw the same router cards, so the status vocabulary and
+  // the fixed-one-decimal rate (#718) have exactly one home.
 
   // --- named things: entity hosts + discovered-but-unnamed hosts, one
   // table (#675) ---------------------------------------------------------
@@ -489,7 +475,7 @@
       <h3>routers — every one that pushes here</h3>
         <div class="fcards">
           {#each routerRows as d (d.id)}
-            {@const st = fstate(d)}
+            {@const st = deviceState(d, appState.now)}
             {@const detail = routerDetail[d.id]}
             <div class="fcard" class:live={d.status === 'live'}>
               <div class="fhead"><b>{d.name}</b><span class="fstate {st.cls}">{st.mark} {st.text}</span></div>
@@ -504,7 +490,7 @@
               </div>
               {#if d.status === 'live'}
                 <div class="frow">
-                  {#if detail?.lastPush}last push {formatHM(detail.lastPush)} ·{/if} {routerRate(d.id)} events/s now
+                  {#if detail?.lastPush}last push {formatHM(detail.lastPush)} ·{/if} {ratePerSecond(appState.events, d.id, appState.now)} events/s now
                 </div>
               {:else if d.status === 'never_seen'}
                 <div class="frow dim">never heard from yet</div>
