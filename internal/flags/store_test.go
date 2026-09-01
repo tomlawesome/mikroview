@@ -680,6 +680,82 @@ func TestAddProvisionalSetsProvisionalMarker(t *testing.T) {
 	}
 }
 
+// TestAddDoesNotConvertActiveProvisionalFlagInPlace is #642's own
+// requirement: a baseline clearing its floor mid-episode must not
+// silently flip an already-active provisional flag's Provisional field
+// to false in place. An operator who already saw this flag hatched/
+// labelled provisional (#616's honesty vocabulary) must not see it
+// silently turn solid without ever being marked as a new judgement --
+// Provisional is fixed at episode start, the same way FirstSeen already
+// is, not re-derived on every re-fire.
+func TestAddDoesNotConvertActiveProvisionalFlagInPlace(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	isNew := s.AddProvisional(TypeActivitySpike, "203.0.113.9", "warming up", 30, Evidence{}, "US", true, now)
+	if !isNew {
+		t.Fatal("expected the first raise to start a new episode")
+	}
+	first := s.List()[0]
+	if !first.Provisional || first.Cleared {
+		t.Fatalf("expected a fresh active provisional flag, got %+v", first)
+	}
+
+	// The same (type, target) fires again, later, now past its floor --
+	// exactly what a baseline finishing its warm-up mid-episode looks
+	// like. This must not convert the still-active flag in place.
+	isNew = s.AddWithDetail(TypeActivitySpike, "203.0.113.9", "settled now", 80, Evidence{}, "US", now.Add(time.Minute))
+	if isNew {
+		t.Fatal("expected the re-fire to update the existing active episode, not start a new one")
+	}
+
+	list := s.List()
+	if len(list) != 1 {
+		t.Fatalf("expected exactly one flag entry (same episode, updated in place), got %d: %+v", len(list), list)
+	}
+	f := list[0]
+	if !f.Provisional {
+		t.Fatal("expected Provisional to stay true for the rest of this active episode -- a settled re-fire must not silently convert it")
+	}
+	if f.Cleared {
+		t.Fatal("expected the episode to still be active, not cleared, after the settled re-fire")
+	}
+	if f.Detail != "settled now" || f.Count != 2 {
+		t.Fatalf("expected the re-fire to still update Detail/Count in place (Provisional aside), got %+v", f)
+	}
+}
+
+// TestAddProvisionalNewEpisodeAfterClearCanSettle is
+// TestAddDoesNotConvertActiveProvisionalFlagInPlace's other half: once a
+// provisional episode is actually cleared (a human reviewed it, or any
+// other clear path), the condition firing again is a genuinely new
+// episode -- the revival branch add() already uses for any cleared flag
+// -- and that new episode is free to be raised settled (provisional
+// false), proving #642's "the warm baseline raises new settled flags
+// instead" is possible, not merely "provisional never changes ever."
+func TestAddProvisionalNewEpisodeAfterClearCanSettle(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.AddProvisional(TypeActivitySpike, "203.0.113.9", "warming up", 30, Evidence{}, "US", true, now)
+	f := s.List()[0]
+	if !s.Clear(f.ID, now.Add(time.Second)) {
+		t.Fatal("expected Clear to succeed on the just-raised provisional flag")
+	}
+
+	isNew := s.AddWithDetail(TypeActivitySpike, "203.0.113.9", "settled now", 80, Evidence{}, "US", now.Add(time.Minute))
+	if !isNew {
+		t.Fatal("expected the post-clear re-fire to revive as a new episode")
+	}
+	revived := s.List()[0]
+	if revived.Provisional {
+		t.Fatal("expected the new, post-clear episode to be raised settled (Provisional=false)")
+	}
+	if revived.Cleared {
+		t.Fatal("expected the revived episode to be active, not cleared")
+	}
+}
+
 // TestAddProvisionalPersistsAndSurvivesReload is #399's "verify the
 // store round-trips it" requirement for internal/flags: Flag.Provisional
 // is additive JSON (omitempty), so nothing about persistedState's shape

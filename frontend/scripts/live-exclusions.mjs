@@ -39,11 +39,9 @@ feedPortScan(20, SCAN_SOURCE)
 const { page } = await session()
 
 async function openFlags() {
-  // Matching the label, not the row: NavRail gives each row an icon and
-  // moves its text into a <span class="label">, and Playwright's text
-  // engine only matches an element that *directly* contains the text --
-  // see live-nav-rail.mjs's own note on why `.item:text-is(...)` stopped
-  // working once that landed.
+  // goTo(page, 'Flags') rolls the deck to the docket scene and clicks its
+  // Flags tab on the scene bar (#700) -- no manual label matching needed
+  // here, that lives in live-browser.mjs's SCENES table.
   await goTo(page, 'Flags')
   await page.waitForSelector('#panel-flags', { timeout: 10000 })
 }
