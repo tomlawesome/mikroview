@@ -12,6 +12,7 @@
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
+  import { topologyNavState } from '../lib/topologyNav.svelte'
   import Flags from './Flags.svelte'
   import Watchlist from './Watchlist.svelte'
   import AuditLog from './AuditLog.svelte'
@@ -76,6 +77,24 @@
         {armed ? 'confirm' : 'clear all'}
       </button>
     {/if}
+    <!-- The watchlist tab's own panel-level action (#761, round 31):
+         the same slot and pill `clear all` uses, the watch's own ink.
+         Opening the draft is Watchlist.svelte's own private state --
+         out of reach from here -- so this just fires the shared
+         handoff (topologyNav.svelte.ts) the same way a flag's own
+         `watch this pathway`/`watch this source` does. -->
+    {#if tab === 'watchlist' && canEdit}
+      <button
+        class="bubble watch"
+        onclick={(e) => {
+          e.stopPropagation()
+          topologyNavState.requestNewWatch()
+        }}
+        title="A new watch -- written in place, at the top of the table"
+      >
+        + watch
+      </button>
+    {/if}
     {#if error}<span class="err" role="alert">{error}</span>{/if}
   </div>
 
@@ -135,6 +154,18 @@
 
   .bubble.armed:hover {
     background: color-mix(in srgb, var(--alarm) 8%, transparent);
+  }
+
+  /* `+ watch` (round 31, `.cabtn.wbtn` in the record): same pill, the
+     watch's own ink -- --marked stands in for the record's #a78bfa, the
+     watchers' purple every other watch-state chip already uses. */
+  .bubble.watch {
+    color: var(--marked);
+    border-color: color-mix(in srgb, var(--marked) 55%, transparent);
+  }
+
+  .bubble.watch:hover {
+    background: color-mix(in srgb, var(--marked) 8%, transparent);
   }
 
   .bubble:disabled {

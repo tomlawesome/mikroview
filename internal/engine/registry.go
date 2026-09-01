@@ -206,6 +206,12 @@ func (r *Registry) Sync() []error {
 	for _, pd := range programmatic {
 		r.eng.Register(pd)
 	}
+	r.eng.Register(&watchLivenessTicker{
+		store:      r.store,
+		devices:    r.deps.Shipped.Devices,
+		staleAfter: deviceStaleAfterFrom(nextBuilt),
+		enabled:    deviceSilenceEnabledFrom(nextBuilt),
+	})
 
 	inverted, err := NewInvertedExpectations(entries, r.deps.Expectations.Observations)
 	if err != nil {

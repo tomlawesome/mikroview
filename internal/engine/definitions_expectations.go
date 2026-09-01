@@ -131,6 +131,9 @@ func EntryFromDefinition(d Definition) (watchlist.Entry, error) {
 	if err := decodeJSONParam(params, "ringJSON", &e.Ring); err != nil {
 		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
 	}
+	if err := decodeJSONParam(params, "silentJSON", &e.SilentOccurrences); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
+	}
 
 	if d.Kind == KindProgrammatic {
 		e.Invert = true
