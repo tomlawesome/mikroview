@@ -40,8 +40,8 @@ syslog(30, 'topo-policy-traffic')
 // not silent.
 
 await page.click('.rail-name >> text=Topography')
-await page.waitForSelector('[data-card="topography"] .lenses', { timeout: 10000 })
-await page.click('[data-card="topography"] .lenses >> text=Policy')
+await page.waitForSelector('[data-card="topography"] [aria-label="Map lenses"]', { timeout: 10000 })
+await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Policy')
 
 const pre = await page.request.get(`${URL_BASE}/api/routeros/${DEVICE}/rules`)
 const preAvailable = pre.ok() && (await pre.json()).available
@@ -112,8 +112,8 @@ check(
 // fresh push arrives today, same as the map's own first load.
 await page.reload()
 await page.click('.rail-name >> text=Topography')
-await page.waitForSelector('[data-card="topography"] .lenses', { timeout: 10000 })
-await page.click('[data-card="topography"] .lenses >> text=Policy')
+await page.waitForSelector('[data-card="topography"] [aria-label="Map lenses"]', { timeout: 10000 })
+await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Policy')
 await page.waitForSelector('[data-card="topography"] .edge-g', { timeout: 10000 })
 
 // SVG lines resolve as "hidden" to Playwright's geometry-box visibility
