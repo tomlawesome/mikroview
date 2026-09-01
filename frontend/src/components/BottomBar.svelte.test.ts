@@ -59,8 +59,8 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
 })
 
-// The bar itself: one button per visible group, in the ratified order,
-// same reserved-slot table lib/navGroups.ts shares with NavRail.
+// The bar itself: one button per visible group, in the ratified order
+// lib/navGroups.ts's reserved-slot table defines.
 describe('BottomBar groups', () => {
   it('renders exactly the five groups for an admin, in order', () => {
     render(BottomBar)
@@ -197,7 +197,7 @@ describe('BottomBar half-sheet', () => {
   })
 })
 
-// #490's absent-never-disabled grammar, carried forward from NavRail.
+// #490's absent-never-disabled grammar, BottomBar's own now.
 describe('BottomBar admin gating (#490)', () => {
   it('keeps admin-only groups/pages absent for a viewer rather than disabled', () => {
     authState.role = 'viewer'
