@@ -214,7 +214,10 @@ func setNightParams(d *Definition, e watchlist.Entry) error {
 	if err != nil {
 		return err
 	}
-	params := make(Params, len(d.Params)+3)
+	// Sized from d.Params alone, not len(d.Params)+3: the three keys below
+	// grow the map at most once, and the arithmetic trips CodeQL's
+	// allocation-size-overflow rule for no real benefit.
+	params := make(Params, len(d.Params))
 	for k, v := range d.Params {
 		params[k] = v
 	}
