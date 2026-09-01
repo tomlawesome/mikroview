@@ -20,13 +20,60 @@
   const card = $derived(journeyState.cards[journeyState.cardIndex])
   const highlights = $derived(card ? (TOUR_HIGHLIGHTS[card.key] ?? []) : [])
   const isLast = $derived(journeyState.cardIndex >= total - 1)
+
+  // A ring that names an element is measured off the live render rather
+  // than drawn at a hand-placed percentage (#750). Measured every frame
+  // while the tour is open, not once per card: the deck's roll runs for
+  // ~700ms after the card changes, so a single reading would place the
+  // ring against a card still in flight -- the same trap goTo() in the
+  // live-check harness documents.
+  type Box = { top: string; left: string; width: string; height: string }
+  let boxes = $state<Record<string, Box>>({})
+
+  function measure(list: typeof highlights) {
+    const next: Record<string, Box> = {}
+    for (const h of list) {
+      if (!h.selector) continue
+      const el = document.querySelector(h.selector)
+      if (!el) continue
+      const r = el.getBoundingClientRect()
+      // A card that is mounted but not rendered has a zero box; falling
+      // back to the hand-placed value beats ringing a point.
+      if (r.width === 0 || r.height === 0) continue
+      next[h.label] = {
+        top: `${(r.top / window.innerHeight) * 100}%`,
+        left: `${(r.left / window.innerWidth) * 100}%`,
+        width: `${(r.width / window.innerWidth) * 100}%`,
+        height: `${(r.height / window.innerHeight) * 100}%`,
+      }
+    }
+    // Only assign when something moved. This runs every frame, and a
+    // fresh object each time would re-render the rings continuously.
+    if (JSON.stringify(next) !== JSON.stringify(boxes)) boxes = next
+  }
+
+  $effect(() => {
+    const list = highlights
+    if (list.length === 0) {
+      boxes = {}
+      return
+    }
+    let raf = 0
+    const tick = () => {
+      measure(list)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  })
 </script>
 
 {#if card}
   <div class="tour" role="group" aria-label="The tour: {card.name}, {journeyState.cardIndex + 1} of {total}">
     <div class="rings" aria-hidden="true">
       {#each highlights as h (h.label)}
-        <div class="ring" style="--h-top: {h.top}; --h-left: {h.left}; --h-width: {h.width}; --h-height: {h.height}">
+        {@const box = boxes[h.label] ?? h}
+        <div class="ring" style="--h-top: {box.top}; --h-left: {box.left}; --h-width: {box.width}; --h-height: {box.height}">
           <span class="tag">{h.label}</span>
         </div>
       {/each}

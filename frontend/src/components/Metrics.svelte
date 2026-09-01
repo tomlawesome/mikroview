@@ -62,6 +62,12 @@
   const reading = $derived(readMinute(hour, cursor))
 
   const perMinuteNow = $derived(hour.traffic.reduce((a, s) => a + s.now, 0))
+
+  // null rather than 0 when stats have not arrived, so the hour line says
+  // nothing instead of claiming "0 events/s now" -- a fetch that has not
+  // landed, or one that failed, is not a measurement of zero. Topography.svelte
+  // already models it this way; this line had drifted from it (#750).
+  const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
   const refusedAtCursor = $derived(
     reading ? reading.traffic.filter((r) => r.ink === 'refused').reduce((a, r) => a + r.value, 0) : 0,
   )
@@ -146,8 +152,10 @@
       <span class="fact"><b>{reading.episodeTotal}</b> flag episodes</span>
     {/if}
     <span class="rate">
-      <span class="big">{formatEps(appState.stats?.eventsPerSecond ?? 0)}<span class="unit">events/s now</span></span>
-      <span class="sep">·</span>
+      {#if epsText}
+        <span class="big">{epsText}<span class="unit">events/s now</span></span>
+        <span class="sep">·</span>
+      {/if}
       <span class="fact"><b>{perMinuteNow}</b>/min</span>
       <span class="sep">·</span>
       <span class="fact"><b>{hour.eventsInHour}</b> events in the hour</span>
