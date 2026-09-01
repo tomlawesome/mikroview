@@ -203,6 +203,32 @@ func (s Snapshot) Fire(minZ float64) bool {
 	return s.Ready && s.ZScore >= minZ
 }
 
+// ProvisionalFire is Fire's counterpart for the one state Fire
+// deliberately refuses: primed, but not yet past the declared
+// BaselineFloor -- a z-score exists (the EMA has a real seed to compare
+// against) but is not yet trusted (too little history backs it). #642's
+// whole chassis change is this method: it reports true exactly there --
+// s.Primed && !s.Ready && the z-score clears minZ -- and false in every
+// other case, including cold/unprimed (s.Primed false), where there is
+// no z-score to judge at all, so silence rather than a guess is the only
+// honest answer (docs/decisions/evaluation-engine.md section 1). It also
+// reports false once s.Ready, deliberately: a settled crossing is Fire's
+// job, not this one's, so a caller checks Fire first and falls back to
+// ProvisionalFire only when Fire itself returned false -- the two are
+// mutually exclusive by construction (Ready and !Ready can't both hold),
+// never both consulted to decide the same emission is both kinds at
+// once.
+//
+// A caller that fires provisional this way is expected to pass
+// Emission.Provisional=true (see that field's own doc comment) so the
+// emission is never silent about being unsettled -- routeToFlag/
+// routeToMatchlog (router.go) and flags.Store.AddProvisional already
+// carry that flag end to end; this method is what a definition's own
+// Evaluate/Tick calls to decide whether to set it.
+func (s Snapshot) ProvisionalFire(minZ float64) bool {
+	return s.Primed && !s.Ready && s.ZScore >= minZ
+}
+
 // Baseline is the chassis's EMA baseline primitive: one instance tracks
 // one key's history (a definition holds many, one per key, typically
 // inside a Keyed[*Baseline] -- see Keyed's own doc comment), gated by a
