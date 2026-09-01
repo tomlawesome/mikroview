@@ -274,6 +274,60 @@ func TestFillWatchNightsAfterADowntimeNightRecordsNotObserved(t *testing.T) {
 	}
 }
 
+// TestTickWatchLivenessMarksTheOpenOccurrenceAndFillLatersHonoursIt is
+// issue #730's end-to-end shape at the store level: a tick while the
+// window is open marks it sticky, and a fill long after -- once the
+// device has recovered and nothing about "now" says anything was ever
+// wrong -- still closes that occurrence as not observed rather than
+// empty.
+func TestTickWatchLivenessMarksTheOpenOccurrenceAndFillLatersHonoursIt(t *testing.T) {
+	s := mustOpenExpectationsStore(t)
+	s.watchingSince = at(t, "2026-08-01T00:00:00Z")
+	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Ports: []int{445}, Window: nightWindow()}); err != nil {
+		t.Fatalf("UpsertExpectation: %v", err)
+	}
+
+	// A tick lands mid-window, while (by hypothesis) the device was stale.
+	changed := s.TickWatchLiveness(at(t, "2026-09-02T01:00:00Z"))
+	if changed != 1 {
+		t.Fatalf("TickWatchLiveness changed %d entries, want 1", changed)
+	}
+	marked := mustGetEntry(t, s, "e1")
+	if len(marked.SilentOccurrences) != 1 {
+		t.Fatalf("got %d silent marks, want 1: %+v", len(marked.SilentOccurrences), marked.SilentOccurrences)
+	}
+
+	// Idempotent within the same occurrence: a second tick before it
+	// closes changes nothing.
+	if changed := s.TickWatchLiveness(at(t, "2026-09-02T02:00:00Z")); changed != 0 {
+		t.Errorf("a second tick in the same occurrence changed %d entries, want 0", changed)
+	}
+
+	// The device recovers, and days later something finally fills the
+	// night -- covered throughout, nothing matched, and by "now" the
+	// device looks perfectly fine. The sticky mark is what remembers.
+	s.FillWatchNights(at(t, "2026-09-08T12:00:00Z"), map[string]bool{"e1": true})
+	got := mustGetEntry(t, s, "e1")
+	var found bool
+	for _, n := range got.Nights {
+		if !n.Opened.Equal(at(t, "2026-09-01T21:00:00Z")) {
+			continue
+		}
+		found = true
+		if n.State != watchlist.NightUnobserved {
+			t.Errorf("the marked night is %q, want %q", n.State, watchlist.NightUnobserved)
+		}
+	}
+	if !found {
+		t.Fatal("the marked night was not filled")
+	}
+
+	// An unknown id is a silent no-op, not a panic or an error.
+	if changed := s.TickWatchLiveness(at(t, "2026-09-09T01:00:00Z")); changed != 1 {
+		t.Errorf("TickWatchLiveness on the next occurrence changed %d entries, want 1", changed)
+	}
+}
+
 // TestFillWatchNightsIgnoresEntriesWithNoWindow pins that an entry with no
 // window accrues no history at all -- there is nothing to be present or
 // absent from.
