@@ -1412,7 +1412,7 @@
           // real keeps the flag open: the stamp takes the chips' place, with retract, and the bar swells
           r.classList.add('isreal'); strike(r, 'real');
           var c = r.cells[5];
-          c.innerHTML = '<span class="vdone"><span class="stamp real">real</span><a>retract</a></span><span class="openc">▸</span>';
+          c.innerHTML = '<span class="vdone"><span class="stamp real">real</span><a>undo</a></span><span class="openc">▸</span>';
           var st = d.querySelector('.story');
           st.insertAdjacentHTML('afterbegin', '<span class="called">Called real at 13:58 by you. It stays open until it is cleared; a fresh episode asks again.</span>');
           c.querySelector('a').addEventListener('click', function (e) {
