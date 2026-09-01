@@ -15,7 +15,9 @@
 #     host ... If a step seems to need one, the step is wrong." Pushing
 #     authenticates from this side instead, so nothing lands over there.
 #   - Only new objects cross after the first run, and node_modules and the
-#     worktrees/ trees never do -- git simply does not carry them.
+#     worktrees/ trees never do -- git simply does not carry them. That is a
+#     saving, not an omission: the far side installs the frontend's
+#     dependencies itself, below, because what lands there is a fresh clone.
 #   - The host gets a real checkout, so live-env.sh's `git rev-parse HEAD`
 #     stamps the build honestly rather than falling back to "nogit".
 #
@@ -60,12 +62,24 @@ echo "==> pushing the tree"
 ssh "$HOST" 'mkdir -p ~/gate-repo.git && cd ~/gate-repo.git && git rev-parse --is-bare-repository >/dev/null 2>&1 || git init --bare -q'
 git push --force --quiet "$HOST:gate-repo.git" "HEAD:refs/heads/gate-run"
 
+# The gate's container chowns /work to uid 10001, which under rootless Docker
+# lands on the host as a subuid this account does not own -- so a plain
+# `rm -rf ~/gate-work` fails on every file, leaves a quarter of a gigabyte
+# behind, and blocks the next run's checkout too. Hand the tree back through
+# the image, which can, before each removal. A no-op when the tree or the
+# image is not there yet, which is the first run.
+RECLAIM='if [ -d ~/gate-work ]; then
+  docker run --rm --user 0 -v "$HOME/gate-work:/work" mv-gate:local \
+    chown -R 0:0 /work >/dev/null 2>&1 || true
+fi'
+
 echo "==> checking out and building the image (cached after the first run)"
-ssh "$HOST" 'set -eu
-  rm -rf ~/gate-work
-  git clone -q --branch gate-run ~/gate-repo.git ~/gate-work
-  cd ~/gate-work
-  docker build -q -f live-check.Dockerfile -t mv-gate:local . >/dev/null'
+ssh "$HOST" "$RECLAIM
+set -eu
+rm -rf ~/gate-work
+git clone -q --branch gate-run ~/gate-repo.git ~/gate-work
+cd ~/gate-work
+docker build -q -f live-check.Dockerfile -t mv-gate:local . >/dev/null"
 
 echo "==> running the gate (35-50 minutes)"
 # --user 0 then dropping to ci-gate inside is deliberate, and is what the
@@ -78,8 +92,10 @@ set +e
 ssh "$HOST" "set -eu
   cd ~/gate-work
   docker run --rm --user 0 --shm-size=1g -v \"\$HOME/gate-work:/work\" -w /work mv-gate:local bash -c '
+    set -e
     useradd -m -u 10001 ci-gate
     chown -R ci-gate:ci-gate /work
+    su ci-gate -c \"cd /work/frontend && HOME=/home/ci-gate npm ci\"
     su ci-gate -c \"cd /work && HOME=/home/ci-gate MV_BROWSER=$BROWSER make live-check\"
   '" 2>&1 | tee gate-run.log
 gate_status=${PIPESTATUS[0]}
@@ -108,7 +124,8 @@ if [ "$KEEP" -eq 1 ]; then
   echo "==> leaving ~/gate-work on $HOST (--keep)"
 else
   echo "==> cleaning up the work tree on $HOST"
-  ssh "$HOST" 'rm -rf ~/gate-work'
+  ssh "$HOST" "$RECLAIM
+rm -rf ~/gate-work"
 fi
 echo "==> log saved to gate-run.log"
 
