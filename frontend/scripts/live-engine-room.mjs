@@ -2,8 +2,10 @@
 //
 // Settings as the shelf (#633, rounds 23-25), driven in a real browser.
 // The five-station signal path (#490) is replaced wholesale: one page,
-// five groups -- your deck, ingest, detection, memory, account -- with
-// the two side doors keeping their own place below the shelf.
+// groups reporting live truth. Round 32 (#767) mounted keys (under
+// ingest) and people (under account) directly in the card, in the
+// card's own row grammar, retiring the two side doors that used to
+// carry them below the shelf.
 //
 // The room's claims survive the restyle, and none of them is visible
 // from the code or from a unit test with a mocked store:
@@ -15,12 +17,11 @@
 //  2. "Tuning unfolds, it does not navigate" -- the detector bench opens
 //     from detection's tune row and the page must still be Settings
 //     afterwards, the bench folded in place rather than routed to.
-//  3. The viewer grammar: chip declared once, affordances absent rather
-//     than disabled, the people door absent entirely -- and, the part no
-//     DOM assertion covers, a viewer's session never even *asks* for the
-//     account list. GET /api/auth/users is admin-only by the owner's
-//     ruling of 2026-08-24, so a viewer issuing it would be a page that
-//     loads and immediately 403s.
+//  3. The viewer grammar: affordances absent rather than disabled, the
+//     people group absent entirely -- and, the part no DOM assertion
+//     covers, a viewer's session never even *asks* for the account
+//     list. GET /api/auth/users is admin-only (#657), so a viewer
+//     issuing it would be a page that loads and immediately 403s.
 
 import { session, feedSyslog, check, done, goTo, launchBrowser } from './live-browser.mjs'
 
@@ -28,28 +29,28 @@ const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session({ waitForEvents: 40 })
 
-const PEOPLE = '.door:has-text("Who may look in")'
-const MACHINES = '.door:has-text("Which machines may speak")'
+const PEOPLE = '#people'
+const MACHINES = '#keys'
 
+// goTo() itself waits for the Settings card to be centred -- round 30
+// draws no page heading to wait for separately (#697/#700).
 await goTo(page, 'Settings')
-await page.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
-  null,
-  { timeout: 5000 },
-)
 
-// --- The page is the five groups, with both doors below the shelf -------
+// --- The page is the groups, with keys and people mounted in place ------
 
-const groupNames = await page.$$eval('.og h3', (els) => els.map((e) => e.textContent.trim()))
+const groupNames = await page.$$eval('.stsection h3', (els) => els.map((e) => e.textContent.trim()))
 check(
   JSON.stringify(groupNames) ===
-    JSON.stringify(['your deck', 'ingest', 'detection', 'memory', 'account']),
-  `the five groups render -- deck, ingest, detection, memory, account -- got ${JSON.stringify(groupNames)}`,
+    JSON.stringify(['ingest', 'keys', 'detection', 'memory', 'account', 'people']),
+  `the groups render in order -- ingest, keys, detection, memory, account, people -- got ${JSON.stringify(groupNames)}`,
 )
-const doorNames = await page.$$eval('.doors .door .dname', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(doorNames) === JSON.stringify(['Who may look in', 'Which machines may speak']),
-  `both side doors render for an admin -- got ${JSON.stringify(doorNames)}`,
+  await page.locator(`${MACHINES} h3`).isVisible(),
+  'the keys group renders for an admin',
+)
+check(
+  await page.locator(`${PEOPLE} h3`).isVisible(),
+  'the people group renders for an admin',
 )
 
 // The shelf holds the whole deck, whatever order an earlier scenario
@@ -70,7 +71,7 @@ check(
 // whole number the server publishes, so a placeholder or a stale render
 // is visible as a number that does not move when more events land.
 
-const BUFFER_ROW = '.og:has(h3:text-is("memory")) .orow:has-text("event buffer") .ov'
+const BUFFER_ROW = '.stsection:has(h3:text-is("memory")) .orow:has-text("event buffer") .ov'
 
 const bufferCount = () =>
   page.$eval(BUFFER_ROW, (el) => {
@@ -91,7 +92,7 @@ const climbed = await page
       // page": the ingest group's events/s moves on its own, so a
       // fallback would let this check pass without ever reading the
       // buffer.
-      const og = [...document.querySelectorAll('.og')].find(
+      const og = [...document.querySelectorAll('.stsection')].find(
         (g) => g.querySelector('h3')?.textContent.trim() === 'memory',
       )
       const row = og && [...og.querySelectorAll('.orow')].find((r) => r.textContent.includes('event buffer'))
@@ -106,7 +107,7 @@ const climbed = await page
   .then(() => true, () => false)
 check(climbed, `the buffer count rises as events arrive -- it is live traffic, not a placeholder (was ${before})`)
 
-const ingestText = (await page.textContent('.og:has(h3:text-is("ingest"))')) ?? ''
+const ingestText = (await page.textContent('.stsection:has(h3:text-is("ingest"))')) ?? ''
 check(
   /listening/.test(ingestText),
   'ingest names the listening port -- the pathway in is a stated fact',
@@ -118,7 +119,7 @@ check(
 
 // The detection group's "N of M on" has to agree with the server's own
 // definitions list, whatever an earlier scenario left toggled.
-const detectorsRow = (await page.textContent('.og:has(h3:text-is("detection")) .orow:has-text("detectors")'))?.trim() ?? ''
+const detectorsRow = (await page.textContent('.stsection:has(h3:text-is("detection")) .orow:has-text("detectors")'))?.trim() ?? ''
 const defs = await page.request
   .get(`${URL_BASE}/api/definitions`)
   .then(async (r) => (await r.json()).definitions ?? [])
@@ -134,7 +135,7 @@ await page.click('.olink:has-text("tune")')
 await page.waitForSelector('.bench .row')
 
 check(
-  (await page.textContent('.page-header h2'))?.trim() === 'Settings',
+  await page.locator('.stshelf .stcard.first').isVisible(),
   'the page is still Settings -- the bench unfolded in place, it did not navigate away',
 )
 check(
@@ -147,41 +148,32 @@ await page.waitForSelector('.bench', { state: 'detached' })
 check(true, 'closing the bench folds it away and the page is whole again')
 
 // --- Claim 3: the viewer grammar ----------------------------------------
+// #657 (predating round 32) narrowed GET /api/tokens to admin-only, the
+// same footing GET /api/auth/users was already on -- issuing keys is a
+// setup task, not using the product. So keys and people are both absent
+// for a viewer, not a read-only rendering of either: this used to assert
+// the machines door stayed viewer-readable with its verbs gone, which
+// stopped being true the moment #657 landed. Round 32/#767 keeps both
+// groups on that same admin-only footing (see EngineRoom.svelte's own
+// doc comment on the point).
 
 const VIEWER_USER = 'live-viewer-490'
 const VIEWER_PASS = 'live-viewer-490-password'
 
-// A key for the viewer to read at the machines door. Minted through the
-// API rather than the door's own form on purpose: whether the form works
-// is live-token-ui.mjs's question, and this scenario must not depend on
-// the list happening to be non-empty -- it is not. Every scenario that
-// mints one also revokes it, and this one runs before all of them, so
-// without this the door is legitimately empty and the check below would
-// be asserting on leftovers.
-const minted = await page.request
-  .post(`${URL_BASE}/api/tokens`, {
-    // The same header the app's own writes send -- the server's
-    // cross-origin guard refuses a state-changing request without it.
-    headers: { 'X-Requested-With': 'mikroview' },
-    data: { name: 'engine-room-door-read', kind: 'api' },
-  })
-  .then((r) => (r.ok() ? r.json() : null))
-check(minted !== null, 'a key exists for the viewer to read at the machines door')
-
-await page.click(`${PEOPLE} .footer-action`)
-await page.waitForSelector(`${PEOPLE} .inline-form`)
-await page.fill(`${PEOPLE} .inline-form input[type="text"]`, VIEWER_USER)
-await page.fill(`${PEOPLE} .inline-form input[type="password"]`, VIEWER_PASS)
-// #653: the door creates a "can change things" account by default, so
-// the read-only tier this claim is about has to be chosen explicitly --
+await page.click(`${PEOPLE} .ogfoot .olink`)
+await page.waitForSelector(`${PEOPLE} .pform`)
+await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, VIEWER_USER)
+await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, VIEWER_PASS)
+// #653: the form defaults to a "can change things" account, so the
+// read-only tier this claim is about has to be chosen explicitly --
 // which also drives the selector itself, since without it the viewer
 // tier has no route in from the UI at all.
-await page.selectOption(`${PEOPLE} .inline-form select`, 'viewer')
-await page.click(`${PEOPLE} .inline-form .save`)
-await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`)
+await page.click(`${PEOPLE} .pform button:has-text("can only look")`)
+await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
+await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`)
 check(
-  await page.isVisible(`${PEOPLE} .row:has-text("${VIEWER_USER}") .chip:has-text("view only")`),
-  'the people door marks the new account as read-only',
+  await page.isVisible(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .pr:has-text("can only look")`),
+  'the people group marks the new account as read-only',
 )
 
 const browser = await launchBrowser()
@@ -201,54 +193,37 @@ await viewerPage.click('button[type="submit"]')
 await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 
 await goTo(viewerPage, 'Settings')
-await viewerPage.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
-  null,
-  { timeout: 5000 },
-)
-check(true, 'a viewer can open Settings -- the one Admin-group page that is readable')
+check(true, 'a viewer can open Settings -- the operational groups stay readable')
 
-const chips = await viewerPage.$$eval('.page-header .chip', (els) => els.map((e) => e.textContent.trim()))
+// The READ-ONLY declaration itself has nowhere to render today -- #700
+// struck the page heading it lived in, and round 30 drew no replacement
+// (a gap tracked on #691, not a decision that viewers stop being told).
+// Pinned here as the present truth rather than the stale claim that it
+// still renders once, in the header.
 check(
-  // #653: the chip names no tier any more -- with three of them,
-  // "ADMINS EDIT" was wrong in both directions, and it only ever renders
-  // for someone who cannot edit the page anyway.
-  JSON.stringify(chips) === JSON.stringify(['READ-ONLY']),
-  `read-only is declared exactly once, in the page header -- got ${JSON.stringify(chips)}`,
-)
-
-const viewerDoors = await viewerPage.$$eval('.doors .door .dname', (els) => els.map((e) => e.textContent.trim()))
-check(
-  JSON.stringify(viewerDoors) === JSON.stringify(['Which machines may speak']),
-  `the people door is absent for a viewer, not read-only and not empty -- got ${JSON.stringify(viewerDoors)}`,
+  (await viewerPage.$$('text=READ-ONLY')).length === 0,
+  'no READ-ONLY declaration renders anywhere (#691 gap, not this scenario\'s to fix)',
 )
 
 check(
-  !viewerRequests.some((u) => u.includes('/api/auth/users')),
-  'a viewer never even asks for the account list -- the request that would 403 is not issued at all',
+  (await viewerPage.$$(`${MACHINES} h3`)).length === 0,
+  'the keys group is absent for a viewer, not read-only and not empty',
+)
+check(
+  (await viewerPage.$$(`${PEOPLE} h3`)).length === 0,
+  'the people group is absent for a viewer, not read-only and not empty',
 )
 
-// Absent, never disabled: the letter of the grammar. A greyed-out Revoke
-// would satisfy "cannot edit" while breaking the rule the record is
-// actually about.
 check(
-  (await viewerPage.$$(`${MACHINES} .verb`)).length === 0,
-  'Mint and Revoke are absent at the machines door for a viewer',
+  !viewerRequests.some((u) => u.includes('/api/auth/users') || u.includes('/api/tokens')),
+  'a viewer never even asks for the account or token list -- the requests that would 403 are not issued at all',
 )
+
 const viewerDisabled = await viewerPage.$$eval('.page button, .page input', (els) =>
   els.filter((e) => e.disabled).length,
 )
 check(viewerDisabled === 0, `nothing on the page is rendered disabled for a viewer -- got ${viewerDisabled}`)
 
-// The facts survive without the handles: a viewer still reads which
-// machines may speak and what every detector is doing, in words.
-check(
-  await viewerPage
-    .locator(`${MACHINES} .row:has-text("engine-room-door-read")`)
-    .waitFor({ timeout: 10000 })
-    .then(() => true, () => false),
-  'a viewer still reads which machines may speak -- the key is named, with its verbs gone',
-)
 await viewerPage.click('.olink:has-text("tune")')
 await viewerPage.waitForSelector('.bench .row')
 check((await viewerPage.$$('.bench .cbx')).length === 0, 'the run/pause checkboxes are absent for a viewer')
@@ -266,16 +241,14 @@ viewerPage.on('console', (m) => m.type() === 'error' && viewerConsole.push(m.tex
 await browser.close()
 
 // --- Clean up: this account should not outlive the scenario -------------
+// Arm-then-confirm (round 28's gesture, retained rather than a confirm()
+// dialog): a click arms remove, a second click on the same button
+// confirms it.
 
-if (minted?.id) {
-  await page.request.delete(`${URL_BASE}/api/tokens/${minted.id}`, {
-    headers: { 'X-Requested-With': 'mikroview' },
-  })
-}
-
-page.on('dialog', (d) => d.accept())
-await page.click(`${PEOPLE} .row:has-text("${VIEWER_USER}") .verb`)
-await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`, { state: 'detached' })
+const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`)
+await remove.click()
+await remove.click()
+await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
 check(true, `the viewer account "${VIEWER_USER}" is removed again`)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)
