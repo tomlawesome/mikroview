@@ -49,12 +49,14 @@ async function openAndCheck(label) {
  * live-nav-bottom-bar.mjs proves any other bottom-bar destination: resize down, open the half-sheet, click Fleet's
  * row inside it, and read the arrival the rebuilt card (#706, #778) actually renders: a per-device status mark
  * plus its written label -- '● LIVE', '◌ QUIET · Nd' or '◌ NEVER SEEN' (lib/fleet.ts's deviceState, drawn by
- * Fleet.svelte's .fstate span). That vocabulary, not a structural class, is what proves Fleet's own content
- * mounted -- the same wording Entities' leading row uses for the same cards, but the two never render at once
- * (App.svelte's view switch is exclusive), so seeing it here after this click is Fleet's. Assumes the gate's
- * fleet has at least one device that has ever reported in, same assumption live-connection-states.mjs makes.
- * Lands back on Detect/Flags before restoring the desktop viewport, not Expect/Watchlist, because Expect is
- * gated away from a viewer (navGroups.ts) and this helper runs for both roles. */
+ * Fleet.svelte's .fstate span). That vocabulary is shared verbatim with Entities' own leading row (same
+ * component, same cards), so the wait is scoped to Fleet's own card -- `.card[data-card="fleet"]`
+ * (Deck.svelte:146-147's per-card section, key 'fleet' from deckCards.ts:49) -- rather than trusting that
+ * Fleet and Entities never render at once. Scoped this way, the wait proves Fleet's card specifically, not an
+ * App-level routing invariant in a different file that could change without this scenario noticing. Assumes
+ * the gate's fleet has at least one device that has ever reported in, same assumption live-connection-states.mjs
+ * makes. Lands back on Detect/Flags before restoring the desktop viewport, not Expect/Watchlist, because Expect
+ * is gated away from a viewer (navGroups.ts) and this helper runs for both roles. */
 async function checkFleetFromBottomBar(target) {
   await target.setViewportSize({ width: 390, height: 844 })
   await target.waitForSelector('.bottom-bar', { timeout: 5000 })
@@ -63,7 +65,7 @@ async function checkFleetFromBottomBar(target) {
   const sheetItems = await target.$$eval('.sheet .sheet-item .label', (els) => els.map((e) => e.textContent.trim()))
   await target.click('.sheet .sheet-item .label:text-is("Fleet")')
   await target.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
-  await target.waitForSelector('text=/● LIVE|◌ QUIET|◌ NEVER SEEN/', { timeout: 5000 })
+  await target.waitForSelector('.card[data-card="fleet"] >> text=/● LIVE|◌ QUIET|◌ NEVER SEEN/', { timeout: 5000 })
   await target.click('.bottom-bar .group-btn .label:text-is("Detect")')
   await target.waitForSelector('.flags-page', { timeout: 5000 })
   await target.setViewportSize({ width: 1280, height: 720 })
