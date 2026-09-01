@@ -41,6 +41,65 @@
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import type { Flag, FlagType, FirewallEvent } from '../lib/types'
 
+  // "watch this pathway" / "watch this source" (#761 item 3): a flag
+  // writes the watchlist tab's draft for it rather than making the
+  // operator retype what mikroview already knows. Both switch to the
+  // watchlist tab through the same shared handoff Docket's `+ watch` and
+  // #724's dial rows already use (topologyNav.svelte.ts) -- Watchlist's
+  // own draft state is private to that component.
+  //
+  // "watch this source" fences the flag's own source -- an inverted
+  // entry, scoped to that device, learning where it goes before
+  // anything fires. Gated on extractSourceIp actually resolving a
+  // single source IP, which is narrower than isFilterable(): that also
+  // covers rule_spike/stale_rule (target is a rule label),
+  // distributed_brute_force (target is "port N") and device_silence
+  // (target is a device id), none of which name a device to fence.
+  // Falling back to the raw target for those would pre-fill the
+  // draft's identity with a rule name or a bare port number -- a
+  // confident-looking but wrong "who".
+  function canWatchSource(f: Flag): boolean {
+    return extractSourceIp(f.target) !== null
+  }
+
+  // "watch this pathway" only ever fires for critical_port: it is the
+  // one detector whose Evidence carries a real host:port destination
+  // (evidence.pairs, #654) rather than a free-text sentence. Every other
+  // type's `target`/`detail` is prose or a list with no single named
+  // destination to expect -- guessing one from text would be inventing
+  // evidence this page did not actually see, so those flags offer
+  // `watch this source` only (and only when canWatchSource agrees).
+  function canWatchPathway(f: Flag): boolean {
+    return f.type === 'critical_port' && (f.evidence?.pairs?.length ?? 0) > 0
+  }
+
+  // The pathway's `toward`: the first evidence pair's host, and every
+  // port evidence recorded against that same host -- the shape the
+  // record's own draft `toward` field takes ("nas · :445, :139").
+  function pathwayToward(f: Flag): string {
+    const pairs = f.evidence?.pairs ?? []
+    const host = pairs[0]?.host ?? ''
+    const ports = pairs.filter((p) => p.host === host).map((p) => `:${p.port}`)
+    return ports.length > 0 ? `${host} · ${ports.join(', ')}` : host
+  }
+
+  // Both are only ever wired to a button gated on canWatchSource/
+  // canWatchPathway, so the source IP this reads has already been
+  // confirmed to exist -- never falls back to the raw target.
+  function watchThisSource(f: Flag) {
+    const who = extractSourceIp(f.target)
+    if (!who) return
+    topologyNavState.requestWatchDraft({ who, mode: 'fence' })
+    appState.view = 'watchlist'
+  }
+
+  function watchThisPathway(f: Flag) {
+    const who = extractSourceIp(f.target)
+    if (!who) return
+    topologyNavState.requestWatchDraft({ who, toward: pathwayToward(f), mode: 'expect' })
+    appState.view = 'watchlist'
+  }
+
   // Same gate the rail uses for the engine room's watchers station --
   // here it decides only whether the empty state offers the audit log.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -751,6 +810,11 @@
           <div class="dwr-acts">
             {#if isFilterable(f)}
               <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
+            {/if}
+            {#if canEdit && canWatchPathway(f)}
+              <button class="act" onclick={() => watchThisPathway(f)}>watch this pathway</button>
+            {:else if canEdit && canWatchSource(f)}
+              <button class="act" onclick={() => watchThisSource(f)}>watch this source</button>
             {/if}
             {#if provisional && canEdit}
               <!-- The verdict loop (#491/#638): the tuning
