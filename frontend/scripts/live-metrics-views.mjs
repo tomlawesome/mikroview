@@ -237,7 +237,13 @@ await page
 await page.locator(cursorBand(SEISMOGRAPH)).waitFor({ state: 'visible', timeout: 5000 })
 const pointerMinute = (await page.locator(`${SEISMOGRAPH} text.cursor-label`).textContent()).trim()
 check(/^\d\d:\d\d$/.test(pointerMinute), `clicking the drum's paper selects a minute -- got "${pointerMinute}"`)
-const hourlineBig = (await page.locator('.metrics .hourline .big').textContent()).trim()
+// .hourline holds two .big spans (Metrics.svelte:146-167): the reading's own time
+// (formatHM(reading.time), a zero-padded HH:MM -- Metrics.svelte:148) and the rate
+// summary's events/s-now figure (formatEps(...), no colon -- Metrics.svelte:156,
+// lib/format.ts:56-65). This assertion is about the minute the drum's click landed
+// on, so it means the first one -- selected here by what it renders (a clock-shaped
+// string), not by DOM position, which is not what distinguishes the two.
+const hourlineBig = (await page.locator('.metrics .hourline .big', { hasText: /^\d\d:\d\d/ }).textContent()).trim()
 check(
   hourlineBig.startsWith(pointerMinute),
   `the hourline reflects the minute clicked on the drum -- got "${hourlineBig}" for "${pointerMinute}"`,
