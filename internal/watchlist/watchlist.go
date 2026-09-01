@@ -154,6 +154,15 @@ type Entry struct {
 	// rule is logging this pathway) is a different kind of broken and
 	// stays computed on read from router state -- see Ring.
 	Ring Ring `json:"ring,omitzero"`
+	// SilentOccurrences is the sticky liveness mark MarkSilent writes and
+	// FillNights consults, via Observation.Silent (issue #730): the Open
+	// instant of every occurrence of Window found, at some tick, to have
+	// the device behind this entry's pathway gone stale. Persisted
+	// alongside Nights/Ring rather than held only in memory, for the same
+	// reason those are: it must survive a restart, and it must still be
+	// there whenever FillNights eventually gets around to closing the
+	// occurrence it names.
+	SilentOccurrences []time.Time `json:"silentOccurrences,omitempty"`
 
 	CreatedAt time.Time `json:"createdAt"`
 }

@@ -14,33 +14,46 @@ export interface DeckCard {
 
 // The ratified default order. A card can answer for several views: the
 // docket is one card whose tabs are the flags, watchlist and audit
-// views, so deep links to any of them land on it. Watchlist and audit
-// are admin-only throughout (#490's grammar: absent for viewers, never
-// disabled).
+// views, so deep links to any of them land on it. Watchlist needs the
+// user tier (#653's edit gate); audit stays admin-only throughout
+// (#490's grammar: absent for a lower tier, never disabled).
 //
 // Entities and Settings joined the deck as its last two cards in #647
 // (#634 round 23): "combined fleet/entities followed by settings the
-// final page" -- seven cards for an admin. Entities keeps its own
-// admin gate (its GET route still 403s for a viewer, per
-// navGroups.ts's own comment on the same point) so its card is absent
-// rather than present-and-broken; Settings/engineroom stays present for
-// every role, unchanged from before (it was already viewer-readable).
-export function deckCards(admin: boolean): DeckCard[] {
+// final page" -- seven cards for an admin, and, since #653 widened
+// GET /api/entities to the user tier, seven for a user too. #657 then
+// ruled Settings and Entities out of a viewer's navigation entirely --
+// a page whose purpose is making a change is noise to someone who
+// cannot -- so canEdit gates both cards now rather than isAdmin gating
+// only Entities. Fleet's routers table folded into Entities' leading
+// section under #647, but #657's ratified matrix keeps Fleet itself
+// viewer-visible ("a stale router is why the log looks wrong"), so a
+// viewer gets the standalone Fleet card (frontend/src/components/
+// Fleet.svelte, otherwise reachable only from the phone-width bottom
+// bar) in place of the two cards they cannot use.
+export function deckCards(isAdmin: boolean, canEdit: boolean = isAdmin): DeckCard[] {
+  const docketViews: View[] = ['flags']
+  if (canEdit) docketViews.push('watchlist')
+  if (isAdmin) docketViews.push('audit')
   const cards: DeckCard[] = [
     { key: 'fall', name: 'The fall', views: ['fall'] },
     { key: 'topography', name: 'Topography', views: ['topography'] },
     { key: 'metrics', name: 'Metrics', views: ['metrics'] },
     { key: 'live', name: 'Stream', views: ['live'] },
-    { key: 'docket', name: 'The docket', views: admin ? ['flags', 'watchlist', 'audit'] : ['flags'] },
+    { key: 'docket', name: 'The docket', views: docketViews },
   ]
-  if (admin) cards.push({ key: 'entities', name: 'Entities', views: ['entities'] })
-  cards.push({ key: 'engineroom', name: 'Settings', views: ['engineroom'] })
+  if (canEdit) {
+    cards.push({ key: 'entities', name: 'Entities', views: ['entities'] })
+    cards.push({ key: 'engineroom', name: 'Settings', views: ['engineroom'] })
+  } else {
+    cards.push({ key: 'fleet', name: 'Fleet', views: ['fleet'] })
+  }
   return cards
 }
 
 // Where signing in lands per first card. Always a role-safe view: cards
 // are reordered whole, and every card's first view is visible to every
-// role (the docket's is flags, never its admin-only tabs).
+// role (the docket's is flags, never its higher-tier tabs).
 export const LANDING_BY_CARD: Record<string, View> = {
   fall: 'fall',
   topography: 'topography',
@@ -49,4 +62,5 @@ export const LANDING_BY_CARD: Record<string, View> = {
   docket: 'flags',
   entities: 'entities',
   engineroom: 'engineroom',
+  fleet: 'fleet',
 }
