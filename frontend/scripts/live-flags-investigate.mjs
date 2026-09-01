@@ -11,7 +11,7 @@
 // control and shouldn't assert on.
 
 import { fileURLToPath } from 'url'
-import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag, goTo, unfoldStreamFilter } from './live-browser.mjs'
 
 
 
@@ -82,6 +82,10 @@ check(await card.isVisible(), 'the card is still there after closing the popover
 await card.locator('button.target').click()
 await page.waitForTimeout(300)
 check(await page.isVisible('input.rule'), 'clicking the target chip still navigates to the live view, unaffected by the new button')
+// The chip click navigates, which closes the filter box behind it (round
+// 30 closes on any click away -- FilterBar.svelte:97-100). The filter is
+// applied either way; re-open so the box can be read (#663).
+await unfoldStreamFilter(page).catch(() => {})
 check(
   // #438 split the single "IP or CIDR" box into side-scoped Source/
   // Destination boxes; a flag target is a source address (Flags.svelte's
