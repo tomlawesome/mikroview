@@ -62,9 +62,9 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // pages wholesale: 'users' and 'tokens' (#548's account/API-token
 // management pages, successors to the UsersOverlay/TokensOverlay
 // modals) and 'detectors' (the per-detector on/off + scope settings
-// tab) -- all three retired with no alias once the engine room's doors
-// and watchers station existed to replace them (see
-// EngineRoomDoors.svelte/EngineRoomWatchers.svelte, which reuse their
+// tab) -- all three retired with no alias once the engine room's keys/
+// people groups and watchers station existed to replace them (see
+// EngineRoom.svelte/EngineRoomWatchers.svelte, which reuse their
 // state modules and API calls unchanged). A real (if minimal) view
 // switch -- only one is ever mounted at a time -- rather than a modal
 // layered over the live table, which used to leave LiveTable running
