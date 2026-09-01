@@ -679,6 +679,8 @@ var watchlistNonInvertedParamSchema = []ParamSchema{
 		Description: "JSON-encoded []watchlist.Night -- the last seven occurrences of the window and what happened in each (kept, empty, not observed). Recorded rather than derived: the match log keeps 48 hours, so a healthy watch would read as empty nights if this were rebuilt from it."},
 	{Name: "ringJSON", Type: ParamTypeStringList, Max: floatBound(1),
 		Description: "JSON-encoded watchlist.Ring -- the recorded break in this expectation's run of kept nights, written at the moment it broke."},
+	{Name: "silentJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded []time.Time -- the Open instant of every currently-open-or-recent occurrence found, at some tick, to have the device behind this expectation's pathway gone stale (issue #730). Sticky: written while the occurrence is still open, so FillNights can still close it as not-observed even if the device recovered before the window shut."},
 }
 
 // watchlistInvertedParamSchema is what an inverted watchlist entry ("this
@@ -715,6 +717,8 @@ var watchlistInvertedParamSchema = []ParamSchema{
 		Description: "JSON-encoded []watchlist.Night -- the last seven occurrences of the window and what happened in each (kept, empty, not observed). Recorded rather than derived: the match log keeps 48 hours, so a healthy watch would read as empty nights if this were rebuilt from it."},
 	{Name: "ringJSON", Type: ParamTypeStringList, Max: floatBound(1),
 		Description: "JSON-encoded watchlist.Ring -- the recorded break in this expectation's run of kept nights, written at the moment it broke."},
+	{Name: "silentJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded []time.Time -- the Open instant of every currently-open-or-recent occurrence found, at some tick, to have the device behind this expectation's pathway gone stale (issue #730). Sticky: written while the occurrence is still open, so FillNights can still close it as not-observed even if the device recovered before the window shut."},
 }
 
 // convertWatchlistEntries converts every watchlist entry into an
@@ -772,41 +776,50 @@ func convertWatchlistEntry(e *watchlist.Entry) (Definition, error) {
 // entry with no window then converts to exactly the definition it
 // converted to before #680, byte for byte, so the field addition costs
 // existing deployments nothing on disk and nothing in review.
-func addWatchHistoryParams(params Params, windowJSON, nightsJSON, ringJSON string) {
-	for name, value := range map[string]string{"windowJSON": windowJSON, "nightsJSON": nightsJSON, "ringJSON": ringJSON} {
+func addWatchHistoryParams(params Params, windowJSON, nightsJSON, ringJSON, silentJSON string) {
+	for name, value := range map[string]string{
+		"windowJSON": windowJSON, "nightsJSON": nightsJSON, "ringJSON": ringJSON, "silentJSON": silentJSON,
+	} {
 		if value != "" {
 			params[name] = []string{value}
 		}
 	}
 }
 
-func watchHistoryParams(e *watchlist.Entry) (windowJSON, nightsJSON, ringJSON string, err error) {
+func watchHistoryParams(e *watchlist.Entry) (windowJSON, nightsJSON, ringJSON, silentJSON string, err error) {
 	if e.Window.Defined() {
 		b, err := json.Marshal(e.Window)
 		if err != nil {
-			return "", "", "", fmt.Errorf("encoding the watch window: %w", err)
+			return "", "", "", "", fmt.Errorf("encoding the watch window: %w", err)
 		}
 		windowJSON = string(b)
 	}
 	if len(e.Nights) > 0 {
 		b, err := json.Marshal(e.Nights)
 		if err != nil {
-			return "", "", "", fmt.Errorf("encoding the nightly history: %w", err)
+			return "", "", "", "", fmt.Errorf("encoding the nightly history: %w", err)
 		}
 		nightsJSON = string(b)
 	}
 	if e.Ring.Broken {
 		b, err := json.Marshal(e.Ring)
 		if err != nil {
-			return "", "", "", fmt.Errorf("encoding the ring state: %w", err)
+			return "", "", "", "", fmt.Errorf("encoding the ring state: %w", err)
 		}
 		ringJSON = string(b)
 	}
-	return windowJSON, nightsJSON, ringJSON, nil
+	if len(e.SilentOccurrences) > 0 {
+		b, err := json.Marshal(e.SilentOccurrences)
+		if err != nil {
+			return "", "", "", "", fmt.Errorf("encoding the silent-occurrence marks: %w", err)
+		}
+		silentJSON = string(b)
+	}
+	return windowJSON, nightsJSON, ringJSON, silentJSON, nil
 }
 
 func convertNonInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
-	windowJSON, nightsJSON, ringJSON, err := watchHistoryParams(e)
+	windowJSON, nightsJSON, ringJSON, silentJSON, err := watchHistoryParams(e)
 	if err != nil {
 		return Definition{}, err
 	}
@@ -819,7 +832,7 @@ func convertNonInvertedEntry(e *watchlist.Entry, name string) (Definition, error
 		"sourceListList":   optionalStringList(e.SourceList.List),
 		"createdAt":        optionalStringList(formatTime(e.CreatedAt)),
 	}
-	addWatchHistoryParams(params, windowJSON, nightsJSON, ringJSON)
+	addWatchHistoryParams(params, windowJSON, nightsJSON, ringJSON, silentJSON)
 	normalized, err := ValidateParams(watchlistNonInvertedParamSchema, params)
 	if err != nil {
 		return Definition{}, fmt.Errorf("converting to a declarative expectation definition: %w", err)
@@ -842,7 +855,7 @@ func convertNonInvertedEntry(e *watchlist.Entry, name string) (Definition, error
 }
 
 func convertInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
-	windowJSON, nightsJSON, ringJSON, err := watchHistoryParams(e)
+	windowJSON, nightsJSON, ringJSON, silentJSON, err := watchHistoryParams(e)
 	if err != nil {
 		return Definition{}, err
 	}
@@ -864,7 +877,7 @@ func convertInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
 		"observedJSON":           []string{string(observedJSON)},
 		"createdAt":              optionalStringList(formatTime(e.CreatedAt)),
 	}
-	addWatchHistoryParams(params, windowJSON, nightsJSON, ringJSON)
+	addWatchHistoryParams(params, windowJSON, nightsJSON, ringJSON, silentJSON)
 	normalized, err := ValidateParams(watchlistInvertedParamSchema, params)
 	if err != nil {
 		return Definition{}, fmt.Errorf("converting to a programmatic expectation definition: %w", err)
