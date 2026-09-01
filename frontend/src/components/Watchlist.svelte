@@ -1033,7 +1033,6 @@
       </table>
     {/if}
   </section>
-
   </div>
 
   {#if WATCHLIST_SUBTABS_ENABLED}
