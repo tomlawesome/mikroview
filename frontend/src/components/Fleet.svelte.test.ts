@@ -5,23 +5,42 @@ import { render } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
+import { flagsState } from '../lib/flags.svelte'
 import Fleet from './Fleet.svelte'
 
 // Fleet reads appState.devices directly -- no request of its own to mock.
 vi.mock('../lib/api', () => ({}))
 
+function device(overrides: Record<string, unknown>) {
+  return {
+    id: 'r1',
+    name: 'router1',
+    configured: true,
+    status: 'live',
+    lastSeen: new Date(Date.now() - 60_000).toISOString(),
+    sourceIp: '10.0.0.1',
+    eventCount: 3,
+    routerosVersion: '7.15',
+    ...overrides,
+  }
+}
+
+function setDevices(list: ReturnType<typeof device>[]) {
+  appState.devices = list as unknown as (typeof appState)['devices']
+}
+
 // #549's Loading and first-run chrome states, applied to Fleet the same
 // way LiveTable.svelte.test.ts covers them for the live view: a
-// zero-device table is either "the app's one loadInitial() call hasn't
+// zero-device view is either "the app's one loadInitial() call hasn't
 // come back yet" (ghost rows) or "it has, and mikroview has genuinely
 // never seen a device" (the first-run pointer). Fleet has no admin gate
-// of its own in the rail (unlike Watchlist/the engine room's watchers
-// station/etc.), so the viewer-vs-admin wording split matters here too.
+// of its own, so the viewer-vs-admin wording split matters here too.
 describe('Fleet Loading and first-run empty states (#549)', () => {
   beforeEach(() => {
     appState.devices = []
     appState.initialLoadDone = true
     authState.role = ''
+    flagsState.list = []
   })
 
   it('shows ghost rows while the initial fetch has not settled yet', () => {
@@ -42,7 +61,7 @@ describe('Fleet Loading and first-run empty states (#549)', () => {
   })
 
   it('tells a viewer to ask an administrator instead', () => {
-    authState.role = 'user'
+    authState.role = 'viewer'
     const { container } = render(Fleet)
     flushSync()
 
@@ -50,23 +69,99 @@ describe('Fleet Loading and first-run empty states (#549)', () => {
     expect(text).not.toMatch(/Run setup…/)
     expect(text.toLowerCase()).toMatch(/administrator/)
   })
+})
 
-  it('renders the table instead once at least one device exists, regardless of role', () => {
-    appState.devices = [
-      {
-        id: 'r1',
-        name: 'router1',
-        configured: true,
-        status: 'live',
-        lastSeen: '2026-08-24T00:00:00Z',
-        sourceIp: '10.0.0.1',
-        eventCount: 3,
-      },
-    ] as unknown as (typeof appState)['devices']
+// #657/#706: the viewer's Fleet is a card of round 30's deck, so it
+// wears the deck's identity -- Entities' own router cards (#675/#718),
+// not the retired table-page frame.
+describe('Fleet deck identity (#657/#706)', () => {
+  beforeEach(() => {
+    appState.devices = []
+    appState.initialLoadDone = true
+    authState.role = 'viewer'
+    flagsState.list = []
+  })
+
+  it('renders router cards, never the old table', () => {
+    setDevices([device({})])
     const { container } = render(Fleet)
     flushSync()
 
-    expect(container.querySelector('.empty')).toBeNull()
-    expect(container.querySelector('table')).not.toBeNull()
+    expect(container.querySelector('.fcard')).not.toBeNull()
+    expect(container.querySelector('table')).toBeNull()
+  })
+
+  it('carries no page heading and no add-router affordance for anyone', () => {
+    authState.role = 'admin'
+    setDevices([device({})])
+    const { container } = render(Fleet)
+    flushSync()
+
+    // #697: the row's label is the .og h3, never an h1/h2 page heading.
+    expect(container.querySelector('h1, h2')).toBeNull()
+    // #657's grammar: adding a router is a change, so the affordance is
+    // absent, not disabled -- no berth, no button but the flag door.
+    expect(container.querySelector('.berth')).toBeNull()
+    for (const b of container.querySelectorAll('button')) {
+      expect(b.textContent?.toLowerCase()).not.toMatch(/add/)
+    }
+  })
+
+  it('states status as a mark plus a written label, never colour alone (#616)', () => {
+    setDevices([
+      device({ id: 'r1', name: 'alpha', status: 'live' }),
+      device({ id: 'r2', name: 'beta', status: 'stale', lastSeen: new Date(Date.now() - 3_600_000).toISOString() }),
+      device({ id: 'r3', name: 'gamma', status: 'never_seen', lastSeen: '', sourceIp: '', eventCount: 0 }),
+    ])
+    const { container } = render(Fleet)
+    flushSync()
+
+    const states = [...container.querySelectorAll('.fstate')].map((el) => el.textContent?.trim())
+    expect(states).toContain('● LIVE')
+    expect(states).toContain('◌ QUIET')
+    expect(states).toContain('◌ NEVER SEEN')
+  })
+
+  it('reads a quiet router as a fact, not a fault', () => {
+    setDevices([device({ status: 'stale', lastSeen: new Date(Date.now() - 3_600_000).toISOString() })])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.textContent).toMatch(/quiet is a fact, not a fault/)
+  })
+
+  it('names an unregistered device as seen on the wire, not in the devices config', () => {
+    setDevices([device({ configured: false })])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.textContent).toMatch(/seen on the wire, not in the devices config/)
+  })
+
+  it('gives an active silence flag a real door into the docket', async () => {
+    setDevices([device({ status: 'stale', lastSeen: new Date(Date.now() - 3_600_000).toISOString() })])
+    flagsState.list = [
+      { id: 'f1', type: 'device_silence', target: 'r1', cleared: false },
+    ] as unknown as (typeof flagsState)['list']
+    const { container } = render(Fleet)
+    flushSync()
+
+    const door = container.querySelector<HTMLButtonElement>('.flag-door')
+    expect(door).not.toBeNull()
+    expect(door?.getAttribute('aria-label')).toMatch(/router1/)
+    door?.click()
+    flushSync()
+    expect(appState.view).toBe('flags')
+  })
+
+  it('draws no flag door for a cleared flag', () => {
+    setDevices([device({})])
+    flagsState.list = [
+      { id: 'f1', type: 'device_silence', target: 'r1', cleared: true },
+    ] as unknown as (typeof flagsState)['list']
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.querySelector('.flag-door')).toBeNull()
   })
 })
