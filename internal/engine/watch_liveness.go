@@ -31,14 +31,30 @@ import (
 // boundary. That is the conservative direction for a package whose whole
 // point is refusing to claim more than it can prove.
 //
-// What an auto-discovered (never configured) source does: the opposite of
-// device_silence's own exclusion. device_silence skips a non-Configured
-// device because it has no expected cadence to raise a false alarm
-// against (#98) -- correct for an alarm, wrong for this. A watch behind a
-// source mikroview has never been told to expect has even less basis for
-// an "empty" claim, not more, so anyDeviceSilent treats a never-contacted
-// auto-discovered device as silent outright, where device_silence would
-// skip it.
+// What an auto-discovered (never configured) source does: judged by the
+// same elapsed/staleAfter comparison as everything else, with no
+// exclusion for being unconfigured. device_silence guards with
+// `if !info.Configured { continue }` before it ever compares elapsed
+// time, because it has no expected cadence to raise a false alarm
+// against (#98) -- correct for an alarm, wrong for this. anyDeviceSilent
+// drops that guard, so an auto-discovered source that has gone quiet past
+// staleAfter counts exactly as a configured one would -- more readily
+// than device_silence, not less. (A separate zero-LastSeen carve-out for
+// auto-discovered devices was considered and rejected: internal/device.
+// Registry.Resolve sets LastSeen on the very call that creates an
+// auto-discovered entry, so such a device can never actually have a zero
+// LastSeen -- the case cannot arise, and code that "handled" it was dead.)
+//
+// What a CONFIGURED device with a zero LastSeen does: treated as silent
+// here, unlike device_silence. deviceElapsedStale deliberately returns
+// not-stale for a zero LastSeen -- device_silence is an alarm, and must
+// not fire on a router that is configured but has not been deployed yet.
+// This file makes a different claim, though: not "sound the alarm" but
+// "can this window honestly be called empty", and a configured device
+// that has never sent a single line is the strongest case there is for
+// "we could not have observed this". So the exception lives in
+// anyDeviceSilent, not in deviceElapsedStale: device_silence keeps its
+// existing contract unchanged, and this file departs from it only here.
 //
 // What DeviceStaleAfter == 0 does: the same "off means off" contract
 // device_silence itself declares, reused rather than reinvented -- see
@@ -58,12 +74,21 @@ import (
 // anyDeviceSilent reports whether any device in devices counts as silent
 // for #730's purposes, reusing device_silence's own elapsed/staleAfter
 // comparison (deviceElapsedStale, shipped_device_silence.go) for the
-// cadence half of the answer.
+// cadence half of the answer -- applied with no Configured guard, unlike
+// device_silence's own Tick, so an auto-discovered source is judged
+// exactly as a configured one is rather than being skipped.
 //
-// Configured devices are judged exactly as device_silence judges them.
-// Auto-discovered devices are judged more readily, not less -- see this
-// file's own doc comment: a source with no declared cadence and no
-// contact at all cannot honestly back an "empty" claim either.
+// One exception on top of that comparison: a CONFIGURED device with a
+// zero LastSeen. deviceElapsedStale reports that as not-stale (by
+// design -- see its own doc comment), because device_silence is an alarm
+// that must not fire on a router configured but not yet deployed. This
+// file is not an alarm, it is an observability claim, and a configured
+// device that has never sent anything at all is the strongest case there
+// is for "this could not have been watched" -- so it counts as silent
+// here even though device_silence itself would never fire on it. An
+// auto-discovered device gets no equivalent zero-LastSeen check: per
+// internal/device.Registry.Resolve, one is never created with a zero
+// LastSeen in the first place, so the case does not arise for it.
 func anyDeviceSilent(devices DeviceLister, staleAfter time.Duration, now time.Time) bool {
 	if devices == nil {
 		return false
@@ -72,7 +97,7 @@ func anyDeviceSilent(devices DeviceLister, staleAfter time.Duration, now time.Ti
 		if _, stale := deviceElapsedStale(info.LastSeen, staleAfter, now); stale {
 			return true
 		}
-		if !info.Configured && info.LastSeen.IsZero() {
+		if info.Configured && info.LastSeen.IsZero() {
 			return true
 		}
 	}
