@@ -142,6 +142,20 @@
     return 'any source'
   }
 
+  // "where it has reached · since Sunday" (watchlist-managed.html:775):
+  // the day the entry started, in UTC per every other timestamp in this
+  // codebase (types.ts's own comment on Window.zone). createdAt is the
+  // one always-present timestamp an entry carries -- there is no
+  // separate "this observation period began" field, so a fenced entry
+  // sent back to `learn again` still reads its original creation day,
+  // the same honest-but-imprecise trade-off the rest of this page makes
+  // rather than inventing a field to be exact.
+  const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  function sinceDay(iso: string): string {
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime()) ? '' : WEEKDAY_NAMES[d.getUTCDay()]
+  }
+
   function detailLabel(e: WatchlistEntry): string {
     return e.invert
       ? `${(e.permitted ?? []).length} permitted, ${(e.observed ?? []).length} to review`
@@ -201,10 +215,19 @@
   // ring: an inverted entry can carry a Window too, so a fenced one that
   // genuinely goes quiet inside it still reads "ring broken", the same
   // as any other watch.
-  function watchState(e: WatchlistEntry): { glyph: string; text: string; broken: boolean; learning: boolean } {
-    if (!e.enabled) return { glyph: '○', text: 'paused', broken: false, learning: false }
+  function watchState(e: WatchlistEntry): {
+    glyph: string
+    text: string
+    broken: boolean
+    learning: boolean
+    paused: boolean
+  } {
+    // The record's own paused chip (watchlist-managed.html:801, :860):
+    // `‖ paused`, dim ink, no alarm/broken styling -- a paused watch is
+    // not a failure, so it must not read as one.
+    if (!e.enabled) return { glyph: '‖', text: 'paused', broken: false, learning: false, paused: true }
     if (watchlistState.coverage[e.id] === 'no-logging') {
-      return { glyph: '○', text: 'ring broken — no logging visible', broken: true, learning: false }
+      return { glyph: '○', text: 'ring broken — no logging visible', broken: true, learning: false, paused: false }
     }
     if (e.invert && e.observing) {
       // "places seen" is a running total of everywhere this device has
@@ -214,16 +237,28 @@
       // is promoted, reading as though mikroview had forgotten it.
       const permitted = (e.permitted ?? []).length
       const seen = (e.observed ?? []).length + permitted
-      return { glyph: '◌', text: `learning — ${seen} places seen · ${permitted} permitted`, broken: false, learning: true }
+      return {
+        glyph: '◌',
+        text: `learning — ${seen} places seen · ${permitted} permitted`,
+        broken: false,
+        learning: true,
+        paused: false,
+      }
     }
     if (e.ring?.broken) {
-      return { glyph: '○', text: 'ring broken — nothing in the window', broken: true, learning: false }
+      return { glyph: '○', text: 'ring broken — nothing in the window', broken: true, learning: false, paused: false }
     }
     if (e.invert) {
       const n = (e.permitted ?? []).length
-      return { glyph: '◉', text: `fencing — ${n} ${n === 1 ? 'place' : 'places'} permitted`, broken: false, learning: false }
+      return {
+        glyph: '◉',
+        text: `fencing — ${n} ${n === 1 ? 'place' : 'places'} permitted`,
+        broken: false,
+        learning: false,
+        paused: false,
+      }
     }
-    return { glyph: '◉', text: 'watching', broken: false, learning: false }
+    return { glyph: '◉', text: 'watching', broken: false, learning: false, paused: false }
   }
 
   // While an inverted entry is still learning, `toward` greys out to
@@ -540,6 +575,7 @@
   let armedRemoveId = $state<string | null>(null)
 
   function armOrRemoveWatch(e: WatchlistEntry) {
+    wtError = null
     if (armedRemoveId !== e.id) {
       armedRemoveId = e.id
       return
@@ -550,15 +586,12 @@
     })
   }
 
-  function disarmRemoveWatch() {
-    armedRemoveId = null
-  }
-
   // Permit, permit all, and fence now / learn again (item 4).
   let permittingKey = $state<string | null>(null)
   let fencingId = $state<string | null>(null)
 
   async function permitOne(e: WatchlistEntry, d: WatchlistPermittedDest) {
+    wtError = null
     permittingKey = e.id + d.destIp + d.port
     try {
       const err = await watchlistState.promote(e.id, [d])
@@ -569,6 +602,7 @@
   }
 
   async function permitAll(e: WatchlistEntry) {
+    wtError = null
     const dests = (e.observed ?? []).map((o) => ({ destIp: o.destIp, port: o.port }))
     if (dests.length === 0) return
     permittingKey = e.id + '*'
@@ -584,6 +618,7 @@
   // Observing), named and worded here for what it does rather than a
   // bare observe/enforce flip.
   async function toggleObserving(e: WatchlistEntry) {
+    wtError = null
     fencingId = e.id
     try {
       const err = await watchlistState.setObserving(e.id, !e.observing)
@@ -620,6 +655,7 @@
     stateText: string
     broken: boolean
     learning: boolean
+    paused: boolean
     lastMatch: WatchlistMatch | undefined
     lastEventLabel: string
   }
@@ -638,6 +674,7 @@
         stateText: st.text,
         broken: st.broken,
         learning: st.learning,
+        paused: st.paused,
         lastMatch,
         lastEventLabel: lastMatch ? formatRelative(lastMatch.lastSeen, appState.now) : '—',
       }
@@ -894,7 +931,7 @@
                 <td class="k">{row.entry.name || '(unnamed)'}</td>
                 <td>{row.boundary}</td>
                 <td class="t">{row.window}</td>
-                <td><span class="wchip2" class:broken={row.broken} class:learn={row.learning}>{row.stateGlyph} {row.stateText}</span></td>
+                <td><span class="wchip2" class:broken={row.broken} class:learn={row.learning} class:paused={row.paused}>{row.stateGlyph} {row.stateText}</span></td>
                 <td class="t">{row.lastEventLabel}</td>
                 <td>
                   <button
@@ -973,7 +1010,7 @@
                                  rather than from an "observed AND
                                  permitted" combination that never
                                  actually occurs. -->
-                            <span class="lab">where it has reached</span>
+                            <span class="lab">where it has reached · since {sinceDay(row.entry.createdAt)}</span>
                             <ul class="seen">
                               {#each row.entry.permitted ?? [] as p (p.destIp + ':' + p.port)}
                                 <li>
@@ -1429,6 +1466,14 @@
 
   .wchip2.learn {
     border-style: dashed;
+  }
+
+  /* `‖ paused` (watchlist-managed.html:801, :860): dim ink, no alarm
+     styling -- a paused watch is a choice, not a failure. */
+  .wchip2.paused {
+    color: var(--fg-dim);
+    border-color: var(--border);
+    background: transparent;
   }
 
   .wchip2.draft {

@@ -48,17 +48,27 @@
   // #724's dial rows already use (topologyNav.svelte.ts) -- Watchlist's
   // own draft state is private to that component.
   //
-  // "watch this source" fences the flag's own source (isFilterable's
-  // single-source-IP shapes, per extractSourceIp) -- an inverted entry,
-  // scoped to that device, learning where it goes before anything fires.
-  //
+  // "watch this source" fences the flag's own source -- an inverted
+  // entry, scoped to that device, learning where it goes before
+  // anything fires. Gated on extractSourceIp actually resolving a
+  // single source IP, which is narrower than isFilterable(): that also
+  // covers rule_spike/stale_rule (target is a rule label),
+  // distributed_brute_force (target is "port N") and device_silence
+  // (target is a device id), none of which name a device to fence.
+  // Falling back to the raw target for those would pre-fill the
+  // draft's identity with a rule name or a bare port number -- a
+  // confident-looking but wrong "who".
+  function canWatchSource(f: Flag): boolean {
+    return extractSourceIp(f.target) !== null
+  }
+
   // "watch this pathway" only ever fires for critical_port: it is the
   // one detector whose Evidence carries a real host:port destination
   // (evidence.pairs, #654) rather than a free-text sentence. Every other
   // type's `target`/`detail` is prose or a list with no single named
   // destination to expect -- guessing one from text would be inventing
   // evidence this page did not actually see, so those flags offer
-  // `watch this source` only.
+  // `watch this source` only (and only when canWatchSource agrees).
   function canWatchPathway(f: Flag): boolean {
     return f.type === 'critical_port' && (f.evidence?.pairs?.length ?? 0) > 0
   }
@@ -73,14 +83,19 @@
     return ports.length > 0 ? `${host} · ${ports.join(', ')}` : host
   }
 
+  // Both are only ever wired to a button gated on canWatchSource/
+  // canWatchPathway, so the source IP this reads has already been
+  // confirmed to exist -- never falls back to the raw target.
   function watchThisSource(f: Flag) {
-    const who = extractSourceIp(f.target) ?? f.target
+    const who = extractSourceIp(f.target)
+    if (!who) return
     topologyNavState.requestWatchDraft({ who, mode: 'fence' })
     appState.view = 'watchlist'
   }
 
   function watchThisPathway(f: Flag) {
-    const who = extractSourceIp(f.target) ?? f.target
+    const who = extractSourceIp(f.target)
+    if (!who) return
     topologyNavState.requestWatchDraft({ who, toward: pathwayToward(f), mode: 'expect' })
     appState.view = 'watchlist'
   }
@@ -798,7 +813,7 @@
             {/if}
             {#if canEdit && canWatchPathway(f)}
               <button class="act" onclick={() => watchThisPathway(f)}>watch this pathway</button>
-            {:else if canEdit && isFilterable(f)}
+            {:else if canEdit && canWatchSource(f)}
               <button class="act" onclick={() => watchThisSource(f)}>watch this source</button>
             {/if}
             {#if provisional && canEdit}
