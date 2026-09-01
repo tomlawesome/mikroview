@@ -681,8 +681,10 @@
   /* called real: the stamp sits by the type and the row's own bar thickens */
   .fmark .stamp { margin-left: 10px; }
   .fmark .by { font: 10.5px var(--mono); color: var(--ink-3); font-weight: 400; margin-left: 6px; }
-  tr.frow td:first-child { transition: box-shadow 0.35s ease; }
-  tr.frow.isreal td:first-child { box-shadow: inset 7px 0 0 var(--alarm) !important; }
+  /* the bar swells, it does not step: a lens over the 3 px bar, its ends arcing back to it */
+  tr.frow td:first-child { position: relative; }
+  tr.frow td:first-child::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--alarm); opacity: 0; border-radius: 0 4px 4px 0 / 0 10px 10px 0; transition: width 0.35s ease, opacity 0.35s ease; }
+  tr.frow.isreal td:first-child::before { width: 7px; opacity: 1; }
   @media (prefers-reduced-motion: reduce) { .stamp, tr.frow.struck td { animation: none; } .vrow button.v:hover { transform: none; } }
   .dwr-acts .never { margin-left: auto; }
   .dwr-acts .never.armed { color: var(--alarm); border-color: var(--alarm); }

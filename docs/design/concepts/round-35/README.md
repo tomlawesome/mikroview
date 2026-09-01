@@ -29,7 +29,9 @@ exclusion is a verdict that outlives the flag** — and gains a corollary:
    cell, with `undo` beside it, so the columns never move. `undo` puts
    the trio back. `clear with a note` stamps `CLEARED` in the quiet ink.
 3. **Called real** stamps `REAL` beside the flag's type in alarm ink,
-   thickens the row's own colour bar from 3 px to 7 px, lights the
+   swells the row's own colour bar from 3 px to 7 px — a lens whose
+   ends arc back into the 3 px bar, so there is no stepped edge against
+   the rows above and below — lights the
    `✱ real` chip, and the story leads with *Called real at 13:58 by
    you…* whether or not the drawer is open. The flag stays open.
 4. **`never again`** stays in the drawer, now alone at the right of the
@@ -66,4 +68,6 @@ UI?" — reworked in place to quiet dot-separated text verbs. Owner:
 "Very bland... was hoping for something cooler." — reworked again to
 the glyph chips and stamps above, before any acceptance. Owner: "I like
 it, except for the offset/angled nature. It is kind of cool, but it's
-also a bit cheesey." — the stamps now sit square; the thump stays.
+also a bit cheesey." — the stamps now sit square; the thump stays. Owner: "id prefer it if
+the bar were thickned by using an arc, so we don't get a jutted edge" —
+the real row's bar now swells as a lens.
