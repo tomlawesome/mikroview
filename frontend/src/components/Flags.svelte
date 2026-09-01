@@ -39,6 +39,50 @@
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import type { Flag, FlagType, FirewallEvent } from '../lib/types'
 
+  // "watch this pathway" / "watch this source" (#761 item 3): a flag
+  // writes the watchlist tab's draft for it rather than making the
+  // operator retype what mikroview already knows. Both switch to the
+  // watchlist tab through the same shared handoff Docket's `+ watch` and
+  // #724's dial rows already use (topologyNav.svelte.ts) -- Watchlist's
+  // own draft state is private to that component.
+  //
+  // "watch this source" fences the flag's own source (isFilterable's
+  // single-source-IP shapes, per extractSourceIp) -- an inverted entry,
+  // scoped to that device, learning where it goes before anything fires.
+  //
+  // "watch this pathway" only ever fires for critical_port: it is the
+  // one detector whose Evidence carries a real host:port destination
+  // (evidence.pairs, #654) rather than a free-text sentence. Every other
+  // type's `target`/`detail` is prose or a list with no single named
+  // destination to expect -- guessing one from text would be inventing
+  // evidence this page did not actually see, so those flags offer
+  // `watch this source` only.
+  function canWatchPathway(f: Flag): boolean {
+    return f.type === 'critical_port' && (f.evidence?.pairs?.length ?? 0) > 0
+  }
+
+  // The pathway's `toward`: the first evidence pair's host, and every
+  // port evidence recorded against that same host -- the shape the
+  // record's own draft `toward` field takes ("nas · :445, :139").
+  function pathwayToward(f: Flag): string {
+    const pairs = f.evidence?.pairs ?? []
+    const host = pairs[0]?.host ?? ''
+    const ports = pairs.filter((p) => p.host === host).map((p) => `:${p.port}`)
+    return ports.length > 0 ? `${host} · ${ports.join(', ')}` : host
+  }
+
+  function watchThisSource(f: Flag) {
+    const who = extractSourceIp(f.target) ?? f.target
+    topologyNavState.requestWatchDraft({ who, mode: 'fence' })
+    appState.view = 'watchlist'
+  }
+
+  function watchThisPathway(f: Flag) {
+    const who = extractSourceIp(f.target) ?? f.target
+    topologyNavState.requestWatchDraft({ who, toward: pathwayToward(f), mode: 'expect' })
+    appState.view = 'watchlist'
+  }
+
   // Same gate the rail uses for the engine room's watchers station --
   // here it decides only whether the empty state offers the audit log.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -598,6 +642,11 @@
                       <div class="dwr-acts">
                         {#if isFilterable(f)}
                           <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
+                        {/if}
+                        {#if canEdit && canWatchPathway(f)}
+                          <button class="act" onclick={() => watchThisPathway(f)}>watch this pathway</button>
+                        {:else if canEdit && isFilterable(f)}
+                          <button class="act" onclick={() => watchThisSource(f)}>watch this source</button>
                         {/if}
                         {#if noteFor === f.id}
                           <!-- The note is optional: confirming with an
