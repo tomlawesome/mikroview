@@ -78,7 +78,17 @@
 
 <ul class="bench">
   {#each detectorSettingsState.list as d (d.name)}
-    {@const info = DETECTORS[d.name] ?? { label: d.label, explanation: d.description ?? '' }}
+    <!-- Only what this bench renders. DetectorInfo.explanation -- 16
+         hand-written sentences saying what each detector actually
+         watches -- is deliberately not computed here: nothing on any
+         surface renders it, and synthesising it from the server's
+         description built a value that went nowhere. The copy stays in
+         detectorCopy.ts; that it has no home is a gap on #691, and the
+         module's own comment says why it matters: "a detector that is
+         evaluating but invisible on the station that exists to say what
+         is being watched is the worst failure the bench can have". -->
+    {@const copy = DETECTORS[d.name]}
+    {@const label = copy?.label ?? d.label}
     {@const fields = SCOPE_FIELDS[d.name] ?? []}
     {@const learning = learningSummary(d.learning)}
     <li class="row">
@@ -87,13 +97,13 @@
           <input
             type="checkbox"
             class="cbx"
-            aria-label="{info.label} runs"
+            aria-label="{label} runs"
             checked={d.enabled}
             disabled={saving[d.name]}
             onchange={(e) => toggleEnabled(d.name, e.currentTarget.checked, d.scope)}
           />
         {/if}
-        <span class="name">{info.label}</span>
+        <span class="name">{label}</span>
         <span class="id">{d.name}</span>
         <span class="dash">—</span>
         {#if fields.length === 0}
@@ -121,11 +131,11 @@
 
       {#if canEdit && editingScope === d.name}
         <div class="scope-form">
-          {#if info.scopeNote}
-            <p class="note"><strong>What this restricts:</strong> {info.scopeNote}</p>
+          {#if copy?.scopeNote}
+            <p class="note"><strong>What this restricts:</strong> {copy.scopeNote}</p>
           {/if}
-          {#if info.example}
-            <p class="example"><strong>Example:</strong> {info.example}</p>
+          {#if copy?.example}
+            <p class="example"><strong>Example:</strong> {copy.example}</p>
           {/if}
           {#if fields.includes('hosts')}
             <label class="field">

@@ -34,3 +34,19 @@ round 28. No new data colours.
 
 Every round-29 surface is accepted. This closes the #634 visioning
 thread: rounds 13–29 hand over to implementation under #620/#633.
+
+## Not everything in a scene is a requirement
+
+The audit-log tab's rows are demo filler, not spec (owner, 2026-08-31,
+item 99). `opened flag`, `changed theme to dark`, `signed in from` and
+`router pushed` are there to fill the tab in a walkthrough; four of the
+six would mean logging reads, client-side preferences and ingest. The
+audit log stays as built — admin-privileged mutations only — and #679
+records the three shapes considered and why this one won.
+
+---
+
+**Superseded as the current picture by [round 30](../round-30/README.md)**,
+which carries every round-29 surface verbatim and adds the stream's
+filter (#697), an ordered top for the stream, and the chrome the owner
+struck on 2026-08-31. Round 29 remains the record of its own verdicts.

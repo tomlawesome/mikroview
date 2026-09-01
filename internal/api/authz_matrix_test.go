@@ -116,6 +116,13 @@ var authzMatrix = []routeExpectation{
 			"way /api/auth/oidc/link takes its target from the session rather than the request. #653 introduced the " +
 			"viewer tier below user, and this stays open to it for the same reason -- even the lowest tier must be " +
 			"able to change its own credential"},
+	{http.MethodPost, "/api/auth/logout-all", accessViewer,
+		"ends every session the caller holds, everywhere, then re-establishes the caller's own -- the settings " +
+			"page's 'sign out everywhere' (#677). Same reasoning as /api/auth/password directly above: it acts only " +
+			"on the session's own account (SessionStore.RevokeAllForUser(user.ID), the ID coming from the session, " +
+			"never a request body), so there is nothing an admin-only gate would add, and the viewer tier must be " +
+			"able to end its own stolen or forgotten sessions same as any other tier. Ending someone *else's* " +
+			"sessions stays admin-only, via DELETE /api/auth/users/{id} below"},
 	{http.MethodGet, "/api/auth/oidc/login", accessPublic,
 		"starts the SSO redirect; a login must work before a session exists"},
 	{http.MethodGet, "/api/auth/oidc/callback", accessPublic,
@@ -125,11 +132,18 @@ var authzMatrix = []routeExpectation{
 
 	{http.MethodGet, "/api/config/problems", accessAdmin,
 		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
+	{http.MethodGet, "/api/persistence", accessAdmin,
+		"reports which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses (#677's settings persistence row) -- a filesystem path is the same infrastructure-map disclosure /api/config/problems above is admin-gated for, so this follows it rather than defaulting to viewer the way most of Settings' other reads do"},
 
 	// -- Any authenticated session (viewer tier) ------------------------
 	{http.MethodGet, "/api/events", accessViewer,
 		"core read: the live firewall event feed"},
 	{http.MethodGet, "/api/devices", accessViewer, "core read"},
+	{http.MethodGet, "/api/devices/macs", accessViewer,
+		"core read, same tier as /api/devices which it complements -- the persisted MAC-registry history " +
+			"(first/last-seen, last-paired IP) backing the Entities page's named-things table (#675). No more " +
+			"sensitive than the source IPs a viewer already reads off /api/events; it's a LAN client's MAC, not " +
+			"credentials or config"},
 	{http.MethodGet, "/api/matches", accessViewer,
 		"a read over already-collected evidence, same tier as events/flags/stats/devices above -- also reachable via a read-only API token (readOnlyRoutes), since birdcage-style external correlation by source is the reason internal/matchlog exists. Renamed from /api/watchlist/matches by #407 when the watchlist noun was retired; the access decision is unchanged. " +
 			"WIDENED by #586, and the widening is the part to scrutinise: entries=all serves the most recent matches across every entry, so a caller no longer needs to know a mac or ip to read from this log, and that includes a read-only token holder. Kept on this tier deliberately rather than promoted to admin, for three reasons. " +
@@ -139,6 +153,12 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/third-party-notices", accessViewer,
 		"licence compliance: the copyright/licence texts of everything statically linked into this binary, which MIT/BSD/ISC/Apache-2.0 all require to accompany a binary distribution. Session-gated rather than public only because it is also a precise dependency-and-version inventory -- it withholds nothing, since the same file is in the public repo and the image"},
 	{http.MethodGet, "/api/stats", accessViewer, "core read"},
+	{http.MethodGet, "/api/stats/tops", accessViewer,
+		"#644 round 21's per-minute top-port/top-talker columns -- the same tier as /api/stats above, since it is " +
+			"a per-minute breakdown of data that endpoint already exposes in aggregate (byAction), not a new class " +
+			"of read. #653's viewer tier took /api/stats down with it, and this follows for the same reason. " +
+			"Deliberately NOT in readOnlyRoutes: HourTops' backward scan is heavier than anything else a " +
+			"bearer token can already trigger on this tier, and nothing asked for that to be token-reachable"},
 	{http.MethodGet, "/api/ws", accessViewer,
 		"live tail; additionally same-origin checked (see checkOrigin)"},
 	{http.MethodGet, "/api/lookup/ip/{ip}", accessViewer,

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
@@ -300,6 +302,133 @@ func TestHandleDevicesReportsStatus(t *testing.T) {
 	}
 	if byID["198.51.100.1"] != "stale" {
 		t.Errorf("expected 198.51.100.1's status = stale (last seen 30m ago, threshold 10m), got %q", byID["198.51.100.1"])
+	}
+}
+
+// TestHandleDevicesReportsRouterOSVersion covers issue #675's router
+// cards, which need "RouterOS 7.20.1" alongside the device's status: the
+// version comes from RouterState (a routerstate push), not from Devices
+// itself, so a device that never pushed any router state must not report
+// one, and a Server with no RouterState at all (an older test fixture)
+// must not panic.
+func TestHandleDevicesReportsRouterOSVersion(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Devices.Resolve("203.0.113.9", time.Now())
+	p, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.20.1 (stable)","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Devices []struct {
+			ID              string `json:"id"`
+			RouterOSVersion string `json:"routerosVersion"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]string{}
+	for _, d := range body.Devices {
+		byID[d.ID] = d.RouterOSVersion
+	}
+	if byID["core"] != "7.20.1 (stable)" {
+		t.Errorf("core's routerosVersion = %q, want the pushed version", byID["core"])
+	}
+	if byID["203.0.113.9"] != "" {
+		t.Errorf("203.0.113.9's routerosVersion = %q, want empty -- it never pushed router state", byID["203.0.113.9"])
+	}
+}
+
+// TestHandleDevicesRouterOSVersionNilRouterState covers the same field
+// against a Server built without RouterState at all -- a nil dereference
+// here would take down every other field in the response with it.
+func TestHandleDevicesRouterOSVersionNilRouterState(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.RouterState = nil
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestHandleDeviceMACs covers issue #675's Entities table source: every
+// persisted MAC entry, with its paired IP, comes back from GET
+// /api/devices/macs -- and a Server with no MACRegistry configured
+// answers an empty list rather than panicking, same as the nil-guarded
+// fields above.
+func TestHandleDeviceMACs(t *testing.T) {
+	s, _ := newTestServer(t)
+	reg, err := device.OpenMACRegistry("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.MACRegistry = reg
+	reg.Seen("aa:bb:cc:dd:ee:ff", time.Now())
+	reg.NoteIP("aa:bb:cc:dd:ee:ff", "10.0.10.2")
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices/macs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Macs []device.MACEntry `json:"macs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Macs) != 1 || body.Macs[0].MAC != "aa:bb:cc:dd:ee:ff" || body.Macs[0].LastIP != "10.0.10.2" {
+		t.Fatalf("unexpected macs: %+v", body.Macs)
+	}
+}
+
+func TestHandleDeviceMACsNilRegistry(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices/macs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Macs []device.MACEntry `json:"macs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Macs == nil || len(body.Macs) != 0 {
+		t.Errorf("macs = %v, want an empty (not null) list", body.Macs)
 	}
 }
 

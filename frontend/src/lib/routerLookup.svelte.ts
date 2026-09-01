@@ -238,3 +238,21 @@ export function prefixMatchesLabel(logPrefix: string, label: string): boolean {
     logPrefix.slice(2, -1) === label
   )
 }
+
+// ruleLabelFromLogPrefix is prefixMatchesLabel's inverse: given a pushed
+// rule's own configured log-prefix, decode the slug an event firing that
+// rule would carry as ruleLabel -- without needing an event to already
+// exist. Entities' rules tab (#681) is the reason this direction is
+// needed: a rule the router has pushed but that has never fired has no
+// event to read a label off, yet still needs a stable key to be named
+// by. Returns null when the prefix doesn't follow the convention (no
+// log-prefix set, or a third-party one) -- such a rule can never
+// produce a ruleLabel either, by the same "an unlogged rule must stay
+// unnameable" reasoning internal/ingest/payload.go's FilterRule doc
+// states for the push side.
+export function ruleLabelFromLogPrefix(logPrefix: string): string | null {
+  if (logPrefix.length < 3 || logPrefix[1] !== '|' || !logPrefix.endsWith('|')) return null
+  if (!'ADRLMN'.includes(logPrefix[0])) return null
+  const slug = logPrefix.slice(2, -1)
+  return slug === '' ? null : slug
+}

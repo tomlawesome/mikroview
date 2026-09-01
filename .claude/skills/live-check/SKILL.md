@@ -11,6 +11,13 @@ firewall events, and drives it in Chromium via Playwright.
 
 Not the test suite. Run it in addition, not instead.
 
+**It does not have to run here.** `make live-check-remote` runs the same gate
+on the second host, so this machine stays free for the 35-50 minutes it takes.
+Same suite, and `MV_BROWSER=firefox` or `webkit` drives an engine the local
+run never does -- which is how #659 shipped a static style attribute Chromium
+tolerates and Firefox refuses. Peer sessions share this workstation, so prefer
+the remote form when someone else may want the machine.
+
 ## Why this exists
 
 Nearly every defect worth finding in this project was found by running it.
@@ -40,6 +47,26 @@ scripts/live-env.sh syslog 200 my-rule
 cd frontend && node scripts/live-smoke.mjs
 scripts/live-env.sh down
 ```
+
+### Which browser it drives
+
+`MV_BROWSER` selects the engine: `chromium` (the default), `firefox` or
+`webkit`. It applies to the whole suite, including the handful of
+scenarios that open a second browser for a second signed-in session.
+
+```sh
+MV_BROWSER=firefox make live-check
+```
+
+Run it under Firefox before believing a UI change is safe. The gate has
+only ever driven Chromium, and that is how #659 shipped: a static
+`style="..."` attribute Chromium tolerates and Firefox refuses under this
+app's CSP passed live-check, vitest and every screenshot, and was found
+by the owner opening the app. An unrecognised value refuses to start
+rather than falling back, because a run that reports PASS believing it
+exercised Firefox is worse than no run. Locally the engine must be
+installed (`npx playwright install firefox`); the CI image carries all
+three.
 
 ## Reading a run
 
@@ -92,6 +119,27 @@ both phases, and this claim is true of the whole gate.
 and use one of its variables, or add a band there with a comment. Never
 write a number into the script -- that is precisely how the two-allocator
 bug happened, and nothing but this line stops it happening again.
+
+### Ports are safe; the CPU is not
+
+Two runs no longer collide, but they still share one machine, and a
+loaded host breaks a specific class of assertion: **the ones waiting for
+something to disappear.** An empty state, a cleared list, a count
+returning to zero -- a feeder that keeps arriving refills what the
+assertion is waiting to stop seeing, so it times out while the app is
+behaving correctly. Assertions waiting for something to *appear* mostly
+just get slower.
+
+Observed 2026-08-31: `live-flags-clearing.mjs` failed its post-reload
+check ("the cleared state survived a reload") on a host running two
+gates, and passed the same check on an idle one. The re-run to establish
+that cost 35 minutes.
+
+So: one gate at a time per host, and a browser-phase failure on a shared
+host is not evidence until it is reproduced alone. `live-inline-editing`
+is the standing counter-example in the other direction -- it fails
+intermittently on an idle host too (#611), so a single clean run does not
+clear it either.
 
 This matters because the collision used to be destructive, not noisy:
 `up` runs `down` and then `rm -rf "$MV_DIR"`, so a second live check on
