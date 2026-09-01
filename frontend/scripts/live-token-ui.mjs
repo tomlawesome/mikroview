@@ -10,12 +10,15 @@
 // one thing that proves the minted token is the right kind: a push that
 // lands.
 //
-// #490 moved that path. The Tokens page is gone; minting happens at the
-// engine room's "which machines may speak" door. The checks below are
-// deliberately the same operator questions as before -- can I mint the
-// right kind, does the pick-list match the devices this instance knows,
-// is the secret shown exactly once, does revoking it stop the push --
-// asked at the new location rather than rewritten around it.
+// #490 moved that path once, to the engine room's "which machines may
+// speak" door; round 32 (#767) moved it again, into the keys group
+// mounted directly in the Settings card (docs/design/concepts/round-32/
+// settings-doors.html's #keys), the door retired outright. The checks
+// below are deliberately the same operator questions as before -- can I
+// mint the right kind, does the pick-list match the devices this
+// instance knows, is the secret shown exactly once, does revoking it
+// stop the push -- asked at the new location rather than rewritten
+// around it.
 
 import { session, check, done, goTo } from './live-browser.mjs'
 
@@ -23,30 +26,30 @@ const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session()
 
-// Scoped to the tokens door throughout: the people door beside it uses
-// the same .row/.verb markup, so an unscoped `.row:has-text(...)` would
-// be one badly-chosen token name away from clicking Remove on a person.
-const DOOR = '.door:has-text("Which machines may speak")'
+// Scoped to the keys group throughout: people sits in the same card with
+// the same .prow markup, so an unscoped `.prow:has-text(...)` would be
+// one badly-chosen token name away from clicking Remove on a person.
+const DOOR = '#keys'
 
 // goTo's own wait (SCENES in live-browser.mjs, waiting for the engineroom card to centre) is what proves arrival --
 // this used to also wait for `.page-header h2`, but #700 unmounted PageHeader from EngineRoom.svelte entirely, so
 // that selector no longer exists anywhere on the page (#667 group E).
 await goTo(page, 'Settings')
 check(true, "the rail's engine room row opens the engine room")
-check((await page.$$('.modal')).length === 0, 'no modal renders -- the doors are part of the page')
+check((await page.$$('.modal')).length === 0, 'no modal renders -- keys is part of the page')
 check(
   await page
-    .locator(`${DOOR} .dname`)
+    .locator(`${DOOR} h3`)
     .waitFor({ timeout: 5000 })
     .then(() => true, () => false),
-  'the machines door is on the page for an admin',
+  'the keys group is on the page for an admin',
 )
 
-// --- Ingest token, entirely through the door ----------------------------
-await page.click(`${DOOR} .footer-action`)
-await page.waitForSelector(`${DOOR} .inline-form`)
-await page.fill(`${DOOR} .inline-form input[type="text"]`, 'ui-ingest')
-await page.selectOption(`${DOOR} select[aria-label="Key kind"]`, 'ingest')
+// --- Ingest token, entirely through the keys group -----------------------
+await page.click(`${DOOR} .ogfoot .olink`)
+await page.waitForSelector(`${DOOR} .pform`)
+await page.fill(`${DOOR} .pform input[aria-label="key name"]`, 'ui-ingest')
+await page.click(`${DOOR} .pform .seg[aria-label="Key kind"] button:has-text("ingest")`)
 
 // The pick-list must offer every device mikroview knows about --
 // configured (live-env.sh declares one) or discovered from its own
@@ -58,31 +61,36 @@ const known = await page.request
   .then(async (r) => ((await r.json()).devices ?? []).map((d) => d.id).sort())
 check(known.length > 0, `the instance knows at least one device (${known})`)
 
-const deviceSelect = `${DOOR} select[aria-label="Device this key speaks for"]`
-await page.waitForSelector(deviceSelect)
-const options = await page.$$eval(`${deviceSelect} option:not([disabled])`, (els) => els.map((e) => e.value).sort())
+const deviceSeg = `${DOOR} .pform .seg[aria-label="which router"]`
+await page.waitForSelector(deviceSeg)
+const options = await page.$$eval(`${deviceSeg} button`, (els) => els.map((e) => e.textContent.trim()).sort())
 check(
   JSON.stringify(options) === JSON.stringify(known),
   `the pick-list offers exactly the known devices (list=${options} api=${known})`,
 )
 const DEVICE = known[0]
-await page.selectOption(deviceSelect, DEVICE)
+await page.click(`${deviceSeg} button:has-text("${DEVICE}")`)
 
-await page.click(`${DOOR} .inline-form .save`)
-await page.waitForSelector(`${DOOR} .secretbanner .sk`)
-const token = (await page.textContent(`${DOOR} .secretbanner .sk`))?.trim() ?? ''
-check(token.length > 0, 'the one-time value banner shows the new token')
+await page.click(`${DOOR} .pform button:has-text("mint it")`)
+await page.waitForSelector(`${DOOR} .reveal code`)
+const token = (await page.textContent(`${DOOR} .reveal code`))?.trim() ?? ''
+check(token.length > 0, 'the once-only reveal shows the new token')
+
+// The reveal stands in for the new row until done is clicked -- the
+// ordinary row is filtered out of the list while it is showing (round
+// 32's "pending" swap), so done comes first here.
+await page.click(`${DOOR} .reveal button:has-text("done")`)
 
 // Which device an ingest key speaks for is the fact an operator revokes
 // on -- with two routers pushing, "ingest" alone does not say which key
-// belongs to which. The old Tokens page carried it and the door has to
-// as well.
+// belongs to which. The old Tokens page carried it and the keys group
+// has to as well.
 check(
   await page
-    .locator(`${DOOR} .row:has-text("ui-ingest") .chip:has-text("ingest: ${DEVICE}")`)
+    .locator(`${DOOR} .prow:has-text("ui-ingest") .pr:has-text("ingest · speaks for ${DEVICE}")`)
     .waitFor({ timeout: 15000 })
     .then(() => true, () => false),
-  'the door row says what the token is and which device it speaks for',
+  'the key row says what the token is and which device it speaks for',
 )
 
 // --- The proof: the UI-minted token actually ingests --------------------
@@ -118,46 +126,38 @@ const pushed = await fetch(`${URL_BASE}/api/ingest/routeros`, {
 check(pushed.status === 200, `the UI-minted ingest token pushes a filter-rule payload (${pushed.status})`)
 
 // --- Read-only stays the default and still works ------------------------
-await page.click(`${DOOR} .footer-action`)
-await page.waitForSelector(`${DOOR} .inline-form`)
-await page.fill(`${DOOR} .inline-form input[type="text"]`, 'ui-readonly')
-await page.selectOption(`${DOOR} select[aria-label="Key kind"]`, 'api')
-await page.click(`${DOOR} .inline-form .save`)
+await page.click(`${DOOR} .ogfoot .olink`)
+await page.waitForSelector(`${DOOR} .pform`)
+await page.fill(`${DOOR} .pform input[aria-label="key name"]`, 'ui-readonly')
+// read-only is the segment's own default -- left untouched here on purpose.
+await page.click(`${DOOR} .pform button:has-text("mint it")`)
 
-// Both waits below look redundant and are not. The copy-once banner is
-// already on screen from the ingest token above, so waiting for the
-// banner returns instantly and proves nothing -- it has to be the *text*
-// that is waited on, or this reads the ingest token back and the
-// /api/events check gets the 404 an ingest token is meant to get.
-// page.isVisible() has the same shape of problem: it answers
-// immediately rather than waiting, and the new row lands a few tens of
-// milliseconds after the click. Both passed only by luck until
-// live-suggestions.mjs started running ahead of this scenario (#547)
-// and put one more token in the list to fetch and render.
-const roRow = page.locator(`${DOOR} .row:has-text("ui-readonly") .chip:has-text("read")`)
+await page.waitForSelector(`${DOOR} .reveal code`)
+const roToken = (await page.textContent(`${DOOR} .reveal code`))?.trim() ?? ''
+check(roToken.length > 0 && roToken !== token, 'the reveal shows the new read-only token, not the ingest one above')
 check(
-  await roRow.waitFor({ timeout: 15000 }).then(() => true, () => false),
-  'a default-kind token is labelled read in the door',
+  (await page.textContent(`${DOOR} .reveal .pr`))?.trim() === 'read-only',
+  'a default-kind token is labelled read-only in the reveal',
 )
-await page
-  .waitForFunction(
-    (previous) => document.querySelector('.door .secretbanner .sk')?.textContent?.trim() !== previous,
-    token,
-    { timeout: 15000 },
-  )
-  .catch(() => {})
-const roToken = (await page.textContent(`${DOOR} .secretbanner .sk`))?.trim() ?? ''
-check(roToken !== token, 'the banner shows the new read-only token, not the ingest one above')
+await page.click(`${DOOR} .reveal button:has-text("done")`)
+check(
+  await page
+    .locator(`${DOOR} .prow:has-text("ui-readonly") .pr:has-text("read-only")`)
+    .waitFor({ timeout: 15000 })
+    .then(() => true, () => false),
+  'the ordinary row takes the reveal\'s place once done is clicked',
+)
 const events = await fetch(`${URL_BASE}/api/events`, {
   headers: { Authorization: `Bearer ${roToken}` },
 })
 check(events.status === 200, `the read-only token reads /api/events (${events.status})`)
 
-// --- Tidy up, via the door's own Revoke (confirm() included) ------------
-page.on('dialog', (d) => d.accept())
+// --- Tidy up, via the keys group's own revoke (arm-then-confirm) --------
 for (const name of ['ui-ingest', 'ui-readonly']) {
-  await page.click(`${DOOR} .row:has-text("${name}") .verb`)
-  await page.waitForSelector(`${DOOR} .row:has-text("${name}")`, { state: 'detached' })
+  const revoke = page.locator(`${DOOR} .prow:has-text("${name}") .revoke`)
+  await revoke.click()
+  await revoke.click()
+  await page.waitForSelector(`${DOOR} .prow:has-text("${name}")`, { state: 'detached' })
 }
 const afterRevoke = await fetch(`${URL_BASE}/api/ingest/routeros`, {
   method: 'POST',

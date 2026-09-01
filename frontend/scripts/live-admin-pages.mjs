@@ -147,21 +147,22 @@ await page.keyboard.press('Escape')
 await wizard.waitFor({ state: 'detached', timeout: 5000 })
 
 // --- A real viewer account, created the way an admin actually would ----
-// Through the engine room's people door now, which is where adding an
-// account lives since #490.
+// Through the engine room's people group now (round 32/#767 mounted it
+// directly in the Settings card; #490 first absorbed the account page
+// into the engine room).
 
 const VIEWER_USER = 'live-viewer-548'
 const VIEWER_PASS = 'live-viewer-548-password'
-const PEOPLE = '.door:has-text("Who may look in")'
+const PEOPLE = '#people'
 
 await openAndCheck('Settings')
-await page.click(`${PEOPLE} .footer-action`)
-await page.waitForSelector(`${PEOPLE} .inline-form`)
-await page.fill(`${PEOPLE} .inline-form input[type="text"]`, VIEWER_USER)
-await page.fill(`${PEOPLE} .inline-form input[type="password"]`, VIEWER_PASS)
-await page.click(`${PEOPLE} .inline-form .save`)
-await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`)
-check(true, `the viewer account "${VIEWER_USER}" is created from the engine room's people door`)
+await page.click(`${PEOPLE} .ogfoot .olink`)
+await page.waitForSelector(`${PEOPLE} .pform`)
+await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, VIEWER_USER)
+await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, VIEWER_PASS)
+await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
+await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`)
+check(true, `the viewer account "${VIEWER_USER}" is created from the people group`)
 
 // --- Viewer: absent, never disabled -------------------------------------
 
@@ -212,9 +213,12 @@ await browser.close()
 // --- Clean up: this account should not outlive the scenario -------------
 
 await openAndCheck('Settings')
-page.on('dialog', (d) => d.accept())
-await page.click(`${PEOPLE} .row:has-text("${VIEWER_USER}") .verb`)
-await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`, { state: 'detached' })
+// Arm-then-confirm (round 28's gesture): a click arms remove, a second
+// click on the same button confirms it.
+const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`)
+await remove.click()
+await remove.click()
+await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
 check(true, `the viewer account "${VIEWER_USER}" is removed again`)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)
