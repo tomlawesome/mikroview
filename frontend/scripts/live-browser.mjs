@@ -345,7 +345,12 @@ export async function goTo(page, label, { unfold = true } = {}) {
       { timeout: 10000 },
     )
     if (scene.tab) {
-      await page.click(`.card[data-card="${scene.card}"] [role="tab"]:has(.tlabel:text-is("${scene.tab}"))`)
+      // The docket's tabs are still `role="tab"` buttons on the scene
+      // bar (SceneBar.svelte:77-99); round 30 dropped the inner
+      // `.tlabel` span this used to match through, putting the label
+      // straight in the button. Ten scenarios died here, all before
+      // their own first assertion (#692, #667).
+      await page.click(`.card[data-card="${scene.card}"] [role="tab"]:text-is("${scene.tab}")`)
     }
     // Every arrival at the stream, not just the first. FilterBar's
     // `expanded` is component-local $state(false), so the card comes back
