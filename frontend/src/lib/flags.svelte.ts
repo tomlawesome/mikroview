@@ -61,7 +61,17 @@ class FlagsState {
   // fetched alongside list in the same GET /api/flags response.
   timeSeries = $state<FlagTimeBucket[]>([])
 
-  activeCount = $derived(this.list.filter((f) => !f.cleared).length)
+  // The open-flags count is the *settled* ledger's count (#642): a
+  // provisional flag -- raised while its baseline was still warming, so
+  // a judgement mikroview does not yet trust -- is visible on the
+  // learning shelf but never counted here. Everything that renders this
+  // (the scene bar's flag mark, BottomBar's badge) therefore only ever
+  // claims trusted judgements; the shelf's own heading carries
+  // provisionalCount instead.
+  activeCount = $derived(this.list.filter((f) => !f.cleared && !f.provisional).length)
+
+  // Open provisional flags -- the learning shelf's number (#642).
+  provisionalCount = $derived(this.list.filter((f) => !f.cleared && f.provisional).length)
 
   // Groups *active* flags by normalized source IP (see extractSourceIp)
   // so "one actor, several signals" -- a port scan, then a critical-port

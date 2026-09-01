@@ -177,6 +177,42 @@ func TestRegistrySyncPreservesUnchangedDefinitionState(t *testing.T) {
 	}
 }
 
+// TestRegistrySyncRegistersTheWatchLivenessTickerReusingDeviceSilence
+// pins issue #730's wiring: Sync registers the watch-liveness ticker
+// under its own fixed id, with the operator's currently configured
+// device_silence threshold and enabled flag reused rather than a second,
+// independent copy -- and toggling device_silence off (or dropping its
+// threshold to zero) switches the ticker off too, on the very next Sync,
+// the same "an edit takes effect on the next event, not the next
+// restart" contract this file's other tests pin for every other
+// definition.
+func TestRegistrySyncRegistersTheWatchLivenessTickerReusingDeviceSilence(t *testing.T) {
+	eng, defs, _ := newTestRegistry(t)
+
+	got, ok := registeredEvaluated(t, eng, WatchLivenessTickerID).(*watchLivenessTicker)
+	if !ok {
+		t.Fatalf("%q is not registered as a *watchLivenessTicker", WatchLivenessTickerID)
+	}
+	if !got.enabled {
+		t.Error("the ticker is not enabled even though device_silence is enabled by default")
+	}
+	if got.staleAfter != 15*time.Minute {
+		t.Errorf("staleAfter = %s, want the 15-minute default device_silence seeds", got.staleAfter)
+	}
+
+	// Disabling device_silence switches the ticker off too.
+	if err := defs.SetEnabledAndScope("device_silence", false, Scope{}); err != nil {
+		t.Fatalf("SetEnabledAndScope: %v", err)
+	}
+	after, ok := registeredEvaluated(t, eng, WatchLivenessTickerID).(*watchLivenessTicker)
+	if !ok {
+		t.Fatalf("%q is not registered as a *watchLivenessTicker after the edit", WatchLivenessTickerID)
+	}
+	if after.enabled {
+		t.Error("disabling device_silence should have disabled the watch-liveness ticker too")
+	}
+}
+
 // registeredDeclarative finds one declarative definition inside a
 // registered set, by id, failing the test if it is not there.
 func registeredDeclarative(t *testing.T, eng *Engine, setID, defID string) *DeclarativeDefinition {
