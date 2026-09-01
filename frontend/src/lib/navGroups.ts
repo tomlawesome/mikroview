@@ -105,8 +105,8 @@ export const navGroups: NavGroup[] = [
     // modal instead.
     //
     // Users and Tokens retired wholesale into the engine room (#490) --
-    // see EngineRoomDoors.svelte -- along with Detectors (see the Detect
-    // group's own comment above).
+    // its people and keys groups (round 32/#767) -- along with Detectors
+    // (see the Detect group's own comment above).
     //
     // #657 gave the engine room `edit: true`, retiring #490's
     // viewer-readable settings page. The test the owner ruled on is not
