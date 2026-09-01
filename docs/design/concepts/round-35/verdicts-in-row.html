@@ -658,17 +658,32 @@
      cleared; an exclusion is a verdict that outlives the flag
      ============================================================ */
   /* round 35: the verdict trio lives in the row, before the caret — one click, no drawer.
-     Three quiet verbs in the row's own mono, dot-separated like the chrome, lifted by the
-     row's hover and lit by the accent when chosen; no boxes — the docket speaks in text */
+     Three glyph chips in the verdict's own ink; a call lands as a stamp on the row */
   .panel td.vc { text-align: right; white-space: nowrap; }
-  .vrow { display: inline-flex; align-items: baseline; vertical-align: middle; margin-right: 18px; }
-  .vrow button.v { font: 10.5px var(--mono); color: var(--ink-3); background: transparent; border: 0; border-bottom: 1px dotted transparent; padding: 0; cursor: pointer; line-height: 16px; transition: color 0.15s; }
-  .vrow button.v + button.v::before { content: '·'; color: var(--ink-3); margin: 0 9px; opacity: 0.6; }
-  tr.frow:hover .vrow button.v { color: var(--ink-2); }
-  .vrow button.v:hover { color: var(--accent); border-bottom-color: var(--accent); }
-  .vrow button.v.on { color: var(--accent); }
-  .vrow button.v.on::after { content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: 1px; }
   .panel th.vc { text-align: right; }
+  .vrow { display: inline-flex; gap: 6px; vertical-align: middle; margin-right: 16px; }
+  .vrow button.v { --vc: var(--ink-2); font: 10.5px var(--mono); color: var(--ink-2); background: transparent; border: 1px solid var(--hair-2); border-radius: 999px; padding: 1px 9px 1px 7px; cursor: pointer; line-height: 16px; transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.15s; }
+  .vrow button.v i { font-style: normal; color: var(--vc); margin-right: 5px; font-weight: 700; }
+  .vrow button.v.expected { --vc: var(--ok); }
+  .vrow button.v.noise { --vc: var(--now); }
+  .vrow button.v.real { --vc: var(--alarm); }
+  .vrow button.v:hover { color: var(--vc); border-color: var(--vc); background: color-mix(in srgb, var(--vc) 12%, transparent); transform: translateY(-1px); }
+  .vrow button.v.on { color: var(--vc); border-color: var(--vc); background: color-mix(in srgb, var(--vc) 18%, transparent); }
+  /* the stamp: a verdict pressed onto the docket in its own ink */
+  .stamp { --vc: var(--ink-3); display: inline-block; font: 800 9.5px var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--vc); border: 1.5px solid var(--vc); border-radius: 3px; padding: 1px 7px 1px 8px; transform: rotate(-5deg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vc) 35%, transparent); animation: stamp-in 0.28s cubic-bezier(0.2, 1.6, 0.4, 1) both; vertical-align: middle; }
+  .stamp.expected { --vc: var(--ok); } .stamp.noise { --vc: var(--now); } .stamp.real { --vc: var(--alarm); }
+  @keyframes stamp-in { from { transform: rotate(-14deg) scale(2.1); opacity: 0; } 60% { opacity: 1; } to { transform: rotate(-5deg) scale(1); } }
+  /* the row takes the ink for a moment as the stamp lands */
+  tr.frow.struck td { animation: struck 0.7s ease-out both; }
+  @keyframes struck { from { background: color-mix(in srgb, var(--sc, var(--ink-3)) 16%, transparent); } }
+  tr.frow.struck.expected { --sc: var(--ok); } tr.frow.struck.noise { --sc: var(--now); } tr.frow.struck.real { --sc: var(--alarm); }
+  .vdone .by { color: var(--ink-3); margin-left: 8px; }
+  /* called real: the stamp sits by the type and the row's own bar thickens */
+  .fmark .stamp { margin-left: 10px; }
+  .fmark .by { font: 10.5px var(--mono); color: var(--ink-3); font-weight: 400; margin-left: 6px; }
+  tr.frow td:first-child { transition: box-shadow 0.35s ease; }
+  tr.frow.isreal td:first-child { box-shadow: inset 7px 0 0 var(--alarm) !important; }
+  @media (prefers-reduced-motion: reduce) { .stamp, tr.frow.struck td { animation: none; } .vrow button.v:hover { transform: none; } }
   .dwr-acts .never { margin-left: auto; }
   .dwr-acts .never.armed { color: var(--alarm); border-color: var(--alarm); }
   /* a flag that has been called: dims in place, keeps its row, offers undo until you leave the tab */
@@ -676,11 +691,10 @@
   tr.frow.fdone td:first-child { box-shadow: none !important; }
   tr.frow.fdone td:last-child { opacity: 1; }
   /* takes the trio's place in the same cell, so the columns never move for it */
-  .vdone { font: 10.5px var(--mono); color: var(--ink-3); white-space: nowrap; }
+  .vdone { font: 10.5px var(--mono); color: var(--ink-3); white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; }
   .vdone a { color: var(--accent); cursor: pointer; margin-left: 8px; }
   .vdone a:hover { text-decoration: underline; }
   /* called real: stays open, and says so where the type is */
-  .fmark .real { font: 600 9px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 9px; padding: 0 7px; margin-left: 10px; vertical-align: 1px; }
   .story .called { display: block; color: var(--ink-3); font-size: 11px; margin-bottom: 6px; }
   /* the exclusions body: the type's ink is off — mikroview does not look at these */
   tr.fx .fmark { color: var(--ink-3) !important; }
@@ -723,7 +737,7 @@
     <table>
       <thead><tr><th>flag</th><th>where</th><th>evidence</th><th>count</th><th>age</th><th class="vc">call it</th></tr></thead>
       <tbody>
-        <tr class="frow ft-unplanned open" data-d="d1"><td class="fmark">✱ UNPLANNED</td><td class="k"><a class="wl" href="#s3" onclick="descend()">iot</a> → <a class="wl" href="#s3" onclick="descend()">lan</a> · tcp/445</td><td>caught by default drop — no rule planned this pathway</td><td class="num">14×</td><td class="t">6 m</td><td class="vc"><span class="vrow"><button class="v" data-v="expected">expected</button><button class="v" data-v="noise">noise</button><button class="v" data-v="real">real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-unplanned open" data-d="d1"><td class="fmark">✱ UNPLANNED</td><td class="k"><a class="wl" href="#s3" onclick="descend()">iot</a> → <a class="wl" href="#s3" onclick="descend()">lan</a> · tcp/445</td><td>caught by default drop — no rule planned this pathway</td><td class="num">14×</td><td class="t">6 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer open ft-unplanned" id="d1"><td colspan="6"><div class="dwr"><div class="dwr-in">
           <div class="story"><b>14 asks in six minutes</b>, all tcp/445, all from <a class="wl" href="#s3" onclick="descend()">cam-porch</a> (10.0.20.14) toward <b>nas</b> (10.0.40.2). Nothing planned an iot → lan pathway, so the <b>default drop</b> caught every one. The camera has never asked for this before today.</div>
           <div class="side"><span class="lab">the episode</span>
@@ -736,7 +750,7 @@
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
-        <tr class="frow ft-portscan" data-d="d2"><td class="fmark">✱ PORT SCAN</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a> · 198.51.100.77</td><td>20 distinct ports in 40 s</td><td class="num">20</td><td class="t">11 m</td><td class="vc"><span class="vrow"><button class="v" data-v="expected">expected</button><button class="v" data-v="noise">noise</button><button class="v" data-v="real">real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-portscan" data-d="d2"><td class="fmark">✱ PORT SCAN</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a> · 198.51.100.77</td><td>20 distinct ports in 40 s</td><td class="num">20</td><td class="t">11 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer ft-portscan" id="d2"><td colspan="6"><div class="dwr"><div class="dwr-in">
           <div class="story"><b>One source, twenty doors.</b> 198.51.100.77 walked ports 1000–1019 in forty seconds, every knock refused at the wan boundary. Known scanner ranges say nothing about this address; the blocklist does not carry it.</div>
           <div class="side"><span class="lab">the episode</span>
@@ -749,7 +763,7 @@
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this source</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
-        <tr class="frow ft-outbound" data-d="d3"><td class="fmark">✱ OUTBOUND</td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> → wan · tcp/25</td><td>a camera asking for a mail server</td><td class="num">3×</td><td class="t">18 m</td><td class="vc"><span class="vrow"><button class="v" data-v="expected">expected</button><button class="v" data-v="noise">noise</button><button class="v" data-v="real">real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-outbound" data-d="d3"><td class="fmark">✱ OUTBOUND</td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> → wan · tcp/25</td><td>a camera asking for a mail server</td><td class="num">3×</td><td class="t">18 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer ft-outbound" id="d3"><td colspan="6"><div class="dwr"><div class="dwr-in">
           <div class="story"><b>A camera asking for a mail server.</b> Three connection attempts to port 25 on three different external hosts. Cameras do not send mail; things that have been taken over do. Refused each time by the iot egress rule.</div>
           <div class="side"><span class="lab">the episode</span>
@@ -759,7 +773,7 @@
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
-        <tr class="frow ft-repeat" data-d="d4"><td class="fmark">✱ REPEATED DROPS</td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · tcp/445</td><td>same ask, same refusal, still asking</td><td class="num">9×</td><td class="t">24 m</td><td class="vc"><span class="vrow"><button class="v" data-v="expected">expected</button><button class="v" data-v="noise">noise</button><button class="v" data-v="real">real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-repeat" data-d="d4"><td class="fmark">✱ REPEATED DROPS</td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · tcp/445</td><td>same ask, same refusal, still asking</td><td class="num">9×</td><td class="t">24 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer ft-repeat" id="d4"><td colspan="6"><div class="dwr"><div class="dwr-in">
           <div class="story"><b>Same ask, same refusal, still asking.</b> Nine identical attempts, one every couple of minutes — machine-regular, not a person retrying. This is the older sibling of the UNPLANNED flag above; opening either shows the same pathway.</div>
           <div class="side"><span class="lab">the episode</span>
@@ -769,7 +783,7 @@
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
-        <tr class="frow ft-surge" data-d="d5"><td class="fmark">▲ DROP SURGE</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a></td><td>3.1× the hour's baseline</td><td class="num">—</td><td class="t">31 m</td><td class="vc"><span class="vrow"><button class="v" data-v="expected">expected</button><button class="v" data-v="noise">noise</button><button class="v" data-v="real">real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-surge" data-d="d5"><td class="fmark">▲ DROP SURGE</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a></td><td>3.1× the hour's baseline</td><td class="num">—</td><td class="t">31 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer ft-surge" id="d5"><td colspan="6"><div class="dwr"><div class="dwr-in">
           <div class="story"><b>The wan boundary is refusing 3.1× more than usual for this hour.</b> No single source dominates — it is a broad rise, the shape background scanning takes. Nothing inside answered anything.</div>
           <div class="side"><span class="lab">the hour against its baseline</span>
@@ -779,7 +793,7 @@
           <div class="dwr-acts"><button>open in metrics ▸</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
-        <tr class="frow ft-talker" data-d="d6"><td class="fmark">▲ NEW TALKER</td><td class="k"><a class="wl" href="#s3" onclick="descend()">lan</a> · laptop-anna</td><td>first traffic on this boundary in 14 d</td><td class="num">—</td><td class="t">55 m</td><td class="vc"><span class="vrow"><button class="v" data-v="expected">expected</button><button class="v" data-v="noise">noise</button><button class="v" data-v="real">real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-talker" data-d="d6"><td class="fmark">▲ NEW TALKER</td><td class="k"><a class="wl" href="#s3" onclick="descend()">lan</a> · laptop-anna</td><td>first traffic on this boundary in 14 d</td><td class="num">—</td><td class="t">55 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer ft-talker" id="d6"><td colspan="6"><div class="dwr"><div class="dwr-in">
           <div class="story"><b>laptop-anna spoke for the first time in fourteen days.</b> Ordinary browsing shape, all accepted. New-talker flags exist so a quiet name reappearing is a thing you saw, not a thing that slipped by.</div>
           <div class="side"><span class="lab">first minutes</span>
@@ -1371,14 +1385,18 @@
     function typeOf(r) { return r.querySelector('.fmark').firstChild.textContent.trim().replace(/^[✱▲] /, ''); }
     function close(r) { r.classList.remove('open'); document.getElementById(r.dataset.d).classList.remove('open'); }
     // a called flag dims where it is; undo puts it back exactly
-    var TRIO = '<span class="vrow"><button class="v" data-v="expected">expected</button><button class="v" data-v="noise">noise</button><button class="v" data-v="real">real</button></span><span class="openc">▸</span>';
-    function done(r, text, undo) {
-      close(r); r.classList.add('fdone');
+    var TRIO = '<span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span>';
+    function strike(r, kind) {
+      r.classList.remove('struck', 'expected', 'noise', 'real'); void r.offsetWidth;
+      r.classList.add('struck', kind);
+    }
+    function done(r, kind, text, after, undo) {
+      close(r); r.classList.add('fdone'); strike(r, kind);
       var c = r.cells[5];
-      c.innerHTML = '<span class="vdone">✓ ' + text + (undo ? ' · <a>undo</a>' : '') + '</span>';
+      c.innerHTML = '<span class="vdone"><span class="stamp ' + kind + '">' + text + '</span>' + (after ? '<span class="by">' + after + '</span>' : '') + (undo ? '<a>undo</a>' : '') + '</span>';
       if (undo) c.querySelector('a').addEventListener('click', function (e) {
         e.stopPropagation();
-        r.classList.remove('fdone'); c.innerHTML = TRIO;
+        r.classList.remove('fdone', 'struck', kind); c.innerHTML = TRIO;
         fcount();
       });
       fcount();
@@ -1392,14 +1410,16 @@
         if (v === 'real') {
           var on = !b.classList.contains('on');
           r.querySelectorAll('.v').forEach(function (x) { x.classList.toggle('on', on && x === b); });
-          var fm = r.querySelector('.fmark'), tag = fm.querySelector('.real');
-          if (on && !tag) fm.insertAdjacentHTML('beforeend', '<span class="real">real · you</span>'); else if (!on && tag) tag.remove();
+          var fm = r.querySelector('.fmark'), tag = fm.querySelector('.stamp');
+          r.classList.toggle('isreal', on);
+          if (on) { strike(r, 'real'); if (!tag) fm.insertAdjacentHTML('beforeend', '<span class="stamp real">real</span>'); }
+          else { r.classList.remove('struck', 'real'); if (tag) tag.remove(); }
           var st = d.querySelector('.story'), c = st.querySelector('.called');
           if (on && !c) st.insertAdjacentHTML('afterbegin', '<span class="called">Called real at 13:58 by you. It stays open until it is cleared; a fresh episode asks again.</span>');
           else if (!on && c) c.remove();
           return;
         }
-        done(r, 'called ' + v, true);
+        done(r, v, v, '', true);
       });
     });
     function disarmAll() {
@@ -1416,11 +1436,11 @@
             return;
           }
           b.classList.remove('armed'); b.textContent = 'never again';
-          done(r, 'never again · listed below', false);
+          done(r, 'never', 'never again', '', false);
           addExcl(r);
           return;
         }
-        if (b.classList.contains('quiet') && /^clear/.test(b.textContent)) done(r, 'cleared', true);
+        if (b.classList.contains('quiet') && /^clear/.test(b.textContent)) done(r, 'cleared', 'cleared', '', true);
       });
     });
     document.addEventListener('click', function (e) { if (!e.target.closest('.never')) disarmAll(); }, true);
@@ -1452,7 +1472,7 @@
       var nr = document.createElement('tr'), nd = document.createElement('tr');
       nr.className = 'frow fx ' + Array.prototype.filter.call(r.classList, function (c) { return /^ft-/.test(c); }).join(' ');
       nr.dataset.d = id;
-      nr.innerHTML = '<td class="fmark">' + type + '</td><td class="k">' + where + '</td><td>never again — just now, you</td><td class="num">—</td><td class="t">now</td><td><span class="openc">▸</span></td>';
+      nr.innerHTML = '<td class="fmark">' + type + '</td><td class="k">' + where + '</td><td>never again — just now, you</td><td class="num">—</td><td class="t">now</td><td class="vc"><span class="openc">▸</span></td>';
       nd.className = 'drawer fx'; nd.id = id;
       nd.innerHTML = '<td colspan="6"><div class="dwr"><div class="dwr-in"><div class="story"><b>Told never to flag this again</b> just now, by you. Nothing about the pair is counted or held now — mikroview simply does not look. The audit log has this line.</div>'
         + '<div class="side"><span class="lab">the pair</span><ul class="seen facts"><li><span>flag</span><b>' + typeOf(r) + '</b></li><li><span>target</span><b>' + r.cells[1].textContent.trim() + '</b></li><li><span>since</span><b>13:58</b></li><li><span>by</span><b>you</b></li></ul></div>'
