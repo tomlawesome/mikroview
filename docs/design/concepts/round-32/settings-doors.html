@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 32 · Settings, its two doors</title>
+<style>
+  /* ============================================================
+     ROUND 5 — THE GLUE. Direction R: the deck.
+
+     The owner's own read of this round, promoted to the design: the
+     scenes are full-viewport cards in a vertical deck with scroll
+     snap. There is no "which scene is home" — the deck plays in the
+     operator's own order, and sign-in lands on whatever card they
+     put first. The atlas stays the jump navigator, and gains the
+     deck-order editor. P and Q are superseded by this one file,
+     which carries every scene once.
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --glass: rgba(15, 20, 34, 0.66);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e; --drop: #f5a623; --nat: #2dd4bf;
+    --fall-accept: #5aa7f0; --fall-drop: #e05252;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; }
+
+  /* ---- the scene bar: every scene's own chrome, no rail, no toolbar ---- */
+  /* Free-floating chrome (owner, 2026-08-30: "I still don't like the
+     rigid top bar"): the same information, loose on the void — no
+     strip, no border, no glass. Each element floats where it reads. */
+  .scenebar { position: absolute; top: 0; left: 0; right: 0; z-index: 10; pointer-events: none; }
+  .scenebar > * { pointer-events: auto; }
+  .wordmark { position: absolute; top: 18px; left: 24px; font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); cursor: pointer; }
+  .wordmark em { font-style: normal; color: var(--accent); }
+  .wordmark .hintkey { font-size: 9px; color: var(--ink-3); font-weight: 400; margin-left: 6px; letter-spacing: 0.08em; }
+  /* NO PAGE HEADING, NO STRAP (owner, 2026-08-31). The scene bar drew
+     a page name and an epithet; he struck them on metrics, the docket,
+     the fall and the topography in turn, so they are gone outright
+     rather than kept as a shrinking list of exceptions. The roll rail
+     already says which card you are on. Rounds up to 29 drew `.scname`
+     and `.scname .epi`; this is a change to the record, and the rule
+     is deleted here so nobody restores it from the stylesheet. */
+  .scstatus { position: absolute; top: 20px; right: 24px; display: flex; gap: 16px; align-items: center; font-size: 11px; color: var(--ink-2); }
+  .scstatus .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: 1px; }
+  .scstatus .flagchip { color: var(--void); background: var(--alarm); border-radius: 9px; padding: 0 7px; font-weight: 700; font-size: 10.5px; }
+  .scstatus .who { color: var(--ink-3); }
+
+  /* ---- scene 1: the door — one beat, then in ---- */
+  .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; }
+  .door .beat { flex: 1; display: grid; place-items: center; position: relative; }
+  .door .stack { text-align: center; width: 300px; position: relative; z-index: 2; }
+  .door .wm {
+    display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px;
+    box-shadow: 0 0 14px rgba(232, 176, 90, 0.22), inset 0 0 10px rgba(232, 176, 90, 0.06);
+    animation: kindle 0.5s ease-out;
+  }
+  .door .wm em { font-style: normal; color: var(--accent); }
+  @keyframes kindle { from { box-shadow: none; border-color: rgba(232, 176, 90, 0); } }
+  .fullfall {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+    /* The rain lives behind the door's elements, never across them: a
+       radial mask carves the centre out of the layer entirely. */
+    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+  }
+  .fullfall i {
+    position: absolute; top: -20px; width: 2.5px; height: 13px; border-radius: 2px;
+    background: var(--fall-accept); animation: fall 5.5s linear infinite;
+  }
+  .fullfall i.r { background: var(--fall-drop); }
+  .fullfall i.v { background: #a78bfa; }
+  @keyframes fall { to { transform: translateY(106vh); } }
+  .cred input {
+    display: block; width: 240px; margin: 10px auto 0; padding: 7px 4px;
+    background: transparent; border: 0; border-bottom: 1px solid var(--hair-2);
+    color: var(--ink); font: 13.5px var(--sans); text-align: center; outline: none;
+  }
+  .cred input::placeholder { color: var(--ink-3); }
+  .cred input:focus { border-bottom-color: var(--accent); }
+  .enter {
+    margin-top: 20px; padding: 7px 30px; font: 600 13px var(--sans); letter-spacing: 0.04em;
+    color: var(--accent); background: transparent; border: 1px solid var(--hair-2);
+    border-radius: 999px; cursor: pointer;
+  }
+  .enter:hover { border-color: var(--accent); }
+
+  /* ---- scene 2: the map (Atlas II refined, carried forward) ---- */
+  .lenses { display: flex; gap: 6px; padding: 88px 24px 0; position: relative; z-index: 4; }
+  .lens { font-size: 11px; color: var(--ink-3); border: 1px solid var(--hair); border-radius: 14px; padding: 3px 12px; }
+  .lens.on { color: var(--ink); border-color: var(--hair-2); background: var(--raised); }
+  .lens .ct { color: var(--void); background: var(--alarm); border-radius: 8px; padding: 0 6px; margin-left: 6px; font-weight: 700; font-size: 10px; }
+  .stage { position: absolute; inset: 132px 0 90px; }
+  .stage svg { width: 100%; height: 100%; }
+  .isl { fill: rgba(15, 20, 34, 0.72); stroke: var(--hair-2); }
+  .n-name { font: 650 15px var(--sans); fill: var(--ink); }
+  .n-cidr { font: 11px var(--mono); fill: var(--ink-3); }
+  .n-sub { font: 11px var(--sans); fill: var(--ink-3); }
+  .cov { font: 700 9px var(--mono); letter-spacing: 0.1em; }
+  .cov-l { fill: var(--ok); } .cov-q { fill: var(--ink-3); } .cov-d { fill: var(--alarm); }
+  .rib { fill: none; opacity: 0.5; }
+  .rib-ghost { fill: none; stroke: var(--ink-3); stroke-width: 1.2; stroke-dasharray: 3 6; opacity: 0.45; }
+  .rib-alarm { fill: none; stroke: var(--alarm); stroke-width: 2; filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.45)); }
+  .alarm-t { font: 700 10.5px var(--mono); fill: var(--alarm); }
+  .chip-t { font: 10.5px var(--mono); fill: var(--ink-2); }
+  .halo { animation: halo 2s ease-out infinite; }
+  @keyframes halo { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2.6); } }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+  .scrub {
+    position: absolute; left: 20px; bottom: 118px; width: 300px; z-index: 4;
+    background: var(--glass); border: 1px solid var(--hair); border-radius: 10px; padding: 8px 12px 6px;
+  }
+  .scrub .row { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; }
+  .scrub .live { color: var(--ok); }
+  .scrub svg { width: 100%; height: 26px; }
+  .scrub polyline { fill: none; stroke: var(--accent); stroke-width: 1.4; opacity: 0.7; }
+  .scrub line { stroke: var(--now); stroke-width: 2; }
+  .ticker {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 4;
+    background: rgba(4, 6, 11, 0.92); border-top: 1px solid var(--hair-2); padding: 8px 20px 10px;
+  }
+  .ticker .head { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .ticker .head i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  .ticker .lift { color: var(--accent); }
+  .trow { display: flex; gap: 12px; font: 11.5px var(--mono); color: var(--ink-2); padding: 2px 0; }
+  .trow .t { color: var(--ink-3); }
+  .badge { font: 700 10px var(--mono); border-radius: 4px; padding: 0 6px; letter-spacing: 0.06em; }
+  .b-drop { color: var(--drop); background: rgba(245, 166, 35, 0.12); }
+  .b-accept { color: var(--accept); background: rgba(62, 207, 126, 0.12); }
+  .b-nat { color: var(--nat); background: rgba(45, 212, 191, 0.12); }
+
+  /* ---- scene 2 (Q): the fall — the accepted live build, restated ---- */
+  .fallwrap { position: absolute; inset: 78px 0 0; display: flex; flex-direction: column; }
+  .fall-head { display: flex; gap: 10px; align-items: center; padding: 10px 20px 4px; }
+  .fall-chip { font: 600 10.5px var(--mono); letter-spacing: 0.05em; border-radius: 12px; padding: 3px 12px; border: 1px solid; }
+  .fc-alarm { color: var(--alarm); border-color: rgba(255, 84, 112, 0.5); }
+  .fc-dim { color: var(--ink-2); border-color: var(--hair-2); }
+  .fall-info { position: absolute; bottom: 10px; left: 14px; z-index: 6; }
+  .ibtn {
+    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--hair-2);
+    background: transparent; color: var(--ink-3); font: italic 600 11px Georgia, serif;
+    cursor: pointer; line-height: 1;
+  }
+  .ibtn:hover { color: var(--accent); border-color: var(--accent); }
+  .fallcanvas { flex: 1; position: relative; }
+  .fallcanvas svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .bh-name { font: 650 11px var(--mono); fill: var(--ink); }
+  .bh-epi { font: 9.5px var(--sans); fill: var(--ink-3); }
+  .bh-watch { font: 700 8px var(--mono); fill: var(--ok); letter-spacing: 0.08em; }
+  .bh-watch.bad { fill: var(--alarm); }
+  .bh-watch.dim { fill: var(--ink-3); }
+  .spec { fill: rgba(90, 167, 240, 0.18); stroke: var(--fall-accept); stroke-width: 1.2; }
+  .spec.r { fill: rgba(224, 82, 82, 0.16); stroke: var(--fall-drop); }
+  .peak-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .nowline { stroke: var(--now); stroke-width: 1.6; }
+  .now-t { font: 10px var(--mono); fill: var(--now); }
+  .gut { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .carrier { stroke-linecap: round; }
+  .flagline { stroke: var(--alarm); stroke-width: 0.7; stroke-dasharray: 2 5; opacity: 0.7; }
+  .flag-t { font: 700 9.5px var(--mono); fill: var(--alarm); }
+  .dark-t { font: 9.5px var(--mono); fill: var(--fall-drop); }
+  .port-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .fall-legend { display: flex; gap: 24px; justify-content: center; padding: 8px 12px 12px; font-size: 11px; color: var(--ink-3); border-top: 1px solid var(--hair); flex-wrap: wrap; }
+  .fall-legend .b { color: var(--fall-accept); }
+  .fall-legend .r { color: var(--fall-drop); }
+  .fall-legend .v { color: #a78bfa; }
+
+  /* ---- the topography card: one place, two viewpoints, three depths ---- */
+  .modechip {
+    margin-left: 18px; font: 600 10.5px var(--mono); letter-spacing: 0.08em;
+    color: var(--accent); background: var(--raised); border: 1px solid var(--hair-2);
+    border-radius: 14px; padding: 3px 14px; cursor: pointer;
+  }
+  #topo { perspective: 1400px; }
+  #topo svg { transition: transform 0.8s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 42%; }
+  #topo.survey svg { transform: rotateX(32deg) scale(0.88) translateY(-24px); }
+  #topo .isl-card, #topo .g-dot, #topo .detail, #topo .svc, #topo .cli { transition: opacity 0.55s ease; }
+  #topo .g-dot { opacity: 0; pointer-events: none; }
+  #topo.survey .g-dot { opacity: 1; }
+  #topo.survey .isl-card, #topo.survey .detail { opacity: 0; pointer-events: none; }
+  #topo[data-lvl="0"] .svc, #topo[data-lvl="0"] .cli { opacity: 0; }
+  #topo[data-lvl="1"] .cli { opacity: 0; }
+  .cli .c-dot { stroke: none; }
+  .cli .c-label { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .cli .spoke { stroke-width: 0.8; opacity: 0.3; }
+  @media (prefers-reduced-motion: reduce) { #topo svg { transition: none; } }
+
+  /* ---- the deck: snap + the rail ---- */
+  html { scroll-snap-type: y mandatory; }
+  .scene { scroll-snap-align: start; scroll-snap-stop: always; }
+  /* The roll rail (owner, round 11): the deck's names as vertical text
+     hugging the right edge, letter-tops outward. Click one: the card
+     rolls to centre while the name gently grows, in the same beat. */
+  .deckrail {
+    position: fixed; right: 8px; top: 50%; transform: translateY(-50%); z-index: 60;
+    display: flex; flex-direction: column; gap: 30px; align-items: center;
+  }
+  .deckrail a {
+    writing-mode: sideways-lr; text-decoration: none; color: var(--ink-3);
+    font: 500 9.5px var(--mono); letter-spacing: 0.22em;
+    transition: font-size 0.45s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s, letter-spacing 0.45s;
+  }
+  .deckrail a:hover { color: var(--ink-2); }
+  .deckrail a.on { color: var(--ink); font-size: 12px; letter-spacing: 0.26em; }
+  /* ---- the atlas's deck-order editor ---- */
+  .heartdeck {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; color: var(--ink-2);
+    text-align: left; min-width: 240px;
+  }
+  .heartdeck .lab { font-size: 9.5px; letter-spacing: 0.16em; color: var(--ink-3); margin-bottom: 2px; text-align: center; }
+  .heartdeck .card { display: flex; gap: 8px; align-items: center; border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 14px; background: var(--raised); cursor: grab; }
+  .heartdeck .card .n { color: var(--ink-3); font-size: 10px; }
+  .heartdeck .card .grip { color: var(--ink-3); letter-spacing: -1px; }
+  .heartdeck .first { border-color: var(--accent); }
+  .heartdeck .first .tag { font-size: 8.5px; color: var(--accent); letter-spacing: 0.12em; margin-left: 4px; }
+  .heartdeck .hint { font-size: 9.5px; color: var(--ink-3); text-align: center; margin-top: 2px; }
+  .faro-orbit { stroke: var(--hair); }
+  .dest .dg { fill: var(--raised); stroke: var(--ink-3); stroke-width: 1.5; transform: rotate(45deg); }
+  .dest .dest-l { font: 600 12px var(--sans); fill: var(--ink-2); }
+  .dest .dest-b { font: 700 10px var(--mono); fill: var(--void); }
+  .dest:hover .dg { stroke: var(--accent); }
+  .dest:hover .dest-l { fill: var(--ink); }
+
+  /* ---- scene 3: the atlas overlay ---- */
+  .atlas { min-height: 100vh; display: flex; flex-direction: column; background: radial-gradient(900px 540px at 50% 30%, rgba(80, 115, 205, 0.08), transparent 65%), var(--void); }
+  .atlas .chart { flex: 1; position: relative; }
+  .atlas .chart svg { width: 100%; height: 100%; position: absolute; inset: 0; }
+  .orbit { fill: none; stroke: var(--hair-2); stroke-dasharray: 2 7; }
+  .zrib { stroke: var(--hair); stroke-width: 1; }
+  .station-ring { fill: none; stroke: var(--accent); stroke-opacity: 0.5; }
+  .station-core { fill: var(--accent); }
+  .station-label { font: 10.5px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-dot { fill: var(--raised); stroke-width: 2.5; }
+  .zone-label { font: 650 13.5px var(--sans); fill: var(--ink); }
+  .zone-epithet { font: 11px var(--sans); fill: var(--ink-3); }
+  .zone-state { font: 700 9px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-state.bad { fill: var(--alarm); }
+  .atlas .hint { text-align: center; font-size: 11px; color: var(--ink-3); padding: 6px 0 14px; }
+  .ports { display: flex; gap: 34px; justify-content: center; flex-wrap: wrap; padding: 16px 20px 10px; border-top: 1px solid var(--hair); }
+  .pgroup { min-width: 110px; }
+  .pname { display: block; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+  .port { display: block; font-size: 12.5px; color: var(--ink-2); padding: 2px 0; cursor: pointer; }
+  .port.on { color: var(--accent); font-weight: 650; }
+  .port .home { font-size: 9px; color: var(--ink-3); letter-spacing: 0.1em; margin-left: 6px; }
+  .port .badge { margin-left: 6px; }
+  .atlas .account { display: flex; gap: 22px; justify-content: center; font-size: 11px; color: var(--ink-3); padding: 8px 0 22px; }
+  .atlas .account b { color: var(--ink-2); font-weight: 600; }
+
+  /* ---- scene 4: the stream, columns squared ---- */
+  .controls { position: absolute; top: 50px; right: 24px; display: flex; gap: 10px; align-items: center; }
+  .controls .search {
+    width: 320px; padding: 5px 12px; font: 12px var(--mono); color: var(--ink-2);
+    background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair); border-radius: 7px;
+  }
+  .controls .search em { font-style: normal; color: var(--accent); }
+  .spans { display: flex; gap: 2px; font: 10.5px var(--mono); color: var(--ink-3); }
+  .spans span { padding: 3px 9px; border-radius: 6px; }
+  .spans .on { color: var(--ink); background: var(--raised); border: 1px solid var(--hair); }
+  table.stream { width: calc(100% - 40px); margin: 100px 20px 14px; border-collapse: collapse; font: 12px var(--mono); }
+  table.stream th {
+    text-align: left; font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-3); padding: 6px 10px; border-bottom: 1px solid var(--hair-2);
+  }
+  table.stream td { padding: 5px 10px; border-bottom: 1px solid var(--hair); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  table.stream .num { text-align: right; }
+  table.stream .host { color: var(--ink); }
+  table.stream .geo { color: var(--ink-3); font-size: 10.5px; }
+  table.stream tr.hl td { background: rgba(255, 84, 112, 0.05); }
+
+  /* The three facts of the day, and the reason you would look at the
+     stream at all -- they were set at the same weight as a caption.
+     Lifted to the ticker's own footing: a real band, ink-2 body, the
+     salient token in full ink. */
+  .foot-legend {
+    position: absolute; bottom: 0; left: 0; right: 0; display: flex; gap: 44px; justify-content: center;
+    padding: 12px 20px 13px; font-size: 12.5px; color: var(--ink-2);
+    background: rgba(4, 6, 11, 0.92); border-top: 1px solid var(--hair-2);
+  }
+  .foot-legend .k { color: var(--ink); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+<style>
+  .alt { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; gap: 14px; align-items: center; font: 500 9px var(--mono); letter-spacing: 0.12em; color: var(--ink-3); opacity: 0.6; }
+  .alt:hover { opacity: 1; }
+  .alt input { width: 210px; height: 2px; accent-color: var(--accent); }
+  .wlens2 { position: absolute; bottom: 12px; left: 26px; z-index: 6; display: flex; gap: 14px; font: 500 10.5px var(--sans); color: var(--ink-3); opacity: 0.8; }
+  .wlens2 .on { color: var(--ink); }
+  .flag-t { font: 700 10px var(--mono); fill: var(--alarm); }
+  .whisper { position: absolute; top: 92px; left: 24px; right: 24px; z-index: 8; display: flex; gap: 26px; align-items: center; font: 11px var(--mono); color: var(--ink-3); }
+  .whisper svg { height: 22px; width: 190px; }
+  .whisper polyline { fill: none; stroke: var(--accent); stroke-width: 1.2; opacity: 0.7; }
+  .whisper .k { color: var(--ink-2); }
+  .whisper .r { color: var(--fall-drop); }
+
+  .wtab-r { fill: rgba(232, 176, 90, 0.13); stroke: rgba(232, 176, 90, 0.45); }
+  .wtab { font: 600 9.5px var(--mono); fill: var(--now); }
+  .ftab-r { fill: rgba(255, 84, 112, 0.12); stroke: rgba(255, 84, 112, 0.45); }
+  .ftab { font: 600 9.5px var(--mono); fill: var(--alarm); }
+  .alt input { -webkit-appearance: none; appearance: none; height: 2px; background: var(--hair-2); border-radius: 1px; }
+  .alt input::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 9px; height: 9px;
+    background: var(--void); border: 1.5px solid var(--accent); border-radius: 2px;
+    transform: rotate(45deg); cursor: pointer;
+  }
+  .alt input::-moz-range-thumb {
+    width: 9px; height: 9px; background: var(--void); border: 1.5px solid var(--accent);
+    border-radius: 2px; transform: rotate(45deg); cursor: pointer;
+  }
+</style>
+<style>
+  .mx { position: absolute; inset: 110px 24px 40px; display: grid; grid-template-columns: 2fr 1fr; gap: 48px; }
+  .mx-t { font: 600 9.5px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); margin-bottom: 12px; }
+  .mx-chart svg { width: 100%; height: 60%; }
+  .mx-legend { display: flex; gap: 22px; font: 10.5px var(--mono); color: var(--ink-3); margin-top: 10px; }
+  .mx-bar { display: flex; align-items: center; gap: 10px; margin: 7px 0; font: 11.5px var(--mono); color: var(--ink-2); }
+  .mx-bar .h { width: 120px; color: var(--ink); }
+  .mx-bar i { display: block; height: 5px; border-radius: 3px; background: var(--fall-accept); opacity: 0.75; }
+  .mx-bar b { color: var(--ink-3); font-weight: 500; }
+</style>
+<style>
+  /* Aggregates are part of their entity (owner, round 12): drawn inside
+     the card, matching the house chip style — rounded, hairline — in
+     their colours only, riding the camera with everything else. */
+  .wchip-r { fill: rgba(232, 176, 90, 0.10); stroke: rgba(232, 176, 90, 0.40); stroke-width: 0.9; }
+  .wchip { font: 600 9.5px var(--mono); fill: var(--now); }
+  .fchip-r { fill: rgba(255, 84, 112, 0.10); stroke: rgba(255, 84, 112, 0.40); stroke-width: 0.9; }
+  .fchip { font: 600 9.5px var(--mono); fill: var(--alarm); }
+  .gd-agg { font: 600 9px var(--mono); }
+</style>
+<style>
+  .mviews { position: absolute; top: 20px; left: 148px; z-index: 12; display: flex; gap: 16px; font: 500 11px var(--sans); color: var(--ink-3); }
+  .mviews span { cursor: pointer; }
+  .mviews .on { color: var(--ink); border-bottom: 1px solid var(--accent); padding-bottom: 2px; }
+  .hourline { position: absolute; top: 62px; left: 26px; right: 26px; display: flex; gap: 10px; align-items: baseline; font: 11px var(--mono); color: var(--ink-3); flex-wrap: wrap; }
+  .hourline .big { font-size: 17px; color: var(--ink); }
+  .hourline .unit { font-size: 9px; color: var(--ink-3); margin-left: 6px; letter-spacing: 0.06em; }
+  .hourline .fact b { color: var(--ink-2); font-weight: 600; }
+  .hourline .sep { opacity: 0.5; }
+  .hourline .gap { flex: 1; }
+  .hourline .brinkmark { color: var(--now); }
+  .drumwrap { position: absolute; inset: 108px 24px 30px; }
+  .drumwrap svg { width: 100%; height: 100%; }
+</style>
+<style>
+  /* C corrected (owner, round-14 verdict): the boxes go UNDERNEATH the
+     card they belong to, full width of it, both equally sized, stacked;
+     flags the foot. Watchers purple — ratified this round. */
+  .wp-r { fill: rgba(167, 139, 250, 0.10); stroke: rgba(167, 139, 250, 0.40); stroke-width: 0.9; }
+  .wp { font: 600 9.5px var(--mono); fill: #a78bfa; }
+  .stage { perspective: 1400px; }
+  .stage svg { transition: transform 0.8s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 42%; }
+  .stage.survey svg { transform: rotateX(32deg) scale(0.88) translateY(-24px); }
+  .stage .isl-card, .stage .g-dot, .stage .detail, .stage .svc, .stage .cli { transition: opacity 0.55s ease; }
+  .stage .g-dot { opacity: 0; pointer-events: none; }
+  .stage.survey .g-dot { opacity: 1; }
+  .stage.survey .isl-card, .stage.survey .detail { opacity: 0; pointer-events: none; }
+  .stage[data-lvl="0"] .svc, .stage[data-lvl="0"] .cli { opacity: 0; }
+  .stage[data-lvl="1"] .cli { opacity: 0; }
+  /* The slider's stops, marked on the line itself: a tiny symbol each,
+     no text (owner, this round). Clicking anywhere on the line jumps to
+     the nearest stop — the input already snaps, the ticks just show
+     where the stops live. The survey stop wears the atlas diamond. */
+  .altwrap { position: relative; display: inline-flex; align-items: center; }
+  .altwrap .tick {
+    position: absolute; top: 50%; width: 3px; height: 3px; border-radius: 50%;
+    background: var(--ink-3); transform: translate(-50%, -50%); pointer-events: none;
+  }
+  .altwrap .tick.survey {
+    width: 5px; height: 5px; border-radius: 0; background: transparent;
+    border: 1px solid var(--ink-3); transform: translate(-50%, -50%) rotate(45deg);
+  }
+</style>
+<style>
+  .dtabs { position: absolute; top: 20px; left: 148px; z-index: 12; display: flex; gap: 16px; font: 500 11px var(--sans); color: var(--ink-3); }
+  .dtabs span { cursor: pointer; }
+  .dtabs .on { color: var(--ink); border-bottom: 1px solid var(--accent); padding-bottom: 2px; }
+  /* NO COUNTS ON THE DOCKET'S TABS (owner, 2026-08-31). Rounds 17-19
+     tried them inline, then beneath the names; both were called clumsy
+     and the tab row now carries the names alone. The counts still live
+     where they are read — the chrome's ⚑ and eye marks, on every scene.
+     Round 29 still carried `.dtabs .under` and its inks in the sheet
+     with nothing using them; they are deleted so no later build can
+     restore counts from the stylesheet. */
+  .panel { position: absolute; inset: 96px 36px 40px; display: flex; justify-content: center; align-items: flex-start; overflow: auto; }
+  .panel:not(.on) { display: none; }
+  .panel table { border-collapse: collapse; font: 12px var(--mono); width: 100%; max-width: 1520px; }
+  .panel th, .panel td { padding: 8px 18px; text-align: left; }
+  .panel thead th { font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--hair-2); cursor: pointer; user-select: none; white-space: nowrap; }
+  .panel thead th:hover { color: var(--ink-2); }
+  .panel thead th .dir { color: var(--accent); margin-left: 5px; }
+  /* every column doubles as a filter: a quiet inline row under the heads */
+  .panel tr.filters td { padding: 2px 18px 8px; border-bottom: 1px solid var(--hair); }
+  .panel tr.filters input {
+    width: 100%; background: transparent; border: 0; border-bottom: 1px dashed var(--hair);
+    font: 10.5px var(--mono); color: var(--ink-2); padding: 2px 0; outline: none;
+  }
+  .panel tr.filters input::placeholder { color: var(--ink-3); opacity: 0.6; }
+  .panel tr.filters input:focus { border-bottom-color: var(--accent); }
+  .panel td { color: var(--ink-2); border-bottom: 1px solid var(--hair); }
+  .panel tr.frow { cursor: pointer; }
+  .panel tr.frow:hover td { background: rgba(160, 185, 230, 0.04); }
+  .panel tr.frow.open td { border-bottom-color: transparent; background: rgba(160, 185, 230, 0.04); }
+  .panel td.t { color: var(--ink-3); }
+  .panel td.k { color: var(--ink); }
+  .panel td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .panel .openc { color: var(--accent); white-space: nowrap; transition: transform 0.2s; display: inline-block; }
+  .frow.open .openc { transform: rotate(90deg); }
+  .fmark { font-weight: 700; white-space: nowrap; }
+  .ft-unplanned .fmark { color: #ff5470; } .ft-unplanned td:first-child { box-shadow: inset 3px 0 0 #ff5470; }
+  .ft-portscan .fmark { color: #ff9e64; } .ft-portscan td:first-child { box-shadow: inset 3px 0 0 #ff9e64; }
+  .ft-outbound .fmark { color: #f072c8; } .ft-outbound td:first-child { box-shadow: inset 3px 0 0 #f072c8; }
+  .ft-repeat .fmark { color: #e0765a; } .ft-repeat td:first-child { box-shadow: inset 3px 0 0 #e0765a; }
+  .ft-surge .fmark { color: #e8b05a; } .ft-surge td:first-child { box-shadow: inset 3px 0 0 #e8b05a; }
+  .ft-talker .fmark { color: #b8c56a; } .ft-talker td:first-child { box-shadow: inset 3px 0 0 #b8c56a; }
+  .wl { color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--hair-2); }
+  .wl:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .wchip2 { font: 600 10.5px var(--mono); color: #a78bfa; border: 1px solid rgba(167, 139, 250, 0.40); background: rgba(167, 139, 250, 0.10); border-radius: 9px; padding: 1px 10px; white-space: nowrap; }
+  .wchip2.broken { color: var(--alarm); border-color: rgba(255, 84, 112, 0.45); background: rgba(255, 84, 112, 0.10); }
+  /* the drawer: the row opens downward and presents the info */
+  tr.drawer > td { padding: 0 18px; border-bottom: 0; }
+  tr.drawer .dwr { overflow: hidden; max-height: 0; transition: max-height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  tr.drawer.open > td { border-bottom: 1px solid var(--hair); }
+  tr.drawer.open .dwr { max-height: 300px; }
+  .dwr-in { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px 36px; padding: 6px 2px 16px; border-left: 3px solid var(--hair-2); padding-left: 20px; margin-bottom: 10px; }
+  .dwr-in .story { font: 12.5px var(--sans); color: var(--ink-2); line-height: 1.55; }
+  .dwr-in .story b { color: var(--ink); font-weight: 600; }
+  .dwr-in .lines { grid-column: 1; font: 10.5px var(--mono); color: var(--ink-3); white-space: pre; overflow: hidden; }
+  .dwr-in .side { grid-column: 2; grid-row: 1 / span 2; }
+  .dwr-in .side .lab { font: 600 9px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); text-transform: uppercase; }
+  .dwr-in .side svg { width: 100%; height: 34px; margin: 6px 0 2px; }
+  .dwr-in .side .span { font: 10.5px var(--mono); color: var(--ink-3); }
+  .dwr-acts { grid-column: 1 / -1; display: flex; gap: 10px; margin-top: 2px; }
+  .dwr-acts button { font: 600 11px var(--sans); color: var(--accent); background: transparent; border: 1px solid var(--hair-2); border-radius: 999px; padding: 4px 16px; cursor: pointer; }
+  .dwr-acts button:hover { border-color: var(--accent); }
+  .dwr-acts button.quiet { color: var(--ink-3); }
+  /* the reach scene */
+  .reach-stage { position: absolute; inset: 110px 0 60px; }
+  .reach-stage svg { width: 100%; height: 100%; }
+  /* two scenes in this file: the rail anchors to its scene, not the viewport */
+  
+  .crumb { position: absolute; top: 62px; left: 26px; z-index: 6; font: 500 11px var(--sans); color: var(--ink-3); }
+  .crumb a { color: var(--accent); text-decoration: none; cursor: pointer; }
+</style>
+<style>
+  /* counts beneath the tab names (owner: the inline numbers read clumsy) */
+  .dtabs { top: 20px; }
+  .dtabs > span { display: inline-flex; align-items: center; }
+  .dtabs .on { border-bottom: 0; position: relative; }
+  .dtabs .on::after { content: ''; position: absolute; left: 0; right: 0; bottom: -3px; height: 1px; background: var(--accent); }
+  .panel { inset: 100px 36px 40px; }
+  /* one unbroken line: row and drawer share the stripe, no drawer indent */
+  tr.drawer.ft-unplanned > td { box-shadow: inset 3px 0 0 #ff5470; }
+  tr.drawer.ft-portscan > td { box-shadow: inset 3px 0 0 #ff9e64; }
+  tr.drawer.ft-outbound > td { box-shadow: inset 3px 0 0 #f072c8; }
+  tr.drawer.ft-repeat > td { box-shadow: inset 3px 0 0 #e0765a; }
+  tr.drawer.ft-surge > td { box-shadow: inset 3px 0 0 #e8b05a; }
+  tr.drawer.ft-talker > td { box-shadow: inset 3px 0 0 #b8c56a; }
+  tr.frow.wt-broken td:first-child, tr.drawer.wt-broken > td { box-shadow: inset 3px 0 0 var(--alarm); }
+  tr.frow.wt-ok td:first-child, tr.drawer.wt-ok > td { box-shadow: inset 3px 0 0 #a78bfa; }
+  .dwr-in { border-left: 0; padding-left: 20px; }
+  
+  .dials { position: absolute; top: 108px; right: 26px; z-index: 6; display: flex; gap: 12px; }
+  .dial { color: var(--ink-3); }
+  .dial .dnum { font: 700 13px var(--mono); fill: var(--ink); }
+  .dial .dsym { font: 10px var(--sans); fill: currentColor; }
+
+</style>
+<style>
+  /* ============================================================
+     ROUND 30 — the stream's top, ordered; and the filter's home.
+
+     Round 29's stream stacked four absolutely-positioned strips at
+     hand-picked offsets. The whisper sat at 88px and stood 46px tall
+     (a 30px line with its two time labels hanging 32px beneath it);
+     the table began at 100px. They overlapped by most of the whisper.
+     Coordinates cannot hold an order — so the top is a flow column
+     now, and each band simply follows the one above it.
+
+     The filter is the same object in two hands (rounds 6-8): the box
+     carries the typed grammar and is ALWAYS on screen, so there is
+     always a way in; `◂ bar` slides round 8's thin strip out of the
+     box's own left edge, and the strip is that filter as named
+     fields. Round 7's glass panel is not restored — it was rejected.
+     ============================================================ */
+  .streamtop {
+    position: relative; z-index: 8;
+    padding: 54px 24px 0; display: flex; flex-direction: column; gap: 14px;
+  }
+  .filterline { display: flex; gap: 18px; align-items: center; }
+
+  /* the handle is welded to the box's left edge, so the bar visibly
+     comes OUT of the box rather than appearing beside it */
+  .fb-open {
+    flex: none; font: 600 10.5px var(--mono); letter-spacing: 0.06em;
+    color: var(--accent); background: transparent;
+    border: 1px solid var(--hair); border-right: 0; border-radius: 7px 0 0 7px;
+    padding: 6px 11px; cursor: pointer; white-space: nowrap;
+  }
+  .fb-open:hover { border-color: var(--hair-2); color: var(--ink); }
+  .fb-open.on { color: var(--ink); background: var(--raised); }
+  .fbox {
+    flex: 1; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    min-height: 28px; padding: 4px 12px;
+    background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair);
+    border-radius: 0 7px 7px 0; font: 12px var(--mono); color: var(--ink-2);
+  }
+  .fbox .fchips { display: flex; gap: 12px; flex-wrap: wrap; }
+  .fbox .chip { display: inline-flex; gap: 5px; align-items: baseline; white-space: nowrap; }
+  .fbox .chip em { font-style: normal; color: var(--accent); }
+  .fbox .chip b { color: var(--ink-3); font-weight: 400; cursor: pointer; }
+  .fbox .chip b:hover { color: var(--alarm); }
+  /* the empty box still says what it is — round 29's box rendered only
+     when a filter existed, which is exactly why the app kept a second
+     "Filters ▸" control alive beside it */
+  .fbox .fbtype { color: var(--ink-3); }
+  .fbox.empty .fbtype { color: var(--ink-3); }
+
+  /* round 8's thin bar, unchanged in substance: dim micro-labels over
+     hairline-underlined values, one quiet row, no boxes */
+  .filterbar {
+    display: flex; gap: 22px; align-items: flex-end; flex-wrap: wrap;
+    padding: 8px 14px 10px;
+    background: rgba(10, 14, 24, 0.55); backdrop-filter: blur(6px);
+    border: 1px solid var(--hair); border-radius: 8px;
+    animation: unfurl 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform-origin: right center;
+  }
+  .filterbar[hidden] { display: none; }
+  @keyframes unfurl { from { transform: scaleX(0.04); opacity: 0; } }
+  .fb-f { display: flex; flex-direction: column; gap: 2px; min-width: 60px; }
+  .fb-f .l { font: 500 8px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); text-transform: uppercase; }
+  .fb-f .v { font: 12px var(--mono); color: var(--ink); border-bottom: 1px solid var(--hair-2); padding: 1px 2px 3px; min-width: 56px; }
+  .fb-f .v.dim { color: var(--ink-3); }
+  .fb-f .v em { font-style: normal; color: var(--ink-3); font-size: 10px; }
+  .fb-f .v.hot { border-bottom-color: var(--drop); }
+  .fb-swap { align-self: center; color: var(--ink-3); font-size: 13px; cursor: pointer; padding: 0 2px; }
+  .fb-swap:hover { color: var(--accent); }
+  .fb-clear { align-self: center; color: var(--ink-3); font-size: 12px; cursor: pointer; margin-left: auto; }
+  .fb-clear:hover { color: var(--alarm); }
+  .fb-fold { align-self: center; color: var(--accent); font: 10.5px var(--mono); background: transparent; border: 0; cursor: pointer; white-space: nowrap; }
+
+  /* the whisper joins the column; its time labels hang 32px below the
+     line, so the band reserves the room rather than borrowing the
+     table's */
+  #s5 .whisper { position: static; left: auto; right: auto; top: auto; margin-bottom: 22px; }
+  #s5 table.stream { width: 100%; margin: 0; padding: 0 24px 14px; }
+  #s5 table.stream th:first-child, #s5 table.stream td:first-child { padding-left: 0; }
+  #s5 table.stream th:last-child, #s5 table.stream td:last-child { padding-right: 0; }
+
+  /* the flag mark rides AFTER the time, so the tabular figures keep one
+     left edge to line up on; the row wash stays — the mark annotates it */
+  table.stream .rmk { font-style: normal; color: var(--alarm); margin-left: 8px; font-size: 11px; }
+  /* the country glyph never carries the meaning alone: the two-letter
+     code stays beside it, and a row with no country gets neither */
+  table.stream .cf { margin-right: 6px; font-size: 11px; }
+</style>
+<style>
+  /* ROUND 30 — "your deck" is a column of Settings, not a shelf above it
+     (owner, 2026-08-31). Same seven cards, same signature marks, same
+     drag-to-reorder; they simply stand in their own column beside the
+     settings proper instead of pushing them down the page. */
+  /* Two columns and no more: the deck on the left, everything else
+     stacked down the right at full width (owner, 2026-08-31). The
+     settings groups were paired into a 1fr 1fr sub-grid, which made
+     four narrow boxes out of a screen that had room for wide ones. */
+  #set .stgrid { grid-template-columns: 1fr; gap: 12px; }
+  #set .stcol { gap: 12px; }
+  /* the two drawings inside are viewBox-scaled, so a full-width column
+     would blow them up to a few hundred pixels tall — they keep their
+     own reading size and sit left */
+  #set .stpath, #set .stmem { max-width: 100%; }
+  /* Stacked full-width groups would just be wide whitespace with the
+     rows hugging the right edge, and the two viewBox drawings would
+     blow up to a few hundred pixels tall. So a group with a drawing
+     splits: the drawing and its caption on the left, its rows on the
+     right. The width buys a shorter page instead of a longer one. */
+  #set .og.wide { display: grid; grid-template-columns: 560px 1fr; column-gap: 40px; align-items: start; }
+  #set .og.wide > h3 { grid-column: 1 / -1; }
+  #set .og.wide > .wleft { grid-column: 1; }
+  #set .og.wide > .wrows { grid-column: 2; }
+  #set .og.wide .orow:first-child { border-top: 0; }
+  #set .og.wide .stflags { padding: 4px 0 0; }
+  #set .og.wide .oghint { margin-bottom: 0; }
+  #set .setlay { display: grid; grid-template-columns: 224px 1fr; gap: 22px; align-items: start; }
+  #set .deckcol { margin-bottom: 0; }
+  #set .deckcol .stshelf { flex-direction: column; flex-wrap: nowrap; gap: 6px; padding: 4px 0 0; }
+  #set .deckcol .stcard { width: 100%; padding: 8px 12px 7px; }
+  #set .deckcol .stcard svg { height: 22px; margin-bottom: 5px; }
+  #set .deckcol .stcard .lv { margin-top: 4px; }
+</style>
+</head>
+<section class="scene op" id="set" aria-label="Settings">
+  <div class="scenebar">
+    <span class="wordmark" title="home — whichever card you keep first">MIKRO<em>VIEW</em></span>
+    <span class="scstatus"><span><span class="dot"></span>LIVE · 34/s</span><a class="fmk" href="#s7" title="6 open flags — 4 alarms, 2 advisories">⚑ 6</a><a class="wmk" href="#s7" title="7 watchers — 6 healthy, 1 broken"><svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b title="one watch broken">○1</b></a><button class="who">tom (admin)</button></span>
+  </div>
+  <div class="opwrap"><div class="opanel">
+
+    <div class="setlay">
+    <div class="og deckcol">
+      <h3>your deck</h3>
+      <p class="oghint">seven cards, in the order you keep them — drag to reorder; sign-in lands on the first</p>
+      <div class="stshelf">
+        <span class="stcard first"><i>⠿</i>
+          <svg viewBox="0 0 76 40" aria-hidden="true"><line x1="16" y1="6" x2="16" y2="22" stroke="#5aa7f0" stroke-width="2" opacity="0.55"/><line x1="30" y1="12" x2="30" y2="24" stroke="#e05252" stroke-width="2" opacity="0.4"/><line x1="44" y1="4" x2="44" y2="16" stroke="#5aa7f0" stroke-width="2" opacity="0.3"/><line x1="58" y1="10" x2="58" y2="28" stroke="#5aa7f0" stroke-width="2" opacity="0.5"/><line x1="8" y1="34" x2="68" y2="34" stroke="var(--now)" stroke-width="1.4" opacity="0.6"/></svg>
+          <span class="nm">THE FALL</span><span class="lv">34 events/s now</span><b>SIGN-IN LANDS HERE</b></span>
+        <span class="stcard"><i>⠿</i>
+          <svg viewBox="0 0 76 40" aria-hidden="true"><circle cx="38" cy="10" r="5" fill="none" stroke="var(--accent)" stroke-width="1.3"/><circle cx="38" cy="10" r="1.4" fill="var(--accent)"/><path d="M35 14 C 26 22, 20 24, 16 30" fill="none" stroke="var(--lan)" stroke-width="1.3"/><path d="M38 15 V 30" fill="none" stroke="var(--srv)" stroke-width="1.3"/><path d="M41 14 C 50 22, 56 24, 60 30" fill="none" stroke="var(--iot)" stroke-width="1.3"/><circle cx="16" cy="32" r="2.6" fill="var(--lan)"/><circle cx="38" cy="32" r="2.6" fill="var(--srv)"/><circle cx="60" cy="32" r="2.6" fill="var(--iot)"/></svg>
+          <span class="nm">TOPOGRAPHY</span><span class="lv"><svg viewBox="0 0 60 4" width="60" height="4" aria-label="watchers and flags, the split bar"><rect x="0" y="0" width="29" height="4" rx="2" fill="#a78bfa" opacity="0.8"/><rect x="31" y="0" width="29" height="4" rx="2" fill="#ff5470" opacity="0.8"/></svg></span></span>
+        <span class="stcard"><i>⠿</i>
+          <svg viewBox="0 0 76 40" aria-hidden="true"><polyline points="6,26 16,22 24,28 32,12 40,24 48,18 56,27 70,20" fill="none" stroke="var(--accent)" stroke-width="1.4" opacity="0.8"/><line x1="6" y1="33" x2="70" y2="33" stroke="var(--hair-2)" stroke-width="1"/></svg>
+          <span class="nm">METRICS</span></span>
+        <span class="stcard"><i>⠿</i>
+          <svg viewBox="0 0 76 40" aria-hidden="true"><line x1="8" y1="9" x2="68" y2="9" stroke="var(--ink-3)" stroke-width="1.2" opacity="0.7"/><line x1="8" y1="17" x2="56" y2="17" stroke="var(--ink-3)" stroke-width="1.2" opacity="0.5"/><line x1="8" y1="25" x2="64" y2="25" stroke="var(--alarm)" stroke-width="1.2" opacity="0.6"/><line x1="8" y1="33" x2="50" y2="33" stroke="var(--ink-3)" stroke-width="1.2" opacity="0.4"/></svg>
+          <span class="nm">STREAM</span></span>
+        <span class="stcard"><i>⠿</i>
+          <svg viewBox="0 0 76 40" aria-hidden="true"><rect x="8" y="6" width="3" height="8" fill="#ff5470"/><line x1="16" y1="10" x2="66" y2="10" stroke="var(--ink-3)" stroke-width="1.2" opacity="0.6"/><rect x="8" y="18" width="3" height="8" fill="#ff9e64"/><line x1="16" y1="22" x2="58" y2="22" stroke="var(--ink-3)" stroke-width="1.2" opacity="0.5"/><rect x="8" y="30" width="3" height="8" fill="#a78bfa"/><line x1="16" y1="34" x2="62" y2="34" stroke="var(--ink-3)" stroke-width="1.2" opacity="0.5"/></svg>
+          <span class="nm">THE DOCKET</span><span class="lv"><b style="color:#ff5470">⚑ 6</b> · <b style="color:#a78bfa">◉ 7 ○1</b></span></span>
+        <span class="stcard"><i>⠿</i>
+          <svg viewBox="0 0 76 40" aria-hidden="true"><circle cx="14" cy="10" r="3.4" fill="none" stroke="var(--accent)" stroke-width="1.2"/><circle cx="14" cy="10" r="1" fill="var(--accent)"/><line x1="24" y1="10" x2="66" y2="10" stroke="var(--hair-2)" stroke-width="1"/><circle cx="14" cy="22" r="2.4" fill="var(--lan)"/><line x1="24" y1="22" x2="58" y2="22" stroke="var(--hair-2)" stroke-width="1"/><circle cx="14" cy="33" r="2.4" fill="var(--iot)"/><line x1="24" y1="33" x2="62" y2="33" stroke="var(--hair-2)" stroke-width="1"/></svg>
+          <span class="nm">ENTITIES</span><span class="lv">23 named · 2 routers</span></span>
+        <span class="stcard"><i>⠿</i>
+          <svg viewBox="0 0 76 40" aria-hidden="true"><line x1="10" y1="10" x2="66" y2="10" stroke="var(--hair-2)" stroke-width="1.2"/><circle cx="46" cy="10" r="3" fill="var(--accent)"/><line x1="10" y1="21" x2="66" y2="21" stroke="var(--hair-2)" stroke-width="1.2"/><circle cx="24" cy="21" r="3" fill="var(--ink-3)"/><line x1="10" y1="32" x2="66" y2="32" stroke="var(--hair-2)" stroke-width="1.2"/><circle cx="56" cy="32" r="3" fill="var(--ink-3)"/></svg>
+          <span class="nm">SETTINGS</span></span>
+      </div>
+    </div>
+
+    <div class="stgrid">
+    <div class="stcol">
+    <div class="og wide">
+      <h3>ingest</h3>
+      <div class="wleft">
+      <svg class="stpath" viewBox="0 0 520 92" role="img" aria-label="Two routers push their logs one way into mikroview's listening port; nothing travels back">
+        <circle cx="52" cy="30" r="10" fill="none" stroke="var(--accent)" stroke-width="1.4"/><circle cx="52" cy="30" r="2" fill="var(--accent)"/>
+        <text x="52" y="54" text-anchor="middle" class="sp-n">rb5009</text>
+        <circle cx="52" cy="74" r="6" fill="none" stroke="var(--ink-3)" stroke-width="1.2" opacity="0.7"/>
+        <text x="66" y="78" class="sp-n" opacity="0.7">hap-ax2 · quiet 3 d — quiet is a fact, not a fault</text>
+        <path d="M66 30 C 180 30, 260 38, 340 42" fill="none" stroke="var(--hair-2)" stroke-width="1.4"/>
+        <path d="M60 70 C 180 64, 260 54, 340 48" fill="none" stroke="var(--hair-2)" stroke-width="1.2" opacity="0.6"/>
+        <path d="M334 37 L 345 44 L 333 50" fill="none" stroke="var(--ink-3)" stroke-width="1.3"/>
+        <circle class="sp-pulse" r="2.4" fill="var(--accent)"/>
+        <circle cx="372" cy="45" r="15" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+        <circle cx="372" cy="45" r="4" fill="var(--ok)"/>
+        <text x="396" y="41" class="sp-k">:16893 · TLS · listening</text>
+        <text x="396" y="57" class="sp-n">34 events/s arriving now</text>
+      </svg>
+      <p class="oghint">the logs travel one way — mikroview never connects to your router</p>
+      </div>
+      <div class="wrows">
+      <div class="orow"><span>plain syslog</span><span class="ov dim">off — loopback only</span></div>
+      <div class="orow"><span>certificate</span><span class="ov">local CA · 7efd…03a4 · <a class="olink">download /ca.crt</a></span></div>
+      <div class="orow"><span>router state</span><span class="ov">pushed hourly, alongside the logs</span></div>
+      </div>
+    </div>
+    <div class="og" id="keys">
+      <h3>keys</h3>
+      <p class="oghint">which machines may speak — an ingest key lets one router push its state; a read-only key lets a reader ask</p>
+      <div class="reveal" id="kreveal" hidden>
+        <div class="rk"><span class="pn" id="kr-name">birdcage</span><span class="pr" id="kr-kind">read-only</span><code id="kr-val">4c1e9b7a03d84f2b9e6d1a5c7f30b8e2</code><button class="olink" id="kr-copy">copy</button><button class="olink quiet" id="kr-done">done</button></div>
+        <div class="rnote" id="kr-note">shown once — mikroview keeps only its fingerprint, so copy it now</div>
+        <div class="rnote" id="kr-router" hidden>the router lines, with this key already in them: <a class="olink" id="kr-lines">copy for RouterOS</a></div>
+      </div>
+      <div class="prow" data-k="rb5009"><span class="pn">rb5009</span><span class="pr ingest">ingest · speaks for rb5009</span><span class="pf">spoke 41 min ago — the hourly state push</span><button class="olink quiet revoke">revoke</button></div>
+      <div class="prow" data-k="hap-ax2"><span class="pn">hap-ax2</span><span class="pr ingest">ingest · speaks for hap-ax2</span><span class="pf">spoke 3 d ago</span><button class="olink quiet revoke">revoke</button></div>
+      <div class="prow" data-k="grafana"><span class="pn">grafana</span><span class="pr">read-only</span><span class="pf">spoke 4 min ago</span><button class="olink quiet revoke">revoke</button></div>
+      <div class="pform wf" id="kdraft" hidden>
+        <input id="k-name" placeholder="name it — birdcage, grafana, the-laptop" aria-label="key name">
+        <span class="seg" id="k-kind"><b class="on" data-v="api">read-only</b><b data-v="ingest">ingest</b></span>
+        <span class="lab" id="k-for" hidden>for</span><span class="seg" id="k-dev" hidden aria-label="which router"><b class="on" data-v="rb5009">rb5009</b><b data-v="hap-ax2">hap-ax2</b></span>
+        <span class="acts dwr-acts"><button class="quiet" id="k-cancel">cancel</button><button id="k-mint">mint it</button></span>
+      </div>
+      <div class="ogfoot" id="kfoot"><button class="olink" id="addkey">+ mint a key</button></div>
+    </div>
+    <div class="og wide">
+      <h3>detection</h3>
+      <div class="wleft">
+      <div class="stflags">
+        <span class="stf" style="color:#ff5470">✱ unplanned · 1</span>
+        <span class="stf" style="color:#ff9e64">✱ port scan · 1</span>
+        <span class="stf" style="color:#f072c8">✱ outbound · 1</span>
+        <span class="stf" style="color:#e0765a">✱ repeated drops · 1</span>
+        <span class="stf" style="color:#e8b05a">▲ drop surge · 1</span>
+        <span class="stf" style="color:#b8c56a">▲ new talker · 1</span>
+        <span class="stf dim">+ 10 more · quiet today</span>
+      </div>
+      </div>
+      <div class="wrows">
+      <div class="orow"><span>flag types</span><span class="ov">16 of 16 on · <a class="olink">tune…</a></span></div>
+      <div class="orow"><span>port-scan window</span><span class="ov">20 ports / 60 s</span></div>
+      </div>
+    </div>
+    </div>
+    <div class="stcol">
+    <div class="og wide">
+      <h3>memory</h3>
+      <div class="wleft">
+      <svg class="stmem" viewBox="0 0 520 58" role="img" aria-label="The event buffer holds about nine hours of events; the oldest hour falls away as the newest arrives">
+        <clipPath id="memclip"><rect x="8" y="20" width="500" height="10" rx="5"/></clipPath>
+        <rect x="8" y="20" width="500" height="10" rx="5" fill="rgba(157,184,232,0.10)"/>
+        <g fill="var(--accent)" clip-path="url(#memclip)"><rect x="8" y="20" width="56" height="10" opacity="0.05"/><rect x="64" y="20" width="56" height="10" opacity="0.09"/><rect x="120" y="20" width="56" height="10" opacity="0.07"/><rect x="176" y="20" width="56" height="10" opacity="0.13"/><rect x="232" y="20" width="56" height="10" opacity="0.11"/><rect x="288" y="20" width="56" height="10" opacity="0.17"/><rect x="344" y="20" width="56" height="10" opacity="0.15"/><rect x="400" y="20" width="56" height="10" opacity="0.21"/><rect x="456" y="20" width="52" height="10" opacity="0.27"/></g>
+        <line x1="64" y1="31" x2="64" y2="35" stroke="var(--hair-2)"/><line x1="120" y1="31" x2="120" y2="35" stroke="var(--hair-2)"/><line x1="176" y1="31" x2="176" y2="35" stroke="var(--hair-2)"/><line x1="232" y1="31" x2="232" y2="35" stroke="var(--hair-2)"/><line x1="288" y1="31" x2="288" y2="35" stroke="var(--hair-2)"/><line x1="344" y1="31" x2="344" y2="35" stroke="var(--hair-2)"/><line x1="400" y1="31" x2="400" y2="35" stroke="var(--hair-2)"/><line x1="456" y1="31" x2="456" y2="35" stroke="var(--hair-2)"/>
+        <rect x="504" y="15" width="3" height="20" rx="1.5" fill="var(--now)"/>
+        <text x="288" y="50" text-anchor="middle" class="sp-n" opacity="0.75">10:00</text>
+        <text x="400" y="50" text-anchor="middle" class="sp-n" opacity="0.75">12:00</text>
+        <text x="8" y="50" class="sp-n">05:04 — the oldest event still held</text>
+        <text x="508" y="50" text-anchor="end" class="sp-k">now</text>
+      </svg>
+      <p class="oghint">the oldest hour falls away as the newest arrives; darker hours held more</p>
+      </div>
+      <div class="wrows">
+      <div class="orow"><span>event buffer</span><span class="ov">120 MiB · ~201 000 events · ~9 h at today's rate</span></div>
+      <div class="orow"><span>persistence</span><span class="ov">JSON store · 14 d</span></div>
+      </div>
+    </div>
+    <div class="og">
+      <h3>account</h3>
+      <div class="orow"><span>password</span><span class="ov"><a class="olink">change…</a></span></div>
+      <div class="orow"><span>sessions</span><span class="ov">this device — tom-desktop, signed in 4 d · <a class="olink">sign out everywhere</a></span></div>
+      <div class="orow"><span>version</span><span class="ov dim">0.9 · AGPL-3.0</span></div>
+    </div>
+    <div class="og" id="people">
+      <h3>people</h3>
+      <p class="oghint">who may look in, and what each may do — the admin is made at the console, never here</p>
+      <div class="prow" data-u="tom"><span class="pn">tom</span><span class="pr admin">admin</span><span class="pf">this is you · signed in 4 d ago</span><span class="olink quiet dim" title="transfer the admin role from the command line first">console-only</span></div>
+      <div class="prow" data-u="anna"><span class="pn">anna</span><span class="pf">signed in 2 h ago</span><button class="olink quiet remove">remove</button></div>
+      <div class="prow" data-u="mia"><span class="pn">mia</span><span class="pr look">can only look</span><span class="pr">sso</span><span class="pf">signed in 12 d ago</span><button class="olink quiet remove">remove</button></div>
+      <div class="pform wf" id="pdraft" hidden>
+        <input id="p-name" placeholder="their name" aria-label="username" autocomplete="off">
+        <input id="p-pass" type="password" placeholder="a first password — they change it" aria-label="password" autocomplete="new-password">
+        <span class="seg" id="p-role"><b class="on" data-v="user">can change things</b><b data-v="viewer">can only look</b></span>
+        <span class="acts dwr-acts"><button class="quiet" id="p-cancel">cancel</button><button id="p-let">let them in</button></span>
+      </div>
+      <div class="ogfoot" id="pfoot"><button class="olink" id="addperson">+ let someone in</button></div>
+    </div>
+    </div>
+    </div>
+    </div>
+  </div></div>
+</section>
+<style>
+  .scstatus .fmk { color: var(--alarm); font: 600 11px var(--mono); text-decoration: none; }
+  .scstatus .wmk { color: #a78bfa; font: 600 11px var(--mono); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; margin-left: 14px; }
+  .scstatus .wmk b { color: var(--alarm); font-size: 9px; font-weight: 600; }
+  .scstatus .who { background: transparent; border: 1px solid transparent; border-radius: 999px; padding: 2px 10px; font: inherit; color: var(--ink-3); cursor: pointer; margin-left: 14px; }
+  .scstatus .who:hover { color: var(--ink-2); border-color: var(--hair); }
+</style>
+<style>
+  /* whisper, full width */
+  .whisper { position: absolute; top: 88px; left: 24px; right: 24px; z-index: 8; display: flex; gap: 14px; align-items: center; }
+  .whisper .wbar { position: relative; flex: 1; }
+  .whisper svg { display: block; width: 100%; height: 30px; cursor: crosshair; }
+  .whisper .wt0, .whisper .wt1 { position: absolute; top: 32px; font: 9px var(--mono); color: var(--ink-3); }
+  .whisper .wt1 { right: 0; }
+  .whisper .wstat { font: 11px var(--mono); color: var(--ink-3); white-space: nowrap; }
+  .whisper .wstat .k { color: var(--ink-2); font-weight: 600; }
+  .whisper .wstat .r { color: var(--fall-drop); font-weight: 600; }
+  .wfence { font: 600 10px var(--mono); letter-spacing: 0.06em; color: var(--ink-3); background: transparent; border: 1px solid var(--hair-2); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+  .wfence.on { color: var(--now); border-color: var(--now); }
+  table.stream tr.outside td { opacity: 0.25; }
+  table.stream { margin-top: 128px; }
+  /* node information, wherever a node is */
+  .nodeinfo {
+    position: fixed; z-index: 90; min-width: 230px; display: none;
+    background: rgba(10, 14, 24, 0.94); backdrop-filter: blur(10px);
+    border: 1px solid var(--hair-2); border-radius: 10px; padding: 10px 14px 12px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5); font: 11.5px var(--sans); color: var(--ink-2);
+  }
+  .nodeinfo.open { display: block; }
+  .nodeinfo b { color: var(--ink); font-size: 12.5px; }
+  .nodeinfo .ni-ip { font: 10.5px var(--mono); color: var(--ink-3); margin-left: 8px; }
+  .nodeinfo .ni-row { margin-top: 4px; }
+  .nodeinfo .ni-warn { color: var(--alarm); }
+  .nodeinfo .ni-acts { margin-top: 8px; display: flex; gap: 8px; }
+  .nodeinfo .ni-acts a { font: 600 10.5px var(--sans); color: var(--accent); border: 1px solid var(--hair-2); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+  #s3 .c-dot, #s3 .c-label, #s3 .c-hit { cursor: pointer; }
+  /* the operate pages */
+  .op .opwrap { position: absolute; inset: 104px 36px 40px; display: flex; justify-content: center; overflow: auto; }
+  .op .opanel { width: 100%; max-width: 980px; }
+  .og { background: var(--glass); border: 1px solid var(--hair); border-radius: 12px; padding: 14px 22px 12px; margin-bottom: 14px; }
+  .og h3 { font: 600 9.5px var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 4px; }
+  .oghint { font: 11px var(--sans); color: var(--ink-3); margin: 2px 0 8px; }
+  .orow { display: flex; justify-content: space-between; gap: 20px; padding: 8px 0; border-top: 1px solid var(--hair); font: 12.5px var(--sans); color: var(--ink-2); }
+  .orow:first-of-type { border-top: 0; }
+  .ov { color: var(--ink); text-align: right; }
+  .ov.dim, .dim { color: var(--ink-3); }
+  .olink { color: var(--accent); cursor: pointer; }
+  .odeck { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 8px; }
+  .ocard { display: flex; align-items: center; gap: 10px; border: 1px solid var(--hair-2); border-radius: 8px; background: var(--raised); padding: 7px 14px; font: 12.5px var(--sans); color: var(--ink-2); cursor: grab; max-width: 340px; }
+  .ocard i { font-style: normal; color: var(--ink-3); letter-spacing: -1px; }
+  .ocard.first { border-color: var(--accent); }
+  .ocard b { font: 600 8.5px var(--mono); color: var(--accent); letter-spacing: 0.1em; margin-left: auto; }
+  .fcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .fcard { background: var(--glass); border: 1px solid var(--hair); border-radius: 12px; padding: 16px 20px; font: 12.5px var(--sans); color: var(--ink-2); }
+  .fcard.live { border-color: var(--hair-2); }
+  .fcard.add { border-style: dashed; }
+  .fhead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .fhead b { font-size: 15px; color: var(--ink); }
+  .fstate { font: 600 10px var(--mono); letter-spacing: 0.08em; }
+  .fstate.ok { color: var(--ok); }
+  .fstate.quiet { color: var(--ink-3); }
+  .fcard .frow { padding: 3px 0; }
+  .etable { border-collapse: collapse; font: 12px var(--mono); width: 100%; }
+  .etable th { text-align: left; font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); padding: 6px 14px; border-bottom: 1px solid var(--hair-2); }
+  .etable td { padding: 7px 14px; border-bottom: 1px solid var(--hair); color: var(--ink-2); }
+  .etable td.k { color: var(--ink); cursor: pointer; }
+  .etable td.k:hover { color: var(--accent); }
+  .etable tr.warn td { background: rgba(255, 84, 112, 0.04); }
+  .lz { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; vertical-align: 0; }
+</style>
+<style>
+  #mv-reg svg { width: 100%; height: 100%; }
+  .drumwrap.mview#mv-reg { inset: 128px 10px 16px; }
+</style>
+<style>
+  .hbar .hb { cursor: pointer; }
+  .hb-w { fill: rgba(167, 139, 250, 0.10); stroke: rgba(167, 139, 250, 0.40); stroke-width: 0.9; }
+  .hb-f { fill: rgba(255, 84, 112, 0.10); stroke: rgba(255, 84, 112, 0.45); stroke-width: 0.9; }
+  .hbar .hb:hover { fill-opacity: 0.9; }
+  .hb-div { stroke: rgba(160, 185, 230, 0.45); stroke-width: 1; }
+  .hbt { pointer-events: none; }
+  .golink { cursor: pointer; }
+  /* entities fills its screen now, routers leading */
+  #ent .opanel { max-width: 1500px; }
+  #ent .etable td { padding: 10px 18px; font-size: 12.5px; }
+  #ent .og { margin-bottom: 20px; }
+  /* settings, rebuilt in the app's own clothes (round 24) */
+  #set .opanel { max-width: none; }
+  .stgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  .stcol { display: flex; flex-direction: column; gap: 14px; }
+  .stgrid .og { margin-bottom: 0; }
+  .stshelf { display: flex; gap: 10px; padding: 6px 0 8px; flex-wrap: wrap; }
+  .stcard { position: relative; width: 138px; border: 1px solid var(--hair-2); border-radius: 10px; background: var(--raised); padding: 12px 14px 10px; cursor: grab; }
+  .stcard:hover { border-color: var(--accent); }
+  .stcard svg { display: block; width: 100%; height: 40px; margin-bottom: 8px; }
+  .stcard .nm { font: 600 9.5px var(--mono); letter-spacing: 0.14em; color: var(--ink-2); }
+  .stcard i { position: absolute; top: 6px; right: 10px; font-style: normal; font-size: 11px; color: var(--ink-3); letter-spacing: -1px; }
+  .stcard.first { border-color: var(--accent); }
+  .stcard.first b { display: block; font: 600 8px var(--mono); letter-spacing: 0.1em; color: var(--accent); margin-top: 5px; }
+  .stcard .lv { display: block; margin-top: 5px; font: 600 8.5px var(--mono); letter-spacing: 0.05em; color: var(--ink-3); }
+  .stcard .lv b { font: inherit; }
+  .stcard .lv svg { display: block; margin-top: 3px; }
+  .stpath, .stmem { display: block; width: 100%; height: auto; margin: 4px 0 2px; }
+  .sp-n { font: 10.5px var(--sans); fill: var(--ink-3); }
+  .sp-k { font: 600 10.5px var(--mono); fill: var(--ink-2); }
+  .sp-pulse { offset-path: path('M66 30 C 180 30, 260 38, 340 42'); animation: sp-run 2.6s linear infinite; }
+  @keyframes sp-run { from { offset-distance: 0%; opacity: 0; } 12% { opacity: 0.9; } 88% { opacity: 0.9; } to { offset-distance: 100%; opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .sp-pulse { animation: none; visibility: hidden; } }
+  .clearall { position: absolute; top: 62px; right: 44px; z-index: 6; }
+  .cabtn { font: 600 10.5px var(--mono); letter-spacing: 0.06em; color: var(--now); background: transparent; border: 1px solid var(--now); border-radius: 999px; padding: 4px 15px; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
+  .cabtn:hover { background: rgba(232, 176, 90, 0.08); }
+  .cabtn.armed { color: var(--alarm); border-color: var(--alarm); }
+  .cabtn.armed:hover { background: rgba(255, 84, 112, 0.08); }
+  @media (prefers-reduced-motion: reduce) { .cabtn { transition: none; } }
+  .caempty { display: none; width: 100%; justify-content: center; padding-top: 90px; }
+  .caempty.on { display: flex; }
+  .cae-in { text-align: center; font: 13px var(--sans); color: var(--ink-2); line-height: 1.7; }
+  .cae-mark { display: block; font-size: 20px; color: var(--ok); margin-bottom: 6px; }
+  /* the first hour, storyboarded (round 26) */
+  .fhhead { position: absolute; top: 86px; left: 44px; }
+  .fhtitle { font: 600 12px var(--mono); letter-spacing: 0.22em; color: var(--ink-2); }
+  .fhsub { margin-left: 14px; font: 11.5px var(--sans); color: var(--ink-3); }
+  .fh { position: absolute; inset: 132px 44px 60px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; align-items: stretch; }
+  .fhframe { background: var(--glass); border: 1px solid var(--hair); border-radius: 14px; padding: 22px 22px; display: flex; flex-direction: column; gap: 13px; justify-content: center; }
+  .fhglass { background: var(--raised); border: 1px solid var(--hair-2); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 11px; }
+  .fhbtn { font: 600 10.5px var(--mono); letter-spacing: 0.05em; color: var(--accent); background: transparent; border: 1px solid var(--accent); border-radius: 999px; padding: 5px 16px; cursor: pointer; align-self: flex-start; }
+  .fhbtn:hover { background: rgba(157, 184, 232, 0.08); }
+  .fhskip { font: 11px var(--sans); color: var(--ink-3); cursor: pointer; }
+  .fhskip:hover { color: var(--ink-2); }
+  .fhrail { display: flex; flex-direction: column; gap: 7px; font: 600 9.5px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); }
+  .fhrail span { padding-left: 10px; }
+  .fhrail .on { color: var(--ink); border-left: 2px solid var(--accent); padding-left: 8px; }
+  .fhprog { font: 600 9px var(--mono); letter-spacing: 0.1em; color: var(--accent); }
+  .fhwizrow { display: flex; justify-content: space-between; gap: 10px; font: 11.5px var(--sans); color: var(--ink-2); border-top: 1px solid var(--hair); padding: 7px 0 2px; }
+  .fhwizrow:first-of-type { border-top: 0; }
+  .fhwizrow .dim { color: var(--ink-3); text-align: right; }
+  .fhframe .fhk { margin-bottom: auto; }
+  .fhframe .fhstory.dim:last-child { margin-top: auto; }
+  .fhk { font: 600 9.5px var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+  .fhwm { font: 800 21px var(--sans); letter-spacing: 0.04em; color: var(--ink); }
+  .fhwm em { font-style: normal; color: var(--accent); }
+  .fhfield { font: 12px var(--sans); color: var(--ink-2); border-bottom: 1px solid var(--hair-2); padding: 6px 2px; max-width: 250px; }
+  .fhstory { font: 12.5px var(--sans); color: var(--ink-2); line-height: 1.55; }
+  .fhstory.dim { color: var(--ink-3); font-size: 11.5px; }
+  .fhcode { font: 9.5px var(--mono); color: var(--ink-2); background: var(--raised); border: 1px solid var(--hair); border-radius: 8px; padding: 9px 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+  .fhbig { font: 600 13px var(--mono); color: var(--ink); }
+  .fhframe svg { width: 100%; height: auto; }
+  .fhtag { font: 600 8.5px var(--mono); letter-spacing: 0.04em; fill: var(--accent); paint-order: stroke; stroke: var(--void); stroke-width: 3px; stroke-linejoin: round; }
+  .fhprogsm { font: 600 8.5px var(--mono); letter-spacing: 0.1em; fill: var(--ink-3); }
+  .stflags { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0 10px; }
+  .stf { font: 600 10.5px var(--mono); letter-spacing: 0.05em; border: 1px solid var(--hair-2); border-radius: 999px; padding: 3px 12px; }
+  .stf.dim { color: var(--ink-3); }
+</style>
+<style>
+  /* ---- round 32: the two doors, drawn in the card's own row grammar ---- */
+  .prow { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--hair); font: 12.5px var(--sans); color: var(--ink-2); }
+  .og .prow:first-of-type { border-top: 0; }
+  .prow .pn, .reveal .pn { color: var(--ink); font-weight: 600; min-width: 92px; }
+  .pr { font: 600 9.5px var(--mono); letter-spacing: 0.05em; border: 1px solid var(--hair-2); border-radius: 999px; padding: 2px 9px; color: var(--ink-3); white-space: nowrap; }
+  .pr.admin { color: var(--accent); border-color: rgba(90, 167, 240, 0.45); }
+  .pr.look { color: var(--now); border-color: rgba(232, 176, 90, 0.45); }
+  .pr.ingest { color: var(--ok); border-color: rgba(120, 200, 140, 0.4); }
+  .prow .pf { margin-left: auto; color: var(--ink-3); text-align: right; }
+  .prow .olink, .reveal .olink, .ogfoot .olink { font: 12.5px var(--sans); background: none; border: 0; padding: 0; cursor: pointer; }
+  .olink.quiet { color: var(--ink-3); } .olink.quiet:hover { color: var(--ink-2); }
+  .prow .remove.armed, .prow .revoke.armed { color: var(--alarm); }
+  .prow.gone { opacity: 0; transition: opacity 0.25s; }
+  .ogfoot { padding: 9px 0 2px; border-top: 1px solid var(--hair); }
+  .pform { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-top: 1px solid var(--hair); }
+  .pform[hidden], .reveal[hidden], .rnote[hidden], .seg[hidden], .prow[hidden] { display: none; }
+  .pform.wf input { width: 240px; flex: none; }
+  .pform.wf .pn { min-width: 0; }
+  .pform .acts { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  /* the form is round 31's: dashed-underline inputs, segmented choices, pill actions */
+  .wf input { background: transparent; border: 0; border-bottom: 1px dashed var(--hair-2); font: 12px var(--mono); color: var(--ink); padding: 3px 0; outline: none; }
+  .wf input:focus { border-bottom-color: var(--accent); }
+  .wf input::placeholder { color: var(--ink-3); opacity: 0.7; }
+  .wf .seg { display: inline-flex; border: 1px solid var(--hair-2); border-radius: 999px; overflow: hidden; flex: none; }
+  .wf .seg b { font: 600 10.5px var(--mono); color: var(--ink-3); padding: 2px 12px; cursor: pointer; }
+  .wf .seg b.on { color: var(--ink); background: rgba(160, 185, 230, 0.10); }
+  .dwr-acts button { font: 600 11px var(--sans); color: var(--accent); background: transparent; border: 1px solid var(--hair-2); border-radius: 999px; padding: 4px 16px; cursor: pointer; }
+  .dwr-acts button:hover { border-color: var(--accent); }
+  .dwr-acts button.quiet { color: var(--ink-3); }
+  /* a freshly minted key: the one moment the secret exists on screen */
+  .reveal { border: 1px solid rgba(90, 167, 240, 0.45); background: rgba(90, 167, 240, 0.06); border-radius: 8px; padding: 9px 14px 8px; margin: 6px 0 4px; }
+  .reveal .rk { display: flex; align-items: center; gap: 10px; font: 12.5px var(--sans); color: var(--ink-2); }
+  .reveal code { font: 12px var(--mono); color: var(--ink); background: var(--raised); border-radius: 5px; padding: 3px 9px; user-select: all; letter-spacing: 0.02em; }
+  .reveal .olink { margin-left: auto; } .reveal .olink + .olink { margin-left: 0; }
+  .rnote { font: 11px var(--sans); color: var(--ink-3); margin-top: 6px; }
+  .rnote .olink { cursor: pointer; font: inherit; }
+  .pform .lab { font: 11px var(--sans); color: var(--ink-3); margin-right: -6px; }
+  .pform .lab[hidden] { display: none; }
+  @media (prefers-reduced-motion: reduce) { .prow.gone { transition: none; } }
+</style>
+<script>
+(function () {
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+  function seg(el, fn) {
+    $$('b', el).forEach(function (b) { b.addEventListener('click', function () {
+      $$('b', el).forEach(function (x) { x.classList.remove('on'); }); b.classList.add('on'); if (fn) fn(b.dataset.v);
+    }); });
+  }
+  function segReset(el) { $$('b', el).forEach(function (x, i) { x.classList.toggle('on', i === 0); }); }
+  function segVal(el) { var b = $('b.on', el); return b ? b.dataset.v : null; }
+  function segText(el) { var b = $('b.on', el); return b ? b.textContent : ''; }
+  function chip(cls, text) { var s = document.createElement('span'); s.className = 'pr' + (cls ? ' ' + cls : ''); s.textContent = text; return s; }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  // ---- arm-then-confirm, round 28's gesture: one click arms it red, a second removes, any other click disarms ----
+  var armed = null;
+  document.addEventListener('click', function (e) {
+    if (armed && !armed.btn.contains(e.target)) { armed.btn.classList.remove('armed'); armed.btn.textContent = armed.was; armed = null; }
+  }, true);
+  function armable(btn, confirmText, onConfirm) {
+    btn.addEventListener('click', function () {
+      if (armed && armed.btn === btn) { armed = null; onConfirm(); return; }
+      armed = { btn: btn, was: btn.textContent }; btn.classList.add('armed'); btn.textContent = confirmText;
+    });
+  }
+  function drop(row) { row.classList.add('gone'); setTimeout(function () { row.remove(); }, 260); }
+
+  // ---- people ----
+  var pdraft = $('#pdraft'), pfoot = $('#pfoot');
+  seg($('#p-role'));
+  $('#addperson').addEventListener('click', function () { pdraft.hidden = false; pfoot.hidden = true; $('#p-name').focus(); });
+  $('#p-cancel').addEventListener('click', function () { pdraft.hidden = true; pfoot.hidden = false; $('#p-name').value = ''; $('#p-pass').value = ''; segReset($('#p-role')); });
+  $('#p-let').addEventListener('click', function () {
+    var name = $('#p-name').value.trim() || 'sam', role = segVal($('#p-role'));
+    var row = el('div', 'prow'); row.dataset.u = name;
+    row.appendChild(el('span', 'pn', name));
+    if (role === 'viewer') row.appendChild(chip('look', 'can only look'));
+    row.appendChild(el('span', 'pf', 'never signed in — yet'));
+    var rm = el('button', 'olink quiet remove', 'remove'); row.appendChild(rm); wirePerson(rm, row);
+    pdraft.parentNode.insertBefore(row, pdraft);
+    $('#p-cancel').click();
+  });
+  function wirePerson(btn, row) { armable(btn, 'confirm — signs them out, revokes their keys', function () { drop(row); }); }
+  $$('#people .remove').forEach(function (b) { wirePerson(b, b.closest('.prow')); });
+
+  // ---- keys ----
+  var kdraft = $('#kdraft'), kfoot = $('#kfoot'), reveal = $('#kreveal'), pending = null;
+  seg($('#k-kind'), function (v) { $('#k-dev').hidden = $('#k-for').hidden = v !== 'ingest'; });
+  seg($('#k-dev'));
+  $('#addkey').addEventListener('click', function () { kdraft.hidden = false; kfoot.hidden = true; $('#k-name').focus(); });
+  $('#k-cancel').addEventListener('click', function () { kdraft.hidden = true; kfoot.hidden = false; $('#k-name').value = ''; segReset($('#k-kind')); segReset($('#k-dev')); $('#k-dev').hidden = $('#k-for').hidden = true; });
+  $('#k-mint').addEventListener('click', function () {
+    var kind = segVal($('#k-kind')), dev = segVal($('#k-dev'));
+    var name = $('#k-name').value.trim() || (kind === 'ingest' ? dev : 'birdcage');
+    var row = el('div', 'prow'); row.dataset.k = name;
+    row.appendChild(el('span', 'pn', name));
+    row.appendChild(kind === 'ingest' ? chip('ingest', 'ingest · speaks for ' + dev) : chip('', 'read-only'));
+    row.appendChild(el('span', 'pf', 'never spoke — yet'));
+    var rv = el('button', 'olink quiet revoke', 'revoke'); row.appendChild(rv); wireKey(rv, row);
+    row.hidden = true; reveal.parentNode.insertBefore(row, reveal.nextSibling); pending = row;
+    $('#kr-name').textContent = name;
+    var kc = $('#kr-kind'); kc.className = 'pr' + (kind === 'ingest' ? ' ingest' : ''); kc.textContent = kind === 'ingest' ? 'ingest · speaks for ' + dev : 'read-only';
+    $('#kr-router').hidden = kind !== 'ingest';
+    $('#kr-copy').textContent = 'copy';
+    reveal.hidden = false;
+    $('#k-cancel').click();
+  });
+  $('#kr-copy').addEventListener('click', function () { this.textContent = 'copied'; });
+  $('#kr-lines').addEventListener('click', function () { this.textContent = 'copied for RouterOS'; });
+  $('#kr-done').addEventListener('click', function () { reveal.hidden = true; if (pending) { pending.hidden = false; pending = null; } });
+  function wireKey(btn, row) { armable(btn, 'confirm — it stops speaking now', function () { drop(row); }); }
+  $$('#keys .revoke').forEach(function (b) { wireKey(b, b.closest('.prow')); });
+})();
+</script>
+</body>
+</html>

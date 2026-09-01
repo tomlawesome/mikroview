@@ -520,7 +520,7 @@ describe('The watch window and its nightly memory (#680)', () => {
       ],
       { e1: 'no-logging' },
     )
-    expect(watchTable().textContent).toContain('○ paused')
+    expect(watchTable().textContent).toContain('‖ paused')
     expect(watchTable().textContent).not.toContain('ring broken')
   })
 })
