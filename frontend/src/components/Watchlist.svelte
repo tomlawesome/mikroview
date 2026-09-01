@@ -207,8 +207,13 @@
       return { glyph: '○', text: 'ring broken — no logging visible', broken: true, learning: false }
     }
     if (e.invert && e.observing) {
-      const seen = (e.observed ?? []).length
+      // "places seen" is a running total of everywhere this device has
+      // ever reached, decided or not -- Entry.Promote (internal/watchlist/
+      // invert.go) moves a destination out of Observed once permitted, so
+      // counting Observed alone would shrink "seen" every time something
+      // is promoted, reading as though mikroview had forgotten it.
       const permitted = (e.permitted ?? []).length
+      const seen = (e.observed ?? []).length + permitted
       return { glyph: '◌', text: `learning — ${seen} places seen · ${permitted} permitted`, broken: false, learning: true }
     }
     if (e.ring?.broken) {
@@ -254,7 +259,8 @@
       }
     }
     if (e.invert && e.observing) {
-      const seen = (e.observed ?? []).length
+      // Same running total as watchState's own chip -- see its comment.
+      const seen = (e.observed ?? []).length + (e.permitted ?? []).length
       return {
         headline: 'Learning, not fencing yet.',
         body: `${sourceLabel(e)} has reached ${seen} ${seen === 1 ? 'place' : 'places'} so far. Nothing fires while it learns -- permit the ones you recognise, then fence it.`,
@@ -871,9 +877,12 @@
             {#each sortedWatchRows as row (row.entry.id)}
               {@const story = watchStory(row.entry, row.lastMatch)}
               {@const nights = nightlySummary(row.entry.nights)}
-              {@const unpermitted = (row.entry.observed ?? []).filter(
-                (o) => !(row.entry.permitted ?? []).some((p) => p.destIp === o.destIp && p.port === o.port),
-              )}
+              <!-- Every entry in Observed is, by construction, not yet
+                   decided: Entry.Promote (internal/watchlist/invert.go)
+                   removes a destination from Observed the moment it is
+                   permitted, so there is no "observed but already
+                   permitted" case to filter out here. -->
+              {@const unpermitted = row.entry.observed ?? []}
               <tr
                 id="watch-{row.entry.id}"
                 class="wt-row"
@@ -955,27 +964,35 @@
                         <div class="side">
                           {#if row.learning}
                             <!-- THE LEARNING WATCH (#761 item 4): where it
-                                 has reached, `permit` per place. -->
+                                 has reached -- every place ever seen,
+                                 decided or not. Entry.Promote
+                                 (internal/watchlist/invert.go) moves a
+                                 destination out of Observed once
+                                 permitted, so the permitted half of this
+                                 list is read from Permitted directly
+                                 rather than from an "observed AND
+                                 permitted" combination that never
+                                 actually occurs. -->
                             <span class="lab">where it has reached</span>
                             <ul class="seen">
+                              {#each row.entry.permitted ?? [] as p (p.destIp + ':' + p.port)}
+                                <li>
+                                  <span class="k">{p.destIp}</span>
+                                  <span class="t">:{p.port}</span>
+                                  <span class="ok">✓ permitted</span>
+                                </li>
+                              {/each}
                               {#each row.entry.observed ?? [] as o (o.destIp + ':' + o.port)}
-                                {@const isPermitted = (row.entry.permitted ?? []).some(
-                                  (p) => p.destIp === o.destIp && p.port === o.port,
-                                )}
                                 <li>
                                   <span class="k">{o.destIp}</span>
                                   <span class="t">:{o.port} · {o.count}×</span>
-                                  {#if isPermitted}
-                                    <span class="ok">✓ permitted</span>
-                                  {:else}
-                                    <button
-                                      class="permit"
-                                      disabled={permittingKey === row.entry.id + o.destIp + o.port}
-                                      onclick={() => permitOne(row.entry, { destIp: o.destIp, port: o.port })}
-                                    >
-                                      permit
-                                    </button>
-                                  {/if}
+                                  <button
+                                    class="permit"
+                                    disabled={permittingKey === row.entry.id + o.destIp + o.port}
+                                    onclick={() => permitOne(row.entry, { destIp: o.destIp, port: o.port })}
+                                  >
+                                    permit
+                                  </button>
                                 </li>
                               {/each}
                             </ul>

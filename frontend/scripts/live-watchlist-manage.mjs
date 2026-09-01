@@ -19,7 +19,7 @@
 // learn (item 4) -> permit one place, then fence the rest -> edit its
 // name (item 5) -> remove it (item 5, round 28's arm/confirm gesture).
 
-import { session, feedRaw, feedPortScan, check, done, goTo } from './live-browser.mjs'
+import { session, feedRaw, feedPortScan, check, done, goTo, waitForFlag } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -38,7 +38,10 @@ async function api(page, method, path, body) {
 const MAC = 'aa:bb:cc:dd:ee:61'
 const SCAN_IP = '198.51.100.161'
 
-feedPortScan(6, SCAN_IP)
+// The default port_scan threshold is 15 distinct ports in a minute
+// (GET /api/definitions/port_scan) -- 20 is what every other passing
+// scenario in this directory feeds, comfortably over it.
+feedPortScan(20, SCAN_IP)
 
 const { page, consoleErrors } = await session()
 
@@ -50,6 +53,12 @@ const { page, consoleErrors } = await session()
 // chevron) call stopPropagation so they can do their own thing instead
 // of toggling the drawer, and a locator built from `hasText` has no way
 // to avoid clicking through to one of those by accident.
+
+// waitForFlag polls the server directly rather than the UI's own 5s
+// refresh, which a bare Playwright locator timeout cannot race safely
+// against (live-browser.mjs's own doc comment on why).
+const flagSeen = await waitForFlag(page, SCAN_IP)
+check(flagSeen.ok, flagSeen.message)
 
 await goTo(page, 'Flags')
 const scanRow = page.locator('tr.frow', { hasText: SCAN_IP })
@@ -90,8 +99,13 @@ await draftRow.waitFor({ state: 'detached', timeout: 10000 })
 function rowFor(name) {
   return page.locator('.wt-row', { hasText: name })
 }
-function drawerFor(name) {
-  return page.locator('.wt-drawer', { hasText: name })
+// Unlike a flag's drawer (whose generated narrative happens to mention
+// its target), a watch's drawer never repeats the watch's own name --
+// see watchStory in Watchlist.svelte, which speaks of the source
+// identity, not the name. Only one drawer is ever open at a time
+// (watchDrawerId is single-valued), so the currently-open one is enough.
+function openDrawer() {
+  return page.locator('.wt-drawer')
 }
 
 await rowFor(NAME).waitFor({ timeout: 10000 })
@@ -113,67 +127,86 @@ const line2 =
 feedRaw(line1)
 feedRaw(line2)
 
-await rowFor(NAME).locator('td.k').click()
-const seenItems = drawerFor(NAME).locator('.seen li')
-
-// Watchlist.svelte's own poll cadence is a 60s admin-only interval
-// (App.svelte's WATCHLIST_COVERAGE_REFRESH_MS) -- too slow for a
-// scenario to sit through. This component's own onMount fires the same
-// refresh every time it (re)mounts, and Docket.svelte fully unmounts it
-// on every tab switch away (`{#if tab === 'watchlist'} <Watchlist />`),
-// so switching away and back is a fast, real "arrival" rather than a
-// synthetic poke at internal state.
-let sawTwo = false
-for (let i = 0; i < 40 && !sawTwo; i++) {
+// Polled server-side first (same reasoning as waitForFlag's own doc
+// comment): Watchlist.svelte's own poll cadence is a 60s admin-only
+// interval (App.svelte's WATCHLIST_COVERAGE_REFRESH_MS), far too slow
+// for a scenario, and a bare UI wait cannot tell "not there yet" from
+// "never coming."
+let observedCount = 0
+for (let i = 0; i < 40 && observedCount < 2; i++) {
   await page.waitForTimeout(500)
-  await goTo(page, 'Flags')
-  await goTo(page, 'Watchlist')
-  await rowFor(NAME).locator('td.k').click()
-  if ((await seenItems.count()) >= 2) sawTwo = true
+  const got = await api(page, 'GET', '/api/definitions')
+  const d = (got.body?.definitions ?? []).find((x) => x.id === entry?.id)
+  observedCount = d?.expectation?.observed?.length ?? 0
 }
-check(sawTwo, `real ingested traffic through the real pipeline populates "where it has reached" (saw ${await seenItems.count()} places)`)
-check(await drawerFor(NAME).locator('.seen').isVisible(), 'the drawer shows "where it has reached" while learning')
+check(
+  observedCount >= 2,
+  `real ingested traffic through the real pipeline reaches the entry's Observed list server-side (saw ${observedCount})`,
+)
+
+// Now that the server has it, a fresh arrival at the tab -- Docket.svelte
+// fully unmounts and remounts Watchlist.svelte on every tab switch
+// (`{#if tab === 'watchlist'} <Watchlist />`), whose own onMount
+// refreshes -- picks it up in the UI. watchlistState is a module
+// singleton, not reset by the remount, so the row still shows whatever
+// it held before the refresh resolves for a moment -- waited out here
+// on the chip's own text (rather than clicking immediately) so the
+// drawer is opened against the settled state, not a stale one.
+await goTo(page, 'Flags')
+await goTo(page, 'Watchlist')
+await rowFor(NAME).locator('.wchip2', { hasText: '2 places seen' }).waitFor({ timeout: 10000 })
+await rowFor(NAME).locator('td.k').click()
+const seenItems = openDrawer().locator('.seen li')
+check((await seenItems.count()) >= 2, `the UI shows what the server has (got ${await seenItems.count()})`)
+check(await openDrawer().locator('.seen').isVisible(), 'the drawer shows "where it has reached" while learning')
 check(
   await page.locator('.wt-row', { hasText: NAME }).locator('.wchip2.learn', { hasText: 'learning' }).isVisible(),
   'the chip reads learning while still observing',
 )
 
 await seenItems.first().getByRole('button', { name: 'permit' }).click()
-await page.waitForTimeout(300)
 check(
-  (await drawerFor(NAME).locator('.seen .ok', { hasText: 'permitted' }).count()) === 1,
+  await openDrawer()
+    .locator('.seen .ok', { hasText: 'permitted' })
+    .waitFor({ timeout: 5000 })
+    .then(
+      () => true,
+      () => false,
+    ),
   'permitting one place marks it permitted in the list',
 )
 
-const permitAllBtn = drawerFor(NAME).getByRole('button', { name: /permit all/ })
+const permitAllBtn = openDrawer().getByRole('button', { name: /permit all/ })
 if (await permitAllBtn.count()) await permitAllBtn.click()
 await page.waitForTimeout(300)
 
-await drawerFor(NAME).getByRole('button', { name: /fence now/ }).click()
+await openDrawer().getByRole('button', { name: /fence now/ }).click()
 await page.waitForTimeout(300)
 check(
   await rowFor(NAME).locator('.wchip2', { hasText: 'fencing' }).isVisible(),
   'fence now turns the chip to fencing',
 )
-check(await drawerFor(NAME).getByRole('button', { name: 'learn again' }).isVisible(), 'the same button now reads learn again')
+check(await openDrawer().getByRole('button', { name: 'learn again' }).isVisible(), 'the same button now reads learn again')
 
 // --- Item 5: edit and remove ------------------------------------------
 
-await drawerFor(NAME).getByRole('button', { name: 'edit' }).click()
+await openDrawer().getByRole('button', { name: 'edit' }).click()
 const RENAMED = 'live manage cam (renamed)'
 await page.fill('.wt-drawer input[aria-label="Watch name"]', RENAMED)
 await page.click('.wt-drawer button:has-text("save")')
 await rowFor(RENAMED).waitFor({ timeout: 10000 })
 check(true, 'edit saves the rename onto the real entry')
 
-await rowFor(RENAMED).locator('td.k').click()
-const removeBtn = drawerFor(RENAMED).getByRole('button', { name: 'remove' })
+// The drawer is already open from before the rename -- saving swaps its
+// story back from the form (editingId resets to null) without touching
+// watchDrawerId, so clicking the row again here would close it instead.
+const removeBtn = openDrawer().getByRole('button', { name: 'remove' })
 await removeBtn.click()
 check(
-  await drawerFor(RENAMED).getByRole('button', { name: /confirm/ }).isVisible(),
+  await openDrawer().getByRole('button', { name: /confirm/ }).isVisible(),
   'the first click arms remove -- "confirm — its matches stay", nothing removed yet',
 )
-await drawerFor(RENAMED).getByRole('button', { name: /confirm/ }).click()
+await openDrawer().getByRole('button', { name: /confirm/ }).click()
 await rowFor(RENAMED).waitFor({ state: 'detached', timeout: 10000 })
 check(true, 'the second click actually removes the watch')
 
