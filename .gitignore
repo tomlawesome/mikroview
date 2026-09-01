@@ -27,3 +27,7 @@
 # Parallel-agent worktrees are created here (see AGENTS.md on running agents
 # in parallel). They are separate checkouts, not content of this one.
 /worktrees/
+
+# The remote gate tees its full run here (scripts/gate-remote.sh). It is a
+# 2700-line log of one run, not content.
+/gate-run.log
