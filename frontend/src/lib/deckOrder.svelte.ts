@@ -10,10 +10,11 @@ const STORAGE_KEY = 'mikroview-deck-order'
 // The ratified default order -- deckCards.ts renders from this module's
 // order, not the other way round, so this list is the one source of the
 // default (a bare string[] to keep this module import-free). 'entities'
-// only ever renders for an admin (deckCards' own gate) -- harmless to
-// carry here regardless of role, since apply() below only ever sorts
-// the keys a session's own card list actually has.
-const DEFAULT_ORDER = ['fall', 'topography', 'metrics', 'live', 'docket', 'entities', 'engineroom']
+// and 'engineroom' only ever render for the user/admin tier, and
+// 'fleet' only for a viewer (deckCards' own gate) -- harmless to carry
+// all three here regardless of role, since apply() below only ever
+// sorts the keys a session's own card list actually has.
+const DEFAULT_ORDER = ['fall', 'topography', 'metrics', 'live', 'docket', 'entities', 'engineroom', 'fleet']
 
 function loadInitial(): string[] {
   try {

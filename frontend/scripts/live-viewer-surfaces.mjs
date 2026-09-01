@@ -17,8 +17,7 @@
 // Rows go absent, never disabled, so every check below also proves that
 // grammar: no menu row renders greyed out for a tier that cannot use it.
 
-import { chromium } from 'playwright'
-import { session, check, done, goTo, openAccountMenu } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -27,8 +26,10 @@ const { page, consoleErrors } = await session()
 const PEOPLE = '.door:has-text("Who may look in")'
 const MACHINES = '.door:has-text("Which machines may speak")'
 
-// The docket's own tab labels render lower-case in the DOM (Docket.svelte);
-// the ratified matrix and every other surface use the capitalised form.
+// The docket's own tab labels render lower-case, in SceneBar's switcher
+// (.switch[role="tablist"] .sw -- round 30/#697 moved them off Docket.svelte
+// itself); the ratified matrix and every other surface use the capitalised
+// form.
 const DOCKET_LABELS = { flags: 'Flags', watchlist: 'Watchlist', 'audit log': 'Audit log' }
 
 // The account menu also carries rows with no place in navGroups.ts at
@@ -41,18 +42,23 @@ const OPERATE_ROWS = ['Settings', 'Fleet', 'Entities', 'Audit log', 'Run setup�
 /**
  * The whole visible navigation set for whatever session `p` holds,
  * read from every real surface that account can reach: the roll rail
- * (deck scenes -- ungated, the same four scenes for every tier), the
- * docket's tabs (flags/watchlist/audit, gated by canEdit/isAdmin), and
- * the account chip's menu (gated per row). Also returns which menu rows
- * render disabled, so a caller can prove absent-not-disabled without a
- * second pass through the menu.
+ * (deck scenes -- gated per card by deckCards.ts's isAdmin/canEdit,
+ * Entities/Settings for the user/admin tiers and Fleet standing in for
+ * both at the viewer tier), the docket's tabs (flags/watchlist/audit,
+ * gated by canEdit/isAdmin in SceneBar's own switcher), and the account
+ * chip's menu (gated per row -- today just Run setup…, admin-only,
+ * since #647 moved every page-shaped row onto the deck). Also returns
+ * which menu rows render disabled, so a caller can prove
+ * absent-not-disabled without a second pass through the menu.
  */
 async function visibleSurfaces(p) {
   const railNames = await p.$$eval('.roll-rail button.rail-name', (els) => els.map((e) => e.textContent.trim()))
   const scenes = railNames.filter((n) => n !== 'The docket')
 
   await goTo(p, 'Flags')
-  const tabLabels = await p.$$eval('.docket .tab-row .tab .tlabel', (els) => els.map((e) => e.textContent.trim()))
+  const tabLabels = await p.$$eval('.card[aria-hidden="false"] .switch[role="tablist"] .sw', (els) =>
+    els.map((e) => e.textContent.trim()),
+  )
   const docket = tabLabels.map((t) => DOCKET_LABELS[t] ?? t)
 
   await openAccountMenu(p)
@@ -79,10 +85,9 @@ const VIEWER_PASS = 'live-viewer-657-password'
 const EDITOR_USER = 'live-user-657'
 const EDITOR_PASS = 'live-user-657-password'
 
+// goTo() itself waits for the Settings card to be centred (round 30/#700
+// draws no page heading to wait for separately -- see its own comment).
 await goTo(page, 'Settings')
-await page.waitForFunction(() => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings', null, {
-  timeout: 5000,
-})
 
 async function createAccount(username, password, role) {
   await page.click(`${PEOPLE} .footer-action`)
@@ -102,7 +107,7 @@ await createAccount(EDITOR_USER, EDITOR_PASS, 'user')
 check(true, `the user account "${EDITOR_USER}" is created from the people door`)
 
 async function signIn(username, password) {
-  const browser = await chromium.launch()
+  const browser = await launchBrowser()
   const ctx = await browser.newContext({ ignoreHTTPSErrors: true })
   const p = await ctx.newPage()
   await p.goto(URL_BASE, { waitUntil: 'networkidle' })
@@ -134,14 +139,18 @@ const editorNav = await visibleSurfaces(editor.page)
 check(
   JSON.stringify(editorNav.union) ===
     JSON.stringify(
-      sortedSet(['The fall', 'Topography', 'Stream', 'Metrics', 'Flags', 'Watchlist', 'Settings', 'Fleet', 'Entities']),
+      sortedSet(['The fall', 'Topography', 'Stream', 'Metrics', 'Flags', 'Watchlist', 'Settings', 'Entities']),
     ),
   `a user's whole navigation adds Watchlist, Settings and Entities -- got ${JSON.stringify(editorNav.union)}`,
 )
 for (const added of ['Watchlist', 'Settings', 'Entities']) {
   check(editorNav.union.includes(added), `${added} is present in a user's navigation`)
 }
-for (const absent of ['Audit log', 'Run setup…']) {
+// Fleet is the viewer's own stand-in for Entities/Settings (deckCards.ts's
+// `fleet` key); a user gets the real Entities card, which folds Fleet's
+// table into its own leading section (#647), so no separate Fleet card
+// reaches the rail for this tier -- same as it never did for an admin.
+for (const absent of ['Fleet', 'Audit log', 'Run setup…']) {
   check(!editorNav.union.includes(absent), `${absent} still absent from a user's navigation`)
 }
 check(editorNav.disabledRows.length === 0, `no menu row is disabled for a user -- got ${JSON.stringify(editorNav.disabledRows)}`)
@@ -149,14 +158,14 @@ check(editorNav.disabledRows.length === 0, `no menu row is disabled for a user -
 // --- 3: a user opening Settings sees neither door ------------------------
 // #657's own narrowing: issuing keys is a setup task, not using the
 // product, so both doors went admin-only -- a user loses token
-// visibility it had before this ruling.
+// visibility it had before this ruling. Round 30 (#700/#691) also
+// unmounts both doors for every role today (TOKENS_DOOR_ENABLED /
+// USERS_DOOR_ENABLED are false in EngineRoomDoors.svelte), so this
+// currently proves the doors are absent without yet proving *why* --
+// the #657 admin gate underneath is pinned directly instead, at the API
+// level, in claim 4 below and internal/api/tokens_test.go.
 
 await goTo(editor.page, 'Settings')
-await editor.page.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
-  null,
-  { timeout: 5000 },
-)
 const editorDoors = await editor.page.$$eval('.doors .door .dname', (els) => els.map((e) => e.textContent.trim()))
 check(editorDoors.length === 0, `neither door renders for a user -- got ${JSON.stringify(editorDoors)}`)
 check(!(await editor.page.locator(MACHINES).count()), '"Which machines may speak" (tokens) is absent for a user')

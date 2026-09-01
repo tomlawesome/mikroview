@@ -82,7 +82,7 @@
   }
 
   // --- your deck -----------------------------------------------------------
-  const cards = $derived(deckOrderState.apply(deckCards(authState.role === 'admin')))
+  const cards = $derived(deckOrderState.apply(deckCards(authState.isAdmin, authState.canEdit)))
 
   let dragKey = $state<string | null>(null)
 
