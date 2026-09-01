@@ -29,12 +29,12 @@ exclusion is a verdict that outlives the flag** — and gains a corollary:
    cell, with `undo` beside it, so the columns never move. `undo` puts
    the trio back. `clear with a note` stamps `CLEARED` in the quiet ink.
 3. **Called real** stamps `REAL` in the same column, in alarm ink,
-   with `retract` beside it and the caret still there — the flag stays
+   with `undo` beside it and the caret still there — the flag stays
    open, the row keeps its ink, and its own colour bar swells from 3 px
    to 7 px as a lens whose ends arc back into the bar, so there is no
    stepped edge against the rows above and below. The story leads with
    *Called real at 13:58 by you…*. To call it something else later:
-   `retract`, then the chip. One rule: every stamp lives in `CALL IT`.
+   `undo`, then the chip. One rule: every stamp lives in `CALL IT`.
 4. **`never again`** stays in the drawer, now alone at the right of the
    action row: it is the one verdict that wants a second look and a
    confirm, and the drawer is where the evidence is. Its arm-then-
@@ -74,4 +74,4 @@ the bar were thickned by using an arc, so we don't get a jutted edge" —
 the real row's bar now swells as a lens.
 
 2026-09-01, owner: "33. stamps are good." On where `real`'s stamp lives:
-"36. your recommendation" — it moved into `CALL IT` with `retract`.
+"36. your recommendation" — it moved into `CALL IT`; owner then asked why `retract` rather than `undo` — same word now, same call.
