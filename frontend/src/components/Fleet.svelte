@@ -10,8 +10,15 @@
   // indicator (see its own doc comment); this one is where you'd actually
   // come to check on a whole fleet. The sort/status logic itself lives in
   // lib/fleet.ts (#647): Entities.svelte's leading "routers" section
-  // reads the same module, now that the deck's Entities card is where
-  // this table leads rather than living on a card of its own.
+  // reads the same module, so this table and that section can't drift.
+  //
+  // #647 folded this table into Entities' own card for the user/admin
+  // tiers, leaving this component reachable only from the phone-width
+  // bottom bar -- but #657's ratified matrix keeps Fleet itself
+  // viewer-visible while ruling Entities out of a viewer's navigation
+  // entirely, so this component is a deck card again for a viewer
+  // (deckCards.ts's `fleet` key), the one card that stands in for both
+  // Entities and Settings at that tier.
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
