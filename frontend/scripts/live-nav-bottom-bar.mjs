@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #550: the small-screen counterpart to live-nav-rail.mjs. Three things
+// #550: the small-screen counterpart to live-roll-rail.mjs. Three things
 // here cannot be proved by a jsdom unit test.
 //
 // The breakpoint itself: viewportState (lib/viewport.svelte.ts) reads a
