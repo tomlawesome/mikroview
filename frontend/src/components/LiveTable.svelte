@@ -241,7 +241,7 @@
     if (appState.devices.length === 0) {
       const base =
         authState.role === 'admin'
-          ? 'No devices have sent anything yet — Admin ▸ Run setup… to point a RouterOS device at mikroview.'
+          ? 'No devices have sent anything yet — your account menu ▸ Run setup… to point a RouterOS device at mikroview.'
           : 'No devices have sent anything yet. Ask an administrator to run setup.'
       // #487's "the record is the feature": where a setup step was
       // skipped or forced past, this silence has a recorded cause, and

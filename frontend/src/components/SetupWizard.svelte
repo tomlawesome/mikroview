@@ -213,7 +213,7 @@
 
   const announcement = $derived(step ? announceStep(step) : onFinish ? finishHeadline(ledger) : '')
 
-  const closeLabel = 'Close setup — finish later from Admin ▸ Run setup…'
+  const closeLabel = 'Close setup — finish later from your account menu ▸ Run setup…'
 </script>
 
 <svelte:window onkeydown={onKeydown} />
