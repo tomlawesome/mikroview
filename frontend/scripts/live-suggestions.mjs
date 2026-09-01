@@ -42,11 +42,9 @@ async function push(token, payload) {
 }
 
 async function openWatchlist() {
-  // Matching the label, not the row: NavRail gives each row an icon and
-  // moves its text into a <span class="label">, and Playwright's text
-  // engine only matches an element that *directly* contains the text --
-  // see live-nav-rail.mjs's own note on why `.item:text-is(...)` stopped
-  // working once that landed.
+  // goTo(page, 'Watchlist') rolls the deck to the docket scene and clicks
+  // its Watchlist tab on the scene bar (#700) -- no manual label matching
+  // needed here, that lives in live-browser.mjs's SCENES table.
   await goTo(page, 'Watchlist')
   await page.waitForSelector('#panel-watchlist', { timeout: 10000 })
 }

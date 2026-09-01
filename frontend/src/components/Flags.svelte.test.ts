@@ -17,10 +17,15 @@ vi.mock('../lib/api', () => ({
   fetchExclusions: vi.fn(async () => []),
   removeExclusion: vi.fn(),
   fetchFlagEpisode: vi.fn(async () => ({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })),
+  // The learning shelf (#642) reads baseline warm-up through
+  // detectorSettingsState, whose refresh() calls these two.
+  fetchDefinitions: vi.fn(async () => ({ definitions: [], coverageEvidence: { complete: true } })),
+  updateDefinition: vi.fn(),
 }))
 
-import { clearFlag, fetchFlagEpisode } from '../lib/api'
+import { clearFlag, fetchDefinitions, fetchFlagEpisode, setFlagVerdict } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
+import { detectorSettingsState } from '../lib/detectorSettings.svelte'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
@@ -621,3 +626,189 @@ describe('opening a flag drawer from the topography dial (#724)', () => {
 // added have no surface in this component to assert against. The
 // backend work is untouched and the grouping logic keeps its own tests
 // in lib/evidencePairs.test.ts. The missing home is recorded on #691.
+
+// The learning shelf (#642): provisional flags -- raised while their
+// baseline was still warming -- live in their own bounded section below
+// the settled table, hatched AND worded (#616: never meaning by colour
+// alone), absent when empty and nothing is warming. See the issue body's
+// ruling for why it is not a fourth docket tab and not interleaved.
+describe('the learning shelf (#642)', () => {
+  // One warming detection, as GET /api/definitions would serve it --
+  // driven through detectorSettingsState.refresh() (the component's own
+  // path) rather than poked into the store, so the projection is
+  // exercised too.
+  const warmingDefinitions = {
+    definitions: [
+      {
+        id: 'port_scan',
+        name: 'Port scan',
+        intent: 'detection',
+        available: true,
+        enabled: true,
+        scope: {},
+        learning: { floor: { minDurationSeconds: 1209600 }, keys: 3, ready: 1 },
+      },
+    ],
+    coverageEvidence: { complete: true },
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchDefinitions).mockResolvedValue({ definitions: [], coverageEvidence: { complete: true } } as never)
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    authState.username = 'kai'
+    detectorSettingsState.list = []
+    flagsState.list = []
+    flagsState.undoableVerdicts = []
+  })
+
+  it('a provisional flag renders on the shelf, not in the settled table', () => {
+    flagsState.list = [
+      testFlag({ id: 's1', target: '198.51.100.1' }),
+      testFlag({ id: 'p1', target: '198.51.100.2', provisional: true }),
+    ]
+    render(Flags)
+    flushSync()
+
+    const settled = document.querySelector('section[aria-label^="Active flags"]') as HTMLElement
+    const shelf = document.querySelector('section[aria-label^="Learning shelf"]') as HTMLElement
+    expect(shelf).toBeTruthy()
+    expect(settled.querySelectorAll('tr.frow')).toHaveLength(1)
+    expect(settled.textContent).toContain('198.51.100.1')
+    expect(shelf.querySelectorAll('tr.frow')).toHaveLength(1)
+    expect(shelf.textContent).toContain('198.51.100.2')
+  })
+
+  it('is absent when nothing is provisional and no baseline is warming', () => {
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('section[aria-label^="Learning shelf"]')).toBeNull()
+  })
+
+  it('wears the word "provisional" on the row and the hatch class, never colour alone', () => {
+    flagsState.list = [testFlag({ id: 'p1', provisional: true })]
+    render(Flags)
+    flushSync()
+
+    const row = document.querySelector('section[aria-label^="Learning shelf"] tr.frow') as HTMLElement
+    expect(row.classList.contains('provisional')).toBe(true)
+    expect(row.querySelector('.ptag')?.textContent?.trim()).toBe('provisional')
+  })
+
+  it("the shelf's own heading carries its number", () => {
+    flagsState.list = [
+      testFlag({ id: 'p1', target: '198.51.100.2', provisional: true }),
+      testFlag({ id: 'p2', target: '198.51.100.3', provisional: true }),
+    ]
+    render(Flags)
+    flushSync()
+
+    expect(screen.getByText(/2 provisional/)).toBeTruthy()
+  })
+
+  it('a warming baseline with no provisional flags states the case in words', async () => {
+    vi.mocked(fetchDefinitions).mockResolvedValue(warmingDefinitions as never)
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+
+    expect(await screen.findByText(/still warming/)).toBeTruthy()
+    // Worded, not a table of nothing.
+    expect(document.querySelector('section[aria-label^="Learning shelf"] table')).toBeNull()
+  })
+
+  it('a viewer never gets the warming line -- the signal is user-tier, so it degrades by absence', async () => {
+    authState.role = 'viewer'
+    vi.mocked(fetchDefinitions).mockResolvedValue(warmingDefinitions as never)
+    // Even a stale store left over from a more-privileged session must
+    // not leak the claim to a viewer.
+    detectorSettingsState.list = [
+      {
+        name: 'port_scan',
+        label: 'Port scan',
+        enabled: true,
+        scope: {},
+        learning: { floor: { minDurationSeconds: 1209600 }, keys: 3, ready: 1 },
+      },
+    ]
+    flagsState.list = []
+    render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    expect(document.querySelector('section[aria-label^="Learning shelf"]')).toBeNull()
+    expect(fetchDefinitions).not.toHaveBeenCalled()
+  })
+
+  it('the settled empty state points at an occupied shelf instead of claiming nothing was flagged', () => {
+    flagsState.list = [testFlag({ id: 'p1', provisional: true })]
+    render(Flags)
+    flushSync()
+
+    expect(screen.getByText('Nothing open.')).toBeTruthy()
+    expect(screen.getByText(/learning shelf below/)).toBeTruthy()
+    expect(screen.queryByText(/Nothing has been flagged yet/)).toBeNull()
+  })
+
+  it('a provisional flag accepts a verdict: noise judges and clears it, and Undo is offered', async () => {
+    const judged = testFlag({
+      id: 'p1',
+      provisional: true,
+      cleared: true,
+      clearedAt: '2026-01-01T00:01:00Z',
+      verdict: 'noise' as const,
+      verdictBy: 'kai',
+      verdictAt: '2026-01-01T00:01:00Z',
+    })
+    vi.mocked(setFlagVerdict).mockResolvedValue(judged as never)
+    flagsState.list = [testFlag({ id: 'p1', provisional: true })]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(document.querySelector('section[aria-label^="Learning shelf"] tr.frow') as HTMLElement)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: 'noise' }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(setFlagVerdict).toHaveBeenCalledWith('p1', 'noise')
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy()
+  })
+
+  it('a viewer gets no verdict buttons on a shelf drawer', async () => {
+    authState.role = 'viewer'
+    flagsState.list = [testFlag({ id: 'p1', provisional: true })]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(document.querySelector('section[aria-label^="Learning shelf"] tr.frow') as HTMLElement)
+    flushSync()
+
+    expect(screen.queryByRole('button', { name: 'noise' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'expected' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'real' })).toBeNull()
+  })
+
+  it('the settled table still carries no verdict row -- #688 stands for the ratified scene', async () => {
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(document.querySelector('section[aria-label^="Active flags"] tr.frow') as HTMLElement)
+    flushSync()
+
+    expect(screen.queryByRole('button', { name: 'noise' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'expected' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'real' })).toBeNull()
+  })
+})

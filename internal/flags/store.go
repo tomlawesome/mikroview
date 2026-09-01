@@ -646,7 +646,25 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 	f.Confidence = mergeConfidence(confidence, f.ReputationFloor)
 	f.Evidence = evidence
 	f.Country = country
-	f.Provisional = provisional
+	// Provisional is fixed at episode start (isNew: first-ever raise, or
+	// a revival from Cleared), same as FirstSeen just above -- not
+	// overwritten on a plain re-fire of an already-active episode.
+	// #642's own requirement: a baseline warming past its floor mid-
+	// episode must not silently convert an already-raised provisional
+	// flag into a settled one in place, since that is exactly the kind
+	// of unmarked status change #616's honesty vocabulary rules out --
+	// an operator who already saw this flag hatched/labelled provisional
+	// would see it silently turn solid. The provisional flag instead
+	// stays provisional for the rest of its active episode; a genuinely
+	// settled judgement is a new episode, which only exists once this
+	// one is cleared (by a human, or an auto-clear) and the condition
+	// fires again through the isNew-revival branch above, where a false
+	// provisional argument does take effect. See
+	// TestAddDoesNotConvertActiveProvisionalFlagInPlace and
+	// TestAddProvisionalNewEpisodeAfterClearCanSettle.
+	if isNew {
+		f.Provisional = provisional
+	}
 	f.LastSeen = now
 	f.Count++
 
