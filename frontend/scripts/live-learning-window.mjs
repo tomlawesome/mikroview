@@ -158,12 +158,11 @@ function expectedSummary(l) {
   return `Ready for ${ready} of ${keys} sources; ${keys - ready} still learning`
 }
 
+// goTo's own wait (SCENES in live-browser.mjs, waiting for the engineroom card to centre) is what proves arrival --
+// this used to also wait for `.page-header h2`, but #700 unmounted PageHeader from EngineRoom.svelte entirely, so
+// that selector no longer exists anywhere on the page (#667 group E, and the same failure shape as #661's original
+// report -- see that issue's own trail).
 await goTo(page, 'Settings')
-await page.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
-  null,
-  { timeout: 5000 },
-)
 // #633 moved the bench: it is no longer a station on a path, it opens
 // from the detection group's own "tune..." link. #661 -- this selector
 // outlived the markup and the scenario timed out on it for both the

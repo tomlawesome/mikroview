@@ -70,8 +70,11 @@ await page.waitForSelector(`${CONN}.conn-open`, { timeout: 15000 })
 // --- Baseline: connected, quiet indicator, no banner ----------------------
 check((await page.$('.banner-closed, .banner-connecting')) === null, 'no banner while connected')
 check(
-  (await page.$eval(CONN, (el) => el.textContent.trim())) === 'Live',
-  'the scene bar says Live while connected',
+  // #683 (round 29) ratified 'LIVE' (uppercase), with a rate suffix everywhere except the Stream card's own bar --
+  // SceneBar.svelte:107 passes `showRate={view !== 'live'}`, so on Stream (what goTo('Stream') above landed on)
+  // ConnectionIndicator.svelte renders bare 'LIVE' with no ` · N/s` (ConnectionIndicator.svelte:19,30-32).
+  (await page.$eval(CONN, (el) => el.textContent.trim())) === 'LIVE',
+  'the scene bar says LIVE while connected',
 )
 
 const mainTopConnected = await page.$eval('#main-content', (el) => el.getBoundingClientRect().top)

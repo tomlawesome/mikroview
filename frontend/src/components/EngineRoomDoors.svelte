@@ -9,15 +9,18 @@
   // (usersState/tokensState) and the same create/remove/revoke calls,
   // reshaped into two compact door cards instead of two whole pages.
   //
-  // The two doors are NOT symmetrically gated. GET /api/auth/users
-  // stayed admin-only -- a deliberate, later departure from the design
-  // record's original "widen users too" clause (the owner overrode it
-  // mid-build; the record is being amended separately) -- so "Who may
-  // look in" is admin-only: absent entirely for a viewer, never fetched
-  // for one either, since a 403'd request is exactly what the rail's
-  // `admin: true` convention exists to prevent. GET /api/tokens *did*
-  // widen, so "Which machines may speak" stays viewer-readable, with
-  // only its verbs (Mint, Revoke) gated on isAdmin.
+  // Both doors are admin-only, and are absent rather than read-only for
+  // anyone else: a 403'd request is exactly what the rail's gating
+  // convention exists to prevent.
+  //
+  // They arrived there separately. GET /api/auth/users stayed admin-only
+  // from the start -- a deliberate departure from the design record's
+  // original "widen users too" clause, which the owner overrode
+  // mid-build. GET /api/tokens did widen under #490, then narrowed back
+  // under #657: issuing keys is a setup task rather than using the
+  // product (owner, 2026-08-31), so the user tier deliberately loses
+  // metadata it could see before. The engine room as a whole is no
+  // longer viewer-visible either -- see navGroups.ts.
   import { onMount } from 'svelte'
   import { usersState } from '../lib/users.svelte'
   import { tokensState } from '../lib/tokens.svelte'
@@ -41,9 +44,14 @@
   const TOKENS_DOOR_ENABLED: boolean = false
 
   onMount(() => {
-    // Never fetched for a viewer -- see the module doc comment above.
-    if (isAdmin) usersState.refresh()
-    tokensState.refresh()
+    // Never fetched below admin -- see the module doc comment above.
+    // #657 moved tokens to the same footing as users: GET /api/tokens is
+    // admin-only now, so fetching it as a user would 403 and leave the
+    // station rendering an error it has no way to act on.
+    if (isAdmin) {
+      usersState.refresh()
+      tokensState.refresh()
+    }
     fetchDevices()
       .then((all) => {
         // Same de-dup/order rule Tokens.svelte used to apply -- an id-less
@@ -209,7 +217,11 @@
     </section>
   {/if}
 
-  {#if TOKENS_DOOR_ENABLED}
+  <!-- #657: the whole tokens door is admin-only now, absent rather than
+       read-only, on the same grammar as the users door above -- and, per
+       round 30 (#700/#691), unmounted for every role until TOKENS_DOOR_ENABLED
+       comes back. -->
+  {#if TOKENS_DOOR_ENABLED && isAdmin}
   <section class="door">
     <div class="dhead">
       <span class="dname">Which machines may speak</span>
