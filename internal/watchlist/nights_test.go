@@ -386,3 +386,101 @@ func TestNightsAcrossADSTTransitionStayOnePerNight(t *testing.T) {
 	}
 	t.Error("the spring-forward night is missing from the history")
 }
+
+// TestFillRecordsAStickySilentMarkAsNotObservedEvenAfterRecovery is
+// issue #730's own scenario: a router that goes quiet for four hours in
+// the middle of a window, and comes back before the window shuts, must
+// still close out as "not observed" -- not "empty", which would be an
+// honest-sounding lie about a network mikroview only partly watched.
+//
+// The mark is taken sticky, during the window (MarkSilent, as the
+// watch-liveness ticker would call it on a tick while the device was
+// down), and is still present in Observation.Silent by the time FillNights
+// closes the occurrence -- long after the device recovered and nothing
+// about "now" would say it had ever gone quiet.
+func TestFillRecordsAStickySilentMarkAsNotObservedEvenAfterRecovery(t *testing.T) {
+	obs := watching(t, "2026-08-01T00:00:00Z")
+
+	// The night of 2026-09-01 opens at 22:00 and closes at 06:00 the next
+	// morning. The device goes quiet at 01:00 -- well inside the window --
+	// and a tick during the outage marks it.
+	tickWhileSilent := mustUTC(t, "2026-09-02T01:00:00Z")
+	marks := MarkSilent(nil, nightlyWindow, tickWhileSilent)
+	if len(marks) != 1 {
+		t.Fatalf("MarkSilent recorded %d marks, want 1", len(marks))
+	}
+	wantOpen := mustUTC(t, "2026-09-01T22:00:00Z")
+	if !marks[0].Equal(wantOpen) {
+		t.Fatalf("mark anchored at %s, want the window's own open %s", marks[0], wantOpen)
+	}
+
+	// The device recovers well before the window shuts -- nothing checked
+	// at close time would see anything wrong.
+	obs.Silent = marks
+	now := mustUTC(t, "2026-09-03T09:00:00Z")
+	nights := FillNights(nil, nightlyWindow, now, obs)
+
+	var found bool
+	for _, n := range nights {
+		if !n.Opened.Equal(wantOpen) {
+			continue
+		}
+		found = true
+		if n.State != NightUnobserved {
+			t.Errorf("the night with a sticky silent mark is %q, want %q -- the device going quiet mid-window must survive its own recovery", n.State, NightUnobserved)
+		}
+	}
+	if !found {
+		t.Fatalf("the night opening %s was not filled at all", wantOpen)
+	}
+
+	// A night the device was never marked silent for is unaffected --
+	// this is not a blanket downgrade of every empty night once any mark
+	// exists anywhere in history.
+	for _, n := range nights {
+		if n.Opened.Equal(wantOpen) {
+			continue
+		}
+		if n.State != NightEmpty {
+			t.Errorf("an unmarked night %s is %q, want %q", n.Opened, n.State, NightEmpty)
+		}
+	}
+}
+
+// TestMarkSilentOutsideAnyOccurrenceIsANoOp pins MarkSilent's own refusal
+// to invent history: a tick landing between windows, or against a
+// windowless entry, says nothing about any occurrence.
+func TestMarkSilentOutsideAnyOccurrenceIsANoOp(t *testing.T) {
+	if got := MarkSilent(nil, nightlyWindow, mustUTC(t, "2026-09-01T12:00:00Z")); got != nil {
+		t.Errorf("a midday tick outside the window marked %v", got)
+	}
+	if got := MarkSilent(nil, Window{}, mustUTC(t, "2026-09-01T23:00:00Z")); got != nil {
+		t.Errorf("a windowless entry marked %v", got)
+	}
+}
+
+// TestMarkSilentIsIdempotentPerOccurrence pins that repeated ticks during
+// the same outage do not grow the mark list -- MarkSilent is a sticky
+// boolean per occurrence, not a log of every stale tick.
+func TestMarkSilentIsIdempotentPerOccurrence(t *testing.T) {
+	marks := MarkSilent(nil, nightlyWindow, mustUTC(t, "2026-09-01T23:00:00Z"))
+	marks = MarkSilent(marks, nightlyWindow, mustUTC(t, "2026-09-02T00:00:00Z"))
+	marks = MarkSilent(marks, nightlyWindow, mustUTC(t, "2026-09-02T05:00:00Z"))
+	if len(marks) != 1 {
+		t.Fatalf("three ticks in the same occurrence produced %d marks, want 1: %v", len(marks), marks)
+	}
+}
+
+// TestMarkSilentIsBoundedAtMaxNights pins the same cap Night history
+// itself carries: a fill cadence slower than the tick cadence must not
+// let pending marks grow without bound.
+func TestMarkSilentIsBoundedAtMaxNights(t *testing.T) {
+	var marks []time.Time
+	base := mustUTC(t, "2026-09-01T23:00:00Z")
+	for i := 0; i < MaxNights+3; i++ {
+		marks = MarkSilent(marks, nightlyWindow, base.Add(time.Duration(i)*24*time.Hour))
+	}
+	if len(marks) != MaxNights {
+		t.Fatalf("got %d pending marks, want the %d-mark cap", len(marks), MaxNights)
+	}
+}
