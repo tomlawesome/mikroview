@@ -12,9 +12,12 @@
 // three changes, and needs a real browser rather than a unit test:
 //
 //  - Every remaining Admin destination is actually reachable -- Settings
-//    and Entities via the deck, Fleet via the bottom bar -- and no modal
-//    renders anywhere in the group -- a unit test of AccountMenu alone
-//    cannot see whether App.svelte still mounts a retired component.
+//    and Entities via the deck, and the bottom bar's Fleet row for every
+//    role: an admin/user rolls to the same router facts folded into
+//    Entities (#647), a viewer rolls to the standalone Fleet card
+//    (#706/deckCards.ts) -- and no modal renders anywhere in the group --
+//    a unit test of AccountMenu alone cannot see whether App.svelte still
+//    mounts a retired component.
 //  - The three absorbed pages are gone with no alias: no destination, and
 //    nothing that renders their old headers.
 //  - "Run setup…" opens #487's setup modal over whatever page is showing,
@@ -43,15 +46,24 @@ async function openAndCheck(label) {
   check(true, `${label} is reachable and opens`)
 }
 
-/** Fleet has no desktop destination any more -- #647 folded its content into Entities' own deck card and left the
- * standalone page reachable only from the phone-width bottom bar's Admin group (App.svelte's DECK_VIEWS comment:
- * "Fleet alone is left outside it ... reached only from the phone-width bottom bar now"). Proven the way
- * live-nav-bottom-bar.mjs proves any other bottom-bar destination: resize down, open the half-sheet, click Fleet's
- * row inside it, and read the .intro paragraph Fleet.svelte always renders (it carries no heading -- #697/#700 --
- * and no table when the fleet is empty, but the intro text is unconditional). Lands back on Detect/Flags before
- * restoring the desktop viewport, not Expect/Watchlist, because Expect is gated away from a viewer (navGroups.ts)
- * and this helper runs for both roles. */
-async function checkFleetFromBottomBar(target) {
+/** Clicking the bottom bar's Fleet row sets appState.view to 'fleet' for every role (navGroups.ts:139-141's row
+ * carries no edit/admin gate), but where that lands differs by tier -- deckCards.ts:45-50 gives an admin/user
+ * Entities and Settings, a viewer Fleet standing in for both, and App.svelte's DECK_VIEWS routes every view
+ * through <Deck/> either way, so there is no standalone Fleet page for admin/user any more: the deck just stays
+ * on whichever of its own cards was already centred (Entities, in this scenario's flow). #647 folded Fleet's
+ * routers table into Entities' own leading section for exactly that reason -- Entities.svelte:88 imports
+ * deviceState/sortedDevices/ratePerSecond from the same lib/fleet.ts the standalone Fleet card uses
+ * (Entities.svelte:92: "routers (folded in from Fleet, #647; cards since #675)") -- so an admin/user reaches
+ * every router fact a viewer does, it just arrives inside Entities rather than a page of its own. The router
+ * status vocabulary -- '● LIVE' / '◌ QUIET · Nd' / '◌ NEVER SEEN' (lib/fleet.ts:61-64's deviceState) -- is
+ * therefore checked inside whichever card actually carries it for the calling role: `expectedCard` is
+ * 'entities' for admin/user, 'fleet' for a viewer (Entities.svelte:481 and Fleet.svelte:100's `.fstate` spans
+ * render the identical text, so scoping by card -- Deck.svelte:146-147's `data-card` -- rather than by the
+ * shared vocabulary alone is what tells the two tiers' cards apart). Assumes the gate's fleet has at least one
+ * device that has ever reported in, same assumption live-connection-states.mjs makes. Lands back on Detect/Flags
+ * before restoring the desktop viewport, not Expect/Watchlist, because Expect is gated away from a viewer
+ * (navGroups.ts) and this helper runs for both roles. */
+async function checkFleetFromBottomBar(target, expectedCard) {
   await target.setViewportSize({ width: 390, height: 844 })
   await target.waitForSelector('.bottom-bar', { timeout: 5000 })
   await target.click('.bottom-bar .group-btn .label:text-is("Admin")')
@@ -59,7 +71,9 @@ async function checkFleetFromBottomBar(target) {
   const sheetItems = await target.$$eval('.sheet .sheet-item .label', (els) => els.map((e) => e.textContent.trim()))
   await target.click('.sheet .sheet-item .label:text-is("Fleet")')
   await target.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
-  await target.waitForSelector('.intro:has-text("Every RouterOS device")', { timeout: 5000 })
+  await target.waitForSelector(`.card[data-card="${expectedCard}"] >> text=/● LIVE|◌ QUIET|◌ NEVER SEEN/`, {
+    timeout: 5000,
+  })
   await target.click('.bottom-bar .group-btn .label:text-is("Detect")')
   await target.waitForSelector('.flags-page', { timeout: 5000 })
   await target.setViewportSize({ width: 1280, height: 720 })
@@ -70,10 +84,10 @@ async function checkFleetFromBottomBar(target) {
 
 await openAndCheck('Settings')
 await openAndCheck('Entities')
-const adminSheetItems = await checkFleetFromBottomBar(page)
+const adminSheetItems = await checkFleetFromBottomBar(page, 'entities')
 check(
   adminSheetItems.includes('Fleet'),
-  `Fleet -- folded out of the deck and off the account menu by #647 -- is reachable from the phone-width bottom bar's Admin group instead, got ${JSON.stringify(adminSheetItems)}`,
+  `Fleet's row is offered in the phone-width bottom bar's Admin group for an admin too, rolling to the same router facts inside Entities (#647), got ${JSON.stringify(adminSheetItems)}`,
 )
 // checkFleetFromBottomBar leaves the deck on Flags; the checks below assume the underlying page is Entities, same
 // as before Fleet's check ran.
@@ -188,10 +202,10 @@ await viewerPage.waitForSelector('.account .menu', { state: 'detached', timeout:
 await goTo(viewerPage, 'Settings')
 check(true, "Settings is reachable for a viewer too -- the one Admin destination that is deliberately viewer-readable")
 
-const viewerSheetItems = await checkFleetFromBottomBar(viewerPage)
+const viewerSheetItems = await checkFleetFromBottomBar(viewerPage, 'fleet')
 check(
   viewerSheetItems.includes('Fleet'),
-  `Fleet -- an Admin-group destination with no admin gate -- is still reachable for a viewer, got ${JSON.stringify(viewerSheetItems)}`,
+  `Fleet -- an Admin-group destination with no admin gate -- is still reachable for a viewer, rolling to the standalone Fleet card (deckCards.ts), got ${JSON.stringify(viewerSheetItems)}`,
 )
 
 await browser.close()
