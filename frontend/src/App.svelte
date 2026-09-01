@@ -44,8 +44,12 @@
   import Toast from './components/Toast.svelte'
 
   // The deck's scenes (#633). Entities and Settings joined the deck in
-  // #647 (round 23); Fleet alone is left outside it, absorbed into the
-  // Entities card and reached only from the phone-width bottom bar now.
+  // #647 (round 23), folding Fleet's own table into Entities' leading
+  // section. #657 then ruled Entities and Settings out of a viewer's
+  // navigation and Fleet back in as its own card (deckCards.ts), so
+  // 'fleet' is a deck view too now -- reachable from the deck's roll
+  // rail for a viewer, same as every other card, rather than only from
+  // the phone-width bottom bar.
   const DECK_VIEWS = new Set([
     'fall',
     'topography',
@@ -56,6 +60,7 @@
     'audit',
     'entities',
     'engineroom',
+    'fleet',
   ])
   const inDeck = $derived(DECK_VIEWS.has(appState.view))
 
