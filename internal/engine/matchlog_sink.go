@@ -45,7 +45,40 @@ var (
 // out of the rate-limited warning path where it would look like a real
 // problem.
 func MatchlogSink(ml matchlog.Store) func(RoutedEmission) {
-	return func(r RoutedEmission) { recordExpectationMatch(ml, r) }
+	return MatchlogSinkWithNights(ml, nil)
+}
+
+// MatchlogSinkWithNights is MatchlogSink that also marks the watch night
+// this match landed in as kept (#680) -- what main.go wires, with the
+// definitions store as the recorder.
+//
+// The night is recorded from the same instant the match log is keyed on
+// (r.EventTime, which becomes the record's LastSeen), so "a match whose
+// LastSeen falls inside the window" means exactly what it says rather
+// than something a clock skew apart from it.
+//
+// A match with no attributable identity does not keep a night: there is
+// no device to say was present, which is the same reason the match log
+// refuses such a record (ErrEmptyIdentity).
+//
+// A match the log could not store *does* keep its night, deliberately.
+// Once the match log fills, Append fails for every further match -- but
+// the traffic still happened, and mikroview saw it. Letting a full log
+// leave the night empty would turn a limit of ours into a ring break the
+// operator would read as silence on the network, which is the one thing
+// this feature exists not to do. The two records disagreeing here is the
+// honest outcome: the log lost the detail, the night kept the fact.
+//
+// A nil nights recorder is a safe no-op, the same convention a nil ml
+// already follows.
+func MatchlogSinkWithNights(ml matchlog.Store, nights NightRecorder) func(RoutedEmission) {
+	return func(r RoutedEmission) {
+		recordExpectationMatch(ml, r)
+		if nights == nil || r.Expectation == nil || r.Expectation.Tuple.Source.Empty() {
+			return
+		}
+		nights.RecordWatchNight(r.Expectation.EntryID, r.EventTime)
+	}
 }
 
 // recordExpectationMatch is MatchlogSink's callback body. Reports

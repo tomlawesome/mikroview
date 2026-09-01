@@ -86,6 +86,23 @@ export interface Device {
   // server-side, read-time, on every GET /api/devices -- always fresh,
   // never a value this client itself has to derive or keep in sync.
   status: 'live' | 'stale' | 'never_seen'
+  // routerosVersion (issue #675's router cards) is what this device last
+  // reported on a routerstate push -- empty until its first push
+  // arrives, same absence-is-not-evidence convention as everything else
+  // routerstate-derived.
+  routerosVersion?: string
+}
+
+// Mirrors internal/device.MACEntry's JSON shape (GET /api/devices/macs,
+// issue #675) -- one persisted MAC address' first/last-seen history and
+// the IP it was last paired with. lastIp is what the Entities page's
+// named-things table joins against a host entity's own IP key; absent
+// when this MAC has never been paired with one.
+export interface MACRegistryEntry {
+  mac: string
+  firstSeen: string
+  lastSeen: string
+  lastIp?: string
 }
 
 // Mirrors internal/store/query.go's Result.
@@ -106,6 +123,18 @@ export interface RuleCount {
 export interface TimeBucket {
   time: string
   byAction: Partial<Record<Action, number>>
+}
+
+// Mirrors internal/store/ring.go's HourTop (#644 round 21's top
+// port/top talker table columns, served by GET /api/stats/tops). talker
+// and port are absent exactly when complete is false, or when the
+// minute genuinely held nothing to count -- either way, the table shows
+// an em dash rather than treating an absent field as zero.
+export interface HourTopBucket {
+  time: string
+  talker?: string
+  port?: string
+  complete: boolean
 }
 
 // Mirrors internal/api/rest.go's handleHealthz response. version is the
@@ -131,6 +160,11 @@ export interface Stats {
   capacity: number
   count: number
   windowSeconds: number
+  // How far back the buffer actually reaches, as opposed to how far back
+  // it was configured to: null when it holds nothing. Not the same as a
+  // query's windowStart, which is the configured retention -- capacity
+  // eviction moves this one and leaves that one alone (#703).
+  oldestHeld: string | null
   connectedClients: number
   // Syslog listener saturation -- mirrors internal/syslog.ListenerStats.
   // Optional so an older server (or a test fixture) that does not send
@@ -166,6 +200,10 @@ export interface AuthSession {
   // convert otherwise.
   hasLocalPassword?: boolean
   ssoAvailable: boolean
+  // This session's own start (#677's sessions row: "signed in 4 d") --
+  // when this login happened, not when the account was created. Absent
+  // while unauthenticated, and on an older server that predates it.
+  signedInSince?: string
 }
 
 // Mirrors internal/api's userSummary. Deliberately not the server's
@@ -328,6 +366,12 @@ export interface DetectorSettings {
   // Carried through from Definition.learning (#639) -- see that field's
   // doc comment.
   learning?: LearningState
+  // Carried through from Definition.params/paramSchema (#677's
+  // port-scan window row, the detector's own numeric tuning -- distinct
+  // from scope above, which restricts what the detector *watches*
+  // rather than the threshold it fires at).
+  params?: Record<string, unknown>
+  paramSchema?: DefinitionParamSchema[]
 }
 
 // Mirrors internal/api's definitionView (issue #407) -- one definition
@@ -721,6 +765,56 @@ export interface WatchlistObservedDest {
   count: number
 }
 
+// Mirrors internal/watchlist.Window's JSON tags (#680): when an entry is
+// expected to see traffic.
+//
+// start/end are "HH:MM" clock times, and both carry `omitzero`
+// server-side -- 00:00 is the zero value, so a midnight-to-six window
+// arrives as `{end: "06:00"}` with no start at all. A missing one means
+// 00:00; never read absence as "no window".
+//
+// end <= start means the window runs into the following date, which is
+// the normal case rather than the edge: 22:00-06:00 is one night across
+// two dates. days is empty for "every day", 0 = Sunday, and filters on
+// the date the window *opened*. zone is an IANA name, empty meaning UTC,
+// and is the only local-time concept anywhere in mikroview -- every other
+// timestamp in this file is UTC.
+export interface WatchWindow {
+  start?: string
+  end?: string
+  days?: number[]
+  zone?: string
+}
+
+// Mirrors internal/watchlist.NightState. Three states, and the third is
+// the point: "not observed" is a night mikroview was down for, or one
+// where no rule was logging the pathway. It must never be rendered as
+// "empty" -- that would present an absence of ours as a fact about the
+// network.
+export type WatchNightState = 'kept' | 'empty' | 'not observed'
+
+// Mirrors internal/watchlist.Night's JSON tags -- one occurrence of the
+// window and what happened in it. first/count carry `omitzero`/`omitempty`
+// server-side and are only meaningful on a kept night.
+export interface WatchNight {
+  opened: string
+  state: WatchNightState
+  first?: string
+  count?: number
+}
+
+// Mirrors internal/watchlist.Ring's JSON tags -- the recorded break in a
+// run of kept nights, written at the moment it broke. Absent entirely
+// when the ring is intact. `since` is the close of the first empty window
+// in the current run. The coverage-derived break (no rule logs this
+// pathway) is a different kind of broken and is not this: it comes from
+// live router state and arrives on the definition's own `coverage`.
+export interface WatchRing {
+  broken?: boolean
+  since?: string
+  reason?: string
+}
+
 // Mirrors internal/watchlist.Entry's JSON tags (#243) -- see that type's
 // own doc comment for the full non-inverted/inverted matching rules.
 // ports/invert/includeStructuralNoise/observing/permitted/observed all
@@ -749,6 +843,12 @@ export interface WatchlistEntry {
   includeStructuralNoise?: boolean
   permitted?: WatchlistPermittedDest[]
   observed?: WatchlistObservedDest[]
+  // The watch window and its nightly memory (#680). All three carry
+  // `omitzero`/`omitempty` server-side: an entry with no window has none
+  // of them, which is what a row renders as "always".
+  window?: WatchWindow
+  nights?: WatchNight[]
+  ring?: WatchRing
   createdAt: string
 }
 
@@ -904,6 +1004,17 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
 // worth an operator's attention, and a false one of those is worse than
 // silence.
 export type WatchlistCoverage = 'unknown' | 'covered' | 'no-logging' | 'out-of-scope'
+
+// Mirrors internal/api's PersistenceInfo (#677's settings persistence
+// row) -- which backend this deployment's persisted stores (flags,
+// definitions, watchlist entries, entities, tokens/accounts) actually
+// use right now.
+export interface PersistenceInfo {
+  backend: 'file' | 'postgres'
+  // The directory the JSON documents live under -- absent for postgres,
+  // which has no filesystem path to report.
+  dir?: string
+}
 
 // Mirrors internal/api's setupStatus (#320). Everything here is an
 // observation mikroview made on its own side -- it never connects to a

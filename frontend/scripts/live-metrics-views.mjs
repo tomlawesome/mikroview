@@ -90,6 +90,62 @@ async function cursorLine(page, root) {
   })
 }
 
+/** apiUrl resolves a path against the page's own origin, for page.request. */
+function apiUrl(page, path) {
+  return new URL(path, page.url()).toString()
+}
+
+// Mirrors lib/format.ts's formatHM exactly, so a minute label read from
+// GET /api/stats/tops (a bare ISO string) can be matched against the
+// same HH:MM the table itself prints -- Node and the browser share one
+// OS clock/timezone in this harness, which is what makes the two agree.
+function hmLabel(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+/**
+ * tableAgreesWithTops polls GET /api/stats/tops and the rendered table
+ * together until every row's top-port/top-talker cell matches a fresh
+ * answer, or the deadline passes.
+ *
+ * Polled rather than checked once: Metrics.svelte's own tops poll
+ * (TOPS_POLL_MS) runs on a 5s cadence independent of this fetch, so a
+ * single fresh read can legitimately be a few seconds ahead of what the
+ * page has painted. That is a timing gap, not a defect, and the two
+ * should converge well inside the deadline.
+ */
+async function tableAgreesWithTops(page, deadlineMs) {
+  const deadline = Date.now() + deadlineMs
+  let detail = 'never sampled'
+  while (Date.now() < deadline) {
+    const res = await page.request.get(apiUrl(page, '/api/stats/tops'))
+    if (res.ok()) {
+      const body = await res.json()
+      const byLabel = new Map((body.tops ?? []).map((t) => [hmLabel(t.time), t]))
+      const rows = await page.$$eval('.table-view tbody tr', (trs) =>
+        trs.map((tr) => ({
+          minute: tr.querySelector('th button.minute')?.textContent.trim(),
+          port: tr.querySelectorAll('td.top')[0]?.textContent.trim(),
+          talker: tr.querySelectorAll('td.top')[1]?.textContent.trim(),
+        })),
+      )
+      const mismatches = []
+      for (const row of rows) {
+        const t = byLabel.get(row.minute)
+        const wantPort = t && t.complete && t.port ? t.port : '—'
+        const wantTalker = t && t.complete && t.talker ? t.talker : '—'
+        if (row.port !== wantPort || row.talker !== wantTalker) mismatches.push({ ...row, wantPort, wantTalker })
+      }
+      if (rows.length > 0 && mismatches.length === 0) return { ok: true, rows: rows.length }
+      detail = JSON.stringify(mismatches.slice(0, 3))
+    }
+    await page.waitForTimeout(500)
+  }
+  return { ok: false, detail }
+}
+
 await goTo(page, 'Metrics')
 
 // --- The default view, actually drawn -----------------------------------
@@ -130,6 +186,58 @@ const inks = await page.$$eval('.drum svg path', (els) =>
 )
 check(inks.length > 0 && inks.length <= 2, `two chart inks only -- got ${JSON.stringify(inks)}`)
 
+// --- The drum: one outer+inner stroke pair per minute on the axis --------
+//
+// MetricsSeismograph's own MIN_HALF floor means every minute draws
+// something, even a silent one -- so the stroke count is checked against
+// the server's own axis length (GET /api/stats) rather than a guessed
+// number: the suite's shared instance has arbitrary history by the time
+// this scenario runs.
+const statsForAxis = await (await page.request.get(apiUrl(page, '/api/stats'))).json()
+const axisLen = statsForAxis.timeSeries?.length ?? 0
+check(axisLen > 0, `the server reports a non-empty axis -- ${axisLen} minutes`)
+
+const outerCount = await page.locator(`${SEISMOGRAPH} line.stroke.outer`).count()
+const innerCount = await page.locator(`${SEISMOGRAPH} line.stroke.inner`).count()
+check(
+  outerCount === axisLen && innerCount === axisLen,
+  `one outer+inner stroke pair per minute on the axis -- outer ${outerCount}, inner ${innerCount}, axis ${axisLen}`,
+)
+
+// Geometry, not visibility -- see this file's own header note on SVG
+// <line> visibility. Each minute's refused (inner) half must never reach
+// further from the midline than its own total (outer) half, and the two
+// halves of one pair must share the same x.
+const strokeGeometry = await page.$eval(SEISMOGRAPH, (svg) => {
+  const read = (sel) =>
+    [...svg.querySelectorAll(sel)].map((l) => ({
+      x: Number(l.getAttribute('x1')),
+      half: Math.abs(Number(l.getAttribute('y2')) - Number(l.getAttribute('y1'))) / 2,
+    }))
+  return { outers: read('line.stroke.outer'), inners: read('line.stroke.inner') }
+})
+const geometryHolds = strokeGeometry.outers.every((o, i) => {
+  const inner = strokeGeometry.inners[i]
+  return inner !== undefined && inner.x === o.x && inner.half <= o.half + 0.01
+})
+check(geometryHolds, "every minute's refused half never exceeds its own total half, at the same x")
+
+// A direct pointer click on the paper itself selects a minute -- distinct
+// from the cursor-survives-a-view-switch test below, which only ever
+// selects through the table's own buttons.
+const drumBox = await page.locator(SEISMOGRAPH).boundingBox()
+await page
+  .locator(SEISMOGRAPH)
+  .click({ position: { x: Math.round(drumBox.width * 0.4), y: Math.round(drumBox.height * 0.3) } })
+await page.locator(cursorBand(SEISMOGRAPH)).waitFor({ state: 'visible', timeout: 5000 })
+const pointerMinute = (await page.locator(`${SEISMOGRAPH} text.cursor-label`).textContent()).trim()
+check(/^\d\d:\d\d$/.test(pointerMinute), `clicking the drum's paper selects a minute -- got "${pointerMinute}"`)
+const hourlineBig = (await page.locator('.metrics .hourline .big').textContent()).trim()
+check(
+  hourlineBig.startsWith(pointerMinute),
+  `the hourline reflects the minute clicked on the drum -- got "${hourlineBig}" for "${pointerMinute}"`,
+)
+
 // --- The old surfaces are gone, not hidden -------------------------------
 for (const gone of ['Event volume — last hour', 'Flags raised — last hour']) {
   const found = await page.locator(`text=${gone}`).count()
@@ -139,6 +247,32 @@ for (const gone of ['Event volume — last hour', 'Flags raised — last hour'])
 // --- The cursor, and its survival across a view switch -------------------
 await page.click(VIEW_BUTTON('Table'))
 await page.locator(TABLE).waitFor({ state: 'visible', timeout: 10000 })
+
+// --- The table's top port/top talker agree with the API, never a guess ---
+//
+// #644 round 21: store.Store.HourTops is the one server-side answer for
+// "who/what led this minute" -- the table's own columns have to print
+// exactly that answer (or an honest em dash for an incomplete minute),
+// not a number reconstructed from the client's own capped buffer. This
+// checks agreement with a fresh fetch of the same endpoint rather than
+// any hardcoded value, since the suite's shared instance has arbitrary
+// history by the time this scenario runs.
+const toposRes = await page.request.get(apiUrl(page, '/api/stats/tops'))
+check(toposRes.ok(), `GET /api/stats/tops responds -- status ${toposRes.status()}`)
+const toposBody = await toposRes.json()
+const toposAxis = toposBody.tops ?? []
+check(toposAxis.length > 0, `GET /api/stats/tops returns the axis -- ${toposAxis.length} minutes`)
+const toposTimesMs = toposAxis.map((t) => new Date(t.time).getTime())
+const oneMinuteApart = toposTimesMs.every((t, i) => i === 0 || t - toposTimesMs[i - 1] === 60_000)
+check(oneMinuteApart, 'the tops axis is one-minute buckets, oldest first')
+
+const tableTops = await tableAgreesWithTops(page, 15000)
+check(
+  tableTops.ok,
+  tableTops.ok
+    ? `the table's top port/talker cells agree with GET /api/stats/tops -- ${tableTops.rows} minutes checked`
+    : `the table's top port/talker cells disagree with GET /api/stats/tops -- ${tableTops.detail}`,
+)
 
 const minuteButtons = page.locator('.table-view tbody th button.minute')
 await minuteButtons.first().waitFor({ state: 'visible', timeout: 10000 })

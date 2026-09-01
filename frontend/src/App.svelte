@@ -2,7 +2,6 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from './lib/state.svelte'
   import { liveSocket } from './lib/ws'
-  import { themeState } from './lib/theme.svelte'
   import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
   import { watchlistState } from './lib/watchlist.svelte'
@@ -15,8 +14,6 @@
   import { viewportState } from './lib/viewport.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
-  import EngineRoom from './components/EngineRoom.svelte'
-  import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
@@ -25,6 +22,13 @@
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
+  // The journey (#646): choreography over the shell below, not a page of
+  // its own. journeyState.begin() (AuthSetup.svelte) is the only trigger;
+  // outside it these three never render.
+  import { journeyState } from './lib/journey.svelte'
+  import JourneyAttach from './components/JourneyAttach.svelte'
+  import JourneyGlass from './components/JourneyGlass.svelte'
+  import JourneyTour from './components/JourneyTour.svelte'
   // Mounted here, not in the rail that triggers it: the rail is chrome
   // for authenticated pages, and this overlay outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
@@ -36,9 +40,20 @@
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
 
-  // The deck's scenes (#633). Everything else is an operate page,
-  // reached from the account menu and rendered as a page of its own.
-  const DECK_VIEWS = new Set(['fall', 'topography', 'metrics', 'live', 'flags', 'watchlist', 'audit'])
+  // The deck's scenes (#633). Entities and Settings joined the deck in
+  // #647 (round 23); Fleet alone is left outside it, absorbed into the
+  // Entities card and reached only from the phone-width bottom bar now.
+  const DECK_VIEWS = new Set([
+    'fall',
+    'topography',
+    'metrics',
+    'live',
+    'flags',
+    'watchlist',
+    'audit',
+    'entities',
+    'engineroom',
+  ])
   const inDeck = $derived(DECK_VIEWS.has(appState.view))
 
   // Any polling call that fails with a 401 (an expired or reset-
@@ -83,10 +98,6 @@
   // internal/api/oidc.go's redirectWithSSOError).
   authState.consumeSSOErrorFromURL()
   authState.consumeSSOLinkedFromURL()
-
-  $effect(() => {
-    themeState.apply()
-  })
 
   $effect(() => {
     colorwayState.apply()
@@ -200,11 +211,13 @@
        restores a rail state) mounts at all. -->
   <!-- Pages are the site (owner, 2026-08-29): no persistent chrome.
        The toolbar and the desktop nav rail are retired wholesale; each
-       scene carries its own bar. Navigation is the deck (#633): the
-       scenes are full-viewport snap cards with the roll rail as the
-       jump control, and the operate pages live on the scene bar's
-       account menu. The phone-width BottomBar stays until the deck
-       learns a small-screen shape. -->
+       scene carries its own bar. Navigation is the deck (#633, #647):
+       the scenes are full-viewport snap cards with the roll rail as the
+       jump control -- Entities and Settings among them since round 23,
+       so Fleet (folded into Entities' own card) is the one page left
+       outside it, reached only from the phone-width bottom bar. The
+       BottomBar itself stays until the deck learns a small-screen
+       shape. -->
   {#if viewportState.isMobile}
     <BottomBar />
   {/if}
@@ -215,18 +228,14 @@
     <div class="content">
       <ConnectionBanner />
       <ConfigProblemBanner />
-      <main id="main-content" class:bare={inDeck}>
-        {#if inDeck}
+      <main id="main-content" class:bare={inDeck && journeyState.phase !== 'attach'}>
+        {#if journeyState.phase === 'attach'}
+          <JourneyAttach />
+        {:else if inDeck}
           <Deck />
         {:else}
           <SceneBar />
-          {#if appState.view === 'entities'}
-            <Entities />
-          {:else if appState.view === 'fleet'}
-            <Fleet />
-          {:else}
-            <EngineRoom />
-          {/if}
+          <Fleet />
         {/if}
       </main>
     </div>
@@ -238,6 +247,16 @@
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <SetupWizard />
+  <!-- Beats 4/5 (connecting, then the glass) float over the live fall;
+       beat 6 (the tour) rings the deck's own cards -- both stay mounted
+       alongside the shell above rather than replacing it, since the
+       whole point is that it plays out over the real, filling app. -->
+  {#if journeyState.phase === 'connecting' || journeyState.phase === 'glass'}
+    <JourneyGlass />
+  {/if}
+  {#if journeyState.phase === 'touring'}
+    <JourneyTour />
+  {/if}
   <Toast />
 {/if}
 

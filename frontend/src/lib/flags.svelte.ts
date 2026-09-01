@@ -103,8 +103,11 @@ class FlagsState {
   // refetch here -- only a failed clearFlag call needs an explicit
   // revert, since otherwise the flag would sit incorrectly "cleared"
   // until that poll ran.
-  async clear(id: string) {
-    return this.optimisticallyClear(id, clearFlag)
+  // note (#678): the operator's reason for clearing, if they gave one --
+  // threaded straight through to clearFlag, which records it server-side
+  // on the same admin-mutation audit entry the clear itself now writes.
+  async clear(id: string, note?: string) {
+    return this.optimisticallyClear(id, (flagId) => clearFlag(flagId, note))
   }
 
   // The shared body of clear() and clearPermanent(), which differed only

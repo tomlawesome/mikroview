@@ -27,12 +27,32 @@
   // Newest first, matching the fall (#363) and both drawn views' brink.
   let sortDir = $state<'asc' | 'desc'>('desc')
 
-  const columns = $derived(hour.traffic.map((s) => ({ key: s.key as string, label: s.label, ink: s.ink })))
+  // natted gets its own ink (#634 round 21: "natted (teal)") rather than
+  // riding the traffic/refused pair -- it's neither an accept nor a
+  // drop, and the app already has a token for exactly this fact
+  // (app.css's --natted, the same one the row backgrounds use).
+  const columns = $derived(
+    hour.traffic.map((s) => ({ key: s.key as string, label: s.label, ink: s.ink, natted: s.key === 'natted' })),
+  )
 
   function valueAt(index: number, key: SortKey): number {
     if (key === 'flags') return hour.episodesPerMinute[index] ?? 0
     const series = hour.traffic.find((s) => s.key === key)
     return series ? series.values[index] : 0
+  }
+
+  // Top port/top talker (#644 round 21) aren't sortable columns: they're
+  // a label per minute, not a count, so there is nothing for a numeric
+  // sort to compare -- same reason 'minute' itself sorts on index rather
+  // than through valueAt. An em dash means "unknown," not "zero": either
+  // GET /api/stats/tops hasn't answered for this minute yet, or the ring
+  // buffer no longer holds every event from it (MinuteTop.complete is
+  // false) -- see lib/metricsSeries.ts's own doc comment on MinuteTop.
+  function topCell(index: number, field: 'talker' | 'port'): string {
+    const top = hour.tops[index]
+    if (!top || !top.complete) return '—'
+    const v = top[field]
+    return v && v.length > 0 ? v : '—'
   }
 
   const order = $derived(
@@ -65,15 +85,23 @@
   // what they get, not a differently-ordered second answer.
   const copyText = $derived(
     [
-      ['minute', ...columns.map((c) => c.label), 'flag episodes'].join('\t'),
+      ['minute', ...columns.map((c) => c.label), 'flag episodes', 'top port', 'top talker'].join('\t'),
       ...order.map((i) =>
         [
           formatHM(hour.axis[i]),
           ...hour.traffic.map((s) => s.values[i]),
           hour.episodesPerMinute[i] ?? 0,
+          topCell(i, 'port'),
+          topCell(i, 'talker'),
         ].join('\t'),
       ),
-      ['hour total', ...hour.traffic.map((s) => s.total), episodesTotal].join('\t'),
+      // The hour-total row's own top port/talker would need the whole
+      // hour's raw counts, not just each minute's already-decided
+      // winner (the two are not the same statistic -- see
+      // internal/store/ring.go's HourTops doc comment) -- left blank
+      // rather than answering a different question than the column
+      // header claims.
+      ['hour total', ...hour.traffic.map((s) => s.total), episodesTotal, '—', '—'].join('\t'),
     ].join('\n'),
   )
 
@@ -97,7 +125,7 @@
     {#if hour.axis.length === 0}
       <p class="empty">No minutes recorded yet.</p>
     {:else}
-      <div class="table-wrap scrollbar">
+      <div class="table-wrap">
         <table>
           <thead>
             <tr>
@@ -105,13 +133,17 @@
                 <button onclick={() => sortBy('minute')}>Minute</button>
               </th>
               {#each columns as column (column.key)}
-                <th scope="col" class:refused={column.ink === 'refused'} aria-sort={ariaSort(column.key)}>
+                <th scope="col" class:refused={column.ink === 'refused'} class:natted={column.natted} aria-sort={ariaSort(column.key)}>
                   <button onclick={() => sortBy(column.key)}>{column.label}</button>
                 </th>
               {/each}
               <th scope="col" aria-sort={ariaSort('flags')}>
                 <button onclick={() => sortBy('flags')}>Flag episodes</button>
               </th>
+              <!-- Not sortable -- a label per minute, not a count. See
+                   topCell's own comment. -->
+              <th scope="col">Top port</th>
+              <th scope="col">Top talker</th>
             </tr>
           </thead>
           <tbody>
@@ -121,9 +153,11 @@
                   <button class="minute" onclick={() => onselect(i)}>{formatHM(hour.axis[i])}</button>
                 </th>
                 {#each hour.traffic as series (series.key)}
-                  <td class:refused={series.ink === 'refused'}>{series.values[i]}</td>
+                  <td class:refused={series.ink === 'refused'} class:natted={series.key === 'natted'}>{series.values[i]}</td>
                 {/each}
                 <td>{hour.episodesPerMinute[i] ?? 0}</td>
+                <td class="top">{topCell(i, 'port')}</td>
+                <td class="top">{topCell(i, 'talker')}</td>
               </tr>
             {/each}
           </tbody>
@@ -131,9 +165,14 @@
             <tr>
               <th scope="row">Hour total</th>
               {#each hour.traffic as series (series.key)}
-                <td class:refused={series.ink === 'refused'}>{series.total}</td>
+                <td class:refused={series.ink === 'refused'} class:natted={series.key === 'natted'}>{series.total}</td>
               {/each}
               <td>{episodesTotal}</td>
+              <!-- Deliberately blank: see copyText's own comment on why
+                   the hour total isn't "whichever port/talker won the
+                   most individual minutes". -->
+              <td class="top">—</td>
+              <td class="top">—</td>
             </tr>
           </tfoot>
         </table>
@@ -150,11 +189,45 @@
 </div>
 
 <style>
+  /* #732: the totals column moves down the left side, the table taking
+     the remaining width, so reading the scene stays one vertical
+     motion (the fall, the stream and the docket all scroll the same
+     way). The column is a plain grid item, not `position: sticky` --
+     it scrolls with the page, which is the owner's own reason for
+     asking. Below the breakpoint it falls back to stacking above the
+     table, same as before this issue. */
   .table-view {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(280px, 320px) 1fr;
+    align-items: start;
     gap: 18px;
     min-width: 0;
+  }
+
+  .totals {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .figures {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  .saved {
+    grid-column: 1 / -1;
+  }
+
+  @media (max-width: 860px) {
+    .table-view {
+      grid-template-columns: 1fr;
+    }
+
+    .totals,
+    .figures,
+    .saved {
+      grid-column: 1;
+    }
   }
 
   h3 {
@@ -179,8 +252,11 @@
     margin-bottom: 10px;
   }
 
+  /* #716: was `margin-left: auto`, pushing this button to the far right
+     of the row where it read as detached from anything. It belongs to
+     the "Every minute" heading beside it, so it now just sits next in
+     the flex row, spaced by .figures-head's own gap. */
   .copy {
-    margin-left: auto;
     margin-bottom: 10px;
     background: transparent;
     border: 1px solid var(--border);
@@ -201,22 +277,39 @@
     color: var(--fg-dim);
   }
 
+  /* The hour's figures sit centred and whole, with no scroller of their
+     own and no box around them: a table that scrolls inside a page that
+     also scrolls gives the operator two scrollbars and a guess about
+     which one moves what.
+
+     No `overflow` here, deliberately. Any value other than `visible`
+     makes this the scroll container for the sticky head below, and a
+     container that never scrolls gives sticky no range to work in --
+     the head would silently stop sticking to the page. The mockup's own
+     .mtable clips, but the mockup draws 14 rows and no sticky head, so
+     it never had to choose between the two. We keep every minute, so we
+     keep the head. */
   .table-wrap {
-    overflow: auto;
-    max-height: 60vh;
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
   }
 
+  /* Round 30's override block (the-whole.html, ~line 1978) supersedes
+     the first draft's fixed 640px floor: the table spans its container
+     instead of sitting as a narrow column in a wide scene (#716). */
   table {
-    width: 100%;
+    width: 92%;
+    max-width: 1480px;
+    min-width: 0;
     border-collapse: collapse;
+    font-family: var(--font-mono);
     font-size: 12px;
   }
 
   th,
   td {
-    padding: 4px 10px;
+    padding: 5px 18px;
     text-align: right;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
@@ -227,38 +320,58 @@
     font-family: var(--font-mono);
   }
 
+  /* Every header cell gets the same small-caps treatment whether or not
+     it holds a sort button -- Top port/Top talker aren't sortable but
+     must still read like the rest of the row instead of falling back to
+     the browser's default th styling (#716). */
+  /* Sticky again (#716): the table runs the full ~90-minute hour against
+     the page's own scroll, so the column heads have to hold. This works
+     only because .table-wrap sets no overflow -- see its comment.
+     Opaque background so scrolled-under rows don't show through, the
+     same token LiveTable.svelte's own sticky header cells use. */
   thead th {
     position: sticky;
     top: 0;
     z-index: 1;
     background: var(--bg-elevated);
-    border-bottom: 1px solid var(--border);
-    padding: 0;
+    border-bottom: 1px solid var(--hair-2);
+    text-align: right;
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
   }
 
   thead th button {
+    all: unset;
+    display: block;
     width: 100%;
-    background: transparent;
-    border: none;
-    color: var(--fg-dim);
-    font-size: 10px;
-    font-weight: 650;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    text-align: right;
-    padding: 6px 10px;
+    cursor: pointer;
+    text-align: inherit;
   }
 
   thead th button:hover {
     color: var(--fg);
   }
 
-  thead th.refused button {
+  /* `all: unset` above drops the UA focus ring; these headers are
+     keyboard-reachable sort controls, so put it back in the app's own
+     focus ink rather than leaving them silently unfocusable. */
+  thead th button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  thead th.refused {
     color: var(--chart-refused);
   }
 
-  thead th:first-child button,
-  tbody th button {
+  thead th.natted {
+    color: var(--natted);
+  }
+
+  thead th:first-child {
     text-align: left;
   }
 
@@ -266,6 +379,7 @@
     padding: 0;
     text-align: left;
     font-weight: 400;
+    border-bottom: 1px solid var(--border);
   }
 
   tbody th button.minute {
@@ -279,15 +393,16 @@
     text-align: left;
   }
 
-  tbody tr:nth-child(even) {
-    background: var(--bg-hover);
+  /* Round 30 drops the zebra striping and the sticky elevated header
+     band for a hairline under every row (#716). */
+  tbody td {
+    border-bottom: 1px solid var(--border);
   }
 
   /* Amber is time: the cursor's minute, the same colour it wears on the
      drum and the register, so the three views agree about which minute
      is selected. */
-  tbody tr.selected,
-  tbody tr.selected:nth-child(even) {
+  tbody tr.selected {
     background: color-mix(in srgb, var(--now) 16%, transparent);
     box-shadow: inset 2px 0 0 var(--now);
   }
@@ -301,18 +416,30 @@
     color: var(--chart-refused);
   }
 
+  /* natted's own ink (#634 round 21) -- neither accepted nor refused,
+     so it gets the app's existing NAT token rather than riding either. */
+  td.natted {
+    color: var(--natted);
+  }
+
+  /* Top port/top talker: a label per minute, not a count, so it reads
+     left-aligned under a right-aligned header, per the mockup's td.t
+     override (#716). */
+  td.top {
+    text-align: left;
+  }
+
   tfoot th,
   tfoot td {
-    border-top: 1px solid var(--border);
-    background: var(--bg-elevated);
+    border-top: 1px solid var(--hair-2);
     font-weight: 600;
     color: var(--fg);
   }
 
   tfoot th {
     text-align: left;
-    font-size: 10px;
-    letter-spacing: 0.04em;
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--fg-dim);
   }

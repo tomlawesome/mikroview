@@ -41,6 +41,12 @@ export function familyOf(type: string): FlagFamily {
   return FLAG_FAMILIES[type as FlagType] ?? custom
 }
 
+// The health dial's generic advisory-severity ink (#648): the ring
+// splits by mark (✱ alarm / ▲ advisory), not by family, and the record
+// says reuse the ratified inks rather than mint a new one -- this is
+// surge's own hex, the family that already owns the ▲ mark most often.
+export const ADVISORY_INK = surge.ink
+
 export const FLAG_FAMILIES: Record<FlagType, FlagFamily> = {
   critical_port: hostile,
   known_bad_ip: hostile,

@@ -243,6 +243,15 @@ export async function dismissSetupWizard(page) {
 // Each entry names the card the rail rolls to (Deck.svelte's data-card
 // key). The docket is one card whose tabs are the flags/watchlist/audit
 // views (#633), so those labels roll its card and then click the tab.
+//
+// Entities and Settings are here because #647 made them the deck's last
+// two cards. They used to be account-menu rows, and this table is what
+// tells goTo which way to reach a label -- so a destination that moves
+// into the deck without moving into this table is not a slow test, it
+// is a scenario that dies at the menu with no RESULT line at all.
+//
+// `tab` is matched with text-is against the tab's own label, so it is
+// the string Docket.svelte renders: 'audit log', not 'audit'.
 const SCENES = {
   'The fall': { rail: 'The fall', card: 'fall' },
   Topography: { rail: 'Topography', card: 'topography' },
@@ -251,6 +260,9 @@ const SCENES = {
   'The docket': { rail: 'The docket', card: 'docket' },
   Flags: { rail: 'The docket', card: 'docket', tab: 'flags' },
   Watchlist: { rail: 'The docket', card: 'docket', tab: 'watchlist' },
+  'Audit log': { rail: 'The docket', card: 'docket', tab: 'audit log' },
+  Entities: { rail: 'Entities', card: 'entities' },
+  Settings: { rail: 'Settings', card: 'engineroom' },
 }
 
 /**
@@ -275,17 +287,36 @@ export async function openAccountMenu(page) {
 }
 
 /**
+ * unfoldStreamFilter opens the stream's folded filter box (#644, round
+ * 8), which replaced the always-open panel every scenario below was
+ * written against.
+ *
+ * Idempotent: the trigger only exists while the box is folded, so an
+ * already-open filter is a no-op rather than a click that closes it. The
+ * mobile drawer has its own trigger and no fold-trigger, hence the
+ * count guard rather than a bare click.
+ */
+export async function unfoldStreamFilter(page) {
+  const fold = page.locator('button.fold-trigger')
+  if (await fold.count()) await fold.click()
+}
+
+/**
  * goTo navigates by visible label exactly as an operator does. Deck
- * scenes ("The fall", "Metrics", "Stream", "Flags", "Watchlist") go via
- * the roll rail's name buttons; everything else ("Settings",
- * "Fleet", "Entities", "Audit log", "Run setup…", ...) via the account
- * chip's menu row of the same text.
+ * scenes go via the roll rail's name buttons; everything still living
+ * in the account chip's menu ("Run setup…", ...) via its menu row of
+ * the same text. SCENES above is the list of the former, and is the
+ * only thing that decides which route a label takes.
+ *
+ * After #647 that split moved: Settings, Entities and Audit log are
+ * deck destinations now, and the menu keeps only theme, Run setup…,
+ * change password, SSO linking, sign out and About.
  *
  * For a scene, waits until the card has actually rolled to centre --
  * appState.view flips on click, but the smooth scroll runs ~700ms and a
  * scenario reading geometry mid-roll would see a card in flight.
  */
-export async function goTo(page, label) {
+export async function goTo(page, label, { unfold = true } = {}) {
   const scene = SCENES[label]
   if (scene) {
     await page.click(`.roll-rail button.rail-name:text-is("${scene.rail}")`)
@@ -305,14 +336,37 @@ export async function goTo(page, label) {
     if (scene.tab) {
       await page.click(`.card[data-card="${scene.card}"] [role="tab"]:has(.tlabel:text-is("${scene.tab}"))`)
     }
+    // Every arrival at the stream, not just the first. FilterBar's
+    // `expanded` is component-local $state(false), so the card comes back
+    // folded each time the deck rolls away and back -- it does not
+    // remember how the last visit left it. #662 unfolded once in
+    // session(), which left live-connection-states and live-waterfall
+    // timing out on `input.rule` after navigating away and returning
+    // (#667).
+    if (scene.card === 'live' && unfold) await unfoldStreamFilter(page)
   } else {
     await openAccountMenu(page)
-    await page.click(`.account .menu button.row:text-is("${label}")`)
+    // Say which label is missing, and what the menu does hold, rather
+    // than letting page.click wait its full 30s and throw a bare
+    // TimeoutError. That timeout kills the scenario before it prints a
+    // RESULT line, so the run records a silent death and the log never
+    // says why -- four scenarios were lost that way when #647 moved
+    // Settings and Entities out of this menu and into the deck (#667).
+    const row = page.locator(`.account .menu button.row:text-is("${label}")`)
+    if ((await row.count()) === 0) {
+      const rows = await page.locator('.account .menu button.row').allTextContents()
+      throw new Error(
+        `goTo(${JSON.stringify(label)}): no such account-menu row, and it is not a deck scene either. ` +
+          `The menu holds: ${rows.map((r) => JSON.stringify(r.trim())).join(', ') || '(none)'}. ` +
+          `If this destination moved into the deck, add it to SCENES in live-browser.mjs.`,
+      )
+    }
+    await row.click()
     await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
   }
 }
 
-export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream' } = {}) {
+export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream', unfoldFilter = true } = {}) {
   browser = await launchBrowser()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
@@ -352,8 +406,12 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
   if (dismissSetup) await dismissSetupWizard(page)
 
   if (landing === 'stream') {
-    await goTo(page, 'Stream')
-    await page.waitForSelector('input.rule', { timeout: 15000 })
+    await goTo(page, 'Stream', { unfold: unfoldFilter })
+    // Wait for whichever shape was asked for. A scenario that opted out
+    // is testing the fold itself (live-stream-interiors asserts "the
+    // filter row starts folded"), so waiting for input.rule would both
+    // time out and destroy the state under test.
+    await page.waitForSelector(unfoldFilter ? 'input.rule' : 'button.fold-trigger', { timeout: 15000 })
   }
 
   if (waitForEvents > 0) {

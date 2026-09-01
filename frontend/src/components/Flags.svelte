@@ -4,127 +4,58 @@
   // "Behavioral flags" section) -- an interrogation aid, not an IPS: every
   // action here is a human reviewing and clearing a flag, never mikroview
   // acting on traffic itself.
+  //
+  // The ratified surface (#688, round 29's `#s7`): a table --
+  // flag · where · evidence · count · age -- one row per open flag, each
+  // row opening as a drawer beneath itself holding the story, the
+  // episode's shape, the matched lines and the actions. Every flag type
+  // wears its own family ink as a left stripe and mark ink, one unbroken
+  // line running row into drawer. Ported from the record's own markup and
+  // CSS (`.frow`/`.fmark`/`.openc`/`tr.drawer`/`.dwr-in`/`.story`/`.side`/
+  // `.lines`/`.dwr-acts`), not from an impression of it; the peer
+  // watchlist table (#676) reads as the same surface because it was
+  // ported from the same scene.
+  //
+  // What this surface deliberately does *not* carry: the verdict row,
+  // confidence, exclusions, campaign grouping, the density picker, the
+  // recently-cleared list, the reputation/evidence panels and the
+  // per-flag abuse check. Round 29 draws no home for any of them, and
+  // the owner's ruling (2026-08-31, #688) is to build the ratified scene
+  // and record the gaps rather than squeeze them in. The stores and API
+  // behind them are untouched and still tested -- see the issue's gap
+  // list for what has to find a home before it comes back.
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { fetchFlagEpisode } from '../lib/api'
   import { familyOf } from '../lib/flagPalette'
-  import { formatHM, formatTime, countryFlag, isPublicIp } from '../lib/format'
-  import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
-  import { viewportState } from '../lib/viewport.svelte'
-  import { exclusionsState } from '../lib/exclusions.svelte'
-  import { groupPairsByHost, pairsTruncated, pairsTruncationLabel } from '../lib/evidencePairs'
-  import ReputationDetails from './ReputationDetails.svelte'
-  import BarList from './BarList.svelte'
-  import IpInvestigateButton from './IpInvestigateButton.svelte'
-  import TabList from './TabList.svelte'
-  import Exclusions from './Exclusions.svelte'
-  import type { Flag, FlagType, FirewallEvent, Verdict } from '../lib/types'
+  import { formatHM, formatTime } from '../lib/format'
+  import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
+  import type { SortDir } from '../lib/sortFilter'
+  import { headlineFor, storyFor } from '../lib/flagNarrative'
+  import { episodeShapeFor } from '../lib/episodeShape'
+  import { zonesState } from '../lib/zones.svelte'
+  import { parseCidr, addressInCidr } from '../lib/addressMatch'
+  import { topologyNavState } from '../lib/topologyNav.svelte'
+  import type { Flag, FlagType, FirewallEvent } from '../lib/types'
 
-  // Same gate the rail uses for the engine room's watchers station.
+  // Same gate the rail uses for the engine room's watchers station --
+  // here it decides only whether the empty state offers the audit log.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
-  // #653: judging and clearing a flag are user-tier actions -- a viewer
-  // may watch what mikroview is seeing but not change what it shows.
-  // Absent rather than disabled, the same grammar the split button below
-  // already uses for the admin-only permanent clear.
+  // #653: clearing a flag is a user-tier action -- a viewer may watch
+  // what mikroview is seeing but not change what it shows. Absent rather
+  // than disabled, the same grammar the rest of the app uses.
   const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
 
-  // Exclusions is a tab of Flags (#547, per the ratified navigation
-  // record) -- admin-only because GET/DELETE /api/flags/exclusions both
-  // 403 a non-admin caller (see Exclusions.svelte's own doc comment), so
-  // the tab itself is absent for a viewer rather than present-and-empty.
-  // With no second tab to switch between, a viewer never sees any tab
-  // chrome at all -- just the flags content, as before #547.
-  type TabId = 'flags' | 'exclusions'
-  let activeTab = $state<TabId>('flags')
-  const tabs = $derived<{ id: string; label: string; count?: number }[]>(
-    isAdminOrOpen
-      ? [
-          { id: 'flags', label: 'Flags' },
-          // Quiet, outlined count -- never the rail's alarm-filled one,
-          // which the record reserves for Flags' own open-count alone.
-          // Omitted rather than shown as a permanent "0", same reasoning
-          // as NavRail's own open-count badge: a count that never has
-          // anything to say shouldn't sit on the tab forever.
-          {
-            id: 'exclusions',
-            label: 'Exclusions',
-            count: exclusionsState.list.length > 0 ? exclusionsState.list.length : undefined,
-          },
-        ]
-      : [{ id: 'flags', label: 'Flags' }],
-  )
-
-  function selectTab(id: string) {
-    activeTab = id as TabId
-    // Exclusions.svelte stays mounted (just hidden) once switched away
-    // from, unlike the standalone page it used to be, which remounted
-    // -- and so refetched -- on every navigation to it. Refreshing on
-    // each switch back keeps that same freshness rather than showing
-    // whatever the list looked like the last time this tab was open.
-    if (activeTab === 'exclusions') exclusionsState.refresh()
-  }
-
-  // Fetched here rather than centrally in App.svelte (unlike flagsState,
-  // which every role needs): only an admin ever sees this tab, so only
-  // an admin session should ever ask the admin-only endpoint for it.
-  $effect(() => {
-    if (isAdminOrOpen) exclusionsState.refresh()
-  })
-
-  // lib/flags.svelte.ts's clear/clearAll/clearPermanent optimistically
-  // update, then roll back and *rethrow* on failure. None of the call
-  // sites below caught that, so a transient 500 or an expired session
-  // became an unhandled rejection: the flag reappeared with no
-  // explanation, which reads as the button not having worked rather
-  // than as an error. Reported the same way Watchlist and Entities
-  // report theirs.
+  // lib/flags.svelte.ts's clear/clearAll optimistically update, then roll
+  // back and *rethrow* on failure. Caught here so a transient 500 or an
+  // expired session reads as an error rather than as a button that did
+  // nothing. Reported the same way Watchlist and Entities report theirs.
   let error = $state<string | null>(null)
 
   function reportFailure(action: string, err: unknown) {
     error = err instanceof Error ? `${action}: ${err.message}` : `${action} failed`
   }
-
-  // The stored preference collapses to 1 below the shared mobile
-  // breakpoint regardless of what's selected (issue #199's responsive
-  // floor) -- computed here in JS rather than as a CSS media query, so
-  // it reuses viewportState's one 700px breakpoint (the same value
-  // Toolbar/ThemeMenu already switch on) instead of a second
-  // hardcoded copy of it, and so the *card* content also reverts to its
-  // full, non-compact detail at exactly the width the grid itself
-  // renders as one column. A CSS-only floor would narrow the grid but
-  // leave the compact card styling active, which is the "unusably
-  // narrow card" the floor exists to prevent, just moved one level down.
-  const effectiveColumns = $derived<FlagColumns>(viewportState.isMobile ? 1 : flagLayoutState.columns)
-  const compact = $derived(effectiveColumns > 1)
-
-  // Which flag's split-Clear dropdown is open, if any -- one shared id
-  // rather than per-card state, since at most one can be open at a time
-  // and this list can be long. Closed on an outside click, Escape, or
-  // picking the menu item (issue #198).
-  let openClearMenuFor: string | null = $state(null)
-
-  function toggleClearMenu(id: string) {
-    openClearMenuFor = openClearMenuFor === id ? null : id
-  }
-
-  function onDocClickCloseClearMenu(e: MouseEvent) {
-    if (!(e.target as HTMLElement).closest('.split-clear')) openClearMenuFor = null
-  }
-
-  function onKeydownCloseClearMenu(e: KeyboardEvent) {
-    if (e.key === 'Escape') openClearMenuFor = null
-  }
-
-  $effect(() => {
-    if (!openClearMenuFor) return
-    document.addEventListener('click', onDocClickCloseClearMenu)
-    document.addEventListener('keydown', onKeydownCloseClearMenu)
-    return () => {
-      document.removeEventListener('click', onDocClickCloseClearMenu)
-      document.removeEventListener('keydown', onKeydownCloseClearMenu)
-    }
-  })
 
   let expandedId: string | null = $state(null)
 
@@ -133,7 +64,7 @@
     if (expandedId === f.id) loadEpisode(f)
   }
 
-  // The drawer's episode (#633, rounds 18-19): the flag's own events,
+  // The drawer's episode (#633, rounds 18-19/29): the flag's own events,
   // fetched once per flag on first open via the #29 around+window
   // lookback centred on lastSeen. Cached for the component's lifetime
   // rather than refetched per open -- a drawer that redraws its episode
@@ -182,6 +113,27 @@
     }
   }
 
+  // #724's second click: a dial panel row's own destination, not just the
+  // right tab. Consumed (cleared) the instant it's read -- same idiom as
+  // topologyNavState.pendingDescend's own consumer in Topography.svelte --
+  // so a later manual visit to this tab doesn't silently reopen a stale
+  // drawer. Opens through loadEpisode directly, not a bare expandedId
+  // assignment, since the row's drawer needs the same episode fetch a
+  // click on the row itself triggers (Care, #724). Matched against
+  // `active` (every open flag, not the filtered/sorted view) so a filter
+  // box left over from an earlier visit can't hide the very row the dial
+  // just promised to open; a flag cleared between the click and landing
+  // here has nothing to match, so nothing opens -- never an error, never
+  // a blank drawer.
+  $effect(() => {
+    const id = topologyNavState.pendingFlagId
+    if (id === null) return
+    topologyNavState.pendingFlagId = null
+    const f = active.find((x) => x.id === id)
+    expandedId = f?.id ?? null
+    if (f) loadEpisode(f)
+  })
+
   // Tick positions for the episode strip, one per event, normalised
   // across the fetched span (the record's own geometry: 260-wide
   // viewBox, ticks inset 8px each side). A single event centres.
@@ -210,18 +162,11 @@
     return `${formatTime(e.time)} ${e.action}|${e.ruleLabel}| ${e.chain}: ${io}${proto}${flow}`
   }
 
-  // Which source IP's campaign card (see below) is currently expanded to
-  // show its individual member flags -- null means every campaign card
-  // is collapsed to just its summary row.
-  let expandedGroup: string | null = $state(null)
-
-  function toggleGroup(sourceIp: string) {
-    expandedGroup = expandedGroup === sourceIp ? null : sourceIp
-  }
-
   // Same labels Exclusions.svelte and lib/metricsSeries.ts use --
   // duplicated rather than shared, which is the long-standing convention
-  // for these two tables in this codebase.
+  // for these two tables in this codebase. The record sets the flag
+  // column in caps; that is done in CSS, so the label a filter matches
+  // on stays the label everything else in the app uses.
   const TYPE_LABELS: Record<FlagType, string> = {
     port_scan: 'Port scan',
     activity_spike: 'Activity spike',
@@ -248,22 +193,21 @@
   // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
   // see internal/flags.Store.List()) so a flag's position is fixed the
   // moment it first appears. lastSeen updates on every re-fire, not just
-  // creation, so sorting by it made an already-visible flag you're
+  // creation, so sorting by it made an already-visible row you're
   // reading jump to the top of the list the instant it (or anything
-  // else) re-fired on the next 5s poll -- jarring for something you're
-  // mid-read on. Only a genuinely new flag entering the active set now
-  // changes the ordering, which is the expected kind of layout change.
+  // else) re-fired on the next 5s poll.
   const active = $derived(
     flagsState.list
       .filter((f) => !f.cleared)
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
-  const cleared = $derived(flagsState.list.filter((f) => f.cleared).slice(0, 20))
+  const cleared = $derived(flagsState.list.filter((f) => f.cleared))
 
-  // The honest cleared state (round 26): when nothing is open, say when
-  // the last clear happened rather than pretending nothing ever fired.
-  // Null when no flag has ever been cleared -- then "nothing open" is
-  // the whole truth and carries no timestamp.
+  // The honest cleared state (round 26, drawn as `.caempty` in round
+  // 29): when nothing is open, say when the last clear happened rather
+  // than pretending nothing ever fired. Null when no flag has ever been
+  // cleared -- then "nothing open" is the whole truth and carries no
+  // timestamp.
   const lastClearedAt = $derived.by((): string | null => {
     let latest: string | null = null
     for (const f of cleared) {
@@ -271,6 +215,29 @@
     }
     return latest
   })
+
+  // The age column (#688, round 29/30's `#s7`): the record writes a bare
+  // "<number> <unit>" -- no "ago" suffix, and no seconds unit ever
+  // appears there (its youngest flag is `6 m`). That is the same
+  // spaced-letter idiom the record uses for every other duration on the
+  // scene (the scene-bar's own `15 m`/`1 h`/`24 h`/`14 d` span picker),
+  // so seconds gets the same "N s" shape rather than "just now" or a
+  // borrowed "Xs ago" -- sub-minute is still a number, not a phrase.
+  // Local rather than a shared lib/format.ts helper: formatRelative is
+  // the "ago" phrasing other views (Fleet's last-seen) still want.
+  function formatFlagAge(iso: string, nowMs: number): string {
+    const t = new Date(iso).getTime()
+    if (Number.isNaN(t)) return iso
+    const deltaMs = Math.max(0, nowMs - t)
+    const s = Math.floor(deltaMs / 1000)
+    if (s < 60) return `${s} s`
+    const m = Math.floor(s / 60)
+    if (m < 60) return `${m} m`
+    const h = Math.floor(m / 60)
+    if (h < 24) return `${h} h`
+    const d = Math.floor(h / 24)
+    return `${d} d`
+  }
 
   function clearedWhen(iso: string): string {
     const d = new Date(iso)
@@ -280,63 +247,65 @@
     return sameDay ? `today at ${formatHM(iso)}` : formatTime(iso)
   }
 
-  // "One actor, several signals" (issue #106): active flags sharing a
-  // normalized source IP (flagsState.groupedBySource -- see that
-  // derived's own doc comment for exactly which target shapes qualify)
-  // collapse into a single campaign card instead of N separate cards,
-  // in the same firstSeen-desc order `active` already uses. Each source
-  // IP is represented once, at the position of its most-recent flag;
-  // everything ungroupable (a lone flag from that source, or a target
-  // with no single source IP to correlate on at all) renders exactly as
-  // before.
-  type ActiveItem = { kind: 'single'; flag: Flag } | { kind: 'group'; sourceIp: string; flags: Flag[] }
+  // Every column sorts and filters (#649) -- the record's own table does
+  // both from the column heads themselves: clicking a head sorts by it,
+  // again to reverse, and the quiet dashed row inside the head group
+  // narrows the list. Age defaults to newest-first, reproducing the
+  // fixed order `active` used to be stuck with.
+  type FlagSortKey = 'type' | 'where' | 'evidence' | 'count' | 'age'
+  let sortKey = $state<FlagSortKey>('age')
+  let sortDir = $state<SortDir>('asc')
+  let filters = $state({ type: '', where: '', evidence: '', count: '', age: '' })
 
-  const activeItems = $derived.by((): ActiveItem[] => {
-    const seen = new Set<string>()
-    const items: ActiveItem[] = []
-    for (const f of active) {
-      const ip = extractSourceIp(f.target)
-      const group = ip ? flagsState.groupedBySource.get(ip) : undefined
-      if (ip && group) {
-        if (seen.has(ip)) continue
-        seen.add(ip)
-        items.push({ kind: 'group', sourceIp: ip, flags: group })
-      } else {
-        items.push({ kind: 'single', flag: f })
-      }
+  function toggleSort(key: FlagSortKey) {
+    if (sortKey === key) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
+    } else {
+      sortKey = key
+      sortDir = 'asc'
     }
-    return items
-  })
-
-  function groupTypeLabels(flags: Flag[]): string {
-    return [...new Set(flags.map((f) => labelFor(f.type)))].join(' · ')
   }
 
-  function groupFirstSeen(flags: Flag[]): string {
-    return flags.reduce((min, f) => (new Date(f.firstSeen) < new Date(min) ? f.firstSeen : min), flags[0].firstSeen)
+  function dirGlyph(key: FlagSortKey): string {
+    if (sortKey !== key) return ''
+    return sortDir === 'asc' ? '▲' : '▼'
   }
 
-  function groupLastSeen(flags: Flag[]): string {
-    return flags.reduce((max, f) => (new Date(f.lastSeen) > new Date(max) ? f.lastSeen : max), flags[0].lastSeen)
-  }
-
-  function filterToSource(sourceIp: string) {
-    appState.setFilter('srcQuery', sourceIp)
-    appState.view = 'live'
-  }
-
-  // "Active flags by type" summary panel -- only types with at least one
-  // active flag, ranked by count like every other BarList panel.
-  const typeBreakdown = $derived(
-    Object.entries(
-      active.reduce<Partial<Record<FlagType, number>>>((counts, f) => {
-        counts[f.type] = (counts[f.type] ?? 0) + 1
-        return counts
-      }, {}),
-    )
-      .map(([type, count]) => ({ label: labelFor(type as FlagType), count: count ?? 0 }))
-      .sort((a, b) => b.count - a.count),
+  const filteredActive = $derived(
+    active.filter(
+      (f) =>
+        matchesFilter(labelFor(f.type), filters.type) &&
+        matchesFilter(f.target, filters.where) &&
+        matchesFilter(f.detail, filters.evidence) &&
+        matchesFilter(String(f.count), filters.count) &&
+        matchesFilter(formatFlagAge(f.lastSeen, appState.now), filters.age),
+    ),
   )
+
+  const sortedActive = $derived.by((): Flag[] => {
+    const list = [...filteredActive]
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'type':
+          return compareText(labelFor(a.type), labelFor(b.type), sortDir)
+        case 'where':
+          return compareText(a.target, b.target, sortDir)
+        case 'evidence':
+          return compareText(a.detail, b.detail, sortDir)
+        case 'count':
+          return compareNumeric(a.count, b.count, sortDir)
+        case 'age': {
+          // Elapsed time since firstSeen -- ascending means smallest
+          // elapsed (newest) first, the default that reproduces today's
+          // fixed order.
+          const ageA = appState.now - new Date(a.firstSeen).getTime()
+          const ageB = appState.now - new Date(b.firstSeen).getTime()
+          return compareNumeric(ageA, ageB, sortDir)
+        }
+      }
+    })
+    return list
+  })
 
   // What a flag's target actually *is* varies by detector -- most are a
   // plain source IP, but distributed_brute_force is keyed by port,
@@ -344,30 +313,9 @@
   // "ip -> port N", device_silence by a device ID, and global_spike has
   // no filterable target at all. new_device's target is a MAC address
   // (see internal/flags.TypeNewDevice) -- the live view's Filters has no
-  // MAC field to filter on, so it's not filterable either, same as
-  // global_spike. Filtering on the right field (rather than always
-  // assuming "ip") is what makes this click-through actually land on a
-  // sensible pre-filtered view.
+  // MAC field to filter on, so it's not filterable either.
   function isFilterable(f: Flag): boolean {
     return f.type !== 'global_spike' && f.type !== 'new_device'
-  }
-
-  // The IP for a live abuse-check button on this card (issue #213), or
-  // null if there is none worth checking. extractSourceIp already
-  // screens out every target shape that isn't a bare IP (a rule label,
-  // "port N", "global", a MAC) -- see its own doc comment -- so most
-  // exclusions fall out of that for free rather than needing a second
-  // type-by-type list to keep in step with filterToTarget's.
-  //
-  // device_silence is the one type that needs an explicit exclusion on
-  // top of the shape check: an auto-discovered device's ID defaults to
-  // its source IP (internal/device.Registry.Resolve), so its target can
-  // be IP-shaped too -- but it identifies the device that went quiet,
-  // not a source worth threat-checking, and #213 excludes it by name.
-  function investigateIp(f: Flag): string | null {
-    if (f.type === 'device_silence') return null
-    const ip = extractSourceIp(f.target)
-    return ip && isPublicIp(ip) ? ip : null
   }
 
   function filterToTarget(f: Flag) {
@@ -403,536 +351,290 @@
     appState.view = 'live'
   }
 
-  async function clear(id: string) {
+  // "where" (#678): every named where is a link into the topography at
+  // its sensible level, not the stream -- filterToTarget above is what
+  // the drawer's "open in stream" still uses. extractSourceIp already
+  // knows which target shapes are a single IP (see its own doc comment);
+  // when one resolves to a zone mikroview has actually observed, this
+  // hands that zone/host off to Topography.svelte's own reach (see
+  // topologyNav.svelte.ts) so the map opens straight into it. A target
+  // with no resolvable IP (a rule label, "global", a MAC, a port) or one
+  // outside every known zone still lands on the map itself -- the map's
+  // own "degrades honestly" stance, never a wrong guess.
+  function openWhere(f: Flag) {
+    const ip = extractSourceIp(f.target)
+    if (ip) {
+      const zone = zonesState.zones.find((z) => {
+        if (!z.cidr) return false
+        const cidr = parseCidr(z.cidr)
+        return cidr ? addressInCidr(ip, cidr) : false
+      })
+      if (zone) {
+        const host = zone.hosts.find((h) => h.ip === ip)?.label ?? ip
+        topologyNavState.requestHost(zone.id, host, ip)
+      }
+    }
+    appState.view = 'topography'
+  }
+
+  // "clear with a note" (#678, and the record's own third action): the
+  // note is the reason the clear happened, and #679's ruling put it in
+  // the existing admin-mutation audit log rather than a second record.
+  // One capture open at a time, in the drawer's action area.
+  let noteFor: string | null = $state(null)
+  let noteDraft = $state('')
+
+  function openNote(id: string) {
+    noteFor = id
+    noteDraft = ''
+  }
+
+  function cancelNote() {
+    noteFor = null
+    noteDraft = ''
+  }
+
+  function confirmClear(id: string) {
+    const note = noteDraft.trim()
+    noteFor = null
+    noteDraft = ''
+    clear(id, note || undefined)
+  }
+
+  async function clear(id: string, note?: string) {
     error = null
     try {
-      await flagsState.clear(id)
+      await flagsState.clear(id, note)
     } catch (err) {
       reportFailure('Could not clear this flag', err)
     }
   }
-
-  // "Clear and never flag this again" -- permanently excludes this
-  // flag's exact (Type, Target) going forward (see internal/flags.
-  // Store.Exclude's doc comment for why this is a deliberate permanent
-  // suppression, not a timed snooze). Reviewing/undoing an exclusion
-  // made by mistake is the admin-only Exclusions tab, not a confirmation
-  // dialog here.
-  async function clearPermanent(id: string) {
-    error = null
-    try {
-      await flagsState.clearPermanent(id)
-      // This is what creates the exclusion the tab's own count and list
-      // are reading -- before #547, that tab was a separate view that
-      // remounted (and so refetched) every time you navigated to it.
-      // Mounted-but-hidden doesn't get that for free, so it is refreshed
-      // explicitly on the one action that changes it. selectTab below
-      // covers the rest (switching to the tab, or a change made
-      // elsewhere in the meantime).
-      exclusionsState.refresh()
-    } catch (err) {
-      reportFailure('Could not permanently clear this flag', err)
-    }
-  }
-
-  // Bare labels only (owner, 2026-08-30) -- no explanatory second line
-  // under any of the three buttons or the badge that replaces them once
-  // a flag is judged.
-  const VERDICT_LABELS: Record<Verdict, string> = {
-    expected: 'Expected',
-    noise: 'Noise',
-    real: 'Real',
-  }
-
-  // The three-button verdict row (issue #638). Every verdict posts at
-  // once and is awaited here, reported the same way clear()/
-  // clearPermanent() above report theirs -- 'expected'/'noise' additionally
-  // clear the flag as part of that same request (flagsState.judgeAndClear),
-  // 'real' does not (flagsState.judgeReal).
-  async function judge(id: string, verdict: Verdict) {
-    error = null
-    try {
-      if (verdict === 'real') {
-        await flagsState.judgeReal(id, authState.username)
-      } else {
-        await flagsState.judgeAndClear(id, verdict)
-      }
-    } catch (err) {
-      reportFailure('Could not record verdict', err)
-    }
-  }
-
-  // Undo (issue #638) is a real DELETE now, not a cancelled timer -- see
-  // flagsState.undoVerdict's own doc comment. Reported the same way as
-  // every other awaited mutation on this page.
-  async function undoVerdict(id: string) {
-    error = null
-    try {
-      await flagsState.undoVerdict(id)
-    } catch (err) {
-      reportFailure('Could not undo this verdict', err)
-    }
-  }
-
-  // "judged by X, HH:MM" -- the badge's own supporting line (issue
-  // #638's "who judged it and when"). verdictBy/verdictAt are only ever
-  // both present or both absent (see Flag's own doc comment), so falling
-  // back to just the account name if a timestamp were somehow missing is
-  // a defensive floor, not an expected path.
-  function judgedByLine(f: Flag): string {
-    if (!f.verdictBy) return ''
-    return f.verdictAt ? `${f.verdictBy} · ${formatHM(f.verdictAt)}` : f.verdictBy
-  }
-
-  // Graded rather than a single color for every value -- a 12% confidence
-  // score and a 95% one shouldn't read as equally worth attention at a
-  // glance, mirroring the severity coloring ActionBadge already uses
-  // elsewhere.
-  function confidenceTier(c: number): 'low' | 'medium' | 'high' {
-    if (c >= 70) return 'high'
-    if (c >= 40) return 'medium'
-    return 'low'
-  }
 </script>
 
 <div class="flags-page">
-  {#if tabs.length > 1}
-    <TabList {tabs} selected={activeTab} onselect={selectTab} label="Flags views" />
-  {/if}
-  <div
-    class="flags scrollbar"
-    role="tabpanel"
-    id="panel-flags"
-    aria-labelledby="tab-flags"
-    tabindex="0"
-    hidden={activeTab !== 'flags'}
-  >
-  {#if error}
-    <p class="mutation-error" role="alert">{error}</p>
-  {/if}
+  <div class="flags scrollbar">
+    {#if error}
+      <p class="mutation-error" role="alert">{error}</p>
+    {/if}
 
-  <BarList title="Active flags by type" rows={typeBreakdown} emptyMessage="Nothing flagged right now." />
-
-  {#snippet flagCard(f: Flag, compactCard: boolean = false)}
-    {@const investigate = investigateIp(f)}
-    {@const family = familyOf(f.type)}
-    <li class="card" class:compact={compactCard} class:open={expandedId === f.id} style="--ft: {family.ink}">
-      <div class="card-main">
-        <span class="type">{family.mark} {labelFor(f.type)}</span>
-        {#if f.confidence != null}
-          <span
-            class="confidence confidence-{confidenceTier(f.confidence)}"
-            title="How confident this specific flag is, based on how much history backs it and how far it deviates from normal -- not how confident mikroview is overall"
-          >
-            {f.confidence}% confidence
-          </span>
-        {/if}
-        {#if isFilterable(f)}
-          <button class="target" onclick={() => filterToTarget(f)} title="Filter the live view to {f.target}">
-            {f.target}
-          </button>
-        {:else}
-          <span class="target target-global">network-wide</span>
-        {/if}
-        {#if investigate}
-          <!-- A fresh check, not the frozen raise-time snapshot below
-               (issue #213): raw events aren't persisted, so an old or
-               cleared flag often has nothing left in the live view to
-               click into -- this is what makes "what does it look like
-               now" reachable without leaving the page. Reuses the exact
-               component/lookup path EventRow/EventDetailSheet already
-               use; the snapshot in Details stays as-is and answers a
-               different question ("what did it look like when it
-               fired"). -->
-          <IpInvestigateButton ip={investigate} />
-        {/if}
-        {#if f.country}
-          <span class="country" title={f.country}>{countryFlag(f.country)}</span>
-        {/if}
-      </div>
-      <!-- Compact (2/3 columns, issue #199): the detail line truncates to
-           one line rather than wrapping and pushing the card taller than
-           its neighbours in the same grid row -- the type/target above
-           and the expand affordance below stay fully visible either way,
-           so nothing identifying is lost, only the free-text summary. -->
-      <p class="detail" title={compactCard ? f.detail : undefined}>{f.detail}</p>
-      <div class="meta">
-        {#if !compactCard}
-          <span>first seen {formatHM(f.firstSeen)}</span>
-        {/if}
-        <span>last seen {formatHM(f.lastSeen)}</span>
-        <span>fired {f.count}×</span>
-      </div>
-      <!-- The leading triage act (issue #638): judge, or the badge once
-           judged -- on the card's face rather than in the drawer,
-           because the verdict is the primary act and must not cost a
-           click to reach. Clear rides the drawer's foot with the rest
-           of the secondary actions. -->
-      <div class="verdict-slot">
-        {#if f.verdict}
-          <div class="verdict-status">
-            <span class="verdict-badge verdict-{f.verdict}">{VERDICT_LABELS[f.verdict]}</span>
-            {#if judgedByLine(f)}
-              <span class="verdict-judged-by">{judgedByLine(f)}</span>
+    <!-- No heading over the table (#697/#700): round 30 draws the flags
+         panel as a bare table under the bar, and the count already
+         lives in the bar's own ⚑ mark. The name survives for screen
+         readers, where it is not competing for space. -->
+    <section aria-label="Active flags ({active.length})">
+      {#if active.length === 0}
+        <!-- The honest cleared state (round 26, drawn as `.caempty` in
+             round 29's scene): zero open is a fact with a history, not a
+             blank. When something was cleared, say when, and stand by
+             the audit-log promise the clear-all bubble makes. -->
+        <div class="caempty">
+          <span class="cae-mark">✓</span>
+          <div>
+            <b>Nothing open.</b>
+            {#if lastClearedAt}
+              Cleared {clearedWhen(lastClearedAt)} — they keep their place{#if isAdminOrOpen}&nbsp;in the
+                <button class="olink" onclick={() => (appState.view = 'audit')}>audit log</button>{/if}.
+            {:else}
+              Nothing has been flagged yet.
             {/if}
           </div>
-        {:else if canEdit}
-          <!-- The three-button verdict row (#638) is the leading
-               affordance; Clear demotes to secondary. Absent for a
-               viewer (#653), never disabled. -->
-          <div class="verdict-row" role="group" aria-label="Judge this flag">
-            <button class="verdict-btn verdict-btn-expected" onclick={() => judge(f.id, 'expected')}>
-              Expected
-            </button>
-            <button class="verdict-btn verdict-btn-noise" onclick={() => judge(f.id, 'noise')}>Noise</button>
-            <button class="verdict-btn verdict-btn-real" onclick={() => judge(f.id, 'real')}>Real</button>
-          </div>
-        {/if}
-      </div>
-      <!-- The whole row's one affordance (rounds 18-19): the chevron
-           opens the drawer; it rotates rather than swapping glyphs so
-           the open state reads at a glance down a striped list. -->
-      <button
-        class="openc"
-        aria-expanded={expandedId === f.id}
-        aria-label="{expandedId === f.id ? 'Close' : 'Open'} the drawer for this flag"
-        onclick={() => toggleExpanded(f)}
-      >
-        ▸
-      </button>
-      {#if expandedId === f.id}
-        {@const ep = episodes[f.id]}
-        <!-- The drawer (rounds 18-19): the evidence and matched lines on
-             the left, the episode's shape on the right, the actions
-             across the foot. The stripe runs through it unbroken -- the
-             card's own left edge, not a second indented border. -->
-        <div class="dwr">
-          <div class="dcol">
-            {#if f.evidence?.ports?.length}
-              <div class="ev-row">
-                <span class="ev-label">Ports touched</span>
-                <span class="ev-value">{f.evidence.ports.join(', ')}</span>
-              </div>
-            {/if}
-            {#if f.evidence?.hosts?.length}
-              <div class="ev-row">
-                <span class="ev-label">Hosts involved</span>
-                <span class="ev-value">{f.evidence.hosts.join(', ')}</span>
-              </div>
-            {/if}
-            {#if f.evidence?.pairs?.length}
-              <!-- #654: grouped by host -- one row per host with the
-                   ports actually seen with it, never a flat host:port
-                   list and never crossed against Hosts/Ports above,
-                   which would silently claim combinations no event ever
-                   produced. The cap is stated, not hidden: a truncated
-                   sample says so rather than reading as complete. -->
-              <div class="ev-row">
-                <span class="ev-label">
-                  Host:port pairs
-                  {#if pairsTruncated(f.evidence.pairs, f.evidence.pairsTotal)}
-                    <span class="ev-truncated"
-                      >(showing {pairsTruncationLabel(
-                        f.evidence.pairs.length,
-                        f.evidence.pairsTotal ?? 0,
-                        f.evidence.pairsTotalIsFloor,
-                      )})</span
-                    >
-                  {/if}
-                </span>
-              </div>
-              {#each groupPairsByHost(f.evidence.pairs) as g (g.host)}
-                <div class="ev-row ev-pair-row">
-                  <span class="ev-label">{g.host}</span>
-                  <span class="ev-value">{g.ports.join(', ')}</span>
-                </div>
-              {/each}
-            {/if}
-            {#if f.evidence?.srcMac}
-              <div class="ev-row">
-                <span class="ev-label">Source MAC</span>
-                <span class="ev-value">{f.evidence.srcMac}</span>
-              </div>
-            {/if}
-            {#if f.evidence?.nat}
-              <div class="ev-row">
-                <span class="ev-label">NAT</span>
-                <span class="ev-value">
-                  {f.evidence.nat.ip}{f.evidence.nat.port ? `:${f.evidence.nat.port}` : ''}
-                  {#if f.evidence.nat.raw}<br /><span class="ev-raw">{f.evidence.nat.raw}</span>{/if}
-                </span>
-              </div>
-            {/if}
-            {#if f.reputation}
-              <ReputationDetails result={f.reputation} />
-            {/if}
-            {#if Array.isArray(ep) && ep.length > 0}
-              <div class="lines">
-                {#each ep.slice(0, 3) as e (e.id)}
-                  <div>{eventLine(e)}</div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-          <div class="side">
-            <span class="lab">the episode</span>
-            {#if ep === 'loading'}
-              <p class="ep-note">fetching the events…</p>
-            {:else if ep === 'error'}
-              <p class="ep-note">could not fetch the events</p>
-            {:else if Array.isArray(ep) && ep.length === 0}
-              <!-- Raw events are only retained in the buffer; an old
-                   flag honestly says the window has moved on rather
-                   than drawing an empty strip. -->
-              <p class="ep-note">no matching events still buffered</p>
-            {:else if Array.isArray(ep)}
-              <svg
-                viewBox="0 0 260 34"
-                preserveAspectRatio="none"
-                role="img"
-                aria-label="{ep.length} events, drawn on a strip of the half hour around last seen"
-              >
-                {#each episodeTicks(ep) as x, i (i)}
-                  <line x1={x} y1="6" x2={x} y2="28" stroke="var(--ft)" stroke-width="2.5" stroke-linecap="round" />
-                {/each}
-              </svg>
-              <span class="span">{ep.length} events · ±30 m around last seen</span>
-            {/if}
-          </div>
-          <div class="dwr-acts">
-            {#if isFilterable(f)}
-              <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
-            {/if}
-            {#if isAdminOrOpen}
-              <!-- Split button: the main segment is exactly today's Clear.
-                   The arrow segment is admin-only, matching the backend's
-                   own gate on POST /api/flags/{id}/clear-permanent -- a
-                   permanent exclusion suppresses detection until someone
-                   undoes it, unlike the plain Clear beside it. See the
-                   user-tier branch below for what a user gets, and #653
-                   for why a viewer gets nothing here. -->
-              <div class="split-clear" class:menu-open={openClearMenuFor === f.id}>
-                <button class="clear split-main" onclick={() => clear(f.id)}>Clear</button>
-                <button
-                  class="clear split-arrow"
-                  aria-haspopup="true"
-                  aria-expanded={openClearMenuFor === f.id}
-                  aria-label="More clear options for this flag"
-                  onclick={() => toggleClearMenu(f.id)}
-                >
-                  ▾
+        </div>
+      {:else}
+        <!-- The ratified table (#688, round 29's `#s7`): flag · where ·
+             evidence · count · age, then the disclosure. Both the sort
+             (the head) and the filter (the quiet dashed row beneath it)
+             live in the head group, as the record's own table has
+             them. -->
+        <table class="ftable">
+          <thead>
+            <tr>
+              <th>
+                <button class="sorth" class:on={sortKey === 'type'} onclick={() => toggleSort('type')}>
+                  flag <span class="dir">{dirGlyph('type')}</span>
                 </button>
-                {#if openClearMenuFor === f.id}
-                  <div class="split-menu" role="menu">
+              </th>
+              <th>
+                <button class="sorth" class:on={sortKey === 'where'} onclick={() => toggleSort('where')}>
+                  where <span class="dir">{dirGlyph('where')}</span>
+                </button>
+              </th>
+              <th>
+                <button class="sorth" class:on={sortKey === 'evidence'} onclick={() => toggleSort('evidence')}>
+                  evidence <span class="dir">{dirGlyph('evidence')}</span>
+                </button>
+              </th>
+              <th class="num">
+                <button class="sorth" class:on={sortKey === 'count'} onclick={() => toggleSort('count')}>
+                  count <span class="dir">{dirGlyph('count')}</span>
+                </button>
+              </th>
+              <th>
+                <button class="sorth" class:on={sortKey === 'age'} onclick={() => toggleSort('age')}>
+                  age <span class="dir">{dirGlyph('age')}</span>
+                </button>
+              </th>
+              <th></th>
+            </tr>
+            <tr class="filters">
+              <td><input bind:value={filters.type} placeholder="filter" aria-label="Filter by flag type" /></td>
+              <td><input bind:value={filters.where} placeholder="filter" aria-label="Filter by where" /></td>
+              <td><input bind:value={filters.evidence} placeholder="filter" aria-label="Filter by evidence" /></td>
+              <td><input bind:value={filters.count} placeholder="filter" aria-label="Filter by count" /></td>
+              <td><input bind:value={filters.age} placeholder="filter" aria-label="Filter by age" /></td>
+              <td></td>
+            </tr>
+          </thead>
+          <tbody>
+            {#if sortedActive.length === 0}
+              <tr>
+                <td class="empty" colspan="6">No flags match these filters.</td>
+              </tr>
+            {/if}
+            {#each sortedActive as f (f.id)}
+              {@const family = familyOf(f.type)}
+              {@const open = expandedId === f.id}
+              {@const ep = episodes[f.id]}
+              <tr class="frow" class:open style="--ft: {family.ink}" onclick={() => toggleExpanded(f)}>
+                <td class="fmark">{family.mark} {labelFor(f.type)}</td>
+                <td class="k">
+                  {#if isFilterable(f)}
                     <button
-                      class="split-menu-item"
-                      role="menuitem"
-                      title="Clear this flag and permanently stop {labelFor(f.type)} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
-                      onclick={() => {
-                        openClearMenuFor = null
-                        clearPermanent(f.id)
+                      class="wl"
+                      title="Open {f.target} in the topography"
+                      onclick={(ev) => {
+                        ev.stopPropagation()
+                        openWhere(f)
                       }}
                     >
-                      Permanently clear
+                      {f.target}
                     </button>
-                  </div>
-                {/if}
-              </div>
-            {:else if canEdit}
-              <!-- A user (#653: below admin, above viewer) gets a plain
-                   Clear with no arrow, rather than a disabled one that
-                   advertises an action they cannot take (#198). A viewer
-                   gets neither. -->
-              <button class="clear" onclick={() => clear(f.id)}>Clear</button>
-            {/if}
-          </div>
-        </div>
+                  {:else}
+                    <span class="wl-plain">network-wide</span>
+                  {/if}
+                </td>
+                <td>{f.detail}</td>
+                <td class="num">{f.count}×</td>
+                <td class="t">{formatFlagAge(f.lastSeen, appState.now)}</td>
+                <td class="disc">
+                  <!-- The row's one affordance (rounds 18-19/29): the
+                       chevron rotates rather than swapping glyphs, so the
+                       open state reads at a glance down a striped list. -->
+                  <button
+                    class="openc"
+                    aria-expanded={open}
+                    aria-label="{open ? 'Close' : 'Open'} the drawer for this flag"
+                    onclick={(ev) => {
+                      ev.stopPropagation()
+                      toggleExpanded(f)
+                    }}
+                  >
+                    ▸
+                  </button>
+                </td>
+              </tr>
+              {#if open}
+                <!-- The drawer (round 29): the story and the matched
+                     lines down the left, the episode's shape on the
+                     right, the actions across the foot. The type's
+                     stripe runs on through it unbroken. -->
+                <tr class="drawer" style="--ft: {family.ink}">
+                  <td colspan="6">
+                    <div class="dwr-in">
+                      <!-- The headline and story (#678): plain-English
+                           writing generated per flag type from the
+                           evidence the flag already carries, not the raw
+                           evidence itself -- the headline stands alone
+                           as the drawer's first words, the story running
+                           on from it in sentences. See flagNarrative.ts. -->
+                      <p class="story"><b class="headline">{headlineFor(f)}</b> {storyFor(f)}</p>
+                      <div class="side">
+                        <span class="lab">the episode</span>
+                        {#if Array.isArray(ep) && ep.length > 0}
+                          <svg
+                            viewBox="0 0 260 34"
+                            preserveAspectRatio="none"
+                            role="img"
+                            aria-label="{ep.length} events, drawn on a strip of the half hour around last seen"
+                          >
+                            {#each episodeTicks(ep) as x, i (i)}
+                              <line
+                                x1={x}
+                                y1="6"
+                                x2={x}
+                                y2="28"
+                                stroke="var(--ft)"
+                                stroke-width="2.5"
+                                stroke-linecap="round"
+                              />
+                            {/each}
+                          </svg>
+                        {/if}
+                        <!-- The episode's shape (#678): still arriving,
+                             stopped, or intermittent -- derived from the
+                             flag's own timestamps (the richer per-event
+                             episode once it's fetched, the flag's
+                             firstSeen/lastSeen before then). See
+                             episodeShape.ts. -->
+                        <span class="span">{episodeShapeFor(f, ep, appState.now)}</span>
+                        {#if ep === 'loading'}
+                          <p class="ep-note">fetching the events…</p>
+                        {:else if ep === 'error'}
+                          <p class="ep-note">could not fetch the events</p>
+                        {:else if Array.isArray(ep) && ep.length === 0}
+                          <!-- Raw events are only retained in the
+                               buffer; an old flag honestly says the
+                               window has moved on rather than drawing an
+                               empty strip. -->
+                          <p class="ep-note">no matching events still buffered</p>
+                        {/if}
+                      </div>
+                      {#if Array.isArray(ep) && ep.length > 0}
+                        <div class="lines">
+                          {#each ep.slice(0, 3) as e (e.id)}
+                            <div>{eventLine(e)}</div>
+                          {/each}
+                        </div>
+                      {/if}
+                      <div class="dwr-acts">
+                        {#if isFilterable(f)}
+                          <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
+                        {/if}
+                        {#if noteFor === f.id}
+                          <!-- The note is optional: confirming with an
+                               empty one is exactly a plain clear. -->
+                          <div class="clear-note" role="group" aria-label="Clear with a note">
+                            <input
+                              type="text"
+                              class="clear-note-input"
+                              placeholder="add a note (optional)"
+                              aria-label="Note for clearing this flag"
+                              bind:value={noteDraft}
+                              onkeydown={(e) => {
+                                if (e.key === 'Enter') confirmClear(f.id)
+                                if (e.key === 'Escape') cancelNote()
+                              }}
+                            />
+                            <button class="act" onclick={() => confirmClear(f.id)}>Clear</button>
+                            <button class="act quiet" onclick={cancelNote}>Cancel</button>
+                          </div>
+                        {:else if canEdit}
+                          <button class="act quiet" onclick={() => openNote(f.id)}>clear with a note</button>
+                        {/if}
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              {/if}
+            {/each}
+          </tbody>
+        </table>
       {/if}
-    </li>
-  {/snippet}
-
-  <section aria-labelledby="active-heading">
-    <div class="active-header">
-      <h2 id="active-heading">Active ({active.length})</h2>
-      <div class="header-controls">
-        <!-- 1/2/3-column density (issue #199), persisted per browser.
-             Below the shared mobile breakpoint this stays selectable but
-             stops changing the render -- see effectiveColumns' own
-             comment for why the floor lives there rather than only in a
-             media query. -->
-        <div class="layout-select" role="radiogroup" aria-label="Card layout columns">
-          {#each [1, 2, 3] as const as n (n)}
-            <button
-              class="layout-option"
-              class:active={flagLayoutState.columns === n}
-              role="radio"
-              aria-checked={flagLayoutState.columns === n}
-              onclick={() => flagLayoutState.set(n)}
-              title="{n} column{n > 1 ? 's' : ''}"
-            >
-              {n}
-            </button>
-          {/each}
-        </div>
-        <!-- Clear-all moved to the docket's tab row as the bubble
-             (#633 round 29) -- one control, not two. Its click-again
-             confirm interaction (#198) travelled with it. -->
-      </div>
-    </div>
-    {#if active.length === 0}
-      <!-- The honest cleared state (round 26): zero open is a fact with
-           a history, not a blank. When something was cleared, say when,
-           and stand by the audit-log promise the bubble makes. -->
-      <div class="caempty">
-        <span class="cae-mark">✓</span>
-        <div>
-          <b>Nothing open.</b>
-          {#if lastClearedAt}
-            Cleared {clearedWhen(lastClearedAt)} — cleared flags keep their place
-            below{#if isAdminOrOpen}&nbsp;and in the
-              <button class="olink" onclick={() => (appState.view = 'audit')}>audit log</button>{/if}.
-          {:else}
-            Nothing has been flagged yet.
-          {/if}
-        </div>
-      </div>
-    {:else}
-      <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
-        {#each activeItems as item (item.kind === 'group' ? `group:${item.sourceIp}` : item.flag.id)}
-          {#if item.kind === 'single'}
-            {@render flagCard(item.flag, compact)}
-          {:else}
-            <!-- The stripe wears the newest member's family ink -- a
-                 campaign has no single type, and the newest member is
-                 what put the card at this position in the list. -->
-            <li class="card campaign-card" style="--ft: {familyOf(item.flags[0].type).ink}">
-              <div class="campaign-header">
-                <button
-                  class="campaign-toggle"
-                  onclick={() => toggleGroup(item.sourceIp)}
-                  aria-expanded={expandedGroup === item.sourceIp}
-                >
-                  <span class="campaign-caret">{expandedGroup === item.sourceIp ? '▾' : '▸'}</span>
-                  <span class="campaign-count">{item.flags.length} related flags from this source</span>
-                </button>
-                <button
-                  class="target campaign-source"
-                  onclick={() => filterToSource(item.sourceIp)}
-                  title="Filter the live view to {item.sourceIp}"
-                >
-                  {item.sourceIp}
-                </button>
-              </div>
-              <div class="campaign-summary">
-                <span class="campaign-types">{groupTypeLabels(item.flags)}</span>
-                <span>first seen {formatHM(groupFirstSeen(item.flags))}</span>
-                <span>last seen {formatHM(groupLastSeen(item.flags))}</span>
-              </div>
-              {#if expandedGroup === item.sourceIp}
-                <ul class="list campaign-members">
-                  {#each item.flags as f (f.id)}
-                    {@render flagCard(f, compact)}
-                  {/each}
-                </ul>
-              {/if}
-            </li>
-          {/if}
-        {/each}
-      </ul>
-    {/if}
-  </section>
-
-  <section aria-labelledby="cleared-heading">
-    <h2 id="cleared-heading">Recently cleared</h2>
-    {#if cleared.length === 0}
-      <p class="empty">No cleared flags yet.</p>
-    {:else}
-      <!-- Same column setting as the active list above (issue #199's
-           "secondary" note) -- no independent control here, one
-           preference for the whole page reads simpler than two. -->
-      <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
-        {#each cleared as f (f.id)}
-          <li class="card cleared-card" class:compact style="--ft: {familyOf(f.type).ink}">
-            <div class="card-main">
-              <span class="type">{familyOf(f.type).mark} {labelFor(f.type)}</span>
-              <span class="target">{f.target === 'global' ? 'network-wide' : f.target}</span>
-            </div>
-            <p class="detail">{f.detail}</p>
-            <div class="meta">
-              {#if f.verdict}
-                <!-- Judged before it cleared (#638's 'expected'/'noise')
-                     -- the verdict is the more informative fact here, so
-                     it replaces the plain "cleared HH:MM" line rather
-                     than sitting alongside it. -->
-                <span class="verdict-badge verdict-{f.verdict}">{VERDICT_LABELS[f.verdict]}</span>
-                <span>{judgedByLine(f)}</span>
-              {:else}
-                <span>cleared {f.clearedAt ? formatHM(f.clearedAt) : ''}</span>
-              {/if}
-            </div>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </section>
-
+    </section>
   </div>
-
-  {#if isAdminOrOpen}
-    <!-- The Exclusions tab (#547): permanently-excluded (detector,
-         target) pairs, reviewed and undone here rather than from a
-         pointer to a separate page -- see Exclusions.svelte's own doc
-         comment for why this is admin-only. -->
-    <div
-      class="exclusions-panel"
-      role="tabpanel"
-      id="panel-exclusions"
-      aria-labelledby="tab-exclusions"
-      tabindex="0"
-      hidden={activeTab !== 'exclusions'}
-    >
-      <Exclusions />
-    </div>
-  {/if}
-
-  {#if flagsState.undoableVerdicts.length > 0}
-    <!-- Issue #638's undo affordance: judgeAndClear() has already
-         posted the verdict and cleared the card -- this is the window
-         (VERDICT_UNDO_MS) during which undoVerdict() can still send a
-         real DELETE to reverse it. Unlike Toast.svelte (a passive,
-         single, fade-away confirmation with pointer-events: none) this
-         needs to be clickable and to hold more than one at a time,
-         since Expected and Noise can each be pressed on a different
-         card before either window lapses. -->
-    <div class="verdict-undo-stack" role="status">
-      {#each flagsState.undoableVerdicts as u (u.id)}
-        <div class="verdict-undo">
-          <span>Cleared as {VERDICT_LABELS[u.verdict]}</span>
-          <button class="verdict-undo-btn" onclick={() => undoVerdict(u.id)}>Undo</button>
-        </div>
-      {/each}
-    </div>
-  {/if}
 </div>
 
 <style>
   .flags-page {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* The explicit display rules above beat the browser's own [hidden]
-     handling, so without this the inactive panel rendered *below* the
-     active one -- the Exclusions blurb sat under the flags list.
-     Watchlist.svelte carries the same guard for the same reason. */
-  .flags[hidden],
-  .exclusions-panel[hidden] {
-    display: none;
-  }
-
-  .exclusions-panel {
     flex: 1;
     min-height: 0;
     display: flex;
@@ -957,220 +659,182 @@
     font-size: 12px;
   }
 
-  h2 {
-    margin: 0 0 10px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+
+  /* The ratified table (round 29, `#s7`'s `.panel table`): the record's
+     own geometry and inks, with this app's theme variables standing in
+     for the mockup's --ink/--hair/--mono names. The peer watchlist table
+     (#676) was ported from the same scene, so the two read as one
+     surface. */
+  .ftable {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 12px;
   }
 
-  .empty {
-    margin: 0;
-    color: var(--fg-dim);
-    font-size: 13px;
+  .ftable th,
+  .ftable td {
+    padding: 8px 12px;
+    text-align: left;
   }
 
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+  .ftable thead th {
+    padding: 0 12px 6px;
+    border-bottom: 1px solid var(--border);
   }
 
-  /* 1/2/3-column density (issue #199). Only the two top-level lists
-     (active, cleared) get this -- .campaign-members (a campaign's
-     expanded member list, nested one level inside a single grid cell)
-     stays the plain flex column above regardless of the page's column
-     setting, since it's already-indented content, not another row of
-     the same grid. minmax(0, 1fr), not 1fr alone, so a long unbroken
-     target/detail string can't force a column wider than its share and
-     blow out the grid -- a bare 1fr lets content overflow its track. */
-  .card-grid {
-    display: grid;
-    grid-template-columns: repeat(var(--flag-columns, 1), minmax(0, 1fr));
+  .ftable thead th.num {
+    text-align: right;
   }
 
-  /* The stripe (rounds 18-19): the flag's family ink as one unbroken
-     3px line down the card's own left edge, running through the drawer
-     when it opens -- an inset shadow rather than a border so it sits
-     inside the rounded corner without its own radius math. --ft is set
-     per-card from lib/flagPalette. The right padding reserves only the
-     chevron's corner now that the actions live in the drawer. */
-  .card {
-    position: relative;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 40px 10px 14px;
-    box-shadow: inset 3px 0 0 var(--ft, transparent);
-  }
-
-  /* Compact (2/3 columns, issue #199): tighter padding, same stripe. */
-  .card.compact {
-    padding: 8px 32px 8px 12px;
-  }
-
-  .cleared-card {
-    opacity: 0.7;
-    padding-right: 12px;
-  }
-
-  /* No single Clear action at the campaign level (clearing happens per
-     member flag, inside the expanded list below), so unlike a plain
-     .card it doesn't need to reserve .clear's right-hand padding. */
-  .campaign-card {
-    padding: 10px 12px;
-  }
-
-  .campaign-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .campaign-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  /* `.panel thead th` in the record: the head *is* the sort control. A
+     button rather than a click handler on the th, so it is reachable
+     from the keyboard. */
+  .sorth {
     background: transparent;
     border: none;
     padding: 0;
-    color: var(--fg);
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
     font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    white-space: nowrap;
     cursor: pointer;
   }
 
-  .campaign-caret {
+  .sorth:hover {
     color: var(--fg-muted);
-    font-size: 11px;
-    width: 10px;
-    display: inline-block;
   }
 
-  .campaign-count {
+  .sorth.on {
     color: var(--fg);
   }
 
-  .campaign-source.target {
-    font-weight: 600;
+  .sorth .dir {
+    display: inline-block;
+    min-width: 8px;
+    margin-left: 5px;
+    color: var(--accent);
+    font-size: 9px;
   }
 
-  .campaign-summary {
-    margin-top: 6px;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-    font-size: 12px;
+  /* Every column doubles as a filter: the record's quiet dashed inline
+     row under the heads (`.panel tr.filters`). */
+  .ftable tr.filters td {
+    padding: 2px 12px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ftable tr.filters input {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-muted);
+    padding: 2px 0;
+    outline: none;
+  }
+
+  .ftable tr.filters input::placeholder {
+    color: var(--fg-dim);
+    opacity: 0.6;
+  }
+
+  .ftable tr.filters input:focus {
+    border-bottom-color: var(--accent);
+  }
+
+  .ftable tbody td {
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ftable tbody td.k {
+    color: var(--fg);
+  }
+
+  .ftable tbody td.t {
     color: var(--fg-dim);
   }
 
-  .campaign-types {
-    color: var(--fg-muted);
+  .ftable tbody td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 
-  .campaign-members {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-  }
-
-  .card-main {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  /* The mark wears the family ink (rounds 18-19): ✱ an alarm, ▲ an
-     advisory, coloured text rather than the old accent chip so the
-     type and its stripe read as one thing. */
-  .type {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--ft, var(--accent));
+  .ftable tbody td.disc {
+    width: 1%;
     white-space: nowrap;
   }
 
-  .confidence {
-    font-size: 11px;
-    font-weight: 600;
-    border-radius: 4px;
-    padding: 2px 7px;
+  .frow {
+    cursor: pointer;
   }
 
-  .confidence-low {
-    color: var(--fg-muted);
+  .frow:hover td {
     background: var(--bg-hover);
   }
 
-  .confidence-medium {
-    color: var(--drop);
-    background: var(--drop-bg);
+  /* An open row hands its bottom edge to the drawer, so the two read as
+     one block rather than as two stacked rows. */
+  .frow.open td {
+    background: var(--bg-hover);
+    border-bottom-color: transparent;
   }
 
-  .confidence-high {
-    color: var(--reject);
-    background: var(--reject-bg);
+  /* One unbroken line: row and drawer share the type's stripe, and the
+     mark wears the same ink (`.ft-*` in the record -- six fixed hexes,
+     carried here by lib/flagPalette.ts as --ft so a custom detector's
+     accent ink works the same way). */
+  .frow td:first-child,
+  tr.drawer > td {
+    box-shadow: inset 3px 0 0 var(--ft);
   }
 
-  .target {
-    font-family: var(--font-mono);
-    font-size: 13px;
-    color: var(--fg);
+  .fmark {
+    font-weight: 700;
+    white-space: nowrap;
+    text-transform: uppercase;
   }
 
-  button.target {
+  /* `.ftable tbody td` above sets the muted body ink at higher CSS
+     specificity (class+type+type) than a bare `.fmark` (class alone)
+     can beat, which is why the label text was landing on --fg-muted
+     instead of its family ink even though --ft was already wired
+     through onto the row. Round 30's label wears the flag's own
+     severity colour (the record's `.ft-* .fmark` rule), matching the
+     ratified six-hex palette in lib/flagPalette.ts -- only the
+     selector's specificity needed fixing, not the colour source. */
+  .ftable tbody td.fmark {
+    color: var(--ft);
+  }
+
+  /* `.wl` in the record: a named where is a link, dotted underneath, and
+     it goes into the topography rather than the stream (#678). */
+  .wl {
     background: none;
     border: none;
+    border-bottom: 1px dotted var(--border);
     padding: 0;
+    font: inherit;
+    color: var(--fg);
     cursor: pointer;
-    text-decoration: underline;
-    text-decoration-color: transparent;
   }
 
-  button.target:hover {
-    text-decoration-color: currentColor;
+  .wl:hover {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
   }
 
-  .target-global {
-    color: var(--fg-muted);
-  }
-
-  .detail {
-    margin: 6px 0 0;
-    font-size: 13px;
-    color: var(--fg-muted);
-  }
-
-  .country {
-    font-size: 14px;
-  }
-
-  .meta {
-    margin-top: 6px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 12px;
+  .wl-plain {
     color: var(--fg-dim);
   }
 
-  /* The row's one affordance: the chevron rotates open, per the
-     record's own idiom. */
   .openc {
-    position: absolute;
-    top: 8px;
-    right: 8px;
     background: transparent;
     border: none;
     color: var(--accent);
@@ -1180,39 +844,60 @@
     transition: transform 0.2s;
   }
 
-  .card.open > .openc {
+  .openc[aria-expanded='true'] {
     transform: rotate(90deg);
   }
 
-  /* The drawer (rounds 18-19): evidence and matched lines left, the
-     episode's shape right, actions across the foot. No indented border
-     of its own -- the card's stripe is the one line (round 19). */
-  .dwr {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
+  .empty {
+    color: var(--fg-dim);
+    font-size: 12px;
+  }
+
+  /* The drawer's grid, straight from the record's `.dwr-in`: story over
+     matched lines down the left, the episode spanning both rows on the
+     right, the actions across the foot. */
+  tr.drawer > td {
+    padding: 0 12px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dwr-in {
     display: grid;
     grid-template-columns: 1.3fr 1fr;
     gap: 10px 32px;
+    padding: 6px 8px 4px;
   }
 
-  .card.compact .dwr {
-    grid-template-columns: 1fr;
-    gap: 8px;
+  .dwr-in .story {
+    grid-column: 1;
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    line-height: 1.55;
   }
 
-  .dcol {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  .dwr-in .story .headline {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .dwr-in .lines {
+    grid-column: 1;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .dwr-in .side {
+    grid-column: 2;
+    grid-row: 1 / span 2;
     min-width: 0;
   }
 
-  .side {
-    min-width: 0;
-  }
-
-  .side .lab {
+  .dwr-in .side .lab {
     display: block;
     font-family: var(--font-mono);
     font-size: 9px;
@@ -1222,41 +907,38 @@
     color: var(--fg-dim);
   }
 
-  .side svg {
+  .dwr-in .side svg {
     display: block;
     width: 100%;
     height: 34px;
     margin: 6px 0 2px;
   }
 
-  .side .span,
-  .ep-note {
+  .dwr-in .side .span {
+    display: block;
     font-family: var(--font-mono);
     font-size: 10.5px;
     color: var(--fg-dim);
   }
 
-  .ep-note {
-    margin: 8px 0 0;
-  }
-
-  .lines {
+  .dwr-in .ep-note {
+    margin: 4px 0 0;
     font-family: var(--font-mono);
     font-size: 10.5px;
     color: var(--fg-dim);
-    white-space: pre;
-    overflow: hidden;
   }
 
   .dwr-acts {
     grid-column: 1 / -1;
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 10px;
     margin-top: 2px;
   }
 
   .act {
+    font-family: var(--font-sans);
     font-size: 11px;
     font-weight: 600;
     color: var(--accent);
@@ -1271,7 +953,35 @@
     border-color: var(--accent);
   }
 
-  /* The honest cleared state (round 26). */
+  .act.quiet {
+    color: var(--fg-dim);
+  }
+
+  .clear-note {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 180px;
+  }
+
+  .clear-note-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--fg);
+    outline: none;
+  }
+
+  .clear-note-input:focus {
+    border-color: var(--accent);
+  }
+
+  /* The honest cleared state (round 26, `.caempty` in round 29). */
   .caempty {
     display: flex;
     align-items: baseline;
@@ -1309,345 +1019,4 @@
       transition: none;
     }
   }
-
-  .ev-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 10px;
-    font-size: 13px;
-  }
-
-  .ev-label {
-    color: var(--fg-muted);
-    flex: none;
-  }
-
-  .ev-value {
-    color: var(--fg);
-    text-align: right;
-    overflow-wrap: anywhere;
-    font-family: var(--font-mono);
-  }
-
-  .ev-raw {
-    font-size: 11px;
-    color: var(--fg-dim);
-  }
-
-  /* #654: the pair cap's truncation notice -- quiet (fg-dim, no icon)
-     because it's a footnote on the header row above, not a warning; the
-     point is only that it's never silent, not that it's loud. */
-  .ev-truncated {
-    font-size: 11px;
-    color: var(--fg-dim);
-    font-weight: normal;
-  }
-
-  /* One row per host group (#654) -- same ev-row/ev-label/ev-value
-     shape as every other evidence line, just indented slightly so a
-     multi-host pairs list visually nests under its own "Host:port
-     pairs" header row rather than reading as a sibling of Ports
-     touched/Hosts involved. */
-  .ev-pair-row {
-    padding-left: 10px;
-  }
-
-  /* The verdict lives on the card's face (issue #638: the primary
-     triage act), inline under the meta line -- the drawer carries the
-     clear actions. */
-  .verdict-slot {
-    margin-top: 8px;
-    max-width: 280px;
-  }
-
-  /* Issue #638: the leading verdict row, three bare-labelled buttons in
-     one line -- see VERDICT_LABELS' own doc comment for why there is no
-     second line under any of them. Colour is reinforcement only; the
-     label text is what carries the meaning (#616's "no meaning by
-     colour alone"). */
-  .verdict-row {
-    display: flex;
-    gap: 4px;
-  }
-
-  .verdict-btn {
-    flex: 1;
-    min-width: 0;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 5px 4px;
-    font-size: 11px;
-    font-weight: 600;
-    white-space: nowrap;
-    color: var(--fg-muted);
-    cursor: pointer;
-  }
-
-  .verdict-btn:hover {
-    color: var(--fg);
-    border-color: var(--fg-muted);
-  }
-
-  .verdict-btn-expected {
-    color: var(--accept);
-    border-color: color-mix(in srgb, var(--accept) 35%, var(--border));
-  }
-
-  .verdict-btn-expected:hover {
-    background: var(--accept-bg);
-    border-color: var(--accept);
-  }
-
-  .verdict-btn-real {
-    color: var(--reject);
-    border-color: color-mix(in srgb, var(--reject) 35%, var(--border));
-  }
-
-  .verdict-btn-real:hover {
-    background: var(--reject-bg);
-    border-color: var(--reject);
-  }
-
-  /* A judged flag's badge + judged-by/when (issue #638) -- replaces the
-     verdict row entirely rather than sitting beside it, which is what
-     keeps a judged flag from ever reading as an open question again. */
-  .verdict-status {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .verdict-badge {
-    align-self: flex-start;
-    font-size: 11px;
-    font-weight: 700;
-    border-radius: 4px;
-    padding: 3px 8px;
-    white-space: nowrap;
-  }
-
-  .verdict-badge.verdict-expected {
-    color: var(--accept);
-    background: var(--accept-bg);
-  }
-
-  .verdict-badge.verdict-noise {
-    color: var(--fg-muted);
-    background: var(--bg-hover);
-  }
-
-  .verdict-badge.verdict-real {
-    color: var(--reject);
-    background: var(--reject-bg);
-  }
-
-  .verdict-judged-by {
-    font-size: 11px;
-    color: var(--fg-dim);
-  }
-
-  /* Clear/split-Clear demote to secondary (#638) -- still fully
-     available, one press away, just no longer the card's leading
-     affordance now that the verdict row is. Quieted with opacity alone
-     (not a smaller control, which would cost the split button's own
-     click target) and restored on hover/focus so the control never
-     becomes hard to find, only quiet to glance past. */
-  .clear.secondary,
-  .split-clear.secondary {
-    opacity: 0.72;
-  }
-
-  .clear.secondary:hover,
-  .clear.secondary:focus-visible,
-  .split-clear.secondary:hover,
-  .split-clear.secondary:focus-within {
-    opacity: 1;
-  }
-
-  /* The undo affordance for a just-judged 'expected'/'noise' verdict
-     (issue #638) -- see flagsState.undoVerdict's own doc comment for why
-     undoing is a real DELETE, not just cancelling a timer. Fixed rather
-     than inline: the card it refers to has already left the active list
-     by the time this renders, so there is nothing sensible to anchor it
-     to in flow. */
-  .verdict-undo-stack {
-    position: fixed;
-    left: 50%;
-    bottom: 28px;
-    transform: translateX(-50%);
-    z-index: 50;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    align-items: center;
-  }
-
-  .verdict-undo {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 10px 8px 16px;
-    border-radius: 8px;
-    background: var(--bg-elevated);
-    color: var(--fg);
-    border: 1px solid var(--border);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    font-size: 13px;
-  }
-
-  .verdict-undo-btn {
-    background: transparent;
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    border-radius: 5px;
-    padding: 4px 10px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .verdict-undo-btn:hover {
-    background: var(--accent-bg);
-  }
-
-  .clear {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
-    border-radius: 5px;
-    padding: 5px 10px;
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .clear:hover {
-    color: var(--fg);
-    border-color: var(--fg-muted);
-  }
-
-  .clear:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  /* Split button: .split-main is today's plain Clear, unchanged in
-     behaviour and appearance. .split-arrow opens the dropdown holding
-     the one permanent action -- kept visually distinct (the drop tint)
-     so its warning colour, not just its position, marks it as the more
-     deliberate one. */
-  .split-clear {
-    position: relative;
-    display: flex;
-  }
-
-  .split-main {
-    flex: 1;
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-    border-right: none;
-  }
-
-  .split-arrow {
-    flex: none;
-    width: 26px;
-    padding: 5px 0;
-    font-size: 10px;
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
-    color: var(--drop);
-    border-color: var(--drop);
-  }
-
-  .split-arrow:hover,
-  .split-clear.menu-open .split-arrow {
-    background: var(--drop-bg);
-  }
-
-  .split-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    min-width: 160px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 4px;
-    box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.4);
-    z-index: 5;
-  }
-
-  .split-menu-item {
-    display: block;
-    width: 100%;
-    text-align: left;
-    background: transparent;
-    border: none;
-    color: var(--drop);
-    padding: 7px 9px;
-    border-radius: 5px;
-    font-size: 12px;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-
-  .split-menu-item:hover {
-    background: var(--drop-bg);
-  }
-
-  .active-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 10px;
-    flex-wrap: wrap;
-  }
-
-  .active-header h2 {
-    margin: 0;
-  }
-
-  .header-controls {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .layout-select {
-    display: flex;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    overflow: hidden;
-  }
-
-  .layout-option {
-    background: transparent;
-    border: none;
-    border-left: 1px solid var(--border);
-    color: var(--fg-muted);
-    padding: 5px 11px;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    cursor: pointer;
-  }
-
-  .layout-option:first-child {
-    border-left: none;
-  }
-
-  .layout-option:hover {
-    color: var(--fg);
-    background: var(--bg-hover);
-  }
-
-  .layout-option.active {
-    color: var(--accent);
-    background: var(--accent-bg);
-    font-weight: 600;
-  }
-
-
 </style>

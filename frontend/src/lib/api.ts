@@ -19,6 +19,9 @@ import type {
   Flag,
   FlagTimeBucket,
   Healthz,
+  HourTopBucket,
+  MACRegistryEntry,
+  PersistenceInfo,
   ReputationResult,
   RuleUsage,
   Stats,
@@ -253,6 +256,18 @@ export async function fetchDevices(): Promise<Device[]> {
   return body.devices ?? []
 }
 
+// fetchDeviceMACs serves the persisted MAC-registry history (issue #675:
+// internal/device.MACRegistry via GET /api/devices/macs) -- the source
+// for the Entities page's named-things table's mac/first-seen/last-seen
+// columns, joined client-side against a host entity's own IP key by
+// MACRegistryEntry.lastIp.
+export async function fetchDeviceMACs(): Promise<MACRegistryEntry[]> {
+  const res = await fetch('/api/devices/macs')
+  if (!res.ok) throw new ApiError(`fetchDeviceMACs: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.macs ?? []
+}
+
 // fetchRules serves every rule label mikroview has ever seen fire (issue
 // #103's internal/rules.Store, via GET /api/rules) -- issue #109's
 // "discovered but unnamed rules" source for the Entities panel, the same
@@ -274,6 +289,20 @@ export async function fetchStats(): Promise<Stats> {
   const res = await fetch('/api/stats')
   if (!res.ok) throw new ApiError(`fetchStats: ${res.status}`, res.status)
   return res.json()
+}
+
+// fetchStatsTops serves #644 round 21's top-port/top-talker table
+// columns (internal/api/rest.go's handleStatsTops) -- deliberately a
+// separate call from fetchStats, not folded into it: see that handler's
+// own doc comment for why. Fetched only by Metrics.svelte, on its own
+// interval scoped to while that page is open, rather than riding
+// App.svelte's global STATS_REFRESH_MS poll that runs regardless of
+// which page is showing.
+export async function fetchStatsTops(): Promise<HourTopBucket[]> {
+  const res = await fetch('/api/stats/tops')
+  if (!res.ok) throw new ApiError(`fetchStatsTops: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.tops ?? []
 }
 
 export async function lookupIp(ip: string): Promise<ReputationResult> {
@@ -388,8 +417,12 @@ export async function fetchFlags(): Promise<FlagsResponse> {
   return { flags: body.flags ?? [], timeSeries: body.timeSeries ?? [] }
 }
 
-export async function clearFlag(id: string): Promise<void> {
-  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear`)
+// note (#678's "clear with a note") is the operator's reason for
+// clearing, if they gave one -- recorded server-side as the audit
+// entry's Detail (see internal/api's handleFlagsClear doc comment for
+// why the log, not a new field on the flag itself, is where it lives).
+export async function clearFlag(id: string, note?: string): Promise<void> {
+  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear`, note ? { note } : {})
   if (!res.ok) throw new ApiError(`clearFlag: ${res.status}`, res.status)
 }
 
@@ -501,6 +534,16 @@ export async function logout(): Promise<string | null> {
   const res = await postJSON('/api/auth/logout')
   if (res.ok) return null
   return (await res.text()) || `logout: ${res.status}`
+}
+
+// signOutEverywhere is #677's sessions row -- ends every session the
+// caller holds, on every device, and the server immediately issues this
+// tab a fresh one (see internal/api.handleAuthLogoutAll), so unlike
+// logout() above this does not leave the caller signed out.
+export async function signOutEverywhere(): Promise<string | null> {
+  const res = await postJSON('/api/auth/logout-all')
+  if (res.ok) return null
+  return (await res.text()) || `signOutEverywhere: ${res.status}`
 }
 
 // role chooses between the two tiers this call can create (#653).
@@ -744,6 +787,19 @@ export async function setWatchlistObserving(id: string, observing: boolean): Pro
   return (await res.text()) || `setWatchlistObserving: ${res.status}`
 }
 
+// setWatchlistEnabled pauses or resumes a watchlist entry (#676's
+// ratified "pause watch"/"resume watch" drawer actions) -- the
+// definition's own `enabled` flag (already read back as
+// WatchlistEntry.enabled, see its own doc comment), sent through the
+// same generic PUT every other definition edit uses. Unlike Observing,
+// pausing has no entry-specific side effect, so no dedicated route
+// exists or is needed here.
+export async function setWatchlistEnabled(id: string, enabled: boolean): Promise<WatchlistEntry | string> {
+  const result = await updateDefinition(id, { enabled })
+  if (typeof result === 'string') return result
+  return definitionEntry(result)
+}
+
 // fetchWatchlistMatches answers a windowed query over the persisted
 // match log for one source device (internal/matchlog's own query
 // contract) -- mac and/or ip identify the source; at least one is
@@ -913,6 +969,18 @@ export async function startSSOLink(): Promise<{ url: string } | string> {
 export async function fetchSetupStatus(): Promise<SetupStatus> {
   const res = await fetch('/api/setup/status')
   if (!res.ok) throw new ApiError(`fetchSetupStatus: ${res.status}`, res.status)
+  return res.json()
+}
+
+// fetchPersistence is #677's settings persistence row: which backend
+// (file directory, or Postgres) this deployment's persisted stores
+// actually use. Admin-gated server-side, same reasoning as
+// /api/config/problems -- a non-admin's 403 surfaces as a thrown
+// ApiError here, same as every other admin-only GET this file wraps
+// (see fetchTokens/fetchUsers above), for the caller to swallow.
+export async function fetchPersistence(): Promise<PersistenceInfo> {
+  const res = await fetch('/api/persistence')
+  if (!res.ok) throw new ApiError(`fetchPersistence: ${res.status}`, res.status)
   return res.json()
 }
 
