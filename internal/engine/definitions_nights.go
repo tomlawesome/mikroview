@@ -34,8 +34,12 @@ import (
 // before that was either already recorded by the process before this one
 // (the record is persisted, and a night is written once) or was not
 // watched at all, and the second case must never be reported as "empty".
-func (s *DefinitionsStore) watchObservationFor(covered bool) watchlist.Observation {
-	return watchlist.Observation{Since: s.watchingSince, Covered: covered}
+//
+// silent is the entry's own sticky liveness mark (Entry.SilentOccurrences,
+// issue #730), carried straight through to Observation.Silent -- see
+// TickWatchLiveness for what writes it.
+func (s *DefinitionsStore) watchObservationFor(covered bool, silent []time.Time) watchlist.Observation {
+	return watchlist.Observation{Since: s.watchingSince, Covered: covered, Silent: silent}
 }
 
 // RecordWatchNight marks the night containing at as kept for expectation
@@ -63,7 +67,7 @@ func (s *DefinitionsStore) RecordWatchNight(id string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.updateNightsLocked(id, func(e *watchlist.Entry) bool {
-		e.Nights = watchlist.FillNights(e.Nights, e.Window, at, s.watchObservationFor(true))
+		e.Nights = watchlist.FillNights(e.Nights, e.Window, at, s.watchObservationFor(true, e.SilentOccurrences))
 		var notable bool
 		e.Nights, notable = watchlist.RecordMatch(e.Nights, e.Window, at)
 		return notable
@@ -90,8 +94,45 @@ func (s *DefinitionsStore) FillWatchNights(now time.Time, covered map[string]boo
 	for id := range s.raw {
 		if s.updateNightsLocked(id, func(e *watchlist.Entry) bool {
 			before := newestOpened(e.Nights)
-			e.Nights = watchlist.FillNights(e.Nights, e.Window, now, s.watchObservationFor(covered[id]))
+			e.Nights = watchlist.FillNights(e.Nights, e.Window, now, s.watchObservationFor(covered[id], e.SilentOccurrences))
 			return newestOpened(e.Nights).After(before)
+		}) {
+			changed++
+		}
+	}
+	return changed
+}
+
+// TickWatchLiveness sticky-marks every expectation's currently open
+// occurrence as device-silent, and returns how many entries changed.
+//
+// Called from the watch-liveness ticker (internal/engine/watch_liveness.go)
+// only when its own sweep of the device registry found at least one
+// device silent -- so every call here means "yes, mark", never "check and
+// maybe mark": the device selection and the staleness definition itself
+// both live on the caller, reused from device_silence rather than
+// duplicated (issue #730's own instruction). What happens here is only
+// watchlist.MarkSilent's bookkeeping: find the occurrence open at now for
+// each entry's own window, and record it.
+//
+// Entries are not scoped to a device (Definition.Coverage's own doc
+// comment makes the same call for firewall-rule coverage: "any device
+// could feed the entry"), so this does not try to decide which device is
+// "the" one behind a given entry's pathway where a boundary spans two --
+// it applies the mark to every entry uniformly. That is deliberately the
+// conservative direction: a device that might have carried this entry's
+// traffic having gone silent is grounds enough to distrust an otherwise-
+// empty night, not grounds to guess it was some other device's problem.
+func (s *DefinitionsStore) TickWatchLiveness(now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	changed := 0
+	for id := range s.raw {
+		if s.updateNightsLocked(id, func(e *watchlist.Entry) bool {
+			before := len(e.SilentOccurrences)
+			e.SilentOccurrences = watchlist.MarkSilent(e.SilentOccurrences, e.Window, now)
+			return len(e.SilentOccurrences) != before
 		}) {
 			changed++
 		}
@@ -156,10 +197,10 @@ func (s *DefinitionsStore) updateNightsLocked(id string, mutate func(*watchlist.
 	return true
 }
 
-// setNightParams writes the nights and the ring back into d's
-// nightsJSON/ringJSON params -- the JSON-in-a-string shape both watchlist
-// schemas declare (definitions_migrate.go). The window itself is not
-// rewritten here: nothing on this path edits it.
+// setNightParams writes the nights, the ring and the sticky liveness mark
+// back into d's nightsJSON/ringJSON/silentJSON params -- the JSON-in-a-
+// string shape both watchlist schemas declare (definitions_migrate.go).
+// The window itself is not rewritten here: nothing on this path edits it.
 func setNightParams(d *Definition, e watchlist.Entry) error {
 	nights, err := json.Marshal(e.Nights)
 	if err != nil {
@@ -169,13 +210,41 @@ func setNightParams(d *Definition, e watchlist.Entry) error {
 	if err != nil {
 		return err
 	}
-	params := make(Params, len(d.Params)+2)
+	silent, err := json.Marshal(e.SilentOccurrences)
+	if err != nil {
+		return err
+	}
+	// Sized from d.Params alone, not len(d.Params)+3: the three keys below
+	// grow the map at most once, and the arithmetic trips CodeQL's
+	// allocation-size-overflow rule for no real benefit.
+	params := make(Params, len(d.Params))
 	for k, v := range d.Params {
 		params[k] = v
 	}
 	params["nightsJSON"] = []string{string(nights)}
 	params["ringJSON"] = []string{string(ring)}
+	params["silentJSON"] = []string{string(silent)}
 	d.Params = params
+
+	// Re-sync the schema alongside the params it declares. This runs on
+	// whatever bytes decodeStored handed back for this definition, which
+	// for a watchlist entry created before silentJSON existed (or, for
+	// that matter, before #680's nightsJSON/ringJSON) still carries the
+	// on-disk ParamSchema from whenever it was last written -- and
+	// MigrateDefinitions only ever runs once, on the very first boot with
+	// no definitions document at all (its own doc comment: "already
+	// migrated ... idempotent no-op"), so nothing else upgrades a stored
+	// definition's schema afterwards. Writing silentJSON into Params
+	// without this would mean the very next decode of this same
+	// definition fails ValidateParams on a param its own persisted schema
+	// does not declare, and this entry silently stops tracking nights at
+	// all from that point on. d.Kind is what convertNonInvertedEntry/
+	// convertInvertedEntry already key this exact choice on.
+	if d.Kind == KindProgrammatic {
+		d.ParamSchema = watchlistInvertedParamSchema
+	} else {
+		d.ParamSchema = watchlistNonInvertedParamSchema
+	}
 	return nil
 }
 
