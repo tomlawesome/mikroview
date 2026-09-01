@@ -110,11 +110,11 @@ func (d *deviceSilenceDefinition) Tick(now time.Time) {
 		return
 	}
 	for _, info := range d.devices.ListDevices() {
-		if !info.Configured || info.LastSeen.IsZero() {
+		if !info.Configured {
 			continue
 		}
-		elapsed := now.Sub(info.LastSeen)
-		if elapsed < d.staleAfter {
+		elapsed, stale := deviceElapsedStale(info.LastSeen, d.staleAfter, now)
+		if !stale {
 			continue
 		}
 		confidence := overshootConfidence(int(elapsed.Seconds()), int(d.staleAfter.Seconds()))
@@ -130,6 +130,34 @@ func (d *deviceSilenceDefinition) Tick(now time.Time) {
 		})
 	}
 }
+
+// deviceElapsedStale reports whether lastSeen is at least staleAfter
+// behind now, and how long it has been -- device_silence's own
+// elapsed-since-last-contact comparison, factored out so issue #730's
+// watch-liveness ticker can reuse the identical definition rather than
+// restate it (that issue's own instruction). A zero lastSeen ("never
+// contacted") is never stale by this comparison -- device_silence's own
+// doc comment on why: it is a distinct condition from "went quiet after
+// being active", and firing on it would alarm every freshly configured
+// device at startup. The watch-liveness ticker applies its own, stricter
+// rule on top for a source this comparison alone would let through -- see
+// that file's own doc comment.
+func deviceElapsedStale(lastSeen time.Time, staleAfter time.Duration, now time.Time) (elapsed time.Duration, stale bool) {
+	if lastSeen.IsZero() {
+		return 0, false
+	}
+	elapsed = now.Sub(lastSeen)
+	return elapsed, elapsed >= staleAfter
+}
+
+// DeviceStaleAfter reports the staleness threshold this live device_silence
+// instance is currently configured with -- the same value Tick compares
+// elapsed time against. Exported so issue #730's watch-liveness ticker can
+// reuse the operator's own configured threshold exactly, rather than
+// reading a second, potentially drifted copy of it (Registry.Sync looks
+// this up on the built "device_silence" definition on every sync, since
+// the operator can edit it at any time).
+func (d *deviceSilenceDefinition) DeviceStaleAfter() time.Duration { return d.staleAfter }
 
 // NonReplayableReason satisfies NonReplayable.
 //
