@@ -130,7 +130,7 @@ async function settledRing(timeoutMs = 75000) {
 // --- Driven into no-logging: the ring appears and names the reason -------
 // (Whether the ring correctly stays *off* for 'unknown'/'out-of-scope'/
 // 'covered' is exercised at the unit level -- watchlist.svelte.test.ts and
-// NavRail.svelte.test.ts -- against synthetic coverage, which is the
+// BottomBar.svelte.test.ts -- against synthetic coverage, which is the
 // right seat for it: this scenario's own job is agreement with a real
 // server, not re-proving the predicate's branches against one.)
 check(

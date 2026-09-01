@@ -25,6 +25,8 @@
   // behind them are untouched and still tested -- see the issue's gap
   // list for what has to find a home before it comes back.
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
+  import { detectorSettingsState } from '../lib/detectorSettings.svelte'
+  import { anyBaselineWarming } from '../lib/learningShelf'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { fetchFlagEpisode } from '../lib/api'
@@ -129,7 +131,9 @@
     const id = topologyNavState.pendingFlagId
     if (id === null) return
     topologyNavState.pendingFlagId = null
-    const f = active.find((x) => x.id === id)
+    // Either table can hold the promised row (#642): a dial can point
+    // at a provisional flag as readily as a settled one.
+    const f = active.find((x) => x.id === id) ?? provisionalActive.find((x) => x.id === id)
     expandedId = f?.id ?? null
     if (f) loadEpisode(f)
   })
@@ -198,10 +202,79 @@
   // else) re-fired on the next 5s poll.
   const active = $derived(
     flagsState.list
-      .filter((f) => !f.cleared)
+      .filter((f) => !f.cleared && !f.provisional)
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
   const cleared = $derived(flagsState.list.filter((f) => f.cleared))
+
+  // The learning shelf's rows (#642): open *provisional* flags -- raised
+  // while their judgement's baseline was still below its history floor,
+  // so mikroview does not yet trust them. Kept out of `active` (and out
+  // of flagsState.activeCount) so trusted and untrusted judgements are
+  // never interleaved in one time-ordered list -- the issue's ruling.
+  // Same fixed firstSeen order as the settled table, for the same
+  // reason: a row must not jump mid-read when it re-fires.
+  const provisionalActive = $derived(
+    flagsState.list
+      .filter((f) => !f.cleared && f.provisional)
+      .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
+  )
+
+  // "Any baseline warming" (#642, ruling amendment 1): readable only
+  // from GET /api/definitions' learning field, which #653 gates at the
+  // user tier -- so it is evaluated for user/admin only, and a viewer's
+  // shelf appears only when it has contents. Degrades by absence, the
+  // app's grammar, never by a disabled control or an unverifiable claim.
+  const warming = $derived(canEdit && anyBaselineWarming(detectorSettingsState.list))
+
+  // Fetch the warm-up projection where this scene is allowed to read
+  // it. A failure is deliberately swallowed: with no data the shelf
+  // falls back to contents-only -- the absence of a claim, not a false
+  // one -- and EngineRoom's own use of this store is unaffected.
+  $effect(() => {
+    if (canEdit) detectorSettingsState.refresh().catch(() => {})
+  })
+
+  const showShelf = $derived(provisionalActive.length > 0 || warming)
+
+  // Verdicts (#642, through #638's store paths): offered on shelf rows
+  // only. The settled table's missing verdict row is #688's recorded
+  // gap and stays recorded -- the shelf is a new surface round 30 never
+  // drew, so carrying verdicts here does not reopen that ruling.
+  // expected/noise judge-and-clear (Undo offered briefly, below); real
+  // records the verdict and the flag stays put.
+  let lastJudged = $state<{ id: string; verdict: 'expected' | 'noise' } | null>(null)
+
+  async function judge(f: Flag, verdict: 'expected' | 'noise') {
+    error = null
+    try {
+      await flagsState.judgeAndClear(f.id, verdict)
+      lastJudged = { id: f.id, verdict }
+    } catch (err) {
+      reportFailure('Could not record the verdict', err)
+    }
+  }
+
+  async function judgeRealVerdict(f: Flag) {
+    error = null
+    try {
+      await flagsState.judgeReal(f.id, authState.username ?? '')
+    } catch (err) {
+      reportFailure('Could not record the verdict', err)
+    }
+  }
+
+  async function undoJudgement() {
+    if (!lastJudged) return
+    const id = lastJudged.id
+    lastJudged = null
+    error = null
+    try {
+      await flagsState.undoVerdict(id)
+    } catch (err) {
+      reportFailure('Could not undo the verdict', err)
+    }
+  }
 
   // The honest cleared state (round 26, drawn as `.caempty` in round
   // 29): when nothing is open, say when the last clear happened rather
@@ -434,6 +507,11 @@
             {#if lastClearedAt}
               Cleared {clearedWhen(lastClearedAt)} — they keep their place{#if isAdminOrOpen}&nbsp;in the
                 <button class="olink" onclick={() => (appState.view = 'audit')}>audit log</button>{/if}.
+            {:else if provisionalActive.length > 0}
+              <!-- "Nothing has been flagged yet" cannot sit above an
+                   occupied shelf (#642, ruling amendment 3): something
+                   plainly fired, it just is not trusted yet. -->
+              What has fired so far is not yet trusted — it sits on the learning shelf below.
             {:else}
               Nothing has been flagged yet.
             {/if}
@@ -491,147 +569,242 @@
               </tr>
             {/if}
             {#each sortedActive as f (f.id)}
-              {@const family = familyOf(f.type)}
-              {@const open = expandedId === f.id}
-              {@const ep = episodes[f.id]}
-              <tr class="frow" class:open style="--ft: {family.ink}" onclick={() => toggleExpanded(f)}>
-                <td class="fmark">{family.mark} {labelFor(f.type)}</td>
-                <td class="k">
-                  {#if isFilterable(f)}
-                    <button
-                      class="wl"
-                      title="Open {f.target} in the topography"
-                      onclick={(ev) => {
-                        ev.stopPropagation()
-                        openWhere(f)
-                      }}
-                    >
-                      {f.target}
-                    </button>
-                  {:else}
-                    <span class="wl-plain">network-wide</span>
-                  {/if}
-                </td>
-                <td>{f.detail}</td>
-                <td class="num">{f.count}×</td>
-                <td class="t">{formatFlagAge(f.lastSeen, appState.now)}</td>
-                <td class="disc">
-                  <!-- The row's one affordance (rounds 18-19/29): the
-                       chevron rotates rather than swapping glyphs, so the
-                       open state reads at a glance down a striped list. -->
-                  <button
-                    class="openc"
-                    aria-expanded={open}
-                    aria-label="{open ? 'Close' : 'Open'} the drawer for this flag"
-                    onclick={(ev) => {
-                      ev.stopPropagation()
-                      toggleExpanded(f)
-                    }}
-                  >
-                    ▸
-                  </button>
-                </td>
-              </tr>
-              {#if open}
-                <!-- The drawer (round 29): the story and the matched
-                     lines down the left, the episode's shape on the
-                     right, the actions across the foot. The type's
-                     stripe runs on through it unbroken. -->
-                <tr class="drawer" style="--ft: {family.ink}">
-                  <td colspan="6">
-                    <div class="dwr-in">
-                      <!-- The headline and story (#678): plain-English
-                           writing generated per flag type from the
-                           evidence the flag already carries, not the raw
-                           evidence itself -- the headline stands alone
-                           as the drawer's first words, the story running
-                           on from it in sentences. See flagNarrative.ts. -->
-                      <p class="story"><b class="headline">{headlineFor(f)}</b> {storyFor(f)}</p>
-                      <div class="side">
-                        <span class="lab">the episode</span>
-                        {#if Array.isArray(ep) && ep.length > 0}
-                          <svg
-                            viewBox="0 0 260 34"
-                            preserveAspectRatio="none"
-                            role="img"
-                            aria-label="{ep.length} events, drawn on a strip of the half hour around last seen"
-                          >
-                            {#each episodeTicks(ep) as x, i (i)}
-                              <line
-                                x1={x}
-                                y1="6"
-                                x2={x}
-                                y2="28"
-                                stroke="var(--ft)"
-                                stroke-width="2.5"
-                                stroke-linecap="round"
-                              />
-                            {/each}
-                          </svg>
-                        {/if}
-                        <!-- The episode's shape (#678): still arriving,
-                             stopped, or intermittent -- derived from the
-                             flag's own timestamps (the richer per-event
-                             episode once it's fetched, the flag's
-                             firstSeen/lastSeen before then). See
-                             episodeShape.ts. -->
-                        <span class="span">{episodeShapeFor(f, ep, appState.now)}</span>
-                        {#if ep === 'loading'}
-                          <p class="ep-note">fetching the events…</p>
-                        {:else if ep === 'error'}
-                          <p class="ep-note">could not fetch the events</p>
-                        {:else if Array.isArray(ep) && ep.length === 0}
-                          <!-- Raw events are only retained in the
-                               buffer; an old flag honestly says the
-                               window has moved on rather than drawing an
-                               empty strip. -->
-                          <p class="ep-note">no matching events still buffered</p>
-                        {/if}
-                      </div>
-                      {#if Array.isArray(ep) && ep.length > 0}
-                        <div class="lines">
-                          {#each ep.slice(0, 3) as e (e.id)}
-                            <div>{eventLine(e)}</div>
-                          {/each}
-                        </div>
-                      {/if}
-                      <div class="dwr-acts">
-                        {#if isFilterable(f)}
-                          <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
-                        {/if}
-                        {#if noteFor === f.id}
-                          <!-- The note is optional: confirming with an
-                               empty one is exactly a plain clear. -->
-                          <div class="clear-note" role="group" aria-label="Clear with a note">
-                            <input
-                              type="text"
-                              class="clear-note-input"
-                              placeholder="add a note (optional)"
-                              aria-label="Note for clearing this flag"
-                              bind:value={noteDraft}
-                              onkeydown={(e) => {
-                                if (e.key === 'Enter') confirmClear(f.id)
-                                if (e.key === 'Escape') cancelNote()
-                              }}
-                            />
-                            <button class="act" onclick={() => confirmClear(f.id)}>Clear</button>
-                            <button class="act quiet" onclick={cancelNote}>Cancel</button>
-                          </div>
-                        {:else if canEdit}
-                          <button class="act quiet" onclick={() => openNote(f.id)}>clear with a note</button>
-                        {/if}
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              {/if}
+              {@render flagRows(f, false)}
             {/each}
           </tbody>
         </table>
       {/if}
     </section>
+
+    <!-- The learning shelf (#642): the bounded region for provisional
+         flags, below the settled table -- an untrusted item never
+         outranks a trusted one -- and never a fourth docket tab, which
+         would hide the learning state from the very person reviewing
+         flags. Present when it has contents or (for user/admin, who can
+         read the warming signal) while any baseline is warming; absent
+         otherwise, as everywhere else in the app (#653). -->
+    {#if showShelf}
+      <section class="shelf" aria-label="Learning shelf ({provisionalActive.length} provisional)">
+        <h2 class="shelf-head">
+          learning
+          {#if provisionalActive.length > 0}
+            <span class="shelf-count">— {provisionalActive.length} provisional</span>
+          {/if}
+        </h2>
+        {#if provisionalActive.length > 0}
+          <!-- The same five ratified columns as the settled table, so
+               the two read as one surface; no sort or filter row -- a
+               shelf is a holding area, not a second ledger. -->
+          <table class="ftable">
+            <thead>
+              <tr class="shelf-heads">
+                <th>flag</th>
+                <th>where</th>
+                <th>evidence</th>
+                <th class="num">count</th>
+                <th>age</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each provisionalActive as f (f.id)}
+                {@render flagRows(f, true)}
+              {/each}
+            </tbody>
+          </table>
+        {:else}
+          <!-- The warming case with nothing on the shelf yet: the
+               answer to "why is it silent", in words -- the point of
+               the issue, not decoration. -->
+          <p class="shelf-warm">
+            Baselines are still warming. A spike seen now is not thrown away — it appears here as a provisional flag,
+            marked as one mikroview does not yet trust. Nothing has fired during warm-up yet.
+          </p>
+        {/if}
+      </section>
+    {/if}
+
+    <!-- Outside the shelf on purpose: judging the shelf's last flag can
+         unmount the shelf itself, and the Undo offer must survive that. -->
+    {#if lastJudged && flagsState.isUndoable(lastJudged.id)}
+      <p class="undo-line" role="status">
+        Judged {lastJudged.verdict}.
+        <button class="olink" onclick={undoJudgement}>Undo</button>
+      </p>
+    {/if}
   </div>
 </div>
+
+{#snippet flagRows(f: Flag, provisional: boolean)}
+  {@const family = familyOf(f.type)}
+  {@const open = expandedId === f.id}
+  {@const ep = episodes[f.id]}
+  <tr class="frow" class:open class:provisional style="--ft: {family.ink}" onclick={() => toggleExpanded(f)}>
+    <td class="fmark">{family.mark} {labelFor(f.type)}{#if provisional}<span class="ptag">provisional</span>{/if}</td>
+    <td class="k">
+      {#if isFilterable(f)}
+        <button
+          class="wl"
+          title="Open {f.target} in the topography"
+          onclick={(ev) => {
+            ev.stopPropagation()
+            openWhere(f)
+          }}
+        >
+          {f.target}
+        </button>
+      {:else}
+        <span class="wl-plain">network-wide</span>
+      {/if}
+    </td>
+    <td>{f.detail}</td>
+    <td class="num">{f.count}×</td>
+    <td class="t">{formatFlagAge(f.lastSeen, appState.now)}</td>
+    <td class="disc">
+      <!-- The row's one affordance (rounds 18-19/29): the
+           chevron rotates rather than swapping glyphs, so the
+           open state reads at a glance down a striped list. -->
+      <button
+        class="openc"
+        aria-expanded={open}
+        aria-label="{open ? 'Close' : 'Open'} the drawer for this flag"
+        onclick={(ev) => {
+          ev.stopPropagation()
+          toggleExpanded(f)
+        }}
+      >
+        ▸
+      </button>
+    </td>
+  </tr>
+  {#if open}
+    <!-- The drawer (round 29): the story and the matched
+         lines down the left, the episode's shape on the
+         right, the actions across the foot. The type's
+         stripe runs on through it unbroken. -->
+    <tr class="drawer" class:provisional style="--ft: {family.ink}">
+      <td colspan="6">
+        <div class="dwr-in">
+          {#if provisional}
+            <!-- The label's meaning, in a sentence (#616:
+                 worded, never shape alone). -->
+            <p class="pwhy">
+              provisional — its baseline was still warming when this fired, so mikroview does not yet trust
+              the comparison behind it. Not counted as an open flag.
+            </p>
+          {/if}
+          <!-- The headline and story (#678): plain-English
+               writing generated per flag type from the
+               evidence the flag already carries, not the raw
+               evidence itself -- the headline stands alone
+               as the drawer's first words, the story running
+               on from it in sentences. See flagNarrative.ts. -->
+          <p class="story"><b class="headline">{headlineFor(f)}</b> {storyFor(f)}</p>
+          <div class="side">
+            <span class="lab">the episode</span>
+            {#if Array.isArray(ep) && ep.length > 0}
+              <svg
+                viewBox="0 0 260 34"
+                preserveAspectRatio="none"
+                role="img"
+                aria-label="{ep.length} events, drawn on a strip of the half hour around last seen"
+              >
+                {#each episodeTicks(ep) as x, i (i)}
+                  <line
+                    x1={x}
+                    y1="6"
+                    x2={x}
+                    y2="28"
+                    stroke="var(--ft)"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                  />
+                {/each}
+              </svg>
+            {/if}
+            <!-- The episode's shape (#678): still arriving,
+                 stopped, or intermittent -- derived from the
+                 flag's own timestamps (the richer per-event
+                 episode once it's fetched, the flag's
+                 firstSeen/lastSeen before then). See
+                 episodeShape.ts. -->
+            <span class="span">{episodeShapeFor(f, ep, appState.now)}</span>
+            {#if ep === 'loading'}
+              <p class="ep-note">fetching the events…</p>
+            {:else if ep === 'error'}
+              <p class="ep-note">could not fetch the events</p>
+            {:else if Array.isArray(ep) && ep.length === 0}
+              <!-- Raw events are only retained in the
+                   buffer; an old flag honestly says the
+                   window has moved on rather than drawing an
+                   empty strip. -->
+              <p class="ep-note">no matching events still buffered</p>
+            {/if}
+          </div>
+          {#if Array.isArray(ep) && ep.length > 0}
+            <div class="lines">
+              {#each ep.slice(0, 3) as e (e.id)}
+                <div>{eventLine(e)}</div>
+              {/each}
+            </div>
+          {/if}
+          <div class="dwr-acts">
+            {#if isFilterable(f)}
+              <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
+            {/if}
+            {#if provisional && canEdit}
+              <!-- The verdict loop (#491/#638): the tuning
+                   feedback a provisional flag exists to
+                   gather. expected/noise clear the flag as
+                   they record; real records and the flag
+                   stays as history. -->
+              {#if f.verdict}
+                <span class="verdictline">judged {f.verdict} by {f.verdictBy}</span>
+              {:else}
+                <button
+                  class="act"
+                  title="Normal for this network — records the verdict and clears the flag"
+                  onclick={() => judge(f, 'expected')}>expected</button
+                >
+                <button
+                  class="act"
+                  title="Not meaningful — records the verdict and clears the flag"
+                  onclick={() => judge(f, 'noise')}>noise</button
+                >
+                <button
+                  class="act"
+                  title="A real finding — records the verdict; the flag stays"
+                  onclick={() => judgeRealVerdict(f)}>real</button
+                >
+              {/if}
+            {/if}
+            {#if noteFor === f.id}
+              <!-- The note is optional: confirming with an
+                   empty one is exactly a plain clear. -->
+              <div class="clear-note" role="group" aria-label="Clear with a note">
+                <input
+                  type="text"
+                  class="clear-note-input"
+                  placeholder="add a note (optional)"
+                  aria-label="Note for clearing this flag"
+                  bind:value={noteDraft}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') confirmClear(f.id)
+                    if (e.key === 'Escape') cancelNote()
+                  }}
+                />
+                <button class="act" onclick={() => confirmClear(f.id)}>Clear</button>
+                <button class="act quiet" onclick={cancelNote}>Cancel</button>
+              </div>
+            {:else if canEdit}
+              <button class="act quiet" onclick={() => openNote(f.id)}>clear with a note</button>
+            {/if}
+          </div>
+        </div>
+      </td>
+    </tr>
+  {/if}
+{/snippet}
 
 <style>
   .flags-page {
@@ -639,6 +812,15 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+    /* #616's dark-not-quiet grammar, as the fall already draws it (its
+       45-degree hatch pattern): the same claim -- absence of a trusted
+       signal, not absence of traffic -- so the same shape, quiet enough
+       to sit under the row's own inks. */
+    --shelf-hatch: repeating-linear-gradient(
+      45deg,
+      transparent 0 5px,
+      color-mix(in srgb, var(--fg-dim) 14%, transparent) 5px 6px
+    );
   }
 
   .flags {
@@ -775,15 +957,26 @@
     cursor: pointer;
   }
 
+  /* background-color, not the background shorthand: a provisional
+     row's hatch rides in background-image and must survive hover and
+     open (#642). */
   .frow:hover td {
-    background: var(--bg-hover);
+    background-color: var(--bg-hover);
   }
 
   /* An open row hands its bottom edge to the drawer, so the two read as
      one block rather than as two stacked rows. */
   .frow.open td {
-    background: var(--bg-hover);
+    background-color: var(--bg-hover);
     border-bottom-color: transparent;
+  }
+
+  /* The shelf's rows and drawers are hatched -- shape -- and every one
+     also wears the worded .ptag/.pwhy -- label -- per #616: never
+     meaning by colour (or texture) alone. */
+  .frow.provisional td,
+  tr.drawer.provisional > td {
+    background-image: var(--shelf-hatch);
   }
 
   /* One unbroken line: row and drawer share the type's stripe, and the
@@ -1012,6 +1205,96 @@
 
   .olink:hover {
     text-decoration-color: currentColor;
+  }
+
+  /* The learning shelf (#642). Its heading is the section's own label
+     -- the docket switcher carries no counts (round 30), so the shelf's
+     number lives here -- wearing a small hatch swatch so the section
+     and its rows share one grammar. */
+  .shelf-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .shelf-head::before {
+    content: '';
+    display: inline-block;
+    width: 18px;
+    height: 9px;
+    border: 1px solid var(--border);
+    background-image: var(--shelf-hatch);
+  }
+
+  .shelf-count {
+    color: var(--fg);
+  }
+
+  .shelf .ftable {
+    margin-top: 8px;
+  }
+
+  /* The shelf's column heads: the settled table's head typography
+     without its sort/filter machinery -- a shelf is a holding area,
+     not a second ledger. */
+  .shelf-heads th {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    white-space: nowrap;
+  }
+
+  .shelf-warm {
+    margin: 8px 0 0;
+    max-width: 62ch;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--fg-muted);
+  }
+
+  /* The worded half of the provisional marking (#616). Inside .fmark it
+     must not inherit the family ink -- it is a trust status, not a
+     family. */
+  .ptag {
+    margin-left: 8px;
+    padding: 1px 5px;
+    border: 1px dashed var(--fg-dim);
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: var(--fg-muted);
+  }
+
+  .pwhy {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  .verdictline {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  .undo-line {
+    margin: 0;
+    font-size: 12px;
+    color: var(--fg-muted);
   }
 
   @media (prefers-reduced-motion: reduce) {
