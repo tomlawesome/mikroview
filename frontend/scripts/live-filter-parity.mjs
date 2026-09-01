@@ -22,7 +22,7 @@
 // *names* for 192.0.2.0/24 and 198.51.100.0/24, which doesn't matter for
 // this check -- it's about the raw address, not the label).
 
-import { session, feedRaw, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedRaw, feedSyslog, check, done, goTo, unfoldStreamFilter } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -126,11 +126,30 @@ async function waitUntil(fn, timeoutMs = 8000, intervalMs = 250) {
   return last
 }
 
+/**
+ * ensureFiltersOpen re-opens the filter strip.
+ *
+ * Round 30's box closes on any click away from it (FilterBar.svelte:97-100,
+ * the owner's 2026-08-31 ruling), and every token this scenario clicks --
+ * a table row, a detail sheet -- is away from it. So the controls read back
+ * below unmount on the very click under test, and page.inputValue reports
+ * "" for an element that is no longer there.
+ *
+ * The filter itself is applied: measured on a real instance, the box's own
+ * chips and the URL both carry it (#663). Re-opening restores the control
+ * so this scenario can assert exactly what it always asserted -- the value
+ * has to be in the box, not merely in the state behind it.
+ */
+async function ensureFiltersOpen() {
+  await unfoldStreamFilter(page).catch(() => {})
+}
+
 /** waitForInputValue polls an input/select's value, returning what it last saw either way -- so a FAIL message shows the real mismatch, not a stale boolean. */
 async function waitForInputValue(selector, expected, timeoutMs = 8000, intervalMs = 250) {
   const deadline = Date.now() + timeoutMs
   let last = ''
   while (Date.now() < deadline) {
+    await ensureFiltersOpen()
     last = await page.inputValue(selector).catch(() => '')
     if (last === expected) return last
     await page.waitForTimeout(intervalMs)
@@ -151,6 +170,10 @@ if (!ready) {
 }
 
 async function clearFilters() {
+  // `.bar` is the strip itself, so this found nothing while the box was
+  // closed -- and cleared nothing, silently, leaving each check to inherit
+  // the last one's filter.
+  await ensureFiltersOpen()
   if (await page.isVisible('.bar .clear').catch(() => false)) {
     await page.click('.bar .clear').catch(() => {})
     await page.waitForTimeout(300)

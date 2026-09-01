@@ -21,12 +21,10 @@
 // render. The percentages then serve only as the fallback for a card
 // that has not rendered that furniture yet.
 //
-// The remaining entries are still hand-placed approximations, and a
-// live measurement on 2026-09-01 showed several of them ring empty
-// space: the fall's band ring sat at left 4% where the bands render at
-// 40%, and the metrics ring was 40% of the viewport wide over a control
-// that is 12% wide. Which element those rings should name is a visual
-// call and is recorded on #750, not guessed at here.
+// Every ring now measures itself off a `selector`; the four values that
+// follow it are only the fallback for a card that has not rendered that
+// furniture yet. Which element each ring names, and why, is recorded on
+// #750 -- not guessed at here.
 //
 // Selectors are scoped to their own card because the deck keeps every
 // card mounted: a bare `span.switch` matches both metrics and the
@@ -44,12 +42,12 @@ export interface TourHighlight {
 
 export const TOUR_HIGHLIGHTS: Record<string, TourHighlight[]> = {
   fall: [
-    { label: 'the brink — now arrives here', top: '9%', left: '4%', width: '92%', height: '7%' },
+    { label: 'the brink — now arrives here', selector: '.card[data-card="fall"] line.nowline', top: '9%', left: '4%', width: '92%', height: '7%' },
     { label: 'a band per boundary — click reaches in', selector: '.card[data-card="fall"] g.band-head', top: '18%', left: '4%', width: '16%', height: '34%' },
-    { label: 'the held hour — scroll looks back', top: '80%', left: '4%', width: '18%', height: '9%' },
+    { label: 'the held hour — scroll looks back', selector: '.card[data-card="fall"] div.fall-foot', top: '80%', left: '4%', width: '18%', height: '9%' },
   ],
   topography: [
-    { label: 'the router as the waist — subnets below, the internet above', top: '30%', left: '38%', width: '24%', height: '30%' },
+    { label: 'the router as the waist — subnets below, the internet above', selector: '.card[data-card="topography"] rect.isl.waist', top: '30%', left: '38%', width: '24%', height: '30%' },
   ],
   metrics: [
     { label: 'one hour, three views — seismograph, register, table', selector: '.card[data-card="metrics"] span.switch', top: '10%', left: '6%', width: '40%', height: '10%' },
@@ -61,9 +59,9 @@ export const TOUR_HIGHLIGHTS: Record<string, TourHighlight[]> = {
     { label: 'flags, watchlist and audit — one card, three tabs', selector: '.card[data-card="docket"] span.switch', top: '10%', left: '6%', width: '50%', height: '9%' },
   ],
   entities: [
-    { label: 'routers, named entities, and what mikroview has discovered', top: '10%', left: '6%', width: '55%', height: '9%' },
+    { label: 'routers, named entities, and what mikroview has discovered', selector: '.card[data-card="entities"] .og:first-of-type', top: '10%', left: '6%', width: '55%', height: '9%' },
   ],
   engineroom: [
-    { label: 'the shelf — deck order, ingest, detection, memory, account', top: '10%', left: '6%', width: '55%', height: '9%' },
+    { label: 'the shelf — deck order, ingest, detection, memory, account', selector: '.card[data-card="engineroom"] .stshelf', top: '10%', left: '6%', width: '55%', height: '9%' },
   ],
 }

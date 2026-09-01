@@ -67,7 +67,7 @@ async function rollTo(page, label, timeoutMs = 60000) {
     { timeout: timeoutMs },
   )
   if (scene.tab) {
-    await page.click(`.card[data-card="${scene.card}"] [role="tab"]:has(.tlabel:text-is("${scene.tab}"))`, {
+    await page.click(`.card[data-card="${scene.card}"] [role="tab"]:text-is("${scene.tab}")`, {
       timeout: timeoutMs,
     })
   }
