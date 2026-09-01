@@ -63,9 +63,10 @@ func TestMemoryCorpusReplayVisitsEveryEventInChronologicalOrder(t *testing.T) {
 
 // TestMemoryCorpusReplayPaginatesAcrossMultiplePages shrinks
 // corpusPageSize far below the event count, forcing Replay to walk
-// several pages via its descending-Until cursor -- pinning that the
-// page-boundary dedup (by event ID) and reassembly into chronological
-// order both work, not just the trivial single-page case.
+// several pages via its BeforeID cursor -- pinning that pages don't
+// overlap or drop events (each ID visited exactly once) and that
+// reassembly into chronological order works, not just the trivial
+// single-page case.
 func TestMemoryCorpusReplayPaginatesAcrossMultiplePages(t *testing.T) {
 	origPageSize := corpusPageSize
 	corpusPageSize = 7
