@@ -37,14 +37,35 @@
       const el = document.querySelector(h.selector)
       if (!el) continue
       const r = el.getBoundingClientRect()
-      // A card that is mounted but not rendered has a zero box; falling
-      // back to the hand-placed value beats ringing a point.
-      if (r.width === 0 || r.height === 0) continue
+      // A card that is mounted but not rendered has a zero box on both
+      // axes; falling back to the hand-placed value beats ringing a
+      // point. A rule or hairline is legitimately zero on *one* axis
+      // only (a plain horizontal SVG <line>'s bounding box is exactly
+      // 0 tall, not merely thin -- the live-check skill's own note on
+      // Playwright and SVG geometry) -- that case is real and goes on
+      // to the padding below, not to the empty-box fallback.
+      if (r.width === 0 && r.height === 0) continue
+      // A rule or hairline measures only a pixel or two thick -- the
+      // fall's now line is ~1px tall. Pad it to a visible band, centred
+      // on the element, rather than ringing a sliver (#750).
+      const MIN_PX = 28
+      let top = r.top
+      let height = r.height
+      if (height < MIN_PX) {
+        top -= (MIN_PX - height) / 2
+        height = MIN_PX
+      }
+      let left = r.left
+      let width = r.width
+      if (width < MIN_PX) {
+        left -= (MIN_PX - width) / 2
+        width = MIN_PX
+      }
       next[h.label] = {
-        top: `${(r.top / window.innerHeight) * 100}%`,
-        left: `${(r.left / window.innerWidth) * 100}%`,
-        width: `${(r.width / window.innerWidth) * 100}%`,
-        height: `${(r.height / window.innerHeight) * 100}%`,
+        top: `${(top / window.innerHeight) * 100}%`,
+        left: `${(left / window.innerWidth) * 100}%`,
+        width: `${(width / window.innerWidth) * 100}%`,
+        height: `${(height / window.innerHeight) * 100}%`,
       }
     }
     // Only assign when something moved. This runs every frame, and a
