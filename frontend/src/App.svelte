@@ -29,12 +29,15 @@
   import JourneyAttach from './components/JourneyAttach.svelte'
   import JourneyGlass from './components/JourneyGlass.svelte'
   import JourneyTour from './components/JourneyTour.svelte'
-  // Mounted here, not in the rail that triggers it: the rail is chrome
-  // for authenticated pages, and this overlay outlives any one of them.
+  // Mounted here, not in the account menu that triggers it: the menu is
+  // scoped to whichever scene's own bar renders it, and this overlay
+  // outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
   // The setup wizard is a modal over the shell, not a page (#487) -- so
   // it is mounted here with the other overlays rather than reached
-  // through appState.view. The rail's "Run setup…" opens it.
+  // through appState.view. Its "Run setup…" row lives in the account
+  // menu (desktop) and the bottom bar (mobile), both of which call
+  // wizardState.launch() directly.
   import SetupWizard from './components/SetupWizard.svelte'
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
@@ -198,18 +201,10 @@
 {:else if authState.state === 'unauthenticated'}
   <AuthLogin />
 {:else}
-  <!-- First in tab order, which is why it is here rather than in the rail
-       that owns the rest of the navigation: the toolbar renders ahead of
-       the rail, so a skip-link inside the rail would sit behind every
-       toolbar control and skip nothing worth skipping. -->
+  <!-- First in tab order: rendered ahead of BottomBar and every scene's
+       own bar, so a keyboard user reaches it before any navigation
+       chrome rather than having to tab past it. -->
   <a class="skip-link" href="#main-content">Skip to content</a>
-  <!-- First in tab order after the skip-link, per the record: the handle
-       is the only way back to a docked rail, so it cannot sit behind the
-       page's own controls. -->
-  <!-- Dock and density are pointer-width affordances (DESIGN.md's "Small
-       screens"): at a small viewport the bottom bar is the whole of
-       navigation, and neither NavRail nor NavHandle (which only ever
-       restores a rail state) mounts at all. -->
   <!-- Pages are the site (owner, 2026-08-29): no persistent chrome.
        The toolbar and the desktop nav rail are retired wholesale; each
        scene carries its own bar. Navigation is the deck (#633, #647):

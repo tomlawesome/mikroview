@@ -720,6 +720,15 @@ export interface Flag {
   // Structured supporting evidence -- see Evidence's own doc comment.
   // Absent/empty for detectors with nothing beyond `detail` to show.
   evidence?: Evidence
+  // Mirrors internal/flags.Flag.Provisional (#642): true for a flag
+  // raised while its judgement's baseline had not yet cleared its
+  // history floor -- a z-score existed but was not yet trusted. Absent
+  // (omitempty on the wire) is the common case and means settled, same
+  // "absence is the default" convention verdict/confidence above
+  // already follow. Fixed at episode start, same as firstSeen -- it does
+  // not flip to false in place if the same episode's baseline later
+  // clears its floor (see internal/flags.Store.add's own doc comment).
+  provisional?: boolean
   // Verdict/verdictBy/verdictAt (#638): all three present together or
   // all absent -- absent means never judged, not "judged with no
   // opinion." verdictBy is the account that judged it; verdictAt is
