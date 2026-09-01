@@ -229,8 +229,21 @@ the whole job.
 `ghcr.io/tomlawesome/mikroview/live-check` is private, and a registry
 credential on that host would be a secret nobody is watching. Building
 from the Dockerfile needs none and tests the same thing. The repository
-is private too, so copy the working tree over rather than cloning it
-there.
+is private too, so the host cannot clone it -- from GitHub or GitLab --
+and nothing should be added to let it.
+
+**Use `make live-check-remote`.** It pushes the tree over SSH into a bare
+repo on the host, checks it out, builds the image if it is not cached,
+runs the gate, brings the log back as `gate-run.log`, and removes the
+work tree afterwards. `MV_BROWSER=firefox make live-check-remote` picks
+the engine. `scripts/gate-remote.sh` carries the reasoning.
+
+`git push` rather than rsync or a clone, because authentication then
+happens from this side: nothing has to live over there. Only new objects
+cross after the first run, `node_modules` and `worktrees/` never do, and
+the host gets a real checkout so `live-env.sh` stamps a true SHA instead
+of `nogit`. The bare repo and the built image stay behind as the cache;
+the work tree does not.
 
 **What it deliberately cannot do**, and none of it should be worked
 around: no sudo; no read access to `/etc/gitlab-runner/config.toml`; no
