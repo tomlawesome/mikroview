@@ -287,18 +287,29 @@ export async function openAccountMenu(page) {
 }
 
 /**
- * unfoldStreamFilter opens the stream's folded filter box (#644, round
- * 8), which replaced the always-open panel every scenario below was
- * written against.
+ * unfoldStreamFilter opens the strip that holds the stream's filter
+ * fields (input.rule and its neighbours).
  *
- * Idempotent: the trigger only exists while the box is folded, so an
- * already-open filter is a no-op rather than a click that closes it. The
- * mobile drawer has its own trigger and no fold-trigger, hence the
- * count guard rather than a bare click.
+ * Round 30 (#697) changed how that happens. The box itself --
+ * `.filterline .fbox` -- is always on screen and is the disclosure:
+ * clicking anywhere inside it opens the strip. The standalone
+ * "Filters ▸" trigger this used to click belonged to round 8's folded
+ * box (#644) and is retired, not merely hidden: FilterBar.svelte gates
+ * it on FILTERS_TRIGGER_ENABLED, which is `false`, so
+ * `button.fold-trigger` renders nowhere and the old click was a silent
+ * no-op -- the count guard swallowed it, the strip never opened, and
+ * every scenario then timed out waiting for input.rule (#667).
+ *
+ * Idempotent, via the box's own `open` class rather than the trigger's
+ * absence: clicking an already-open box would not close it, but nor is
+ * there any reason to. The mobile drawer has its own trigger and no
+ * .filterline, hence the count guard rather than a bare click.
  */
 export async function unfoldStreamFilter(page) {
-  const fold = page.locator('button.fold-trigger')
-  if (await fold.count()) await fold.click()
+  const box = page.locator('.filterline .fbox')
+  if (!(await box.count())) return
+  if (await box.evaluate((el) => el.classList.contains('open'))) return
+  await box.click()
 }
 
 /**
@@ -408,10 +419,14 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
   if (landing === 'stream') {
     await goTo(page, 'Stream', { unfold: unfoldFilter })
     // Wait for whichever shape was asked for. A scenario that opted out
-    // is testing the fold itself (live-stream-interiors asserts "the
-    // filter row starts folded"), so waiting for input.rule would both
-    // time out and destroy the state under test.
-    await page.waitForSelector(unfoldFilter ? 'input.rule' : 'button.fold-trigger', { timeout: 15000 })
+    // is testing the closed box itself, so waiting for input.rule would
+    // both time out and destroy the state under test.
+    //
+    // The closed shape is the always-present type-ahead input inside the
+    // box (#697). It is not `button.fold-trigger`: that control is
+    // retired, so waiting for it timed out for every scenario that
+    // opted out, exactly as the open shape did for the rest (#667).
+    await page.waitForSelector(unfoldFilter ? 'input.rule' : '.filterline input.fbtype', { timeout: 15000 })
   }
 
   if (waitForEvents > 0) {
