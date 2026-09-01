@@ -516,9 +516,26 @@ type expectationRequest struct {
 	Ports                  []int                    `json:"ports"`
 	Invert                 bool                     `json:"invert"`
 	IncludeStructuralNoise bool                     `json:"includeStructuralNoise"`
+	// Window sets when this entry is expected to see traffic (#680,
+	// watchlist.Window). Deliberately a pointer, unlike every sibling
+	// field above: those replace in full whenever the expectation block
+	// is sent at all, but the docket form does not carry a window
+	// control yet (#761/#772, round 31) and will keep PUTting this block
+	// to change ports, invert or scope long before it does. Full-replace
+	// semantics for Window would mean the first such edit silently resets
+	// an operator's window to "always" -- the exact bug #773 exists to
+	// close, reappearing one field over. So nil means "leave the entry's
+	// current window alone" on PUT, and "no window" (the zero value,
+	// which Window.Defined reports as always-on) on POST, where there is
+	// no existing window to preserve. Sending an explicit zero-value
+	// window (start == end, e.g. "00:00"/"00:00") is how a caller that
+	// does know about windows clears one back to always.
+	Window *watchlist.Window `json:"window,omitempty"`
 }
 
-// applyTo copies req's operator-settable fields onto e in place.
+// applyTo copies req's operator-settable fields onto e in place. Window is
+// the one exception to full replacement -- see its own doc comment on
+// expectationRequest for why an absent Window must not touch e.Window.
 func (req expectationRequest) applyTo(e *watchlist.Entry) {
 	e.Source = req.Source
 	e.SourceList = req.SourceList
@@ -526,6 +543,9 @@ func (req expectationRequest) applyTo(e *watchlist.Entry) {
 	e.Ports = req.Ports
 	e.Invert = req.Invert
 	e.IncludeStructuralNoise = req.IncludeStructuralNoise
+	if req.Window != nil {
+		e.Window = *req.Window
+	}
 }
 
 // detectionRequest is the wire shape for creating a custom detection --
