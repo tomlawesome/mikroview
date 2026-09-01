@@ -71,15 +71,21 @@ async function signedInPage(scheme) {
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
   await page.waitForSelector('#main-content', { timeout: 15000 })
-  // The operate pages live on the scene bar's account chip since #616's
-  // deck retired the rail. Standalone here rather than importing
-  // live-browser.mjs's goTo(): this capture tool deliberately stays
-  // outside the scenario contract.
-  await page.click('.card[aria-hidden="false"] .account button.chip')
-  await page.waitForSelector('.account .menu', { timeout: 5000 })
-  await page.click('.account .menu button.row:text-is("Settings")')
+  // Settings is one of the deck's own cards since #647 (round 23), reached via the roll rail rather than the
+  // account chip's menu (#616's deck retired the rail, but #647 moved Settings and Entities off the menu and onto
+  // the deck itself -- see live-browser.mjs's SCENES table). Standalone here rather than importing
+  // live-browser.mjs's goTo(): this capture tool deliberately stays outside the scenario contract. Waits for the
+  // engineroom card to actually centre -- .page-header h2 used to be the landing proof, but #700 unmounted
+  // PageHeader from EngineRoom.svelte entirely, so that selector no longer exists anywhere on the page (#667 group
+  // E).
+  await page.click('.roll-rail button.rail-name:text-is("Settings")')
   await page.waitForFunction(
-    () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
+    () => {
+      const deck = document.querySelector('.deck')
+      const el = deck?.querySelector('.card[data-card="engineroom"]')
+      if (!el) return false
+      return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
+    },
     null,
     { timeout: 10000 },
   )

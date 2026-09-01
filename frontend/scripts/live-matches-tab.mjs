@@ -100,9 +100,9 @@ check(before.status === 200, `the merged query answers (${before.status})`)
 // in: the page stays mounted between visits, so arriving from the rail
 // lands on whichever tab was last open.
 async function openMatchesTab() {
-  // Matching the label, not the row: NavRail moves each row's text into
-  // a <span class="label">, and Playwright's text engine only matches an
-  // element directly containing the text (see live-nav-rail.mjs).
+  // goTo(page, 'Watchlist') rolls the deck to the docket scene and clicks
+  // its Watchlist tab on the scene bar (#700); no manual label matching
+  // needed here, that lives in live-browser.mjs's SCENES table.
   await goTo(page, 'Watchlist')
   const tab = page.locator('[role="tab"]:has-text("Matches")')
   if (!(await visible(tab))) {
