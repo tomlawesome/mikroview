@@ -101,7 +101,7 @@ check(
 )
 
 await page.click('[data-card="topography"] .dial >> nth=0')
-await page.waitForSelector('[data-card="docket"] .tab.on .tlabel >> text=flags', { timeout: 5000 })
+await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=flags', { timeout: 5000 })
 check(true, 'clicking the flags dial opens the docket on the flags tab')
 
 await page.click('.rail-name >> text=Topography')
@@ -114,13 +114,13 @@ check(bars >= 2, `the LAN island draws both halves of the aggregate bar (${bars}
 check((await page.locator('[data-card="topography"] .zone .hb-div').count()) >= 1, 'a centre divider is drawn between them')
 
 await page.click('[data-card="topography"] .zone .hbar-g[aria-label*="watcher"] >> nth=0')
-await page.waitForSelector('[data-card="docket"] .tab.on .tlabel >> text=watchlist', { timeout: 5000 })
+await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=watchlist', { timeout: 5000 })
 check(true, 'the purple half opens the watchlist')
 
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 await page.click('[data-card="topography"] .zone .hbar-g[aria-label*="open flag"] >> nth=0')
-await page.waitForSelector('[data-card="docket"] .tab.on .tlabel >> text=flags', { timeout: 5000 })
+await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=flags', { timeout: 5000 })
 check(true, 'the red half opens the flags tab, pre-filtered to the zone')
 
 await page.click('.rail-name >> text=Topography')
