@@ -13,7 +13,12 @@ const STORAGE_KEY = 'mikroview-deck-order'
 // and 'engineroom' only ever render for the user/admin tier, and
 // 'fleet' only for a viewer (deckCards' own gate) -- harmless to carry
 // all three here regardless of role, since apply() below only ever
-// sorts the keys a session's own card list actually has.
+// sorts the keys a session's own card list actually has. 'fleet' sits
+// last deliberately, not by inheritance: the deck reads from the log
+// outward -- the fall and stream first, the docket's judgements, then
+// the machinery behind the log -- and Fleet is a viewer's machinery
+// card exactly as Entities/Settings are a user's, so it takes the same
+// tail position they do.
 const DEFAULT_ORDER = ['fall', 'topography', 'metrics', 'live', 'docket', 'entities', 'engineroom', 'fleet']
 
 function loadInitial(): string[] {
