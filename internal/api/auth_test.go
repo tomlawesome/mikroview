@@ -237,6 +237,41 @@ func TestAuthSessionReportsSetupRequired(t *testing.T) {
 	}
 }
 
+// TestAuthSessionReportsSignedInSince covers #677's sessions row ("this
+// device ... signed in 4 d"): the field must be present and parseable
+// once authenticated, and absent while not.
+func TestAuthSessionReportsSignedInSince(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp, err := client.Get(ts.URL + "/api/auth/session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body sessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Authenticated {
+		t.Fatalf("expected an authenticated session, got %+v", body)
+	}
+	since, err := time.Parse(time.RFC3339, body.SignedInSince)
+	if err != nil {
+		t.Fatalf("signedInSince %q did not parse as RFC3339: %v", body.SignedInSince, err)
+	}
+	if time.Since(since) > time.Minute {
+		t.Errorf("expected signedInSince to be about now (just logged in), got %v", since)
+	}
+}
+
 func TestRegisterCreatesAdminAndStartsASession(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
@@ -378,6 +413,71 @@ func TestLogoutRevokesSession(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("expected the session to no longer work after logout, got %d", resp.StatusCode)
+	}
+}
+
+// TestLogoutAllRejectsAnonymousCaller is #677's negative case for the
+// new self-serve "sign out everywhere" route: with no session cookie at
+// all there is nothing to revoke, and the endpoint must refuse rather
+// than silently no-op the way plain logout does (see
+// authzMatrix's accessViewer row for why -- unlike /api/auth/logout,
+// this one performs a real account-scoped action and needs a caller to
+// act on).
+func TestLogoutAllRejectsAnonymousCaller(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/logout-all", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected an anonymous caller to be refused, got %d", resp.StatusCode)
+	}
+}
+
+// TestLogoutAllEndsEverySessionButTheCallers is the positive case: two
+// devices signed in as the same user, "sign out everywhere" called from
+// one of them, and the result checked from both -- the caller that made
+// the call keeps working (issued a fresh session, #677's requirement
+// that the tab you clicked from doesn't itself get logged out), while
+// the other device's session is dead.
+func TestLogoutAllEndsEverySessionButTheCallers(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	deviceA := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, deviceA, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	deviceB := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, deviceB, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	callResp := postJSON(t, deviceA, ts.URL+"/api/auth/logout-all", map[string]any{})
+	callResp.Body.Close()
+	if callResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected sign-out-everywhere to succeed, got %d", callResp.StatusCode)
+	}
+
+	aResp, err := deviceA.Get(ts.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer aResp.Body.Close()
+	if aResp.StatusCode != http.StatusOK {
+		t.Errorf("expected the calling device's session to keep working (it was reissued a fresh one), got %d", aResp.StatusCode)
+	}
+
+	bResp, err := deviceB.Get(ts.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bResp.Body.Close()
+	if bResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected the other device's session to be revoked, got %d", bResp.StatusCode)
 	}
 }
 

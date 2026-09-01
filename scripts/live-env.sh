@@ -98,6 +98,32 @@ else
   DEVICES_BLOCK=''
 fi
 
+# MV_DEMO_DEVICES=1 declares the estate scripts/seed-demo.py feeds, which
+# is the only way its pushed tables can ever be read back (#709).
+#
+# A pushed rule/NAT/address table is keyed by *device id*. seed-demo.py
+# mints its ingest tokens against the router names below and then streams
+# syslog from one loopback address per router, so unless those addresses
+# are declared here the registry invents a discovered device per source
+# IP -- "127.0.0.1" and friends -- and the pushed tables sit under ids no
+# device has. Both halves report success and never meet: the topography
+# draws an unnamed waist card and boundary-derived zones, and the fall's
+# bands read "not in a pushed rule table". seed-demo.py was written
+# expecting this block to exist; its own comment calls guest-ap
+# "declared in cfg.yaml", and nothing declared it.
+#
+# Opt-in, and set after both branches above deliberately: the gate's
+# scenarios read devices[0], and internal/device.Registry.List is
+# map-ordered, so declaring four devices unconditionally would make that
+# nondeterministic. Unset, every existing caller behaves exactly as
+# before.
+#
+# guest-ap is declared and never fed on purpose -- a router that has
+# said nothing is part of the story the demo tells (#687).
+if [ "${MV_DEMO_DEVICES:-}" = "1" ]; then
+  DEVICES_BLOCK='devices: [{id: border-rb5009, name: border-rb5009, sourceIp: 127.0.0.1}, {id: office-hex, name: office-hex, sourceIp: 127.0.0.2}, {id: lab-crs, name: lab-crs, sourceIp: 127.0.0.3}, {id: guest-ap, name: guest-ap, sourceIp: 127.0.0.4}]'
+fi
+
 # The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
 SYSLOG_TLS_HOST="${SYSLOG_TLS_ADDR%:*}"
 
@@ -179,7 +205,12 @@ build() {
   # succeeds too -- "> vite build" read as a redirection into a command
   # named "build" is how this was actually caught, as "eval: build: not
   # found" once npm's own text stopped going to /dev/null with the error.
-  if ! ( cd frontend && npm run build ) 1>&2; then
+  # MV_DEMO_BUILD=1: ship a self-destroying service worker, so a browser
+  # holding an earlier build's precached shell drops it instead of
+  # serving it back (#713). Without this a fix can be in the tree, in the
+  # bundle and served correctly, and still be invisible to whoever is
+  # reviewing the demo.
+  if ! ( cd frontend && MV_DEMO_BUILD=1 npm run build ) 1>&2; then
     echo "live-env: npm run build failed in frontend/ -- see the output above." >&2
     if [ ! -d frontend/node_modules ]; then
       echo "live-env: frontend/node_modules is missing -- run 'npm ci' in frontend/ first." >&2
@@ -195,7 +226,21 @@ build() {
   # stamp. Stamping it also fails outright in a linked git worktree --
   # "error obtaining VCS status: exit status 128" -- which took the whole
   # live check down for anyone not working in a plain clone (#348).
-  go build -buildvcs=false -o "$MV_DIR/mikroview" .
+  # Stamp the binary so the running instance can say which build it is.
+  # Without this every demo called itself "dev:local" (main.go's no-ldflags
+  # fallback), so an instance built before a fix was indistinguishable in
+  # the browser from one built after it -- which is how round 30 lost a
+  # day to the owner reviewing a stale build and finding faults that were
+  # already fixed in the tree. AGENTS.md carries the rule; this is what
+  # makes it true. -buildvcs=false stays: it is what stops `go build`
+  # dying in a linked worktree (#348), and the sha below is read from git
+  # explicitly instead.
+  mv_sha="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
+  mv_dirty=""
+  git diff --quiet HEAD 2>/dev/null || mv_dirty="-dirty"
+  mv_stamp="$(cat VERSION 2>/dev/null || echo 0.0.0)+g${mv_sha}${mv_dirty}.$(date -u +%Y%m%dT%H%M%SZ)"
+  go build -buildvcs=false -ldflags "-X main.version=$mv_stamp" -o "$MV_DIR/mikroview" .
+  echo "live-env: built $mv_stamp" >&2
 }
 
 # True if anything is listening on the given TCP port on this host.

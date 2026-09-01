@@ -8,7 +8,9 @@
 //   the real signed-in role: a viewer's deck simply has no Watchlist
 //   card and no Watchlist name (#490's grammar: absent, never
 //   disabled), proved end to end with a real second account rather than
-//   a mocked authState.role.
+//   a mocked authState.role. Since #647 (round 23), Entities carries the
+//   same gate as its own card: an admin's rail carries seven names, a
+//   viewer's six (no Entities -- its GET route still 403s for a viewer).
 // - Clicking a name has to actually roll the card to centre and move
 //   the active state -- appState.view, the snap scroll, and the
 //   IntersectionObserver writing the view back all have to agree, which
@@ -35,8 +37,9 @@ const { page, consoleErrors } = await session({ landing: 'fall' })
 // --- The deck's names, in the ratified order ------------------------------
 const names = await page.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(names) === JSON.stringify(['The fall', 'Topography', 'Metrics', 'Stream', 'The docket']),
-  `an admin's roll rail carries the five scenes in deck order -- got ${JSON.stringify(names)}`,
+  JSON.stringify(names) ===
+    JSON.stringify(['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']),
+  `an admin's roll rail carries the seven cards in deck order -- got ${JSON.stringify(names)}`,
 )
 
 // Absent, never disabled -- a disabled name would satisfy a presence
@@ -138,8 +141,9 @@ check(focused.visible && focused.cls.includes('skip-link'), 'the skip-link becom
 await skipBrowser.close()
 
 // --- A viewer's docket carries no watchlist tab ---------------------------
-// The deck itself is the same five cards for every role (#633): what is
-// admin-only is the docket's watchlist and audit tabs, absent for a
+// The deck itself carries the same six cards for every role (#633);
+// Entities is the one card gated whole (#647), and what is admin-only
+// within the docket is its watchlist and audit tabs -- absent for a
 // viewer rather than disabled.
 const VIEWER_USER = 'live-viewer-rail'
 const VIEWER_PASS = 'live-viewer-rail-password'
@@ -160,8 +164,9 @@ await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
 const viewerNames = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(viewerNames) === JSON.stringify(['The fall', 'Topography', 'Metrics', 'Stream', 'The docket']),
-  `a viewer's rail carries the same five scenes -- the docket answers with its flags tab -- got ${JSON.stringify(viewerNames)}`,
+  JSON.stringify(viewerNames) ===
+    JSON.stringify(['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Settings']),
+  `a viewer's rail carries six cards -- no Entities, and the docket answers with its flags tab -- got ${JSON.stringify(viewerNames)}`,
 )
 check(
   (await viewerPage.locator('.docket [role="tab"]:has-text("watchlist")').count()) === 0,

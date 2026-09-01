@@ -1,12 +1,15 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState, applyFilters } from '../lib/state.svelte'
+  import { whisperState } from '../lib/whisper.svelte'
   import { authState } from '../lib/auth.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
   import { COLUMNS, columnState } from '../lib/columns.svelte'
   import { groupModeState } from '../lib/groupMode.svelte'
   import { flaggedSources, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
   import { flagsState } from '../lib/flags.svelte'
+  import { fallState } from '../lib/fall.svelte'
+  import { footLineFacts } from '../lib/footLine'
   import { viewportState } from '../lib/viewport.svelte'
   import type { ClientEvent, FirewallEvent } from '../lib/types'
   import EventRow from './EventRow.svelte'
@@ -14,6 +17,7 @@
   import EventDetailSheet from './EventDetailSheet.svelte'
   import GhostRows from './GhostRows.svelte'
   import { wizardState } from '../lib/wizard.svelte'
+  import { onMount } from 'svelte'
 
   // Both optional -- default to the live view's own state, so the
   // existing `<LiveTable />` call site (App.svelte's 'live' branch)
@@ -41,8 +45,12 @@
 
   let bodyEl: HTMLDivElement | undefined = $state()
   let gridEl: HTMLDivElement | undefined = $state()
-  // Which event's EventDetailSheet.svelte is open (issue #85's mobile
-  // card layout) -- null means none. Desktop never sets this. Typed as
+  // Which event's EventDetailSheet.svelte is open -- null means none.
+  // Originally issue #85's mobile card layout only; #644's squared
+  // columns made it every row's detail surface, since the sheet is the
+  // one place a row's full detail lives -- raw line, MAC/NAT lookups,
+  // and (#717 restored these as columns too, but the sheet still has
+  // them) device, chain, interfaces, src port, NAT, MAC. Typed as
   // FirewallEvent, not ClientEvent, to match EventRow/EventCardMobile's
   // own prop type -- applyFilters's declared return type is
   // FirewallEvent[] even though the real objects flowing through it are
@@ -50,6 +58,19 @@
   // FirewallEvent[] too.
   let selectedEvent: FirewallEvent | null = $state(null)
   let headerEls: (HTMLDivElement | undefined)[] = $state([])
+
+  // Column-resize affordance (handles/tick marks over the header) is
+  // implemented below (measureOffsets, handleOffsets, startResize,
+  // onResizeMove, endResize, and the `.resize-overlay`/`.resizer` styles)
+  // but unmounted for round-30 fidelity: the ratified mockup
+  // (docs/design/concepts/round-30/shots/stream.png and
+  // stream-bar-out.png) draws no resize handle, tick mark, or drag
+  // target anywhere on the stream's header. Round 30 builds to the
+  // mockup first (#700); the gap is tracked on #691 for a future round
+  // to remount. Do not delete this implementation -- flip
+  // RESIZE_HANDLES_ENABLED and restore the template block in the markup
+  // below when #691 is picked up.
+  const RESIZE_HANDLES_ENABLED: boolean = false
   let dragIndex = $state<number | null>(null)
   let dragStartX = 0
   let dragStartWidth = 0
@@ -239,6 +260,45 @@
   // one lookup per rendered row.
   const flagged = $derived(flaggedSources(flagsState.list))
 
+  // The foot line (#691, round 30's .foot-legend): the three facts of
+  // the day, along the bottom edge of the stream. See lib/footLine.ts
+  // for what each one is and when each one is absent -- an empty array
+  // means the band itself does not render, never an empty strip.
+  //
+  // Owner ruling, 2026-08-31 (#717 review of build 0.4.0+g65bf3b0):
+  // "Bottom bar with the messages, dark, which server, last etc, I hate
+  // it, remove it." This supersedes the earlier #691/#700 ask for round
+  // 30's own three centred facts here -- the band goes entirely, not
+  // just restyled. Unmounted, not deleted, matching RESIZE_HANDLES_ENABLED
+  // above: the facts still compute below in case a future round wants
+  // them somewhere else, but nothing renders them.
+  const FOOT_LEGEND_ENABLED: boolean = false
+
+  // Derived from the whole buffer and the whole flag list, not from
+  // `rendered`: these are facts about the deployment, the same
+  // relationship the whisper strip directly above this table already
+  // has to it. A filter narrows which rows you are looking at; it does
+  // not make a repeating refusal or a dark boundary stop being true.
+  const footFacts = $derived(
+    footLineFacts({
+      flags: flagsState.list,
+      events: appState.events,
+      boundaries: fallState.boundaries,
+      nowMs: appState.now,
+    }),
+  )
+
+  // The dark-boundary fact reads the pushed rule tables through
+  // fallState, which today only the Fall card ever fetches -- and the
+  // deck mounts just the centred card and its neighbours, so the Stream
+  // can be open with fallState still holding nothing. One read on
+  // mount, and only when it is empty: rule tables change on a push, not
+  // per second, and Fall.svelte's own poll keeps them fresh whenever
+  // that card is the one in view.
+  onMount(() => {
+    if (fallState.boundaries.length === 0) void fallState.refresh()
+  })
+
   // Which groups are open. Keyed by the group key rather than by index,
   // so an open drawer stays with its group as new events arrive.
   let openGroups = $state(new Set<string>())
@@ -265,6 +325,14 @@
 
   function deviceName(id: string): string {
     return deviceNames.get(id) ?? id
+  }
+
+  // applyFilters is declared FirewallEvent[] even though the objects
+  // flowing through it are always ClientEvents (see state.svelte.ts's
+  // own comment on filteredEvents) -- this reads the receivedAt every
+  // one of them actually carries, for the whisper's fence (#644).
+  function isDimmed(event: FirewallEvent): boolean {
+    return whisperState.dimmed((event as ClientEvent).receivedAt)
   }
 
   function startResize(index: number, e: PointerEvent) {
@@ -320,7 +388,12 @@
   {#if viewportState.isMobile}
     <div class="body scrollbar">
       {#each displayRendered as event (event.id)}
-        <EventCardMobile {event} deviceName={deviceName(event.deviceId)} onOpen={() => (selectedEvent = event)} />
+        <EventCardMobile
+          {event}
+          deviceName={deviceName(event.deviceId)}
+          dimmed={isDimmed(event)}
+          onOpen={() => (selectedEvent = event)}
+        />
       {/each}
       {#if rendered.length === 0}
         {#if emptyState.kind === 'ghost'}
@@ -333,7 +406,13 @@
   {:else}
     <div class="body scrollbar" bind:this={bodyEl}>
       <div class="grid" bind:this={gridEl} style="grid-template-columns: {columnState.gridTemplate}">
-        {#each COLUMNS as col, i (col.key)}
+        <!-- #729: the reader's chosen subset, not the fixed fifteen --
+             columnState.visibleColumns already carries Time and Rule
+             (pinned, always in it) plus whatever else the chooser in
+             FilterBar left on. EventRow's own cells are gated on the same
+             columnState.isColumnVisible(key) calls, column by column, so
+             the two can never disagree about which columns are showing. -->
+        {#each columnState.visibleColumns as col, i (col.key)}
           <div
             class="header-cell"
             class:sticky-col={col.key === 'time'}
@@ -344,31 +423,38 @@
           </div>
         {/each}
 
-        <div class="resize-overlay" style="height: {headerHeight}px">
-          {#each COLUMNS.slice(0, -1) as col, i (col.key)}
-            <span
-              class="resizer"
-              class:active={dragIndex === i}
-              style="left: {(handleOffsets[i] ?? 0) - 5}px"
-              onpointerdown={(e) => startResize(i, e)}
-              ondblclick={() => columnState.reset()}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize {col.label} column"
-            ></span>
-          {/each}
-        </div>
+        {#if RESIZE_HANDLES_ENABLED}
+          <!-- Unmounted for round-30 fidelity -- see the comment on
+               RESIZE_HANDLES_ENABLED above. Not deleted: tracked on #691. -->
+          <div class="resize-overlay" style="height: {headerHeight}px">
+            {#each COLUMNS.slice(0, -1) as col, i (col.key)}
+              <span
+                class="resizer"
+                class:active={dragIndex === i}
+                style="left: {(handleOffsets[i] ?? 0) - 5}px"
+                onpointerdown={(e) => startResize(i, e)}
+                ondblclick={() => columnState.reset()}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize {col.label} column"
+              ></span>
+            {/each}
+          </div>
+        {/if}
 
         {#if groupModeState.enabled}
-          {#each displayGroups as group (group.key)}
+          {#each displayGroups as group, gi (group.key)}
             <EventRow
               event={group.head}
               deviceName={deviceName(group.head.deviceId)}
               count={group.count}
               flagged={flagged.has(group.head.srcIp ?? '')}
+              dimmed={isDimmed(group.head)}
+              banded={gi % 2 === 1}
               expandable={group.count > 1}
               expanded={openGroups.has(group.key)}
               onToggle={() => toggleGroup(group.key)}
+              onOpen={() => (selectedEvent = group.head)}
             />
             <!-- Gated on group.count > 1 as well as the open flag, matching
                  the `expandable` predicate on the toggle above. The two used
@@ -386,7 +472,9 @@
                   event={member}
                   deviceName={deviceName(member.deviceId)}
                   flagged={flagged.has(member.srcIp ?? '')}
+                  dimmed={isDimmed(member)}
                   member
+                  onOpen={() => (selectedEvent = member)}
                 />
               {/each}
               {#if hiddenInDrawer(group) > 0}
@@ -404,11 +492,14 @@
             {/if}
           {/each}
         {:else}
-          {#each displayRendered as event (event.id)}
+          {#each displayRendered as event, i (event.id)}
             <EventRow
               {event}
               deviceName={deviceName(event.deviceId)}
               flagged={flagged.has(event.srcIp ?? '')}
+              dimmed={isDimmed(event)}
+              banded={i % 2 === 1}
+              onOpen={() => (selectedEvent = event)}
             />
           {/each}
         {/if}
@@ -422,6 +513,27 @@
       {/if}
     </div>
   {/if}
+
+  <!-- Absent entirely when there is nothing true to put in it, and one
+       or two facts wide when only one or two of the three have data --
+       the band never holds a placeholder for a fact it does not have.
+       Unmounted outright behind FOOT_LEGEND_ENABLED (#717) -- see that
+       flag's own comment above. -->
+  {#if FOOT_LEGEND_ENABLED && footFacts.length > 0}
+    <div class="foot-legend" aria-label="What the stream is showing">
+      {#each footFacts as fact (fact.key)}
+        <!-- Each fact lays its own three pieces out with a gap rather
+             than relying on literal spaces in the strings: the salient
+             token is an element, and whitespace either side of an
+             expression is not something to leave to markup formatting. -->
+        <span class="fact">
+          {#if fact.lead}<span>{fact.lead}</span>{/if}
+          <span class="k">{fact.salient}</span>
+          {#if fact.tail}<span>{fact.tail}</span>{/if}
+        </span>
+      {/each}
+    </div>
+  {/if}
 </div>
 
 {#if selectedEvent}
@@ -433,6 +545,39 @@
 {/if}
 
 <style>
+  /* The foot line (#691, round 30's .foot-legend): a real band on the
+     stream's own footing, not a caption -- muted body ink with the one
+     salient token per fact in full ink, centred, with the drawing's
+     wide gap between facts. It sits as the last flex child of
+     .table-wrap rather than absolutely positioned as in the mockup: the
+     scrolling body above it already flexes, so the band takes its own
+     height and the rows get the rest, with no overlap to manage. */
+  .foot-legend {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px 44px;
+    padding: 12px 20px 13px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--fg-muted);
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+  }
+
+  .foot-legend .fact {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35em;
+  }
+
+  .foot-legend .k {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
   /* Spans every column: it is about the group, not about a field. */
   .drawer-note {
     grid-column: 1 / -1;
@@ -443,15 +588,26 @@
     border-bottom: 1px solid var(--border);
   }
 
+  /* #733: the stream is the scene, not a card dropped on it -- no
+     border, no corner radius, and the ground is the page's own
+     (var(--bg)), not the elevated panel tint. The shared deck padding
+     (Deck.svelte) already runs this flush to the scene's margins, so
+     nothing here needs its own inset.
+
+     No `overflow` here, deliberately, matching MetricsTable.svelte's
+     own .table-wrap comment: .body below is the real, intentional
+     scroll container (it needs its own scrollbar for the 1622px of
+     fixed columns, #729), and .header-cell's `position: sticky` holds
+     against .body's scrollport regardless of what this wrapper does --
+     but giving this wrapper any overflow other than visible has no
+     upside now that there's no border-radius left to clip, and it's
+     one fewer ancestor to reason about if sticky ever moves. */
   .table-wrap {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
+    background: var(--bg);
   }
 
   .body {
@@ -470,7 +626,10 @@
     position: sticky;
     top: 0;
     z-index: 2;
-    background: var(--bg-elevated);
+    /* Opaque so rows scrolling underneath don't show through, but the
+       scene's own ground (#733) now that .table-wrap carries no
+       separate panel tint for this to stand apart from. */
+    background: var(--bg);
     padding: 10px;
     font-size: 12px;
     text-transform: uppercase;
@@ -523,6 +682,14 @@
     touch-action: none;
     display: flex;
     justify-content: center;
+    /* #685: missing on purpose nowhere -- without it, a flex item with an
+       explicit cross-size (::after's height: 60% below) does not stretch
+       and falls back to flex-start (top), so the tick pinned itself to
+       the header's top edge instead of centering in it. That read as an
+       unexplained stroke hovering over the column label rather than a
+       column-boundary divider, which is what it actually is: the drag
+       handle for this column's resize. */
+    align-items: center;
   }
 
   /* A clearly-visible divider line at rest, so the resize affordance is

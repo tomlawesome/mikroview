@@ -120,24 +120,19 @@ describe('Docket tiers (#653)', () => {
     expect(screen.queryByRole('tab', { name: /audit log/ })).toBeNull()
   })
 
-  it('a user sees the watchlist tab but not the audit log tab', async () => {
-    authState.role = 'user'
-    render(Docket)
-    await Promise.resolve()
-    flushSync()
+  // #700: the tab row moved to the scene bar, so the docket draws no
+  // tabs of its own at any tier. The tier rule those two tests pinned
+  // now lives in SceneBar.svelte.test.ts, where the tabs do.
+  it('draws no tab row of its own, at any tier', async () => {
+    for (const role of ['viewer', 'user', 'admin'] as const) {
+      authState.role = role
+      const { unmount } = render(Docket)
+      await Promise.resolve()
+      flushSync()
 
-    expect(screen.getByRole('tab', { name: /watchlist/ })).toBeTruthy()
-    expect(screen.queryByRole('tab', { name: /audit log/ })).toBeNull()
-  })
-
-  it('an admin sees both the watchlist tab and the audit log tab', async () => {
-    authState.role = 'admin'
-    render(Docket)
-    await Promise.resolve()
-    flushSync()
-
-    expect(screen.getByRole('tab', { name: /watchlist/ })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: /audit log/ })).toBeTruthy()
+      expect(screen.queryAllByRole('tab')).toHaveLength(0)
+      unmount()
+    }
   })
 
   it('a viewer with open flags sees no clear-all bubble', async () => {
@@ -150,14 +145,14 @@ describe('Docket tiers (#653)', () => {
     expect(screen.queryByRole('button', { name: /clear all/ })).toBeNull()
   })
 
-  it('a user with open flags sees the clear-all bubble, labelled with the open count', async () => {
+  it('a user with open flags sees the clear-all bubble', async () => {
     authState.role = 'user'
     flagsState.list = [testFlag(), testFlag({ id: 'f2' })]
     render(Docket)
     await Promise.resolve()
     flushSync()
 
-    expect(screen.getByRole('button', { name: 'clear all 2' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'clear all' })).toBeTruthy()
   })
 
   it('an admin with open flags also sees the clear-all bubble', async () => {
@@ -167,7 +162,7 @@ describe('Docket tiers (#653)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(screen.getByRole('button', { name: 'clear all 1' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'clear all' })).toBeTruthy()
   })
 
   it('a user with no open flags sees no clear-all bubble -- the bubble needs an active count, not just edit rights', async () => {

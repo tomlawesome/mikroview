@@ -11,9 +11,10 @@ vi.mock('./api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   register: vi.fn(),
+  signOutEverywhere: vi.fn(),
 }))
 
-import { fetchAuthSession, login, logout, register } from './api'
+import { fetchAuthSession, login, logout, register, signOutEverywhere } from './api'
 import { authState } from './auth.svelte'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
@@ -36,6 +37,8 @@ beforeEach(() => {
   authState.role = ''
   authState.ssoAvailable = false
   authState.ssoError = null
+  authState.justSignedOut = false
+  authState.signedInSince = ''
   window.history.replaceState(null, '', '/')
 })
 
@@ -51,6 +54,19 @@ describe('AuthState.check', () => {
     expect(authState.username).toBe('tom')
     expect(authState.role).toBe('admin')
     expect(authState.ssoAvailable).toBe(true)
+  })
+
+  // #677's sessions row ("this device ... signed in 4 d") reads this.
+  it('carries signedInSince through from the session, and clears it once signed out', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'admin', signedInSince: '2026-08-27T00:00:00Z' }),
+    )
+    await authState.check()
+    expect(authState.signedInSince).toBe('2026-08-27T00:00:00Z')
+
+    vi.mocked(fetchAuthSession).mockResolvedValue(session())
+    await authState.check()
+    expect(authState.signedInSince).toBe('')
   })
 
 
@@ -156,6 +172,53 @@ describe('AuthState.logout', () => {
     expect(authState.username).toBe('')
     expect(authState.role).toBe('')
     expect(fetchAuthSession).not.toHaveBeenCalled()
+    // Set so AuthLogin's next mount plays the door's way-out beat
+    // (#645) -- consumeJustSignedOut() below is how it reads this.
+    expect(authState.justSignedOut).toBe(true)
+  })
+})
+
+describe('AuthState.signOutEverywhere', () => {
+  it('calls the endpoint and re-checks the session, unlike logout it does not drop to unauthenticated', async () => {
+    authState.state = 'authenticated'
+    authState.username = 'tom'
+    authState.role = 'admin'
+    vi.mocked(signOutEverywhere).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'admin', signedInSince: '2026-08-31T00:00:00Z' }),
+    )
+
+    const err = await authState.signOutEverywhere()
+
+    expect(signOutEverywhere).toHaveBeenCalled()
+    expect(fetchAuthSession).toHaveBeenCalled()
+    expect(err).toBeNull()
+    expect(authState.state).toBe('authenticated')
+    expect(authState.signedInSince).toBe('2026-08-31T00:00:00Z')
+  })
+
+  it('returns the error and skips the re-check on failure', async () => {
+    vi.mocked(signOutEverywhere).mockResolvedValue('signOutEverywhere: 500')
+
+    const err = await authState.signOutEverywhere()
+
+    expect(err).toBe('signOutEverywhere: 500')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('AuthState.consumeJustSignedOut', () => {
+  it('reads and clears the flag logout() sets', async () => {
+    vi.mocked(logout).mockResolvedValue(null)
+    await authState.logout()
+
+    expect(authState.consumeJustSignedOut()).toBe(true)
+    expect(authState.justSignedOut).toBe(false)
+    expect(authState.consumeJustSignedOut()).toBe(false)
+  })
+
+  it('is false when nobody signed out (a plain page load)', () => {
+    expect(authState.consumeJustSignedOut()).toBe(false)
   })
 })
 

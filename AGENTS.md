@@ -76,6 +76,14 @@ run it. A feature that needs mikroview itself to touch the network is
 either redesigned around pushed or passive data, or it belongs in a
 different tool.
 
+## Building a ratified design
+
+Port the mockup's markup and CSS; never build from an impression of it. Drawn
+but built differently is a **defect** -- build it as drawn. Something the app
+does that the design draws nowhere is a **gap** -- leave it off, keep its code,
+write it down, never invent a home mid-build. Fidelity work goes to a top-tier
+model.
+
 ## A stale origin/dev incident
 
 **This is not hypothetical.** In this same repo, a branch was cut with
@@ -387,6 +395,9 @@ plain language.
 
 ## Issues
 
+Open does not mean undone: `Closes #N` fires only on the default branch, so
+check the branch before picking an issue up.
+
 Issue-body, decision-recording and supersession rules follow the global
 agent instructions. Project-specific: `.github/ISSUE_TEMPLATE/work-item.md`
 puts the current plan at the top for new issues; existing issues get
@@ -485,3 +496,54 @@ check `.github/workflows/*.yml` for the precise invocation. Three known traps:
 
 The first two were found on PR #257 (Watchlist frontend), the third on
 #581 — each a supposedly complete local pass that CI caught out.
+
+## Demos the owner reviews
+
+### Seed it: a demo on bare syslog is not a demo
+
+`scripts/seed-demo.py` (#687) gives a running instance a whole story
+rather than a log stream: pushed filter/NAT/address tables, named
+entities, a user and a viewer account, and a watchlist with a healthy
+entry, a held one and a deliberately broken ring. One estate throughout,
+so a name on the stream is the same thing on the topography and in
+Entities.
+
+**Bring the instance up with `MV_DEMO_DEVICES=1`**, or the seeding is
+half-wasted. A pushed rule/NAT/address table is keyed by device id;
+`seed-demo.py` mints its tokens against router names and streams syslog
+from one loopback address per router. Unless `live-env.sh` declares those
+addresses, the registry invents a discovered device per source IP and the
+pushed tables sit under ids no device has. Both halves report success and
+never meet (#709).
+
+    MV_DEMO_DEVICES=1 MV_BIND=<addr> scripts/live-env.sh up
+
+    export MV_URL=... MV_USER=... MV_PASS=...
+    export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_PORT=<tls port>
+    scripts/seed-demo.py all      # push, entities, accounts, watchlist
+    scripts/seed-demo.py feed &   # long-running; leave it running
+    scripts/seed-demo.py mutate   # once the feed has produced real flags
+
+`feed` is the piece that takes time: the metrics hourline, the register
+and the fall's memory stay flat until real time has passed under them.
+
+Without this the fall's bands read "other traffic — not in a pushed rule
+table", the topography degrades to boundary-derived zones, and the empty
+surfaces get reported as UI defects. Every UI review this project ran
+before the seeder existed was hampered that way, and reviews after it
+existed were still handed bare-syslog instances because nobody checked.
+
+### Stamp it: a demo must say which build it is
+
+**Show a version on every demo instance the owner is asked to look at,
+and quote the same version when handing it over.** Round 30 lost most of
+a day to this: fault after fault was fixed in the tree while the running
+instance had been built before the fixes, so the owner kept finding
+faults that were already fixed and reasonably concluded the work had been
+lost. Nothing in the browser said which build it was, so neither side
+could tell.
+
+A demo whose version cannot be read off the screen is not evidence of
+anything. If the owner reports a fault that the tree says is fixed,
+compare the demo's stamp against the branch before touching the code —
+the usual answer is a stale build, not a lost fix.

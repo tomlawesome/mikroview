@@ -5,6 +5,7 @@ import {
   login,
   logout,
   register,
+  signOutEverywhere,
 } from "./api";
 import type { AuthSession } from "./types";
 
@@ -54,6 +55,17 @@ class AuthState {
   // deliberately a fixed message chosen from the opaque error code,
   // never the raw code or any provider-supplied text.
   ssoError = $state<string | null>(null);
+  // #677's sessions row ("this device ... signed in 4 d") -- this
+  // session's own IssuedAt, RFC3339, from sessionResponse.signedInSince.
+  // Empty while unauthenticated or against an older server.
+  signedInSince = $state("");
+  // Set by logout() below, consumed once by AuthLogin.svelte via
+  // consumeJustSignedOut() -- the door's "way out" (#645, round 5)
+  // plays its beat in reverse only when this mount followed an actual
+  // sign-out, never a plain page load or a 401 bounce
+  // (handleUnauthorized() deliberately leaves this alone: that is a
+  // forced session expiry, not the door's way-out beat).
+  justSignedOut = $state(false);
 
   // Reads and strips a ?ssoError=<code> query param left by a failed
   // OIDC callback redirect -- called once on App.svelte's mount. Uses
@@ -106,6 +118,15 @@ class AuthState {
     history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : ""));
   }
 
+  // Reads and clears the one-shot flag logout() sets -- AuthLogin.svelte
+  // calls this once at mount to decide whether to play the door's way-
+  // out beat before its ordinary entrance.
+  consumeJustSignedOut(): boolean {
+    const was = this.justSignedOut;
+    this.justSignedOut = false;
+    return was;
+  }
+
   async check() {
     try {
       const session = await fetchAuthSession();
@@ -130,11 +151,13 @@ class AuthState {
       // ever offers a link that the server would then refuse -- the
       // safe direction to be wrong in.
       this.hasLocalPassword = session.hasLocalPassword ?? true;
+      this.signedInSince = session.signedInSince ?? "";
     } else {
       this.state = "unauthenticated";
       this.username = "";
       this.role = "";
       this.hasLocalPassword = true;
+      this.signedInSince = "";
     }
   }
 
@@ -166,6 +189,18 @@ class AuthState {
     this.state = "unauthenticated";
     this.username = "";
     this.role = "";
+    this.justSignedOut = true;
+    return err;
+  }
+
+  // signOutEverywhere is #677's sessions row action. Unlike logout()
+  // above, the caller stays signed in on this tab -- the server issues
+  // a fresh session in the same response (see handleAuthLogoutAll) --
+  // so this just re-reads the session to pick up the new
+  // signedInSince, rather than dropping to 'unauthenticated'.
+  async signOutEverywhere(): Promise<string | null> {
+    const err = await signOutEverywhere();
+    if (!err) await this.check();
     return err;
   }
 

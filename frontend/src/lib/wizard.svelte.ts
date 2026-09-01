@@ -118,6 +118,16 @@ class WizardState {
     this.launch()
   }
 
+  // markAutoLaunchSpent lets a caller that opens the wizard through its
+  // own path (the journey, #646) spend this once-only slot itself,
+  // without also launching from here. Without it, the ordinary
+  // maybeAutoLaunch check would still be unspent the next time its
+  // conditions are re-evaluated and would reopen a wizard something else
+  // just opened and handed off.
+  markAutoLaunchSpent() {
+    this.autoLaunched = true
+  }
+
   goTo(pane: number) {
     if (pane < 1 || pane > FINISH_PANE) return
     this.pane = pane

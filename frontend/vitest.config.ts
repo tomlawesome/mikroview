@@ -1,3 +1,10 @@
+// Pin the suite's timezone before anything formats a date (#741). The
+// foot line renders wall-clock times through the browser's local zone,
+// so three of its assertions passed on a BST machine and failed in CI's
+// UTC container -- a check that reports green for whoever wrote it and
+// red for everyone else. UTC matches CI, so local runs now agree with it.
+process.env.TZ = 'UTC'
+
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { svelteTesting } from '@testing-library/svelte/vite'

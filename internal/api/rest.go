@@ -65,6 +65,13 @@ type deviceView struct {
 	// never-contacted device is never flagged even though it's also not
 	// "live" here.
 	Status string `json:"status"`
+	// RouterOSVersion is what this device last reported on a routerstate
+	// push (issue #675's router cards -- "RouterOS 7.20.1 ... "), empty
+	// until its first push arrives. Read from RouterState rather than
+	// held on device.Info itself: routerstate is the one store that
+	// already tracks it (main.go wires the same push into both), and
+	// duplicating it into a second store risks the two disagreeing.
+	RouterOSVersion string `json:"routerosVersion,omitempty"`
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
@@ -72,9 +79,36 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	infos := s.Devices.List()
 	views := make([]deviceView, 0, len(infos))
 	for _, info := range infos {
-		views = append(views, deviceView{Info: info, Status: deviceStatus(info, s.DeviceStaleAfter, now)})
+		v := deviceView{Info: info, Status: deviceStatus(info, s.DeviceStaleAfter, now)}
+		if s.RouterState != nil {
+			if version, _, ok := s.RouterState.RouterOSVersion(info.ID); ok {
+				v.RouterOSVersion = version
+			}
+		}
+		views = append(views, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
+}
+
+// handleDeviceMACs serves the persisted MAC-registry history (issue
+// #675): every MAC mikroview has ever seen, its first/last-seen times,
+// and the IP it was last paired with (device.MACRegistry.NoteIP). Same
+// tier and same "read-only usage data" reasoning as handleRules above --
+// this is the registry that already exists to answer "is this MAC new,"
+// exposed for the Entities page to join a named host entity (keyed on
+// IP) against its MAC and how long mikroview has known it. A nil
+// MACRegistry (a Server built without one) answers an empty list rather
+// than panicking, same convention as Reputation/NetClass elsewhere on
+// this struct.
+func (s *Server) handleDeviceMACs(w http.ResponseWriter, r *http.Request) {
+	var macs []device.MACEntry
+	if s.MACRegistry != nil {
+		macs = s.MACRegistry.List()
+	}
+	if macs == nil {
+		macs = []device.MACEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"macs": macs})
 }
 
 // handleRules serves every rule label mikroview has ever seen fire
@@ -108,17 +142,33 @@ func deviceStatus(info device.Info, staleAfter time.Duration, now time.Time) str
 	return "live"
 }
 
+// oldestHeldJSON renders the buffer's reach for the wire: an RFC3339
+// instant, or null when the buffer holds nothing. Marshalling the zero
+// time directly would put "0001-01-01T00:00:00Z" on the wire, which a
+// client can only mistake for a real reach of two thousand years.
+func oldestHeldJSON(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.UTC()
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.Store.Stats()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total":            stats.Total,
-		"byAction":         stats.ByAction,
-		"topRules":         stats.TopRules,
-		"timeSeries":       stats.TimeSeries,
-		"eventsPerSecond":  stats.EventsPerSecond,
-		"capacity":         stats.Capacity,
-		"count":            stats.Count,
-		"windowSeconds":    int(stats.Window.Seconds()),
+		"total":           stats.Total,
+		"byAction":        stats.ByAction,
+		"topRules":        stats.TopRules,
+		"timeSeries":      stats.TimeSeries,
+		"eventsPerSecond": stats.EventsPerSecond,
+		"capacity":        stats.Capacity,
+		"count":           stats.Count,
+		"windowSeconds":   int(stats.Window.Seconds()),
+		// How far back the buffer actually reaches, as opposed to how far
+		// back it was configured to. Null rather than a zero timestamp
+		// when nothing is held, so the client reads "no reach yet" and
+		// not "reaches back to the year 1" (#703).
+		"oldestHeld":       oldestHeldJSON(stats.OldestHeld),
 		"connectedClients": s.Hub.ClientCount(),
 		// Syslog listener saturation. Included here rather than behind
 		// its own endpoint because the condition it reports -- mikroview
@@ -127,6 +177,23 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		// means visible to nobody. See internal/syslog.ListenerStats.
 		"syslog": syslog.Stats(),
 	})
+}
+
+// handleStatsTops serves #644 round 21's top-port/top-talker table
+// columns: store.Store.HourTops, computed fresh from whatever the ring
+// buffer currently holds. Deliberately its own endpoint rather than a
+// field folded into GET /api/stats above -- that one is polled by every
+// open browser tab every STATS_REFRESH_MS regardless of which page is
+// showing (App.svelte), and HourTops' backward scan of the last hour's
+// events is heavier than anything else Stats() returns, none of which
+// touches the buffer past its own O(1) rolling counters. Fetched only
+// by the Metrics page itself (Metrics.svelte), on the same cadence but
+// scoped to while that page is actually open -- the same pattern
+// Fall.svelte already uses for its own per-page poll. Same access tier
+// as GET /api/stats (see authzMatrix): a read over data that endpoint
+// already exposes in aggregate, just broken out per minute.
+func (s *Server) handleStatsTops(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"tops": s.Store.HourTops()})
 }
 
 // badQueryParam is the one shape a malformed windowed-query parameter

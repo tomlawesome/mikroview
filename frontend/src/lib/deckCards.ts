@@ -17,14 +17,25 @@ export interface DeckCard {
 // views, so deep links to any of them land on it. Watchlist and audit
 // are admin-only throughout (#490's grammar: absent for viewers, never
 // disabled).
+//
+// Entities and Settings joined the deck as its last two cards in #647
+// (#634 round 23): "combined fleet/entities followed by settings the
+// final page" -- seven cards for an admin. Entities keeps its own
+// admin gate (its GET route still 403s for a viewer, per
+// navGroups.ts's own comment on the same point) so its card is absent
+// rather than present-and-broken; Settings/engineroom stays present for
+// every role, unchanged from before (it was already viewer-readable).
 export function deckCards(admin: boolean): DeckCard[] {
-  return [
+  const cards: DeckCard[] = [
     { key: 'fall', name: 'The fall', views: ['fall'] },
     { key: 'topography', name: 'Topography', views: ['topography'] },
     { key: 'metrics', name: 'Metrics', views: ['metrics'] },
     { key: 'live', name: 'Stream', views: ['live'] },
     { key: 'docket', name: 'The docket', views: admin ? ['flags', 'watchlist', 'audit'] : ['flags'] },
   ]
+  if (admin) cards.push({ key: 'entities', name: 'Entities', views: ['entities'] })
+  cards.push({ key: 'engineroom', name: 'Settings', views: ['engineroom'] })
+  return cards
 }
 
 // Where signing in lands per first card. Always a role-safe view: cards
@@ -36,4 +47,6 @@ export const LANDING_BY_CARD: Record<string, View> = {
   metrics: 'metrics',
   live: 'live',
   docket: 'flags',
+  entities: 'entities',
+  engineroom: 'engineroom',
 }
