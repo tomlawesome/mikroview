@@ -378,6 +378,9 @@
       revokeKey(id)
       return
     }
+    // One armed verb at a time, as in the mockup: arming this disarms
+    // whatever else was armed, key or person.
+    disarmAll()
     armedRevoke = id
   }
 
@@ -440,6 +443,7 @@
       removePerson(id)
       return
     }
+    disarmAll()
     armedRemove = id
   }
 

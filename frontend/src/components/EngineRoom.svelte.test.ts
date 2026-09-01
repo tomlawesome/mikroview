@@ -404,6 +404,23 @@ describe('The settings shelf (#633)', () => {
     expect(deleteUser).toHaveBeenCalledWith('u2')
   })
 
+  it('only one verb is armed at a time: arming remove disarms an armed revoke', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'revoke' }))
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — it stops speaking now' })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'confirm — it stops speaking now' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'revoke' })).toBeTruthy()
+  })
+
   it('shows a user no read-only chip, and neither keys nor people: they edit the watchers station here', async () => {
     // #653: the chip follows canEdit, not isAdmin. Telling a user this
     // page is read-only was wrong -- keys and people are gated, the
