@@ -22,8 +22,8 @@ exclusion is a verdict that outlives the flag** — and gains a corollary:
    (`closest('a, button')` in the row's click guard).
    `POST /api/flags/{id}/verdict {verdict}`.
 2. **A verdict lands as a stamp.** This is a docket, so a call is
-   pressed onto it: the chip's word becomes a small tilted rubber stamp
-   in the same ink — `NOISE`, `EXPECTED` — thumping in at twice its size
+   pressed onto it: the chip's word becomes a small rubber stamp
+   in the same ink — `NOISE`, `EXPECTED` — square, thumping in at twice its size
    (`stamp-in`, 280 ms, overshoot) while the row flashes a wash of that
    colour and settles dim. The stamp takes the trio's place in the same
    cell, with `undo` beside it, so the columns never move. `undo` puts
@@ -64,4 +64,6 @@ the stamp, the flash and the hover lift.
 we make this more aesthetically pleasing in keeping with Mikroview's new
 UI?" — reworked in place to quiet dot-separated text verbs. Owner:
 "Very bland... was hoping for something cooler." — reworked again to
-the glyph chips and stamps above, before any acceptance.
+the glyph chips and stamps above, before any acceptance. Owner: "I like
+it, except for the offset/angled nature. It is kind of cool, but it's
+also a bit cheesey." — the stamps now sit square; the thump stays.
