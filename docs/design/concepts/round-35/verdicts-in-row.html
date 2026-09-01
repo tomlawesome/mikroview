@@ -678,9 +678,7 @@
   @keyframes struck { from { background: color-mix(in srgb, var(--sc, var(--ink-3)) 16%, transparent); } }
   tr.frow.struck.expected { --sc: var(--ok); } tr.frow.struck.noise { --sc: var(--now); } tr.frow.struck.real { --sc: var(--alarm); }
   .vdone .by { color: var(--ink-3); margin-left: 8px; }
-  /* called real: the stamp sits by the type and the row's own bar thickens */
-  .fmark .stamp { margin-left: 10px; }
-  .fmark .by { font: 10.5px var(--mono); color: var(--ink-3); font-weight: 400; margin-left: 6px; }
+  /* called real: the stamp takes the chips' place and the row's own bar swells */
   /* the bar swells, it does not step: a lens over the 3 px bar, its ends arcing back to it */
   tr.frow td:first-child { position: relative; }
   tr.frow td:first-child::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--alarm); opacity: 0; border-radius: 0 4px 4px 0 / 0 10px 10px 0; transition: width 0.35s ease, opacity 0.35s ease; }
@@ -693,7 +691,8 @@
   tr.frow.fdone td:first-child { box-shadow: none !important; }
   tr.frow.fdone td:last-child { opacity: 1; }
   /* takes the trio's place in the same cell, so the columns never move for it */
-  .vdone { font: 10.5px var(--mono); color: var(--ink-3); white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; }
+  .vdone { font: 10.5px var(--mono); color: var(--ink-3); white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
+  .vdone + .openc { margin-left: 16px; }
   .vdone a { color: var(--accent); cursor: pointer; margin-left: 8px; }
   .vdone a:hover { text-decoration: underline; }
   /* called real: stays open, and says so where the type is */
@@ -1410,15 +1409,17 @@
         e.stopPropagation();
         var v = b.dataset.v, d = document.getElementById(r.dataset.d);
         if (v === 'real') {
-          var on = !b.classList.contains('on');
-          r.querySelectorAll('.v').forEach(function (x) { x.classList.toggle('on', on && x === b); });
-          var fm = r.querySelector('.fmark'), tag = fm.querySelector('.stamp');
-          r.classList.toggle('isreal', on);
-          if (on) { strike(r, 'real'); if (!tag) fm.insertAdjacentHTML('beforeend', '<span class="stamp real">real</span>'); }
-          else { r.classList.remove('struck', 'real'); if (tag) tag.remove(); }
-          var st = d.querySelector('.story'), c = st.querySelector('.called');
-          if (on && !c) st.insertAdjacentHTML('afterbegin', '<span class="called">Called real at 13:58 by you. It stays open until it is cleared; a fresh episode asks again.</span>');
-          else if (!on && c) c.remove();
+          // real keeps the flag open: the stamp takes the chips' place, with retract, and the bar swells
+          r.classList.add('isreal'); strike(r, 'real');
+          var c = r.cells[5];
+          c.innerHTML = '<span class="vdone"><span class="stamp real">real</span><a>retract</a></span><span class="openc">▸</span>';
+          var st = d.querySelector('.story');
+          st.insertAdjacentHTML('afterbegin', '<span class="called">Called real at 13:58 by you. It stays open until it is cleared; a fresh episode asks again.</span>');
+          c.querySelector('a').addEventListener('click', function (e) {
+            e.stopPropagation();
+            r.classList.remove('isreal', 'struck', 'real'); c.innerHTML = TRIO;
+            var cl = st.querySelector('.called'); if (cl) cl.remove();
+          });
           return;
         }
         done(r, v, v, '', true);
