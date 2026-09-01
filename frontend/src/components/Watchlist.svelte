@@ -21,29 +21,31 @@
   // The owner-level neighbours it used to sit beside, Audit and
   // Exclusions, stay admin.
   //
-  // The "Watchlist" tab panel below carries two surfaces (#676): the
-  // ratified round-29 docket table (watch · boundary · window · state ·
-  // last event, drawers with a story/verbatim line/actions) at the top,
-  // and this component's own pre-existing add/edit/invert/observe/
-  // promote workflow underneath it, headed "Manage entries." The
-  // ratified design describes only the former; #676 keeps the latter
-  // reachable rather than removing it -- see the ratified table's own
-  // script section, below, for what it could and couldn't honestly
-  // carry from today's data.
+  // The "Watchlist" tab panel below is the ratified round-29/31 docket
+  // table (watch · boundary · window · state · last event, drawers with
+  // a story/verbatim line/actions) -- and, since #761, the surface that
+  // creates, edits, removes, permits and fences a watch too. The
+  // separate "Manage entries" card list and its own add/edit form
+  // (#243, #649) pre-dated that table and were retired wholesale once
+  // every capability they carried was reachable from the drawer instead
+  // (AGENTS.md's "removals are wholesale" -- no flag, no dead code kept
+  // reachable behind one, since nothing here still needs it).
   import { onMount, tick } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { suggestState } from '../lib/suggest.svelte'
   import { matchesState } from '../lib/matches.svelte'
+  import { zonesState } from '../lib/zones.svelte'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
   import { formatRelative } from '../lib/format'
   import { nightlySummary, windowLabel } from '../lib/watchWindow'
-  import { topologyNavState } from '../lib/topologyNav.svelte'
+  import { topologyNavState, type PendingWatchDraft } from '../lib/topologyNav.svelte'
   import TabList from './TabList.svelte'
   import Suggestions from './Suggestions.svelte'
   import MatchesTab from './MatchesTab.svelte'
-  import type { WatchlistEntry, WatchlistMatch, WatchlistPermittedDest } from '../lib/types'
+  import type { WatchlistEntry, WatchlistIdentity, WatchlistMatch, WatchlistPermittedDest } from '../lib/types'
+  import type { WatchlistEntryRequest } from '../lib/api'
 
   onMount(() => {
     watchlistState.refresh()
@@ -119,188 +121,19 @@
   }
 
   // Following a match's entry name back to the entry itself (#584): the
-  // Watchlist tab, that entry expanded, scrolled to. The scroll is
-  // deliberate -- the entry list can be long, and switching tabs to a
-  // row that is expanded somewhere off-screen looks like nothing
-  // happened.
+  // Watchlist tab, that entry's drawer open on the ratified table,
+  // scrolled to. The scroll is deliberate -- the table can be long, and
+  // switching tabs to a row that is open somewhere off-screen looks like
+  // nothing happened. Targets the ratified table's own row (#761
+  // retired the second "Entries" card list this used to point at, see
+  // watchDrawerId below) rather than a dead anchor.
   async function openEntry(entryId: string) {
     selectTab('watchlist')
-    expandedId = entryId
+    watchDrawerId = entryId
     await tick()
     // Optional-call rather than assumed: jsdom has no layout, so
     // scrollIntoView is not implemented there.
-    document.getElementById(`entry-${entryId}`)?.scrollIntoView?.({ block: 'center' })
-  }
-
-  // --- Add/edit form -----------------------------------------------
-
-  let editingId = $state<string | null>(null)
-  let draftName = $state('')
-  let draftInvert = $state(false)
-  let draftSourceMac = $state('')
-  let draftSourceIp = $state('')
-  let draftDestIp = $state('')
-  let draftPorts = $state('')
-  let draftIncludeStructuralNoise = $state(false)
-
-  let error = $state<string | null>(null)
-  let saving = $state(false)
-  let deletingId = $state<string | null>(null)
-
-  function resetDraft() {
-    editingId = null
-    draftName = ''
-    draftInvert = false
-    draftSourceMac = ''
-    draftSourceIp = ''
-    draftDestIp = ''
-    draftPorts = ''
-    draftIncludeStructuralNoise = false
-    error = null
-  }
-
-  function startEdit(e: WatchlistEntry) {
-    editingId = e.id
-    draftName = e.name ?? ''
-    draftInvert = !!e.invert
-    draftSourceMac = e.source?.mac ?? ''
-    draftSourceIp = e.source?.ip ?? ''
-    draftDestIp = e.destIp ?? ''
-    draftPorts = (e.ports ?? []).join(', ')
-    draftIncludeStructuralNoise = !!e.includeStructuralNoise
-    error = null
-  }
-
-  // Mirrors Entities.svelte's parseTags shape -- comma/whitespace
-  // separated, blank entries dropped, non-numeric entries dropped rather
-  // than rejecting the whole field (a stray comma or typo shouldn't lose
-  // every other port already typed).
-  function parsePorts(v: string): number[] {
-    return v
-      .split(/[,\s]+/)
-      .map((s) => Number(s.trim()))
-      .filter((n) => Number.isInteger(n) && n > 0)
-  }
-
-  async function submit(ev: Event) {
-    ev.preventDefault()
-    saving = true
-    error = null
-    try {
-      const req = {
-        name: draftName.trim() || undefined,
-        invert: draftInvert,
-        source:
-          draftSourceMac.trim() || draftSourceIp.trim()
-            ? { mac: draftSourceMac.trim() || undefined, ip: draftSourceIp.trim() || undefined }
-            : undefined,
-        destIp: draftInvert ? undefined : draftDestIp.trim() || undefined,
-        ports: draftInvert ? undefined : parsePorts(draftPorts),
-        includeStructuralNoise: draftInvert ? draftIncludeStructuralNoise : undefined,
-      }
-      const err = editingId ? await watchlistState.update(editingId, req) : await watchlistState.create(req)
-      if (err) {
-        error = err
-      } else {
-        resetDraft()
-      }
-    } finally {
-      saving = false
-    }
-  }
-
-  async function remove(e: WatchlistEntry) {
-    if (!confirm(`Remove the watchlist entry "${e.name || e.id}"? This does not delete any matches it already recorded.`))
-      return
-    deletingId = e.id
-    try {
-      // The return value is the error text, not a throw -- see
-      // lib/api.ts. Dropping it left a failed delete looking identical
-      // to a successful one: the row stayed, and nothing said why.
-      error = await watchlistState.remove(e.id)
-    } finally {
-      deletingId = null
-    }
-  }
-
-  // --- Observe/promote/matches, expanded per entry ------------------
-
-  let expandedId = $state<string | null>(null)
-  let togglingObserve = $state<string | null>(null)
-  let promoting = $state<string | null>(null)
-  let matchesByEntry = $state<Record<string, WatchlistMatch[] | 'loading' | 'error'>>({})
-
-  function toggleExpand(id: string) {
-    expandedId = expandedId === id ? null : id
-  }
-
-  async function toggleObserving(e: WatchlistEntry) {
-    togglingObserve = e.id
-    try {
-      error = await watchlistState.setObserving(e.id, !e.observing)
-    } finally {
-      togglingObserve = null
-    }
-  }
-
-  async function promoteOne(e: WatchlistEntry, d: WatchlistPermittedDest) {
-    promoting = e.id + d.destIp + d.port
-    try {
-      error = await watchlistState.promote(e.id, [d])
-    } finally {
-      promoting = null
-    }
-  }
-
-  // loadMatches is called each time the matches panel is opened rather
-  // than cached indefinitely -- a match log is append-only and can
-  // change between views, and the volumes here (an entry's own recent
-  // matches) are small enough that refetching on open is cheap.
-  // The reason is kept rather than collapsed to "Could not load
-  // matches." The backend distinguishes these -- a 503 says the match
-  // log is not available, which is a configuration answer, not a
-  // network blip -- and this page's own house style is that an error
-  // names what to fix.
-  let matchErrorByEntry = $state<Record<string, string>>({})
-
-  async function loadMatches(e: WatchlistEntry) {
-    if (!e.source?.mac && !e.source?.ip) return
-    matchesByEntry[e.id] = 'loading'
-    try {
-      matchesByEntry[e.id] = await watchlistState.matchesFor(e.source.mac, e.source.ip)
-      delete matchErrorByEntry[e.id]
-    } catch (err) {
-      matchErrorByEntry[e.id] = err instanceof Error ? err.message : String(err)
-      matchesByEntry[e.id] = 'error'
-    }
-  }
-
-  // Why an entry might never match, when that can be said for certain
-  // (#274). Returns null far more often than not, deliberately: the
-  // router push is optional, so most deployments have nothing to answer
-  // from, and a wrong warning here is worse than no warning -- it sends
-  // an operator to fix a rule set that is fine.
-  function coverageWarning(id: string): string | null {
-    switch (watchlistState.coverage[id]) {
-      case 'no-logging':
-        return (
-          'Nothing can match this: no firewall rule on any router you have connected has logging turned on, ' +
-          'so no traffic is being reported at all. Set log=yes on the rules you want to see (see the RouterOS setup guide).'
-        )
-      case 'out-of-scope':
-        return (
-          'Nothing can match this: your routers do log, but no logging rule covers what this entry watches, ' +
-          'so no traffic in its scope is ever reported. Widen a rule, or narrow this entry to something a rule covers.'
-        )
-      default:
-        // 'covered', 'unknown', or no answer at all. Silence.
-        return null
-    }
-  }
-
-  function formatTime(iso: string): string {
-    const d = new Date(iso)
-    return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+    document.getElementById(`watch-${entryId}`)?.scrollIntoView?.({ block: 'center' })
   }
 
   function sourceLabel(e: WatchlistEntry): string {
@@ -309,17 +142,18 @@
     return 'any source'
   }
 
-  // The state a card's own stripe already shows by colour (round 19: the
-  // watchers' purple for healthy, the alarm ink where the ring is
-  // broken) -- named here too, as text, so it sorts and filters.
-  // paused > no logging visible > ring broken > watching (#680). The
-  // order matters: a watch no rule logs cannot be judged on nightly
-  // presence at all, so coverage outranks the recorded ring.
-  function stateLabel(e: WatchlistEntry): string {
-    if (!e.enabled) return 'paused'
-    if (watchlistState.coverage[e.id] === 'no-logging') return 'ring broken'
-    if (e.ring?.broken) return 'ring broken'
-    return 'watching'
+  // "where it has reached · since Sunday" (watchlist-managed.html:775):
+  // the day the entry started, in UTC per every other timestamp in this
+  // codebase (types.ts's own comment on Window.zone). createdAt is the
+  // one always-present timestamp an entry carries -- there is no
+  // separate "this observation period began" field, so a fenced entry
+  // sent back to `learn again` still reads its original creation day,
+  // the same honest-but-imprecise trade-off the rest of this page makes
+  // rather than inventing a field to be exact.
+  const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  function sinceDay(iso: string): string {
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime()) ? '' : WEEKDAY_NAMES[d.getUTCDay()]
   }
 
   function detailLabel(e: WatchlistEntry): string {
@@ -328,67 +162,8 @@
       : `ports ${(e.ports ?? []).join(', ')}${e.destIp ? ` → ${e.destIp}` : ''}`
   }
 
-  // Every column sorts and filters (#649, round-18/19's ratified idiom):
-  // a quiet dashed row beneath the labels; clicking a label sorts by it,
-  // again to reverse. There is no fixed "the record's own order" to
-  // preserve here (entries render in whatever order the API returns),
-  // so name is a reasonable, stable default.
-  type WatchSortKey = 'watch' | 'boundary' | 'state' | 'detail'
-  let sortKey = $state<WatchSortKey>('watch')
-  let sortDir = $state<SortDir>('asc')
-  let filters = $state({ watch: '', boundary: '', state: '', detail: '' })
-
-  function toggleSort(key: WatchSortKey) {
-    if (sortKey === key) {
-      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
-    } else {
-      sortKey = key
-      sortDir = 'asc'
-    }
-  }
-
-  function dirGlyph(key: WatchSortKey): string {
-    if (sortKey !== key) return ''
-    return sortDir === 'asc' ? '▲' : '▼'
-  }
-
-  const filteredEntries = $derived(
-    watchlistState.entries.filter(
-      (e) =>
-        matchesFilter(e.name || '(unnamed)', filters.watch) &&
-        matchesFilter(sourceLabel(e), filters.boundary) &&
-        matchesFilter(stateLabel(e), filters.state) &&
-        matchesFilter(detailLabel(e), filters.detail),
-    ),
-  )
-
-  const sortedEntries = $derived.by((): WatchlistEntry[] => {
-    const list = [...filteredEntries]
-    list.sort((a, b) => {
-      switch (sortKey) {
-        case 'watch':
-          return compareText(a.name || '(unnamed)', b.name || '(unnamed)', sortDir)
-        case 'boundary':
-          return compareText(sourceLabel(a), sourceLabel(b), sortDir)
-        case 'state':
-          return compareText(stateLabel(a), stateLabel(b), sortDir)
-        case 'detail':
-          return compareText(detailLabel(a), detailLabel(b), sortDir)
-      }
-    })
-    return list
-  })
-
-  // --- The ratified table (#676, round 29's "watch · boundary · window
-  // · state · last event") ---------------------------------------------
-  //
-  // This is a second read of the same entries the card list above
-  // manages -- the round-29 docket scene's own surface, not a
-  // replacement for it. Add/edit/remove and the invert/observe/promote
-  // workflow (the "Manage entries" section below) are a different, real
-  // feature the ratified design doesn't describe; #676 leaves it
-  // reachable rather than folding or deleting it. See this component's
-  // own module comment and the issue for the full account.
+  // --- The ratified table (#676/#761, round 29/31's "watch · boundary ·
+  // window · state · last event") ---------------------------------------
   //
   // "window" and the nightly summary are both real now (#680): an entry
   // carries a Window (clock range, days, IANA zone) and up to seven
@@ -432,19 +207,71 @@
   // logs has no nightly presence to judge -- its nights are recorded "not
   // observed" precisely so they cannot be mistaken for silence -- so the
   // sight problem is what an operator needs told first.
-  function watchState(e: WatchlistEntry): { glyph: string; text: string; broken: boolean } {
-    if (!e.enabled) return { glyph: '○', text: 'paused', broken: false }
+  // #761 adds two states an inverted entry passes through that #680
+  // never had to draw: learning (still Observing -- the dashed "◌"
+  // chip) and fencing (Observing turned off -- back to "◉", but worded
+  // by what it fences rather than a bare "watching", so the row still
+  // says how many places it trusts). Placed either side of the recorded
+  // ring: an inverted entry can carry a Window too, so a fenced one that
+  // genuinely goes quiet inside it still reads "ring broken", the same
+  // as any other watch.
+  function watchState(e: WatchlistEntry): {
+    glyph: string
+    text: string
+    broken: boolean
+    learning: boolean
+    paused: boolean
+  } {
+    // The record's own paused chip (watchlist-managed.html:801, :860):
+    // `‖ paused`, dim ink, no alarm/broken styling -- a paused watch is
+    // not a failure, so it must not read as one.
+    if (!e.enabled) return { glyph: '‖', text: 'paused', broken: false, learning: false, paused: true }
     if (watchlistState.coverage[e.id] === 'no-logging') {
-      return { glyph: '○', text: 'ring broken — no logging visible', broken: true }
+      return { glyph: '○', text: 'ring broken — no logging visible', broken: true, learning: false, paused: false }
+    }
+    if (e.invert && e.observing) {
+      // "places seen" is a running total of everywhere this device has
+      // ever reached, decided or not -- Entry.Promote (internal/watchlist/
+      // invert.go) moves a destination out of Observed once permitted, so
+      // counting Observed alone would shrink "seen" every time something
+      // is promoted, reading as though mikroview had forgotten it.
+      const permitted = (e.permitted ?? []).length
+      const seen = (e.observed ?? []).length + permitted
+      return {
+        glyph: '◌',
+        text: `learning — ${seen} places seen · ${permitted} permitted`,
+        broken: false,
+        learning: true,
+        paused: false,
+      }
     }
     if (e.ring?.broken) {
-      return { glyph: '○', text: 'ring broken — nothing in the window', broken: true }
+      return { glyph: '○', text: 'ring broken — nothing in the window', broken: true, learning: false, paused: false }
     }
-    return { glyph: '◉', text: 'watching', broken: false }
+    if (e.invert) {
+      const n = (e.permitted ?? []).length
+      return {
+        glyph: '◉',
+        text: `fencing — ${n} ${n === 1 ? 'place' : 'places'} permitted`,
+        broken: false,
+        learning: false,
+        paused: false,
+      }
+    }
+    return { glyph: '◉', text: 'watching', broken: false, learning: false, paused: false }
   }
 
+  // While an inverted entry is still learning, `toward` greys out to
+  // "wherever it goes" -- there is nothing scoped yet to name (#761 item
+  // 2/4). Once fenced, it names what it actually trusts rather than a
+  // generic "its observed destinations".
   function boundaryLabel(e: WatchlistEntry): string {
-    const dest = e.destIp ? e.destIp : e.invert ? 'its observed destinations' : 'any destination'
+    if (e.invert) {
+      if (e.observing) return `${sourceLabel(e)} → wherever it goes`
+      const n = (e.permitted ?? []).length
+      return `${sourceLabel(e)} → ${n} permitted ${n === 1 ? 'place' : 'places'}`
+    }
+    const dest = e.destIp ? e.destIp : 'any destination'
     return `${sourceLabel(e)} → ${dest}`
   }
 
@@ -466,6 +293,14 @@
         body: 'No firewall rule mikroview can see is logging this pathway, so nothing here can be recorded until a rule that covers it turns logging on.',
       }
     }
+    if (e.invert && e.observing) {
+      // Same running total as watchState's own chip -- see its comment.
+      const seen = (e.observed ?? []).length + (e.permitted ?? []).length
+      return {
+        headline: 'Learning, not fencing yet.',
+        body: `${sourceLabel(e)} has reached ${seen} ${seen === 1 ? 'place' : 'places'} so far. Nothing fires while it learns -- permit the ones you recognise, then fence it.`,
+      }
+    }
     if (e.ring?.broken) {
       // The recorded break, which knows *which* window closed empty --
       // that is why it is written down at the break rather than worked
@@ -475,6 +310,13 @@
       return {
         headline: 'The ring is broken.',
         body: `Nothing has matched inside this watch's window${since}. Nights mikroview could not watch are not counted against it.`,
+      }
+    }
+    if (e.invert) {
+      const n = (e.permitted ?? []).length
+      return {
+        headline: 'Fenced.',
+        body: `${sourceLabel(e)} may reach its ${n} permitted ${n === 1 ? 'place' : 'places'}. Anything else it reaches from now on is a flag; permit it here and the flag clears.`,
       }
     }
     if (lastMatch) {
@@ -539,6 +381,253 @@
     appState.view = 'live'
   }
 
+  // --- The draft, edit and remove gestures (#761) -----------------------
+  //
+  // One editing surface for the docket, per the ratified round-31
+  // record: a watch is written, mended and removed in the row it lives
+  // in, never in a second panel. `+ watch` (Docket.svelte) and a flag's
+  // own `watch this pathway`/`watch this source` (Flags.svelte) both
+  // reach this through the shared handoff in topologyNav.svelte.ts,
+  // since neither lives inside this component.
+
+  const MAC_RE = /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/
+
+  // Best-effort "who" resolution against hosts mikroview has actually
+  // observed (zonesState, #485/#627): a MAC is used as typed, a name
+  // matching an observed host's label resolves to that host's IP, and
+  // anything else is sent through as a literal IP. Never invented -- a
+  // typo or an unrecognised name is simply stored as the literal text
+  // the operator typed, the same as if this lookup didn't exist. The
+  // backend's own validation (a source is required for a fenced entry,
+  // at least one port for an expected one) is what surfaces a genuinely
+  // empty or unusable value, not a guess made here.
+  function resolveIdentity(raw: string): WatchlistIdentity | undefined {
+    const v = raw.trim()
+    if (!v) return undefined
+    if (MAC_RE.test(v)) return { mac: v }
+    const known = zonesState.zones.flatMap((z) => z.hosts).find((h) => h.label.toLowerCase() === v.toLowerCase())
+    return { ip: known ? known.ip : v }
+  }
+
+  // "toward" is one compound field in the draft/edit form, the record's
+  // own "nas · :445, :139": a host before the "·", its ports after it.
+  // Mirrors resolveIdentity's own name lookup for the host half.
+  function parseToward(raw: string): { destIp?: string; ports: number[] } {
+    const v = raw.trim()
+    if (!v) return { ports: [] }
+    const [hostPart, portsPart] = v.split('·')
+    const host = hostPart.trim()
+    const known = zonesState.zones.flatMap((z) => z.hosts).find((h) => h.label.toLowerCase() === host.toLowerCase())
+    const destIp = host ? (known ? known.ip : host) : undefined
+    const ports = Array.from((portsPart ?? '').matchAll(/(\d+)/g)).map((m) => Number(m[1]))
+    return { destIp, ports }
+  }
+
+  function towardLabel(destIp: string | undefined, ports: number[] | undefined): string {
+    if (!destIp) return ''
+    const p = (ports ?? []).map((n) => `:${n}`).join(', ')
+    return p ? `${destIp} · ${p}` : destIp
+  }
+
+  // The draft (item 2): a row at the top of the table, open as a
+  // drawer, gone the instant it starts watching or is discarded.
+  type DraftMode = 'expect' | 'fence'
+
+  let draftOpen = $state(false)
+  let draftName = $state('')
+  let draftWho = $state('')
+  let draftToward = $state('')
+  let draftMode = $state<DraftMode>('expect')
+  let draftIncludeStructuralNoise = $state(false)
+  let draftSaving = $state(false)
+  let draftError = $state<string | null>(null)
+
+  // The row's cells fill in as the form is typed, so the watch is read
+  // the way it will be listed before it exists.
+  const draftPreviewName = $derived(
+    draftName.trim() || (draftWho.trim() ? `${draftWho.trim()}${draftMode === 'fence' ? ' fenced' : ''}` : 'new watch'),
+  )
+  const draftPreviewBoundary = $derived.by(() => {
+    const who = draftWho.trim()
+    if (!who) return '—'
+    if (draftMode === 'fence') return `${who} → wherever it goes`
+    const toward = draftToward.trim()
+    return toward ? `${who} → ${toward}` : who
+  })
+
+  function openDraft(fill?: PendingWatchDraft) {
+    draftName = ''
+    draftWho = fill?.who ?? ''
+    draftToward = fill?.toward ?? ''
+    draftMode = fill?.mode ?? 'expect'
+    draftIncludeStructuralNoise = false
+    draftError = null
+    draftOpen = true
+  }
+
+  function discardDraft() {
+    draftOpen = false
+  }
+
+  async function startWatching() {
+    draftError = null
+    const source = resolveIdentity(draftWho)
+    const { destIp, ports } = draftMode === 'expect' ? parseToward(draftToward) : { destIp: undefined, ports: [] }
+    const req: WatchlistEntryRequest = {
+      name: draftName.trim() || undefined,
+      invert: draftMode === 'fence',
+      source,
+      destIp: draftMode === 'expect' ? destIp : undefined,
+      ports: draftMode === 'expect' ? ports : undefined,
+      includeStructuralNoise: draftMode === 'fence' ? draftIncludeStructuralNoise : undefined,
+    }
+    draftSaving = true
+    try {
+      // The server is the validator (unscoped ports on an `expect` watch,
+      // a missing source on a `fence` one) -- its message is shown as-is,
+      // the same house style every other mutation on this page uses.
+      const err = await watchlistState.create(req)
+      if (err) draftError = err
+      else draftOpen = false
+    } finally {
+      draftSaving = false
+    }
+  }
+
+  // The docket's `+ watch` (Docket.svelte) and a flag's `watch this
+  // pathway`/`watch this source` (Flags.svelte) both live outside this
+  // component -- see topologyNav.svelte.ts's own doc comment for why the
+  // handoff is shaped the way it is, including why both slots are
+  // cleared the instant they're read (these tabs stay mounted once
+  // visited, so a slot left non-null would reopen the draft on a later,
+  // unrelated visit).
+  $effect(() => {
+    if (topologyNavState.pendingNewWatch === null) return
+    topologyNavState.pendingNewWatch = null
+    openDraft()
+  })
+
+  $effect(() => {
+    const fill = topologyNavState.pendingWatchDraft
+    if (fill === null) return
+    topologyNavState.pendingWatchDraft = null
+    openDraft(fill)
+  })
+
+  // Edit (item 5): the same drawer, its story swapped for the form,
+  // pre-filled. "Mend" (item 6) would be edit with a suggested fix
+  // already typed in, but the definitions API has no way to set or
+  // change an entry's window at all -- internal/api/definitions.go's
+  // expectationRequest (the wire shape both create and update take)
+  // carries source/destIp/ports/invert/includeStructuralNoise only,
+  // never Window, so there is no window fix this page could ever save.
+  // Per the issue's own fallback for exactly this case ("if the app has
+  // no suggestion to make, the button is plain edit; do not invent
+  // one"), plain edit is what's offered here, and its own window row is
+  // read-only text rather than a control that would silently fail to
+  // persist what it shows.
+  let editingId = $state<string | null>(null)
+  let editName = $state('')
+  let editWho = $state('')
+  let editToward = $state('')
+  let editMode = $state<DraftMode>('expect')
+  let editIncludeStructuralNoise = $state(false)
+  let editSaving = $state(false)
+
+  function startEditWatch(e: WatchlistEntry) {
+    editingId = e.id
+    editName = e.name ?? ''
+    editWho = e.source?.mac || e.source?.ip || ''
+    editToward = towardLabel(e.destIp, e.ports)
+    editMode = e.invert ? 'fence' : 'expect'
+    editIncludeStructuralNoise = !!e.includeStructuralNoise
+    wtError = null
+  }
+
+  function cancelEditWatch() {
+    editingId = null
+  }
+
+  async function saveEditWatch() {
+    if (!editingId) return
+    const source = resolveIdentity(editWho)
+    const { destIp, ports } = editMode === 'expect' ? parseToward(editToward) : { destIp: undefined, ports: [] }
+    const req: WatchlistEntryRequest = {
+      name: editName.trim() || undefined,
+      invert: editMode === 'fence',
+      source,
+      destIp: editMode === 'expect' ? destIp : undefined,
+      ports: editMode === 'expect' ? ports : undefined,
+      includeStructuralNoise: editMode === 'fence' ? editIncludeStructuralNoise : undefined,
+    }
+    editSaving = true
+    try {
+      const err = await watchlistState.update(editingId, req)
+      if (err) wtError = err
+      else editingId = null
+    } finally {
+      editSaving = false
+    }
+  }
+
+  // Remove (item 5): round 28's clear-all gesture -- one click arms it
+  // red as "confirm", a second removes, any other click disarms.
+  let armedRemoveId = $state<string | null>(null)
+
+  function armOrRemoveWatch(e: WatchlistEntry) {
+    wtError = null
+    if (armedRemoveId !== e.id) {
+      armedRemoveId = e.id
+      return
+    }
+    armedRemoveId = null
+    watchlistState.remove(e.id).then((err) => {
+      if (err) wtError = err
+    })
+  }
+
+  // Permit, permit all, and fence now / learn again (item 4).
+  let permittingKey = $state<string | null>(null)
+  let fencingId = $state<string | null>(null)
+
+  async function permitOne(e: WatchlistEntry, d: WatchlistPermittedDest) {
+    wtError = null
+    permittingKey = e.id + d.destIp + d.port
+    try {
+      const err = await watchlistState.promote(e.id, [d])
+      if (err) wtError = err
+    } finally {
+      permittingKey = null
+    }
+  }
+
+  async function permitAll(e: WatchlistEntry) {
+    wtError = null
+    const dests = (e.observed ?? []).map((o) => ({ destIp: o.destIp, port: o.port }))
+    if (dests.length === 0) return
+    permittingKey = e.id + '*'
+    try {
+      const err = await watchlistState.promote(e.id, dests)
+      if (err) wtError = err
+    } finally {
+      permittingKey = null
+    }
+  }
+
+  // "fence now" / "learn again": the observe-only toggle (#243's
+  // Observing), named and worded here for what it does rather than a
+  // bare observe/enforce flip.
+  async function toggleObserving(e: WatchlistEntry) {
+    wtError = null
+    fencingId = e.id
+    try {
+      const err = await watchlistState.setObserving(e.id, !e.observing)
+      if (err) wtError = err
+    } finally {
+      fencingId = null
+    }
+  }
+
   type WatchTableSortKey = 'watch' | 'boundary' | 'window' | 'state' | 'lastEvent'
   let wtSortKey = $state<WatchTableSortKey>('watch')
   let wtSortDir = $state<SortDir>('asc')
@@ -565,6 +654,8 @@
     stateGlyph: string
     stateText: string
     broken: boolean
+    learning: boolean
+    paused: boolean
     lastMatch: WatchlistMatch | undefined
     lastEventLabel: string
   }
@@ -582,6 +673,8 @@
         stateGlyph: st.glyph,
         stateText: st.text,
         broken: st.broken,
+        learning: st.learning,
+        paused: st.paused,
         lastMatch,
         lastEventLabel: lastMatch ? formatRelative(lastMatch.lastSeen, appState.now) : '—',
       }
@@ -624,29 +717,32 @@
   // --- Round-30 fidelity flags (#700, #691) --------------------------
   //
   // The ratified mockup (docs/design/concepts/round-30/shots/
-  // docket-watchlist.png, the-whole.html #s7's `#p-watch` panel) draws
-  // one flat watch table under the docket's tabs -- watch / boundary /
+  // docket-watchlist.png, the-whole.html #s7's `#p-watch` panel, carried
+  // forward verbatim by round 31's watchlist-managed.html) draws one
+  // flat watch table under the docket's tabs -- watch / boundary /
   // window / state / last event, one header row, one filter row
-  // directly beneath it, nothing else. Everything below that the
-  // ratified design does not draw -- the Watchlist/Matches/Suggestions
-  // sub-tab row, the "Watches" page heading (round 30: "no page heading
-  // and no strap, anywhere" -- owner, 2026-08-31), the "Manage entries"
-  // explanatory prose, the add/edit form, and the second "Entries" card
-  // list -- is real, shipped capability (#243, #547, #584, #649, #676)
-  // that the ratified design simply doesn't describe. Per the
-  // build-to-the-mockup-first policy (#700) none of it is deleted; each
-  // surface is unmounted behind its own typed flag (explicit boolean,
-  // not inferred -- a bare `false` narrows to `never` and the type
-  // checker reports the guarded block as unreachable), same pattern as
-  // LiveTable's RESIZE_HANDLES_ENABLED, MetricsRegister's LEDGER_ENABLED
-  // and Topography's DEGRADED_NOTE_ENABLED. Bringing any one back is
-  // tracked on #691, independently of the others.
+  // directly beneath it, nothing else. What it does not draw -- the
+  // Watchlist/Matches/Suggestions sub-tab row and the "Watches" page
+  // heading (round 30: "no page heading and no strap, anywhere" --
+  // owner, 2026-08-31) -- is real, shipped capability (#547, #584) the
+  // ratified design simply doesn't describe, and stays unmounted behind
+  // its own typed flag rather than deleted, same pattern as LiveTable's
+  // RESIZE_HANDLES_ENABLED. Bringing either back is tracked on #691.
+  //
+  // The second surface these flags used to guard -- "Manage entries",
+  // the add/edit form and the "Entries" card list (#243, #649) -- is
+  // gone outright rather than joining this list: #761 made every
+  // capability it carried reachable from the ratified table's own
+  // drawer, and AGENTS.md's "removals are wholesale" applies once
+  // nothing still needs the old surface to reach it.
   const WATCHLIST_SUBTABS_ENABLED: boolean = false
   const WATCH_HEADING_ENABLED: boolean = false
-  const MANAGE_ENTRIES_INTRO_ENABLED: boolean = false
-  const ADD_ENTRY_FORM_ENABLED: boolean = false
-  const ENTRIES_TABLE_ENABLED: boolean = false
 </script>
+
+<!-- "remove" (#761 item 5, round 28's clear-all gesture): one click arms
+     it, a second removes, any other click disarms -- same idiom as
+     Docket.svelte's own clear-all bubble. -->
+<svelte:window onclick={() => (armedRemoveId = null)} />
 
 <div class="watchlist-page">
   {#if WATCHLIST_SUBTABS_ENABLED}
@@ -664,12 +760,12 @@
     tabindex={WATCHLIST_SUBTABS_ENABLED ? 0 : undefined}
     hidden={WATCHLIST_SUBTABS_ENABLED && activeTab !== 'watchlist'}
   >
-  <!-- The ratified table (#676, round 29's docket scene: watch ·
+  <!-- The ratified table (#676/#761, round 29/31's docket scene: watch ·
        boundary · window · state · last event, rows opening as drawers
-       like the flags tab). Reads the same entries the "Manage entries"
-       section below edits -- see the script's own section comment for
-       what "window" and the seven-night strip could not honestly carry,
-       and why.
+       like the flags tab -- and, since #761, the table's own draft row
+       and every drawer's edit/remove/permit/fence actions). See the
+       script's own section comment for what "window" and the
+       seven-night strip could not honestly carry, and why.
 
        Header + filter (round 30, the-whole.html #s7 `.panel thead`):
        one <thead> carrying both the clickable column heads (click to
@@ -682,8 +778,8 @@
       <h3 id="watch-heading" class="section-title">Watches</h3>
     {/if}
     {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
-    {#if watchlistState.entries.length === 0}
-      <p class="empty">{ADD_ENTRY_FORM_ENABLED ? 'No watches yet -- add one below.' : 'No watches yet.'}</p>
+    {#if watchlistState.entries.length === 0 && !draftOpen}
+      <p class="empty">No watches yet -- add one with the button above.</p>
     {:else}
       <table class="watch-table">
         <thead>
@@ -727,22 +823,115 @@
           </tr>
         </thead>
         <tbody>
+          <!-- THE DRAFT (#761 item 2): a row at the top of the table, open
+               as a drawer, gone the moment it starts watching or is
+               discarded. `+ watch` (Docket.svelte) makes it blank; a
+               flag's `watch this pathway`/`watch this source` (Flags.svelte)
+               make it filled in -- see the shared handoff in
+               topologyNav.svelte.ts. -->
+          {#if draftOpen}
+            <tr class="wt-row wt-draft">
+              <td class="k">{draftPreviewName}</td>
+              <td>{draftPreviewBoundary}</td>
+              <td class="t">always</td>
+              <td><span class="wchip2 draft">✎ not watching yet</span></td>
+              <td class="t">—</td>
+              <td></td>
+            </tr>
+            <tr class="wt-drawer wt-draft">
+              <td colspan="6">
+                <div class="dwr">
+                  <div class="dcol wform">
+                    <label class="wf-field"
+                      ><span class="lab">watch</span><input
+                        bind:value={draftName}
+                        placeholder="a name — or leave it, and it takes its boundary's"
+                        aria-label="Watch name"
+                      /></label
+                    >
+                    <label class="wf-field"
+                      ><span class="lab">who</span><input
+                        bind:value={draftWho}
+                        placeholder="a host — its name, MAC or address"
+                        aria-label="Who this watch scopes to"
+                      /></label
+                    >
+                    <label class="wf-field"
+                      ><span class="lab">toward</span><input
+                        bind:value={draftToward}
+                        disabled={draftMode === 'fence'}
+                        placeholder={draftMode === 'fence'
+                          ? 'wherever it goes — it learns, you permit'
+                          : 'a host, and ports — nas · :445, :139'}
+                        aria-label="Toward"
+                      /></label
+                    >
+                    <!-- The window control the record draws (always/between,
+                         days) is not offered here: the definitions API has
+                         no field to carry a window on create or update
+                         (internal/api/definitions.go's expectationRequest),
+                         so a "between" choice could never actually be
+                         saved -- offering it would silently lose what the
+                         operator set. See startWatching's own comment. -->
+                    <div class="wf-row"><span class="lab">window</span><span class="t">always</span></div>
+                    {#if draftError}<p class="error" role="alert">{draftError}</p>{/if}
+                  </div>
+                  <div class="side wf-mode">
+                    <span class="lab">and it means</span>
+                    <button type="button" class="mode" class:on={draftMode === 'expect'} onclick={() => (draftMode = 'expect')}>
+                      <b>expect it</b><i>this pathway should happen. The ring breaks when a kept window passes and it does not.</i>
+                    </button>
+                    <button type="button" class="mode" class:on={draftMode === 'fence'} onclick={() => (draftMode = 'fence')}>
+                      <b>fence it</b><i
+                        >this host may go only where you permit. It learns first — every place it reaches is listed,
+                        nothing fires — and the fence starts when you say so.</i
+                      >
+                      {#if draftMode === 'fence'}
+                        <label class="sub"
+                          ><input type="checkbox" bind:checked={draftIncludeStructuralNoise} /> count broadcast, multicast
+                          and link-local too</label
+                        >
+                      {/if}
+                    </button>
+                  </div>
+                  <div class="dwr-acts">
+                    <button class="act" disabled={draftSaving} onclick={startWatching}>
+                      {draftSaving ? 'Saving…' : 'start watching'}
+                    </button>
+                    <button class="act quiet" onclick={discardDraft}>discard</button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          {/if}
           {#if sortedWatchRows.length === 0}
-            <tr><td class="empty-row" colspan="6">No watches match these filters.</td></tr>
+            <tr>
+              <td class="empty-row" colspan="6">
+                {watchlistState.entries.length === 0 ? 'No watches yet.' : 'No watches match these filters.'}
+              </td>
+            </tr>
           {:else}
             {#each sortedWatchRows as row (row.entry.id)}
               {@const story = watchStory(row.entry, row.lastMatch)}
               {@const nights = nightlySummary(row.entry.nights)}
+              <!-- Every entry in Observed is, by construction, not yet
+                   decided: Entry.Promote (internal/watchlist/invert.go)
+                   removes a destination from Observed the moment it is
+                   permitted, so there is no "observed but already
+                   permitted" case to filter out here. -->
+              {@const unpermitted = row.entry.observed ?? []}
               <tr
+                id="watch-{row.entry.id}"
                 class="wt-row"
                 class:watching={!row.broken && row.entry.enabled}
                 class:ring-broken={row.broken}
+                class:learning={row.learning}
                 onclick={() => toggleWatchDrawer(row.entry.id)}
               >
                 <td class="k">{row.entry.name || '(unnamed)'}</td>
                 <td>{row.boundary}</td>
                 <td class="t">{row.window}</td>
-                <td><span class="wchip2" class:broken={row.broken}>{row.stateGlyph} {row.stateText}</span></td>
+                <td><span class="wchip2" class:broken={row.broken} class:learn={row.learning} class:paused={row.paused}>{row.stateGlyph} {row.stateText}</span></td>
                 <td class="t">{row.lastEventLabel}</td>
                 <td>
                   <button
@@ -763,26 +952,131 @@
                 <tr class="wt-drawer" class:ring-broken={row.broken}>
                   <td colspan="6">
                     <div class="dwr">
-                      <div class="dcol">
-                        <p class="story"><b>{story.headline}</b> {story.body}</p>
-                        <div class="lines">{row.lastMatch ? row.lastMatch.event.raw : 'No matching line in the recent log.'}</div>
-                      </div>
-                      <div class="side">
-                        <span class="lab">the pathway</span>
-                        <p class="ep-note">{detailLabel(row.entry)}</p>
-                        {#if nights}
-                          <span class="lab">the last seven nights</span>
-                          <p class="ep-note">{nights}</p>
-                        {/if}
-                      </div>
-                      <div class="dwr-acts">
-                        <button class="act" disabled={pausingId === row.entry.id} onclick={() => togglePause(row.entry)}>
-                          {pausingId === row.entry.id ? 'Saving…' : row.entry.enabled ? 'pause watch' : 'resume watch'}
-                        </button>
-                        {#if row.entry.source?.mac || row.entry.source?.ip}
-                          <button class="act quiet" onclick={() => openWatchInStream(row.entry)}>open in stream ▸</button>
-                        {/if}
-                      </div>
+                      {#if editingId === row.entry.id}
+                        <!-- EDIT (#761 item 5): the same drawer, its story
+                             swapped for the form, pre-filled. "Mend" (item
+                             6) is not offered -- see startEditWatch's own
+                             comment for why there is no window fix this
+                             page could ever save. -->
+                        <div class="dcol wform">
+                          <label class="wf-field"><span class="lab">watch</span><input bind:value={editName} aria-label="Watch name" /></label>
+                          <label class="wf-field"><span class="lab">who</span><input bind:value={editWho} aria-label="Who this watch scopes to" /></label>
+                          <label class="wf-field"
+                            ><span class="lab">toward</span><input
+                              bind:value={editToward}
+                              disabled={editMode === 'fence'}
+                              placeholder={editMode === 'fence' ? 'wherever it goes — it learns, you permit' : ''}
+                              aria-label="Toward"
+                            /></label
+                          >
+                          <div class="wf-row"><span class="lab">window</span><span class="t">{row.window}</span></div>
+                          {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
+                        </div>
+                        <div class="side wf-mode">
+                          <span class="lab">and it means</span>
+                          <button type="button" class="mode" class:on={editMode === 'expect'} onclick={() => (editMode = 'expect')}>
+                            <b>expect it</b>
+                          </button>
+                          <button type="button" class="mode" class:on={editMode === 'fence'} onclick={() => (editMode = 'fence')}>
+                            <b>fence it</b>
+                            {#if editMode === 'fence'}
+                              <label class="sub"
+                                ><input type="checkbox" bind:checked={editIncludeStructuralNoise} /> count broadcast,
+                                multicast and link-local too</label
+                              >
+                            {/if}
+                          </button>
+                        </div>
+                        <div class="dwr-acts">
+                          <button class="act" disabled={editSaving} onclick={saveEditWatch}>
+                            {editSaving ? 'Saving…' : 'save'}
+                          </button>
+                          <button class="act quiet" onclick={cancelEditWatch}>cancel</button>
+                        </div>
+                      {:else}
+                        <div class="dcol">
+                          <p class="story"><b>{story.headline}</b> {story.body}</p>
+                          <div class="lines">{row.lastMatch ? row.lastMatch.event.raw : 'No matching line in the recent log.'}</div>
+                        </div>
+                        <div class="side">
+                          {#if row.learning}
+                            <!-- THE LEARNING WATCH (#761 item 4): where it
+                                 has reached -- every place ever seen,
+                                 decided or not. Entry.Promote
+                                 (internal/watchlist/invert.go) moves a
+                                 destination out of Observed once
+                                 permitted, so the permitted half of this
+                                 list is read from Permitted directly
+                                 rather than from an "observed AND
+                                 permitted" combination that never
+                                 actually occurs. -->
+                            <span class="lab">where it has reached · since {sinceDay(row.entry.createdAt)}</span>
+                            <ul class="seen">
+                              {#each row.entry.permitted ?? [] as p (p.destIp + ':' + p.port)}
+                                <li>
+                                  <span class="k">{p.destIp}</span>
+                                  <span class="t">:{p.port}</span>
+                                  <span class="ok">✓ permitted</span>
+                                </li>
+                              {/each}
+                              {#each row.entry.observed ?? [] as o (o.destIp + ':' + o.port)}
+                                <li>
+                                  <span class="k">{o.destIp}</span>
+                                  <span class="t">:{o.port} · {o.count}×</span>
+                                  <button
+                                    class="permit"
+                                    disabled={permittingKey === row.entry.id + o.destIp + o.port}
+                                    onclick={() => permitOne(row.entry, { destIp: o.destIp, port: o.port })}
+                                  >
+                                    permit
+                                  </button>
+                                </li>
+                              {/each}
+                            </ul>
+                          {:else}
+                            <span class="lab">the pathway</span>
+                            <p class="ep-note">{detailLabel(row.entry)}</p>
+                            {#if nights}
+                              <span class="lab">the last seven nights</span>
+                              <p class="ep-note">{nights}</p>
+                            {/if}
+                          {/if}
+                        </div>
+                        <div class="dwr-acts">
+                          {#if row.entry.invert}
+                            {#if row.entry.observing && unpermitted.length > 0}
+                              <button class="act" disabled={permittingKey === row.entry.id + '*'} onclick={() => permitAll(row.entry)}>
+                                permit all {unpermitted.length}
+                              </button>
+                            {/if}
+                            <button class="act" disabled={fencingId === row.entry.id} onclick={() => toggleObserving(row.entry)}>
+                              {fencingId === row.entry.id
+                                ? 'Saving…'
+                                : row.entry.observing
+                                  ? `fence now · ${(row.entry.permitted ?? []).length} permitted`
+                                  : 'learn again'}
+                            </button>
+                          {:else}
+                            <button class="act" disabled={pausingId === row.entry.id} onclick={() => togglePause(row.entry)}>
+                              {pausingId === row.entry.id ? 'Saving…' : row.entry.enabled ? 'pause watch' : 'resume watch'}
+                            </button>
+                          {/if}
+                          {#if row.entry.source?.mac || row.entry.source?.ip}
+                            <button class="act quiet" onclick={() => openWatchInStream(row.entry)}>open in stream ▸</button>
+                          {/if}
+                          <button class="act quiet edit" onclick={() => startEditWatch(row.entry)}>edit</button>
+                          <button
+                            class="act quiet remove"
+                            class:armed={armedRemoveId === row.entry.id}
+                            onclick={(ev) => {
+                              ev.stopPropagation()
+                              armOrRemoveWatch(row.entry)
+                            }}
+                          >
+                            {armedRemoveId === row.entry.id ? 'confirm — its matches stay' : 'remove'}
+                          </button>
+                        </div>
+                      {/if}
                     </div>
                   </td>
                 </tr>
@@ -793,253 +1087,6 @@
       </table>
     {/if}
   </section>
-
-  <!-- "Manage entries" (#676's second surface: the add/edit/invert/
-       observe/promote workflow this component pre-dates the ratified
-       table with). Round 30 draws none of it -- see the flags' own
-       comment above the script's watch-window section. Kept reachable,
-       not deleted, per #700; the heading covers all three sub-surfaces
-       so restoring any one of them still gets it back. -->
-  {#if MANAGE_ENTRIES_INTRO_ENABLED || ADD_ENTRY_FORM_ENABLED || ENTRIES_TABLE_ENABLED}
-    <h3 class="section-title manage-heading">Manage entries</h3>
-  {/if}
-
-  {#if MANAGE_ENTRIES_INTRO_ENABLED}
-    <p class="intro">
-      Watch attempts against specific ports (<strong>record</strong>), or flip an
-      entry around to watch what one device does (<strong>invert</strong>): "this device should only ever reach X" --
-      everything else it touches gets recorded. A new inverted entry starts <strong>observing</strong>: nothing fires
-      until you review what it actually saw and promote the destinations that are expected. Matches are recorded to
-      disk and survive a restart, unlike the live view's own volatile buffer.
-    </p>
-  {/if}
-
-  {#if ADD_ENTRY_FORM_ENABLED}
-  <form class="form" onsubmit={submit}>
-    <div class="form-title">{editingId ? 'Editing entry' : 'Add entry'}</div>
-    <div class="form-row">
-      <label class="field">
-        <span>Name</span>
-        <input type="text" placeholder="SSH watch" bind:value={draftName} />
-      </label>
-      <label class="field checkbox-field">
-        <span>
-          <input type="checkbox" bind:checked={draftInvert} />
-          Invert (watch what a device does, not a port list)
-        </span>
-      </label>
-    </div>
-
-    <div class="form-row">
-      <label class="field">
-        <span>Source MAC{draftInvert ? ' (required)' : ' (optional)'}</span>
-        <input type="text" placeholder="aa:bb:cc:dd:ee:ff" bind:value={draftSourceMac} required={draftInvert} />
-      </label>
-      <label class="field">
-        <span>Source IP (fallback, used only if MAC is unknown for a given event)</span>
-        <input type="text" placeholder="192.168.1.50" bind:value={draftSourceIp} />
-      </label>
-    </div>
-
-    {#if !draftInvert}
-      <div class="form-row">
-        <label class="field">
-          <span>Destination IP (optional)</span>
-          <input type="text" placeholder="any destination" bind:value={draftDestIp} />
-        </label>
-        <label class="field grow">
-          <span>Ports (comma-separated, required)</span>
-          <input type="text" placeholder="22, 23, 3389" bind:value={draftPorts} required />
-        </label>
-      </div>
-    {:else}
-      <div class="form-row">
-        <label class="field checkbox-field">
-          <span>
-            <input type="checkbox" bind:checked={draftIncludeStructuralNoise} />
-            Also watch broadcast/multicast/link-local traffic (usually just noise -- off by default)
-          </span>
-        </label>
-      </div>
-    {/if}
-
-    {#if error}
-      <p class="error">{error}</p>
-    {/if}
-    <div class="form-actions">
-      {#if editingId}
-        <button type="button" class="cancel" onclick={resetDraft}>Cancel</button>
-      {/if}
-      <button type="submit" class="save" disabled={saving}>
-        {saving ? 'Saving…' : editingId ? 'Save changes' : 'Add entry'}
-      </button>
-    </div>
-  </form>
-  {/if}
-
-  {#if ENTRIES_TABLE_ENABLED}
-  <section class="section" id="entries-section">
-    <h3 class="section-title">Entries</h3>
-    {#if watchlistState.entries.length === 0}
-      <p class="empty">No watchlist entries yet -- add one above.</p>
-    {:else}
-      <!-- Every column sorts and filters (#649): a quiet dashed row
-           beneath the labels, matching round-18/19's ratified idiom. -->
-      <div class="sortbar" role="row">
-        <button class="sorth" class:on={sortKey === 'watch'} onclick={() => toggleSort('watch')}>
-          watch <span class="dir">{dirGlyph('watch')}</span>
-        </button>
-        <button class="sorth" class:on={sortKey === 'boundary'} onclick={() => toggleSort('boundary')}>
-          boundary <span class="dir">{dirGlyph('boundary')}</span>
-        </button>
-        <button class="sorth" class:on={sortKey === 'state'} onclick={() => toggleSort('state')}>
-          state <span class="dir">{dirGlyph('state')}</span>
-        </button>
-        <button class="sorth" class:on={sortKey === 'detail'} onclick={() => toggleSort('detail')}>
-          detail <span class="dir">{dirGlyph('detail')}</span>
-        </button>
-      </div>
-      <div class="filterbar" role="row">
-        <input bind:value={filters.watch} placeholder="filter watch…" aria-label="Filter by watch name" />
-        <input bind:value={filters.boundary} placeholder="filter boundary…" aria-label="Filter by boundary" />
-        <input bind:value={filters.state} placeholder="filter state…" aria-label="Filter by state" />
-        <input bind:value={filters.detail} placeholder="filter detail…" aria-label="Filter by detail" />
-      </div>
-      {#if sortedEntries.length === 0}
-        <p class="empty">No entries match these filters.</p>
-      {:else}
-      <ul class="list">
-        {#each sortedEntries as e (e.id)}
-          <!-- The id is the target a match row's entry name scrolls to
-               (openEntry, #584), not decoration. -->
-          <!-- The watchlist wears the docket's stripe treatment too
-               (round 19): the watchers' purple for a healthy watch, the
-               alarm ink where the ring is broken (same condition as
-               watchlistState.brokenCount), nothing for a paused one. -->
-          <li
-            class="card"
-            class:watching={e.enabled && watchlistState.coverage[e.id] !== 'no-logging'}
-            class:ring-broken={e.enabled && watchlistState.coverage[e.id] === 'no-logging'}
-            id="entry-{e.id}"
-          >
-            <button class="card-main" onclick={() => toggleExpand(e.id)}>
-              <span class="name">{e.name || '(unnamed)'}</span>
-              {#if e.invert}
-                <span class="badge invert">inverted</span>
-                {#if e.observing}
-                  <span class="badge observing">observing</span>
-                {/if}
-              {/if}
-              <span class="source">{sourceLabel(e)}</span>
-              {#if e.invert}
-                <span class="detail">{(e.permitted ?? []).length} permitted, {(e.observed ?? []).length} to review</span>
-              {:else}
-                <span class="detail">ports {(e.ports ?? []).join(', ')}{e.destIp ? ` → ${e.destIp}` : ''}</span>
-              {/if}
-            </button>
-            {#if coverageWarning(e.id)}
-              <p class="coverage-warning" role="status">{coverageWarning(e.id)}</p>
-            {/if}
-
-            <span class="row-actions">
-              <button class="edit" onclick={() => startEdit(e)}>Edit</button>
-              <button class="delete" disabled={deletingId === e.id} onclick={() => remove(e)}>
-                {deletingId === e.id ? 'Removing…' : 'Remove'}
-              </button>
-            </span>
-
-            {#if expandedId === e.id}
-              <div class="expanded">
-                {#if e.invert}
-                  <div class="expanded-row">
-                    <button class="observe-toggle" disabled={togglingObserve === e.id} onclick={() => toggleObserving(e)}>
-                      {togglingObserve === e.id
-                        ? 'Saving…'
-                        : e.observing
-                          ? 'Stop observing (start enforcing)'
-                          : 'Resume observing'}
-                    </button>
-                    {#if e.observing}
-                      <span class="hint">Nothing fires while observing -- review what's below and promote what's expected.</span>
-                    {:else}
-                      <span class="hint">Enforcing: anything not in Permitted below is recorded as a violation.</span>
-                    {/if}
-                  </div>
-
-                  <div class="sub-section">
-                    <h4>Permitted ({(e.permitted ?? []).length})</h4>
-                    {#if (e.permitted ?? []).length === 0}
-                      <p class="empty small">Nothing promoted yet.</p>
-                    {:else}
-                      <ul class="dest-list">
-                        {#each e.permitted ?? [] as p (p.destIp + ':' + p.port)}
-                          <li>{p.destIp}:{p.port}</li>
-                        {/each}
-                      </ul>
-                    {/if}
-                  </div>
-
-                  <div class="sub-section">
-                    <h4>To review ({(e.observed ?? []).length})</h4>
-                    {#if (e.observed ?? []).length === 0}
-                      <p class="empty small">Nothing observed yet -- it will appear here once the device is seen reaching somewhere new.</p>
-                    {:else}
-                      <ul class="dest-list">
-                        {#each e.observed ?? [] as o (o.destIp + ':' + o.port)}
-                          <li>
-                            <span class="dest">{o.destIp}:{o.port}</span>
-                            <span class="dest-meta">
-                              seen {o.count}× · last {formatTime(o.lastSeen)}
-                            </span>
-                            <button
-                              class="promote"
-                              disabled={promoting === e.id + o.destIp + o.port}
-                              onclick={() => promoteOne(e, { destIp: o.destIp, port: o.port })}
-                            >
-                              {promoting === e.id + o.destIp + o.port ? 'Promoting…' : 'Promote'}
-                            </button>
-                          </li>
-                        {/each}
-                      </ul>
-                    {/if}
-                  </div>
-                {/if}
-
-                {#if e.source?.mac || e.source?.ip}
-                  <div class="sub-section">
-                    <h4>Recent matches</h4>
-                    {#if !matchesByEntry[e.id]}
-                      <button class="load-matches" onclick={() => loadMatches(e)}>Load recent matches</button>
-                    {:else if matchesByEntry[e.id] === 'loading'}
-                      <p class="empty small">Loading…</p>
-                    {:else if matchesByEntry[e.id] === 'error'}
-                      <p class="error">Could not load matches: {matchErrorByEntry[e.id] ?? 'unknown error'}</p>
-                      <button class="load-matches" onclick={() => loadMatches(e)}>Try again</button>
-                    {:else if (matchesByEntry[e.id] as WatchlistMatch[]).length === 0}
-                      <p class="empty small">No matches recorded yet for this entry's device.</p>
-                    {:else}
-                      <ul class="match-list">
-                        {#each matchesByEntry[e.id] as WatchlistMatch[] as m (m.id)}
-                          <li>
-                            <span class="dest">{m.tuple.destIp}:{m.tuple.port}</span>
-                            <span class="dest-meta">
-                              {m.count}× · last {formatTime(m.lastSeen)} · via {m.event.action}
-                            </span>
-                          </li>
-                        {/each}
-                      </ul>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-      {/if}
-    {/if}
-  </section>
-  {/if}
   </div>
 
   {#if WATCHLIST_SUBTABS_ENABLED}
@@ -1112,96 +1159,10 @@
     gap: 14px;
   }
 
-  .intro {
-    margin: 0;
-    max-width: 80ch;
-    font-size: 13px;
-    color: var(--fg-muted);
-    line-height: 1.5;
-  }
-
-  .form {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .form-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .form-row {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    font-size: 12px;
-    color: var(--fg-muted);
-    flex: 1 1 200px;
-    min-width: 160px;
-  }
-
-  .field.grow {
-    flex: 2 1 260px;
-  }
-
-  .checkbox-field span {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
-
-  input[type='text'] {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--fg);
-    border-radius: 5px;
-    padding: 6px 8px;
-    font-size: 13px;
-  }
-
-  input[type='text']:focus {
-    outline: none;
-    border-color: var(--accent);
-  }
-
   .error {
     margin: 0;
     color: var(--reject);
     font-size: 12px;
-  }
-
-  /* Deliberately not the same red as .error: an entry that cannot match
-     is a configuration mismatch to look at, not a failed action. */
-  .coverage-warning {
-    grid-column: 1 / -1;
-    margin: 6px 0 0;
-    padding: 6px 8px;
-    border-radius: 6px;
-    background: var(--panel);
-    border-left: 3px solid var(--log);
-    color: var(--text-muted);
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .form-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
   }
 
   .section {
@@ -1224,296 +1185,20 @@
     padding: 10px 0;
   }
 
-  .empty.small {
-    padding: 4px 0;
-    font-size: 12px;
-  }
-
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  /* Every column sorts and filters (#649): a sort toolbar standing in
-     for table column heads (the entries are cards, not a table), and
-     beneath it the quiet dashed filter row round-18/19 ratified -- same
-     idiom as docs/design/concepts/round-18/the-docket-opened.html's
-     `.panel tr.filters input`, translated onto a card list. */
-  .sortbar {
-    display: flex;
-    gap: 20px;
-    padding: 2px 4px 4px;
-  }
-
-  .sorth {
-    background: transparent;
-    border: none;
-    padding: 0;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
-    cursor: pointer;
-  }
-
-  .sorth:hover {
-    color: var(--fg-muted);
-  }
-
-  .sorth.on {
-    color: var(--fg);
-  }
-
-  .sorth .dir {
-    display: inline-block;
-    min-width: 8px;
-    color: var(--accent);
-    font-size: 9px;
-  }
-
-  .filterbar {
-    display: flex;
-    gap: 20px;
-    padding: 0 4px 10px;
-  }
-
-  .filterbar input {
-    flex: 1;
-    min-width: 0;
-    background: transparent;
-    border: 0;
-    border-bottom: 1px dashed var(--border);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--fg-muted);
-    padding: 2px 0;
-    outline: none;
-  }
-
-  .filterbar input::placeholder {
-    color: var(--fg-dim);
-    opacity: 0.7;
-  }
-
-  .filterbar input:focus {
-    border-bottom-color: var(--accent);
-  }
-
-  .card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 12px 10px 14px;
-  }
-
-  /* The stripe (round 19): one unbroken line at the card's left edge,
-     inset so it follows the rounded corner. */
-  .card.watching {
-    box-shadow: inset 3px 0 0 var(--marked);
-  }
-
-  .card.ring-broken {
-    box-shadow: inset 3px 0 0 var(--alarm);
-  }
-
-  .card-main {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    min-width: 0;
-    flex: 1 1 auto;
-    background: transparent;
-    border: none;
-    text-align: left;
-    padding: 0;
-  }
-
-  .name {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--fg);
-  }
-
-  .badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 7px;
-    border-radius: 999px;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-  }
-
-  .badge.invert {
-    background: var(--accent-bg);
-    color: var(--accent);
-  }
-
-  .badge.observing {
-    background: var(--drop-bg);
-    color: var(--drop);
-  }
-
-  .source {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--fg-muted);
-  }
-
-  .detail {
-    font-size: 12px;
-    color: var(--fg-dim);
-  }
-
-  .row-actions {
-    display: flex;
-    gap: 8px;
-    flex: none;
-  }
-
-  .cancel,
-  .save,
-  .edit,
-  .delete,
-  .observe-toggle,
-  .promote,
-  .load-matches {
-    border-radius: 5px;
-    padding: 6px 12px;
-    font-size: 12px;
-  }
-
-  .cancel,
-  .edit,
-  .observe-toggle,
-  .load-matches {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
-  }
-
-  .cancel:hover,
-  .edit:hover,
-  .observe-toggle:hover:not(:disabled),
-  .load-matches:hover {
-    color: var(--fg);
-    border-color: var(--fg-muted);
-  }
-
-  .save,
-  .promote {
-    background: var(--accent);
-    border: 1px solid var(--accent);
-    color: var(--bg);
-    font-weight: 600;
-  }
-
-  .promote {
-    padding: 4px 9px;
-    font-size: 11px;
-  }
-
-  .delete {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
-  }
-
-  .delete:hover:not(:disabled) {
-    background: var(--drop-bg);
-    color: var(--drop);
-    border-color: var(--drop);
-  }
-
   button:disabled {
     opacity: 0.6;
   }
 
-  .expanded {
-    flex-basis: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding-top: 10px;
-    margin-top: 4px;
-    border-top: 1px solid var(--border);
-  }
-
-  .expanded-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .hint {
-    font-size: 12px;
-    color: var(--fg-dim);
-  }
-
-  .sub-section h4 {
-    margin: 0 0 4px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .dest-list,
-  .match-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .dest-list li,
-  .match-list li {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 12px;
-    padding: 4px 0;
-  }
-
-  .dest {
-    font-family: var(--font-mono);
-    color: var(--fg);
-  }
-
-  .dest-meta {
-    color: var(--fg-dim);
-    flex: 1 1 auto;
-  }
-
-  /* The ratified table (#676, round 29): watch · boundary · window ·
-     state · last event. The drawer reuses Flags.svelte's own class
-     names for the parts they share (.dwr/.dcol/.side/.lab/.lines/
+  /* The ratified table (#676/#761, round 29/31): watch · boundary ·
+     window · state · last event. The drawer reuses Flags.svelte's own
+     class names for the parts they share (.dwr/.dcol/.side/.lab/.lines/
      .dwr-acts/.act) -- scoped separately per component the same way
-     .card/.sortbar/.filterbar already are across this file and that
-     one -- plus .story for the standalone headline the round-29 record
-     adds, which Flags' own drawer doesn't carry. */
+     .section/.watch-table-section already are across this file and
+     that one -- plus .story for the standalone headline the round-29
+     record adds, which Flags' own drawer doesn't carry. */
   .watch-table-section {
     padding-bottom: 6px;
     border-bottom: 1px solid var(--border);
-  }
-
-  .manage-heading {
-    margin-top: 2px;
   }
 
   .watch-table {
@@ -1764,6 +1449,205 @@
   .dwr .act:disabled {
     opacity: 0.6;
     cursor: default;
+  }
+
+  /* THE DRAFT, and the same stripe/state idioms carried onto the two
+     more states an inverted entry passes through (#761): learning
+     (dashed, still the watchers' purple) and the draft itself (dashed,
+     dim -- "not watching yet" is not a state to alarm on). */
+  .wt-row.learning td:first-child {
+    box-shadow: inset 3px 0 0 color-mix(in srgb, var(--marked) 50%, transparent);
+  }
+
+  .wt-row.wt-draft td:first-child,
+  .wt-drawer.wt-draft td {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .wchip2.learn {
+    border-style: dashed;
+  }
+
+  /* `‖ paused` (watchlist-managed.html:801, :860): dim ink, no alarm
+     styling -- a paused watch is a choice, not a failure. */
+  .wchip2.paused {
+    color: var(--fg-dim);
+    border-color: var(--border);
+    background: transparent;
+  }
+
+  .wchip2.draft {
+    color: var(--fg-dim);
+    border-style: dashed;
+    border-color: var(--border);
+    background: transparent;
+  }
+
+  /* The form -- the drawer's story column, as fields, shared by the
+     draft and by edit. */
+  .wform {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .wf-field {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  .wf-field input {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg);
+    padding: 3px 0;
+    outline: none;
+  }
+
+  .wf-field input:focus {
+    border-bottom-color: var(--accent);
+  }
+
+  .wf-field input::placeholder {
+    color: var(--fg-dim);
+    opacity: 0.7;
+  }
+
+  .wf-field input:disabled {
+    color: var(--fg-dim);
+    border-bottom-style: dotted;
+  }
+
+  .wf-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 4px;
+  }
+
+  .wf-row .lab {
+    width: 64px;
+    flex: none;
+  }
+
+  .wform .lab {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  /* "and it means": expect it / fence it, the record's own two cards. */
+  .wf-mode .mode {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 6px;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .wf-mode .mode.on {
+    border-color: color-mix(in srgb, var(--marked) 55%, transparent);
+    background: color-mix(in srgb, var(--marked) 6%, transparent);
+  }
+
+  .wf-mode .mode b {
+    display: block;
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .wf-mode .mode i {
+    display: block;
+    font-family: var(--font-sans);
+    font-style: normal;
+    font-size: 11px;
+    color: var(--fg-dim);
+    line-height: 1.5;
+    margin-top: 2px;
+  }
+
+  .wf-mode .mode .sub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    margin-top: 6px;
+  }
+
+  /* "where it has reached" (#761 item 4): the learning watch's own
+     per-place permit list. */
+  .seen {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+  }
+
+  .seen li {
+    display: grid;
+    grid-template-columns: 1fr auto 72px;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .seen .k {
+    color: var(--fg);
+  }
+
+  .seen .t {
+    color: var(--fg-dim);
+  }
+
+  .seen .ok {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 10px;
+    color: var(--marked);
+    text-align: right;
+  }
+
+  .seen .permit {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    font-size: 10px;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 1px 10px;
+    cursor: pointer;
+    justify-self: end;
+  }
+
+  .seen .permit:hover {
+    border-color: var(--accent);
+  }
+
+  /* "remove" (#761 item 5): armed red on the first click, same idiom as
+     Docket.svelte's own clear-all bubble. */
+  .dwr .act.remove.armed {
+    color: var(--alarm);
+    border-color: var(--alarm);
   }
 
   @media (prefers-reduced-motion: reduce) {
