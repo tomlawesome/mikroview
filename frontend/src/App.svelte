@@ -125,13 +125,14 @@
     flagsState.refresh().catch(handleApiError)
     // #546's broken ring needs a live coverage answer even when Watchlist
     // itself is never opened -- the rail is chrome, not a page, so it
-    // cannot wait on that page's own onMount. Gated to admin because
-    // GET /api/definitions (which the ring's coverage rides on) is
-    // admin-only throughout (internal/api/definitions.go), and the
-    // Watchlist row this feeds is itself admin-only in the rail. The
+    // cannot wait on that page's own onMount. Gated to canEdit because the
+    // Watchlist row this feeds is visible to that tier (navGroups.ts's
+    // `edit: true` on the row), not admin-only, and GET /api/definitions
+    // (which the ring's coverage rides on) is accessViewer -- readable by
+    // canEdit and below (#653; internal/api/authz_matrix_test.go). The
     // immediate call here is what makes the ring correct on first paint;
     // WATCHLIST_COVERAGE_REFRESH_MS above is what keeps it correct after.
-    if (authState.role === 'admin') watchlistState.refresh().catch(handleApiError)
+    if (authState.canEdit) watchlistState.refresh().catch(handleApiError)
 
     const statsInterval = setInterval(() => {
       appState.refreshDevicesAndStats().catch(handleApiError)
@@ -142,7 +143,7 @@
     // WATCHLIST_COVERAGE_REFRESH_MS's own comment for why the two cadences
     // are deliberately different rather than an oversight.
     const watchlistInterval =
-      authState.role === 'admin'
+      authState.canEdit
         ? setInterval(() => watchlistState.refresh().catch(handleApiError), WATCHLIST_COVERAGE_REFRESH_MS)
         : undefined
 
