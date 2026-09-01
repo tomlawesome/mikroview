@@ -82,3 +82,8 @@ the dataviz validator has nothing new to check.
 ## Verdicts
 
 2026-09-01, owner: "Yeah love this, good job."
+
+Same day, on reflection: "These buttons need to be elegantly worked into
+the row before the drawer opens … you have to open the drawer to select
+an answer - it's unnecessary clicks." Round 35 moves the trio into the
+row; everything else here stands.
