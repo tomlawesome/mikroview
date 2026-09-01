@@ -34,9 +34,9 @@ export const DETECTORS: Partial<Record<string, DetectorInfo>> = {
   port_scan: {
     label: 'Port scan',
     explanation:
-      'Flags a source that touches at least 15 distinct destination ports within 60 seconds. A burst of new-connection attempts spread across many ports in a short window is the classic signature of active scanning, not ordinary use of a handful of services.',
+      'Flags a source that touches at least 15 distinct destination ports within 60 seconds by default -- both the count and the window are configurable, and the engine room edits them. A burst of new-connection attempts spread across many ports in a short window is the classic signature of active scanning, not ordinary use of a handful of services.',
     scopeNote:
-      'Hosts/Classification restrict which source IPs are tracked at all. Ports restricts which distinct destination ports count toward the 15-port threshold, not which events are tracked in the first place.',
+      'Hosts/Classification restrict which source IPs are tracked at all. Ports restricts which distinct destination ports count toward the port-count threshold, not which events are tracked in the first place.',
     example: 'Ignore a vulnerability scanner you run yourself: Hosts = 192.168.1.20, mode = deny.',
   },
   activity_spike: {

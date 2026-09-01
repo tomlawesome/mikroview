@@ -568,8 +568,8 @@ describe('LiveTable distinguishes a failed fetch from a confirmed empty result (
 })
 
 // #549's chrome Loading state ("shell plus ghost rows -- never a spinner
-// page") and its first-run empty state ("point the operator at Admin ▸
-// Run setup…"). Both hang off the same empty buffer that #373's tests
+// page") and its first-run empty state ("point the operator at the account
+// menu's Run setup…"). Both hang off the same empty buffer that #373's tests
 // above cover -- these add the two readings #373 predates: "still
 // loading" and "confirmed empty because no device has ever sent
 // anything".
@@ -598,7 +598,7 @@ describe('LiveTable Loading and first-run empty states (#549)', () => {
     expect(container.querySelector('.empty')).not.toBeNull()
   })
 
-  it('points an admin at Admin ▸ Run setup… once settled with no devices ever seen', () => {
+  it('points an admin at your account menu ▸ Run setup… once settled with no devices ever seen', () => {
     appState.fetchFailed = false
     appState.events = []
     appState.initialLoadDone = true
@@ -608,7 +608,7 @@ describe('LiveTable Loading and first-run empty states (#549)', () => {
     const { container } = render(LiveTable, {})
     flushSync()
 
-    expect(container.querySelector('.empty')?.textContent).toMatch(/Admin ▸ Run setup…/)
+    expect(container.querySelector('.empty')?.textContent).toMatch(/your account menu ▸ Run setup…/)
   })
 
   it('tells a viewer to ask an administrator instead, rather than naming a control they cannot reach', () => {
