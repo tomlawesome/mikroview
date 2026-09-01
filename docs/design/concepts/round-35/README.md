@@ -28,12 +28,13 @@ exclusion is a verdict that outlives the flag** — and gains a corollary:
    colour and settles dim. The stamp takes the trio's place in the same
    cell, with `undo` beside it, so the columns never move. `undo` puts
    the trio back. `clear with a note` stamps `CLEARED` in the quiet ink.
-3. **Called real** stamps `REAL` beside the flag's type in alarm ink,
-   swells the row's own colour bar from 3 px to 7 px — a lens whose
-   ends arc back into the 3 px bar, so there is no stepped edge against
-   the rows above and below — lights the
-   `✱ real` chip, and the story leads with *Called real at 13:58 by
-   you…* whether or not the drawer is open. The flag stays open.
+3. **Called real** stamps `REAL` in the same column, in alarm ink,
+   with `retract` beside it and the caret still there — the flag stays
+   open, the row keeps its ink, and its own colour bar swells from 3 px
+   to 7 px as a lens whose ends arc back into the bar, so there is no
+   stepped edge against the rows above and below. The story leads with
+   *Called real at 13:58 by you…*. To call it something else later:
+   `retract`, then the chip. One rule: every stamp lives in `CALL IT`.
 4. **`never again`** stays in the drawer, now alone at the right of the
    action row: it is the one verdict that wants a second look and a
    confirm, and the drawer is where the evidence is. Its arm-then-
@@ -72,6 +73,5 @@ also a bit cheesey." — the stamps now sit square; the thump stays. Owner: "id 
 the bar were thickned by using an arc, so we don't get a jutted edge" —
 the real row's bar now swells as a lens.
 
-2026-09-01, owner: "33. stamps are good." Open: whether `real`'s stamp
-moves to the CALL IT column as `REAL · retract` (recommended) or stays
-beside the type.
+2026-09-01, owner: "33. stamps are good." On where `real`'s stamp lives:
+"36. your recommendation" — it moved into `CALL IT` with `retract`.
