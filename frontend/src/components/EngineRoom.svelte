@@ -2,21 +2,40 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   //
   // Settings as the shelf (#633, rounds 23-25, owner-approved): the
-  // page reports live truth and is not a form until you touch it. Five
-  // groups -- your deck (the cards in the order you keep them, drag to
-  // reorder, sign-in lands on the first), ingest (the one-way pathway),
-  // detection (what fired this hour, and the bench behind tune),
-  // memory (what the buffer holds, hour by hour), account. The deep
-  // admin surfaces live on: the watcher bench (EngineRoomWatchers)
-  // unfolds from detection's tune row, and the two doors
-  // (EngineRoomDoors: people and machine keys) keep their own place
-  // below the shelf.
+  // page reports live truth and is not a form until you touch it.
+  // Seven groups -- your deck (the cards in the order you keep them,
+  // drag to reorder, sign-in lands on the first), ingest (the one-way
+  // pathway), keys (which machines may speak), detection (what fired
+  // this hour, and the bench behind tune), memory (what the buffer
+  // holds, hour by hour), account, people (who may look in). The
+  // watcher bench (EngineRoomWatchers) unfolds from detection's tune
+  // row.
   //
   // This replaces #490's five-station signal path wholesale; the
-  // stations' facts survive inside the groups (the door -> ingest, the
-  // store -> memory, the watchers/flags desk -> detection), and the
-  // room's honesty rule is unchanged: the page never pretends a knob
-  // the server does not hold.
+  // stations' facts survive inside the groups (the store -> memory, the
+  // watchers/flags desk -> detection), and the room's honesty rule is
+  // unchanged: the page never pretends a knob the server does not hold.
+  //
+  // Round 32 (#767) mounts keys and people directly in the card, in its
+  // own row grammar -- the two doors EngineRoomDoors.svelte used to draw
+  // below the shelf behind USERS_DOOR_ENABLED/TOKENS_DOOR_ENABLED
+  // (round 30/#700/#691 had unmounted both). That component and its
+  // flags are retired outright (no shim -- see AGENTS.md's "removals
+  // are wholesale"); usersState/tokensState and their create/remove/
+  // revoke calls are the same ones it used.
+  //
+  // Both groups are gated on isAdmin, not just the verbs: GET
+  // /api/tokens and GET /api/auth/users are both admin-only today
+  // (internal/api/tokens.go's handleTokensList, #657; internal/api/
+  // auth.go's handleAuthListUsers), so a `user` or `viewer` session
+  // cannot even read either list. Round 32's own drawing (settings-
+  // doors.html) and its issue body (#767) describe keys as visible to
+  // "anyone signed in", verbs admin-only -- that reading is not
+  // reachable without reopening the read #657 deliberately closed, which
+  // is a security-gate call this build does not make unilaterally. Kept
+  // on the closer, backend-consistent reading (both groups admin-only,
+  // like people already is) and flagged in the PR rather than guessed
+  // past.
   import { onMount } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -28,17 +47,18 @@
   import { versionState } from '../lib/version.svelte'
   import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
-  import { fetchSetupStatus } from '../lib/api'
-  import { formatEps, formatHM, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
-  import { portOf } from '../lib/setupsteps'
-  import type { SetupStatus, FlagType } from '../lib/types'
+  import { fetchSetupStatus, fetchDevices } from '../lib/api'
+  import { usersState } from '../lib/users.svelte'
+  import { tokensState } from '../lib/tokens.svelte'
+  import { formatEps, formatHM, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
+  import { portOf, pushScript } from '../lib/setupsteps'
+  import type { SetupStatus, FlagType, Device } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
-  import EngineRoomDoors from './EngineRoomDoors.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
   // The watchers station's own tier (#653): running the detector bench
   // is a normal operational action, open to user and admin alike --
-  // unlike the doors (tokens, users), which stay admin-only below.
+  // unlike keys and people (tokens, users), which stay admin-only.
   const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
 
   let status = $state<SetupStatus | null>(null)
@@ -57,6 +77,30 @@
     // the persistence row below just states less for that caller,
     // same swallow-and-degrade shape as fetchSetupStatus above.
     persistenceState.ensureLoaded().catch(() => {})
+    // keys and people: never fetched below admin -- both GET /api/tokens
+    // and GET /api/auth/users 403 for anyone else (see the module doc
+    // comment above), so fetching either as a lesser role would only
+    // leave the group rendering an error it has no way to act on.
+    if (isAdmin) {
+      usersState.refresh().catch(() => {})
+      tokensState.refresh().catch(() => {})
+    }
+    fetchDevices()
+      .then((all) => {
+        // Same de-dup/order rule the former tokens door applied -- an
+        // id-less or duplicated device would crash the keyed {#each}
+        // the mint form's device picker uses.
+        const byID = new Map<string, Device>()
+        for (const d of all) {
+          if (d.id && !byID.has(d.id)) byID.set(d.id, d)
+        }
+        knownDevices = [...byID.values()].sort(
+          (a, b) => Number(b.configured) - Number(a.configured) || a.id.localeCompare(b.id),
+        )
+      })
+      .catch(() => {
+        knownDevices = []
+      })
   })
 
   const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
@@ -245,7 +289,176 @@
     const days = Math.floor((Date.now() - new Date(lastSeen).getTime()) / 86400000)
     return days >= 1 ? `quiet ${days} d — quiet is a fact, not a fault` : null
   }
+
+  // --- keys (#767, round 32) -------------------------------------------
+  // "Which machines may speak", moved from the retired EngineRoomDoors
+  // door into the ingest group's own row grammar -- the reveal, the
+  // mint form and revoke's arm-then-confirm all follow
+  // docs/design/concepts/round-32/settings-doors.html's #keys verbatim.
+  let knownDevices = $state<Device[]>([])
+  let showMintKey = $state(false)
+  let newKeyName = $state('')
+  let newKeyKind = $state<'api' | 'ingest'>('api')
+  let newKeyDevice = $state('')
+  let keyError = $state<string | null>(null)
+  let minting = $state(false)
+  let keyCopied = $state(false)
+  let routerCopied = $state(false)
+  let armedRevoke = $state<string | null>(null)
+
+  function selectKeyKind(kind: 'api' | 'ingest') {
+    newKeyKind = kind
+    if (kind === 'ingest' && !newKeyDevice) newKeyDevice = knownDevices[0]?.id ?? ''
+  }
+
+  function openMintKey() {
+    showMintKey = true
+    keyError = null
+  }
+
+  function cancelMintKey() {
+    showMintKey = false
+    newKeyName = ''
+    newKeyKind = 'api'
+    newKeyDevice = ''
+    keyError = null
+  }
+
+  async function submitMintKey() {
+    keyError = null
+    if (newKeyKind === 'ingest' && !newKeyDevice) {
+      keyError = 'An ingest key needs a device -- pick the router it speaks for.'
+      return
+    }
+    minting = true
+    keyCopied = false
+    routerCopied = false
+    const err = await tokensState.create(
+      newKeyName.trim(),
+      newKeyKind,
+      newKeyKind === 'ingest' ? newKeyDevice : undefined,
+    )
+    minting = false
+    if (err) {
+      keyError = err
+      return
+    }
+    cancelMintKey()
+  }
+
+  async function copyKeyValue(value: string) {
+    try {
+      await navigator.clipboard.writeText(value)
+      keyCopied = true
+    } catch {
+      // The value stays selectable in the reveal regardless.
+    }
+  }
+
+  // copyRouterLines hands back the same push script the setup wizard
+  // would (setupsteps.ts's pushScript, keyed to instance() address and
+  // status.pushKinds) with the freshly-minted key already embedded, so
+  // rotating an ingest key never sends the operator back through setup
+  // for a line-by-line diff.
+  async function copyRouterLines(value: string) {
+    if (!status) return
+    const script = pushScript(window.location.host, value, status.pushKinds)
+    try {
+      await navigator.clipboard.writeText(script)
+      routerCopied = true
+    } catch {
+      // Nothing else to fall back to -- the value itself stays copyable.
+    }
+  }
+
+  function onRevokeClick(e: MouseEvent, id: string) {
+    e.stopPropagation()
+    if (armedRevoke === id) {
+      armedRevoke = null
+      revokeKey(id)
+      return
+    }
+    armedRevoke = id
+  }
+
+  async function revokeKey(id: string) {
+    const err = await tokensState.revoke(id)
+    if (err) keyError = err
+  }
+
+  // --- people (#767, round 32) -------------------------------------------
+  // "Who may look in", moved from the retired EngineRoomDoors door into
+  // the account group's own row grammar. Admin-only end to end -- GET
+  // /api/auth/users is gated, so the group is absent, not empty, for
+  // anyone else.
+  let showAddPerson = $state(false)
+  let newPersonName = $state('')
+  let newPersonPass = $state('')
+  let newPersonRole = $state<'user' | 'viewer'>('user')
+  let personError = $state<string | null>(null)
+  let addingPerson = $state(false)
+  let armedRemove = $state<string | null>(null)
+
+  // Your own row leads the list, then everyone else's, matching the
+  // drawing's "your account, then everyone else's" -- the server has no
+  // opinion on the order.
+  const people = $derived.by(() => {
+    const mine = usersState.list.filter((u) => u.username === authState.username)
+    const rest = usersState.list.filter((u) => u.username !== authState.username)
+    return [...mine, ...rest]
+  })
+
+  function openAddPerson() {
+    showAddPerson = true
+    personError = null
+  }
+
+  function cancelAddPerson() {
+    showAddPerson = false
+    newPersonName = ''
+    newPersonPass = ''
+    newPersonRole = 'user'
+    personError = null
+  }
+
+  async function submitAddPerson() {
+    personError = null
+    addingPerson = true
+    const err = await usersState.create(newPersonName.trim(), newPersonPass, newPersonRole)
+    addingPerson = false
+    if (err) {
+      personError = err
+      return
+    }
+    cancelAddPerson()
+  }
+
+  function onRemoveClick(e: MouseEvent, id: string) {
+    e.stopPropagation()
+    if (armedRemove === id) {
+      armedRemove = null
+      removePerson(id)
+      return
+    }
+    armedRemove = id
+  }
+
+  async function removePerson(id: string) {
+    const err = await usersState.remove(id)
+    if (err) personError = err
+  }
+
+  // Round 28's arm-then-confirm gesture (Docket.svelte's clear-all
+  // bubble is the other example): a click anywhere that isn't the armed
+  // button itself disarms it, so an armed revoke/remove can't be
+  // triggered by a stray click elsewhere on the page.
+  function disarmAll() {
+    armedRevoke = null
+    armedRemove = null
+  }
 </script>
+
+<svelte:window onclick={disarmAll} />
 
 <div class="page scrollbar">
   <!-- No page heading (#697/#700), which takes the READ-ONLY chip off
@@ -253,8 +466,8 @@
        draws no replacement anywhere. #548's grammar -- read-only
        declared once, in words, never by disabling every control -- now
        has nowhere to be said, recorded as a gap on #691 rather than
-       quietly dropped. The owner-level doors below stay gated on
-       isAdmin either way. -->
+       quietly dropped. keys and people stay gated on isAdmin either
+       way. -->
 
   <div class="setlay">
     <div class="og deckcol">
@@ -421,10 +634,116 @@
           {/if}
           <div class="orow">
             <span>who may speak</span>
-            <span class="ov">holders of an ingest key — the machines' door, below</span>
+            <span class="ov">holders of an ingest key — the keys group below</span>
           </div>
         </div>
       </div>
+
+      {#if isAdmin}
+        <div class="stsection" id="keys">
+          <h3>keys</h3>
+          <p class="oghint">
+            which machines may speak — an ingest key lets one router push its state; a read-only key lets a reader
+            ask
+          </p>
+
+          {#if tokensState.justCreated}
+            {@const jc = tokensState.justCreated}
+            <div class="reveal">
+              <div class="rk">
+                <span class="pn">{jc.name}</span>
+                <span class="pr" class:ingest={jc.kind === 'ingest'}>
+                  {jc.kind === 'ingest' ? `ingest · speaks for ${jc.device}` : 'read-only'}
+                </span>
+                <code>{jc.value}</code>
+                <button type="button" class="olink" onclick={() => copyKeyValue(jc.value ?? '')}>
+                  {keyCopied ? 'copied' : 'copy'}
+                </button>
+                <button type="button" class="olink quiet" onclick={() => tokensState.clearJustCreated()}>
+                  done
+                </button>
+              </div>
+              <div class="rnote">shown once — mikroview keeps only its fingerprint, so copy it now</div>
+              {#if jc.kind === 'ingest'}
+                <div class="rnote">
+                  the router lines, with this key already in them:
+                  <button type="button" class="olink" onclick={() => copyRouterLines(jc.value ?? '')}>
+                    {routerCopied ? 'copied for RouterOS' : 'copy for RouterOS'}
+                  </button>
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          {#each tokensState.list.filter((t) => t.id !== tokensState.justCreated?.id) as tok (tok.id)}
+            <div class="prow">
+              <span class="pn">{tok.name}</span>
+              <span class="pr" class:ingest={tok.kind === 'ingest'}>
+                {tok.kind === 'ingest' ? `ingest · speaks for ${tok.device}` : 'read-only'}
+              </span>
+              <span class="pf">
+                {tok.lastUsedAt ? `spoke ${formatRelative(tok.lastUsedAt, appState.now)}` : 'never spoke — yet'}
+              </span>
+              <button
+                type="button"
+                class="olink quiet revoke"
+                class:armed={armedRevoke === tok.id}
+                onclick={(e) => onRevokeClick(e, tok.id)}
+              >
+                {armedRevoke === tok.id ? 'confirm — it stops speaking now' : 'revoke'}
+              </button>
+            </div>
+          {/each}
+
+          {#if keyError}<p class="oghint err">{keyError}</p>{/if}
+
+          {#if showMintKey}
+            <div class="pform wf">
+              <input
+                type="text"
+                placeholder="name it — birdcage, grafana, the-laptop"
+                aria-label="key name"
+                bind:value={newKeyName}
+              />
+              <span class="seg" role="group" aria-label="Key kind">
+                <button type="button" class:on={newKeyKind === 'api'} onclick={() => selectKeyKind('api')}>
+                  read-only
+                </button>
+                <button type="button" class:on={newKeyKind === 'ingest'} onclick={() => selectKeyKind('ingest')}>
+                  ingest
+                </button>
+              </span>
+              {#if newKeyKind === 'ingest'}
+                <span class="lab">for</span>
+                {#if knownDevices.length > 0}
+                  <span class="seg" role="group" aria-label="which router">
+                    {#each knownDevices as d (d.id)}
+                      <button
+                        type="button"
+                        data-device-id={d.id}
+                        class:on={newKeyDevice === d.id}
+                        onclick={() => (newKeyDevice = d.id)}
+                      >
+                        {d.name && d.name !== d.id ? d.name : d.id}
+                      </button>
+                    {/each}
+                  </span>
+                {:else}
+                  <span class="lab">no devices known yet — one appears here once it sends syslog</span>
+                {/if}
+              {/if}
+              <span class="acts dwr-acts">
+                <button type="button" class="quiet" onclick={cancelMintKey}>cancel</button>
+                <button type="button" disabled={minting} onclick={submitMintKey}>
+                  {minting ? 'minting…' : 'mint it'}
+                </button>
+              </span>
+            </div>
+          {:else}
+            <div class="ogfoot"><button type="button" class="olink" onclick={openMintKey}>+ mint a key</button></div>
+          {/if}
+        </div>
+      {/if}
 
       <div class="stsection wide">
         <h3>detection</h3>
@@ -597,10 +916,76 @@
           <span class="ov dim">{versionState.version || '—'} · AGPL-3.0</span>
         </div>
       </div>
+
+      {#if isAdmin}
+        <div class="stsection" id="people">
+          <h3>people</h3>
+          <p class="oghint">who may look in, and what each may do — the admin is made at the console, never here</p>
+
+          {#each people as user (user.id)}
+            <div class="prow">
+              <span class="pn">{user.username}</span>
+              {#if user.role === 'admin'}<span class="pr admin">admin</span>{/if}
+              {#if user.role === 'viewer'}<span class="pr look">can only look</span>{/if}
+              {#if user.sso}<span class="pr">sso</span>{/if}
+              <span class="pf">
+                {user.username === authState.username ? 'this is you · ' : ''}{user.lastLogin
+                  ? `signed in ${formatRelative(user.lastLogin, appState.now)}`
+                  : 'never signed in — yet'}
+              </span>
+              {#if user.role === 'admin'}
+                <span class="olink quiet dim" title="transfer the admin role from the command line first">
+                  console-only
+                </span>
+              {:else}
+                <button
+                  type="button"
+                  class="olink quiet remove"
+                  class:armed={armedRemove === user.id}
+                  onclick={(e) => onRemoveClick(e, user.id)}
+                >
+                  {armedRemove === user.id ? 'confirm — signs them out, revokes their keys' : 'remove'}
+                </button>
+              {/if}
+            </div>
+          {/each}
+
+          {#if personError}<p class="oghint err">{personError}</p>{/if}
+
+          {#if showAddPerson}
+            <div class="pform wf">
+              <input type="text" placeholder="their name" aria-label="username" autocomplete="off" bind:value={newPersonName} />
+              <input
+                type="password"
+                placeholder="a first password — they change it"
+                aria-label="password"
+                autocomplete="new-password"
+                bind:value={newPersonPass}
+              />
+              <span class="seg" role="group" aria-label="What they may do">
+                <button type="button" class:on={newPersonRole === 'user'} onclick={() => (newPersonRole = 'user')}>
+                  can change things
+                </button>
+                <button type="button" class:on={newPersonRole === 'viewer'} onclick={() => (newPersonRole = 'viewer')}>
+                  can only look
+                </button>
+              </span>
+              <span class="acts dwr-acts">
+                <button type="button" class="quiet" onclick={cancelAddPerson}>cancel</button>
+                <button type="button" disabled={addingPerson} onclick={submitAddPerson}>
+                  {addingPerson ? 'saving…' : 'let them in'}
+                </button>
+              </span>
+            </div>
+          {:else}
+            <div class="ogfoot">
+              <button type="button" class="olink" onclick={openAddPerson}>+ let someone in</button>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
   </div>
-
-  <EngineRoomDoors {isAdmin} />
 </div>
 
 <style>
@@ -953,5 +1338,232 @@
     width: 100%;
     height: auto;
     display: block;
+  }
+
+  /* --- keys, people (#767, round 32): the two doors' own row grammar ------
+     Ported from docs/design/concepts/round-32/settings-doors.html's #keys/
+     #people -- name · chips · fact · quiet verb, a form row where the next
+     row would go, and the once-only reveal. Mockup tokens translate onto
+     this file's own custom properties the same way the rest of the card
+     already does (--hair/--hair-2 -> --border, --ink/-2/-3 -> --fg/-muted/
+     -dim, --raised -> --bg, --ok -> --accept, --sans dropped since the
+     inherited default already is one). */
+  .prow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
+  .stsection .prow:first-of-type {
+    border-top: 0;
+  }
+
+  .prow .pn,
+  .reveal .pn {
+    color: var(--fg);
+    font-weight: 600;
+    min-width: 92px;
+  }
+
+  .pr {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 9px;
+    color: var(--fg-dim);
+    white-space: nowrap;
+  }
+
+  .pr.admin {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+
+  .pr.look {
+    color: var(--now);
+    border-color: color-mix(in srgb, var(--now) 45%, transparent);
+  }
+
+  .pr.ingest {
+    color: var(--accept);
+    border-color: color-mix(in srgb, var(--accept) 40%, transparent);
+  }
+
+  .prow .pf {
+    margin-left: auto;
+    color: var(--fg-dim);
+    text-align: right;
+    font-size: 11px;
+  }
+
+  .prow .olink,
+  .reveal .olink,
+  .ogfoot .olink {
+    font-size: 12.5px;
+  }
+
+  .olink.quiet {
+    color: var(--fg-dim);
+  }
+
+  .olink.quiet:hover {
+    color: var(--fg-muted);
+  }
+
+  .olink.quiet.dim {
+    cursor: default;
+  }
+
+  .prow .remove.armed,
+  .prow .revoke.armed {
+    color: var(--alarm);
+  }
+
+  .ogfoot {
+    margin-top: 4px;
+    padding: 9px 0 2px;
+    border-top: 1px solid var(--border);
+  }
+
+  .pform {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 9px 0;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .pform input {
+    width: 220px;
+    flex: none;
+  }
+
+  .pform .acts {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  /* The form is round 31's -- dashed-underline inputs, segmented choices,
+     pill actions -- so it reads the same wherever it is met. */
+  .wf input {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg);
+    padding: 3px 0;
+    outline: none;
+  }
+
+  .wf input:focus {
+    border-bottom-color: var(--accent);
+  }
+
+  .wf input::placeholder {
+    color: var(--fg-dim);
+    opacity: 0.7;
+  }
+
+  .wf .seg {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+    flex: none;
+  }
+
+  .wf .seg button {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--fg-dim);
+    padding: 2px 12px;
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+
+  .wf .seg button.on {
+    color: var(--fg);
+    background: var(--bg-hover);
+  }
+
+  .dwr-acts button {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 16px;
+    cursor: pointer;
+  }
+
+  .dwr-acts button:hover {
+    border-color: var(--accent);
+  }
+
+  .dwr-acts button.quiet {
+    color: var(--fg-dim);
+  }
+
+  /* A freshly minted key: the one moment the secret exists on screen. */
+  .reveal {
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    border-radius: 8px;
+    padding: 9px 14px 8px;
+    margin: 6px 0 4px;
+  }
+
+  .reveal .rk {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    flex-wrap: wrap;
+  }
+
+  .reveal code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg);
+    background: var(--bg);
+    border-radius: 5px;
+    padding: 3px 9px;
+    user-select: all;
+    letter-spacing: 0.02em;
+    word-break: break-all;
+  }
+
+  .reveal .olink {
+    margin-left: auto;
+  }
+
+  .reveal .olink + .olink {
+    margin-left: 0;
+  }
+
+  .rnote {
+    font-size: 11px;
+    color: var(--fg-dim);
+    margin-top: 6px;
+  }
+
+  .pform .lab {
+    font-size: 11px;
+    color: var(--fg-dim);
   }
 </style>
