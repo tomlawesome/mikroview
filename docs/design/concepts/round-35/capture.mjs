@@ -17,6 +17,7 @@ await page.goto('file://' + path.join(here, 'verdicts-in-row.html'));
 await page.waitForTimeout(800);
 
 async function take(name, sel = '#s7') {
+  await page.mouse.move(0, 0); // no hover state in a shot
   await page.waitForTimeout(450);
   await page.locator(sel).screenshot({ path: shot(name) });
   console.log(name + '.png');

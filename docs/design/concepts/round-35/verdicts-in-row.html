@@ -657,14 +657,18 @@
      round 34: verdicts and exclusions — a verdict is how a flag is
      cleared; an exclusion is a verdict that outlives the flag
      ============================================================ */
-  /* round 35: the verdict trio lives in the row, before the caret — one click, no drawer */
+  /* round 35: the verdict trio lives in the row, before the caret — one click, no drawer.
+     Three quiet verbs in the row's own mono, dot-separated like the chrome, lifted by the
+     row's hover and lit by the accent when chosen; no boxes — the docket speaks in text */
   .panel td.vc { text-align: right; white-space: nowrap; }
-  .vrow { display: inline-flex; vertical-align: middle; margin-right: 14px; }
-  .vrow button.v { font: 10.5px var(--mono); color: var(--ink-2); background: transparent; border: 1px solid var(--hair-2); border-radius: 0; margin-left: -1px; padding: 1px 9px; cursor: pointer; line-height: 16px; }
-  .vrow button.v:first-child { border-radius: 999px 0 0 999px; margin-left: 0; }
-  .vrow button.v:last-child { border-radius: 0 999px 999px 0; }
-  .vrow button.v:hover { color: var(--accent); border-color: var(--accent); position: relative; }
-  .vrow button.v.on { color: var(--accent); border-color: rgba(167, 139, 250, 0.55); background: rgba(167, 139, 250, 0.08); position: relative; }
+  .vrow { display: inline-flex; align-items: baseline; vertical-align: middle; margin-right: 18px; }
+  .vrow button.v { font: 10.5px var(--mono); color: var(--ink-3); background: transparent; border: 0; border-bottom: 1px dotted transparent; padding: 0; cursor: pointer; line-height: 16px; transition: color 0.15s; }
+  .vrow button.v + button.v::before { content: '·'; color: var(--ink-3); margin: 0 9px; opacity: 0.6; }
+  tr.frow:hover .vrow button.v { color: var(--ink-2); }
+  .vrow button.v:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .vrow button.v.on { color: var(--accent); }
+  .vrow button.v.on::after { content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: 1px; }
+  .panel th.vc { text-align: right; }
   .dwr-acts .never { margin-left: auto; }
   .dwr-acts .never.armed { color: var(--alarm); border-color: var(--alarm); }
   /* a flag that has been called: dims in place, keeps its row, offers undo until you leave the tab */
@@ -717,7 +721,7 @@
   </div>
   <div class="panel" id="p-flags" aria-label="Open flags, newest first">
     <table>
-      <thead><tr><th>flag</th><th>where</th><th>evidence</th><th>count</th><th>age</th><th></th></tr></thead>
+      <thead><tr><th>flag</th><th>where</th><th>evidence</th><th>count</th><th>age</th><th class="vc">call it</th></tr></thead>
       <tbody>
         <tr class="frow ft-unplanned open" data-d="d1"><td class="fmark">✱ UNPLANNED</td><td class="k"><a class="wl" href="#s3" onclick="descend()">iot</a> → <a class="wl" href="#s3" onclick="descend()">lan</a> · tcp/445</td><td>caught by default drop — no rule planned this pathway</td><td class="num">14×</td><td class="t">6 m</td><td class="vc"><span class="vrow"><button class="v" data-v="expected">expected</button><button class="v" data-v="noise">noise</button><button class="v" data-v="real">real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer open ft-unplanned" id="d1"><td colspan="6"><div class="dwr"><div class="dwr-in">
@@ -1131,7 +1135,7 @@
     fr.className = 'filters';
     heads.forEach(function (h) {
       var td = fr.insertCell();
-      if (!h.textContent.trim()) return;
+      if (!h.textContent.trim() || h.classList.contains('vc')) return;
       var inp = document.createElement('input');
       inp.placeholder = 'filter';
       inp.setAttribute('aria-label', 'Filter by ' + h.textContent.trim());
