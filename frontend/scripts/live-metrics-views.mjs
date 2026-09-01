@@ -45,7 +45,12 @@ feedPortScan(20, '203.0.113.44')
 const { page, consoleErrors } = await session({ waitForEvents: 100 })
 await waitForFlag(page, '203.0.113.44')
 
-const VIEW_BUTTON = (name) => `.views button:text-is("${name}")`
+// #700 moved the view switcher off Metrics.svelte's own `.views` and onto the scene bar (SceneBar.svelte:62-72):
+// `.switch[role="group"][aria-label="Metrics view"]`, holding `button.sw[aria-pressed]` rows. The switch also
+// dropped title case for its labels -- METRICS_VIEWS in lib/metrics.svelte.ts:33-37 renders 'seismograph',
+// 'register', 'table', lowercase throughout.
+const VIEW_SWITCH = '.switch[aria-label="Metrics view"]'
+const VIEW_BUTTON = (name) => `${VIEW_SWITCH} button.sw:text-is("${name}")`
 const SEISMOGRAPH = '.drum svg'
 const REGISTER = '.register .paper svg'
 const TABLE = '.table-view table'
@@ -152,14 +157,14 @@ await goTo(page, 'Metrics')
 await page.locator(SEISMOGRAPH).waitFor({ state: 'visible', timeout: 10000 })
 check(true, 'Metrics opens on the seismograph and draws it')
 
-const buttons = await page.$$eval('.views button', (els) => els.map((e) => e.textContent.trim()))
+const buttons = await page.$$eval(`${VIEW_SWITCH} button.sw`, (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(buttons) === JSON.stringify(['Seismograph', 'Register', 'Table']),
-  `all three views are offered in the page header -- got ${JSON.stringify(buttons)}`,
+  JSON.stringify(buttons) === JSON.stringify(['seismograph', 'register', 'table']),
+  `all three views are offered on the scene bar -- got ${JSON.stringify(buttons)}`,
 )
 
-const pressed = await page.$eval('.views button[aria-pressed="true"]', (e) => e.textContent.trim())
-check(pressed === 'Seismograph', `the seismograph is the default -- got "${pressed}"`)
+const pressed = await page.$eval(`${VIEW_SWITCH} button.sw[aria-pressed="true"]`, (e) => e.textContent.trim())
+check(pressed === 'seismograph', `the seismograph is the default -- got "${pressed}"`)
 
 // The SVG is sized from the measured box, not stretched from a viewBox:
 // a width attribute that matches the element's own client width is what
@@ -245,7 +250,7 @@ for (const gone of ['Event volume — last hour', 'Flags raised — last hour'])
 }
 
 // --- The cursor, and its survival across a view switch -------------------
-await page.click(VIEW_BUTTON('Table'))
+await page.click(VIEW_BUTTON('table'))
 await page.locator(TABLE).waitFor({ state: 'visible', timeout: 10000 })
 
 // --- The table's top port/top talker agree with the API, never a guess ---
@@ -283,7 +288,7 @@ await page.locator('.table-view tbody tr.selected').waitFor({ state: 'visible', 
 const selectedInTable = (await page.locator('.table-view tbody tr.selected th button.minute').textContent()).trim()
 check(selectedInTable === chosenMinute, `the table highlights the minute clicked -- got "${selectedInTable}"`)
 
-await page.click(VIEW_BUTTON('Seismograph'))
+await page.click(VIEW_BUTTON('seismograph'))
 await page.locator(cursorBand(SEISMOGRAPH)).waitFor({ state: 'visible', timeout: 10000 })
 const drumCursor = await cursorLine(page, SEISMOGRAPH)
 check(
@@ -293,7 +298,7 @@ check(
 const drumMinute = (await page.locator('.drum svg text.cursor-label').textContent()).trim()
 check(drumMinute === chosenMinute, `the drum's cursor is on the same minute -- got "${drumMinute}" for "${chosenMinute}"`)
 
-await page.click(VIEW_BUTTON('Register'))
+await page.click(VIEW_BUTTON('register'))
 await page.locator(cursorBand(REGISTER)).waitFor({ state: 'visible', timeout: 10000 })
 const registerCursor = await cursorLine(page, REGISTER)
 check(
@@ -327,8 +332,8 @@ await goTo(page, 'Metrics')
 // preference were applied after first paint, the seismograph would be
 // on screen here instead.
 await page.locator(REGISTER).waitFor({ state: 'visible', timeout: 10000 })
-const pressedAfterReload = await page.$eval('.views button[aria-pressed="true"]', (e) => e.textContent.trim())
-check(pressedAfterReload === 'Register', `the stored view survives a reload -- got "${pressedAfterReload}"`)
+const pressedAfterReload = await page.$eval(`${VIEW_SWITCH} button.sw[aria-pressed="true"]`, (e) => e.textContent.trim())
+check(pressedAfterReload === 'register', `the stored view survives a reload -- got "${pressedAfterReload}"`)
 check(
   (await page.locator(SEISMOGRAPH).count()) === 0,
   'the default view is not mounted first and then replaced',

@@ -3,14 +3,18 @@
 // The Admin group's pages, driven in a real browser. #548 made Users,
 // Tokens, Fleet and Entities pages instead of overlays; #490 then
 // removed Users, Tokens and Detectors outright, absorbing them into the
-// engine room. What survives from both changes, and needs a real
-// browser rather than a unit test:
+// engine room; #647 (round 23) then slimmed the account chip's menu
+// itself down to theme, Run setup…, change password, SSO linking, sign
+// out and About -- Settings and Entities became deck cards (reached via
+// the roll rail, live-browser.mjs's SCENES table), and Fleet became the
+// one page left off the deck, reachable only from the phone-width bottom
+// bar's Admin group (App.svelte's own comment). What survives from all
+// three changes, and needs a real browser rather than a unit test:
 //
-//  - Every remaining Admin destination is actually reachable from the
-//    account chip's menu (#616: the operate pages live there), and no
-//    modal renders anywhere in the group -- a unit test of AccountMenu
-//    alone cannot see whether App.svelte still mounts a retired
-//    component.
+//  - Every remaining Admin destination is actually reachable -- Settings
+//    and Entities via the deck, Fleet via the bottom bar -- and no modal
+//    renders anywhere in the group -- a unit test of AccountMenu alone
+//    cannot see whether App.svelte still mounts a retired component.
 //  - The three absorbed pages are gone with no alias: no destination, and
 //    nothing that renders their old headers.
 //  - "Run setup…" opens #487's setup modal over whatever page is showing,
@@ -29,19 +33,50 @@ const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session()
 
-/** opens a deck destination -- goTo() itself waits for that card to be
- * centred (round 30/#697/#700 draws no page heading to wait for
- * separately -- see live-viewer-surfaces.mjs's own comment on the
- * point), so there is nothing further to wait for here. */
+/** navigates to a deck destination by its visible label and confirms it landed. Used to wait for `.page-header h2`
+ * to show the right title too, but #700 unmounted PageHeader from every page it drew (EngineRoom, Fleet, Metrics)
+ * and none of Settings/Entities carries a heading of its own any more, so that wait could never resolve (#667 group
+ * E). goTo's own wait -- SCENES in live-browser.mjs waits for the destination's own `data-card` to centre -- is what
+ * proves arrival now; it is specific to the destination because each deck card carries a different `data-card`. */
 async function openAndCheck(label) {
   await goTo(page, label)
-  check(true, `the account menu's ${label} row opens the ${label} page`)
+  check(true, `${label} is reachable and opens`)
+}
+
+/** Fleet has no desktop destination any more -- #647 folded its content into Entities' own deck card and left the
+ * standalone page reachable only from the phone-width bottom bar's Admin group (App.svelte's DECK_VIEWS comment:
+ * "Fleet alone is left outside it ... reached only from the phone-width bottom bar now"). Proven the way
+ * live-nav-bottom-bar.mjs proves any other bottom-bar destination: resize down, open the half-sheet, click Fleet's
+ * row inside it, and read the .intro paragraph Fleet.svelte always renders (it carries no heading -- #697/#700 --
+ * and no table when the fleet is empty, but the intro text is unconditional). Lands back on Detect/Flags before
+ * restoring the desktop viewport, not Expect/Watchlist, because Expect is gated away from a viewer (navGroups.ts)
+ * and this helper runs for both roles. */
+async function checkFleetFromBottomBar(target) {
+  await target.setViewportSize({ width: 390, height: 844 })
+  await target.waitForSelector('.bottom-bar', { timeout: 5000 })
+  await target.click('.bottom-bar .group-btn .label:text-is("Admin")')
+  await target.waitForSelector('[role="dialog"]', { timeout: 5000 })
+  const sheetItems = await target.$$eval('.sheet .sheet-item .label', (els) => els.map((e) => e.textContent.trim()))
+  await target.click('.sheet .sheet-item .label:text-is("Fleet")')
+  await target.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
+  await target.waitForSelector('.intro:has-text("Every RouterOS device")', { timeout: 5000 })
+  await target.click('.bottom-bar .group-btn .label:text-is("Detect")')
+  await target.waitForSelector('.flags-page', { timeout: 5000 })
+  await target.setViewportSize({ width: 1280, height: 720 })
+  return sheetItems
 }
 
 // --- Admin: each page is reachable, the overlays are genuinely gone -----
 
 await openAndCheck('Settings')
-await openAndCheck('Fleet')
+await openAndCheck('Entities')
+const adminSheetItems = await checkFleetFromBottomBar(page)
+check(
+  adminSheetItems.includes('Fleet'),
+  `Fleet -- folded out of the deck and off the account menu by #647 -- is reachable from the phone-width bottom bar's Admin group instead, got ${JSON.stringify(adminSheetItems)}`,
+)
+// checkFleetFromBottomBar leaves the deck on Flags; the checks below assume the underlying page is Entities, same
+// as before Fleet's check ran.
 await openAndCheck('Entities')
 
 check((await page.$$('.modal')).length === 0, 'no modal of any kind renders anywhere in the Admin group')
@@ -50,7 +85,10 @@ check((await page.$$('.modal')).length === 0, 'no modal of any kind renders anyw
 // Removals here are wholesale: no destination, no alias, no stub.
 // Checking the menu's own labels is the honest test -- a `:has-text()` click that
 // finds nothing would just time out and say "timeout", not "the row is
-// correctly absent".
+// correctly absent". Settings itself left this menu too, in #647 (it is a
+// deck destination now, proved above by openAndCheck), so this block only
+// checks Users/Tokens/Detectors' absence -- not for anything that
+// replaced them here.
 await openAccountMenu(page)
 const adminLabels = await page.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
 await page.keyboard.press('Escape')
@@ -61,31 +99,28 @@ for (const gone of ['Users', 'Tokens', 'Detectors']) {
     `${gone} has no menu row of its own any more -- the menu shows ${JSON.stringify(adminLabels)}`,
   )
 }
-check(
-  adminLabels.some((l) => l.includes('Settings')),
-  'Settings -- the engine room -- is what replaced them',
-)
 
 // --- Run setup… opens the modal, and is not a page (#487) --------------
 // The row before this one left the app on Entities, and it must still be
-// there underneath: an action does not navigate. Checked with the shell
-// visible behind the modal rather than by reading appState, because what
-// broke here before was App.svelte still mounting a retired component --
-// exactly the thing only a real browser can see.
+// there underneath: an action does not navigate. Checked against the roll
+// rail's own current-scene marker rather than the account menu's
+// button.row.on -- #647 emptied that menu down to Run setup… alone, which
+// carries no `view` of its own (AccountMenu.svelte's operate table), so
+// `.row.on` can never match any row any more and would always read as
+// "nothing is current" regardless of what is actually showing.
 
 await goTo(page, 'Run setup…')
 const wizard = page.locator('.setup-wizard')
 await wizard.waitFor({ state: 'visible', timeout: 5000 })
 check(true, 'Run setup… opens the setup modal')
-await page.keyboard.press('Escape') // the wizard modal owns Escape; close it before reading the menu
+await page.keyboard.press('Escape') // the wizard modal owns Escape; close it before reading the rail
 await wizard.waitFor({ state: 'detached', timeout: 5000 })
-await openAccountMenu(page)
-const stillCurrent = await page.$$eval('.account .menu button.row.on', (els) => els.map((e) => e.textContent.trim()))
-await page.keyboard.press('Escape')
-await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+const stillCurrent = await page
+  .$eval('.roll-rail button.rail-name[aria-current="page"]', (e) => e.textContent.trim())
+  .catch(() => null)
 check(
-  stillCurrent.length === 1 && stillCurrent[0] === 'Entities',
-  `the page underneath is still the one the operator was on -- an action does not navigate (${JSON.stringify(stillCurrent)})`,
+  stillCurrent === 'Entities',
+  `the page underneath is still the one the operator was on -- an action does not navigate (got ${JSON.stringify(stillCurrent)})`,
 )
 check(
   !(await page.locator('main .setup').count()),
@@ -134,24 +169,30 @@ for (const absent of ['Users', 'Tokens', 'Detectors', 'Entities', 'Run setup…'
     `${absent} is absent from a viewer's menu -- the menu shows ${JSON.stringify(viewerLabels)}`,
   )
 }
-check(viewerLabels.includes('Fleet'), 'Fleet -- an Admin-group row with no admin gate -- is still there')
-check(
-  viewerLabels.some((l) => l.includes('Settings')),
-  'Settings is in a viewer\'s menu too -- the one Admin destination that is deliberately viewer-readable',
-)
 
 // A disabled stub would satisfy "absent" in spirit while breaking the
-// letter of it -- prove nothing in the viewer's menu is disabled either.
+// letter of it -- prove nothing in the viewer's menu is disabled either,
+// while it is still open from the read above.
 const viewerDisabled = await viewerPage.$$eval('.account .menu button.row', (els) =>
   els.filter((e) => e.disabled).map((e) => e.textContent.trim()),
 )
 check(viewerDisabled.length === 0, `no menu row is disabled for a viewer -- got ${JSON.stringify(viewerDisabled)}`)
 check((await viewerPage.$$('.modal')).length === 0, 'no modal renders for a viewer either')
 
-// goTo() itself waits for the Fleet card to be centred -- see
-// openAndCheck's own comment above.
-await goTo(viewerPage, 'Fleet')
-check(true, 'Fleet renders for a viewer')
+await viewerPage.keyboard.press('Escape')
+await viewerPage.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+
+// Settings and Fleet both left this menu in #647 too -- Settings is a deck destination now (SCENES), Fleet is
+// bottom-bar-only -- so "still reachable for a viewer, with no admin gate" is proved the same two ways the admin
+// half of this scenario proved it above, not by reading this menu.
+await goTo(viewerPage, 'Settings')
+check(true, "Settings is reachable for a viewer too -- the one Admin destination that is deliberately viewer-readable")
+
+const viewerSheetItems = await checkFleetFromBottomBar(viewerPage)
+check(
+  viewerSheetItems.includes('Fleet'),
+  `Fleet -- an Admin-group destination with no admin gate -- is still reachable for a viewer, got ${JSON.stringify(viewerSheetItems)}`,
+)
 
 await browser.close()
 
