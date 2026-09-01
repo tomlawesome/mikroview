@@ -206,3 +206,34 @@ func BenchmarkMemoryCorpusReplay(b *testing.B) {
 		corpus.Replay(func(store.Event) {})
 	}
 }
+
+// BenchmarkMemoryCorpusReplayManyPages shrinks corpusPageSize far below
+// its production default against a large corpus, forcing many pagination
+// round trips -- the shape issue #759 exists about: a per-page cost that
+// grows with page number (a rescan-from-newest cursor) rather than
+// staying flat (an O(1)-resume cursor). Replay's own public behavior
+// (call Replay, get a CorpusWindow) is identical whichever cursor
+// corpus.go pages with internally, so this benchmark's numbers are
+// directly comparable before and after that internal change without
+// needing two code paths side by side: a per-page cost that grows with
+// page number shows up here as the whole pass's cost growing much faster
+// than corpus size / page size alone would predict.
+func BenchmarkMemoryCorpusReplayManyPages(b *testing.B) {
+	origPageSize := corpusPageSize
+	corpusPageSize = 100
+	defer func() { corpusPageSize = origPageSize }()
+
+	const n = 50_000
+	s := store.New(n, time.Hour)
+	base := time.Now().Add(-10 * time.Minute)
+	for i := 0; i < n; i++ {
+		s.Insert(corpusEvent(base.Add(time.Duration(i)*time.Microsecond), fmt.Sprintf("10.6.%d.%d", i/250, i%250)))
+	}
+	corpus := NewMemoryCorpus(s)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		corpus.Replay(func(store.Event) {})
+	}
+}
