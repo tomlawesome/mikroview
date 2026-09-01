@@ -68,9 +68,10 @@ describe('TabList roles and structure', () => {
     expect(alpha.querySelector('.count')).toBeNull()
   })
 
-  // Outlined, never alarm-filled: the rail's one alarm-filled count is
-  // Flags' own open-count (NavRail.svelte's `.count`), and the record is
-  // explicit that in-page counts like this one are outlined instead.
+  // Outlined, never alarm-filled: the bottom bar's one alarm-filled count
+  // is Flags' own open-count (BottomBar.svelte's `.count`), and the
+  // record is explicit that in-page counts like this one are outlined
+  // instead.
   // This component's stylesheet is the one place that could regress
   // that by reaching for --alarm, so it is asserted directly rather than
   // through a jsdom computed-style read, which does not reliably resolve
