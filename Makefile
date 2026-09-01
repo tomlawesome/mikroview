@@ -88,6 +88,12 @@ clean:
 # holds the port precisely so it does not trample a stranger's instance
 # -- arming the trap first would have this recipe do exactly that on the
 # way out of the refusal it just respected.
+# The same gate, on the second host, so it does not hold this machine for
+# the better part of an hour. scripts/gate-remote.sh has the reasoning;
+# AGENTS.md's "The second host live-check runs on" has the account.
+live-check-remote:
+	@scripts/gate-remote.sh $(if $(MV_BROWSER),--browser $(MV_BROWSER),)
+
 live-check:
 	@eval "$$(scripts/live-env.sh up)"; \
 	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT; \
