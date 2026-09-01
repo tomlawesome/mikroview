@@ -75,13 +75,21 @@ type CorpusWindow struct {
 	Start, End time.Time
 	// Count is how many events were visited.
 	Count int
-	// Truncated reports whether this Corpus's own bounded-read policy
-	// (see maxCorpusEvents) stopped the pass before every available
-	// event was visited -- distinct from a definition's own Receipt
-	// declining for being shorter than its window (replay.go's
-	// Decline): a corpus can be simultaneously truncated (more history
-	// existed than this call was willing to hold) and still long enough
-	// to satisfy a given definition's window.
+	// Truncated reports whether this pass stopped before every event
+	// currently retained was visited, for either of two distinct
+	// reasons: this Corpus's own bounded-read policy (see
+	// maxCorpusEvents) chose to stop, or ring eviction raced the pass
+	// itself and took the event MemoryCorpus.Replay's resume cursor was
+	// about to ask for (store.Result.CursorEvicted -- see Replay's own
+	// handling). Both get reported the same way: a caller cannot act
+	// differently on "this call declined to read further" versus "the
+	// data this call wanted to read is gone," so there is nothing a
+	// finer-grained signal would let a caller do that this one doesn't
+	// already cover. Distinct from a definition's own Receipt declining
+	// for being shorter than its window (replay.go's Decline): a corpus
+	// can be simultaneously truncated (more history existed than this
+	// call was willing or able to read) and still long enough to
+	// satisfy a given definition's window.
 	Truncated bool
 }
 
@@ -96,8 +104,8 @@ type CorpusWindow struct {
 // doc comment on internal/audit/query.go's identical helper).
 //
 // A var, not a const, so a test can shrink it to exercise multi-page
-// pagination (dedup at page boundaries, the descending Until cursor)
-// without needing thousands of events -- same convention as
+// pagination (the BeforeID cursor, and reassembly into chronological
+// order) without needing thousands of events -- same convention as
 // queueSize/maxTrackedKeys elsewhere in this package.
 var corpusPageSize = 5000
 
@@ -159,10 +167,35 @@ var maxCorpusEvents = 1_000_000
 // Query's own backward-from-newest design (walking from "now" towards
 // the past, per its own doc comment) means the first page this type
 // reads back is always the corpus's newest slice, not its oldest --
-// Replay pages backward via a descending Until cursor, deduplicating by
-// event ID at page boundaries (Until is an inclusive bound), then sorts
-// everything it collected into forward-chronological order before
-// handing events to the caller's visit function, exactly once each.
+// Replay pages backward via Query's BeforeID cursor (issue #759), each
+// page's exclusive upper bound being the previous page's own oldest
+// event ID, then sorts everything it collected into forward-
+// chronological order before handing events to the caller's visit
+// function, exactly once each.
+//
+// The cursor is an ID, not a timestamp, because of what that costs per
+// page. Before #759, this paged with a descending Until cursor instead:
+// Until is an inclusive bound, so it only *narrows what a page keeps* --
+// Query still has to walk from the newest held event on every call, so
+// each successive page repaid the scan cost of every page already
+// collected, and the *last* page of a multi-page pass (the one that
+// finally reaches the oldest held event) ended up scanning close to the
+// whole corpus in one RLock hold: precisely the single-lock-spans-the-
+// pass failure mode this type exists to rule out, just reached via
+// pagination instead of a single Snapshot call. Confirmed by
+// instrumenting per-page Query durations: a final, nearly-empty page
+// routinely cost as much as an earlier page that returned a full 5,000
+// events. BeforeID fixes this by moving where the scan *starts*, not
+// just what it keeps: Query resumes at the cursor's own ring position in
+// O(1) (see BeforeID's doc comment in internal/store), so each page only
+// ever examines that page's own share of the corpus, and pages never
+// overlap -- no per-page dedup is needed (contrast the old Until-based
+// version's seen map). See BenchmarkMemoryCorpusReplayManyPages for the
+// measured before/after difference and
+// TestQueryBeforeIDScanCostDoesNotGrowWithDepth (internal/store) for the
+// pinned per-page cost bound. What a resume cursor evicted mid-pass
+// means is a separate, deliberate decision -- see CorpusWindow.Truncated
+// and store.Result.CursorEvicted's own doc comments.
 type MemoryCorpus struct {
 	store *store.Store
 }
@@ -172,34 +205,66 @@ func NewMemoryCorpus(s *store.Store) *MemoryCorpus {
 	return &MemoryCorpus{store: s}
 }
 
+// afterReplayPageForTest, if non-nil, is called once per page immediately
+// after Query returns, before Replay acts on the result. Test-only
+// instrumentation (nil in production, so the cost is one nil check per
+// page): it lets a test deterministically insert events between two
+// pages of a Replay pass -- forcing the resume cursor's own event to be
+// evicted before the next page reads it -- without depending on a
+// timing race between two goroutines, which is exactly the kind of test
+// this codebase's own history (#501, #744) says not to write. See
+// TestMemoryCorpusReplayReportsTruncatedWhenCursorIsEvicted.
+var afterReplayPageForTest func()
+
 // Replay satisfies Corpus. See MemoryCorpus's own doc comment for the
 // snapshot-vs-iterate reasoning and the concurrency guarantee this
 // method is built to uphold.
 func (c *MemoryCorpus) Replay(visit func(store.Event)) CorpusWindow {
 	var all []store.Event
-	seen := make(map[uint64]struct{})
 
-	until := time.Now() // fixed once, so concurrent ingest during this
-	// call never grows the window this pass covers -- a replay always
-	// answers against a stable, well-defined upper bound, not a moving
-	// target that depends on how long the pass itself takes.
+	until := time.Now() // fixed once, for the first page only, so the
+	// pass never grows to include events inserted after this call
+	// started -- a replay always answers against a stable, well-defined
+	// upper bound, not a moving target that depends on how long the pass
+	// itself takes. Later pages don't use this: they cursor off the
+	// previous page's own oldest event ID instead (beforeID below), an
+	// exclusive, gap-free bound Until can't give per-page (see this
+	// type's own doc comment for why that matters for per-page cost).
+	var beforeID uint64
 	truncated := false
 
 	for {
-		res := c.store.Query(store.Query{Until: until, Limit: corpusPageSize})
+		q := store.Query{Limit: corpusPageSize}
+		if beforeID != 0 {
+			q.BeforeID = beforeID
+		} else {
+			q.Until = until
+		}
+		res := c.store.Query(q)
+		if afterReplayPageForTest != nil {
+			afterReplayPageForTest()
+		}
+		if res.CursorEvicted {
+			// The event our resume cursor named has been evicted since
+			// the previous page read it -- ring eviction only removes
+			// from the oldest end, so everything from that point down
+			// (and, since the previous page's own HasMore was true,
+			// there was more to read) is gone. This pass cannot report
+			// everything currently retained; it must say so rather than
+			// stopping silently the same way it would at a genuine,
+			// uncontended end of history.
+			truncated = true
+			break
+		}
 		if len(res.Events) == 0 {
 			break
 		}
 
-		newInPage := 0
-		for _, e := range res.Events {
-			if _, ok := seen[e.ID]; ok {
-				continue // already collected via an earlier, overlapping page
-			}
-			seen[e.ID] = struct{}{}
-			all = append(all, e)
-			newInPage++
-		}
+		// No dedup needed: BeforeID is an exclusive bound derived from
+		// the previous page's own oldest ID, so pages never overlap
+		// (contrast the old Until-based version, which needed a seen
+		// map because Until is inclusive).
+		all = append(all, res.Events...)
 
 		if len(all) >= maxCorpusEvents {
 			truncated = true
@@ -208,21 +273,11 @@ func (c *MemoryCorpus) Replay(visit func(store.Event)) CorpusWindow {
 		if !res.HasMore {
 			break // reached the start of what's currently retained
 		}
-		if newInPage == 0 {
-			// No progress possible from this page (every event in it
-			// was already collected) -- stop rather than loop forever.
-			// Only reachable if Query's own Until-inclusive boundary
-			// returns exactly the same page twice, which res.HasMore
-			// being true after zero new events would mean; guarding it
-			// explicitly costs nothing and turns a theoretical infinite
-			// loop into a defined stop.
-			break
-		}
 		// res.Events is oldest-first within the page (Query's own
-		// contract); its first entry is this page's oldest event, which
-		// becomes the next page's upper bound so the next call walks
-		// strictly further back in history.
-		until = res.Events[0].ReceivedAt
+		// contract); its first entry's ID becomes the next page's
+		// exclusive upper bound, so the next call resumes exactly where
+		// this one left off instead of re-scanning it.
+		beforeID = res.Events[0].ID
 	}
 
 	sort.Slice(all, func(i, j int) bool {
