@@ -670,9 +670,9 @@
   .vrow button.v:hover { color: var(--vc); border-color: var(--vc); background: color-mix(in srgb, var(--vc) 12%, transparent); transform: translateY(-1px); }
   .vrow button.v.on { color: var(--vc); border-color: var(--vc); background: color-mix(in srgb, var(--vc) 18%, transparent); }
   /* the stamp: a verdict pressed onto the docket in its own ink */
-  .stamp { --vc: var(--ink-3); display: inline-block; font: 800 9.5px var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--vc); border: 1.5px solid var(--vc); border-radius: 3px; padding: 1px 7px 1px 8px; transform: rotate(-5deg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vc) 35%, transparent); animation: stamp-in 0.28s cubic-bezier(0.2, 1.6, 0.4, 1) both; vertical-align: middle; }
+  .stamp { --vc: var(--ink-3); display: inline-block; font: 800 9.5px var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--vc); border: 1.5px solid var(--vc); border-radius: 3px; padding: 1px 7px 1px 8px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vc) 35%, transparent); animation: stamp-in 0.28s cubic-bezier(0.2, 1.6, 0.4, 1) both; vertical-align: middle; }
   .stamp.expected { --vc: var(--ok); } .stamp.noise { --vc: var(--now); } .stamp.real { --vc: var(--alarm); }
-  @keyframes stamp-in { from { transform: rotate(-14deg) scale(2.1); opacity: 0; } 60% { opacity: 1; } to { transform: rotate(-5deg) scale(1); } }
+  @keyframes stamp-in { from { transform: scale(1.9); opacity: 0; } 60% { opacity: 1; } to { transform: scale(1); } }
   /* the row takes the ink for a moment as the stamp lands */
   tr.frow.struck td { animation: struck 0.7s ease-out both; }
   @keyframes struck { from { background: color-mix(in srgb, var(--sc, var(--ink-3)) 16%, transparent); } }
