@@ -54,7 +54,9 @@ await page.click(`${KEYS} .ogfoot .olink`)
 await page.waitForSelector(`${KEYS} .pform`)
 await page.fill(`${KEYS} .pform input[aria-label="key name"]`, KEY_NAME)
 await page.click(`${KEYS} .pform .seg[aria-label="Key kind"] button:has-text("ingest")`)
-await page.click(`${KEYS} .pform .seg[aria-label="which router"] button:has-text("${DEVICE}")`)
+// By id, not text: the picker shows the device's name ("Live Router")
+// where it has one, and the id is what the chip and the API carry.
+await page.click(`${KEYS} .pform .seg[aria-label="which router"] button[data-device-id="${DEVICE}"]`)
 await page.click(`${KEYS} .pform button:has-text("mint it")`)
 
 await page.waitForSelector(`${KEYS} .reveal code`)
