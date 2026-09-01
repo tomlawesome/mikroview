@@ -75,3 +75,5 @@ the real row's bar now swells as a lens.
 
 2026-09-01, owner: "33. stamps are good." On where `real`'s stamp lives:
 "36. your recommendation" — it moved into `CALL IT`; owner then asked why `retract` rather than `undo` — same word now, same call.
+
+2026-09-01, owner: "38. approved."
