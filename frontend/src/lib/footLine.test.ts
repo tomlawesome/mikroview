@@ -130,7 +130,7 @@ describe('surgeFact', () => {
   it('sizes a network-wide spike against the buffer before it started', () => {
     const fact = surgeFact([global], surgeBuffer(1, 3), NOW)
     expect(fact?.salient).toBe('▲3.0×')
-    expect(fact?.tail).toBe('traffic since 14:32')
+    expect(fact?.tail).toBe('traffic since 13:32')
   })
 
   it('measures an activity spike over its own source only', () => {
@@ -143,12 +143,12 @@ describe('surgeFact', () => {
     ]
     const fact = surgeFact([spike], events, NOW)
     expect(fact?.salient).toBe('▲3.0×')
-    expect(fact?.tail).toBe('from cam-porch since 14:32')
+    expect(fact?.tail).toBe('from cam-porch since 13:32')
   })
 
   it('names the rule for a rule spike', () => {
     const spike = flag('rule_spike', 'iot-to-lan-drop', { firstSeen: new Date(since).toISOString() })
-    expect(surgeFact([spike], surgeBuffer(1, 3), NOW)?.tail).toBe('on rule iot-to-lan-drop since 14:32')
+    expect(surgeFact([spike], surgeBuffer(1, 3), NOW)?.tail).toBe('on rule iot-to-lan-drop since 13:32')
   })
 
   // The honesty rule, four ways: with no baseline in the buffer, with
