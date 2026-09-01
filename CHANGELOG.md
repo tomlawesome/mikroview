@@ -18,6 +18,247 @@ rewritten.
 
 ### Added
 
+- **A demo seeder that exercises the whole interface, not just syslog**
+  (#687). Every UI review this project has run was hampered by a demo
+  that only ever sent syslog: one lane on the fall, no pushed rule/NAT/
+  address tables, every stream row on the unnamed-host fallback,
+  nothing named on Entities, an empty watchlist, a flat metrics
+  hourline -- all read as UI defects when they were data gaps.
+  `scripts/seed-demo.py` is a seeder against a running instance, in the
+  repo rather than rebuilt from memory in `/tmp` each session: it pushes
+  filter/NAT/address tables (with log prefixes, and two rules per
+  router that are pushed but never fire) over `POST /api/ingest/
+  routeros`, names hosts/rules/ports, creates four watchlist entries
+  (two healthy, one paused, one with a genuinely broken ring --
+  `internal/engine/coverage.go`'s `out-of-scope`), a user- and a
+  viewer-tier account alongside the admin, and drives three admin
+  mutations (a cleared flag with a note, an entity rename, a definition
+  edit) so the audit log has rows. Its own `feed` subcommand replaces
+  the ad hoc `/tmp` traffic generator with one that gives every host in
+  its small, consistent estate a single stable MAC for the run --
+  the earlier per-line-random-MAC version read as thousands of
+  first-ever devices (measured: 4,025 `new_device` episodes from about
+  8,000 events), which is what was making the docket, not the traffic,
+  laggy. A fourth router is declared and never touched, so Entities'
+  "quiet is a fact, not a fault" card is real. Country-flag data needs
+  an operator-supplied MaxMind GeoLite2 database (`geoip.dbPath`) that
+  this demo instance does not have configured; the seeder picks real,
+  geolocatable public addresses so that flag is real the moment one is.
+- **The scene bar built to its ratified round-29 design, the stream's
+  retired toolbar folded into it, and the filter row rebuilt as one
+  quiet row** (#683). Every scene's bar now reads MIKROVIEW · page ·
+  strap · LIVE·rate (bare `LIVE` on the stream, whose whisper line
+  already carries the rate) · `⚑ N` (docket) · the mockup's own
+  eye-glyph watch marker, `N ○M` (watchlist) · account, ported field-
+  for-field from `docs/design/concepts/round-29/the-whole.html` rather
+  than approximated -- including on the fall, which hand-rolls its own
+  bar rather than sharing `SceneBar.svelte`. The retired `[0d 0h 3m
+  55s]` uptime counter and the per-router chips (`border (RB5009)` etc)
+  are off every bar; round 29 draws neither. The previously-bare pink
+  flag count (no `⚑`, no title, hidden at zero) now carries the
+  ratified glyph, an accurate title, and shows even at zero
+  ("no open flags", ok-coloured) -- the mockup's own "clear all" demo
+  state, not invented. The stream's active filter now also shows on the
+  bar as one bordered box (`action:drop boundary:iot→lan ⌫`), matching
+  `.controls .search` exactly rather than as separate chip pills.
+  `lib/watchlist.svelte.ts` gained `heldCount` (the same "enabled and
+  not ring-broken" predicate `Watchlist.svelte`'s own `class:watching`
+  already used) so the bar's count can never disagree with the page's.
+
+  The filter row (`FilterBar.svelte`) is one quiet row on desktop --
+  device · action · chain · proto · source ⇄ destination (scope,
+  address and country) · port · interface · rule -- as dim micro-labels
+  over hairline underlines, no boxes, no placeholder prose, a single
+  `×` to clear and `▸` to fold back, fitting one line well inside
+  1600px. `Presets` and `Export to CSV` are off the row: round 29 draws
+  neither, so they are not homed here -- `FilterPresetsMenu.svelte` and
+  `lib/export.ts` are untouched and still work, just unmounted.
+
+  Two ratified pieces are not built, on the owner's explicit
+  instruction not to invent a home for anything round 29 does not
+  draw: the stream bar's own SPAN control (`15 m · 1 h · 24 h · 14 d`,
+  the same pattern as the fall's), since the app has no existing
+  time-window concept matching those four buckets; and the retired
+  toolbar's other controls (`17/s`, `2% of buffer used`, `No limit ▾`,
+  Autoscroll, Pause, Group, Clear) -- round 29's own `#s5` bar markup
+  does not draw any of them, only the filter summary and (unbuilt) SPAN
+  control, so building them onto the bar would have been inventing a
+  home for them. All are recorded on the issue as gaps, each with what
+  it does today and the nearest ratified thing, for the owner to work
+  through one by one.
+
+- **The docket's watchlist tab built to its ratified round-29 design**
+  (#676). A table -- watch · boundary · window · state · last event --
+  sits above the existing add/edit/invert/observe/promote workflow
+  (now headed "Manage entries"), reading the same entries rather than
+  replacing them. Rows open as drawers, matching the flags tab's own
+  grammar: a plain-English story with a standalone headline, the
+  entry's verbatim last matching line (from the persisted match log's
+  own event, not composed), a detail panel, and pause/resume-watch plus
+  open-in-stream actions. Pausing reuses the definition's existing
+  `enabled` flag through the generic definition PUT (`setWatchlistEnabled`)
+  -- no new route. Two ratified pieces are not built: a per-entry
+  time-of-day "window" (every row honestly reads "always," since no
+  entry carries a schedule) and the seven-night strip ("five kept
+  nights · two empty"), which would need a new persisted nightly
+  history and a schedule to call "night" against -- a data-model
+  decision left to the issue, not invented here. "Mend — widen window"
+  is withheld for the same reason: there is no window to widen.
+
+- **Entities, built to round 29's ratified scene** (#675). Router cards
+  lead the page -- one per pushing device, its live/quiet state, RouterOS
+  version, rule/zone counts, and either its current push rate or a plain
+  "quiet is a fact, not a fault" -- followed by a dashed invite card for
+  the next router, carrying the standing promise (mikroview only ever
+  receives, never connects out) behind a disclosure of the real RouterOS
+  lines to paste. Below that, one table of every named and
+  discovered-but-unnamed host -- lane, address, mac (elided; `private`
+  when none is known), first seen, last seen, and the docket's own marks
+  (new talker, watched, flagged, ring broken) -- renamed inline by
+  clicking the name (Enter saves, Esc cancels). Replaces #647's page
+  wholesale: the old add-entity form and the separate discovered-rules/
+  -ports sections are gone, since the ratified scene has exactly one
+  table and no other CRUD surface. mac/first-seen/last-seen had no
+  existing source, so `device.MACRegistry` gained `NoteIP` (pairing a
+  MAC with the IP it last answered to) and a new read route,
+  `GET /api/devices/macs`; `GET /api/devices` gained each device's
+  reported RouterOS version. Lane reuses the topography's own
+  boundary-derived zones unchanged.
+- **Settings' three previously-unbuilt rows** (#677). Detection gains a
+  tunable port-scan window (`20 ports / 60 s`, editable next to "flag
+  types ... tune..."), reading and writing the port_scan definition's
+  own `threshold`/`window` params through the exact PUT
+  `/api/definitions/{id}` the watcher bench already uses -- no second
+  store. Memory gains a persistence row stating live truth on both
+  halves: the ratified copy read `JSON store · 14 d`, but no event
+  store with a day-based retention exists (`internal/persist`'s own
+  package doc calls the live event stream the one deliberate
+  in-memory-only exception) -- `internal/persist` *is* real, though,
+  and backs flags/definitions/watchlist entries/entities/tokens, so the
+  row instead states which backend is actually live (file, with its
+  directory, or Postgres) via a new admin-gated `GET /api/persistence`
+  (admin-tier for the same reason `GET /api/config/problems` already
+  is -- a filesystem path is infrastructure detail), alongside the fact
+  that the event buffer above it stays memory-only regardless. Account
+  gains a sessions row -- "this device, signed in 4 d · sign out
+  everywhere" -- backed by a new self-serve `POST /api/auth/logout-all`
+  (`SessionStore.RevokeAllForUser` against the caller's own account,
+  then a fresh session so the calling tab stays signed in, the same
+  revoke-then-recreate shape `POST /api/auth/password` already uses),
+  and `GET /api/auth/session` now threads the session's own `IssuedAt`
+  through as `signedInSince`. The device name in the ratified copy
+  ("tom-desktop") was mockup placeholder text -- `auth.Session` tracks
+  no device/user-agent -- so the row says "this device" rather than
+  inventing one.
+- **The docket's flag drawer explains itself: a headline, a story, the
+  episode's shape, a note on clear** (#678). Round 29's drawer gains the
+  plain-English headline and prose story the mockup ratified -- "One
+  source, twenty doors.", "A camera asking for a mail server." --
+  generated per flag type from the evidence the flag already carries
+  (`lib/flagNarrative.ts`), and the episode's shape -- still arriving,
+  stopped, or intermittent, e.g. "first 13:46 · last 13:52 · still
+  arriving" or "every ~2 m since 13:28" -- derived purely from the
+  flag's own timestamps (`lib/episodeShape.ts`). Clear now opens an
+  inline note field before clearing; the note travels to
+  `POST /api/flags/{id}/clear` and lands on the same admin-mutation
+  audit entry the clear itself already writes (#679's ruling that a
+  clear's note belongs in the existing log, not a second one). The
+  where value in a flag's collapsed row now opens the topography at the
+  host it resolves to, rather than the live stream -- "watch this
+  pathway"/"watch this source" is deliberately not part of this change;
+  it depends on the watchlist tab #676 is still building.
+- **Entities gets a tab strip back -- hosts, rules and ports** (#681).
+  Naming a rule or a port in context turned out to have nowhere to
+  happen: a rule the router has pushed but that has never fired has no
+  row anywhere to click. The owner ruled naming-in-context out and asked
+  for a tab strip over the one table instead, reusing the docket's own
+  three-tab vocabulary rather than new furniture. hosts is the ratified
+  table exactly as #675 built it, and stays the default. rules lists
+  every rule in a router's pushed filter-rule table -- name, chain,
+  action, last fired -- whether or not it has ever fired; a never-fired
+  rule reads as "has not fired," never as a blank. That join needed a
+  rule's log-prefix decoded into the slug an event from it would carry
+  (`ruleLabelFromLogPrefix`, `lib/routerLookup.svelte.ts`, the inverse of
+  the router-lookup popup's own `prefixMatchesLabel`), since `GET
+  /api/rules` only ever holds a rule once it has fired. ports lists every
+  port seen in traffic plus any already named. Inline rename is one path
+  across all three tabs, same store, same `EntityType`, same
+  Enter-saves/Esc-cancels/blur-saves behaviour #675 built.
+- **Per-hour top talker and top port, answered by the ring itself**
+  (#644). `Store.HourTops` computes each axis minute's winning source
+  and destination port from the events the ring actually holds, under
+  one RLock, walking backward and stopping at the hour's edge. A minute
+  is answered only while the buffer still holds every event it received
+  in that window -- once eviction reaches in, the minute reads as an
+  honest em dash, never a count of the survivors, and ties break on the
+  lower label so map order can't flap the answer. Served by its own
+  route, `GET /api/stats/tops`, fetched only by the Metrics page while
+  open rather than folded into the `/api/stats` poll every open tab
+  makes every five seconds. The metrics table gains the two columns as
+  plain, unsortable headers, with their hour-total footer cells staying
+  em dashes.
+- **The whisper commands the live stream, and the filter box folds to a
+  thin bar** (#644). The whisper is a quiet full-width strip above the
+  live table -- rate curve, drop share, top talker, top port -- that
+  commands the stream: clicking the curve seeks it, turning off
+  autoscroll and moving the stat line to the clicked minute, and a
+  fence toggle plus two clicks dims every row outside the picked range,
+  as a display lens rather than a second filter state beside
+  FilterBar's own. On desktop, the filter box now defaults folded
+  behind a "Filters ▸" trigger and slides out into one quiet row --
+  device, action, chain, proto, source/destination, port, interface,
+  rule -- with dim micro-labels over hairline underlines, a × to clear
+  and a fold back; it still writes only `appState.filters`, the same
+  grammar typing does.
+- **The drum: Metrics' seismograph is one mirrored stroke per minute**
+  (#644). The seismograph is rewritten from per-action horizon lanes
+  into the drum -- one mirrored stroke per minute, clickable paper to
+  select a minute -- where the outer half of each stroke is every event
+  that minute and the inner half its refused share, both on one shared
+  scale so a quiet minute's refused sliver can never draw taller than
+  its own total. Per-action detail lives on in the register and the
+  table, and the cursor's `aria-valuetext` still reads every action's
+  figure.
+- **The drum drops its leftover per-flag-type panel** (#644). The
+  round-13 rewrite replaced the seismograph's per-action lanes with the
+  mirrored stroke but left a FLAG EPISODES row per detector type
+  underneath, inherited unchanged from the pre-drum `#488` build --
+  something no round-13 through round-29 mockup of the seismograph ever
+  drew. Removed; flag detail still reads from the register's flag
+  columns, the table's flag-episodes column, and the cursor's own "N
+  flag episodes" fact. The drum's left margin, which existed only to
+  hold that panel's labels, now matches its right margin.
+- **The topography map grows a floor, two health dials, an aggregate bar
+  per card, and node information cards** (#648). An altitude slider at
+  the foot of the map steps between clients, services, zones and survey.
+  Two health dials sit top-right for flags and watchers, and clicking
+  either one takes you straight to the docket. Each card also carries
+  one aggregate bar, clicking through to the watchlist or to a
+  pre-filtered view of flags depending on which card it belongs to. And
+  a node's information card now opens the same way wherever that node
+  appears on the map, rather than only from one place.
+- **Every column on the docket now sorts and filters, across all three
+  tabs** (#649). Flags, watchlist and audit log all gained the same
+  behaviour: click a column to sort by it, click again to reverse, and a
+  quiet filter sits under the heading. Flags and watchlist are card
+  grids rather than tables, so there the same sorting and filtering
+  appears as a toolbar over the same columns instead of column heads
+  themselves. Filtering the flags list also renders it flat rather than
+  grouped by campaign, so a match is never left hidden inside a
+  collapsed group it happens to belong to.
+- **A brand-new instance now has a first-run journey, choreographed door
+  to wizard** (#646). Where an empty instance used to greet you with the
+  ordinary sign-in form, it now opens on a door that offers Enter instead
+  of a login box. From there the journey walks you through creating the
+  first admin account, an attach step that shows the two commands the
+  router needs, a held beat while that connection comes alive, and then
+  a choice: skip the tour and go straight to the wizard, or take a
+  card-by-card tour of the deck first. Most of what it walks through
+  already existed as its own surface -- the journey is what strings them
+  together into one continuous first hour, rather than adding a page of
+  its own. Either path leads to the same place, the setup wizard, which
+  now finishes by taking you to the fall, its landing page, instead of
+  leaving you somewhere else.
 - **Flags carry an operator's verdict** (#638). Every flag now offers
   Expected, Noise and Real, and the old Clear demotes to a secondary
   affordance beside them. Expected means legitimate traffic; Noise means
@@ -69,8 +310,162 @@ rewritten.
   evaluated against every event instead. `POST /api/definitions`'s
   refusal of `intent=detection` is gone, since it is no longer true.
 
+### Changed
+
+- **The docket's flags tab is the ratified round-29 table, not a card
+  grid** (#688). One row per open flag -- flag · where · evidence ·
+  count · age -- each wearing its flag type's own family ink as a left
+  stripe and mark, and each opening as a drawer directly beneath itself
+  rather than expanding a card. The drawer holds the plain-English
+  headline and story, the episode's shape drawn as a tick strip, the
+  matched log lines, and the two ratified actions: open in stream, and
+  clear with a note. Every column still sorts by its head and filters
+  from the quiet dashed row beneath it, and `where` still opens the
+  topography at its sensible level. Two earlier passes put ratified
+  language inside the old card instead of building the row-and-drawer
+  structure the record draws; this ports the record's own markup and CSS,
+  so the flags and watchlist tabs now read as one surface.
+
+  Things the round-29 scene draws no home for have been taken off this
+  tab rather than squeezed into it, and are recorded on #688 to be
+  placed one at a time: the Expected/Noise/Real verdict row and its
+  undo, per-flag confidence, the Exclusions tab (and the "permanently
+  clear" action that fed it), campaign grouping of flags sharing a
+  source, the 1/2/3-column density picker, the "Recently cleared" list,
+  the "Active flags by type" summary, the per-flag abuse check, the
+  reputation panel and the ports/hosts/NAT evidence rows. None of the
+  code, API or stores behind them changed -- only what this tab shows.
+
+- **The live table now shows the ratified nine columns, and NAT stopped
+  being one of them** (#644). Stream's table is rebuilt around time
+  (with milliseconds), action, source name, source address, destination
+  name, destination address, proto, port and rule -- a name now carries
+  the identity and its address sits dim and right-aligned beside it, and
+  an unnamed external address shows bare, with its country code standing
+  in for a name it doesn't have. NAT is no longer a column of its own; a
+  NAT'd row carries an action badge instead. Rows have gone quiet too --
+  no more full-row colour washes, a subtle band instead -- and the
+  per-cell information buttons are gone, with that same detail now
+  living in the row's own detail sheet, opened from the time cell and
+  reachable by keyboard. The filter bar folds away behind a quiet
+  trigger too, rather than sitting permanently open.
+- **Entities and Settings join the deck, and Fleet's routers move in with
+  them** (#647). The card deck now runs to seven: Entities and Settings
+  take the two final places, and Fleet's routers table folds into
+  Entities rather than staying a page of its own -- Fleet stops being
+  where you go for them. The account menu, now that each of those has a
+  home of its own, slims down to theme, Run setup, Sign out, and About
+  and licence.
+- **The fall's port spectra are stroke-only waves now, not filled
+  triangles** (#650). Each carrier's live-spectrum peak used to draw as
+  a small filled triangle; it now draws as a single stroked wave, with
+  no fill and no baseline, so the spectrum strip reads as a line rather
+  than a row of solid tents.
+
+### Removed
+
+- **The `system` and `light` themes are gone** (#708), wholesale. Round
+  30 -- the ratified design -- is dark throughout, and dark stops being
+  a preference and becomes what the stylesheet simply is. The light/dark
+  auto mode picker is removed from the theme menu; the `mikroview-theme`
+  storage key, the `ThemePref` type, `cycle()` and the `system` fallback
+  in `lib/theme.svelte.ts` are removed outright along with the file
+  itself; and every light-mode CSS variable override and the
+  `prefers-color-scheme` media query are removed from `app.css`. No
+  alias maps `system` or `light` onto dark, and no stored preference is
+  read even to migrate it -- a browser with an old `mikroview-theme`
+  value in local storage now simply has an unread key. The colourway
+  picker (Signal/Pulse/Nebula/Frequency/Mono) is unaffected.
+
 ### Fixed
 
+- **Pages could scroll far past their own content into empty space**
+  (#689). Metrics' own sr-only screen-reader region is `position:
+  absolute` with no offset of its own, and none of the deck's wrappers
+  established a positioning context, so the browser fell back to the
+  region's CSS "static position" -- computed from the full, unclipped
+  flow height of everything before it, ignoring every
+  overflow:hidden/auto ancestor on the way. With nothing positioned
+  between it and `<html>`, that became real document coordinates:
+  scrolling far enough down left nothing on screen but the deck's fixed
+  roll rail, on any scene sharing a card with Metrics (it is a snap
+  neighbour of Topography and Stream as well as itself). Deck.svelte's
+  `.card` is now `position: relative`, closing the gap for every scene
+  that sits inside it rather than papering over Metrics' own case.
+- **The stream's table had the ratified nine columns but not the
+  ratified measure** (#685). #644 built the columns; this is the rest of
+  round 29's stream scene, which the branch that built them never
+  touched. Source, destination and rule were three equal flexible
+  columns sharing leftover width evenly regardless of what each held --
+  on a wide viewport that gave source roughly a third of the table for
+  a short IP, while proto/port/rule were pushed toward (and sometimes
+  past) the right edge. Rule is now the only flexible column; the rest
+  hold fixed widths sized to what they actually carry (worked out by
+  hand against the mockup's own rows, since `the-whole.html`'s table
+  sets no widths at all and relies on plain browser auto-layout).
+  Action badges shrink to the mockup's own small-flat numbers (`10px`
+  font, `0 6px` padding, `0.06em` tracking, was `12.5px`/`3px 8px`/
+  `0.03em`) -- the colors already matched. The thin vertical strokes
+  floating over the header turned out to be the column resize handles:
+  their tick mark had an explicit height with no `align-items` to
+  center it, so it pinned to the top of the header instead of centering
+  in it. Persisted column widths from before this change are
+  discarded (`mikroview-column-widths-v4` → `-v5`) since three of the
+  nine columns changed from flexible to fixed. A row on a flagged
+  pathway carried a ⚑ mark in the time cell where the ratified table
+  draws a full-row wash instead (`tr.hl`, `var(--alarm)` at 5%) --
+  built as drawn, glyph removed. The name/address pairing and the row
+  banding were already built to spec and are untouched.
+- **The topography's furniture, landed against its ratified round-29
+  scene** (#682). #648 built the dials, the lens selector, the zone
+  cards, the edge labels, the altitude control and the ascend link; on
+  screen none of it read as designed. The health dials sat on top of a
+  top-right Traffic/Policy/Coverage tab strip that round 29 never
+  draws there -- the strip is now the scene's own bottom-left bar,
+  merged with the same typography the map's other chrome wears, and
+  the dials sit alone, inset clear of the deck's roll rail. The
+  watcher dial's ring wore a "◉" text glyph for its legend; it now
+  draws the scene's own eye (a path and a pupil, ported from the
+  mockup's dial markup). Zone cards' coverage badges (`LOGGED BOTH
+  WAYS`, `DARK TOWARD WAN`) rendered in flat grey, one crammed
+  sentence; they now carry the ratified three-way colour -- green
+  logged, red dark, dim otherwise -- as two lines, badge over detail,
+  with the aggregate bar moved below the card's own edge (as round 29
+  draws it) so the second line never collides with it. Edge labels sat
+  directly across the lines they annotated; they now sit off to the
+  side, with a backdrop-matched halo for the cases still crossing
+  something. The altitude control was a bare browser range input; it
+  now wears a custom thin track and diamond thumb with its two
+  extremes named ("clients" ... "survey", the middle stops staying
+  tick-only). The ascend link floated as a bordered pill over the
+  whole card; it now sits inside the map's own flow, top-left of the
+  stage, as plain text. The boundary-derived note that used to float
+  half off the map's bottom-left corner is now a bounded, backed pill
+  stacked above the relocated lens bar, in the scene's own chrome
+  rather than over the drawing. Degrading honestly when the `/ip`
+  address table hasn't been pushed (#687) was already correct and
+  stays untouched -- these fixes change how the furniture reads, not
+  what it invents when data is missing.
+- **The deck mounted a card's scene a card early and tore it down a
+  card late, worst on the docket** (#690). `Deck.svelte` used to mount
+  any card within one index of the active one, always -- so sitting on
+  Stream paid a full mount of the docket's unvirtualised Flags list,
+  and sitting on Entities or Settings paid its teardown, neither ever
+  seen. A card's scene now mounts once it's the one actually visited,
+  plus whichever neighbour the deck is physically rolling it into or
+  out of view (tracked by a low-threshold `IntersectionObserver` with a
+  lookahead margin, `lib/deckMount.ts`), so the roll still shows real
+  content mid-transit without paying for a neighbour nobody scrolled
+  toward. Measured against the live demo: the stream roll dropped from
+  ~11 s to under 1 s, the docket's own roll from ~50 s to under 2 s,
+  Entities from ~20 s to under 1 s, and Settings from ~14 s to under
+  0.5 s.
+- **Finishing the setup wizard could land you on a dead view** (#646).
+  Its exit still pointed at the stream-as-landing-page arrangement that
+  #616 retired once the fall took over as the real landing page, so
+  every wizard exit -- not only the new journey's -- closed onto a view
+  that no longer served that role. It now closes onto the fall instead,
+  on every path into the wizard.
 - **Watchlist matching against a real router could silently see nothing**
   (#614). Against a real RouterOS device, several firewall lines logged
   close together in a burst -- an input line and the forward/NAT line

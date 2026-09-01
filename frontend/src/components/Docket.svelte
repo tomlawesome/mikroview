@@ -3,15 +3,15 @@
   //
   // The docket (#633, rounds 17-19/25/28-29): what was flagged, what
   // you watch, what changed -- flags, watchlist and audit log as one
-  // deck card's tabs. The tab row carries the flags tab's one control,
-  // the clear-all bubble (round 29, owner-ratified): an outlined amber
+  // deck card's tabs -- the tabs themselves ride the scene bar since
+  // #700. What stays on the page is the flags tab's one control, the
+  // clear-all bubble (round 29, owner-ratified): an outlined amber
   // bubble; one click arms it alarm-red 'confirm'; the second click
   // clears every open flag; clicking anywhere else disarms it, so an
   // armed bubble cannot ambush a stray click.
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
-  import { watchlistState } from '../lib/watchlist.svelte'
   import Flags from './Flags.svelte'
   import Watchlist from './Watchlist.svelte'
   import AuditLog from './AuditLog.svelte'
@@ -64,55 +64,16 @@
 <svelte:window onclick={onWindowClick} />
 
 <div class="docket">
-  <div class="tab-row" role="tablist" aria-label="The docket">
-    <!-- Counts sit beneath the labels (round 19): bare ink, tiny, and
-         only when they have something to say -- a permanent "0" is the
-         failure, not the goal. The broken watch is the small red ○
-         under "watchlist"; the healthy count wears the watchers'
-         purple. The row keeps its height when every count is silent. -->
-    <button
-      class="tab"
-      class:on={tab === 'flags'}
-      role="tab"
-      aria-selected={tab === 'flags'}
-      onclick={() => (appState.view = 'flags')}
-    >
-      <span class="tlabel">flags</span>
-      <span class="under">
-        {#if flagsState.activeCount > 0}<b class="ct">⚑ {flagsState.activeCount}</b>{/if}
-      </span>
-    </button>
-    {#if canEdit}
-      <button
-        class="tab"
-        class:on={tab === 'watchlist'}
-        role="tab"
-        aria-selected={tab === 'watchlist'}
-        onclick={() => (appState.view = 'watchlist')}
-      >
-        <span class="tlabel">watchlist</span>
-        <span class="under">
-          {#if watchlistState.entries.length > 0}<b class="wct">◉ {watchlistState.entries.length}</b>{/if}
-          {#if watchlistState.brokenCount > 0}<b class="bct">○ {watchlistState.brokenCount}</b>{/if}
-        </span>
-      </button>
-    {/if}
-    {#if isAdmin}
-      <button
-        class="tab"
-        class:on={tab === 'audit'}
-        role="tab"
-        aria-selected={tab === 'audit'}
-        onclick={() => (appState.view = 'audit')}
-      >
-        <span class="tlabel">audit log</span>
-        <span class="under"></span>
-      </button>
-    {/if}
-
+  <!-- The tabs moved to the scene bar (#700): round 30 rides them where
+       the page heading used to be, beside the wordmark. What stays here
+       is the flags tab's own control -- the clear-all bubble, which
+       round 30 draws as its own row under the bar (its `.clearall`).
+       Outlined, never filled; one click arms it 'confirm', the second
+       clears, and clicking elsewhere disarms it. -->
+  <div class="clear-row">
     {#if tab === 'flags' && flagsState.activeCount > 0 && canEdit}
       <button class="bubble" class:armed disabled={busy} onclick={onClearAll} title="They keep their place in the audit log">
-        {armed ? 'confirm' : `clear all ${flagsState.activeCount}`}
+        {armed ? 'confirm' : 'clear all'}
       </button>
     {/if}
     {#if error}<span class="err" role="alert">{error}</span>{/if}
@@ -137,59 +98,12 @@
     min-height: 0;
   }
 
-  .tab-row {
+  .clear-row {
     display: flex;
     align-items: center;
     gap: 4px;
     padding: 0 6px 6px;
-  }
-
-  .tab {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1px;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--fg-dim);
-    font-size: 13px;
-    padding: 4px 10px 4px;
-    cursor: pointer;
-  }
-
-  .tab:hover {
-    color: var(--fg-muted);
-  }
-
-  .tab.on {
-    color: var(--fg);
-    border-bottom-color: var(--accent);
-  }
-
-  /* A fixed-height shelf under every label, so a count appearing or
-     clearing never shifts the row. */
-  .under {
-    display: flex;
-    align-items: baseline;
-    gap: 7px;
-    height: 13px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 600;
-  }
-
-  .ct {
-    color: var(--alarm);
-  }
-
-  .wct {
-    color: var(--marked);
-  }
-
-  .bct {
-    color: var(--alarm);
-    font-size: 9px;
+    min-height: 26px;
   }
 
   /* The bubble (round 29): outlined, never filled. */

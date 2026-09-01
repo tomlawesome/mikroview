@@ -118,6 +118,20 @@ func EntryFromDefinition(d Definition) (watchlist.Entry, error) {
 		e.CreatedAt = t
 	}
 
+	// The watch window and its nightly history (#680) ride on both
+	// shapes: an inverted entry is watched on a schedule the same way a
+	// non-inverted one is, so this is read before the split rather than
+	// twice after it.
+	if err := decodeJSONParam(params, "windowJSON", &e.Window); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
+	}
+	if err := decodeJSONParam(params, "nightsJSON", &e.Nights); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
+	}
+	if err := decodeJSONParam(params, "ringJSON", &e.Ring); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
+	}
+
 	if d.Kind == KindProgrammatic {
 		e.Invert = true
 		if e.IncludeStructuralNoise, err = paramBool(params, "includeStructuralNoise"); err != nil {

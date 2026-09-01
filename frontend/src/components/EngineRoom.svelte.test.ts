@@ -6,9 +6,16 @@
 // #490's absorbed pages (Users/Tokens/Detectors) live on behind the
 // doors and the bench; the viewer/admin split those tests carried is
 // unchanged (chip once, verbs gated, facts identical).
+//
+// Round 30 (#700/#691): the side doors (EngineRoomDoors' "who may look
+// in" and "which machines may speak") are unmounted, not deleted --
+// round 30's own settings page draws exactly four groups and fits
+// without scrolling. USERS_DOOR_ENABLED/TOKENS_DOOR_ENABLED are both
+// false, so every assertion below about the doors checks that they are
+// absent for every role, admin included.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
@@ -27,6 +34,7 @@ vi.mock('../lib/api', () => ({
         kind: 'declarative',
         enabled: true,
         scope: { hosts: ['203.0.113.9'], hostsMode: 'deny' },
+        params: { threshold: 15, window: '1m0s' },
         provenance: { origin: 'shipped' },
         available: true,
         replay: { known: true, capable: true },
@@ -57,6 +65,16 @@ vi.mock('../lib/api', () => ({
   createToken: vi.fn(),
   revokeToken: vi.fn(),
   fetchDevices: vi.fn(async () => []),
+  signOutEverywhere: vi.fn(async () => null),
+  fetchPersistence: vi.fn(async () => ({ backend: 'file', dir: '/var/lib/mikroview' })),
+  fetchAuthSession: vi.fn(async () => ({
+    setupRequired: false,
+    authenticated: true,
+    username: 'admin',
+    role: 'admin',
+    ssoAvailable: false,
+    signedInSince: new Date().toISOString(),
+  })),
 }))
 
 import { appState } from '../lib/state.svelte'
@@ -66,6 +84,7 @@ import { detectorSettingsState } from '../lib/detectorSettings.svelte'
 import { usersState } from '../lib/users.svelte'
 import { tokensState } from '../lib/tokens.svelte'
 import { deckOrderState } from '../lib/deckOrder.svelte'
+import { persistenceState } from '../lib/persistence.svelte'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
@@ -78,6 +97,7 @@ function stats(overrides: Partial<Stats> = {}): Stats {
     eventsPerSecond: 7.4,
     capacity: 100000,
     count: 41208,
+    oldestHeld: null,
     windowSeconds: 72 * 3600,
     connectedClients: 1,
     ...overrides,
@@ -99,11 +119,18 @@ beforeEach(() => {
   usersState.list = []
   tokensState.list = []
   tokensState.justCreated = null
-  deckOrderState.set(['fall', 'metrics', 'live', 'docket'])
+  authState.signedInSince = ''
+  // persistenceState.ensureLoaded() only ever fetches once (see its own
+  // doc comment), so across a whole test file its cache would otherwise
+  // leak from whichever test rendered EngineRoom first -- reset the
+  // seeded value directly instead of relying on the mocked fetch, same
+  // as detectorSettingsState.list/flagsState.list above.
+  persistenceState.info = null
+  deckOrderState.set(['fall', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
 })
 
 describe('The settings shelf (#633)', () => {
-  it('renders the five groups and the deck in the kept order', async () => {
+  it('renders the five groups and the deck -- seven cards for an admin (#647) -- in the kept order', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
@@ -112,11 +139,35 @@ describe('The settings shelf (#633)', () => {
     for (const name of ['your deck', 'ingest', 'detection', 'memory', 'account']) {
       expect(screen.getByText(name)).toBeTruthy()
     }
-    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket']) {
-      expect(screen.getByText(card)).toBeTruthy()
+    const shelf = document.querySelector<HTMLElement>('.stshelf')!
+    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
+      expect(within(shelf).getByText(card)).toBeTruthy()
     }
+    // #735: the "seven cards, in the order you keep them" caption is
+    // gone -- its purpose (the owner: "obvious") was redundant with the
+    // cards' own drag handle and position aria-label. Seven cards for
+    // an admin is now checked by counting them directly.
+    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
     // Sign-in lands on the first card, and the shelf says so exactly once.
     expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
+  })
+
+  // #657: Entities carries `edit: true` (#653's widening to the user
+  // tier), and this page is itself gated to the same tier -- so a
+  // `user` who reaches Settings at all sees the same seven cards an
+  // admin does. Named for the role it actually renders, unlike the
+  // pre-#657 version of this test, which called that tier "viewer"
+  // when only `user` and `admin` can ever reach this page.
+  it("a user's shelf carries all seven cards, same as an admin's", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    const shelf = document.querySelector<HTMLElement>('.stshelf')!
+    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    expect(within(shelf).getByText('Entities')).toBeTruthy()
+    expect(within(shelf).getByText('Settings')).toBeTruthy()
   })
 
   it('reordering a card moves the landing with it', async () => {
@@ -158,52 +209,54 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByRole('button', { name: 'close the bench' })).toBeTruthy()
   })
 
-  it('a viewer sees the chip and neither door', async () => {
+  it('a viewer sees the chip, no verbs, and no side doors at all', async () => {
     authState.state = 'authenticated'
     authState.role = 'viewer'
     render(EngineRoom)
     await settle()
 
-    expect(screen.getByText('READ-ONLY')).toBeTruthy()
+    // The READ-ONLY chip is gone with the page heading it lived in
+    // (#700): round 30 draws no heading on any deck and no replacement
+    // chip anywhere, so #548's grammar -- read-only declared once, in
+    // words -- currently has nowhere to be said. That is recorded as a
+    // gap on #691, not a decision that viewers stop being told; the
+    // component and its own test are untouched and still pass. This
+    // pins the present truth so the gap cannot be mistaken for done.
+    expect(screen.queryByText('READ-ONLY')).toBeNull()
 
-    // #657: both doors are admin-only now. The tokens door used to be
-    // viewer-readable with only its verbs gated (#490); that widening
-    // existed to serve a viewer-readable settings page, and this issue
-    // removed the page from a viewer's navigation entirely.
+    // Round 30 (#700/#691): neither side door is mounted for any role,
+    // so a viewer sees no tokens door and no users door -- not the old
+    // "tokens readable, users admin-only" split. TOKENS_DOOR_ENABLED /
+    // USERS_DOOR_ENABLED are both false in EngineRoomDoors.svelte. When
+    // a future round remounts them, #657's own gate (both doors
+    // admin-only -- see EngineRoomDoors.svelte's isAdmin check, and
+    // internal/api/tokens_test.go's TestTokensListAdminOnly for the
+    // route it depends on) has to hold for the `user` tier too, not
+    // only `viewer`.
     expect(screen.queryByText('rb5009-ingest')).toBeNull()
     expect(screen.queryByText(/ingest: rb5009/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
     expect(screen.queryByRole('button', { name: '+ Mint a key' })).toBeNull()
-
     expect(screen.queryByText('Who may look in')).toBeNull()
+    expect(screen.queryByText('Which machines may speak')).toBeNull()
+    expect(screen.queryByText('The side doors — who and what may come in')).toBeNull()
     expect(screen.queryByRole('button', { name: '+ Let someone in' })).toBeNull()
   })
 
-  // The tier that actually lost something to #657. A user could read
-  // token metadata before it; issuing keys was ruled a setup task rather
-  // than using the product (owner, 2026-08-31), so the door went with the
-  // users door rather than staying half-open.
-  it('a user no longer sees the tokens door either', async () => {
-    authState.state = 'authenticated'
-    authState.role = 'user'
-    render(EngineRoom)
-    await settle()
-
-    expect(screen.queryByText('rb5009-ingest')).toBeNull()
-    expect(screen.queryByText('Which machines may speak')).toBeNull()
-  })
-
-  it('an admin sees the verbs', async () => {
+  it('an admin sees no side doors either -- round 30 draws none (#700/#691)', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
     await settle()
 
     expect(screen.queryByText('READ-ONLY')).toBeNull()
-    expect(screen.getByText('Who may look in')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '+ Let someone in' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '+ Mint a key' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+    // Unmounted, not deleted: an admin gets the same absence a viewer
+    // does, even though usersState/tokensState still hold the admin's
+    // own data underneath (see the mint-banner test below).
+    expect(screen.queryByText('Who may look in')).toBeNull()
+    expect(screen.queryByRole('button', { name: '+ Let someone in' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '+ Mint a key' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
   })
 
   it('shows a user no read-only chip: they edit the watchers station here', async () => {
@@ -250,7 +303,13 @@ describe('The settings shelf (#633)', () => {
     expect(document.querySelector('.scope-knob')).toBeTruthy()
   })
 
-  it('the mint banner appears once', async () => {
+  it('the mint banner has nowhere to show while the tokens door is unmounted (#700/#691)', async () => {
+    // Before round 30, this asserted the just-minted secret's banner
+    // rendered exactly once. TOKENS_DOOR_ENABLED is now false, and the
+    // banner lives inside that door's own markup, so it renders zero
+    // times rather than once -- a tracked gap (#691), not silent data
+    // loss: tokensState.justCreated itself is untouched, and the banner
+    // reappears the moment the flag flips back.
     authState.state = 'authenticated'
     authState.role = 'admin'
     tokensState.justCreated = {
@@ -263,7 +322,102 @@ describe('The settings shelf (#633)', () => {
     render(EngineRoom)
     await settle()
 
-    expect(screen.getAllByText('mv1_4c21secret9b0d')).toHaveLength(1)
-    expect(screen.getAllByText(/Copy it now/)).toHaveLength(1)
+    expect(screen.queryAllByText('mv1_4c21secret9b0d')).toHaveLength(0)
+    expect(screen.queryAllByText(/Copy it now/)).toHaveLength(0)
+    expect(tokensState.justCreated?.value).toBe('mv1_4c21secret9b0d')
+  })
+
+  // #677: the three previously-unbuilt rows.
+  it("detection's port-scan window states the live threshold, editable for a user", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    const knob = screen.getByRole('button', { name: '15 ports / 60 s' })
+    await fireEvent.click(knob)
+    await settle()
+
+    const portsInput = screen.getByLabelText('distinct ports') as HTMLInputElement
+    const windowInput = screen.getByLabelText('window in seconds') as HTMLInputElement
+    expect(portsInput.value).toBe('15')
+    expect(windowInput.value).toBe('60')
+
+    await fireEvent.input(portsInput, { target: { value: '25' } })
+    await fireEvent.input(windowInput, { target: { value: '90' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
+    await settle()
+
+    const { updateDefinition } = await import('../lib/api')
+    expect(updateDefinition).toHaveBeenCalledWith('port_scan', { params: { threshold: 25, window: '90s' } })
+  })
+
+  it('a viewer sees the port-scan window as a fact, not a knob', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('15 ports / 60 s')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '15 ports / 60 s' })).toBeNull()
+  })
+
+  it('memory states persistence live truth: the file backend and its directory, and that the buffer is memory-only', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    persistenceState.info = { backend: 'file', dir: '/var/lib/mikroview' }
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('persistence')).toBeTruthy()
+    expect(screen.getByText(/file store · \/var\/lib\/mikroview/)).toBeTruthy()
+    expect(
+      screen.getByText(/holds flags, definitions, watchlist entries, entities and tokens/),
+    ).toBeTruthy()
+    expect(screen.getByText(/the event buffer above is memory-only and clears on restart/)).toBeTruthy()
+  })
+
+  it('states Postgres, not a file path, when that backend is live', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    persistenceState.info = { backend: 'postgres' }
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText(/^Postgres —/)).toBeTruthy()
+    expect(screen.queryByText(/file store/)).toBeNull()
+  })
+
+  it('a viewer without access to GET /api/persistence sees only the buffer fact, not a fabricated backend', async () => {
+    // #677: the route is admin-gated (a directory is infrastructure
+    // detail, same reasoning /api/config/problems already applies), so
+    // persistenceState.info stays null for anyone else -- absent, not
+    // disabled, the same grammar the rest of Settings' admin-only facts
+    // already follow.
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('the event buffer above is memory-only and clears on restart')).toBeTruthy()
+    expect(screen.queryByText(/file store/)).toBeNull()
+    expect(screen.queryByText(/Postgres/)).toBeNull()
+  })
+
+  it('the sessions row states this device and can sign out everywhere', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.signedInSince = new Date(Date.now() - 4.5 * 86_400_000).toISOString()
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText(/this device, signed in 4 d/)).toBeTruthy()
+
+    const { signOutEverywhere } = await import('../lib/api')
+    await fireEvent.click(screen.getByRole('button', { name: 'sign out everywhere' }))
+    await settle()
+
+    expect(signOutEverywhere).toHaveBeenCalled()
+    expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
   })
 })

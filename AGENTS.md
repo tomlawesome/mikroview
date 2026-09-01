@@ -76,6 +76,14 @@ run it. A feature that needs mikroview itself to touch the network is
 either redesigned around pushed or passive data, or it belongs in a
 different tool.
 
+## Building a ratified design
+
+Port the mockup's markup and CSS; never build from an impression of it. Drawn
+but built differently is a **defect** -- build it as drawn. Something the app
+does that the design draws nowhere is a **gap** -- leave it off, keep its code,
+write it down, never invent a home mid-build. Fidelity work goes to a top-tier
+model.
+
 ## A stale origin/dev incident
 
 **This is not hypothetical.** In this same repo, a branch was cut with
@@ -176,6 +184,93 @@ for a concrete example of a GitHub/GitLab environment difference that
 broke a test for a reason that had nothing to do with the code — worth
 checking for similar defaults mismatches before assuming a GitLab-only
 failure is a real regression.
+
+## The second host live-check runs on
+
+Live-check is slow and it holds the workstation while it runs, which is
+the bottleneck #673 set out to relieve: its image exists so `make
+live-check` can run somewhere other than the machine you are working on.
+Somewhere else and local -- **not** in CI. No pipeline on either host
+runs the gate, and none should; a job proposing to was closed unmerged
+(#704, #705) once that was clear.
+
+The image carries **all three engines**, and `MV_BROWSER` picks one --
+`chromium` (the default), `firefox` or `webkit`. That is the second half
+of what it is for: a suite any of the three can be driven against,
+whenever a change warrants it, rather than a box dedicated to one of
+them. Chromium is not the safe choice merely because it is the default:
+#659 shipped a static `style` attribute Chromium tolerates and Firefox
+refuses under this app's CSP, past live-check, vitest and every
+screenshot, found by the owner opening the app.
+
+So the two hosts are interchangeable for a run. If the workstation is
+already busy with one, run the next one here instead -- that is the
+point of it existing.
+
+The second host is the box that also serves the GitLab runner. It has a
+dedicated unprivileged account, `mvagent`, provisioned by the owner on
+2026-08-31.
+
+Reach it as **`mikroview-runner`** — an ssh config entry on the agent
+host, key `~/.ssh/mikroview_runner`, key-only, no passphrase. The
+hostname is deliberately not written here: this file already refuses to
+carry network topology (see the GitLab section above), and the address
+lives in the agent's own ssh config where it is needed. Ask the owner if
+it is missing rather than guessing.
+
+**What the account can do.** Run containers under its own rootless
+Docker — its own daemon on its own socket
+(`/run/user/1001/docker.sock`, `DOCKER_HOST` set in its `.bashrc`),
+separate from the runner's. That is enough to build
+`live-check.Dockerfile` and run `make live-check` inside it, which is
+the whole job.
+
+**Build the image, never pull it.** The published
+`ghcr.io/tomlawesome/mikroview/live-check` is private, and a registry
+credential on that host would be a secret nobody is watching. Building
+from the Dockerfile needs none and tests the same thing. The repository
+is private too, so the host cannot clone it -- from GitHub or GitLab --
+and nothing should be added to let it.
+
+**Use `make live-check-remote`.** It pushes the tree over SSH into a bare
+repo on the host, checks it out, builds the image if it is not cached,
+runs the gate, brings the log back as `gate-run.log`, and removes the
+work tree afterwards. `MV_BROWSER=firefox make live-check-remote` picks
+the engine. `scripts/gate-remote.sh` carries the reasoning.
+
+`git push` rather than rsync or a clone, because authentication then
+happens from this side: nothing has to live over there. Only new objects
+cross after the first run, `node_modules` and `worktrees/` never do, and
+the host gets a real checkout so `live-env.sh` stamps a true SHA instead
+of `nogit`. The bare repo and the built image stay behind as the cache;
+the work tree does not.
+
+**What it deliberately cannot do**, and none of it should be worked
+around: no sudo; no read access to `/etc/gitlab-runner/config.toml`; no
+SSH forwarding of any kind, so the account cannot be used as a route
+into the rest of the network. It also holds no registry credential, so
+it cannot pull the private gate image — build from the Dockerfile
+instead, which needs no credential and tests the same thing.
+
+**Never put a token on that host**, for a pull or a clone or anything
+else. If a step seems to need one, the step is wrong.
+
+Two traps met while setting this up, recorded so the next person does
+not:
+
+- `adduser` assigns a subordinate UID/GID range of its own. Adding a
+  second with `usermod --add-subuids` gives the account two ranges, and
+  rootless Docker then fails at `newuidmap` with an unhelpful map dump.
+  One range only.
+- `usermod` refuses while any process of that user is alive, and with
+  lingering enabled `systemd --user` restarts faster than
+  `loginctl terminate-user` returns. Editing the single line out of
+  `/etc/subuid` and `/etc/subgid` avoids the fight entirely.
+
+Unrelated to mikroview but observed on that host: `gitlab-runner` and
+`tom` are assigned the *same* subordinate range in both files, so the
+isolation between those two accounts' containers is thinner than it
+looks. Reported to the owner; not an agent's to change.
 
 ## Security by design
 
@@ -313,6 +408,9 @@ plain language.
 
 ## Issues
 
+Open does not mean undone: `Closes #N` fires only on the default branch, so
+check the branch before picking an issue up.
+
 Issue-body, decision-recording and supersession rules follow the global
 agent instructions. Project-specific: `.github/ISSUE_TEMPLATE/work-item.md`
 puts the current plan at the top for new issues; existing issues get
@@ -411,3 +509,54 @@ check `.github/workflows/*.yml` for the precise invocation. Three known traps:
 
 The first two were found on PR #257 (Watchlist frontend), the third on
 #581 — each a supposedly complete local pass that CI caught out.
+
+## Demos the owner reviews
+
+### Seed it: a demo on bare syslog is not a demo
+
+`scripts/seed-demo.py` (#687) gives a running instance a whole story
+rather than a log stream: pushed filter/NAT/address tables, named
+entities, a user and a viewer account, and a watchlist with a healthy
+entry, a held one and a deliberately broken ring. One estate throughout,
+so a name on the stream is the same thing on the topography and in
+Entities.
+
+**Bring the instance up with `MV_DEMO_DEVICES=1`**, or the seeding is
+half-wasted. A pushed rule/NAT/address table is keyed by device id;
+`seed-demo.py` mints its tokens against router names and streams syslog
+from one loopback address per router. Unless `live-env.sh` declares those
+addresses, the registry invents a discovered device per source IP and the
+pushed tables sit under ids no device has. Both halves report success and
+never meet (#709).
+
+    MV_DEMO_DEVICES=1 MV_BIND=<addr> scripts/live-env.sh up
+
+    export MV_URL=... MV_USER=... MV_PASS=...
+    export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_PORT=<tls port>
+    scripts/seed-demo.py all      # push, entities, accounts, watchlist
+    scripts/seed-demo.py feed &   # long-running; leave it running
+    scripts/seed-demo.py mutate   # once the feed has produced real flags
+
+`feed` is the piece that takes time: the metrics hourline, the register
+and the fall's memory stay flat until real time has passed under them.
+
+Without this the fall's bands read "other traffic — not in a pushed rule
+table", the topography degrades to boundary-derived zones, and the empty
+surfaces get reported as UI defects. Every UI review this project ran
+before the seeder existed was hampered that way, and reviews after it
+existed were still handed bare-syslog instances because nobody checked.
+
+### Stamp it: a demo must say which build it is
+
+**Show a version on every demo instance the owner is asked to look at,
+and quote the same version when handing it over.** Round 30 lost most of
+a day to this: fault after fault was fixed in the tree while the running
+instance had been built before the fixes, so the owner kept finding
+faults that were already fixed and reasonably concluded the work had been
+lost. Nothing in the browser said which build it was, so neither side
+could tell.
+
+A demo whose version cannot be read off the screen is not evidence of
+anything. If the owner reports a fault that the tree says is fixed,
+compare the demo's stamp against the branch before touching the code —
+the usual answer is a stale build, not a lost fix.

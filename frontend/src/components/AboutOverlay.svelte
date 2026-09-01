@@ -18,6 +18,16 @@
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
 
+  // Fetch the running server's build version when this overlay opens.
+  // Without this the panel showed nothing at all unless the viewer had
+  // already visited Settings, which was the only caller of
+  // ensureLoaded() -- so the one place anyone looks to find out which
+  // build they are staring at was reliably blank (#713). ensureLoaded()
+  // caches, so reopening costs nothing, and /api/healthz needs no auth.
+  $effect(() => {
+    if (open) versionState.ensureLoaded().catch(() => {})
+  })
+
   const SOURCE_URL = 'https://github.com/tomlawesome/mikroview'
   const LICENSE_URL = 'https://www.gnu.org/licenses/agpl-3.0.html'
 

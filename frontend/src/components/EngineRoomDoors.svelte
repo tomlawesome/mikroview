@@ -30,6 +30,19 @@
 
   let { isAdmin }: { isAdmin: boolean } = $props()
 
+  // Off for round-30 fidelity: round 30's settings page draws exactly
+  // four groups (your deck, ingest, detection, memory, account) and
+  // fits without scrolling -- neither side door appears anywhere in it.
+  // Unmounted, not deleted (#700, #691): a real administrative surface,
+  // tracked for a future round to remount. Typed rather than inferred
+  // so the block stays reachable to the type checker -- a bare `false`
+  // narrows to `never` and reports the block as unreachable. Same
+  // pattern as MetricsRegister's LEDGER_ENABLED and LiveTable's
+  // RESIZE_HANDLES_ENABLED. Two flags, not one, so "who may look in"
+  // and "which machines may speak" can come back independently.
+  const USERS_DOOR_ENABLED: boolean = false
+  const TOKENS_DOOR_ENABLED: boolean = false
+
   onMount(() => {
     // Never fetched below admin -- see the module doc comment above.
     // #657 moved tokens to the same footing as users: GET /api/tokens is
@@ -141,9 +154,11 @@
 </script>
 
 <div class="doors">
-  <span class="doorlbl">The side doors — who and what may come in</span>
+  {#if USERS_DOOR_ENABLED || TOKENS_DOOR_ENABLED}
+    <span class="doorlbl">The side doors — who and what may come in</span>
+  {/if}
 
-  {#if isAdmin}
+  {#if USERS_DOOR_ENABLED && isAdmin}
     <!-- Admin-only door, absent entirely for a viewer -- not collapsed,
          not shown empty, not explained. GET /api/auth/users stayed
          admin-only (see the module doc comment above), so there is
@@ -203,8 +218,10 @@
   {/if}
 
   <!-- #657: the whole tokens door is admin-only now, absent rather than
-       read-only, on the same grammar as the users door above. -->
-  {#if isAdmin}
+       read-only, on the same grammar as the users door above -- and, per
+       round 30 (#700/#691), unmounted for every role until TOKENS_DOOR_ENABLED
+       comes back. -->
+  {#if TOKENS_DOOR_ENABLED && isAdmin}
   <section class="door">
     <div class="dhead">
       <span class="dname">Which machines may speak</span>

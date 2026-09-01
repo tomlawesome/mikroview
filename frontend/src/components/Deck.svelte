@@ -4,23 +4,32 @@
   // The deck (#633, from the #634 rounds): the scenes are full-viewport
   // snap cards rolled vertically, and navigation between them is the
   // roll rail on the right edge -- the deck's names as sideways text,
-  // clicking one rolls that card to centre. The ratified default order
-  // is login -> the fall -> topography -> metrics -> stream; topography
-  // is unbuilt, so today's deck is the fall, metrics, stream, then the
-  // docket (flags · watchlist · audit as one card's tabs, rounds 17-19).
-  // Operate pages (settings, fleet, entities) are not cards: they live
-  // on the account menu and render as pages over the deck.
+  // clicking one rolls that card to centre. The ratified order is the
+  // fall, topography, metrics, stream, the docket (flags · watchlist ·
+  // audit as one card's tabs, rounds 17-19), then -- since #647 (round
+  // 23) -- Entities and Settings as the deck's last two cards: seven for
+  // an admin, six for a viewer (Entities keeps its own admin gate; see
+  // deckCards.ts). Run setup… and the account's own actions are all
+  // that is left on the account menu; every page-shaped operate surface
+  // now lives here. Fleet alone stays off the deck, absorbed into the
+  // Entities card (its "routers" section leads); the standalone Fleet
+  // page still exists for the phone-width bottom bar, per its own file.
+  import { SvelteSet } from 'svelte/reactivity'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { deckCards, type DeckCard } from '../lib/deckCards'
   import { deckOrderState } from '../lib/deckOrder.svelte'
+  import { deckCardMounted } from '../lib/deckMount'
   import SceneBar from './SceneBar.svelte'
   import Fall from './Fall.svelte'
   import Metrics from './Metrics.svelte'
   import FilterBar from './FilterBar.svelte'
   import LiveTable from './LiveTable.svelte'
+  import Whisper from './Whisper.svelte'
   import Docket from './Docket.svelte'
   import Topography from './Topography.svelte'
+  import Entities from './Entities.svelte'
+  import EngineRoom from './EngineRoom.svelte'
 
   // The card table lives in lib/deckCards.ts, shared with the Settings
   // shelf; the order is the operator's own (#633 rounds 23-25, drag to
@@ -29,12 +38,20 @@
 
   const activeIndex = $derived(cards.findIndex((c) => c.views.includes(appState.view)))
 
-  // Only the centred card and its neighbours mount their scene: the
+  // Only the visited card mounts its scene, plus whichever neighbour the
+  // deck is physically rolling it into or out of view (#690): the
   // scenes were built for single-mount (Metrics polls, LiveTable
-  // renders the buffer, the fall animates), and several running
-  // off-screen would multiply that cost for nothing visible.
-  function near(i: number): boolean {
-    return Math.abs(i - activeIndex) <= 1
+  // renders the buffer, the fall animates), so several mounted at once
+  // multiplies that cost for nothing visible -- worst on the docket's
+  // unvirtualised Flags list, which used to mount a card early and tear
+  // down a card late for no reason but sitting next to the active one.
+  // visibleKeys is kept by the low-threshold observer below; the rule
+  // itself lives in lib/deckMount.ts so it's unit-testable without
+  // mounting a component.
+  let visibleKeys = new SvelteSet<string>()
+
+  function mounted(i: number): boolean {
+    return deckCardMounted(i, activeIndex, cards[i]?.key, visibleKeys)
   }
 
   let deckEl: HTMLElement | undefined
@@ -87,6 +104,31 @@
     for (const el of Object.values(cardEls)) if (el) observer.observe(el)
     return () => observer.disconnect()
   })
+
+  // Mount-only observer (#690): tracks which cards are actually on
+  // screen, independent of the 0.6 "you've arrived" threshold above --
+  // a low threshold plus a lookahead margin so a neighbour the roll is
+  // carrying toward view mounts a little ahead of being visible (no
+  // pop-in), but a card sitting untouched a full card away never enters
+  // this set at all. Not gated on `rolling`: a programmatic roll should
+  // mount whatever it's visibly passing through exactly like a wheel
+  // scroll does.
+  $effect(() => {
+    void cards
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const key = (entry.target as HTMLElement).dataset.card
+          if (!key) continue
+          if (entry.isIntersecting) visibleKeys.add(key)
+          else visibleKeys.delete(key)
+        }
+      },
+      { root: deckEl, threshold: 0, rootMargin: '25% 0px' },
+    )
+    for (const el of Object.values(cardEls)) if (el) observer.observe(el)
+    return () => observer.disconnect()
+  })
 </script>
 
 <div class="deck" bind:this={deckEl}>
@@ -98,7 +140,7 @@
       aria-label={card.name}
       aria-hidden={i !== activeIndex}
     >
-      {#if near(i)}
+      {#if mounted(i)}
         {#if card.key === 'fall'}
           <Fall />
         {:else}
@@ -109,10 +151,15 @@
             {:else if card.key === 'metrics'}
               <Metrics />
             {:else if card.key === 'live'}
+              <Whisper />
               <FilterBar />
               <LiveTable />
             {:else if card.key === 'docket'}
               <Docket />
+            {:else if card.key === 'entities'}
+              <Entities />
+            {:else if card.key === 'engineroom'}
+              <EngineRoom />
             {/if}
           </div>
         {/if}
@@ -122,9 +169,11 @@
 </div>
 
 <!-- The roll rail: the deck's names as vertical sideways text hugging
-     the right edge, top of the letters to the right (owner, #634 round
-     11). The in-view name grows and brightens in the same beat as the
-     roll. -->
+     the right edge, top of the letters to the LEFT -- round 30's
+     `.deckrail a { writing-mode: sideways-lr }`, ported field-for-field
+     (the build had drawn `vertical-rl` here, rotating the letters the
+     opposite way round). The in-view name grows and brightens in the
+     same beat as the roll. -->
 <nav class="roll-rail" aria-label="The deck">
   {#each cards as card, i (card.key)}
     <button
@@ -155,6 +204,21 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
+    /* #689: a positioning context, not just a clip. Without this, a
+       descendant that is `position: absolute` with no offset of its own
+       (an sr-only live region, say) falls back to its CSS "static
+       position" -- computed from the full *unclipped* flow height of
+       whatever comes before it, ignoring every overflow:hidden/auto
+       ancestor on the way. With no positioned ancestor between here and
+       <html>, that static position becomes real document coordinates,
+       so a scene whose content wants to be much taller than the
+       viewport (a chart, a long table) before it is clipped stretches
+       document.scrollingElement.scrollHeight to match -- the deck's own
+       rail stays fixed and visible while everything else scrolls away
+       under it, exactly the "nothing but the rail" defect reported.
+       This is the one wrapper every scene shares, so it is the one
+       place to close the gap rather than chasing it per scene. */
+    position: relative;
   }
 
   .card-body {
@@ -162,7 +226,16 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    padding: 0 14px 14px;
+    /* #721: six reports across four scenes turned out to be one missing
+       constraint (content crowding .roll-rail below), fixed per-scene by
+       hand or not at all. Reserved here instead, once, for every card's
+       content -- see app.css's --deck-rail-gutter for where its value
+       comes from. Every scene's own component (Metrics*, LiveTable,
+       Flags/Docket) fills this box with ordinary flow width, no
+       `position: absolute` escaping to the card's own edge (see
+       LiveTable.svelte's .table-wrap comment), so this padding reaches
+       all of them without any of them needing their own copy. */
+    padding: 0 var(--deck-rail-gutter, 36px) 14px 14px;
     min-height: 0;
   }
 
@@ -180,7 +253,7 @@
   }
 
   .rail-name {
-    writing-mode: vertical-rl;
+    writing-mode: sideways-lr;
     background: transparent;
     border: none;
     padding: 2px;

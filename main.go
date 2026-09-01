@@ -16,12 +16,24 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	// The IANA zone database, compiled in as a fallback (#680). A watch
+	// window is stored as a zone name, and Go only falls back to this copy
+	// when the host has no zoneinfo of its own -- so where tzdata exists
+	// (including the distroless image this ships in) nothing changes.
+	//
+	// It is here because of what the alternative failure looks like: a
+	// window whose zone will not load records no nights at all, silently.
+	// The watch would keep saying "watching" while its nightly memory
+	// quietly stopped filling, which is precisely the shape of failure
+	// this project refuses -- an absence of ours that reads as calm.
+	_ "time/tzdata"
 
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/audit"
@@ -1007,8 +1019,11 @@ func main() {
 			State:    engineState,
 		},
 		Expectations: engine.ExpectationDeps{
-			Members:      routerState,
-			Sink:         engine.MatchlogSink(matchLog),
+			Members: routerState,
+			// The night recorder is the definitions store itself: a
+			// match that reaches the log marks the watch night it landed
+			// in as kept, on the entry (#680).
+			Sink:         engine.MatchlogSinkWithNights(matchLog, definitions),
 			Observations: definitions,
 		},
 		Flags:      fs,
@@ -1313,9 +1328,26 @@ func main() {
 		})
 	}
 
+	// persistenceInfo (issue #677's settings persistence row) states
+	// which backend the storage decision above (persistence.pool) actually
+	// resolved to, rather than re-deriving a guess from cfg.Postgres.DSNFile
+	// independently. Dir is internal/auth's own configured StorePath's
+	// directory: accounts are the one store mikroview insists on
+	// persisting (see cfg.Auth.StorePath's validation above), so it is
+	// non-empty whenever the file backend is actually in use, unlike
+	// e.g. Flags.StorePath, which is deliberately optional.
+	persistenceInfo := api.PersistenceInfo{Backend: "postgres"}
+	if persistence.pool == nil {
+		persistenceInfo.Backend = "file"
+		if cfg.Auth.StorePath != "" {
+			persistenceInfo.Dir = filepath.Dir(cfg.Auth.StorePath)
+		}
+	}
+
 	srv := &api.Server{
 		Store:             st,
 		Devices:           devices,
+		MACRegistry:       macRegistry,
 		Setup:             setupStore,
 		Hub:               h,
 		Reputation:        rep,
@@ -1353,6 +1385,7 @@ func main() {
 		Version:           version,
 		ThirdPartyNotices: thirdPartyNotices,
 		ConfigProblems:    configProblems,
+		Persistence:       persistenceInfo,
 	}
 
 	rootMux := http.NewServeMux()
@@ -2280,12 +2313,20 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	// scored" contract as Flag.Confidence's nil case. The target is a
 	// MAC, not an IP, so -- same as TypeRuleSpike's rule-label target --
 	// there's no meaningful Country to attach either.
-	if parsed.SrcMAC != "" && macRegistry.Seen(parsed.SrcMAC, rm.RecvTime) {
-		detail := fmt.Sprintf("first traffic seen from MAC %s", parsed.SrcMAC)
-		if parsed.SrcIP != "" {
-			detail = fmt.Sprintf("first traffic seen from MAC %s (source IP %s)", parsed.SrcMAC, parsed.SrcIP)
+	if parsed.SrcMAC != "" {
+		if macRegistry.Seen(parsed.SrcMAC, rm.RecvTime) {
+			detail := fmt.Sprintf("first traffic seen from MAC %s", parsed.SrcMAC)
+			if parsed.SrcIP != "" {
+				detail = fmt.Sprintf("first traffic seen from MAC %s (source IP %s)", parsed.SrcMAC, parsed.SrcIP)
+			}
+			fs.Add(flags.TypeNewDevice, parsed.SrcMAC, detail, rm.RecvTime)
 		}
-		fs.Add(flags.TypeNewDevice, parsed.SrcMAC, detail, rm.RecvTime)
+		// Pairs this MAC with the IP it's currently answering to (issue
+		// #675) -- orthogonal to the new-device check above, so it runs
+		// on every event carrying a MAC, not just the first one ever seen.
+		if parsed.SrcIP != "" {
+			macRegistry.NoteIP(parsed.SrcMAC, parsed.SrcIP)
+		}
 	}
 
 	e := store.Event{
