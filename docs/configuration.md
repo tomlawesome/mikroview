@@ -1599,6 +1599,17 @@ split out of the bottom of the Flags page (issue #207) because
 reviewing exclusions underneath a list of hundreds of active flags was
 a pain.
 
+> **Not on screen at the moment.** The flags tab was rebuilt to its
+> ratified round-29 design in #688, which draws a five-column table with
+> drawers and gives no place to the split Clear control or the
+> Exclusions tab. Both were taken off the tab rather than squeezed into
+> it, and are on #688's gap list to be placed properly. Nothing about
+> the endpoints, the audit-log entries or the exclusion behaviour
+> described above has changed -- `POST /api/flags/{id}/clear-permanent`
+> and the exclusion list API work exactly as written; only the buttons
+> that reached them are absent. The drawer's **clear with a note**
+> action is the plain clear, and it still records the note.
+
 ## New-device detection (optional, on by default)
 
 Raises a `new_device` flag the first time mikroview ever sees a given

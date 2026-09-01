@@ -15,25 +15,21 @@
 //  2. "Tuning unfolds, it does not navigate" -- the detector bench opens
 //     from detection's tune row and the page must still be Settings
 //     afterwards, the bench folded in place rather than routed to.
-//  3. The viewer grammar: #657 gave the room `edit: true`, retiring
-//     #490's viewer-readable settings page -- there is no page left for
-//     a viewer to read partially, so the claim collapses to "the row is
-//     truly gone from a viewer's own menu, and their session never even
-//     *asks* for the account list" (GET /api/auth/users is admin-only by
-//     the owner's ruling of 2026-08-24, so a viewer issuing it would be
-//     a page that loads and immediately 403s). The reduced-but-signed-in
-//     experience the room still offers -- both doors gone, everything
-//     else fully interactive -- belongs to the `user` tier now, and is
-//     covered end to end in live-viewer-surfaces.mjs.
+//  3. The viewer grammar: chip declared once, affordances absent rather
+//     than disabled, the people door absent entirely -- and, the part no
+//     DOM assertion covers, a viewer's session never even *asks* for the
+//     account list. GET /api/auth/users is admin-only by the owner's
+//     ruling of 2026-08-24, so a viewer issuing it would be a page that
+//     loads and immediately 403s.
 
-import { chromium } from 'playwright'
-import { session, feedSyslog, check, done, goTo, openAccountMenu } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session({ waitForEvents: 40 })
 
 const PEOPLE = '.door:has-text("Who may look in")'
+const MACHINES = '.door:has-text("Which machines may speak")'
 
 await goTo(page, 'Settings')
 await page.waitForFunction(
@@ -151,23 +147,33 @@ await page.waitForSelector('.bench', { state: 'detached' })
 check(true, 'closing the bench folds it away and the page is whole again')
 
 // --- Claim 3: the viewer grammar ----------------------------------------
-// #657 retired #490's viewer-readable settings page (the room carries
-// `edit: true` now, gated to the user tier), so there is no page left
-// for a viewer to open here at all -- goTo(page, 'Settings') would hang
-// forever waiting for a menu row that no longer exists. What is left of
-// "the viewer grammar" for this room is that the row is truly gone from
-// a viewer's own menu, and that their session never even asks for data
-// the page would have fetched.
 
 const VIEWER_USER = 'live-viewer-490'
 const VIEWER_PASS = 'live-viewer-490-password'
+
+// A key for the viewer to read at the machines door. Minted through the
+// API rather than the door's own form on purpose: whether the form works
+// is live-token-ui.mjs's question, and this scenario must not depend on
+// the list happening to be non-empty -- it is not. Every scenario that
+// mints one also revokes it, and this one runs before all of them, so
+// without this the door is legitimately empty and the check below would
+// be asserting on leftovers.
+const minted = await page.request
+  .post(`${URL_BASE}/api/tokens`, {
+    // The same header the app's own writes send -- the server's
+    // cross-origin guard refuses a state-changing request without it.
+    headers: { 'X-Requested-With': 'mikroview' },
+    data: { name: 'engine-room-door-read', kind: 'api' },
+  })
+  .then((r) => (r.ok() ? r.json() : null))
+check(minted !== null, 'a key exists for the viewer to read at the machines door')
 
 await page.click(`${PEOPLE} .footer-action`)
 await page.waitForSelector(`${PEOPLE} .inline-form`)
 await page.fill(`${PEOPLE} .inline-form input[type="text"]`, VIEWER_USER)
 await page.fill(`${PEOPLE} .inline-form input[type="password"]`, VIEWER_PASS)
 // #653: the door creates a "can change things" account by default, so
-// the viewer tier this claim is about has to be chosen explicitly --
+// the read-only tier this claim is about has to be chosen explicitly --
 // which also drives the selector itself, since without it the viewer
 // tier has no route in from the UI at all.
 await page.selectOption(`${PEOPLE} .inline-form select`, 'viewer')
@@ -178,12 +184,13 @@ check(
   'the people door marks the new account as read-only',
 )
 
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const viewerPage = await viewerCtx.newPage()
 
 // Attached before the first navigation, so it sees every request the
-// viewer's session makes from sign-in onwards.
+// viewer's session makes from sign-in onwards -- not only the ones after
+// Settings opens.
 const viewerRequests = []
 viewerPage.on('request', (r) => viewerRequests.push(r.url()))
 
@@ -193,23 +200,78 @@ await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
 await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 
-await openAccountMenu(viewerPage)
-const viewerMenu = await viewerPage.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
-check(
-  !viewerMenu.includes('Settings'),
-  `Settings is absent from a viewer's menu (#657) -- the room exists to change things, and a viewer cannot -- got ${JSON.stringify(viewerMenu)}`,
+await goTo(viewerPage, 'Settings')
+await viewerPage.waitForFunction(
+  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
+  null,
+  { timeout: 5000 },
 )
-await viewerPage.keyboard.press('Escape')
-await viewerPage.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+check(true, 'a viewer can open Settings -- the one Admin-group page that is readable')
+
+const chips = await viewerPage.$$eval('.page-header .chip', (els) => els.map((e) => e.textContent.trim()))
+check(
+  // #653: the chip names no tier any more -- with three of them,
+  // "ADMINS EDIT" was wrong in both directions, and it only ever renders
+  // for someone who cannot edit the page anyway.
+  JSON.stringify(chips) === JSON.stringify(['READ-ONLY']),
+  `read-only is declared exactly once, in the page header -- got ${JSON.stringify(chips)}`,
+)
+
+const viewerDoors = await viewerPage.$$eval('.doors .door .dname', (els) => els.map((e) => e.textContent.trim()))
+check(
+  JSON.stringify(viewerDoors) === JSON.stringify(['Which machines may speak']),
+  `the people door is absent for a viewer, not read-only and not empty -- got ${JSON.stringify(viewerDoors)}`,
+)
 
 check(
   !viewerRequests.some((u) => u.includes('/api/auth/users')),
   'a viewer never even asks for the account list -- the request that would 403 is not issued at all',
 )
 
+// Absent, never disabled: the letter of the grammar. A greyed-out Revoke
+// would satisfy "cannot edit" while breaking the rule the record is
+// actually about.
+check(
+  (await viewerPage.$$(`${MACHINES} .verb`)).length === 0,
+  'Mint and Revoke are absent at the machines door for a viewer',
+)
+const viewerDisabled = await viewerPage.$$eval('.page button, .page input', (els) =>
+  els.filter((e) => e.disabled).length,
+)
+check(viewerDisabled === 0, `nothing on the page is rendered disabled for a viewer -- got ${viewerDisabled}`)
+
+// The facts survive without the handles: a viewer still reads which
+// machines may speak and what every detector is doing, in words.
+check(
+  await viewerPage
+    .locator(`${MACHINES} .row:has-text("engine-room-door-read")`)
+    .waitFor({ timeout: 10000 })
+    .then(() => true, () => false),
+  'a viewer still reads which machines may speak -- the key is named, with its verbs gone',
+)
+await viewerPage.click('.olink:has-text("tune")')
+await viewerPage.waitForSelector('.bench .row')
+check((await viewerPage.$$('.bench .cbx')).length === 0, 'the run/pause checkboxes are absent for a viewer')
+check((await viewerPage.$$('.bench .scope-knob')).length === 0, 'the scope knobs are absent for a viewer')
+const states = await viewerPage.$$eval('.bench .state', (els) => els.map((e) => e.textContent.trim()))
+check(
+  states.length > 0 && states.every((s) => s === 'running' || s === 'paused'),
+  `every detector's state survives as a word for a viewer -- got ${JSON.stringify(states.slice(0, 4))}`,
+)
+const scopeFacts = await viewerPage.$$eval('.bench .scope-fact', (els) => els.length)
+check(scopeFacts > 0, 'a scope reads as a sentence for a viewer rather than vanishing with its knob')
+
+const viewerConsole = []
+viewerPage.on('console', (m) => m.type() === 'error' && viewerConsole.push(m.text()))
 await browser.close()
 
 // --- Clean up: this account should not outlive the scenario -------------
+
+if (minted?.id) {
+  await page.request.delete(`${URL_BASE}/api/tokens/${minted.id}`, {
+    headers: { 'X-Requested-With': 'mikroview' },
+  })
+}
 
 page.on('dialog', (d) => d.accept())
 await page.click(`${PEOPLE} .row:has-text("${VIEWER_USER}") .verb`)

@@ -33,12 +33,12 @@ describe('Fleet Loading and first-run empty states (#549)', () => {
     expect(container.querySelector('.empty')).toBeNull()
   })
 
-  it('points an admin at Admin ▸ Run setup… once settled with no devices ever seen', () => {
+  it('points an admin at your account menu ▸ Run setup… once settled with no devices ever seen', () => {
     authState.role = 'admin'
     const { container } = render(Fleet)
     flushSync()
 
-    expect(container.querySelector('.empty')?.textContent).toMatch(/Admin ▸ Run setup…/)
+    expect(container.querySelector('.empty')?.textContent).toMatch(/your account menu ▸ Run setup…/)
   })
 
   it('tells a viewer to ask an administrator instead', () => {

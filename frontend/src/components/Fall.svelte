@@ -6,11 +6,14 @@
   // 2026-08-29 review on #616. Visual reference:
   // docs/design/concepts/round-3/direction-o-waterfall.html, scene 1
   // only. The rig below is that scene's own SVG — its coordinate
-  // system (a 76px time rail, 160px band pitch, spectrum baseline at
-  // y=170, NOW at y=186, the fall pouring y=196..760), its class
-  // vocabulary (.blab/.bsub/.plab/.spec/.anno/.tlab/.darkband/.horizon)
-  // and its CSS values move across from the mockup as-is; only the
-  // coordinates are computed from live data instead of being hand-drawn.
+  // system (a 76px time rail, spectrum baseline at y=170, NOW at y=186,
+  // the fall pouring y=196..760), its class vocabulary (.blab/.bsub/
+  // .plab/.spec/.anno/.tlab/.darkband/.horizon) and its CSS values move
+  // across from the mockup as-is; only the coordinates are computed from
+  // live data instead of being hand-drawn. The band pitch that scene's
+  // own SVG used (a fixed 160 units) is no longer fixed -- #722 gives it
+  // a sizing policy instead, read from round 30's own mockup; see the
+  // "Band sizing policy" comment below.
   // Where the record's plain vocabulary contradicts the mockup's radio
   // ambience ("no antenna"), the record wins: dark bands say "nothing is
   // logged".
@@ -32,11 +35,7 @@
   import { lookupPort } from '../lib/commonPorts'
   import type { ClientEvent, Flag } from '../lib/types'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
-  import UptimeBadge from './UptimeBadge.svelte'
-  import DeviceStatus from './DeviceStatus.svelte'
-
-  // The key is reference, not chrome: hidden until asked for.
-  let showKey = $state(false)
+  import AlarmCluster from './AlarmCluster.svelte'
 
   // Bucket counts scale with the span so a ~64s knock still reads as
   // distinct dashes: 60 buckets at 15m is 15s/bucket. `railStep` is the
@@ -54,10 +53,21 @@
   // as individual marks; the rest fold into "+n quieter".
   const MAX_CARRIERS = 8
 
+  // The following three surfaces are implemented and load-bearing (the
+  // data behind them is real), but the ratified round-30 mockup
+  // (docs/design/concepts/round-30/shots/fall.png, the-whole.html #s2)
+  // draws none of them anywhere on the fall -- an empty band is simply
+  // empty, a quiet carrier count folds silently, and the window range
+  // is not printed in the bottom-right corner. Round 30 builds to the
+  // mockup first (#700); each gap is tracked on #691 for a future round
+  // to remount. Do not delete these -- flip the relevant const and
+  // restore the markup below when #691 is picked up.
+  const EMPTY_BAND_CAPTION_ENABLED: boolean = false
+  const QUIETER_COUNT_ENABLED: boolean = false
+  const WINDOW_RANGE_CAPTION_ENABLED: boolean = false
+
   // ── The mockup's own geometry, in its own units ─────────────────────
   const RAIL = 76 // left time rail width
-  const BAND_W = 150 // a band's drawable width
-  const PITCH = 160 // band slot pitch (150 + 10 gutter)
   const SPEC_TOP = 62 // spectrum strip top
   const SPEC_BASE = 170 // spectrum baseline
   const NOW_Y = 186 // the NOW line
@@ -67,6 +77,50 @@
   const RIG_H = 800
   const DASH_W = 2.4 // a carrier dash's width — thin, never a fill
   const HIT_W = 14 // a carrier's invisible click/focus target width
+
+  // ── Band sizing policy (#722): an ideal width, elastic within limits,
+  // and pages beyond them ─────────────────────────────────────────────
+  // Before this, the rig gave every band a fixed 160-unit slot but drew
+  // its svg at `width: 100%` -- so the viewBox (which grows with the
+  // band count) always got rescaled to fit the same pixel width, which
+  // is exactly "divide the available width by however many there are"
+  // in disguise. At 16 boundaries the titles overlapped outright
+  // (#709's seeding took the fall from 3 bands to 16). The fix below
+  // gives the svg an intrinsic pixel size (see `rig`'s `width`/`height`
+  // attributes in the template) so a band's width is chosen on purpose,
+  // never a side effect of how many neighbours it has.
+  //
+  // Read off round 30's own mockup (docs/design/concepts/round-30/
+  // shots/fall.png; markup the-whole.html section #s2), which draws the
+  // comfortable case: nine bands across the frame. That mockup's own rig
+  // is a 1400×560 viewBox rendered into a 1600px-wide frame (scale
+  // 1600/1400 = 8/7); its nine band headers sit on a 150-unit pitch --
+  // compare consecutive `.bh-name` label x's: 120, 270, 420, … 1320,
+  // each 150 apart. Scaled to the real frame that pitch is the
+  // "comfortable" figure below.
+  const IDEAL_PITCH = 171 // 150 × 8/7 ≈ 171.4 -- the mockup's own 9-band pitch at 1600px wide
+  // Too few to fill the frame: bands may stretch past the ideal, but
+  // capped so two (or one) boundaries never draw two comically wide
+  // columns (owner's own wording). The mockup has no few-boundary scene
+  // to measure, so this is chosen rather than read: roughly double the
+  // ideal, wide enough to look deliberate without reading as a poster.
+  const MAX_PITCH = 340
+  // Slightly too many: shrink by "a very small amount" (owner) before
+  // giving up and paginating -- about 88% of the ideal, enough give to
+  // fit a couple more boundaries onto one page without the scene
+  // reading cramped. Below this floor the policy stops shrinking and
+  // pages instead.
+  const MIN_PITCH = 150
+  const GUTTER = 10 // the shipped rig's own band-to-band gutter -- unchanged, not part of this issue
+  // Only used to size a carrier's invisible click target (below) before
+  // the render pass has counted this page's bands and settled on a real
+  // pitch; imprecision here only affects a hit-target's width slightly,
+  // never anything drawn.
+  const NOMINAL_BAND_W = IDEAL_PITCH - GUTTER
+  // jsdom (tests) and the very first paint report a 0 clientWidth before
+  // layout has run; 1600 is both this issue's own verification width and
+  // a reasonable fallback meanwhile.
+  const DEFAULT_FRAME_W = 1600
 
   let span = $state<SpanId>('15m')
   let flags = $state<Flag[]>([])
@@ -318,7 +372,7 @@
         // 0-100 band space → band units happens at render; keep the
         // target no wider than the gap to its neighbour so an overlapped
         // target never steals its neighbour's clicks.
-        const hitW = Math.max(DASH_W + 1, Math.min(HIT_W, (nearest / 100) * BAND_W))
+        const hitW = Math.max(DASH_W + 1, Math.min(HIT_W, (nearest / 100) * NOMINAL_BAND_W))
         return { ...c, x: xs[i], hitW }
       })
       return { carriers: withX, quieterCount: Math.max(0, all.length - MAX_CARRIERS) }
@@ -404,9 +458,170 @@
 
   const allBands = $derived(bandsData)
   const darkBands = $derived(allBands.filter((b) => b.coverage === 'dark'))
-  const isCalm = $derived(!windowLoading && !windowError && allBands.length > 0 && darkBands.length === 0)
+  // One boundary, one colour, everywhere: shared by the rig's band-head
+  // underlines and the overview strip's ticks below, the same lane map
+  // the atlas overlay's zones draw from (fall.svelte.ts's laneColors) --
+  // computed once here rather than separately in each consumer.
+  const laneMap = $derived(laneColors(allBands))
 
-  // ── Rig layout: every band gets the mockup's 160-unit slot ──────────
+  // ── Sizing policy budget: apply the policy above ────────────────────
+  // `.rig`'s own measured width (see `bind:clientWidth` in the template)
+  // -- the real budget the policy divides up, falling back to
+  // DEFAULT_FRAME_W before the first layout pass (or under jsdom).
+  let rigW = $state(0)
+  const containerWidth = $derived(rigW || DEFAULT_FRAME_W)
+  const bandsAreaW = $derived(Math.max(0, containerWidth - RAIL - 4))
+
+  // The most boundaries a single window can hold, packed as tight as the
+  // shrink floor (MIN_PITCH) allows -- past this count the policy stops
+  // shrinking and windows instead.
+  const maxPerPage = $derived(Math.max(1, Math.floor(bandsAreaW / MIN_PITCH)))
+  const totalPages = $derived(allBands.length === 0 ? 1 : Math.max(1, Math.ceil(allBands.length / maxPerPage)))
+  // Boundaries per window, spread evenly across `totalPages` (never the
+  // lopsided "15 in the first window, 1 in the second" the owner ruled
+  // out) -- unchanged from #722: this still decides the window's size
+  // and the pitch below, only how the window's *position* moves is new
+  // (see "The window" below).
+  const perPage = $derived(allBands.length === 0 ? 0 : Math.ceil(allBands.length / totalPages))
+
+  // ── The window: which contiguous slice of the estate is drawn ───────
+  // #722 gave the fall a pager that flipped between whole, non-
+  // overlapping pages. The owner ruled that out (2026-08-31, issue
+  // #722 amendment: "We need a better way to switch between pages
+  // anyway as I dont like it") for a single freely positioned window:
+  // `viewStart` is the index of the first boundary currently drawn,
+  // not a page number, and can sit anywhere from 0 to `maxStart` rather
+  // than jumping in whole `perPage` steps. This is the one place the
+  // windowing maths above had to change: `pageBands` no longer
+  // partitions the estate into non-overlapping `perPage`-sized chunks
+  // (which is what made the old last page lopsided when the count
+  // didn't divide evenly) -- it always slices exactly `perPage`
+  // boundaries starting at `viewStart`, so every reachable window is
+  // the same width, never a shrunken remainder. `maxPerPage`,
+  // `totalPages` and `perPage` themselves are untouched.
+  const maxStart = $derived(Math.max(0, allBands.length - perPage))
+
+  let viewStart = $state(0)
+  $effect(() => {
+    // Clamp when the estate shrinks (or the frame narrows, shrinking
+    // maxPerPage) pulls maxStart below the current viewStart -- the
+    // same job the old pager's page-clamp effect did. Never reads or
+    // sets viewStart when it's already in range, so this can't loop.
+    if (viewStart > 0 && viewStart > maxStart) viewStart = maxStart
+  })
+
+  const pageBands = $derived.by(() => {
+    if (allBands.length === 0) return []
+    return allBands.slice(viewStart, viewStart + perPage)
+  })
+
+  function clampStart(n: number): number {
+    return Math.min(maxStart, Math.max(0, n))
+  }
+
+  // The strip's own value text: the one place a screen reader learns
+  // which boundaries are actually drawn, since the strip itself carries
+  // no visible words (round 30 README §5, "no apparatus ... anywhere").
+  const stripValueText = $derived.by(() => {
+    if (allBands.length === 0) return ''
+    const from = viewStart + 1
+    const to = Math.min(allBands.length, viewStart + perPage)
+    return `showing boundaries ${from} to ${to} of ${allBands.length}`
+  })
+
+  let stripEl = $state<HTMLDivElement | undefined>()
+  const STRIP_WHEEL_STEP_PX = 60 // sideways scroll distance that shifts the window by one boundary
+  let wheelCarry = 0
+
+  // #731: the only state the affordance work needs -- whether a drag is
+  // currently in progress, so the cursor can read "grabbing" instead of
+  // "grab" while it is. Nothing else about the drag logic below changes.
+  let stripDragging = $state(false)
+
+  // A drag and a plain click land in the same place: the lit segment
+  // centres on the pointer immediately (satisfying "click anywhere
+  // moves the window there"), and staying down and moving keeps
+  // recentring it underneath the pointer (the drag).
+  function viewStartFromClientX(clientX: number): number {
+    if (!stripEl || maxStart <= 0) return 0
+    const rect = stripEl.getBoundingClientRect()
+    const trackW = Math.max(1, rect.width)
+    const thumbFrac = Math.min(1, (perPage || 1) / Math.max(1, allBands.length))
+    const thumbPx = trackW * thumbFrac
+    const maxLeft = Math.max(1, trackW - thumbPx)
+    const desiredLeft = clientX - rect.left - thumbPx / 2
+    const frac = Math.min(1, Math.max(0, desiredLeft / maxLeft))
+    return clampStart(Math.round(frac * maxStart))
+  }
+
+  function onStripPointerMove(e: PointerEvent) {
+    viewStart = viewStartFromClientX(e.clientX)
+  }
+  function onStripPointerUp() {
+    stripDragging = false
+    window.removeEventListener('pointermove', onStripPointerMove)
+    window.removeEventListener('pointerup', onStripPointerUp)
+  }
+  function onStripPointerDown(e: PointerEvent) {
+    if (maxStart <= 0) return
+    stripEl?.focus()
+    stripDragging = true
+    viewStart = viewStartFromClientX(e.clientX)
+    window.addEventListener('pointermove', onStripPointerMove)
+    window.addEventListener('pointerup', onStripPointerUp, { once: true })
+    e.preventDefault()
+  }
+
+  function onStripKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      viewStart = clampStart(viewStart - 1)
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      viewStart = clampStart(viewStart + 1)
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      viewStart = 0
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      viewStart = maxStart
+    }
+  }
+
+  // Sideways scroll over the rig pans the window too -- but only once
+  // there is somewhere to pan (maxStart > 0), and only in the direction
+  // that still has room: at either edge a further swipe the same way is
+  // left alone, so the browser's own back/forward swipe gesture still
+  // fires there instead of being eaten by this control.
+  function onRigWheel(e: WheelEvent) {
+    if (maxStart <= 0) return
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return
+    const dir = e.deltaX > 0 ? 1 : -1
+    if ((dir > 0 && viewStart >= maxStart) || (dir < 0 && viewStart <= 0)) return
+    e.preventDefault()
+    wheelCarry += e.deltaX
+    while (Math.abs(wheelCarry) >= STRIP_WHEEL_STEP_PX) {
+      const step = wheelCarry > 0 ? 1 : -1
+      viewStart = clampStart(viewStart + step)
+      wheelCarry -= step * STRIP_WHEEL_STEP_PX
+    }
+  }
+
+  // The pitch this page actually renders at: stretch toward MAX_PITCH
+  // when there's slack, sit at IDEAL_PITCH (or above) when the count is
+  // comfortable, or give a little (down to MIN_PITCH) when it's
+  // slightly over -- `perPage`, not the page's own possibly-smaller
+  // last-page count, so every page in a paginated fall draws its bands
+  // at the same size.
+  const pitch = $derived.by(() => {
+    const n = perPage || 1
+    const natural = bandsAreaW / n
+    if (natural >= IDEAL_PITCH) return Math.min(MAX_PITCH, natural)
+    return Math.max(MIN_PITCH, natural)
+  })
+  const bandW = $derived(Math.max(20, pitch - GUTTER))
+
+  // ── Rig layout: every band on this page gets its own pitch-wide slot ─
   interface BandSlot {
     band: BandView
     bx: number // band's left edge in rig units
@@ -414,22 +629,20 @@
   }
 
   const rig = $derived.by(() => {
-    const n = allBands.length
-    const width = RAIL + n * PITCH + 4
-    // One boundary, one colour, everywhere: the same lane map the atlas
-    // overlay's zones draw from.
-    const lanes = laneColors(allBands)
-    const slots: BandSlot[] = allBands.map((band, i) => ({
+    const slotsSource = pageBands
+    const n = slotsSource.length
+    const width = RAIL + n * pitch + 4
+    const slots: BandSlot[] = slotsSource.map((band, i) => ({
       band,
-      bx: RAIL + i * PITCH,
-      laneColor: lanes.get(band.key) || 'var(--o-ink3)',
+      bx: RAIL + i * pitch,
+      laneColor: laneMap.get(band.key) || 'var(--o-ink3)',
     }))
     return { width, slots }
   })
 
   // A carrier's x within the rig.
   function cx(slot: BandSlot, c: Carrier): number {
-    return slot.bx + 10 + (c.x / 100) * (BAND_W - 20)
+    return slot.bx + 10 + (c.x / 100) * (bandW - 20)
   }
 
   // ── The time rail: gridlines at the span's own step ─────────────────
@@ -458,6 +671,21 @@
   }
 
   // ── The spectrum: one needle per carrier arriving this instant ──────
+  // A needle's climb is capped so even the busiest carrier's peak (and
+  // its label, and the curve's own overshoot past its tip -- see
+  // wavePath) never reaches into the band head above: SPEC_TOP is the
+  // head's own bottom edge, and its coloured bar (the `rect` at
+  // y=56..59 in the template) sits just inside it. peakLabels puts a
+  // label's baseline 8px above the tip; a label has no descenders here
+  // (port labels are digits and capitals) but its own ascender still
+  // runs another ~8px above that baseline. Reserving 20 units of
+  // headroom above SPEC_TOP for the tallest possible tip clears both
+  // the label's own rendered top and the curve's overshoot, with a
+  // margin to spare. Not compared against the mockup's own peak heights:
+  // #s2 draws its spectra on a 128 baseline, a different frame from this
+  // scene's 170, so its raw coordinates say nothing about ours.
+  const SPEC_CLIMB_MIN = 24 // a barely-active carrier's needle
+  const SPEC_CLIMB_MAX = SPEC_BASE - (SPEC_TOP + 20) // the busiest carrier's needle
   interface Needle {
     x: number
     tipY: number
@@ -471,10 +699,32 @@
       .filter((c) => c.buckets[0].total > 0)
       .map((c) => ({
         x: cx(slot, c),
-        tipY: SPEC_BASE - (24 + (c.buckets[0].total / b.nowMax) * 72),
+        tipY: SPEC_BASE - (SPEC_CLIMB_MIN + (c.buckets[0].total / b.nowMax) * (SPEC_CLIMB_MAX - SPEC_CLIMB_MIN)),
         lane: dominantLane(c.buckets[0]),
         port: c.port,
       }))
+  }
+
+  // A wave, not a tent (#650, round 21/22): a smooth mound with soft
+  // skirts that meets the baseline at both ends but never draws it --
+  // the two cubics climb from base to the shoulder of the peak, and a
+  // shallow quadratic caps it. No fill: the line is the only coloured
+  // bit (round 22, owner).
+  function wavePath(n: Needle): string {
+    const halfW = 8
+    const x0 = n.x - halfW
+    const x1 = n.x + halfW
+    const h = SPEC_BASE - n.tipY
+    const cap = halfW * 0.18
+    const overshoot = h * 0.1
+    const shoulderX = halfW * 0.55
+    const shoulderY = SPEC_BASE - h * 0.6
+    return (
+      `M ${x0},${SPEC_BASE} ` +
+      `C ${x0 + halfW * 0.41},${SPEC_BASE - 1} ${x0 + shoulderX},${shoulderY} ${n.x - cap},${n.tipY} ` +
+      `Q ${n.x},${n.tipY - overshoot} ${n.x + cap},${n.tipY} ` +
+      `C ${x1 - shoulderX},${shoulderY} ${x1 - halfW * 0.41},${SPEC_BASE - 1} ${x1},${SPEC_BASE}`
+    )
   }
 
   // Peak labels, culled so neighbours never collide: strongest first,
@@ -490,14 +740,30 @@
     const kept: typeof cands = []
     for (const c of cands) {
       const w = c.text.length * 6.2
-      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 6 && Math.abs(k.y - c.y) < 11)) continue
+      // Round 30 places one label above each curve, never stacked on
+      // another (#700) -- the build's own 11-unit vertical tolerance was
+      // tight enough that two peaks differing in height by just over
+      // that still rendered close enough for a 10px label (which draws
+      // roughly a full line's height either side of its baseline) to
+      // visibly overlap. Widened to a margin that actually clears a
+      // label's own rendered height, alongside a slightly wider
+      // horizontal gap.
+      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 8 && Math.abs(k.y - c.y) < 15)) continue
       kept.push(c)
     }
     return kept
   })
 
   // Port labels under the floor, culled the same way (heaviest carrier
-  // keeps its label; a crowded band folds the rest).
+  // keeps its label; a crowded band folds the rest) -- but only ever
+  // against another candidate on the *same* band (#700). Comparing
+  // across bands let a heavy carrier on one boundary silently suppress
+  // a lighter one several bands away whenever the two candidates'
+  // absolute x (adjacent bands sit only pitch-bandW apart, i.e. one
+  // gutter) happened to
+  // fall inside the text-width gap, which is how the build ended up
+  // labelling only a couple of ports total instead of every band along
+  // the foot.
   const portLabels = $derived.by(() => {
     const cands: { x: number; text: string; lane: Lane; port: number; bandKey: string; w: number }[] = []
     for (const slot of rig.slots) {
@@ -510,7 +776,7 @@
     const kept: typeof cands = []
     for (const c of cands) {
       const w = c.text.length * 6.2
-      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 4)) continue
+      if (kept.some((k) => k.bandKey === c.bandKey && Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 4)) continue
       kept.push(c)
     }
     return kept
@@ -527,22 +793,61 @@
     return list
   })
 
-  // The attention chips: one per flag type in the window, carrying the
-  // count and the most recent moment -- never one chip per flag.
+  // The same identity join bandsData's own flagsByKey uses (a flag names
+  // only its target IP; the boundary it belongs to is whichever band
+  // that IP actually appeared on this window) -- kept as its own
+  // derived, independent of the per-bucket pass above, so flagChips can
+  // resolve a boundary label without being tied to bandsData's window
+  // gating.
+  const ipToBoundaryKey = $derived.by(() => {
+    const knownKeys = new Set(fallState.boundaries.map((b) => b.key))
+    const m = new Map<string, string>()
+    for (const e of windowEvents) {
+      const key = boundaryKeyOf(e.chain, e.inInterface, e.outInterface)
+      if (!knownKeys.has(key)) continue
+      if (e.srcIp && !m.has(e.srcIp)) m.set(e.srcIp, key)
+      if (e.dstIp && !m.has(e.dstIp)) m.set(e.dstIp, key)
+    }
+    return m
+  })
+
+  // The attention chips: one per flag type among every currently open
+  // (uncleared) flag -- deliberately independent of the visible span.
+  // Round 30's own defect (#700): the build derived these from
+  // flagHorizons, which only ever carries flags whose firstSeen falls
+  // inside the current window AND whose target IP happened to appear in
+  // that same window's events -- so a flag raised more than one span ago
+  // (a `15 m` default is a common case) silently dropped off every chip,
+  // even though the header's own flag count (⚑) is span-independent and
+  // kept counting it. The chips are the fall's restatement of that same
+  // current state, not a narrower one, so they read straight off `flags`
+  // instead. The boundary label (", iot → bridge1") is still
+  // window-scoped best-effort via ipToBoundaryKey above -- omitted, not
+  // guessed, when the flagged IP hasn't produced a matching event in the
+  // window currently loaded.
   const flagChips = $derived.by(() => {
-    const byType = new Map<string, { n: number; y: number; hm: string }>()
-    for (const f of flagHorizons) {
+    const byKeyLabel = new Map(fallState.boundaries.map((b) => [b.key, b.label]))
+    const byType = new Map<string, { n: number; t: number; hm: string; boundaryLabel?: string }>()
+    for (const f of flags) {
+      if (f.cleared) continue
+      const t = new Date(f.firstSeen).getTime()
+      if (Number.isNaN(t)) continue
+      const boundaryKey = ipToBoundaryKey.get(f.target)
+      const boundaryLabel = boundaryKey ? byKeyLabel.get(boundaryKey) : undefined
       const cur = byType.get(f.type)
-      if (!cur) byType.set(f.type, { n: f.n, y: f.y, hm: f.hm })
+      if (!cur) byType.set(f.type, { n: 1, t, hm: formatHM(f.firstSeen), boundaryLabel })
       else {
-        cur.n += f.n
-        if (f.y < cur.y) {
-          cur.y = f.y
-          cur.hm = f.hm
+        cur.n++
+        if (t > cur.t) {
+          cur.t = t
+          cur.hm = formatHM(f.firstSeen)
+          if (boundaryLabel) cur.boundaryLabel = boundaryLabel
         }
       }
     }
-    return [...byType.entries()].map(([type, v]) => ({ type, ...v }))
+    return [...byType.entries()]
+      .sort((a, b) => b[1].t - a[1].t)
+      .map(([type, v]) => ({ type, n: v.n, hm: v.hm, boundaryLabel: v.boundaryLabel }))
   })
 
   function keyActivate(e: KeyboardEvent, fn: () => void) {
@@ -577,39 +882,67 @@
 <div class="fall">
   <div class="bar">
     <span class="wm">MIKRO<em>VIEW</em></span>
-    <h1>The fall</h1>
-    <ConnectionIndicator />
-    <UptimeBadge />
-    <DeviceStatus />
-    <span class="attention" aria-live="polite">
-      {#each flagChips.slice(0, 3) as f, fi (fi)}
-        <button type="button" class="att alarm" onclick={() => (appState.view = 'flags')}>
-          <i></i>{f.type.replace(/_/g, ' ').toUpperCase()}{f.n > 1 ? ` ×${f.n}` : ''} — {f.hm}
-        </button>
-      {/each}
-      {#if darkBands.length > 0}
-        <button type="button" class="att dark" onclick={() => openInStream(darkBands[0])}>
-          <i></i>{darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
-        </button>
-      {:else if isCalm}
-        <span class="att calm"><i></i>every band sounds like itself</span>
-      {/if}
-    </span>
-    <div class="span-control" role="group" aria-label="Time span">
-      <span class="lab">SPAN</span>
-      {#each SPANS as s (s.id)}
-        <button type="button" class="rng" class:on={span === s.id} aria-pressed={span === s.id} onclick={() => (span = s.id)}>
-          {s.label}
-        </button>
-      {/each}
+    <!-- No name and no strap (#697/#700, owner verbatim: "I meant all...
+         No page heading, no strap"). This bar drew its own rather than
+         going through SceneBar, which is how it survived the first
+         sweep. The rail says which card you are on. -->
+    <div class="status-cluster">
+      <!-- The fall's spans ride the status cluster, ahead of LIVE
+           (round 30's README §4), not mid-bar under a SPAN label. -->
+      <div class="span-control" role="group" aria-label="Time span">
+        {#each SPANS as s (s.id)}
+          <button type="button" class="rng" class:on={span === s.id} aria-pressed={span === s.id} onclick={() => (span = s.id)}>
+            {s.label}
+          </button>
+        {/each}
+      </div>
+      <ConnectionIndicator />
+      <AlarmCluster />
+      <AccountMenu />
     </div>
-    <AccountMenu />
   </div>
+
+  <!-- Below the bar, not riding it (#683, round 29: the bar carries only
+       wordmark · name · strap · the page's own control · LIVE·rate ·
+       ⚑ · ◉○ · account -- these per-boundary alerts are the fall's own
+       content, same as .fallwrap's fall-head in the mockup).
+
+       Centred, not left-aligned: the mockup's own `.fall-head` example
+       packs its two chips against the left edge, but the owner asked
+       for the row to sit centred on the scene and fan outward in both
+       directions as chips are added, rather than growing rightward from
+       a fixed left start -- ratified in session on 2026-08-31, beyond
+       what the mockup itself shows. `justify-content: center` on this
+       row (below) is that instruction, not a mockup value. -->
+  <span class="attention" aria-live="polite">
+    {#each flagChips.slice(0, 3) as f, fi (fi)}
+      <button type="button" class="att alarm" onclick={() => (appState.view = 'flags')}>
+        <i></i>{f.type.replace(/_/g, ' ').toUpperCase()}{f.n > 1 ? ` ×${f.n}` : ''} — {f.hm}{f.boundaryLabel
+          ? ` · ${f.boundaryLabel}`
+          : ''}
+      </button>
+    {/each}
+    {#if darkBands.length > 0}
+      <button type="button" class="att dark" onclick={() => openInStream(darkBands[0])}>
+        <i></i>{darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
+      </button>
+    {/if}
+  </span>
 
   {#if fallState.loading}
     <p class="state-msg">Reading pushed firewall rules…</p>
   {:else if fallState.error}
     <p class="state-msg error" role="alert">Could not read the pushed rule tables: {fallState.error}</p>
+  {:else if windowError && windowEvents.length === 0}
+    <!-- #737: a failed window load is not a quiet one. Without this, a
+         fetchEventsWindow failure left every band's traffic at zero,
+         which read exactly like the empty-window state below and like a
+         quiet-but-covered band ("WATCH HOLDING ✓") -- an absence of ours
+         presented as a fact about the network. Only takes over while
+         there is no window data at all: once a load has ever succeeded,
+         a later transient failure still has real (if ageing) events to
+         draw instead of hiding them behind this message. -->
+    <p class="state-msg error" role="alert">Could not load the window: {windowError}</p>
   {:else if allBands.length === 0 && !windowLoading}
     <!-- Unmissable, mid-page: an empty fall must read as waiting, never
          as broken or unbuilt (owner, 2026-08-30). -->
@@ -621,8 +954,63 @@
       </p>
     </div>
   {:else}
-    <div class="rig">
-      <svg viewBox="0 0 {rig.width} {RIG_H}" style="max-width: {rig.width * 1.4}px">
+    <!-- The overview strip (#722 amendment, 2026-08-31): replaces the
+         pager. One tick per boundary in the whole estate -- every one
+         of them, not just the ones currently drawn -- in that
+         boundary's own lane colour; the contiguous run actually drawn
+         (`viewStart` .. `viewStart + perPage`) sits bright, the
+         rest dim. Drag or click anywhere on it to move the window;
+         left/right arrow keys (and Home/End) do the same by keyboard.
+         Along the top of the scene, not the middle, so the fall's own
+         dashed band edges never run through it the way the old pager's
+         arrows did. Never drawn once everything already fits
+         (maxStart === 0), exactly as the old pager never drew when
+         totalPages === 1. No page numbers, no arrows, no words -- round
+         30 README §5, "no apparatus, anywhere" -- the visible range
+         reaches a screen reader only through aria-valuetext. #731 gave
+         it a control's look without adding any of that back: a recessed
+         rail behind the ticks, a light edge on the two ends of the lit
+         run (so the run reads as one thumb, not several bright ticks),
+         a hover response, and a grab/grabbing cursor -- all CSS/state,
+         no new text or markup semantics. -->
+    {#if maxStart > 0}
+      <div
+        class="ovstrip"
+        class:dragging={stripDragging}
+        role="slider"
+        tabindex="0"
+        aria-label="Boundaries shown"
+        aria-orientation="horizontal"
+        aria-valuemin="0"
+        aria-valuemax={maxStart}
+        aria-valuenow={viewStart}
+        aria-valuetext={stripValueText}
+        bind:this={stripEl}
+        onpointerdown={onStripPointerDown}
+        onkeydown={onStripKeydown}
+      >
+        {#each allBands as b, i (b.key)}
+          <span
+            class="ovtick"
+            class:inwin={i >= viewStart && i < viewStart + perPage}
+            class:inwin-start={i === viewStart}
+            class:inwin-end={i === viewStart + perPage - 1}
+            style:background-color={laneMap.get(b.key) || 'var(--o-ink3)'}
+            aria-hidden="true"
+          ></span>
+        {/each}
+      </div>
+    {/if}
+    <div class="rig" bind:clientWidth={rigW} onwheel={onRigWheel}>
+      <!-- Explicit pixel width/height, not `width: 100%`: this is what
+           actually fixes #722 -- the svg renders at its own chosen size
+           (1 viewBox unit = 1px) instead of being rescaled to fit
+           whatever the container happens to be, which is what silently
+           divided the available width by the band count before. `.rig`'s
+           own `justify-content: center` (below) centres it, leaving
+           empty space on either side when the policy stretch-caps a
+           small estate rather than filling the frame. -->
+      <svg viewBox="0 0 {rig.width} {RIG_H}" width={rig.width} height={RIG_H}>
         <defs>
           <pattern id="fall-hatch" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
             <line x1="0" y1="0" x2="0" y2="8" class="hatch-line" />
@@ -632,21 +1020,17 @@
           </linearGradient>
         </defs>
 
-        <!-- ══ the time rail (a flag's moment outranks a colliding
-             gridline or now label) ══ -->
+        <!-- ══ the time gutter (a flag's moment outranks a colliding
+             time label or now label) -- round 30 draws no grid at all,
+             here or between bands: the labels are the only marks in
+             this margin (#700). ══ -->
         {#if !flagHorizons.some((f) => Math.abs(f.y - (FALL_TOP + 4)) < 16)}
           <text class="tlab now-t" x={RAIL - 14} y={FALL_TOP + 4} text-anchor="end">{formatHM(new Date(windowEnd || Date.now()).toISOString())}</text>
         {/if}
         {#each railLines as l (l.y)}
-          <line class="gridline" x1={RAIL} y1={l.y} x2={rig.width - 14} y2={l.y} />
           {#if !flagHorizons.some((f) => Math.abs(f.y - l.y) < 12)}
             <text class="tlab" x={RAIL - 14} y={l.y + 3} text-anchor="end">{l.label}</text>
           {/if}
-        {/each}
-
-        <!-- ══ band separators ══ -->
-        {#each rig.slots.slice(1) as slot (slot.band.key)}
-          <line class="bandline" x1={slot.bx - 5} y1={FALL_TOP} x2={slot.bx - 5} y2={FALL_BOT} />
         {/each}
 
         {#each rig.slots as slot (slot.band.key)}
@@ -661,48 +1045,44 @@
               onclick={() => openInStream(b)}
               onkeydown={(e) => keyActivate(e, () => openInStream(b))}
             >
-              <rect class="head-hit" x={slot.bx} y="6" width={BAND_W} height="56" />
+              <rect class="head-hit" x={slot.bx} y="6" width={bandW} height="56" />
               <text class="blab band-label" x={slot.bx + 6} y="22">{b.label}</text>
               {#if b.epithet}<text class="bsub band-epithet" x={slot.bx + 6} y="36">{b.epithet}</text>{/if}
               {#if b.key === '__unmatched__'}
-                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">NOT IN A PUSHED RULE TABLE</text>
+                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">NOT IN A PUSHED TABLE</text>
               {:else if b.coverage === 'dark'}
                 <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">DARK — NO LOG RULE</text>
               {:else if b.coverage === 'unknown'}
                 <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">COVERAGE UNKNOWN</text>
               {:else if b.flagMarks.length > 0}
                 {@const fired = b.flagMarks.reduce((a, m) => (m.idx > a.idx ? m : a), b.flagMarks[0])}
-                <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">ALARM FIRED {fired.hm}</text>
-              {:else if b.total === 0}
-                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">QUIET</text>
+                <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50"
+                  >✱ {fired.type.replace(/_/g, ' ').toUpperCase()}</text
+                >
               {:else}
+                <!-- Round 30 reads a quiet-but-covered band the same as
+                     a busy one: the watch holds either way (README
+                     "quiet is a fact, not a fault") -- there is no
+                     separate QUIET caption. -->
                 <text class="chip ch-ok band-caption ok" x={slot.bx + 6} y="50">WATCH HOLDING ✓</text>
               {/if}
-              <rect x={slot.bx} y="56" width={BAND_W} height="3" rx="1.5" fill={slot.laneColor} />
+              <rect x={slot.bx} y="56" width={bandW} height="3" rx="1.5" fill={slot.laneColor} />
             </g>
 
             <!-- ══ the panadapter: this band's live spectrum ══ -->
             <g class="spectrum" aria-hidden="true">
               {#if b.coverage === 'dark'}
-                <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + BAND_W} y2={SPEC_BASE} class="dark-baseline" />
-                <text class="anno bad-anno" x={slot.bx + BAND_W / 2} y={SPEC_BASE - 32} text-anchor="middle"
+                <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + bandW} y2={SPEC_BASE} class="dark-baseline" />
+                <text class="anno bad-anno" x={slot.bx + bandW / 2} y={SPEC_BASE - 32} text-anchor="middle"
                   >nothing logged —</text>
-                <text class="anno bad-anno" x={slot.bx + BAND_W / 2} y={SPEC_BASE - 20} text-anchor="middle"
+                <text class="anno bad-anno" x={slot.bx + bandW / 2} y={SPEC_BASE - 20} text-anchor="middle"
                   >no trace, and no claim of one</text>
               {:else}
                 {#each needlesFor(slot) as n (n.port)}
-                  <polygon
-                    class="peak {n.lane}"
-                    data-port={n.port}
-                    points="{n.x - 8},{SPEC_BASE} {n.x},{n.tipY} {n.x + 8},{SPEC_BASE}"
-                  />
-                  <polyline
-                    class="spec {n.lane}"
-                    points="{n.x - 8},{SPEC_BASE} {n.x},{n.tipY} {n.x + 8},{SPEC_BASE}"
-                  />
+                  <path class="spec {n.lane}" data-port={n.port} d={wavePath(n)} />
                 {/each}
                 {#if b.carriers.length > 0 && needlesFor(slot).length === 0}
-                  <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + BAND_W} y2={SPEC_BASE} class="spec-floor" />
+                  <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + bandW} y2={SPEC_BASE} class="spec-floor" />
                 {/if}
               {/if}
             </g>
@@ -710,10 +1090,10 @@
             <!-- ══ this band's stretch of the fall ══ -->
             <g class="waterfall">
               {#if b.coverage === 'dark'}
-                <rect class="darkband" x={slot.bx} y={FALL_TOP} width={BAND_W} height={FALL_BOT - FALL_TOP} />
-                <text class="anno bad-anno strong" x={slot.bx + BAND_W / 2} y="420" text-anchor="middle"
+                <rect class="darkband" x={slot.bx} y={FALL_TOP} width={bandW} height={FALL_BOT - FALL_TOP} />
+                <text class="anno bad-anno strong" x={slot.bx + bandW / 2} y="420" text-anchor="middle"
                   >blank because nothing is logged</text>
-                <text class="anno" x={slot.bx + BAND_W / 2} y="434" text-anchor="middle"
+                <text class="anno" x={slot.bx + bandW / 2} y="434" text-anchor="middle"
                   >— not because nothing is sent</text>
               {:else}
                 {#if b.dropShare > 0.5 && b.total > 0}
@@ -725,7 +1105,7 @@
                   <rect
                     x={slot.bx}
                     y={FALL_TOP}
-                    width={BAND_W}
+                    width={bandW}
                     height={Math.min(FALL_BOT - FALL_TOP, (b.deepestActive + 2) * bucketH)}
                     fill="url(#fall-ramp)"
                     opacity={0.3 + 0.45 * b.dropShare}
@@ -771,25 +1151,38 @@
                     {/if}
                   {/each}
                 {/each}
-                {#if b.quieterCount > 0}
+                {#if QUIETER_COUNT_ENABLED && b.quieterCount > 0}
                   <text
                     class="quieter"
                     role="button"
                     tabindex="0"
                     aria-label="{b.quieterCount} quieter port{b.quieterCount === 1 ? '' : 's'} on {b.label}, folded out of the individual carriers above. Activate to open the whole boundary in Stream."
-                    x={slot.bx + BAND_W / 2}
+                    x={slot.bx + bandW / 2}
                     y={FALL_BOT - 8}
                     text-anchor="middle"
                     onclick={() => openInStream(b)}
                     onkeydown={(e) => keyActivate(e, () => openInStream(b))}>+{b.quieterCount} quieter</text>
                 {/if}
-                {#if b.carriers.length === 0 && b.total === 0}
-                  <text class="anno" x={slot.bx + BAND_W / 2} y="420" text-anchor="middle">no traffic in this window</text>
+                {#if EMPTY_BAND_CAPTION_ENABLED && b.carriers.length === 0 && b.total === 0}
+                  <text class="anno" x={slot.bx + bandW / 2} y="420" text-anchor="middle">no traffic in this window</text>
                 {/if}
               {/if}
             </g>
 
-            <!-- flag annotations at their moment on this band -->
+            <!-- flag annotations at their moment on this band. The
+                 mockup's single wide "new_talker" callout (a red band
+                 across the full rig width -- "✳ new_talker · cam-porch
+                 → nas :445 · born 13:52 on a band blank for 41 days ·
+                 ×14 · open ▸") has no counterpart here: `new_talker`
+                 is not a FlagType this codebase raises (see
+                 lib/types.ts's FlagType union -- the closest existing
+                 detector, `new_device`, answers "has this device ever
+                 been seen at all", not "has this device ever used this
+                 boundary/port before"), so there is no evidence to draw
+                 the callout from, not a styling gap. Tracked for #700
+                 follow-up: a new detector and FlagType would need to
+                 land server-side (internal/detect, internal/flags)
+                 before this callout can be built here. -->
             {#each b.flagMarks as m, mi (mi)}
               {@const fy = bucketY(m.idx) + bucketH / 2}
               <g class="flag-mark" aria-hidden="true">
@@ -814,40 +1207,41 @@
         <!-- ══ flag horizons: the line through every band ══ -->
         {#each flagHorizons as f, fi (fi)}
           <line class="horizon" x1={RAIL} y1={f.y} x2={rig.width - 14} y2={f.y} />
-          <text class="tlab flag-t" x={RAIL - 14} y={f.y + 3} text-anchor="end">{f.hm} ◉</text>
+          <!-- Round 30 draws every gutter time in the same quiet dim ink
+               (the-whole.html #s2's `.gut`) -- no per-minute colouring
+               and no mark beside a flagged minute's label, even though
+               the horizon line through the bands still shows where it
+               fired. This label used to ride `.flag-t` (alarm-coloured,
+               bold, with a trailing ◉) as a leftover of the pre-round-30
+               build; that read as if some minutes were flagged red/pink
+               and others weren't, which round 30 never draws. -->
+          <text class="tlab" x={RAIL - 14} y={f.y + 3} text-anchor="end">{f.hm}</text>
         {/each}
 
         <!-- ══ the NOW edge ══ -->
         <text class="now-caption" x={RAIL} y={NOW_Y - 5}
-          >NOW · {nowClock()} — the spectrum above is this instant; below, it falls into memory</text>
+          >NOW · {nowClock()}</text>
         <line class="nowline" x1={RAIL} y1={NOW_Y} x2={rig.width - 14} y2={NOW_Y} />
         <circle class="now-dot" cx={rig.width - 18} cy={NOW_Y} r="2.5" />
-        <text class="anno" x={RAIL - 14} y={SPEC_TOP + 40} text-anchor="end">live</text>
-        <text class="anno" x={RAIL - 14} y={SPEC_BASE} text-anchor="end">floor</text>
       </svg>
     </div>
 
-    {#if showKey}
-      <div class="legend">
-        <span class="k k-acc">blue energy = accepted (brightness = rate)</span>
-        <span class="k k-drop">red energy = dropped — red never means anything else</span>
-        <span class="k k-nat">violet = nat</span>
-        <span class="k">a carrier = a steady talker · dash rhythm = its cadence</span>
-        <span class="k">▨ unlogged (≠ a quiet band)</span>
-        <span class="k">◉ flag at its moment · click a carrier to open it in Stream</span>
-      </div>
-    {/if}
-    <p class="window-caption">
-      <button type="button" class="key-toggle" aria-expanded={showKey} onclick={() => (showKey = !showKey)}>
-        key {showKey ? '▾' : '▸'}
-      </button>
-      <span>
-        {#if windowHasMore}showing the most recent 5,000 events; more exist ·
-        {/if}{#if windowStart && windowEnd}{formatHM(new Date(windowStart).toISOString())} – {formatHM(
-            new Date(windowEnd).toISOString(),
-          )}, newest at the top{/if}
-      </span>
-    </p>
+    <!-- Deep explanation never sits in the UI (round 30 README §5, itself
+         restating round 5's ruling): a learned display explains itself
+         once, in the docs. What remains on-screen is a tiny (i), well
+         out of the way -- not the toggleable key-plus-legend the build
+         had grown, which round 30 never draws. -->
+    <div class="fall-foot">
+      <button type="button" class="ibtn" title="How to read the fall — full explanation in the docs">i</button>
+      {#if WINDOW_RANGE_CAPTION_ENABLED}
+        <span class="window-caption">
+          {#if windowHasMore}showing the most recent 5,000 events; more exist ·
+          {/if}{#if windowStart && windowEnd}{formatHM(new Date(windowStart).toISOString())} – {formatHM(
+              new Date(windowEnd).toISOString(),
+            )}, newest at the top{/if}
+        </span>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -858,7 +1252,6 @@
     --o-ink: var(--fg);
     --o-ink2: var(--fg-muted);
     --o-ink3: var(--fg-dim);
-    --o-grid: color-mix(in srgb, var(--fg) 8%, transparent);
     --o-grid2: color-mix(in srgb, var(--fg) 15%, transparent);
     --o-acc: var(--fall-accept);
     --o-drop: var(--fall-drop);
@@ -881,72 +1274,92 @@
     gap: 20px;
     flex-wrap: wrap;
   }
-  .bar h1 {
-    font-size: 22px;
-    font-weight: 600;
-    margin: 0;
-    color: var(--o-ink);
+  .scname {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
   }
-  .wm {
-    font-size: 13px;
-    font-weight: 800;
-    letter-spacing: 0.22em;
+  .epi {
+    font-weight: 400;
     color: var(--o-ink3);
+    font-size: 12px;
+  }
+  .status-cluster {
+    margin-left: auto;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  /* Round 30's `.wordmark`, ported field-for-field (same fix as
+     SceneBar.svelte's `.wm`/`.wm em`, #683/#700): MIKRO in the bar's own
+     near-white ink, not dimmed, with VIEW carrying the accent -- this
+     bar draws its own wordmark instead of going through SceneBar (that
+     is how it missed the shared fix the first time), so the values are
+     restated here rather than dimly wide-tracked. */
+  .wm {
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    color: var(--fg);
   }
   .wm em {
-    color: var(--now);
+    color: var(--accent);
     font-style: normal;
   }
   .span-control {
-    margin-left: auto;
     display: flex;
     gap: 2px;
-    border-bottom: 1px solid var(--o-grid2);
-    padding-bottom: 5px;
   }
-  .span-control .lab {
-    font-size: 10px;
-    letter-spacing: 0.12em;
-    color: var(--o-ink3);
-    align-self: center;
-    margin-right: 8px;
-  }
+  /* Round 30's `.spans`/`.spans span`/`.spans .on` (the-whole.html #s2):
+     a compact quiet cluster, the active one lifted only by a subtle
+     filled pill -- not the oversized, wide-spaced buttons with a heavy
+     amber underline this bar drew before (same class of miss as the
+     wordmark above: its own control, not routed through the shared
+     switcher). */
   .rng {
     background: transparent;
-    border: none;
-    font-size: 13.5px;
-    font-weight: 550;
+    border: 1px solid transparent;
+    font: 10.5px var(--font-mono);
     color: var(--o-ink3);
-    padding: 3px 12px;
+    padding: 3px 9px;
+    border-radius: 6px;
     cursor: pointer;
-    font-family: var(--font-mono);
   }
   .rng:hover {
     color: var(--o-ink);
   }
   .rng.on {
     color: var(--o-ink);
-    border-bottom: 2px solid var(--now);
-    margin-bottom: -7px;
+    background: var(--bg-elevated);
+    border-color: var(--border);
   }
 
   /* ── attention chips, riding the bar ─────────────────────────────── */
+  /* Centred and fanning outward as chips are added (owner, ratified
+     2026-08-31 -- see the template comment above): a full-width flex
+     row with justify-content: center, not the inline/left-packed row
+     the mockup's own two-chip example draws. */
   .attention {
-    display: inline-flex;
-    gap: 8px;
+    display: flex;
+    justify-content: center;
+    gap: 10px;
     align-items: center;
     flex-wrap: wrap;
   }
+  /* Sized to the mockup's `.fall-chip` (the-whole.html #s2): font,
+     padding and pill height brought down from the oversized, loosely
+     spaced pills this bar drew before (owner: "comically oversized"). */
   .att {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    font-size: 12.5px;
-    font-weight: 650;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
     font-family: inherit;
     border: 1px solid var(--o-grid2);
-    border-radius: 999px;
-    padding: 4px 13px;
+    border-radius: 12px;
+    padding: 3px 12px;
     color: var(--o-ink2);
     background: transparent;
   }
@@ -979,12 +1392,6 @@
   .att.dark i {
     background: transparent;
     border: 1px solid var(--o-drop);
-  }
-  .att.calm {
-    color: var(--o-ok);
-  }
-  .att.calm i {
-    background: var(--o-ok);
   }
 
   .state-msg {
@@ -1023,8 +1430,13 @@
     justify-content: center;
   }
   .rig svg {
-    width: 100%;
+    /* No width: 100% here (#722) -- the svg's own width/height
+       attributes (set in the template from the sizing policy above) are
+       its real size; `justify-content: center` on `.rig` centres it,
+       which is how a stretch-capped small estate gets to leave empty
+       space either side instead of being rescaled to fill the frame. */
     display: block;
+    max-width: 100%;
   }
   .rig svg text {
     font-family: var(--font-mono);
@@ -1036,10 +1448,6 @@
   }
   .tlab.now-t {
     fill: var(--now);
-  }
-  .tlab.flag-t {
-    fill: var(--o-drop);
-    font-weight: 700;
   }
   .blab {
     fill: var(--o-ink);
@@ -1067,15 +1475,6 @@
   .ch-mut {
     fill: var(--o-ink3);
   }
-  .bandline {
-    stroke: var(--o-grid2);
-    stroke-width: 1;
-  }
-  .gridline {
-    stroke: var(--o-grid);
-    stroke-width: 1;
-  }
-
   .band-head {
     cursor: pointer;
   }
@@ -1109,21 +1508,6 @@
   }
   .spec.other {
     stroke: var(--o-other);
-  }
-  .peak {
-    stroke: none;
-  }
-  .peak.accept {
-    fill: color-mix(in srgb, var(--o-acc) 14%, transparent);
-  }
-  .peak.drop {
-    fill: color-mix(in srgb, var(--o-drop) 14%, transparent);
-  }
-  .peak.nat {
-    fill: color-mix(in srgb, var(--o-nat) 14%, transparent);
-  }
-  .peak.other {
-    fill: color-mix(in srgb, var(--o-other) 14%, transparent);
   }
   .spec-floor {
     stroke: var(--o-grid2);
@@ -1272,44 +1656,110 @@
     fill: var(--accent);
   }
 
-  /* ── legend + window caption ─────────────────────────────────────── */
-  .legend {
+  /* ── the overview strip (#722 amendment, 2026-08-31): replaces the
+     pager -- see the template comment above the `{#if maxStart > 0}`
+     block for what it is. Thin and along the top of the scene, not the
+     middle, and carries no visible text of its own (round 30 README
+     §5).
+     #731: it worked but didn't read as a control, so it now sits in a
+     faint recessed rail (background + hairline border, built from the
+     same --o-grid2 tint used for borders elsewhere in this file -- no
+     new colours), the lit run's two ends get a light bracket so the
+     run reads as one thumb rather than several bright ticks, hovering
+     grows the rail by 3px while margin-bottom shrinks by the same
+     amount (the box `.ovstrip` + its margin occupies stays fixed, so
+     `.rig` below never moves), and the cursor is grab/grabbing instead
+     of a plain pointer. Still no text, numbers or arrows (round 30
+     README §5) -- purely a look-and-feel change. */
+  .ovstrip {
     display: flex;
-    gap: 22px;
-    padding-top: 4px;
-    font-size: 12px;
-    color: var(--o-ink2);
-    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 1px;
+    height: 6px;
+    margin: 2px 0 10px;
+    padding: 1px;
+    border-radius: 3px;
+    background: var(--o-grid2);
+    border: 1px solid var(--o-grid2);
+    cursor: grab;
+    touch-action: none;
+    transition: height 150ms ease, margin-bottom 150ms ease;
   }
-  .k-acc {
-    color: var(--o-acc);
+  .ovstrip:hover {
+    height: 9px;
+    margin-bottom: 7px;
   }
-  .k-drop {
-    color: var(--o-drop);
+  .ovstrip.dragging {
+    cursor: grabbing;
   }
-  .k-nat {
-    color: var(--o-nat);
+  .ovstrip:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .ovtick {
+    flex: 1;
+    min-width: 1px;
+    border-radius: 1px;
+    opacity: 0.32;
+    transition: opacity 150ms ease;
+  }
+  .ovstrip:hover .ovtick {
+    opacity: 0.55;
+  }
+  .ovtick.inwin {
+    opacity: 1;
+  }
+  .ovtick.inwin-start {
+    box-shadow:
+      inset 1px 0 0 var(--o-ink),
+      inset 0 1px 0 var(--o-ink),
+      inset 0 -1px 0 var(--o-ink);
+  }
+  .ovtick.inwin-end {
+    box-shadow:
+      inset -1px 0 0 var(--o-ink),
+      inset 0 1px 0 var(--o-ink),
+      inset 0 -1px 0 var(--o-ink);
+  }
+  /* perPage === 1: the run's first and last tick are the same element,
+     so it needs both outer edges rather than whichever of the two
+     rules above happens to win. Three classes outranks two, so this
+     always applies over them when both match. */
+  .ovtick.inwin-start.inwin-end {
+    box-shadow:
+      inset 1px 0 0 var(--o-ink),
+      inset -1px 0 0 var(--o-ink),
+      inset 0 1px 0 var(--o-ink),
+      inset 0 -1px 0 var(--o-ink);
+  }
+
+  /* ── the foot: the (i), and (when enabled) the window caption ────── */
+  .fall-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+  .ibtn {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid var(--o-grid2);
+    background: transparent;
+    color: var(--o-ink3);
+    font: italic 600 11px Georgia, serif;
+    padding: 0;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .ibtn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
   }
   .window-caption {
     margin: 0;
     font-size: 11.5px;
     color: var(--o-ink3);
     font-family: var(--font-mono);
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
-  }
-  .key-toggle {
-    background: transparent;
-    border: none;
-    padding: 0;
-    color: var(--o-ink3);
-    font-size: 11.5px;
-    font-family: var(--font-mono);
-    cursor: pointer;
-  }
-  .key-toggle:hover {
-    color: var(--o-ink);
   }
 </style>

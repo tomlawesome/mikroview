@@ -206,6 +206,20 @@ describe('SetupWizard', () => {
     expect(container.querySelectorAll('.readback li').length).toBe(5)
   })
 
+  // #646: the wizard ends by taking the operator back to the fall,
+  // mikroview's real landing page (#616) -- whichever path opened the
+  // wizard, the journey's own hand-off included.
+  it('the finish leads back to the fall', async () => {
+    wizardState.pane = 5
+    appState.view = 'engineroom'
+    render(SetupWizard)
+    await fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Take me to the fall' }))
+    expect(appState.view).toBe('fall')
+    expect(wizardState.open).toBe(false)
+  })
+
   // The step list carries each step's receipt for the wizard's life --
   // a decision that has been recorded goes on saying so.
   it('carries a recorded decision in the step list', () => {

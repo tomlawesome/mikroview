@@ -1,104 +1,76 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The account menu's rows, per tier (#657).
-//
-// This file exists because of the defect it now pins. The menu carried
-// its own hardcoded copy of the operate rows, with a binary `admin` flag
-// that predated #653's three tiers, and nothing tested it. So when #657
-// gated Settings away from a viewer, the rail and the small-screen bar
-// both obeyed and this menu did not: a viewer was still offered Settings
-// -- the headline example in #657's own ruling -- and a user was still
-// denied Entities. Reading navGroups.ts in a test could never have caught
-// it, because the menu was not reading navGroups.ts.
-//
-// The live check found it. These tests are the cheap guard underneath.
+// The account menu, slimmed by #647 (#634 round 23): Settings, Fleet and
+// Entities left for cards of their own on the deck (Fleet folded into
+// Entities' own card), and Audit log has lived on the docket's tab since
+// rounds 17-19 -- so the menu carries no page links at all now, only
+// Run setup… (admin-gated), the account actions, and About & licence.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
+import { flushSync } from 'svelte'
 
-// jsdom has no matchMedia, which lib/viewport.svelte.ts reads at module
-// load. Same vi.hoisted shim SetupWizard.svelte.test.ts installs, and
-// for the same reason: it has to be in place before the component's
-// import chain runs.
-vi.hoisted(() => {
-  window.matchMedia = ((query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    addListener: () => {},
-    removeListener: () => {},
-    dispatchEvent: () => false,
-  })) as unknown as typeof window.matchMedia
-})
+vi.mock('../lib/api', () => ({
+  fetchAuthSession: vi.fn(),
+  login: vi.fn(),
+  logout: vi.fn(async () => null),
+  register: vi.fn(),
+}))
 
-import AccountMenu from './AccountMenu.svelte'
 import { authState } from '../lib/auth.svelte'
 
-async function openMenuAs(role: 'admin' | 'user' | 'viewer') {
-  authState.state = 'authenticated'
-  authState.role = role
-  authState.username = `test-${role}`
-  render(AccountMenu)
-  await fireEvent.click(screen.getByRole('button', { name: /test-/ }))
+// jsdom has no window.matchMedia -- AccountMenu mounts ThemeMenu, which
+// pulls in lib/viewport.svelte.ts; its ViewportState singleton calls
+// matchMedia at module-load time, so this has to land before the
+// dynamic import below (same fix Flags.svelte.test.ts already needed).
+if (!window.matchMedia) {
+  window.matchMedia = (query: string) =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as unknown as MediaQueryList
 }
 
-function rowLabels(): string[] {
-  return screen
-    .getAllByRole('menuitem')
-    .map((el) => el.textContent?.trim() ?? '')
-    .filter(Boolean)
+const { default: AccountMenu } = await import('./AccountMenu.svelte')
+
+async function openMenu() {
+  await fireEvent.click(screen.getByTitle('Account and operate pages'))
+  flushSync()
 }
 
-describe('AccountMenu operate rows follow navGroups (#657)', () => {
-  beforeEach(() => {
-    authState.hasLocalPassword = false
-    authState.ssoAvailable = false
-  })
+beforeEach(() => {
+  authState.username = 'tom'
+  authState.hasLocalPassword = true
+  authState.ssoAvailable = false
+})
 
-  it('offers a viewer Fleet and nothing that exists to change things', async () => {
-    await openMenuAs('viewer')
-    const rows = rowLabels()
+describe('the slimmed account menu (#647)', () => {
+  it("an admin's menu carries no page links -- Run setup… is the only operate row left", async () => {
+    authState.role = 'admin'
+    render(AccountMenu)
+    await openMenu()
 
-    expect(rows).toContain('Fleet')
-    // The four a viewer must never be offered here. Settings is the one
-    // that regressed: the menu kept showing it after #657 hid it
-    // everywhere else.
-    expect(rows).not.toContain('Settings')
-    expect(rows).not.toContain('Entities')
-    expect(rows).not.toContain('Audit log')
-    expect(rows).not.toContain('Run setup…')
-  })
-
-  it('offers a user Settings and Entities, but not the admin-only rows', async () => {
-    await openMenuAs('user')
-    const rows = rowLabels()
-
-    expect(rows).toContain('Settings')
-    expect(rows).toContain('Fleet')
-    // Entities is the other half of the drift: the rail gave it to a
-    // user under #653 and this menu still required admin.
-    expect(rows).toContain('Entities')
-    expect(rows).not.toContain('Audit log')
-    expect(rows).not.toContain('Run setup…')
-  })
-
-  it('offers an admin every operate row', async () => {
-    await openMenuAs('admin')
-    const rows = rowLabels()
-
-    for (const label of ['Settings', 'Fleet', 'Entities', 'Audit log', 'Run setup…']) {
-      expect(rows).toContain(label)
+    const rows = screen.getAllByRole('menuitem').map((el) => el.textContent?.trim())
+    expect(rows).toContain('Run setup…')
+    for (const retired of ['Settings', 'Fleet', 'Entities', 'Audit log']) {
+      expect(rows).not.toContain(retired)
     }
   })
 
-  it('keeps the operate rows in their established order for every tier', async () => {
-    // The menu's selection is its own, but its order is fixed: a row
-    // must not move about depending on who is signed in.
-    await openMenuAs('admin')
-    const rows = rowLabels()
-    const operate = rows.filter((r) => ['Settings', 'Fleet', 'Entities', 'Audit log', 'Run setup…'].includes(r))
-    expect(operate).toEqual(['Settings', 'Fleet', 'Entities', 'Audit log', 'Run setup…'])
+  it("a viewer's menu has no Run setup… row -- absent, not disabled", async () => {
+    authState.role = 'user'
+    render(AccountMenu)
+    await openMenu()
+
+    const rows = screen.getAllByRole('menuitem').map((el) => el.textContent?.trim())
+    expect(rows).not.toContain('Run setup…')
+    expect(rows).toContain('Sign out')
+    expect(rows).toContain('About & licence')
   })
 })

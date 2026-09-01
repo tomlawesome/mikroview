@@ -88,6 +88,12 @@ clean:
 # holds the port precisely so it does not trample a stranger's instance
 # -- arming the trap first would have this recipe do exactly that on the
 # way out of the refusal it just respected.
+# The same gate, on the second host, so it does not hold this machine for
+# the better part of an hour. scripts/gate-remote.sh has the reasoning;
+# AGENTS.md's "The second host live-check runs on" has the account.
+live-check-remote:
+	@scripts/gate-remote.sh $(if $(MV_BROWSER),--browser $(MV_BROWSER),)
+
 live-check:
 	@eval "$$(scripts/live-env.sh up)"; \
 	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT; \
@@ -223,3 +229,30 @@ live-routeros-container:
 	  exit $$status
 
 .PHONY: live-routeros-container
+
+# The door's geometry in the engines the harness doesn't drive.
+# The Playwright container ships Firefox and WebKit with their system
+# libraries, which the host lacks and cannot install without root --
+# run against an already-standing instance: make engines-check
+# MV_URL=https://<host-lan>:<port>. The repo mounts read-only so a
+# stray install inside the container can never rewrite the host's
+# node_modules (see the environment notes' Orbit incident).
+engines-check:
+	test -n "$(MV_URL)" || { echo "MV_URL required -- an already-standing instance, reachable from a container (host LAN address, not 127.0.0.1)" >&2; exit 1; }
+	docker run --rm -v $(CURDIR):/repo:ro -w /repo/frontend -e MV_URL=$(MV_URL) \
+	  mcr.microsoft.com/playwright:v1.62.0-noble node scripts/live-door-engines.mjs
+
+.PHONY: engines-check
+
+# fidelity: photograph the built app and its ratified mockup at the same
+# viewport and compare per pixel (#658, ported from Orbit). Catches the
+# thing neither the suite nor live-check can see -- a surface that works
+# but is not the one that was ratified.
+#
+# Needs a running instance and the design host. Both are overridable:
+#   FIDELITY_APP=... FIDELITY_MOCKUPS=... make fidelity
+# Baselines move only deliberately: UPDATE_BASELINE=1 make fidelity
+fidelity:
+	@cd frontend && node tests/fidelity/screens.mjs
+
+.PHONY: fidelity
