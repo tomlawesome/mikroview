@@ -106,15 +106,22 @@ export const navGroups: NavGroup[] = [
     //
     // Users and Tokens retired wholesale into the engine room (#490) --
     // see EngineRoomDoors.svelte -- along with Detectors (see the Detect
-    // group's own comment above). The engine room itself carries no
-    // `admin: true`: it is deliberately viewer-readable (the design
-    // record's authz-matrix clause widens the tokens/definitions/setup-
-    // status GETs it reads to any signed-in user), with per-control
-    // verbs gated inside the page instead. GET /api/auth/users is the
-    // one exception -- the owner overrode the record's original "widen
-    // users too" clause mid-build, so the engine room's own "who may
-    // look in" door stays admin-only *within* an otherwise
-    // viewer-readable page (see EngineRoomDoors.svelte).
+    // group's own comment above).
+    //
+    // #657 gave the engine room `edit: true`, retiring #490's
+    // viewer-readable settings page. The test the owner ruled on is not
+    // whether a viewer may read a surface but whether it helps them
+    // interrogate the log: a page of settings they cannot change is a
+    // wall of controls, and the one thing in it a viewer genuinely needs
+    // -- why an empty stream is empty -- is rendered by the Stream view
+    // itself (LiveTable.svelte's empty state, from the #487 ledger), not
+    // here. GET /api/setup/status therefore stays viewer-readable while
+    // this page does not.
+    //
+    // The doors went further and are admin-only now, so a `user` sees the
+    // engine room without them. Issuing keys is a setup task rather than
+    // using the product (owner, 2026-08-31), and GET /api/tokens narrowed
+    // back to match -- see internal/api/tokens.go.
     //
     // Entities carries `edit: true` since #653: the backend widened its
     // GET route from admin to the user tier, so a user gets a page that
@@ -124,6 +131,7 @@ export const navGroups: NavGroup[] = [
       {
         label: 'Settings',
         view: 'engineroom',
+        edit: true,
         icon: 'engineroom',
         title: "Mikroview's own signal path, live, with every setting on the station it governs",
       },

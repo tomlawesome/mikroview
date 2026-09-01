@@ -107,11 +107,23 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTokensList returns every token's metadata -- name/created/last-
-// used, never the hash or raw value -- open to any signed-in user (#490):
-// the raw value only ever appears in handleTokensCreate's one-time
-// response, so widening this GET cannot hand out a secret. Minting and
-// revoking a token stay admin-only below.
+// used, never the hash or raw value -- and is admin-only (#657).
+//
+// #490 widened it to any signed-in caller, on the reasoning that the raw
+// value never appears here so the read hands out no secret. That is still
+// true, and it is no longer the question: the widening existed to serve a
+// viewer-readable settings page, and #657 removed that page from a
+// viewer's navigation entirely. Issuing keys is a setup task rather than
+// using the product, so the whole doors station -- this read included --
+// went back to admin, deliberately narrowing what the user tier could see
+// before. A read left open for a surface that no longer exists is reachable
+// with nothing to reach it from.
 func (s *Server) handleTokensList(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+
 	tokens := s.Tokens.List()
 	out := make([]tokenResponse, 0, len(tokens))
 	for _, t := range tokens {
