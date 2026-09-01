@@ -7,13 +7,21 @@
   // clicking one rolls that card to centre. The ratified order is the
   // fall, topography, metrics, stream, the docket (flags · watchlist ·
   // audit as one card's tabs, rounds 17-19), then -- since #647 (round
-  // 23) -- Entities and Settings as the deck's last two cards: seven for
-  // an admin, six for a viewer (Entities keeps its own admin gate; see
-  // deckCards.ts). Run setup… and the account's own actions are all
-  // that is left on the account menu; every page-shaped operate surface
-  // now lives here. Fleet alone stays off the deck, absorbed into the
-  // Entities card (its "routers" section leads); the standalone Fleet
-  // page still exists for the phone-width bottom bar, per its own file.
+  // 23) -- Entities and Settings as the deck's last two cards: seven
+  // for the user/admin tiers, who can act on both (Entities and
+  // Settings/engineroom carry deckCards.ts's `canEdit` gate). Run
+  // setup… and the account's own actions are all that is left on the
+  // account menu; every other page-shaped operate surface lives here.
+  //
+  // Fleet is the one exception. #647 folded its routers table into
+  // Entities' own leading section, so it stays off the deck for the
+  // user/admin tiers -- but #657's ratified matrix keeps Fleet itself
+  // viewer-visible ("a stale router is why the log looks wrong") while
+  // ruling Entities and Settings out of a viewer's navigation entirely.
+  // A viewer therefore gets six cards, the last of them the standalone
+  // Fleet page (frontend/src/components/Fleet.svelte) in place of
+  // Entities and Settings -- reused rather than duplicated: it is the
+  // same component the phone-width bottom bar has always reached.
   import { SvelteSet } from 'svelte/reactivity'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -30,11 +38,12 @@
   import Topography from './Topography.svelte'
   import Entities from './Entities.svelte'
   import EngineRoom from './EngineRoom.svelte'
+  import Fleet from './Fleet.svelte'
 
   // The card table lives in lib/deckCards.ts, shared with the Settings
   // shelf; the order is the operator's own (#633 rounds 23-25, drag to
   // reorder there), applied here so the deck rolls in the kept order.
-  const cards = $derived(deckOrderState.apply(deckCards(authState.role === 'admin')))
+  const cards = $derived(deckOrderState.apply(deckCards(authState.isAdmin, authState.canEdit)))
 
   const activeIndex = $derived(cards.findIndex((c) => c.views.includes(appState.view)))
 
@@ -160,6 +169,8 @@
               <Entities />
             {:else if card.key === 'engineroom'}
               <EngineRoom />
+            {:else if card.key === 'fleet'}
+              <Fleet />
             {/if}
           </div>
         {/if}

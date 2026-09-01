@@ -29,20 +29,27 @@
   import JourneyAttach from './components/JourneyAttach.svelte'
   import JourneyGlass from './components/JourneyGlass.svelte'
   import JourneyTour from './components/JourneyTour.svelte'
-  // Mounted here, not in the rail that triggers it: the rail is chrome
-  // for authenticated pages, and this overlay outlives any one of them.
+  // Mounted here, not in the account menu that triggers it: the menu is
+  // scoped to whichever scene's own bar renders it, and this overlay
+  // outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
   // The setup wizard is a modal over the shell, not a page (#487) -- so
   // it is mounted here with the other overlays rather than reached
-  // through appState.view. The rail's "Run setup…" opens it.
+  // through appState.view. Its "Run setup…" row lives in the account
+  // menu (desktop) and the bottom bar (mobile), both of which call
+  // wizardState.launch() directly.
   import SetupWizard from './components/SetupWizard.svelte'
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
 
   // The deck's scenes (#633). Entities and Settings joined the deck in
-  // #647 (round 23); Fleet alone is left outside it, absorbed into the
-  // Entities card and reached only from the phone-width bottom bar now.
+  // #647 (round 23), folding Fleet's own table into Entities' leading
+  // section. #657 then ruled Entities and Settings out of a viewer's
+  // navigation and Fleet back in as its own card (deckCards.ts), so
+  // 'fleet' is a deck view too now -- reachable from the deck's roll
+  // rail for a viewer, same as every other card, rather than only from
+  // the phone-width bottom bar.
   const DECK_VIEWS = new Set([
     'fall',
     'topography',
@@ -53,6 +60,7 @@
     'audit',
     'entities',
     'engineroom',
+    'fleet',
   ])
   const inDeck = $derived(DECK_VIEWS.has(appState.view))
 
@@ -122,13 +130,14 @@
     flagsState.refresh().catch(handleApiError)
     // #546's broken ring needs a live coverage answer even when Watchlist
     // itself is never opened -- the rail is chrome, not a page, so it
-    // cannot wait on that page's own onMount. Gated to admin because
-    // GET /api/definitions (which the ring's coverage rides on) is
-    // admin-only throughout (internal/api/definitions.go), and the
-    // Watchlist row this feeds is itself admin-only in the rail. The
+    // cannot wait on that page's own onMount. Gated to canEdit because the
+    // Watchlist row this feeds is visible to that tier (navGroups.ts's
+    // `edit: true` on the row), not admin-only, and GET /api/definitions
+    // (which the ring's coverage rides on) is accessViewer -- readable by
+    // canEdit and below (#653; internal/api/authz_matrix_test.go). The
     // immediate call here is what makes the ring correct on first paint;
     // WATCHLIST_COVERAGE_REFRESH_MS above is what keeps it correct after.
-    if (authState.role === 'admin') watchlistState.refresh().catch(handleApiError)
+    if (authState.canEdit) watchlistState.refresh().catch(handleApiError)
 
     const statsInterval = setInterval(() => {
       appState.refreshDevicesAndStats().catch(handleApiError)
@@ -139,7 +148,7 @@
     // WATCHLIST_COVERAGE_REFRESH_MS's own comment for why the two cadences
     // are deliberately different rather than an oversight.
     const watchlistInterval =
-      authState.role === 'admin'
+      authState.canEdit
         ? setInterval(() => watchlistState.refresh().catch(handleApiError), WATCHLIST_COVERAGE_REFRESH_MS)
         : undefined
 
@@ -197,18 +206,10 @@
 {:else if authState.state === 'unauthenticated'}
   <AuthLogin />
 {:else}
-  <!-- First in tab order, which is why it is here rather than in the rail
-       that owns the rest of the navigation: the toolbar renders ahead of
-       the rail, so a skip-link inside the rail would sit behind every
-       toolbar control and skip nothing worth skipping. -->
+  <!-- First in tab order: rendered ahead of BottomBar and every scene's
+       own bar, so a keyboard user reaches it before any navigation
+       chrome rather than having to tab past it. -->
   <a class="skip-link" href="#main-content">Skip to content</a>
-  <!-- First in tab order after the skip-link, per the record: the handle
-       is the only way back to a docked rail, so it cannot sit behind the
-       page's own controls. -->
-  <!-- Dock and density are pointer-width affordances (DESIGN.md's "Small
-       screens"): at a small viewport the bottom bar is the whole of
-       navigation, and neither NavRail nor NavHandle (which only ever
-       restores a rail state) mounts at all. -->
   <!-- Pages are the site (owner, 2026-08-29): no persistent chrome.
        The toolbar and the desktop nav rail are retired wholesale; each
        scene carries its own bar. Navigation is the deck (#633, #647):
