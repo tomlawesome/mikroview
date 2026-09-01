@@ -293,3 +293,30 @@ describe('FlagsState verdicts (#638)', () => {
     expect(setFlagVerdict).not.toHaveBeenCalled()
   })
 })
+
+// #642: the open-flags count is the settled ledger's count. A
+// provisional flag -- raised while its baseline was still warming -- is
+// visible on the learning shelf but never counted as an open flag, so
+// the scene bar's flag mark and the bottom bar's badge only ever claim
+// judgements mikroview actually trusts.
+describe('provisional flags and the open-flags count (#642)', () => {
+  it('activeCount excludes provisional flags', () => {
+    flagsState.list = [flag('port_scan', '203.0.113.9'), flag('activity_spike', '203.0.113.10', { provisional: true })]
+    expect(flagsState.activeCount).toBe(1)
+  })
+
+  it('provisionalCount counts open provisional flags only', () => {
+    flagsState.list = [
+      flag('port_scan', '203.0.113.9'),
+      flag('activity_spike', '203.0.113.10', { provisional: true }),
+      flag('port_scan', '203.0.113.11', { provisional: true, cleared: true }),
+    ]
+    expect(flagsState.provisionalCount).toBe(1)
+  })
+
+  it('a cleared provisional flag counts toward neither', () => {
+    flagsState.list = [flag('port_scan', '203.0.113.9', { provisional: true, cleared: true })]
+    expect(flagsState.activeCount).toBe(0)
+    expect(flagsState.provisionalCount).toBe(0)
+  })
+})
