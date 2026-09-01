@@ -77,8 +77,8 @@ check(
 await page.reload()
 
 await page.click('.rail-name >> text=Topography')
-await page.waitForSelector('[data-card="topography"] .lenses', { timeout: 10000 })
-await page.click('[data-card="topography"] .lenses >> text=Coverage')
+await page.waitForSelector('[data-card="topography"] [aria-label="Map lenses"]', { timeout: 10000 })
+await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Coverage')
 await page.waitForSelector('[data-card="topography"] .cedge', { timeout: 10000 })
 
 const darkCount = await page.locator('[data-card="topography"] .cedge.dark').count()
@@ -92,7 +92,7 @@ check(stageText.includes('DARK TOWARD WAN') || stageText.includes('DARK BOTH WAY
 
 // The captions hold on the other lenses too (the shaped surface: the
 // Coverage lens carries the full model, the others keep the captions).
-await page.click('[data-card="topography"] .lenses >> text=Traffic')
+await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Traffic')
 await new Promise((r) => setTimeout(r, 400))
 const trafficText = await page.locator('[data-card="topography"] .stage svg').textContent()
 check(
@@ -102,7 +102,7 @@ check(
 
 // --- Declare-a-gap (#392): one acknowledgement, stored with a reason --
 
-await page.click('[data-card="topography"] .lenses >> text=Coverage')
+await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Coverage')
 await new Promise((r) => setTimeout(r, 400))
 
 // An admin clicks a dark edge and the panel opens.
