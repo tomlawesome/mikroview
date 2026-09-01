@@ -41,11 +41,11 @@ export function spokenLabel(label: string, bits: string[]): string {
 // The broken ring's whole meaning, in one sentence (#546's ratified
 // wording): plain operator language naming the count and the cause, not
 // "coverage is no-logging", which is vocabulary the operator never chose.
-// It lives here beside spokenLabel because #583 puts the ring on three
-// surfaces -- the rail's page row, the bottom bar's group, and the
-// half-sheet's page row -- and the record asks for the *same sentence*
-// each time, with only the subject narrowing (Expect - Watchlist - the
-// entry itself). One copy is what makes that true rather than aspirational.
+// It lives here beside spokenLabel because #583 puts the ring on two
+// surfaces -- the bottom bar's group and its half-sheet's page row --
+// and the record asks for the *same sentence* each time, with only the
+// subject narrowing (Expect - Watchlist - the entry itself). One copy
+// is what makes that true rather than aspirational.
 export function ringReason(brokenCount: number): string {
   return brokenCount === 1
     ? `1 watch can't be checked: the firewall rules it needs aren't being logged`
