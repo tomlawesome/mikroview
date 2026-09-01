@@ -636,6 +636,12 @@
   #sugg .sdiv .sdl b { color: var(--ink-2); font-weight: 600; }
   #sugg .sdiv .sdr { float: right; display: inline-flex; gap: 18px; }
   #sugg .sdiv .sdr b { font-weight: 600; }
+  /* the heading's two verbs wear the drawer's pill, so they read as things to do, not notes */
+  #sugg .sdiv .sdr .slink { font: 600 11px var(--sans); border: 1px solid var(--hair-2); border-radius: 999px; padding: 3px 12px; }
+  #sugg .sdiv .sdr .slink:hover { border-color: var(--accent); text-decoration: none; }
+  #sugg .sdiv .sdr .slink.quiet:hover { border-color: var(--ink-3); }
+  #sugg .sdiv .sdr .slink.armed { border-color: var(--alarm); }
+  #sugg .sdiv .sdr .slink:empty { display: none; }
   .wchip2.sugg { color: var(--ink-3); border-style: dashed; border-color: var(--hair-2); background: transparent; }
   tr.frow.wt-sugg td.k, tr.frow.wt-aside td.k { color: var(--ink-2); }
   tr.frow.wt-sugg td:first-child, tr.drawer.wt-sugg > td { box-shadow: inset 3px 0 0 var(--hair); }
@@ -867,7 +873,7 @@
            suggestion is a watch that has not been said yes to. `watch it`
            is accept; `not this` sets it aside; `start over` is the reset. -->
       <tbody id="sugg">
-        <tr class="sdiv"><td colspan="6"><span class="sdl">mikroview suggests · from what rb5009 and hap-ax2 pushed · <b id="sugn">3</b></span><span class="sdr"><a class="slink" id="sugshow"><b id="asiden">2</b> set aside · show them</a><a class="slink quiet" id="sugreset">start over</a></span></td></tr>
+        <tr class="sdiv"><td colspan="6"><span class="sdl">mikroview suggests · from what rb5009 and hap-ax2 pushed · <b id="sugn">3</b></span><span class="sdr"><a class="slink" id="sugshow"><b id="asiden">2</b> set aside · show them</a><a class="slink quiet" id="sugreset">start over — wipe every watch</a></span></td></tr>
 
         <tr class="frow wt-sugg" data-d="g1" data-kind="device"><td class="k">doorbell fenced</td><td><a class="wl" href="#s3" onclick="descend()">iot</a> → wherever it goes</td><td class="t">always</td><td><span class="wchip2 sugg">◇ suggested — a new lease on iot</span></td><td class="t">—</td><td><span class="openc">▸</span></td></tr>
         <tr class="drawer wt-sugg" id="g1"><td colspan="6"><div class="dwr"><div class="dwr-in">
@@ -1282,7 +1288,7 @@
     }
     // start over: armed on the first click, done on the second, disarmed by any other (round 28's `clear all`)
     var armed = false;
-    function disarm() { if (armed) { armed = false; reset.classList.remove('armed'); reset.textContent = 'start over'; } }
+    function disarm() { if (armed) { armed = false; reset.classList.remove('armed'); reset.textContent = 'start over — wipe every watch'; } }
     reset.addEventListener('click', function (e) {
       e.stopPropagation();
       if (!armed) { armed = true; reset.classList.add('armed'); reset.textContent = 'confirm — every watch goes, and it suggests afresh'; return; }

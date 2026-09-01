@@ -48,12 +48,12 @@ Nothing opens a panel, a modal, a sub-tab or a second page.
    and `not this` (`POST …/hide`).
 4. **A stale suggestion** leads with the honest verb: `let it go` first,
    `watch it anyway` quiet. The chip and the side column say what went.
-5. **Set aside** is the heading's right-hand link — *2 set aside · show
+5. **Set aside** is the heading's right-hand pill — *2 set aside · show
    them* — which reveals the hidden rows in dimmer ink (`status=hide`),
    each with one verb, `bring it back` (`POST …/unhide`). Nothing is
    ever thrown away from here.
-6. **`start over`** is the heading's far-right quiet link, and uses
-   round 28's arm-then-confirm: one click reads `confirm — every watch
+6. **`start over — wipe every watch`** is the heading's far-right quiet
+   pill, and uses round 28's arm-then-confirm: one click reads `confirm — every watch
    goes, and it suggests afresh` in alarm ink; a second click is `POST
    /api/suggestions/reset {confirm: true}`; any other click disarms.
    Afterwards the watch body says *Started over* where the rows were,
@@ -92,5 +92,7 @@ nothing new to check.
 Noted while viewing: the owner could not find `watch it`, `not this`,
 `show them` or `start over` at first. The first two sit at the foot of a
 suggested row's drawer; the last two are the quiet links on the
-suggestions heading. Whether those two links should carry more weight
-is an open question, answered on #691.
+suggestions heading. Owner, on lifting those two links: "Yes,
+though you didn't explain start over" — so both now wear the drawer
+verbs' pill, and the reset says what it does before it is clicked:
+`start over — wipe every watch`.
