@@ -13,7 +13,8 @@
 // The owner's test (issue body): not "may they read this" but "does it
 // help them interrogate the log". A viewer keeps every operational
 // read; what disappears is anything whose purpose is making a change --
-// Entities, Watchlist, Settings, the doors inside it, the setup wizard.
+// Entities, Watchlist, Settings, keys and people inside it, the setup
+// wizard.
 // Rows go absent, never disabled, so every check below also proves that
 // grammar: no menu row renders greyed out for a tier that cannot use it.
 
@@ -23,8 +24,11 @@ const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session()
 
-const PEOPLE = '.door:has-text("Who may look in")'
-const MACHINES = '.door:has-text("Which machines may speak")'
+// Round 32 (#767) mounted keys and people directly in the Settings
+// card (docs/design/concepts/round-32/settings-doors.html), retiring
+// the two side doors this scenario used to scope against.
+const PEOPLE = '#people'
+const MACHINES = '#keys'
 
 // The docket's own tab labels render lower-case, in SceneBar's switcher
 // (.switch[role="tablist"] .sw -- round 30/#697 moved them off Docket.svelte
@@ -90,15 +94,15 @@ const EDITOR_PASS = 'live-user-657-password'
 await goTo(page, 'Settings')
 
 async function createAccount(username, password, role) {
-  await page.click(`${PEOPLE} .footer-action`)
-  await page.waitForSelector(`${PEOPLE} .inline-form`)
-  await page.fill(`${PEOPLE} .inline-form input[type="text"]`, username)
-  await page.fill(`${PEOPLE} .inline-form input[type="password"]`, password)
-  // The door defaults to 'user' ("can change things"); only the viewer
-  // tier needs the selector touched at all.
-  if (role === 'viewer') await page.selectOption(`${PEOPLE} .inline-form select`, 'viewer')
-  await page.click(`${PEOPLE} .inline-form .save`)
-  await page.waitForSelector(`${PEOPLE} .row:has-text("${username}")`)
+  await page.click(`${PEOPLE} .ogfoot .olink`)
+  await page.waitForSelector(`${PEOPLE} .pform`)
+  await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, username)
+  await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, password)
+  // The form defaults to 'user' ("can change things"); only the viewer
+  // tier needs the segment touched at all.
+  if (role === 'viewer') await page.click(`${PEOPLE} .pform button:has-text("can only look")`)
+  await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
+  await page.waitForSelector(`${PEOPLE} .prow:has-text("${username}")`)
 }
 
 await createAccount(VIEWER_USER, VIEWER_PASS, 'viewer')
@@ -155,21 +159,18 @@ for (const absent of ['Fleet', 'Audit log', 'Run setup…']) {
 }
 check(editorNav.disabledRows.length === 0, `no menu row is disabled for a user -- got ${JSON.stringify(editorNav.disabledRows)}`)
 
-// --- 3: a user opening Settings sees neither door ------------------------
+// --- 3: a user opening Settings sees neither keys nor people -------------
 // #657's own narrowing: issuing keys is a setup task, not using the
-// product, so both doors went admin-only -- a user loses token
-// visibility it had before this ruling. Round 30 (#700/#691) also
-// unmounts both doors for every role today (TOKENS_DOOR_ENABLED /
-// USERS_DOOR_ENABLED are false in EngineRoomDoors.svelte), so this
-// currently proves the doors are absent without yet proving *why* --
-// the #657 admin gate underneath is pinned directly instead, at the API
-// level, in claim 4 below and internal/api/tokens_test.go.
+// product, so both groups are admin-only -- a user loses token
+// visibility it had before this ruling. Round 32/#767 mounted keys and
+// people directly in the card on that same footing, so this proves the
+// groups are absent for a user, not just their old doors; the #657
+// admin gate underneath is pinned directly at the API level in claim 4
+// below and internal/api/tokens_test.go.
 
 await goTo(editor.page, 'Settings')
-const editorDoors = await editor.page.$$eval('.doors .door .dname', (els) => els.map((e) => e.textContent.trim()))
-check(editorDoors.length === 0, `neither door renders for a user -- got ${JSON.stringify(editorDoors)}`)
-check(!(await editor.page.locator(MACHINES).count()), '"Which machines may speak" (tokens) is absent for a user')
-check(!(await editor.page.locator(PEOPLE).count()), '"Who may look in" (users) is absent for a user')
+check(!(await editor.page.locator(MACHINES).count()), 'keys is absent for a user')
+check(!(await editor.page.locator(PEOPLE).count()), 'people is absent for a user')
 
 // Absent, never disabled -- the letter of #490's grammar. A greyed-out
 // control satisfies "cannot use this" while breaking the rule the record
@@ -205,10 +206,13 @@ check(
 await viewer.browser.close()
 await editor.browser.close()
 
-page.on('dialog', (d) => d.accept())
+// Arm-then-confirm (round 28's gesture): a click arms remove, a second
+// click on the same button confirms it.
 for (const u of [VIEWER_USER, EDITOR_USER]) {
-  await page.click(`${PEOPLE} .row:has-text("${u}") .verb`)
-  await page.waitForSelector(`${PEOPLE} .row:has-text("${u}")`, { state: 'detached' })
+  const remove = page.locator(`${PEOPLE} .prow:has-text("${u}") .remove`)
+  await remove.click()
+  await remove.click()
+  await page.waitForSelector(`${PEOPLE} .prow:has-text("${u}")`, { state: 'detached' })
 }
 check(true, `the viewer and user accounts are removed again`)
 
