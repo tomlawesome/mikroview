@@ -31,8 +31,9 @@ const { page, consoleErrors } = await session()
 // one badly-chosen token name away from clicking Remove on a person.
 const DOOR = '#keys'
 
-// goTo() itself waits for the Settings card to be centred -- round 30
-// draws no page heading to wait for separately (#697/#700).
+// goTo's own wait (SCENES in live-browser.mjs, waiting for the engineroom card to centre) is what proves arrival --
+// this used to also wait for `.page-header h2`, but #700 unmounted PageHeader from EngineRoom.svelte entirely, so
+// that selector no longer exists anywhere on the page (#667 group E).
 await goTo(page, 'Settings')
 check(true, "the rail's engine room row opens the engine room")
 check((await page.$$('.modal')).length === 0, 'no modal renders -- keys is part of the page')

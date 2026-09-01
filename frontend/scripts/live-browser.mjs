@@ -350,8 +350,11 @@ export async function goTo(page, label, { unfold = true } = {}) {
     )
     if (scene.tab) {
       // Round 30 (#697/#700) moved the docket's tabs into SceneBar's own
-      // switcher (.switch[role="tablist"] .sw), plain text with no
-      // nested .tlabel span -- the selector this used to read.
+      // switcher (.switch[role="tablist"] .sw). They are still
+      // `role="tab"` buttons (SceneBar.svelte:77-99), but the label now
+      // sits straight in the button: the inner `.tlabel` span this used
+      // to match through is gone. Ten scenarios died here, every one of
+      // them before its own first assertion (#692, #667).
       await page.click(`.card[data-card="${scene.card}"] [role="tab"]:text-is("${scene.tab}")`)
     }
     // Every arrival at the stream, not just the first. FilterBar's
