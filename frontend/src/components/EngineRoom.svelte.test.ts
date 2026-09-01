@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #633 (rounds 23-25): Settings is the shelf -- five groups reporting
-// live truth, the deck's cards in the kept order with sign-in landing
-// on the first, and the watcher bench behind detection's tune row.
-// #490's absorbed pages (Users/Tokens/Detectors) live on behind the
-// doors and the bench; the viewer/admin split those tests carried is
-// unchanged (chip once, verbs gated, facts identical).
+// #633 (rounds 23-25): Settings is the shelf -- groups reporting live
+// truth, the deck's cards in the kept order with sign-in landing on the
+// first, and the watcher bench behind detection's tune row. #490's
+// absorbed pages (Users/Tokens/Detectors) live on behind keys/people and
+// the bench; the viewer/admin split those tests carried is unchanged
+// (chip once, verbs gated, facts identical).
 //
-// Round 30 (#700/#691): the side doors (EngineRoomDoors' "who may look
-// in" and "which machines may speak") are unmounted, not deleted --
-// round 30's own settings page draws exactly four groups and fits
-// without scrolling. USERS_DOOR_ENABLED/TOKENS_DOOR_ENABLED are both
-// false, so every assertion below about the doors checks that they are
-// absent for every role, admin included.
+// Round 32 (#767): keys (under ingest) and people (under account) are
+// mounted directly in the card, in its own row grammar, replacing the
+// retired EngineRoomDoors.svelte and its USERS_DOOR_ENABLED/
+// TOKENS_DOOR_ENABLED flags outright -- no shim, per AGENTS.md's
+// "removals are wholesale". Both groups are gated on isAdmin: GET
+// /api/tokens and GET /api/auth/users are both admin-only server-side
+// (#657), so a `user` or `viewer` session gets neither group at all, not
+// a read-only rendering of one.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
@@ -136,7 +138,7 @@ describe('The settings shelf (#633)', () => {
     render(EngineRoom)
     await settle()
 
-    for (const name of ['your deck', 'ingest', 'detection', 'memory', 'account']) {
+    for (const name of ['your deck', 'ingest', 'keys', 'detection', 'memory', 'account', 'people']) {
       expect(screen.getByText(name)).toBeTruthy()
     }
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
@@ -209,7 +211,7 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByRole('button', { name: 'close the bench' })).toBeTruthy()
   })
 
-  it('a viewer sees the chip, no verbs, and no side doors at all', async () => {
+  it('a viewer sees the chip, no verbs, and neither keys nor people', async () => {
     authState.state = 'authenticated'
     authState.role = 'viewer'
     render(EngineRoom)
@@ -224,53 +226,213 @@ describe('The settings shelf (#633)', () => {
     // pins the present truth so the gap cannot be mistaken for done.
     expect(screen.queryByText('READ-ONLY')).toBeNull()
 
-    // Round 30 (#700/#691): neither side door is mounted for any role,
-    // so a viewer sees no tokens door and no users door -- not the old
-    // "tokens readable, users admin-only" split. TOKENS_DOOR_ENABLED /
-    // USERS_DOOR_ENABLED are both false in EngineRoomDoors.svelte. When
-    // a future round remounts them, #657's own gate (both doors
-    // admin-only -- see EngineRoomDoors.svelte's isAdmin check, and
-    // internal/api/tokens_test.go's TestTokensListAdminOnly for the
-    // route it depends on) has to hold for the `user` tier too, not
-    // only `viewer`.
+    // Both groups are gated on isAdmin (see EngineRoom.svelte's own doc
+    // comment): GET /api/tokens and GET /api/auth/users 403 for a
+    // viewer, so neither group renders at all -- absent, not a
+    // read-only view of one.
+    expect(screen.queryByText('keys')).toBeNull()
+    expect(screen.queryByText('people')).toBeNull()
     expect(screen.queryByText('rb5009-ingest')).toBeNull()
-    expect(screen.queryByText(/ingest: rb5009/)).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '+ Mint a key' })).toBeNull()
-    expect(screen.queryByText('Who may look in')).toBeNull()
-    expect(screen.queryByText('Which machines may speak')).toBeNull()
-    expect(screen.queryByText('The side doors — who and what may come in')).toBeNull()
-    expect(screen.queryByRole('button', { name: '+ Let someone in' })).toBeNull()
+    expect(screen.queryByText(/ingest · speaks for rb5009/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'revoke' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '+ mint a key' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '+ let someone in' })).toBeNull()
   })
 
-  it('an admin sees no side doors either -- round 30 draws none (#700/#691)', async () => {
+  it('an admin sees keys and people, populated from the state modules', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.username = 'tom'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByText('READ-ONLY')).toBeNull()
+    expect(screen.getByText('keys')).toBeTruthy()
+    expect(screen.getByText('people')).toBeTruthy()
+
+    // The seeded ingest token, chipped with the device it speaks for.
+    expect(screen.getByText('rb5009-ingest')).toBeTruthy()
+    expect(screen.getByText('ingest · speaks for rb5009')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'revoke' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '+ mint a key' })).toBeTruthy()
+
+    // The seeded accounts: tom is the caller ("this is you"), and the
+    // admin row ends console-only rather than a remove verb.
+    expect(screen.getByText('tom')).toBeTruthy()
+    expect(screen.getByText(/this is you/)).toBeTruthy()
+    expect(screen.getByText('console-only')).toBeTruthy()
+    expect(screen.getByText('kai')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '+ let someone in' })).toBeTruthy()
+  })
+
+  it('minting a key shows the once-only reveal, and done lets the form close', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
     await settle()
 
-    expect(screen.queryByText('READ-ONLY')).toBeNull()
-    // Unmounted, not deleted: an admin gets the same absence a viewer
-    // does, even though usersState/tokensState still hold the admin's
-    // own data underneath (see the mint-banner test below).
-    expect(screen.queryByText('Who may look in')).toBeNull()
-    expect(screen.queryByRole('button', { name: '+ Let someone in' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '+ Mint a key' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
+    const { createToken } = await import('../lib/api')
+    vi.mocked(createToken).mockResolvedValueOnce({
+      id: 't9',
+      name: 'nas-read',
+      kind: 'api',
+      createdAt: '2026-09-01T00:00:00Z',
+      value: 'mv1_4c21secret9b0d',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
+    await settle()
+    await fireEvent.input(screen.getByLabelText('key name'), { target: { value: 'nas-read' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
+    await settle()
+
+    expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined)
+    expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
+    expect(screen.getByText(/shown once — mikroview keeps only its fingerprint/)).toBeTruthy()
+    // A read-only key gets no RouterOS lines.
+    expect(screen.queryByText(/copy for RouterOS/)).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'done' }))
+    await settle()
+
+    expect(screen.queryByText('mv1_4c21secret9b0d')).toBeNull()
+    expect(screen.getByRole('button', { name: '+ mint a key' })).toBeTruthy()
   })
 
-  it('shows a user no read-only chip: they edit the watchers station here', async () => {
+  it('an ingest key reveal offers copy for RouterOS', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchDevices } = await import('../lib/api')
+    vi.mocked(fetchDevices).mockResolvedValueOnce([
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        sourceIp: '203.0.113.5',
+        configured: true,
+        firstSeen: '2026-08-01T00:00:00Z',
+        lastSeen: '2026-09-01T00:00:00Z',
+        eventCount: 10,
+        status: 'live',
+        routerosVersion: '',
+      },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    const { createToken } = await import('../lib/api')
+    vi.mocked(createToken).mockResolvedValueOnce({
+      id: 't10',
+      name: 'rb5009-b',
+      kind: 'ingest',
+      device: 'rb5009',
+      createdAt: '2026-09-01T00:00:00Z',
+      value: 'mv1_ingestsecret',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
+    await settle()
+
+    expect(createToken).toHaveBeenCalledWith('', 'ingest', 'rb5009')
+    expect(screen.getByText('mv1_ingestsecret')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'copy for RouterOS' })).toBeTruthy()
+  })
+
+  it("revoke arms before it acts, and any other click disarms it", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const { revokeToken } = await import('../lib/api')
+    const revoke = screen.getByRole('button', { name: 'revoke' })
+
+    await fireEvent.click(revoke)
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — it stops speaking now' })).toBeTruthy()
+    expect(revokeToken).not.toHaveBeenCalled()
+
+    // Clicking elsewhere disarms it rather than revoking.
+    await fireEvent.click(document.body)
+    await settle()
+    expect(screen.getByRole('button', { name: 'revoke' })).toBeTruthy()
+    expect(revokeToken).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'revoke' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — it stops speaking now' }))
+    await settle()
+    expect(revokeToken).toHaveBeenCalledWith('t1')
+  })
+
+  it('letting someone in calls the create endpoint with the picked role', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const { createUser } = await import('../lib/api')
+    await fireEvent.click(screen.getByRole('button', { name: '+ let someone in' }))
+    await settle()
+    await fireEvent.input(screen.getByLabelText('username'), { target: { value: 'mia' } })
+    await fireEvent.input(screen.getByLabelText('password'), { target: { value: 'first-password' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'can only look' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'let them in' }))
+    await settle()
+
+    expect(createUser).toHaveBeenCalledWith('mia', 'first-password', 'viewer')
+  })
+
+  it("remove arms before it acts, same gesture as revoke", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const { deleteUser } = await import('../lib/api')
+    const remove = screen.getByRole('button', { name: 'remove' })
+
+    await fireEvent.click(remove)
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' }))
+    await settle()
+    expect(deleteUser).toHaveBeenCalledWith('u2')
+  })
+
+  it('only one verb is armed at a time: arming remove disarms an armed revoke', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'revoke' }))
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — it stops speaking now' })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'confirm — it stops speaking now' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'revoke' })).toBeTruthy()
+  })
+
+  it('shows a user no read-only chip, and neither keys nor people: they edit the watchers station here', async () => {
     // #653: the chip follows canEdit, not isAdmin. Telling a user this
-    // page is read-only was wrong -- the owner-level doors are gated,
-    // the page is not.
+    // page is read-only was wrong -- keys and people are gated, the
+    // page is not.
     authState.state = 'authenticated'
     authState.role = 'user'
     render(EngineRoom)
     await settle()
 
     expect(screen.queryByText('READ-ONLY')).toBeNull()
-    // The owner-level door is still absent for them.
-    expect(screen.queryByText('Who may look in')).toBeNull()
+    expect(screen.queryByText('keys')).toBeNull()
+    expect(screen.queryByText('people')).toBeNull()
   })
 
   // #653's three tiers: running the detector bench (enable/pause, edit
@@ -303,13 +465,7 @@ describe('The settings shelf (#633)', () => {
     expect(document.querySelector('.scope-knob')).toBeTruthy()
   })
 
-  it('the mint banner has nowhere to show while the tokens door is unmounted (#700/#691)', async () => {
-    // Before round 30, this asserted the just-minted secret's banner
-    // rendered exactly once. TOKENS_DOOR_ENABLED is now false, and the
-    // banner lives inside that door's own markup, so it renders zero
-    // times rather than once -- a tracked gap (#691), not silent data
-    // loss: tokensState.justCreated itself is untouched, and the banner
-    // reappears the moment the flag flips back.
+  it('a reveal already in state (e.g. a remount mid-session) still renders, not just a freshly-minted one', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     tokensState.justCreated = {
@@ -322,9 +478,10 @@ describe('The settings shelf (#633)', () => {
     render(EngineRoom)
     await settle()
 
-    expect(screen.queryAllByText('mv1_4c21secret9b0d')).toHaveLength(0)
-    expect(screen.queryAllByText(/Copy it now/)).toHaveLength(0)
-    expect(tokensState.justCreated?.value).toBe('mv1_4c21secret9b0d')
+    expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
+    expect(screen.getByText(/shown once — mikroview keeps only its fingerprint/)).toBeTruthy()
+    // The revealed token does not also render as an ordinary row.
+    expect(screen.queryAllByText('nas-read')).toHaveLength(1)
   })
 
   // #677: the three previously-unbuilt rows.
