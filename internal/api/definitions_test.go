@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -824,6 +825,132 @@ func TestHandleDefinitionsUpdateStartsObservingWhenInverted(t *testing.T) {
 	got, _, _ := s.Definitions.GetExpectation(entry.ID)
 	if !got.Observing {
 		t.Error("expected Observing=true after switching to inverted")
+	}
+}
+
+// --- Window (#773) ---------------------------------------------------------
+
+// TestHandleDefinitionsCreateWithWindow pins that POST can set a window at
+// creation time -- before this, expectationRequest had no Window field at
+// all, so every watch created through the API was silently "always".
+func TestHandleDefinitionsCreateWithWindow(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	window := watchlist.Window{Start: 0, End: 6 * 60, Zone: "Europe/London"}
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:        "quiet hours",
+		Expectation: &expectationRequest{Ports: []int{22}, Window: &window},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	got := mustDecodeDefinition(t, resp)
+	if got.Expectation == nil || !reflect.DeepEqual(got.Expectation.Window, window) {
+		t.Errorf("expected window %+v, got %+v", window, got.Expectation)
+	}
+
+	stored, _, err := s.Definitions.GetExpectation(got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stored.Window, window) {
+		t.Errorf("window not persisted: got %+v, want %+v", stored.Window, window)
+	}
+}
+
+// TestHandleDefinitionsUpdateSetsWindow pins that PUT can set a window on
+// an existing expectation that had none.
+func TestHandleDefinitionsUpdateSetsWindow(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{Name: "e", Expectation: &expectationRequest{Ports: []int{22}}})
+	entry := mustDecodeDefinition(t, created)
+	if entry.Expectation.Window.Defined() {
+		t.Fatal("setup failed: expected the fresh entry to start with no window")
+	}
+
+	window := watchlist.Window{Start: 22 * 60, End: 6 * 60}
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{Ports: []int{22}, Window: &window},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _, _ := s.Definitions.GetExpectation(entry.ID)
+	if !reflect.DeepEqual(got.Window, window) {
+		t.Errorf("expected window %+v, got %+v", window, got.Window)
+	}
+}
+
+// TestHandleDefinitionsUpdateRejectsInvalidWindow pins that a window this
+// package cannot turn into instants -- here, a zone tzdata cannot load --
+// is refused with a 400 rather than stored to drift silently. Reuses
+// watchlist's own "made-up zone" case (window_test.go's TestWindowValidate)
+// rather than asserting a second, narrower notion of "invalid".
+func TestHandleDefinitionsUpdateRejectsInvalidWindow(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{Name: "e", Expectation: &expectationRequest{Ports: []int{22}}})
+	entry := mustDecodeDefinition(t, created)
+
+	badWindow := watchlist.Window{Start: 0, End: 6 * 60, Zone: "Middle/Earth"}
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{Ports: []int{22}, Window: &badWindow},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an unloadable zone, got %d", resp.StatusCode)
+	}
+
+	got, _, _ := s.Definitions.GetExpectation(entry.ID)
+	if got.Window.Defined() {
+		t.Errorf("a refused update must not have taken effect, got window %+v", got.Window)
+	}
+}
+
+// TestHandleDefinitionsUpdateOmittedWindowLeavesItUnchanged pins the
+// decision behind expectationRequest.Window being a pointer: an update that
+// does not mention window (as the docket form does not yet -- #772, round
+// 31) must not reset an existing window to "always" as a side effect of
+// editing something else, here Ports.
+func TestHandleDefinitionsUpdateOmittedWindowLeavesItUnchanged(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	window := watchlist.Window{Start: 0, End: 6 * 60}
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:        "e",
+		Expectation: &expectationRequest{Ports: []int{22}, Window: &window},
+	})
+	entry := mustDecodeDefinition(t, created)
+	if !reflect.DeepEqual(entry.Expectation.Window, window) {
+		t.Fatalf("setup failed: expected window %+v, got %+v", window, entry.Expectation.Window)
+	}
+
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{Ports: []int{22, 2222}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _, _ := s.Definitions.GetExpectation(entry.ID)
+	if len(got.Ports) != 2 {
+		t.Errorf("expected the port edit to apply, got %+v", got.Ports)
+	}
+	if !reflect.DeepEqual(got.Window, window) {
+		t.Errorf("expected window to survive an update that did not mention it: got %+v, want %+v", got.Window, window)
 	}
 }
 
