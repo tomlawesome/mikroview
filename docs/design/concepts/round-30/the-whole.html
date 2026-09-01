@@ -2224,9 +2224,19 @@
     'tv-lounge': { ip: '10.0.20.6', lane: 'iot', rows: ['evening talker · https only'] },
   };
   var ni = document.getElementById('nodeinfo');
+  // The node name is read back out of this page's own markup, so nothing
+  // hostile can reach it -- but it still lands in innerHTML, which the
+  // scanner reads as DOM text reinterpreted as HTML. Escape it rather
+  // than argue with the check: the names carry no markup, so the panel
+  // renders identically either way.
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
   function showNode(name, x, y) {
     var info = NODE_INFO[name.replace(/\s*[✱○·].*$/, '').trim()] || { ip: '—', lane: '—', rows: ['no record yet — it has not spoken'] };
-    ni.innerHTML = '<b>' + name + '</b><span class="ni-ip">' + info.ip + ' · ' + info.lane + '</span>'
+    ni.innerHTML = '<b>' + escHtml(name) + '</b><span class="ni-ip">' + info.ip + ' · ' + info.lane + '</span>'
       + info.rows.map(function (r) { return '<div class="ni-row">' + r + '</div>'; }).join('')
       + (info.warn ? '<div class="ni-row ni-warn">' + info.warn + '</div>' : '')
       + (info.watch ? '<div class="ni-row" style="color:#a78bfa">' + info.watch + '</div>' : '')
