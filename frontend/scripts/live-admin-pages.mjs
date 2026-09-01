@@ -47,10 +47,14 @@ async function openAndCheck(label) {
  * standalone page reachable only from the phone-width bottom bar's Admin group (App.svelte's DECK_VIEWS comment:
  * "Fleet alone is left outside it ... reached only from the phone-width bottom bar now"). Proven the way
  * live-nav-bottom-bar.mjs proves any other bottom-bar destination: resize down, open the half-sheet, click Fleet's
- * row inside it, and read the .intro paragraph Fleet.svelte always renders (it carries no heading -- #697/#700 --
- * and no table when the fleet is empty, but the intro text is unconditional). Lands back on Detect/Flags before
- * restoring the desktop viewport, not Expect/Watchlist, because Expect is gated away from a viewer (navGroups.ts)
- * and this helper runs for both roles. */
+ * row inside it, and read the arrival the rebuilt card (#706, #778) actually renders: a per-device status mark
+ * plus its written label -- '● LIVE', '◌ QUIET · Nd' or '◌ NEVER SEEN' (lib/fleet.ts's deviceState, drawn by
+ * Fleet.svelte's .fstate span). That vocabulary, not a structural class, is what proves Fleet's own content
+ * mounted -- the same wording Entities' leading row uses for the same cards, but the two never render at once
+ * (App.svelte's view switch is exclusive), so seeing it here after this click is Fleet's. Assumes the gate's
+ * fleet has at least one device that has ever reported in, same assumption live-connection-states.mjs makes.
+ * Lands back on Detect/Flags before restoring the desktop viewport, not Expect/Watchlist, because Expect is
+ * gated away from a viewer (navGroups.ts) and this helper runs for both roles. */
 async function checkFleetFromBottomBar(target) {
   await target.setViewportSize({ width: 390, height: 844 })
   await target.waitForSelector('.bottom-bar', { timeout: 5000 })
@@ -59,7 +63,7 @@ async function checkFleetFromBottomBar(target) {
   const sheetItems = await target.$$eval('.sheet .sheet-item .label', (els) => els.map((e) => e.textContent.trim()))
   await target.click('.sheet .sheet-item .label:text-is("Fleet")')
   await target.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
-  await target.waitForSelector('.intro:has-text("Every RouterOS device")', { timeout: 5000 })
+  await target.waitForSelector('text=/● LIVE|◌ QUIET|◌ NEVER SEEN/', { timeout: 5000 })
   await target.click('.bottom-bar .group-btn .label:text-is("Detect")')
   await target.waitForSelector('.flags-page', { timeout: 5000 })
   await target.setViewportSize({ width: 1280, height: 720 })
