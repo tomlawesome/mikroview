@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #616: the fall as the landing page. live-nav-rail.mjs already proves
+// #616: the fall as the landing page. live-roll-rail.mjs already proves
 // "The fall" is what session() lands on; this scenario is the fall's own
 // behaviour, and needs a real pushed filter-rule table (not just synthetic
 // events) to exercise the one thing worth a browser for: telling a dark
