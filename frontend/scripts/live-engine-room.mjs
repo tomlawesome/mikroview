@@ -31,12 +31,10 @@ const { page, consoleErrors } = await session({ waitForEvents: 40 })
 const PEOPLE = '.door:has-text("Who may look in")'
 const MACHINES = '.door:has-text("Which machines may speak")'
 
+// goTo's own wait (SCENES in live-browser.mjs, waiting for the engineroom card to centre) is what proves arrival --
+// this used to also wait for `.page-header h2`, but #700 unmounted PageHeader from EngineRoom.svelte entirely, so
+// that selector no longer exists anywhere on the page (#667 group E).
 await goTo(page, 'Settings')
-await page.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
-  null,
-  { timeout: 5000 },
-)
 
 // --- The page is the five groups, with both doors below the shelf -------
 
@@ -133,8 +131,12 @@ check(
 await page.click('.olink:has-text("tune")')
 await page.waitForSelector('.bench .row')
 
+// .page-header h2 is gone with #700 (see above); the roll rail's own current-scene marker is what proves the page
+// underneath the unfolded bench is still Settings.
 check(
-  (await page.textContent('.page-header h2'))?.trim() === 'Settings',
+  (await page
+    .$eval('.roll-rail button.rail-name[aria-current="page"]', (e) => e.textContent.trim())
+    .catch(() => null)) === 'Settings',
   'the page is still Settings -- the bench unfolded in place, it did not navigate away',
 )
 check(
@@ -200,14 +202,15 @@ await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
 await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 
+// goTo's own wait proves arrival -- .page-header h2 is gone with #700, same as the admin half of this scenario
+// above.
 await goTo(viewerPage, 'Settings')
-await viewerPage.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
-  null,
-  { timeout: 5000 },
-)
 check(true, 'a viewer can open Settings -- the one Admin-group page that is readable')
 
+// Deliberately left asserting against a header that no longer renders: EngineRoom.svelte's own comment
+// (frontend/src/components/EngineRoom.svelte:251-256) records that #700 took the READ-ONLY chip off the page with
+// no replacement, and that this is a tracked gap (#691), not a quiet drop. Weakening this check would make the
+// harness agree the grammar is fine when the app itself says it is not currently said anywhere.
 const chips = await viewerPage.$$eval('.page-header .chip', (els) => els.map((e) => e.textContent.trim()))
 check(
   // #653: the chip names no tier any more -- with three of them,
