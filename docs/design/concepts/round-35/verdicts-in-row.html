@@ -1409,7 +1409,7 @@
         e.stopPropagation();
         var v = b.dataset.v, d = document.getElementById(r.dataset.d);
         if (v === 'real') {
-          // real keeps the flag open: the stamp takes the chips' place, with retract, and the bar swells
+          // real keeps the flag open: the stamp takes the chips' place, with undo, and the bar swells
           r.classList.add('isreal'); strike(r, 'real');
           var c = r.cells[5];
           c.innerHTML = '<span class="vdone"><span class="stamp real">real</span><a>undo</a></span><span class="openc">▸</span>';
