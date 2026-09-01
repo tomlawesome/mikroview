@@ -11,6 +11,13 @@ firewall events, and drives it in Chromium via Playwright.
 
 Not the test suite. Run it in addition, not instead.
 
+**It does not have to run here.** `make live-check-remote` runs the same gate
+on the second host, so this machine stays free for the 35-50 minutes it takes.
+Same suite, and `MV_BROWSER=firefox` or `webkit` drives an engine the local
+run never does -- which is how #659 shipped a static style attribute Chromium
+tolerates and Firefox refuses. Peer sessions share this workstation, so prefer
+the remote form when someone else may want the machine.
+
 ## Why this exists
 
 Nearly every defect worth finding in this project was found by running it.
