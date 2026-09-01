@@ -1,29 +1,49 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
-  // Multi-router-fleet health view (issue #98): every known device (both
-  // configured, from config.yaml's `devices` list, and auto-discovered --
-  // seen on the wire but not yet added there) in one table, with the
-  // server-computed live/stale/never-seen status GET /api/devices now
-  // reports (see internal/api/rest.go's deviceView/deviceStatus). This is
-  // the richer, dedicated view the toolbar's small DeviceStatus dot-strip
-  // was never meant to replace -- that one stays a glance-and-go
-  // indicator (see its own doc comment); this one is where you'd actually
-  // come to check on a whole fleet. The sort/status logic itself lives in
-  // lib/fleet.ts (#647): Entities.svelte's leading "routers" section
-  // reads the same module, now that the deck's Entities card is where
-  // this table leads rather than living on a card of its own.
+  //
+  // Multi-router-fleet health view (issue #98), reshaped onto the deck's
+  // own clothes for #657/#706: every known device (both configured, from
+  // config.yaml's `devices` list, and auto-discovered -- seen on the
+  // wire but not yet added there), with the server-computed
+  // live/stale/never-seen status GET /api/devices reports.
+  //
+  // #647 folded the old table into Entities' card for the user/admin
+  // tiers, leaving this component reachable only from the phone-width
+  // bottom bar -- but #657's ratified matrix keeps Fleet itself
+  // viewer-visible ("a stale router is *why* the log looks wrong")
+  // while ruling Entities and Settings out of a viewer's navigation
+  // entirely, so this is a deck card again for a viewer (deckCards.ts's
+  // `fleet` key). Being a card of round 30's deck, it wears the deck's
+  // identity, not the retired operate-page frame it was born in:
+  //
+  // - The same router cards as Entities' leading row (#675/#718), not
+  //   the old flat table -- deviceState/ratePerSecond live in
+  //   lib/fleet.ts so the two surfaces literally share the vocabulary
+  //   and cannot drift. A viewer's Fleet and a user's Entities describe
+  //   the same routers in the same voice.
+  // - No page heading and no strap (#697, "I meant all... No page
+  //   heading, no strap"); the row keeps only the .og h3 label, the
+  //   same one Entities prints over the same cards.
+  // - No berth, no add-router affordance of any kind: adding a router
+  //   is a change, and #657's grammar is absent, never disabled. This
+  //   card exists so a viewer can read why the log looks wrong -- a
+  //   quiet router is presented as a fact to read, not a fault to fix.
+  // - Status is a mark plus a written label (#616: never colour alone),
+  //   and a router with an active silence flag carries a real link into
+  //   the docket's flags tab -- the one place a viewer can take that
+  //   reading further.
+  //
+  // Fleet never carried a readOnly chip (#548/#490's grammar): the view
+  // has no edit affordance for anyone, admin included, so there is no
+  // distinction to declare.
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
-  import { formatRelative, formatHM } from '../lib/format'
-  import { STATUS_LABEL, sortedDevices, recentCount as recentCountOf } from '../lib/fleet'
+  import { formatRelative } from '../lib/format'
+  import { deviceState, sortedDevices, ratePerSecond } from '../lib/fleet'
   import GhostRows from './GhostRows.svelte'
 
   const rows = $derived(sortedDevices(appState.devices))
-
-  function recentCount(deviceId: string): number {
-    return recentCountOf(appState.events, deviceId, appState.now)
-  }
 
   // True when this device has an active (unacknowledged) device_silence
   // flag -- distinct from status === 'stale': the flag only exists for a
@@ -35,13 +55,21 @@
     return flagsState.list.some((f) => f.type === 'device_silence' && f.target === deviceId && !f.cleared)
   }
 
-  // Mirrors LiveTable's own emptyState derived (#549): a zero-row table
-  // is either "the app's one loadInitial() call hasn't come back yet" or
+  // The flag chip is a real door, not a decoration: the flags tab is
+  // where a viewer reads what the silence means, and they can reach it.
+  // Setting the view rolls the deck there (Deck.svelte's own effect);
+  // at phone width the same assignment lands on the docket card.
+  function openFlags() {
+    appState.view = 'flags'
+  }
+
+  // Mirrors LiveTable's own emptyState derived (#549): zero devices is
+  // either "the app's one loadInitial() call hasn't come back yet" or
   // "it has, and mikroview has never seen a device" -- the second is
   // first-run's sharpest client-side signal, since seeing a device is
   // exactly what running setup produces. See appState.initialLoadDone's
-  // doc comment for why that flag, rather than rows.length or fetchFailed
-  // alone, is what tells the two apart.
+  // doc comment for why that flag, rather than rows.length or
+  // fetchFailed alone, is what tells the two apart.
   const emptyState = $derived.by((): { kind: 'ghost' } | { kind: 'text'; text: string } => {
     if (!appState.initialLoadDone) return { kind: 'ghost' }
     return {
@@ -54,86 +82,89 @@
   })
 </script>
 
-<div class="page scrollbar">
-  <!-- No page heading (#697/#700). Fleet never carried a readOnly chip
-       either (#548/#490's grammar): the table has no edit affordance for
-       anyone, admin included, so there is no distinction to declare. -->
-  <p class="intro">
-    Every RouterOS device mikroview has seen syslog from, or that's configured in <code>devices</code> but hasn't
-    sent anything yet. A <strong>configured</strong> device that goes quiet for longer than the configured staleness
-    threshold also raises a flag (see the Flags tab) -- this view is where you'd notice it happening, or notice a
-    device that's simply never been wired up correctly in the first place.
-  </p>
-
-  {#if rows.length === 0}
-    {#if emptyState.kind === 'ghost'}
-      <GhostRows label="Loading devices…" rows={4} />
-    {:else}
-      <div class="empty">{emptyState.text}</div>
-    {/if}
-  {:else}
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Device</th>
-            <th>Status</th>
-            <th>Last seen</th>
-            <th>Source IP</th>
-            <th class="num">Events (total)</th>
-            <th class="num">Recent (5m)</th>
-          </tr>
-        </thead>
-        <tbody>
+<div class="page scrollbar op-page">
+  <div class="opwrap"><div class="opanel">
+    <div class="og">
+      <h3>routers — every one that pushes here</h3>
+      {#if rows.length === 0}
+        {#if emptyState.kind === 'ghost'}
+          <GhostRows label="Loading devices…" rows={4} />
+        {:else}
+          <div class="empty">{emptyState.text}</div>
+        {/if}
+      {:else}
+        <div class="fcards">
           {#each rows as d (d.id)}
-            <tr class:row-stale={d.status === 'stale'} class:row-never={d.status === 'never_seen'}>
-              <td class="name-cell">
-                <span class="name">{d.name}</span>
-                {#if !d.configured}<span class="badge badge-unregistered">unregistered</span>{/if}
-                {#if hasActiveSilenceFlag(d.id)}<span class="badge badge-flag">flagged</span>{/if}
-              </td>
-              <td>
-                <span class="status status-{d.status}">
-                  <span class="dot"></span>
-                  {STATUS_LABEL[d.status]}
-                </span>
-              </td>
-              <td class="mono" title={d.lastSeen ? formatHM(d.lastSeen) : '—'}>
-                {d.status === 'never_seen' ? '—' : formatRelative(d.lastSeen, appState.now)}
-              </td>
-              <td class="mono dim">{d.sourceIp}</td>
-              <td class="num mono">{d.eventCount}</td>
-              <td class="num mono">{recentCount(d.id)}</td>
-            </tr>
+            {@const st = deviceState(d, appState.now)}
+            <div class="fcard" class:live={d.status === 'live'}>
+              <div class="fhead"><b>{d.name}</b><span class="fstate {st.cls}">{st.mark} {st.text}</span></div>
+              <div class="frow">
+                {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
+              </div>
+              {#if d.status === 'live'}
+                <div class="frow">
+                  {ratePerSecond(appState.events, d.id, appState.now)} events/s now · {d.eventCount} event{d.eventCount === 1 ? '' : 's'} ever
+                </div>
+              {:else if d.status === 'never_seen'}
+                <div class="frow dim">never heard from yet</div>
+              {:else}
+                <div class="frow dim">
+                  last heard {formatRelative(d.lastSeen, appState.now)} — quiet is a fact, not a fault
+                </div>
+              {/if}
+              {#if d.sourceIp}
+                <div class="frow dim">syslog from <span class="mono">{d.sourceIp}</span></div>
+              {/if}
+              {#if !d.configured}
+                <div class="frow dim">seen on the wire, not in the <span class="mono">devices</span> config</div>
+              {/if}
+              {#if hasActiveSilenceFlag(d.id)}
+                <button type="button" class="flag-door" onclick={openFlags} aria-label="Read the silence flag for {d.name} in the docket">
+                  ⚑ silence flagged — read it in the docket
+                </button>
+              {/if}
+            </div>
           {/each}
-        </tbody>
-      </table>
+        </div>
+      {/if}
     </div>
-  {/if}
+  </div></div>
 </div>
 
 <style>
+  /* The deck's own frame (#675/#718, same fields as Entities.svelte):
+     no bordered panel around already-bordered cards, label but no
+     heading, cards on the glass. Svelte scopes styles per component, so
+     these are the ported fields, with lib/fleet.ts holding the logic
+     that must not fork. */
   .page {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 14px 16px;
+    padding: 14px 16px 24px;
+  }
+
+  .op-page .opwrap {
     display: flex;
-    flex-direction: column;
-    gap: 14px;
+    justify-content: center;
   }
 
-  .intro {
-    margin: 0;
-    max-width: 80ch;
-    font-size: 13px;
-    color: var(--fg-muted);
-    line-height: 1.5;
+  .op-page .opanel {
+    width: 100%;
+    max-width: 1500px;
   }
 
-  .intro code {
-    font-family: var(--font-mono);
-    font-size: 12px;
+  .og {
+    margin-bottom: 20px;
+  }
+
+  .og h3 {
+    margin: 0 0 6px;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
   }
 
   .empty {
@@ -142,137 +173,92 @@
     padding: 10px 0;
   }
 
-  .table-wrap {
-    background: var(--bg-elevated);
+  .fcards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
+  }
+
+  .fcard {
+    background: var(--glass);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow-x: auto;
+    border-radius: 12px;
+    padding: 16px 20px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
   }
 
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
+  .fcard.live {
+    border-color: var(--hair-2);
   }
 
-  th,
-  td {
-    padding: 9px 14px;
-    text-align: left;
+  .fhead {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+    gap: 10px;
+  }
+
+  .fhead b {
+    font-size: 15px;
+    color: var(--fg);
+  }
+
+  .fstate {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
     white-space: nowrap;
   }
 
-  th {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--fg-muted);
-    border-bottom: 1px solid var(--border);
+  .fstate.ok {
+    color: var(--accept);
   }
 
-  th.num,
-  td.num {
-    text-align: right;
+  .fstate.quiet {
+    color: var(--fg-dim);
   }
 
-  tbody tr {
-    border-bottom: 1px solid var(--border);
+  .fcard .frow {
+    padding: 3px 0;
   }
 
-  tbody tr:last-child {
-    border-bottom: none;
-  }
-
-  .row-stale {
-    background: color-mix(in srgb, var(--drop) 6%, transparent);
-  }
-
-  .row-never {
-    background: color-mix(in srgb, var(--fg-dim) 6%, transparent);
-  }
-
-  .name-cell {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .name {
-    color: var(--fg);
-    font-weight: 600;
+  .frow.dim {
+    color: var(--fg-dim);
   }
 
   .mono {
     font-family: var(--font-mono);
-    color: var(--fg);
+    font-size: 11.5px;
   }
 
-  .mono.dim {
-    color: var(--fg-muted);
-  }
-
-  .badge {
-    font-size: 11px;
-    font-weight: 600;
-    border-radius: 3px;
-    padding: 1px 5px;
-    white-space: nowrap;
-  }
-
-  .badge-unregistered {
-    color: var(--drop);
-    border: 1px solid var(--drop);
-  }
-
-  .badge-flag {
-    color: var(--reject);
-    background: var(--reject-bg);
-  }
-
-  .status {
+  /* The silence flag's door into the docket: mark + words (#616), a
+     bordered chip rather than bare text so it reads as pressable, in
+     the reject family because that is the flag palette's own colour for
+     an uncleared flag -- but never colour alone. */
+  .flag-door {
+    margin-top: 8px;
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    background: var(--reject-bg);
+    color: var(--reject);
+    border: 1px solid var(--reject);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
   }
 
-  .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    flex: none;
+  .flag-door:hover {
+    filter: brightness(1.15);
   }
 
-  .status-live .dot {
-    background: var(--accept);
-    box-shadow: 0 0 6px var(--accept);
-  }
-
-  .status-live {
-    color: var(--accept);
-  }
-
-  .status-stale .dot {
-    background: var(--drop);
-    box-shadow: 0 0 6px var(--drop);
-  }
-
-  .status-stale {
-    color: var(--drop);
-  }
-
-  .status-never_seen .dot {
-    background: var(--fg-dim);
-  }
-
-  .status-never_seen {
-    color: var(--fg-dim);
-  }
-
-  @media (max-width: 700px) {
-    th,
-    td {
-      padding: 8px 10px;
-    }
+  .flag-door:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 </style>
