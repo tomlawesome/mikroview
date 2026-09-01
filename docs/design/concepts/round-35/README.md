@@ -12,10 +12,15 @@ exclusion is a verdict that outlives the flag** — and gains a corollary:
 
 ## What moved
 
-1. **The trio is the row's last cell**, before the caret: `expected` ·
-   `noise` · `real`, in the row's own mono at `ink-2`, one segmented
-   control, lit in the accent on hover and when chosen. Every flag row
-   carries it, so the column reads as a column. A click on a pill is a
+1. **The trio is the row's last cell**, before the caret, under its
+   own column head `CALL IT`: `expected · noise · real` as three quiet
+   verbs in the row's mono at `ink-3`, dot-separated the way the chrome
+   is. No boxes — the docket speaks in text and dotted underlines, and
+   three boxed pills a row were the heaviest thing on the page. The
+   row's hover lifts them to `ink-2`; a verb's own hover takes the
+   accent and the where-link's dotted underline; the chosen one keeps
+   the accent with a small filled dot after it. No filter under this
+   head: verdicts are given, not searched. A click on a verb is a
    verdict and never toggles the drawer (`closest('a, button')` in the
    row's click guard). `POST /api/flags/{id}/verdict {verdict}`.
 2. **Called expected or noise** dims the row where it stands, and the
@@ -43,9 +48,13 @@ round 34's README still apply.
 `let-it-fire-again`. Calls in `called-noise` and `called-expected` are
 made with the drawer closed.
 
-No new data palette: the row pills are round 30's pills at the row's
-size — the dataviz validator has nothing new to check.
+No new data palette: the verbs are the row's own mono in `ink-3`,
+`ink-2` and the accent — the dataviz validator has nothing new to
+check.
 
 ## Verdicts
 
-(none yet)
+2026-09-01, owner, on the first cut (three bordered pills a row): "Could
+we make this more aesthetically pleasing in keeping with Mikroview's new
+UI?" — reworked in place to the quiet text verbs above, before any
+acceptance.
