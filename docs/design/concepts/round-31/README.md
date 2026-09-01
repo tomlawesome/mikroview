@@ -84,4 +84,6 @@ round 30's, so the dataviz validator has nothing new to check.
 
 ## Verdicts
 
-_(none yet — posted on #691 when the owner replies)_
+Owner, 2026-09-01, on all six placements: *"Approved."* Round 31 is
+ratified as drawn and is the surface #691's watchlist build is faithful
+to.
