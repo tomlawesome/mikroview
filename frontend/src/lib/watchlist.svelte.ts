@@ -6,6 +6,7 @@ import {
   fetchWatchlistEntries,
   fetchWatchlistMatches,
   promoteWatchlistDestinations,
+  setWatchlistEnabled,
   setWatchlistObserving,
   updateWatchlistEntry,
   type WatchlistEntryRequest,
@@ -37,6 +38,14 @@ class WatchlistState {
   // (definitionCoverage, internal/api/definitions.go), so this inherits
   // that honesty guarantee for free rather than needing to reimplement it.
   brokenCount = $derived.by(() => this.entries.filter((e) => e.enabled && this.coverage[e.id] === 'no-logging').length)
+
+  // The scene bar's "◉ 7 ○ 1" (#683, ratified round 29): watchers
+  // actually holding, i.e. enabled and not ring-broken -- the same
+  // predicate Watchlist.svelte's own class:watching already uses, so
+  // the bar's count and the page's own per-row marker never disagree.
+  heldCount = $derived.by(
+    () => this.entries.filter((e) => e.enabled && this.coverage[e.id] !== 'no-logging').length,
+  )
 
   async refresh() {
     const { entries, coverage } = await fetchWatchlistEntries()
@@ -73,6 +82,17 @@ class WatchlistState {
 
   async setObserving(id: string, observing: boolean): Promise<string | null> {
     const result = await setWatchlistObserving(id, observing)
+    if (typeof result === 'string') return result
+    await this.refresh()
+    return null
+  }
+
+  // Pause/resume (#676's ratified "pause watch"/"resume watch"): the
+  // same enabled flag the broken-ring predicate and stateLabel already
+  // read, flipped from the drawer rather than only from the add/edit
+  // form (which never exposed a plain toggle for it).
+  async setEnabled(id: string, enabled: boolean): Promise<string | null> {
+    const result = await setWatchlistEnabled(id, enabled)
     if (typeof result === 'string') return result
     await this.refresh()
     return null

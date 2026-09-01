@@ -260,6 +260,25 @@ func (s *Server) definitionViewFor(sd engine.StoredDefinition, rulesByDevice map
 // which renders as silence rather than as a confident wrong claim.
 // CoverageOK is untouched, because one router demonstrably logging the
 // right traffic stays true however many others went unread.
+// expectationCoverage answers, per expectation id, whether any firewall
+// rule mikroview can see is logging that entry's pathway -- the input the
+// nightly fill needs to tell an empty night from one it could not observe
+// (watchlist.Observation). Only a definite "covered" counts: "unknown",
+// which is what an incomplete evidence base degrades every negative to
+// (#367), is not a claim that the pathway was logged, and a night filled
+// on the strength of it would be mikroview's own blind spot reported as
+// silence on the network.
+func expectationCoverage(stored []engine.StoredDefinition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool) map[string]bool {
+	out := make(map[string]bool)
+	for _, sd := range stored {
+		if !sd.Available || sd.Definition.Intent != engine.IntentExpectation {
+			continue
+		}
+		out[sd.Definition.ID] = definitionCoverage(sd.Definition, rulesByDevice, evidenceComplete) == engine.CoverageOK
+	}
+	return out
+}
+
 func definitionCoverage(d engine.Definition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool) engine.CoverageState {
 	state := d.Coverage(rulesByDevice)
 	if !evidenceComplete {
@@ -408,6 +427,18 @@ func (s *Server) handleDefinitionsList(w http.ResponseWriter, r *http.Request) {
 	rulesByDevice, evidence := s.definitionsCoverage()
 	now := time.Now()
 	stored := s.Definitions.List()
+	// Catch the nightly history up before rendering it (#680). This is the
+	// half of the lazy fill the evaluation path cannot do: an entry
+	// nothing has matched never reaches the match sink, and an empty
+	// night is exactly what such an entry needs written down.
+	//
+	// Idempotent and cheap -- a night is keyed by the instant its window
+	// opened and written once, so this does nothing at all until a window
+	// closes. The list is read again only when it actually wrote
+	// something, so the usual request pays one read, not two.
+	if s.Definitions.FillWatchNights(now, expectationCoverage(stored, rulesByDevice, evidence.Complete)) > 0 {
+		stored = s.Definitions.List()
+	}
 	out := make([]definitionView, 0, len(stored))
 	for _, sd := range stored {
 		out = append(out, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, now))

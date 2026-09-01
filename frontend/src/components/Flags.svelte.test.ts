@@ -5,8 +5,8 @@ import { render, screen, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 // Flags.svelte itself makes no requests directly -- these stop the
-// stores it pulls in (flagsState, exclusionsState) from reaching for the
-// network when they initialise under jsdom.
+// store it pulls in (flagsState) from reaching for the network when it
+// initialises under jsdom.
 vi.mock('../lib/api', () => ({
   fetchFlags: vi.fn(async () => ({ flags: [], timeSeries: [] })),
   clearFlag: vi.fn(),
@@ -16,19 +16,19 @@ vi.mock('../lib/api', () => ({
   deleteFlagVerdict: vi.fn(),
   fetchExclusions: vi.fn(async () => []),
   removeExclusion: vi.fn(),
+  fetchFlagEpisode: vi.fn(async () => ({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })),
 }))
 
-import { deleteFlagVerdict, fetchExclusions, setFlagVerdict } from '../lib/api'
+import { clearFlag, fetchFlagEpisode } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
-import { exclusionsState } from '../lib/exclusions.svelte'
 import { authState } from '../lib/auth.svelte'
-import type { Exclusion, Flag } from '../lib/types'
+import { appState } from '../lib/state.svelte'
+import { topologyNavState } from '../lib/topologyNav.svelte'
+import type { Flag } from '../lib/types'
 
-// jsdom has no window.matchMedia -- Flags.svelte pulls in
-// lib/viewport.svelte.ts, whose ViewportState singleton calls it at
-// module-load time. Polyfilled before the dynamic import below (a
-// static import would already have run this file's top-level code too
-// late to matter) -- same fix LiveTable.svelte.test.ts already needed.
+// jsdom has no window.matchMedia -- polyfilled before the dynamic import
+// below (a static import would already have run this file's top-level
+// code too late to matter), the same fix LiveTable.svelte.test.ts needs.
 if (!window.matchMedia) {
   window.matchMedia = (query: string) =>
     ({
@@ -45,10 +45,6 @@ if (!window.matchMedia) {
 
 const { default: Flags } = await import('./Flags.svelte')
 
-function exclusion(id: string, target: string): Exclusion {
-  return { id, type: 'port_scan', target }
-}
-
 function testFlag(overrides: Partial<Flag> = {}): Flag {
   return {
     id: 'f1',
@@ -63,97 +59,112 @@ function testFlag(overrides: Partial<Flag> = {}): Flag {
   }
 }
 
-// #547: Exclusions folded into Flags as a tab, admin-only (GET/DELETE
-// /api/flags/exclusions both 403 a non-admin caller). What this proves
-// that a plain unit test of exclusionsState alone cannot: the tab is
-// absent -- not merely unusable -- for a viewer, and the count it
-// carries for an admin is the quiet, outlined kind the record reserves
-// for in-page badges, never the rail's single alarm-filled count.
-describe('Flags Exclusions tab (#547)', () => {
+// #688: round 29 (`#s7`) ratified a *table* -- flag · where · evidence ·
+// count · age -- one row per open flag, each opening as a drawer beneath
+// itself. What shipped until now was a card grid with those five words
+// dressed as sort heads standing over it, which is why the ratified
+// language #678 added landed inside the wrong container. These
+// assertions replace the card-grid ones: they pin the structure the
+// record draws, so the same substitution cannot happen again quietly.
+describe('the ratified flags table (#688, round 29)', () => {
   beforeEach(() => {
     vi.resetAllMocks()
-    vi.mocked(fetchExclusions).mockResolvedValue([])
-    flagsState.list = []
-    exclusionsState.list = []
-  })
-
-  it('renders no tablist at all for a viewer -- a single-tab tablist is not the pattern', () => {
-    authState.state = 'authenticated'
-    authState.role = 'user'
-    render(Flags)
-    expect(screen.queryByRole('tablist')).toBeNull()
-    expect(screen.queryByRole('tab', { name: /Exclusions/ })).toBeNull()
-  })
-
-  it('carries no count on the Exclusions tab while the list is empty -- omitted, not shown as a permanent 0', async () => {
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
     authState.state = 'authenticated'
     authState.role = 'admin'
-    render(Flags)
-    await Promise.resolve()
-    flushSync()
-    const tab = screen.getByRole('tab', { name: 'Exclusions' })
-    expect(tab.querySelector('.count')).toBeNull()
+    flagsState.list = [testFlag({ target: '198.51.100.77', detail: '20 distinct ports in 40 s', count: 20 })]
   })
 
-  it('renders a tablist with an Exclusions tab for an admin', async () => {
-    authState.state = 'authenticated'
-    authState.role = 'admin'
+  it('draws the five ratified columns in order, plus the disclosure column', () => {
     render(Flags)
-    await Promise.resolve()
     flushSync()
-    expect(screen.getByRole('tablist', { name: 'Flags views' })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: 'Flags' })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: /Exclusions/ })).toBeTruthy()
+
+    const heads = Array.from(document.querySelectorAll('table.ftable thead tr:first-child th')).map((th) =>
+      th.textContent?.replace(/[▲▼]/g, '').trim(),
+    )
+    expect(heads).toEqual(['flag', 'where', 'evidence', 'count', 'age', ''])
   })
 
-  it('carries the current exclusion count on the tab, and it is not the rail badge markup', async () => {
-    vi.mocked(fetchExclusions).mockResolvedValue([exclusion('e1', '198.51.100.1'), exclusion('e2', '198.51.100.2')])
-    authState.state = 'authenticated'
-    authState.role = 'admin'
+  it('renders one row per open flag, carrying flag, where, evidence, count and age', () => {
     render(Flags)
-    await Promise.resolve()
-    await Promise.resolve()
     flushSync()
 
-    const tab = screen.getByRole('tab', { name: 'Exclusions 2' })
-    expect(tab.querySelector('.count')?.textContent).toBe('2')
+    const rows = document.querySelectorAll('tr.frow')
+    expect(rows).toHaveLength(1)
+    const cells = Array.from(rows[0].querySelectorAll('td')).map((td) => td.textContent?.trim())
+    expect(cells[0]).toBe('✱ Port scan')
+    expect(cells[1]).toBe('198.51.100.77')
+    expect(cells[2]).toBe('20 distinct ports in 40 s')
+    expect(cells[3]).toBe('20×')
+    expect(cells[4]).toBeTruthy()
   })
 
-  it('switching to the Exclusions tab shows its panel and hides the Flags panel', async () => {
-    vi.mocked(fetchExclusions).mockResolvedValue([exclusion('e1', '198.51.100.1')])
-    authState.state = 'authenticated'
-    authState.role = 'admin'
+  it('wears the flag type’s own family ink, as stripe and mark, on the row and its drawer', async () => {
     render(Flags)
-    await Promise.resolve()
+    flushSync()
+
+    // port_scan is the scan family (lib/flagPalette.ts, the record's own
+    // six hexes) -- the ink rides as --ft, which the CSS turns into the
+    // left stripe and the mark's colour on both row and drawer.
+    const row = document.querySelector('tr.frow') as HTMLElement
+    expect(row.getAttribute('style')).toContain('#ff9e64')
+    expect(row.querySelector('.fmark')?.textContent?.trim().startsWith('✱')).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+    expect((document.querySelector('tr.drawer') as HTMLElement).getAttribute('style')).toContain('#ff9e64')
+  })
+
+  it('opens a drawer as the very next row beneath its own row, not a panel inside a card', async () => {
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.drawer')).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
     await Promise.resolve()
     flushSync()
 
-    const flagsPanel = document.getElementById('panel-flags')
-    const exclusionsPanel = document.getElementById('panel-exclusions')
-    expect(flagsPanel?.hasAttribute('hidden')).toBe(false)
-    expect(exclusionsPanel?.hasAttribute('hidden')).toBe(true)
+    const row = document.querySelector('tr.frow') as HTMLElement
+    expect(row.classList.contains('open')).toBe(true)
+    expect(row.nextElementSibling?.classList.contains('drawer')).toBe(true)
+    expect(row.nextElementSibling?.querySelector('td')?.getAttribute('colspan')).toBe('6')
+  })
 
-    await fireEvent.click(screen.getByRole('tab', { name: /Exclusions/ }))
+  it('opens the drawer from a click anywhere on the row, as the record has it', async () => {
+    render(Flags)
     flushSync()
 
-    expect(flagsPanel?.hasAttribute('hidden')).toBe(true)
-    expect(exclusionsPanel?.hasAttribute('hidden')).toBe(false)
-    expect(screen.getByText('198.51.100.1')).toBeTruthy()
+    await fireEvent.click(document.querySelector('tr.frow') as HTMLElement)
+    await Promise.resolve()
+    flushSync()
+
+    expect(document.querySelector('tr.drawer')).toBeTruthy()
+  })
+
+  it('leaves no card grid behind', () => {
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('.card')).toBeNull()
+    expect(document.querySelector('.card-grid')).toBeNull()
   })
 })
 
-// A custom detection's flag carries the definition's own name as its
-// type -- a string the sixteen-entry palette and label tables cannot
-// know. Indexing them directly crashed the render on the first custom
-// flag, and because the deck mounts every card, that one flag took down
-// every scene at once (caught by the whole live-check suite timing out
-// from live-definitions onward). familyOf/labelFor are the fix; this
-// pins the render surviving.
+// A custom detector's type is a string the sixteen-entry label table
+// cannot know. familyOf/labelFor fall back rather than index blindly;
+// indexing FLAG_FAMILIES directly used to crash the render on the first
+// such flag, and because the deck mounts every scene, that one flag took
+// down every scene at once. This pins the render surviving.
 describe('a custom detection type renders without crashing', () => {
   beforeEach(() => {
     vi.resetAllMocks()
-    vi.mocked(fetchExclusions).mockResolvedValue([])
-    exclusionsState.list = []
+    authState.state = 'authenticated'
     authState.role = 'admin'
     flagsState.list = [
       {
@@ -169,270 +180,444 @@ describe('a custom detection type renders without crashing', () => {
     ]
   })
 
-  it('shows the card with the author-named type as its label', () => {
+  it('shows the row with the author-named type as its label', () => {
     render(Flags)
     flushSync()
-    // Two homes, both honest: the card's own type line (wearing the
-    // custom family's advisory mark) and the by-type breakdown.
-    expect(screen.getAllByText(/live-custom-detection watch/).length).toBeGreaterThan(0)
     expect(screen.getByText('▲ live-custom-detection watch')).toBeTruthy()
   })
 })
 
-// The verdict row itself (issue #638): bare-labelled buttons, the
-// undo-on-clear flow for expected/noise, and the badge that replaces the
-// row (never re-presenting a judged flag as an open question) for real.
-describe('Flags verdict row (#638)', () => {
+// #649, kept in the shape round 29 draws it: the column head *is* the
+// sort control, and the quiet dashed row beneath the heads is the
+// filter.
+describe('Flags table sort and filter (#649)', () => {
   beforeEach(() => {
     vi.resetAllMocks()
-    vi.mocked(fetchExclusions).mockResolvedValue([])
-    flagsState.list = []
-    flagsState.undoableVerdicts = []
-    exclusionsState.list = []
     authState.state = 'authenticated'
     authState.role = 'admin'
-    authState.username = 'alice'
+    flagsState.list = [
+      testFlag({
+        id: 'f1',
+        type: 'port_scan',
+        target: '198.51.100.1',
+        detail: 'twenty ports',
+        count: 20,
+        firstSeen: '2026-01-01T00:00:00Z',
+        lastSeen: '2026-01-01T00:00:00Z',
+      }),
+      testFlag({
+        id: 'f2',
+        type: 'outbound_anomaly',
+        target: '198.51.100.2',
+        detail: 'mail server',
+        count: 3,
+        firstSeen: '2026-01-01T00:10:00Z',
+        lastSeen: '2026-01-01T00:10:00Z',
+      }),
+    ]
   })
 
-  it('shows exactly three bare-labelled buttons for an unjudged flag -- no second line', async () => {
-    flagsState.list = [testFlag()]
+  // Was `.card .target`; the wheres now sit in the table's own second
+  // column, so this reads them from there. Same flags, same order
+  // expectations -- only the container changed.
+  function rowWheres() {
+    return Array.from(document.querySelectorAll('tr.frow td.k')).map((el) => el.textContent?.trim())
+  }
+
+  it('defaults to newest first (age ascending), matching the order this replaces', () => {
     render(Flags)
-    await Promise.resolve()
     flushSync()
-
-    const row = screen.getByRole('group', { name: 'Judge this flag' })
-    const labels = Array.from(row.querySelectorAll('button')).map((b) => b.textContent?.trim())
-    expect(labels).toEqual(['Expected', 'Noise', 'Real'])
+    expect(rowWheres()).toEqual(['198.51.100.2', '198.51.100.1'])
   })
 
-  it('Expected posts at once and clears the card, with an undo affordance shown', async () => {
-    vi.mocked(setFlagVerdict).mockResolvedValue(
-      testFlag({ cleared: true, verdict: 'expected', verdictBy: 'alice', verdictAt: 't' }),
-    )
-    flagsState.list = [testFlag()]
-    render(Flags)
-    flushSync()
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Expected' }))
-    await Promise.resolve()
-    await Promise.resolve()
-    flushSync()
-
-    // Posted immediately, not deferred behind the undo window (issue
-    // #638's rework: a deferred version of this lost the verdict
-    // whenever the page was torn down inside the window).
-    expect(setFlagVerdict).toHaveBeenCalledWith('f1', 'expected')
-    expect(screen.queryByRole('button', { name: '203.0.113.9' })).toBeNull()
-    expect(screen.getByText('Cleared as Expected')).toBeTruthy()
-  })
-
-  it('the undo affordance disappears on its own once the window lapses, without any further request', async () => {
-    vi.useFakeTimers()
-    vi.mocked(setFlagVerdict).mockResolvedValue(
-      testFlag({ cleared: true, verdict: 'expected', verdictBy: 'alice', verdictAt: 't' }),
-    )
-    flagsState.list = [testFlag()]
+  it('clicking a sort head (count) sorts by it, and again reverses', async () => {
     render(Flags)
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Expected' }))
-    await Promise.resolve()
-    await Promise.resolve()
+    await fireEvent.click(screen.getByRole('button', { name: /^count/ }))
     flushSync()
-    expect(screen.getByText('Cleared as Expected')).toBeTruthy()
+    expect(rowWheres()).toEqual(['198.51.100.2', '198.51.100.1'])
 
-    await vi.advanceTimersByTimeAsync(5000)
+    await fireEvent.click(screen.getByRole('button', { name: /^count/ }))
     flushSync()
-
-    expect(screen.queryByText('Cleared as Expected')).toBeNull()
-    expect(setFlagVerdict).toHaveBeenCalledTimes(1)
-    expect(deleteFlagVerdict).not.toHaveBeenCalled()
-    vi.useRealTimers()
+    expect(rowWheres()).toEqual(['198.51.100.1', '198.51.100.2'])
   })
 
-  it('Undo sends a real DELETE and restores the card, within the window', async () => {
-    vi.mocked(setFlagVerdict).mockResolvedValue(
-      testFlag({ cleared: true, verdict: 'noise', verdictBy: 'alice', verdictAt: 't' }),
-    )
-    vi.mocked(deleteFlagVerdict).mockResolvedValue(testFlag({ cleared: false }))
-    flagsState.list = [testFlag()]
+  it('a filter on evidence narrows the table to matching flags only', async () => {
     render(Flags)
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Noise' }))
-    await Promise.resolve()
-    await Promise.resolve()
+    await fireEvent.input(screen.getByLabelText('Filter by evidence'), { target: { value: 'mail' } })
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-    await Promise.resolve()
-    await Promise.resolve()
-    flushSync()
-
-    expect(deleteFlagVerdict).toHaveBeenCalledWith('f1')
-    expect(screen.getByRole('button', { name: '203.0.113.9' })).toBeTruthy()
-    expect(screen.queryByText('Cleared as Noise')).toBeNull()
+    expect(rowWheres()).toEqual(['198.51.100.2'])
   })
 
-  it('Real records the verdict, keeps the card open, and replaces the button row with a badge', async () => {
-    vi.mocked(setFlagVerdict).mockResolvedValue(
-      testFlag({ verdict: 'real', verdictBy: 'alice', verdictAt: '2026-01-01T00:05:00Z' }),
-    )
-    flagsState.list = [testFlag()]
+  it('says plainly when nothing matches the filters, rather than the "nothing open" empty state', async () => {
     render(Flags)
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Real' }))
-    await Promise.resolve()
-    await Promise.resolve()
+    await fireEvent.input(screen.getByLabelText('Filter by where'), { target: { value: 'nobody-home' } })
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('f1', 'real')
-    expect(screen.getByRole('button', { name: '203.0.113.9' })).toBeTruthy()
-    expect(screen.queryByRole('group', { name: 'Judge this flag' })).toBeNull()
-    expect(document.querySelector('.verdict-badge.verdict-real')?.textContent).toBe('Real')
-    expect(document.querySelector('.verdict-judged-by')?.textContent).toContain('alice')
+    expect(screen.getByText('No flags match these filters.')).toBeTruthy()
+    expect(screen.queryByText('Nothing open.')).toBeNull()
   })
 })
 
-// #653's three tiers: judging/clearing a flag is a normal operational
-// action (user tier), not an owner-level one -- only a viewer, the
-// tier below user, must see none of it. Hidden, never disabled (issue
-// #198's own reasoning, now applied one tier lower).
+// #653's tiers, on the ratified surface: clearing a flag is a normal
+// operational action (user tier), not an owner-level one -- only a
+// viewer, the tier below user, must see none of it. Hidden, never
+// disabled. The verdict row this describe used to also cover is not on
+// this surface at all any more (#688's gap list); flagsState's own
+// judge/undo tests are untouched in lib/flags.svelte.test.ts.
 describe('Flags tiers (#653)', () => {
   beforeEach(() => {
     vi.resetAllMocks()
-    vi.mocked(fetchExclusions).mockResolvedValue([])
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
     flagsState.list = [testFlag()]
-    flagsState.undoableVerdicts = []
-    exclusionsState.list = []
     authState.username = 'kai'
   })
 
-  it('a viewer sees no verdict row, no Clear, and no Clear all', async () => {
+  it('a viewer gets no clear action in the drawer', async () => {
     authState.state = 'authenticated'
     authState.role = 'viewer'
     render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
     await Promise.resolve()
     flushSync()
 
-    expect(screen.queryByRole('group', { name: 'Judge this flag' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'clear with a note' })).toBeNull()
   })
 
-  it('a user sees the verdict row, a plain Clear, and Clear all', async () => {
+  it('a user gets the clear action in the drawer', async () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
     await Promise.resolve()
     flushSync()
 
-    expect(screen.getByRole('group', { name: 'Judge this flag' })).toBeTruthy()
-
-    // Clear lives in the drawer since #633; Clear all left this
-    // component entirely for the docket's bubble (covered there).
-    await fireEvent.click(screen.getAllByRole('button', { name: /the drawer for this flag/ })[0])
-    flushSync()
-
-    expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy()
-    // The permanent-clear arrow stays admin-only -- a user gets the
-    // plain Clear button with no split menu beside it.
-    expect(screen.queryByRole('button', { name: 'More clear options for this flag' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'clear with a note' })).toBeTruthy()
   })
 })
 
-// #654: the drawer's evidence panel groups pairs by host and states a
-// truncation cap rather than letting a capped list read as complete --
-// the owner-recorded design decisions this issue implements. The pure
-// grouping/truncation logic itself is unit-tested directly in
-// lib/evidencePairs.test.ts; these two prove Flags.svelte actually wires
-// that logic into what a reviewer sees when they open the drawer.
-describe('Flags evidence panel (#654)', () => {
+// #678: the drawer's headline, story and episode shape -- generated per
+// flag type from the evidence the flag already carries (flagNarrative.ts,
+// episodeShape.ts each have their own direct unit tests; these confirm
+// the component actually wires them in, not just that the functions work
+// in isolation). Unchanged by #688 except for the container they now
+// live in: the drawer row beneath the flag's own row.
+describe('the drawer: headline, story and episode shape (#678)', () => {
   beforeEach(() => {
     vi.resetAllMocks()
-    vi.mocked(fetchExclusions).mockResolvedValue([])
-    exclusionsState.list = []
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })
     authState.state = 'authenticated'
-    authState.role = 'user'
-  })
-
-  it('groups host:port pairs by host, one row per host, never a flat list', async () => {
+    authState.role = 'admin'
     flagsState.list = [
       testFlag({
-        type: 'critical_port',
-        evidence: {
-          pairs: [
-            { host: '192.168.1.10', port: 22 },
-            { host: '192.168.1.11', port: 23 },
-            { host: '192.168.1.10', port: 443 },
-          ],
+        type: 'port_scan',
+        target: '198.51.100.77',
+        evidence: { ports: [1000, 1001, 1002] },
+        firstSeen: '2026-01-01T13:41:00Z',
+        lastSeen: '2026-01-01T13:41:40Z',
+      }),
+    ]
+  })
+
+  async function openDrawer() {
+    render(Flags)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    await Promise.resolve()
+    flushSync()
+  }
+
+  it('shows the generated headline and story, not just the raw evidence line', async () => {
+    await openDrawer()
+
+    expect(document.querySelector('.headline')?.textContent).toBe('One source, three doors.')
+    expect(document.querySelector('.story')?.textContent).toContain('198.51.100.77')
+  })
+
+  it('shows a non-empty episode shape derived from the flag before the episode fetch resolves richer data', async () => {
+    await openDrawer()
+
+    const shape = document.querySelector('.side .span')?.textContent ?? ''
+    expect(shape.length).toBeGreaterThan(0)
+  })
+
+  it('once the real episode resolves, the shape reflects its actual per-event timestamps', async () => {
+    // Five events inside a forty-second window -- port_scan's own
+    // shape (see episodeShape.test.ts): short burst, second precision.
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [0, 8, 16, 24, 40].map((s, i) => ({
+        id: i,
+        time: `2026-01-01T13:41:${String(s).padStart(2, '0')}Z`,
+        deviceId: 'd1',
+        sourceIp: '198.51.100.77',
+        action: 'drop' as const,
+        ruleLabel: 'wan-in-drop',
+        chain: 'input',
+        raw: '',
+      })),
+      hasMore: false,
+      windowStart: '2026-01-01T13:40:00Z',
+      serverTime: '2026-01-01T13:42:00Z',
+    })
+    await openDrawer()
+    await Promise.resolve()
+    flushSync()
+
+    expect(document.querySelector('.side .span')?.textContent).toMatch(/→/)
+  })
+
+  it('draws the matched log lines verbatim in the drawer', async () => {
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [
+        {
+          id: 1,
+          time: '2026-01-01T13:41:42Z',
+          deviceId: 'd1',
+          sourceIp: '198.51.100.77',
+          action: 'drop' as const,
+          ruleLabel: 'wan-in-drop',
+          chain: 'input',
+          raw: '',
+          srcIp: '198.51.100.77',
+          dstIp: '203.0.113.7',
+          dstPort: 1019,
         },
-      }),
-    ]
-    render(Flags)
+      ],
+      hasMore: false,
+      windowStart: '2026-01-01T13:40:00Z',
+      serverTime: '2026-01-01T13:42:00Z',
+    })
+    await openDrawer()
+    await Promise.resolve()
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
-    flushSync()
-
-    // One row per host, each carrying only the ports actually seen with
-    // it -- .10 shows 22 and 443 together, .11 shows only 23, and
-    // nothing implies .11 was ever tried on 22 or 443.
-    expect(screen.getByText('192.168.1.10')).toBeTruthy()
-    expect(screen.getByText('22, 443')).toBeTruthy()
-    expect(screen.getByText('192.168.1.11')).toBeTruthy()
-    expect(screen.getByText('23')).toBeTruthy()
-  })
-
-  it('states the exact truncation count instead of showing a short list that reads as complete', async () => {
-    const pairs = Array.from({ length: 50 }, (_, i) => ({ host: `10.0.0.${i}`, port: 22 }))
-    flagsState.list = [testFlag({ type: 'critical_port', evidence: { pairs, pairsTotal: 214 } })]
-    render(Flags)
-    flushSync()
-
-    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
-    flushSync()
-
-    expect(screen.getByText('(showing 50 of 214)')).toBeTruthy()
-  })
-
-  // #654's owner correction: pairsTotal is itself bounded
-  // (internal/engine's maxEvidencePairsTracked), so once the backend
-  // reports pairsTotalIsFloor the panel must say "at least this many"
-  // rather than a flat number that would look exactly as precise as the
-  // exact-count case above. Pinned as its own test, distinctly from it,
-  // so a regression that dropped the "+" suffix (or applied it to the
-  // exact case) would show up as a text-content mismatch, not just a
-  // missing element.
-  it('marks a floor total with a "+", distinctly from an exact total', async () => {
-    const pairs = Array.from({ length: 50 }, (_, i) => ({ host: `10.0.0.${i}`, port: 22 }))
-    flagsState.list = [
-      testFlag({ type: 'critical_port', evidence: { pairs, pairsTotal: 200, pairsTotalIsFloor: true } }),
-    ]
-    render(Flags)
-    flushSync()
-
-    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
-    flushSync()
-
-    expect(screen.getByText('(showing 50 of 200+)')).toBeTruthy()
-    expect(screen.queryByText('(showing 50 of 200)')).toBeNull()
-  })
-
-  it('shows no truncation notice when the pair list is already complete', async () => {
-    flagsState.list = [
-      testFlag({
-        type: 'critical_port',
-        evidence: { pairs: [{ host: '192.168.1.10', port: 22 }] },
-      }),
-    ]
-    render(Flags)
-    flushSync()
-
-    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
-    flushSync()
-
-    expect(screen.queryByText(/showing \d+ of \d+/)).toBeNull()
+    expect(document.querySelector('.lines')?.textContent).toContain('198.51.100.77->203.0.113.7:1019')
   })
 })
+
+// #678's third item: "where" is a link into the topography at its
+// sensible level, not the live stream -- filterToTarget/appState.view =
+// 'live' (still used by "open in stream" in the drawer) is no longer
+// what the where value itself does.
+describe('"where" links into the topography, not the stream (#678)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ target: '198.51.100.77' })]
+    appState.view = 'flags'
+  })
+
+  it('clicking the where value opens the topography rather than the live stream', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: '198.51.100.77' }))
+    flushSync()
+
+    expect(appState.view).toBe('topography')
+  })
+
+  it('does not toggle the drawer on its way past the row', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: '198.51.100.77' }))
+    flushSync()
+
+    expect(document.querySelector('tr.drawer')).toBeNull()
+  })
+})
+
+// #678/#679: the note is the reason the clear happened, and rides along
+// on the same clearFlag call the audit log now records it from (see
+// internal/api's handleFlagsClear). The action wears the record's own
+// wording, "clear with a note", rather than the bare "Clear" the card
+// carried.
+describe('clear with a note (#678)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    flagsState.list = [testFlag()]
+  })
+
+  async function openDrawer() {
+    render(Flags)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    await Promise.resolve()
+    flushSync()
+  }
+
+  it('clicking "clear with a note" opens a note field instead of clearing immediately', async () => {
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear with a note' }))
+    flushSync()
+
+    expect(screen.getByLabelText('Note for clearing this flag')).toBeTruthy()
+    expect(clearFlag).not.toHaveBeenCalled()
+  })
+
+  it('typing a note and confirming clears with that note', async () => {
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear with a note' }))
+    flushSync()
+    await fireEvent.input(screen.getByLabelText('Note for clearing this flag'), {
+      target: { value: 'expected, speed test' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(clearFlag).toHaveBeenCalledWith('f1', 'expected, speed test')
+  })
+
+  it('confirming with an empty note still clears, with no note recorded', async () => {
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear with a note' }))
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(clearFlag).toHaveBeenCalledWith('f1', undefined)
+  })
+
+  it('Cancel discards the note and leaves the flag open, uncleared', async () => {
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear with a note' }))
+    flushSync()
+    await fireEvent.input(screen.getByLabelText('Note for clearing this flag'), { target: { value: 'nope' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    flushSync()
+
+    expect(clearFlag).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'clear with a note' })).toBeTruthy()
+  })
+})
+
+// Round 26/29's honest empty state, drawn as `.caempty`: zero open is a
+// fact with a history, not a blank.
+describe('the empty state (round 26/29)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+  })
+
+  it('says nothing has been flagged yet when no flag has ever cleared', () => {
+    flagsState.list = []
+    render(Flags)
+    flushSync()
+
+    expect(screen.getByText('Nothing open.')).toBeTruthy()
+    expect(screen.getByText(/Nothing has been flagged yet/)).toBeTruthy()
+    expect(document.querySelector('table.ftable')).toBeNull()
+  })
+
+  it('says when the last clear happened, and offers the audit log to an admin', () => {
+    flagsState.list = [testFlag({ cleared: true, clearedAt: '2026-01-01T13:58:00Z' })]
+    render(Flags)
+    flushSync()
+
+    expect(screen.getByText('Nothing open.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'audit log' })).toBeTruthy()
+  })
+})
+
+// #724's second click: a dial panel row on the topography hands off which
+// flag it was through topologyNavState.pendingFlagId (topologyNav.svelte.ts)
+// rather than just switching the view -- this is the tab side that
+// consumes it.
+describe('opening a flag drawer from the topography dial (#724)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ id: 'f1', target: '198.51.100.1' }), testFlag({ id: 'f2', target: '198.51.100.2' })]
+    topologyNavState.pendingFlagId = null
+  })
+
+  it("opens that flag's drawer on arrival, through the same episode-fetch path a click on the row would use, and clears the pending selection", async () => {
+    topologyNavState.pendingFlagId = 'f2'
+    render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    const rows = document.querySelectorAll('tr.frow')
+    expect(rows[1].classList.contains('open')).toBe(true)
+    expect(rows[0].classList.contains('open')).toBe(false)
+    expect(rows[1].nextElementSibling?.classList.contains('drawer')).toBe(true)
+    expect(fetchFlagEpisode).toHaveBeenCalledWith(expect.objectContaining({ ip: '198.51.100.2' }))
+    expect(topologyNavState.pendingFlagId).toBeNull()
+  })
+
+  it('a pending id that matches nothing lands on the tab with no drawer open and no error', () => {
+    topologyNavState.pendingFlagId = 'no-such-flag'
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.drawer')).toBeNull()
+    expect(topologyNavState.pendingFlagId).toBeNull()
+  })
+
+  // The part that rots if it's missed (#724's own Care note): once the
+  // dial's row has been followed and its drawer opened, a later, ordinary
+  // visit to this tab -- not through the dial -- must not silently reopen
+  // it. Simulated here the same way the deck's own keep-alive card
+  // lifecycle would produce it: the tab's component is torn down when the
+  // docket scrolls out of view, and freshly built again on a later visit.
+  it('does not reopen a drawer on a later, unrelated visit to the tab', async () => {
+    topologyNavState.pendingFlagId = 'f1'
+    const { unmount } = render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+    expect(document.querySelector('tr.drawer')).toBeTruthy()
+    expect(topologyNavState.pendingFlagId).toBeNull()
+
+    unmount()
+
+    // A plain, later visit to the flags tab -- nothing pending this time.
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.drawer')).toBeNull()
+  })
+})
+
+// #654's evidence panel is not tested here any more, and that is
+// deliberate rather than an oversight. Round 30's drawer shows the
+// generated narrative, the episode's shape and the matched lines -- not
+// the raw evidence the old panel listed -- so the host:port pairs #654
+// added have no surface in this component to assert against. The
+// backend work is untouched and the grouping logic keeps its own tests
+// in lib/evidencePairs.test.ts. The missing home is recorded on #691.

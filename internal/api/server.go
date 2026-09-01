@@ -35,6 +35,16 @@ type Server struct {
 	Devices    *device.Registry
 	Hub        *hub.Hub
 	Reputation *reputation.Client
+	// MACRegistry is the persisted MAC-address first/last-seen history
+	// (internal/device.MACRegistry) that already backs the new-device
+	// detector -- read-only here, for GET /api/devices/macs (issue #675):
+	// the Entities page's named-things table joins a host entity (keyed
+	// on IP) against this by MACEntry.LastIP to show its MAC and how long
+	// mikroview has known it, without inventing a second persisted
+	// per-host store. Nil-guarded in handleDeviceMACs like Reputation/
+	// NetClass above -- a Server built without one (an older test) simply
+	// answers an empty list rather than panicking.
+	MACRegistry *device.MACRegistry
 	// NetClass attributes an IP to a Tor exit / VPN / datacenter /
 	// privacy relay for the manual lookup popover (issue #114). Nil means
 	// no sources were enabled, and every use is nil-guarded -- the same
@@ -169,6 +179,12 @@ type Server struct {
 	// is not good enough for a setting the operator believes is in
 	// effect. See config_problems.go.
 	ConfigProblems []ConfigProblem
+	// Persistence reports which backend this deployment's persisted
+	// stores (flags, definitions, watchlist entries, entities, tokens/
+	// accounts -- internal/persist's own package doc) actually use right
+	// now -- set once at boot from main.go's storage decision. See
+	// persistence.go.
+	Persistence PersistenceInfo
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -275,6 +291,7 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/healthz", s.handleHealthz},
 		{http.MethodGet, "/api/events", s.handleEvents},
 		{http.MethodGet, "/api/devices", s.handleDevices},
+		{http.MethodGet, "/api/devices/macs", s.handleDeviceMACs},
 		{http.MethodGet, "/api/rules", s.handleRules},
 		// The pushed rule/NAT tables (issue #186 step 4) -- session-gated
 		// reads over RouterState, entirely separate from the push
@@ -284,6 +301,10 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
 		{http.MethodGet, "/api/routeros/{device}/addresses", s.handleRouterOSAddresses},
 		{http.MethodGet, "/api/stats", s.handleStats},
+		// #644 round 21's top port/top talker table columns -- see
+		// handleStatsTops' own doc comment for why this is a separate
+		// route rather than a field on /api/stats above.
+		{http.MethodGet, "/api/stats/tops", s.handleStatsTops},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
@@ -366,12 +387,14 @@ func (s *Server) routes() []route {
 		// past. Admin-only, matching the modal it is written from.
 		{http.MethodPost, "/api/setup/mark", s.handleSetupMark},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
+		{http.MethodGet, "/api/persistence", s.handlePersistence},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
 		{http.MethodPost, "/api/auth/password", s.handleAuthChangePassword},
 		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
+		{http.MethodPost, "/api/auth/logout-all", s.handleAuthLogoutAll},
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
 		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
 		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},

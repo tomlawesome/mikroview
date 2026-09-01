@@ -20,13 +20,44 @@
   import { flagsState } from '../lib/flags.svelte'
   import { metricsPref, METRICS_VIEWS } from '../lib/metrics.svelte'
   import { buildHour, minuteIndexOf, readMinute } from '../lib/metricsSeries'
+  import { fetchStatsTops } from '../lib/api'
   import { formatEps, formatHM } from '../lib/format'
-  import PageHeader from './PageHeader.svelte'
   import MetricsSeismograph from './MetricsSeismograph.svelte'
   import MetricsRegister from './MetricsRegister.svelte'
   import MetricsTable from './MetricsTable.svelte'
+  import type { HourTopBucket } from '../lib/types'
 
-  const hour = $derived(buildHour(appState.stats?.timeSeries ?? [], flagsState.timeSeries))
+  // #644 round 21's top-port/top-talker columns: GET /api/stats/tops is
+  // its own poll, scoped to this page rather than riding App.svelte's
+  // global STATS_REFRESH_MS -- same reasoning, and the same POLL_MS
+  // pattern, as Fall.svelte's own per-page fetch. See fetchStatsTops'
+  // own doc comment for why this isn't folded into appState.stats.
+  const TOPS_POLL_MS = 5000
+  let tops = $state<HourTopBucket[]>([])
+
+  $effect(() => {
+    let cancelled = false
+    async function refresh() {
+      try {
+        const result = await fetchStatsTops()
+        if (!cancelled) tops = result
+      } catch {
+        // A failed poll leaves the previous tops in place -- the table
+        // then shows slightly stale (rather than blank) top port/talker
+        // columns until the next successful poll, matching how a failed
+        // appState.refreshDevicesAndStats() leaves the rest of the page
+        // showing its last-known figures instead of clearing them.
+      }
+    }
+    refresh()
+    const id = setInterval(refresh, TOPS_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  })
+
+  const hour = $derived(buildHour(appState.stats?.timeSeries ?? [], flagsState.timeSeries, tops))
   const cursor = $derived(minuteIndexOf(hour.axis, metricsPref.minute))
   const reading = $derived(readMinute(hour, cursor))
 
@@ -97,20 +128,15 @@
 </script>
 
 <div class="metrics scrollbar" onkeydown={onkeydown} role="presentation">
-  <PageHeader title="Metrics">
-    <div class="views" role="group" aria-label="Metrics view">
-      {#each METRICS_VIEWS as option (option.value)}
-        <button
-          class="view"
-          class:on={metricsPref.view === option.value}
-          aria-pressed={metricsPref.view === option.value}
-          title={option.title}
-          onclick={() => metricsPref.setView(option.value)}>{option.label}</button
-        >
-      {/each}
-    </div>
-  </PageHeader>
-
+  <!-- No page heading (#697/#700), and the view switcher rides the
+       scene bar where it used to sit -- round 30 puts it beside the
+       wordmark, and #488's "three views of one data set" is satisfied
+       there. -->
+  <!-- Round 30's arrangement (#s4): the minute under the cursor and its
+       own facts on the left, the hour's rate facts pinned to the right
+       by `.rate`'s own margin-left:auto -- the reverse of what this
+       used to draw (rate on the left, nothing meaningful on the
+       right). -->
   <div class="hourline">
     {#if reading}
       <span class="big">{formatHM(reading.time)}<span class="unit">the minute under the cursor</span></span>
@@ -118,20 +144,18 @@
       <span class="fact"><b>{refusedAtCursor}</b> refused of <b>{eventsAtCursor}</b> events</span>
       <span class="sep">·</span>
       <span class="fact"><b>{reading.episodeTotal}</b> flag episodes</span>
-    {:else}
+    {/if}
+    <span class="rate">
       <span class="big">{formatEps(appState.stats?.eventsPerSecond ?? 0)}<span class="unit">events/s now</span></span>
       <span class="sep">·</span>
       <span class="fact"><b>{perMinuteNow}</b>/min</span>
       <span class="sep">·</span>
       <span class="fact"><b>{hour.eventsInHour}</b> events in the hour</span>
-      <span class="sep">·</span>
-      <span class="fact"
-        ><b>{hour.episodesInHour}</b> episodes raised, from <b>{hour.typesThatSpoke}</b> of {hour.flags.length} types</span
-      >
-    {/if}
-    {#if hour.brink}
-      <span class="brinkmark">the brink · {formatHM(hour.brink)}</span>
-    {/if}
+      {#if hour.brink}
+        <span class="sep">·</span>
+        <span class="brinkmark">the brink · {formatHM(hour.brink)}</span>
+      {/if}
+    </span>
   </div>
 
   <!-- A slider is what this actually is: one value moving along the
@@ -159,11 +183,10 @@
     {/if}
   </div>
 
-  <p class="keys">
-    Click a minute to read it across every series · <kbd>←</kbd><kbd>→</kbd> a minute · <kbd>Shift</kbd> ten ·
-    <kbd>Home</kbd>/<kbd>End</kbd> the ends of the hour · <kbd>Esc</kbd> clears the cursor
-  </p>
-
+  <!-- No keyboard hint printed on the page (#697/#700 -- round 30 draws
+       no aids to understanding anywhere, and the surface keeps every
+       one of those keys working regardless; the slider announces itself
+       to a screen reader through its own aria-valuetext). -->
   <p class="sr-only" role="status">{metricsPref.announcement}</p>
 </div>
 
@@ -177,32 +200,6 @@
     gap: 12px;
     overflow-y: auto;
     padding-bottom: 10px;
-  }
-
-  .views {
-    display: flex;
-    gap: 6px;
-    margin-left: auto;
-  }
-
-  .view {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--fg-muted);
-    font-size: 11.5px;
-    padding: 3px 10px;
-  }
-
-  .view:hover {
-    color: var(--fg);
-    border-color: var(--fg-dim);
-  }
-
-  .view.on {
-    color: var(--fg);
-    border-color: var(--accent);
-    background: var(--accent-bg);
   }
 
   .hourline {
@@ -246,8 +243,19 @@
     font-weight: 600;
   }
 
-  .brinkmark {
+  /* The right-hand rate group (round 30's `.hourline .gap { flex: 1 }`
+     spacer, folded into the group itself since it is the only thing
+     that ever sits on this side): pinned to the far right regardless
+     of whether the left-hand cursor group is present. */
+  .rate {
     margin-left: auto;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .brinkmark {
     font-family: var(--font-mono);
     font-size: 10px;
     letter-spacing: 0.08em;
@@ -255,29 +263,15 @@
   }
 
   .surface {
+    flex: 1;
     min-width: 0;
+    min-height: 0;
   }
 
   .surface:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 4px;
     border-radius: 4px;
-  }
-
-  .keys {
-    margin: 0;
-    font-size: 10.5px;
-    color: var(--fg-dim);
-  }
-
-  kbd {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    border: 1px solid var(--border);
-    border-bottom-width: 2px;
-    border-radius: 4px;
-    padding: 0 4px;
-    margin: 0 1px;
   }
 
   /* Clipped rather than hidden -- display:none would remove the live

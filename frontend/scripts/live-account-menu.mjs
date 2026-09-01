@@ -5,9 +5,13 @@
 // the atlas overlay. What needs a real browser rather than a unit test:
 //
 // - The rows are gated on the real signed-in role. A viewer's menu has
-//   no Entities, Audit log or Run setup… row at all (#490's grammar:
-//   absent, never disabled), proved with a real second account rather
-//   than a mocked authState.role.
+//   no Run setup… row at all (#490's grammar: absent, never disabled),
+//   proved with a real second account rather than a mocked
+//   authState.role. Since #647 (round 23) the menu carries no page
+//   links at all -- Settings, Fleet and Entities joined the deck (Fleet
+//   folded into Entities' own card) and Audit log has lived on the
+//   docket's tab since rounds 17-19 -- so Run setup… is the only
+//   admin-gated row left to prove.
 // - Escape and click-away close the menu through a real window listener
 //   -- a jsdom keydown on a detached component proves nothing about
 //   which element actually owns the key.
@@ -35,17 +39,11 @@ check(
 
 await openAccountMenu(page)
 const rows = await page.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
-for (const expected of [
-  'Settings',
-  'Fleet',
-  'Entities',
-  'Audit log',
-  'Run setup…',
-  'Change password',
-  'Sign out',
-  'About & licence',
-]) {
+for (const expected of ['Run setup…', 'Change password', 'Sign out', 'About & licence']) {
   check(rows.includes(expected), `an admin's menu offers ${expected} -- got ${JSON.stringify(rows)}`)
+}
+for (const retired of ['Settings', 'Fleet', 'Entities', 'Audit log']) {
+  check(!rows.includes(retired), `${retired} left the menu for the deck (#647) -- got ${JSON.stringify(rows)}`)
 }
 
 // --- Escape closes it ------------------------------------------------------
@@ -95,11 +93,9 @@ await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 
 await openAccountMenu(viewerPage)
 const viewerRows = await viewerPage.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
-for (const absent of ['Entities', 'Audit log', 'Run setup…']) {
+for (const absent of ['Settings', 'Fleet', 'Entities', 'Audit log', 'Run setup…']) {
   check(!viewerRows.includes(absent), `${absent} is absent from a viewer's menu -- got ${JSON.stringify(viewerRows)}`)
 }
-check(viewerRows.includes('Settings'), 'Settings (the engine room) is there for a viewer -- deliberately viewer-readable')
-check(viewerRows.includes('Fleet'), 'Fleet -- the operate page with no admin gate -- is there too')
 check(viewerRows.includes('Sign out'), 'a viewer can still sign out')
 check(viewerRows.includes('About & licence'), 'and still reach the licence')
 const viewerDisabled = await viewerPage.$$eval('.account .menu button.row', (els) =>
