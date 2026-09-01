@@ -71,3 +71,7 @@ it, except for the offset/angled nature. It is kind of cool, but it's
 also a bit cheesey." — the stamps now sit square; the thump stays. Owner: "id prefer it if
 the bar were thickned by using an arc, so we don't get a jutted edge" —
 the real row's bar now swells as a lens.
+
+2026-09-01, owner: "33. stamps are good." Open: whether `real`'s stamp
+moves to the CALL IT column as `REAL · retract` (recommended) or stays
+beside the type.
