@@ -621,6 +621,16 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 	// Emission, so it is what fills it in.
 	conf := overshootConfidence(count, d.threshold)
 	em.Confidence = &conf
+	// Size: a declarative definition's size is always the counting-mode
+	// tally that crossed the threshold -- distinct destination ports for
+	// port_scan, attempts for critical_port, and so on -- because
+	// "threshold-over-window" is the whole of what this kind evaluates
+	// (docs/decisions/evaluation-engine.md section 2). So it is set here,
+	// once, rather than per shipped builder: there is no declarative
+	// definition, shipped or operator-authored, whose size is anything
+	// else. See Emission.Size and #640.
+	size := count
+	em.Size = &size
 	// Country/EventTime: see Emission's own doc comment on why these are
 	// set here, from the triggering event, rather than by RenderEmission.
 	// Country only where the definition declared it honest -- see
