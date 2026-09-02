@@ -39,6 +39,7 @@
     STEP_COUNT,
     type LedgerStep,
   } from '../lib/setupsteps'
+  import MemoryControl from './MemoryControl.svelte'
 
   // Steps land seconds to minutes apart (the documented push scheduler
   // runs every 20 minutes), so this polls rather than streaming -- and
@@ -462,6 +463,30 @@
                   </li>
                 {/each}
               </ol>
+              <!-- The one place the wizard offers the buffer's size
+                   (#796): the same track and the same sentence as
+                   Settings' memory group, once, on the pane where the
+                   operator has finished pointing a router at mikroview
+                   and is about to go and look at what arrives. It is
+                   asked here rather than as a step of its own because
+                   nothing about it can be checked or waited for -- it is
+                   a choice, not an observation, and the wizard's steps
+                   are all observations. -->
+              {#if appState.stats?.memory}
+                <div class="memory">
+                  <h3>How much to hold</h3>
+                  <p class="note">
+                    Every event lives in memory and nothing else. This is how much of this machine's
+                    memory to spend on it; the oldest events fall away as new ones arrive.
+                  </p>
+                  <MemoryControl
+                    mem={appState.stats.memory}
+                    stats={appState.stats}
+                    canEdit={isAdmin}
+                    onapplied={() => appState.refreshDevicesAndStats().catch(() => {})}
+                  />
+                </div>
+              {/if}
               <p class="note">Run setup… reopens this any time, from the Admin group.</p>
             {/if}
           </div>
@@ -719,6 +744,21 @@
 
   .headline {
     font-size: 15px;
+  }
+
+  /* The buffer-size control on the finish pane (#796) -- separated from
+     the read-back above it the way the wizard already separates its own
+     blocks, and left to MemoryControl for everything inside. */
+  .memory {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  .memory h3 {
+    margin: 0 0 4px;
+    font-size: 13px;
+    font-weight: 600;
   }
 
   pre {

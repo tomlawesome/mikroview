@@ -166,10 +166,39 @@ export interface Stats {
   // eviction moves this one and leaves that one alone (#703).
   oldestHeld: string | null
   connectedClients: number
+  // The event buffer's budget, the range it may be moved within, and
+  // what the process is actually costing (#796) -- mirrors
+  // internal/api.StoreSettings. Optional so a test fixture or an older
+  // server that does not send it leaves the memory control absent
+  // rather than drawing a slider over undefined bounds.
+  memory?: StoreMemory
   // Syslog listener saturation -- mirrors internal/syslog.ListenerStats.
   // Optional so an older server (or a test fixture) that does not send
   // it simply shows nothing rather than rendering NaN.
   syslog?: SyslogListenerStats
+}
+
+// Mirrors internal/api.StoreSettings (#796). Every figure is in bytes.
+export interface StoreMemory {
+  // store.maxMemory in effect right now.
+  maxMemory: number
+  // The ends of the slider. See internal/config.MaxMemoryCeiling for the
+  // headroom rule that produced max.
+  min: number
+  max: number
+  // What max is a share of -- the cgroup limit if the server is in one,
+  // otherwise the machine's RAM. Zero when the server could read
+  // neither, in which case the track's right-hand end says the ceiling
+  // is a conservative default rather than naming a total nobody knows.
+  hostTotal: number
+  // internal/config.AssumedBytesPerEvent, so a proposed budget turns
+  // into an event count without a second copy of that constant here.
+  bytesPerEvent: number
+  // What the server process currently holds from the operating system.
+  resident: number
+  // Whether the figure came from the settings store rather than
+  // config.yaml.
+  stored: boolean
 }
 
 // Mirrors internal/syslog.ListenerStats. The connection pool is finite,
