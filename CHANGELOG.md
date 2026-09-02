@@ -663,6 +663,15 @@ rewritten.
 
 ### Fixed
 
+- **`docs/configuration.md`'s API reference table had drifted from the
+  authorization matrix** (#847). Several rows still said `admin-only`
+  for routes #653's "watchers" bench ruling had widened to user tier
+  months earlier (`/api/entities`, `/api/naming/provenance`,
+  `/api/coverage/declarations/{key}`, `/api/suggestions*`), one said the
+  opposite -- `GET /api/tokens` was narrowed back to admin-only by #657
+  after the table was last updated -- and nine registered routes had no
+  row at all. The table now states the tier `internal/api/authz_matrix_test.go`
+  actually pins for every route in it.
 - **The engine room's event-buffer row lost its live count** (#842).
   #823's memory slider replaced "8,412 of 201,000 events · ~9 h window"
   with "120 MiB · ~201 000 events · ~9 h at today's rate" -- the
