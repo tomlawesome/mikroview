@@ -135,6 +135,14 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/persistence", accessAdmin,
 		"reports which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses (#677's settings persistence row) -- a filesystem path is the same infrastructure-map disclosure /api/config/problems above is admin-gated for, so this follows it rather than defaulting to viewer the way most of Settings' other reads do"},
 
+	{http.MethodPut, "/api/settings/store", accessAdmin,
+		"sets the event buffer's size on the running instance (#796). Admin rather than user tier for two " +
+			"separate reasons, either sufficient: it spends the host's memory, which is an instance-wide cost " +
+			"nobody else can undo from inside the app, and shrinking it destroys held history -- the only route " +
+			"in mikroview by which a caller can discard evidence a viewer or user was relying on. The read half " +
+			"is deliberately not here: the figure and its bounds ride GET /api/stats, so a viewer sees the bar " +
+			"and the number without being able to move it"},
+
 	// -- Any authenticated session (viewer tier) ------------------------
 	{http.MethodGet, "/api/events", accessViewer,
 		"core read: the live firewall event feed"},

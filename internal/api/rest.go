@@ -168,7 +168,20 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		// back it was configured to. Null rather than a zero timestamp
 		// when nothing is held, so the client reads "no reach yet" and
 		// not "reaches back to the year 1" (#703).
-		"oldestHeld":       oldestHeldJSON(stats.OldestHeld),
+		"oldestHeld": oldestHeldJSON(stats.OldestHeld),
+		// The event buffer's budget, the range it may be moved within,
+		// and what the process is actually costing (#796). Here rather
+		// than behind its own GET because every surface that needs it --
+		// the settings memory group's bar, row and slider -- also needs
+		// the capacity, count and oldestHeld above, and they have to be
+		// one snapshot: a figure fetched on a separate tick can show a
+		// budget that does not match the ring beside it, which is
+		// precisely the disagreement this control exists to remove. It
+		// is also the smaller change (one field, no second route, no
+		// second poll), and it lands on the tier a viewer already has,
+		// which is what lets a viewer see the bar and the figure without
+		// a second access decision. See settings.go.
+		"memory":           s.storeSettings(),
 		"connectedClients": s.Hub.ClientCount(),
 		// Syslog listener saturation. Included here rather than behind
 		// its own endpoint because the condition it reports -- mikroview

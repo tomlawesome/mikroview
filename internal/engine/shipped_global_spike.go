@@ -168,6 +168,8 @@ func (d *globalSpikeDefinition) Tick(now time.Time) {
 		samples = d.warmupSamples
 	}
 	confidence := emaConfidence(before.ZScore, samples, d.warmupSamples)
+	// No Size: global_spike declares none -- see ShippedSizeMeasure for
+	// why a rate against a moving baseline has no size to record.
 	d.emit(Emission{
 		Target: "global",
 		Detail: fmt.Sprintf("%.1f events/s vs a baseline of %.1f (based on %d samples, %.1fσ above normal)",

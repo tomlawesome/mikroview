@@ -56,6 +56,7 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"definitions":       {"engine", "definitionsStorePath"},
 		"audit":             {"audit", "storePath"},
 		"setup":             {"setup", "storePath"},
+		"settings":          {"store", "settingsStorePath"},
 		"watchlist":         {"watchlist", "storePath"},
 		"suggestions":       {"watchlist", "suggestionsStorePath"},
 		"match_log":         {"watchlist", "matchLogPath"},
