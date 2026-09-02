@@ -372,6 +372,41 @@ rewritten.
   them, with absorbed counts, and lets you prune them is the remaining
   part of #640.
 
+- **A verdict now writes to the watchlist as well as to the flag**
+  (#641). Recognising traffic as legitimate and recording it as expected
+  used to be two separate errands, so the second rarely happened.
+
+  - **expected** records the destinations the flag actually saw -- each
+    with the port it was reached on -- as permitted on the device's own
+    inverted watchlist entry. If the device has no entry, one is created
+    **observing**: it lists where the device goes and fires nothing, so
+    an automatic step never arms a fence. No form and no extra click,
+    because it is reversible -- undoing the verdict, or changing it to
+    something else, takes the permissions back and removes an entry that
+    existed only to hold them. Only what that verdict added is removed;
+    anything permitted separately stays.
+  - **resolved** offers instead of acting. The line it leaves behind
+    reads *resolved — undo · watch for this*. Taking the offer opens the
+    watchlist's own entry form, prefilled with the host (by MAC where
+    the evidence carries one, otherwise by address) and the pairs the
+    flag saw, and states where those values came from: which firing
+    window, how many of how many pairs, and whether the watch is MAC- or
+    IP-bound. Saving *or* discarding puts you back in the flags inbox,
+    so declining costs nothing. The flag stays resolved either way.
+
+  Why offer a watcher at all: after a block, the first packet that gets
+  through matters more than the detector's threshold being crossed
+  again. The detector brings a resolved flag back only when the host
+  re-crosses its threshold; a watch fires on the first line that
+  reappears.
+
+  **outbound_anomaly and internal_recon now record the port alongside
+  each destination**, which is what makes their evidence precise enough
+  to permit or watch. Nothing is inferred by crossing a host list
+  against a port list -- that would allow combinations the device never
+  made -- so a flag from a detector that records no pairs permits
+  nothing, and offers no watcher.
+
 - **The docket's flags tab is the ratified round-29 table, not a card
   grid** (#688). One row per open flag -- flag · where · evidence ·
   count · age -- each wearing its flag type's own family ink as a left
