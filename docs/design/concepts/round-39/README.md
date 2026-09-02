@@ -35,6 +35,8 @@ settings is an admin surface in this drawing.
 `settings-memory-shrink`, plus round 38's set unchanged. Looked at each;
 no collisions.
 
-## Owner verdicts
+## Owner verdicts (2026-09-02)
 
-None yet.
+- *"Ok, yes approved 39"* — accepted as drawn, after asking what
+  "dragging only proposes" meant: the handle changes nothing until
+  apply, so a shrink cannot lose hours to a slipped mouse.
