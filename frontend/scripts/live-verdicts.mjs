@@ -1,31 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Issue #780 (rounds 34-35): verdicts, stamps and exclusions mounted on
-// the flags tab. Supersedes live-flag-verdicts.mjs outright (deleted by
-// this same change, not merely edited) -- that scenario drove the old
-// card-grid's `.verdict-row`/`.verdict-btn-real`/`.verdict-badge`
-// buttons, which round 29's plain-table rewrite had already retired
-// before this issue existed; #780 goes on to retire the drawer-only
-// buttons that replaced them, too. There is nothing left in that
-// scenario worth carrying forward -- every one of its selectors targets
-// markup this build no longer has anywhere.
+// Issue #780 (rounds 34-35) mounted the verdicts on the flag row itself;
+// #640 replaced what they say. A fresh flag offers expected · checked ·
+// investigate, an investigated one expected · resolved, and all four are
+// user-tier -- the noise chip, the plain clear and the admin-only
+// "never again" (with the exclusions body that reviewed it) are gone
+// from this scene entirely, so nothing below reaches for them.
 //
-// Real flags, real clicks: three independent port_scan sources so the
-// noise/undo, real, and never-again/exclusions paths each run against
-// their own flag rather than three assertions racing one shared row.
+// The sized half of expected -- absorbing within tolerance, returning
+// above it -- is live-flags-expectations.mjs. This scenario is about the
+// row: which chips are offered, what a call stamps, and that undo puts
+// it back.
+//
+// Real flags, real clicks: four independent port_scan sources so the
+// checked/undo, investigate, and reload paths each run against their own
+// row rather than several assertions racing one.
 
 import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
 
 // Unused by every other scenario in this directory (checked against
 // every 198.51.100.* literal already in use here before picking these).
-const NOISE_IP = '198.51.100.104'
-const REAL_IP = '198.51.100.105'
-const NEVER_IP = '198.51.100.106'
+const CHECKED_IP = '198.51.100.104'
+const INVESTIGATE_IP = '198.51.100.105'
+const RESOLVED_IP = '198.51.100.106'
 const RELOAD_IP = '198.51.100.107'
 
-feedPortScan(20, NOISE_IP)
-feedPortScan(20, REAL_IP)
-feedPortScan(20, NEVER_IP)
+feedPortScan(20, CHECKED_IP)
+feedPortScan(20, INVESTIGATE_IP)
+feedPortScan(20, RESOLVED_IP)
 feedPortScan(20, RELOAD_IP)
 
 const { page, consoleErrors } = await session()
@@ -74,7 +76,7 @@ async function waitForApiVerdict(target, predicate, { timeoutMs = 5000 } = {}) {
 // Server-side first (#354): a locator timeout here can't say whether a
 // scan never raised a flag at all or just hasn't rendered yet.
 const raised = []
-for (const ip of [NOISE_IP, REAL_IP, NEVER_IP, RELOAD_IP]) {
+for (const ip of [CHECKED_IP, INVESTIGATE_IP, RESOLVED_IP, RELOAD_IP]) {
   const r = await waitForFlag(page, ip)
   check(r.ok, r.message)
   raised.push(r)
@@ -83,33 +85,38 @@ for (const ip of [NOISE_IP, REAL_IP, NEVER_IP, RELOAD_IP]) {
 if (raised.every((r) => r.ok)) {
   await openFlags()
 
-  // --- Call noise, with the drawer closed (item 1/2) -----------------
+  // --- A fresh flag offers exactly the three chips -------------------
 
-  const noiseRow = rowFor(NOISE_IP)
-  await noiseRow.waitFor({ timeout: 15000 })
+  const checkedRow = rowFor(CHECKED_IP)
+  await checkedRow.waitFor({ timeout: 15000 })
   check(
-    !(await noiseRow.evaluate((el) => el.classList.contains('open'))),
-    "the noise row's drawer starts closed, never opened for this call",
+    !(await checkedRow.evaluate((el) => el.classList.contains('open'))),
+    "the row's drawer starts closed, never opened for a call",
   )
-  check(await noiseRow.locator('button.v.noise').isVisible(), 'the noise chip is reachable straight off the row')
+  check(await checkedRow.locator('button.v.expected').isVisible(), 'expected is reachable straight off the row')
+  check(await checkedRow.locator('button.v.checked').isVisible(), 'checked is too')
+  check(await checkedRow.locator('button.v.investigate').isVisible(), 'and investigate')
+  check(
+    (await checkedRow.locator('button.v.resolved').count()) === 0,
+    'resolved is not offered on a flag nobody is investigating yet',
+  )
 
-  const beforeNoise = await badgeCount()
-  await noiseRow.locator('button.v.noise').click()
-  await noiseRow.locator('.stamp.noise').waitFor({ timeout: 5000 })
+  // --- Call checked, with the drawer closed --------------------------
+
+  const beforeChecked = await badgeCount()
+  await checkedRow.locator('button.v.checked').click()
+  await checkedRow.locator('.stamp.checked').waitFor({ timeout: 5000 })
 
   check(
-    (await noiseRow.locator('.stamp.noise').textContent())?.trim() === 'noise',
-    'calling noise stamps the row in its own CALL IT cell',
+    (await checkedRow.locator('.stamp.checked').textContent())?.trim() === 'checked',
+    'calling checked stamps the row in its own CALL IT cell',
   )
+  check(await checkedRow.locator('.olink', { hasText: 'undo' }).isVisible(), 'undo is offered beside the stamp')
   check(
-    await noiseRow.locator('.olink', { hasText: 'undo' }).isVisible(),
-    'undo is offered beside the stamp',
-  )
-  check(
-    !(await noiseRow.evaluate((el) => el.classList.contains('open'))),
+    !(await checkedRow.evaluate((el) => el.classList.contains('open'))),
     'the click never toggled the drawer open',
   )
-  check((await drawerFor(NOISE_IP).count()) === 0, 'no drawer row exists for the call at all')
+  check((await drawerFor(CHECKED_IP).count()) === 0, 'no drawer row exists for the call at all')
 
   await page.waitForFunction(
     (before) => {
@@ -118,17 +125,20 @@ if (raised.every((r) => r.ok)) {
       const n = Number((el.textContent ?? '').replace(/[^\d]/g, ''))
       return !Number.isNaN(n) && n === before - 1
     },
-    beforeNoise,
+    beforeChecked,
     { timeout: 10000 },
   )
-  check(true, `the chrome's ⚑ counted down once the noise call landed (from ${beforeNoise})`)
+  check(true, `the chrome's ⚑ counted down once the checked call landed (from ${beforeChecked})`)
 
   // --- Undo puts it back exactly --------------------------------------
 
-  await noiseRow.locator('.olink', { hasText: 'undo' }).click()
-  await noiseRow.locator('button.v.noise').waitFor({ timeout: 5000 })
-  check((await noiseRow.locator('.stamp').count()) === 0, 'undo removes the stamp')
-  check(await noiseRow.locator('button.v.expected').isVisible(), 'undo restores the whole trio, not just noise')
+  await checkedRow.locator('.olink', { hasText: 'undo' }).click()
+  await checkedRow.locator('button.v.checked').waitFor({ timeout: 5000 })
+  check((await checkedRow.locator('.stamp').count()) === 0, 'undo removes the stamp')
+  check(
+    await checkedRow.locator('button.v.expected').isVisible(),
+    'undo restores the whole row, not just the chip that was clicked',
+  )
 
   await page.waitForFunction(
     (before) => {
@@ -137,82 +147,52 @@ if (raised.every((r) => r.ok)) {
       const n = Number((el.textContent ?? '').replace(/[^\d]/g, ''))
       return !Number.isNaN(n) && n === before
     },
-    beforeNoise,
+    beforeChecked,
     { timeout: 10000 },
   )
   check(true, "undo puts the flag back on the chrome's ⚑ count too")
 
-  // --- Call real: stamp in CALL IT, row stays, caret and undo remain -
+  // --- Investigate: the row stays, and its chips change --------------
 
-  const realRow = rowFor(REAL_IP)
-  await realRow.locator('button.v.real').click()
-  await realRow.locator('.stamp.real').waitFor({ timeout: 5000 })
+  const investigateRow = rowFor(INVESTIGATE_IP)
+  await investigateRow.locator('button.v.investigate').click()
+  await investigateRow.locator('button.v.resolved').waitFor({ timeout: 5000 })
 
+  check(await investigateRow.isVisible(), 'the row stays -- an investigate verdict never clears the flag')
   check(
-    (await realRow.locator('.stamp.real').textContent())?.trim() === 'real',
-    'calling real stamps REAL in the same CALL IT column',
+    await investigateRow.locator('button.v.expected').isVisible(),
+    'an investigated row offers expected · resolved',
   )
-  check(await realRow.isVisible(), 'the row stays -- a real verdict never clears the flag')
-  check(await realRow.locator('.openc').isVisible(), 'the caret is still there for a real row')
   check(
-    await realRow.locator('.olink', { hasText: 'undo' }).isVisible(),
-    'undo is offered for a real verdict too, with no window on it',
+    (await investigateRow.locator('button.v.checked').count()) === 0,
+    'checked is gone from it -- it has already been looked at',
   )
+  check(await investigateRow.locator('.openc').isVisible(), 'the caret is still there for an investigated row')
 
-  await realRow.click()
-  await page.waitForSelector(`tr.frow:has-text("${REAL_IP}") + tr.drawer`, { timeout: 5000 })
+  await investigateRow.click()
+  await page.waitForSelector(`tr.frow:has-text("${INVESTIGATE_IP}") + tr.drawer`, { timeout: 5000 })
   check(
-    ((await drawerFor(REAL_IP).locator('.story .called').textContent()) ?? '').startsWith('Called real at'),
-    'the drawer story leads with the "Called real" line',
+    ((await drawerFor(INVESTIGATE_IP).locator('.story .called').textContent()) ?? '').startsWith(
+      'Being investigated since',
+    ),
+    'the drawer story leads with the "being investigated" line',
   )
+  await investigateRow.locator('.openc').click()
 
-  // --- Never again: arm, confirm, listed in the exclusions body ------
+  // --- Resolved: clears, and records no suppression ------------------
 
-  const neverRow = rowFor(NEVER_IP)
-  await neverRow.locator('.openc').click()
-  const neverDrawer = drawerFor(NEVER_IP)
-  await neverDrawer.waitFor({ timeout: 5000 })
+  const resolvedRow = rowFor(RESOLVED_IP)
+  await resolvedRow.locator('button.v.investigate').click()
+  await resolvedRow.locator('button.v.resolved').waitFor({ timeout: 5000 })
+  await resolvedRow.locator('button.v.resolved').click()
+  await resolvedRow.locator('.stamp.resolved').waitFor({ timeout: 5000 })
+  check(true, 'calling resolved from an investigated row stamps RESOLVED and clears it')
 
-  const neverBtn = neverDrawer.locator('button.never')
-  await neverBtn.click()
+  const resolvedFlag = await waitForApiVerdict(RESOLVED_IP, (f) => f.cleared && f.verdict === 'resolved')
   check(
-    ((await neverBtn.textContent()) ?? '').trim().startsWith('confirm — Port scan never fires again for'),
-    'a first click arms never again with a confirm label, rather than acting immediately',
+    resolvedFlag.ok,
+    `the resolved verdict reached the server and cleared the flag (got: ${JSON.stringify(resolvedFlag.flag)})`,
   )
-
-  await neverBtn.click()
-  await neverRow.locator('.stamp', { hasText: 'never again' }).waitFor({ timeout: 15000 })
-  check(true, 'a second click calls clear-permanent and stamps NEVER AGAIN on the row')
-  check((await neverRow.locator('.olink', { hasText: 'undo' }).count()) === 0, 'no undo on a never-again row')
-
-  const showThem = page.locator('button', { hasText: 'show them' })
-  await showThem.waitFor({ timeout: 10000 })
-  await showThem.click()
-  const excludedRow = page.locator(`tr.frow.fx:has-text("${NEVER_IP}")`)
-  await excludedRow.waitFor({ timeout: 5000 })
-  check(await excludedRow.isVisible(), 'the pair shows up in the exclusions body once shown')
-
-  // --- Let it fire again: removed from the body, and can raise anew --
-
-  await excludedRow.locator('.openc').click()
-  await page.locator('button', { hasText: 'let it fire again' }).click()
-  await page.waitForSelector(`tr.frow.fx:has-text("${NEVER_IP}")`, { state: 'detached', timeout: 10000 })
-  check(true, 'let it fire again removes the pair from the exclusions body')
-
-  const exclusionsAfter = await page.request
-    .get(`${process.env.MV_URL}/api/flags/exclusions`)
-    .then((r) => r.json())
-    .then((b) => b.exclusions ?? [])
-  check(
-    !exclusionsAfter.some((e) => e.target === NEVER_IP),
-    'the exclusion is gone server-side too, not just optimistically hidden',
-  )
-
-  // A fresh scan at the same source proves detection is actually
-  // re-armed, not just that the list entry disappeared.
-  feedPortScan(20, NEVER_IP)
-  const refired = await waitForFlag(page, NEVER_IP)
-  check(refired.ok, `letting it fire again actually lets it fire again: ${refired.message}`)
 
   // --- Reload immediately after judging: the case that caught a real
   // defect, carried forward from the retired live-flag-verdicts.mjs ---
@@ -230,16 +210,20 @@ if (raised.every((r) => r.ok)) {
   // doc comment) leaves nothing in flight for the reload to lose, so
   // this must still show the verdict landed even though the page
   // navigated away before the request's own promise ever resolved.
+  //
+  // Checked, not expected: this leg is about the request surviving, and
+  // an expected verdict would leave a real expectation on a shared
+  // instance for the sake of testing something else.
 
   await openFlags()
   const reloadRow = rowFor(RELOAD_IP)
   await reloadRow.waitFor({ timeout: 15000 })
-  await reloadRow.locator('button.v.expected').click()
+  await reloadRow.locator('button.v.checked').click()
   await page.waitForTimeout(200)
 
   await page.reload({ waitUntil: 'networkidle' })
 
-  const reloadResult = await waitForApiVerdict(RELOAD_IP, (f) => f.cleared && f.verdict === 'expected')
+  const reloadResult = await waitForApiVerdict(RELOAD_IP, (f) => f.cleared && f.verdict === 'checked')
   check(
     reloadResult.ok,
     `a verdict judged just before an immediate reload is on the server afterward -- posted at once, nothing for the reload to lose (got: ${JSON.stringify(reloadResult.flag)})`,
@@ -256,7 +240,7 @@ if (raised.every((r) => r.ok)) {
   await openFlags()
   check((await rowFor(RELOAD_IP).count()) === 0, 'the reloaded, unpinned UI no longer shows the judged row as open')
 } else {
-  check(true, 'skipped -- the verdict/exclusion flow cannot run without its four port-scan flags')
+  check(true, 'skipped -- the verdict row cannot be driven without its four port-scan flags')
 }
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)
