@@ -166,6 +166,22 @@ export function feedPortScan(n, sourceIp) {
 }
 
 /**
+ * feedInternalRecon delivers n distinct internal destinations from one
+ * LAN source, each reached on `port`, so a real internal_recon flag is
+ * raised carrying evidence pairs (#641) -- the shape an expected verdict
+ * permits and a "watch for this" draft is built from.
+ *
+ * Same reasoning as feedPortScan above for living here rather than in
+ * the one scenario that needs it today.
+ */
+export function feedInternalRecon(n, sourceIp, port) {
+  const args = ['recon', String(n)]
+  if (sourceIp) args.push(sourceIp)
+  if (port) args.push(String(port))
+  execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO })
+}
+
+/**
  * isUntrustedCertServiceWorkerError filters out the one console error a
  * browser always produces against a self-signed certificate it has not
  * been told to trust.
