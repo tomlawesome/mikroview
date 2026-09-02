@@ -118,6 +118,70 @@ describe('Metrics', () => {
     expect(surface.getAttribute('aria-valuenow')).toBe('0')
   })
 
+  // Rounds 36-37 (#803): "reading the minute under the cursor across every
+  // series was already the hourline's job; it now reads every series in one
+  // line under the cursor". The `.fact` spans that are direct children of
+  // `.hourline` are the cursor's group -- the hour's rate facts live inside
+  // `.rate`, which is why this does not just query `.hourline .fact`.
+  function cursorFacts(container: HTMLElement): string[] {
+    const hourline = container.querySelector('.hourline')!
+    return [...hourline.children]
+      .filter((el) => el.classList.contains('fact'))
+      .map((el) => el.textContent!.replace(/\s+/g, ' ').trim())
+  }
+
+  it('reads every series under the cursor, not a ratio naming two of them', async () => {
+    const { container } = render(Metrics)
+    const surface = screen.getByRole('slider', { name: 'The minute under the cursor' })
+    await fireEvent.keyDown(surface, { key: 'End' })
+    await fireEvent.keyDown(surface, { key: 'ArrowLeft' })
+
+    const facts = cursorFacts(container)
+    expect(facts).toContain('410 Accept')
+    expect(facts).toContain('88 Drop')
+    expect(facts).toContain('2 Reject')
+    // Every traffic series gets a fact, plus one for the episodes -- so a
+    // series that was silent this minute still says so rather than being
+    // folded into an "of N events" denominator.
+    expect(facts.length).toBe(container.querySelectorAll('.hourline > .fact').length)
+    expect(facts.some((f) => /refused of/.test(f))).toBe(false)
+  })
+
+  it('wears the refused ink on the refused series, and only on it', async () => {
+    const { container } = render(Metrics)
+    const surface = screen.getByRole('slider', { name: 'The minute under the cursor' })
+    await fireEvent.keyDown(surface, { key: 'End' })
+    await fireEvent.keyDown(surface, { key: 'ArrowLeft' })
+
+    const hourline = container.querySelector('.hourline')!
+    const refused = [...hourline.children]
+      .filter((el) => el.classList.contains('fact') && el.classList.contains('ref'))
+      .map((el) => el.textContent!.replace(/\s+/g, ' ').trim())
+    expect(refused).toContain('88 Drop')
+    expect(refused).toContain('2 Reject')
+    expect(refused).not.toContain('410 Accept')
+  })
+
+  // The flag-episode names are what the removed cross-section panel used to
+  // print. They ride the hourline now, so nothing that panel said is lost.
+  it('names the flag types behind the episode count', async () => {
+    const { container } = render(Metrics)
+    const surface = screen.getByRole('slider', { name: 'The minute under the cursor' })
+    await fireEvent.keyDown(surface, { key: 'End' })
+    await fireEvent.keyDown(surface, { key: 'ArrowLeft' })
+
+    const episodes = cursorFacts(container).find((f) => /flag episode/.test(f))
+    expect(episodes).toBe('2 flag episodes — Repeated drops on a port ×2')
+  })
+
+  it('draws no cross-section panel beside the register, and prints no instruction', () => {
+    const { container } = render(Metrics)
+    metricsPref.setView('register')
+    flushSync()
+    expect(container.querySelector('.cross-section')).toBeNull()
+    expect(container.textContent).not.toContain('Pick a minute')
+  })
+
   it('clears the cursor on Escape rather than leaving a minute stuck under it', async () => {
     render(Metrics)
     const surface = screen.getByRole('slider', { name: 'The minute under the cursor' })

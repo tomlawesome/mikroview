@@ -11,11 +11,28 @@ vi.mock('./api', () => ({
 import { appState } from './state.svelte'
 import { authState } from './auth.svelte'
 import { wizardState } from './wizard.svelte'
-import { journeyState } from './journey.svelte'
+import { journeyState, tourLengthSentence, tourMinutes } from './journey.svelte'
+import type { ClientEvent } from './types'
+
+// One line off the wire -- the whole of what beat 3 waits for.
+function firstEvent(): ClientEvent {
+  return {
+    id: 1,
+    time: '2026-01-01T13:46:00.000Z',
+    deviceId: 'core',
+    sourceIp: '192.168.1.1',
+    action: 'drop',
+    ruleLabel: 'r13',
+    chain: 'forward',
+    raw: '',
+    receivedAt: 0,
+  }
+}
 
 beforeEach(() => {
   authState.role = 'admin'
   appState.view = 'engineroom'
+  appState.events = []
   journeyState.phase = 'idle'
   journeyState.cardIndex = 0
   wizardState.open = false
@@ -51,6 +68,17 @@ describe('journeyState', () => {
     journeyState.fromAttach()
     journeyState.fromConnecting()
     expect(journeyState.phase).toBe('glass')
+  })
+
+  // #750 B1: beat 3 is gated on a line actually landing, so `arrived`
+  // reads the client's own event buffer and nothing else -- no clock,
+  // no "the router probably has it by now".
+  it('arrived() is false until an event is actually in the buffer', () => {
+    appState.events = []
+    expect(journeyState.arrived).toBe(false)
+
+    appState.events = [firstEvent()]
+    expect(journeyState.arrived).toBe(true)
   })
 
   it('beginTour() starts touring on the deck\'s first card', () => {
@@ -118,5 +146,25 @@ describe('journeyState', () => {
 
     wizardState.maybeAutoLaunch(false)
     expect(wizardState.open).toBe(false)
+  })
+})
+
+// Round 27 draws "Six cards. About two minutes." -- and the deck it is
+// describing is six for a viewer, seven for an admin (#647), so the
+// sentence has to move with the count instead of being fixed prose.
+describe('tourLengthSentence', () => {
+  it('says exactly what round 27 draws, for the deck round 27 drew', () => {
+    expect(tourLengthSentence(6)).toBe('Six cards. About two minutes. It ends at the wizard either way.')
+  })
+
+  it('scales the minutes with the count rather than fixing them at two', () => {
+    expect(tourMinutes(6)).toBe(2)
+    expect(tourMinutes(9)).toBe(3)
+    expect(tourLengthSentence(9)).toContain('About three minutes.')
+  })
+
+  it('never rounds a short deck down to no time at all', () => {
+    expect(tourMinutes(1)).toBe(1)
+    expect(tourLengthSentence(1)).toBe('One card. About a minute. It ends at the wizard either way.')
   })
 })

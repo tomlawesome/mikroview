@@ -939,6 +939,20 @@
               {/each}
             </div>
           {/if}
+          <!-- #750 group B item 3, the evidence-truncation line, goes
+               here: one foot closing the pairs list -- "12 of 340
+               pairs", or "12 of at least 340 pairs" when the total is a
+               floor, and no line at all when nothing is cut. The
+               wording is ruled and built (evidencePairs.ts's
+               pairsTruncationLabel, with its own tests); what it counts
+               is not on screen. 68fd460 dropped the per-host pairs
+               panel when this drawer was rebuilt to round 29, and #791
+               is where it comes back -- placement inside this drawer is
+               that issue's open design call, not this one's. A foot
+               reading "12 of 340 pairs" above no pairs would disclose
+               a truncation of nothing, so the line lands with the list
+               it closes. -->
+
           <div class="dwr-acts">
             {#if isFilterable(f)}
               <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>

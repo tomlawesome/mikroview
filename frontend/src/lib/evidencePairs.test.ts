@@ -76,18 +76,19 @@ describe('pairsTruncated', () => {
 // visibly differently (#654's owner correction): a flat "50 of 200"
 // looks exactly as precise as a genuine "50 of 214" while lying about
 // it once pairsTotal is itself only a floor (internal/engine's
-// maxEvidencePairsTracked ceiling). These two tests pin that the two
-// cases are in fact distinct outputs, not just distinct inputs.
+// maxEvidencePairsTracked ceiling). These tests pin that the two cases
+// are in fact distinct outputs, not just distinct inputs, and that the
+// line reads as #750's ruling words it.
 describe('pairsTruncationLabel', () => {
-  it('renders the exact case with no suffix', () => {
-    expect(pairsTruncationLabel(50, 214, false)).toBe('50 of 214')
+  it('closes the list with the count and the noun, as ruled on #750', () => {
+    expect(pairsTruncationLabel(12, 340, false)).toBe('12 of 340 pairs')
   })
 
-  it('renders the floor case with a "+" suffix, distinctly from the exact case', () => {
-    expect(pairsTruncationLabel(50, 200, true)).toBe('50 of 200+')
+  it('says "at least" for the floor case, distinctly from the exact case', () => {
+    expect(pairsTruncationLabel(12, 340, true)).toBe('12 of at least 340 pairs')
   })
 
   it('treats an absent pairsTotalIsFloor the same as false (the exact case)', () => {
-    expect(pairsTruncationLabel(50, 214, undefined)).toBe('50 of 214')
+    expect(pairsTruncationLabel(50, 214, undefined)).toBe('50 of 214 pairs')
   })
 })
