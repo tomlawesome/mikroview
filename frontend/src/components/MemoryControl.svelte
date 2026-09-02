@@ -30,6 +30,7 @@
     doublingTicks,
     formatSize,
     midLabel,
+    pageStepBytes,
     stepBytes,
     trackX,
     type Proposal,
@@ -121,6 +122,12 @@
       case 'ArrowRight':
       case 'ArrowUp':
         proposed = stepBytes(shown, 1, mem.min, mem.max)
+        break
+      case 'PageUp':
+        proposed = pageStepBytes(shown, 1, mem.min, mem.max)
+        break
+      case 'PageDown':
+        proposed = pageStepBytes(shown, -1, mem.min, mem.max)
         break
       case 'Home':
         proposed = mem.min

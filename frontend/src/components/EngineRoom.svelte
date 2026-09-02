@@ -872,7 +872,12 @@
            only proposes -- see docs/design/concepts/round-39/the-whole.html,
            `#set`, and its README's `#set.mgrow`/`#set.mshrink` states,
            which are the mgrow/mshrink classes on this section. -->
-      <div class="stsection wide memg" class:mgrow={memoryProposal?.kind === 'grow'} class:mshrink={memoryProposal?.kind === 'shrink'}>
+      <div
+        id="memg"
+        class="stsection wide"
+        class:mgrow={memoryProposal?.kind === 'grow'}
+        class:mshrink={memoryProposal?.kind === 'shrink'}
+      >
         <h3>memory</h3>
         <div class="wleft">
           {#if memSlices.length > 0}

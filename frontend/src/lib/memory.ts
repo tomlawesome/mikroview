@@ -65,7 +65,7 @@ export function bytesAtX(x: number, min: number, max: number): number {
 }
 
 function snap(bytes: number): number {
-  const step = bytes >= GIB ? 64 * MIB : 8 * MIB
+  const step = stepFor(bytes)
   return Math.round(bytes / step) * step
 }
 
@@ -78,20 +78,33 @@ function clamp01(v: number): number {
 }
 
 /**
- * stepBytes is one keyboard press: an eighth of a doubling, so twelve
- * presses cross one octave of the scale and the whole range is a few
- * seconds of held arrow key rather than a minute of it. Snapped like a
- * drag, so a keyboard user and a mouse user reach the same figures.
+ * stepBytes is one arrow key: one snap step, so every figure a drag can
+ * land on is also reachable from the keyboard, and the two never
+ * disagree about what is settable.
+ *
+ * Deliberately not a fraction of a doubling, which was the first
+ * attempt: a geometric step lands on whatever the snap rounds it to and
+ * skips figures in between -- from 120 MiB it steps straight over
+ * 480 MiB to 504. A control whose keyboard cannot reach a figure its
+ * mouse can is a control with two different sets of legal values.
+ * Crossing the whole range is what pageStepBytes below is for.
  */
 export function stepBytes(bytes: number, direction: 1 | -1, min: number, max: number): number {
-  const proposed = snap(bytes * Math.pow(2, direction / 8))
-  // At the small end an eighth of a doubling can round back to where it
-  // started, which reads as a key that does nothing. Nudge by one step.
-  if (proposed === bytes) {
-    const step = bytes >= GIB ? 64 * MIB : 8 * MIB
-    return clampBytes(bytes + direction * step, min, max)
-  }
-  return clampBytes(proposed, min, max)
+  return clampBytes(snap(bytes) + direction * stepFor(bytes), min, max)
+}
+
+/**
+ * pageStepBytes is one Page Up or Page Down: a doubling, so the whole
+ * range is a handful of presses rather than a few hundred. The scale is
+ * logarithmic, so a doubling is the natural big step -- it moves the
+ * handle the same distance along the track wherever it starts.
+ */
+export function pageStepBytes(bytes: number, direction: 1 | -1, min: number, max: number): number {
+  return clampBytes(snap(direction > 0 ? bytes * 2 : bytes / 2), min, max)
+}
+
+function stepFor(bytes: number): number {
+  return bytes >= GIB ? 64 * MIB : 8 * MIB
 }
 
 /**
@@ -166,13 +179,22 @@ function threeSignificantFigures(n: number): number {
 }
 
 /**
- * formatHours renders a span of hours the way round 39 does: "9 h",
- * "36 h", "4.8 h" -- one decimal below ten hours, none above, because
- * the difference between 36 and 36.4 hours is not a difference anyone
- * acts on while the difference between 4.8 and 5 is.
+ * formatHours renders a span the way round 39 does: "9 h", "36 h",
+ * "4.8 h" -- one decimal below ten hours, none above, because the
+ * difference between 36 and 36.4 hours is not one anyone acts on while
+ * the difference between 4.8 and 5 is.
+ *
+ * Below an hour it changes unit rather than printing a fraction. Round
+ * 39 never draws a span that short, so this is not a departure from it;
+ * it is what stops a 32 MiB buffer on a busy instance reading "holds
+ * ~0 h at today's rate", which is not a rounding of half an hour but a
+ * different claim -- and the wrong one to put beside a control whose
+ * whole job is showing what a figure buys. Seen on the first live run.
  */
 export function formatHours(hours: number): string {
-  if (!Number.isFinite(hours) || hours <= 0) return '0 h'
+  if (!Number.isFinite(hours) || hours <= 0) return '0 s'
+  if (hours < 1 / 60) return `${Math.max(1, Math.round(hours * 3600))} s`
+  if (hours < 1) return `${Math.round(hours * 60)} min`
   if (hours < 10) return `${trimZero(hours.toFixed(1))} h`
   return `${Math.round(hours)} h`
 }
