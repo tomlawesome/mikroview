@@ -160,6 +160,14 @@ await page.click(`${PEOPLE} .ogfoot .olink`)
 await page.waitForSelector(`${PEOPLE} .pform`)
 await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, VIEWER_USER)
 await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, VIEWER_PASS)
+// #653 gave the form a tier choice and defaulted it to "can change
+// things". Without this click the account below is a *user*, not a
+// viewer -- which is what this section had been creating since #653, so
+// every "absent for a viewer" claim under it was really proving the user
+// tier's grammar under a viewer's name. It went unnoticed because the
+// rows it checks (Users, Tokens, Detectors, Entities, Run setup…) are
+// admin-gated, so they are absent for a user too and the checks passed.
+await page.click(`${PEOPLE} .pform button:has-text("can only look")`)
 await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`)
 check(true, `the viewer account "${VIEWER_USER}" is created from the people group`)
