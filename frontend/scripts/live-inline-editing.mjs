@@ -279,11 +279,11 @@ check(restored, 'an emptied field removes the label and the raw value shows agai
 // hostname and a MAC, which is exactly what internal/suggest's Generate
 // turns into a *device candidate* (see generate.go -- a lease needs both
 // to become one). Generate scans every device in RouterState, and
-// live-suggestions.mjs pushes its own lease under a device name of its
+// live-suggestions-matches.mjs pushes its own lease under a device name of its
 // own ("live-suggest-router"), so the two coexisted rather than
 // replacing each other and its "the Undecided filter counts both"
 // assertion saw three candidates where it expects two. Confirmed by
-// running live-suggestions.mjs alone on a clean instance (pass), then
+// running live-suggestions-matches.mjs alone on a clean instance (pass), then
 // after this scenario (fail on exactly that line).
 //
 // Retiring the lease, rather than avoiding a MAC to dodge the candidate
