@@ -8,9 +8,12 @@
 //   the real signed-in role: a viewer's deck simply has no Watchlist
 //   card and no Watchlist name (#490's grammar: absent, never
 //   disabled), proved end to end with a real second account rather than
-//   a mocked authState.role. Since #647 (round 23), Entities carries the
-//   same gate as its own card: an admin's rail carries seven names, a
-//   viewer's six (no Entities -- its GET route still 403s for a viewer).
+//   a mocked authState.role. Since #647 (round 23) Entities and Settings
+//   are cards too, and #657 gates both on canEdit rather than on either
+//   one's API: an admin's rail carries seven names, a viewer's six, with
+//   the standalone Fleet card standing in for the two they do not get.
+//   (Not an API gate -- #653 widened GET /api/entities to the user tier.
+//   The rule is whether the page's purpose is making a change.)
 // - Clicking a name has to actually roll the card to centre and move
 //   the active state -- appState.view, the snap scroll, and the
 //   IntersectionObserver writing the view back all have to agree, which
@@ -141,9 +144,14 @@ check(focused.visible && focused.cls.includes('skip-link'), 'the skip-link becom
 await skipBrowser.close()
 
 // --- A viewer's docket carries no watchlist tab ---------------------------
-// The deck itself carries the same six cards for every role (#633);
-// Entities is the one card gated whole (#647), and what is admin-only
-// within the docket is its watchlist and audit tabs -- absent for a
+// The deck is not the same for every role any more. #647 put Entities
+// and Settings on it as its last two cards -- seven for an admin, as the
+// first check in this scenario proves -- and #657 then ruled both out of
+// a viewer's navigation entirely, giving a viewer the standalone Fleet
+// card in their place (deckCards.ts:45-50). So a viewer's six are the
+// five shared cards plus Fleet, not plus Settings: this expected Settings
+// until the gate reached it, a pre-#657 premise the same age as #783's.
+// Within the docket, watchlist and audit stay tier-gated -- absent for a
 // viewer rather than disabled.
 const VIEWER_USER = 'live-viewer-rail'
 const VIEWER_PASS = 'live-viewer-rail-password'
@@ -165,8 +173,8 @@ await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 const viewerNames = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
   JSON.stringify(viewerNames) ===
-    JSON.stringify(['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Settings']),
-  `a viewer's rail carries six cards -- no Entities, and the docket answers with its flags tab -- got ${JSON.stringify(viewerNames)}`,
+    JSON.stringify(['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Fleet']),
+  `a viewer's rail carries six cards -- Fleet in place of Entities and Settings (#657) -- got ${JSON.stringify(viewerNames)}`,
 )
 check(
   (await viewerPage.locator('.docket [role="tab"]:has-text("watchlist")').count()) === 0,

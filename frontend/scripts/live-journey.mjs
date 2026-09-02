@@ -13,7 +13,14 @@
 // tests the modal's *relaunch* door rather than its first auto-launch.
 // Those beats, and the tour's advance/skip/leave mechanics, are covered
 // by component tests instead (lib/journey.svelte.test.ts,
-// JourneyAttach/JourneyGlass/JourneyTour.svelte.test.ts).
+// JourneyAttach/JourneyGlass/JourneyTour.svelte.test.ts). #750 B1's
+// arrival gate is in that same set: beat 3 now waits on the first event
+// reaching appState.events rather than on a 3.2s timer, and this
+// instance has been pouring events since long before the page loaded --
+// so the one state a shared instance could ever show here is the state
+// after the gate, which is indistinguishable from the old timer having
+// run. The gate is pinned in JourneyGlass.svelte.test.ts, which can
+// hold the buffer empty and watch the clock not move the beat on.
 //
 // What a real browser against a real server *can* still prove here: the
 // one piece of #646 that is not gated on instance freshness -- the full

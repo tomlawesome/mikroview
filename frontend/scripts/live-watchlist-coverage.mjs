@@ -16,7 +16,7 @@
 // joinery.
 //
 // Every scenario in this directory shares one instance, and two that
-// sort earlier (live-router-lookup, live-suggestions) push filter tables
+// sort earlier (live-router-lookup, live-suggestions-matches) push filter tables
 // of their own. So there is no clean slate here, and the "nothing has
 // been pushed" case cannot be tested from this seat -- it lives in
 // TestCoverageSaysNothingWithoutPushedRules instead. Assuming otherwise
