@@ -66,6 +66,21 @@ type destSpreadDefinition struct {
 	vpnMultiplier float64
 
 	dests *Keyed[*DistinctRing[string]]
+	// pairs is the (destination, port) combinations actually seen
+	// together, per source, over the same window dests is counted over
+	// -- #641's "record the port alongside the destination". Kept as its
+	// own ring rather than derived from dests because a pair is a
+	// different distinct value: two ports to one host is one destination
+	// and two pairs, and the threshold this definition fires on is
+	// counted on destinations, never on pairs.
+	//
+	// Why a second ring is affordable here: it is bounded exactly like
+	// the first (windowBucketCount buckets, maxDistinctPerBucket values
+	// each), so the ceiling on what one source can make this definition
+	// hold is doubled, not opened -- see maxDistinctPerBucket's own doc
+	// comment for why that ceiling is a backstop rather than a limit any
+	// real deployment reaches.
+	pairs *Keyed[*DistinctRing[HostPort]]
 }
 
 func buildOutboundAnomalyDefinition(def Definition, deps ShippedDeps) (Evaluated, error) {
@@ -106,6 +121,7 @@ func buildDestSpreadDefinition(def Definition, _ ShippedDeps, direction destDire
 		vpnInterfaces:    ifaces,
 		vpnMultiplier:    vpnMult,
 		dests:            NewKeyed[*DistinctRing[string]](),
+		pairs:            NewKeyed[*DistinctRing[HostPort]](),
 	}, nil
 }
 
@@ -172,6 +188,20 @@ func (d *destSpreadDefinition) Evaluate(e store.Event) {
 	})
 	if d.tracks(e.DstIP) {
 		ring.Add(now, e.DstIP)
+		// The pair rides on the same gate as the destination it is made
+		// of: a destination this direction does not track is not this
+		// definition's evidence, whichever port it was reached on. A
+		// port of 0 is a line the parser found no destination port on
+		// (ICMP, a malformed line), and {host, 0} is not a pair anyone
+		// can permit or watch -- watchlist.Entry's own matching would
+		// never see a 0 port either (matchNonInverted's DstPort == 0
+		// guard), so recording it would put an unusable row in front of
+		// the operator.
+		if e.DstPort != 0 {
+			d.pairs.GetOrCreate(e.SrcIP, now, func() *DistinctRing[HostPort] {
+				return NewDistinctRing[HostPort](d.window)
+			}).Add(now, HostPort{Host: e.DstIP, Port: e.DstPort})
+		}
 	}
 
 	// Checked on every qualifying event, not only on one this direction
@@ -191,6 +221,7 @@ func (d *destSpreadDefinition) Evaluate(e store.Event) {
 	// (outbound_anomaly and internal_recon), and the measure each one's
 	// threshold param is compared against. See ShippedSizeMeasure.
 	size := count
+	pairs, pairsTotal := d.pairsFor(e.SrcIP, now)
 	d.emit(Emission{
 		Target: e.SrcIP,
 		Detail: fmt.Sprintf("%d distinct %s destinations in %s", count, d.noun(), d.window) +
@@ -198,12 +229,50 @@ func (d *destSpreadDefinition) Evaluate(e store.Event) {
 		Confidence: &confidence,
 		Size:       &size,
 		Hosts:      sortedHostsCapped(hosts),
+		// #641: the destinations this source reached, each with the port
+		// it was reached on, so an expected verdict can permit exactly
+		// those and a watcher can be drafted from them. Hosts above stays
+		// as it was -- it is what the Detail sentence counts, and a pair
+		// list capped at maxEvidencePairs is a sample of combinations,
+		// not a replacement for the destination set.
+		Pairs:      pairs,
+		PairsTotal: pairsTotal,
+		// PairsTotalIsFloor is deliberately left false: pairsTotal is
+		// counted by the same DistinctRing that counts the destinations
+		// this definition's Detail sentence states exactly, under the
+		// same per-bucket ceiling (maxDistinctPerBucket), so claiming
+		// this one number is approximate while the sentence beside it
+		// claims precision would be two answers to one question. That
+		// shared ceiling is a known bound on both, not a pairs-specific
+		// one.
 		// No Country: internal/detect passed "" for both directions. The
 		// emission is about a LAN source, whose country badge would be
 		// meaningless, and the destinations it names are many.
 		SourceIP:  e.SrcIP,
 		EventTime: now,
 	})
+}
+
+// pairsFor reads the (destination, port) combinations recorded for src
+// over the last window, returning the display-capped list and the
+// distinct count before that cap -- the same two-number contract
+// EvidenceSet.Pairs/PairsTotal gives the declarative path (#654), so a
+// reader of either can say "6 of 14 pairs" rather than showing six and
+// letting the list read as complete.
+//
+// A source with no ring at all (nothing it reached carried a
+// destination port) yields no pairs and a total of 0, which is exactly
+// how a flag from a definition that never recorded pairs already reads.
+func (d *destSpreadDefinition) pairsFor(src string, now time.Time) ([]HostPort, int) {
+	ring, ok := d.pairs.Get(src)
+	if !ok {
+		return nil, 0
+	}
+	seen := ring.Values(now, d.window, nil)
+	if len(seen) == 0 {
+		return nil, 0
+	}
+	return sortedPairsCapped(seen), len(seen)
 }
 
 // Replay satisfies Replayable: the same per-source distinct-destination
