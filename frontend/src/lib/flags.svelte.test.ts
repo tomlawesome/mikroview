@@ -41,7 +41,6 @@ function flag(type: FlagType, target: string, overrides: Partial<Flag> = {}): Fl
 // approach for authState.
 beforeEach(() => {
   flagsState.list = []
-  flagsState.undoableVerdicts = []
   nextId = 1
   vi.mocked(setFlagVerdict).mockReset()
   vi.mocked(deleteFlagVerdict).mockReset()
@@ -160,9 +159,10 @@ describe('FlagsState.groupedBySource', () => {
 // an earlier, deferred version of this got replaced (a verdict judged
 // just before a reload reached the server 0 times out of 6, because the
 // PWA's service worker strips the keepalive guarantee that version
-// depended on). Undo's ~5s window is now cosmetic UI state only, so
-// fake timers are used just for the tests that exercise it lapsing, not
-// for judging or undoing themselves.
+// depended on). #780 retired the old ~5s Undo window along with the
+// toast it existed for: the row-level stamp now offers Undo for as
+// long as the flag still carries the verdict, per isUndoable's own doc
+// comment, so there is nothing timed left to test here.
 describe('FlagsState verdicts (#638)', () => {
   it('judgeAndClear posts the verdict immediately and clears the flag from the response', async () => {
     flagsState.list = [flag('port_scan', '203.0.113.9')]
@@ -192,7 +192,7 @@ describe('FlagsState verdicts (#638)', () => {
     expect(flagsState.isUndoable(id)).toBe(false)
   })
 
-  it('stops offering Undo once the ~5s window lapses, without sending anything further', async () => {
+  it('keeps offering Undo well past the old ~5s window, since #780 made it last as long as the verdict does', async () => {
     vi.useFakeTimers()
     flagsState.list = [flag('port_scan', '203.0.113.9')]
     const id = flagsState.list[0].id
@@ -203,9 +203,9 @@ describe('FlagsState verdicts (#638)', () => {
     await flagsState.judgeAndClear(id, 'expected')
     expect(flagsState.isUndoable(id)).toBe(true)
 
-    await vi.advanceTimersByTimeAsync(5000)
+    await vi.advanceTimersByTimeAsync(60_000)
 
-    expect(flagsState.isUndoable(id)).toBe(false)
+    expect(flagsState.isUndoable(id)).toBe(true)
     expect(setFlagVerdict).toHaveBeenCalledTimes(1)
     expect(deleteFlagVerdict).not.toHaveBeenCalled()
     vi.useRealTimers()
@@ -228,21 +228,31 @@ describe('FlagsState verdicts (#638)', () => {
     expect(flagsState.isUndoable(id)).toBe(false)
   })
 
-  it('undoVerdict does nothing once the undo window has already lapsed -- no id left to undo', async () => {
-    vi.useFakeTimers()
+  it('undoVerdict is a no-op on a flag that was never judged -- nothing to undo', async () => {
     flagsState.list = [flag('port_scan', '203.0.113.9')]
     const id = flagsState.list[0].id
-    vi.mocked(setFlagVerdict).mockResolvedValue(
-      flag('port_scan', '203.0.113.9', { id, cleared: true, verdict: 'expected', verdictBy: 'alice', verdictAt: 't' }),
-    )
-    await flagsState.judgeAndClear(id, 'expected')
-    await vi.advanceTimersByTimeAsync(5000)
 
     await flagsState.undoVerdict(id)
 
     expect(deleteFlagVerdict).not.toHaveBeenCalled()
-    expect(flagsState.list[0].cleared).toBe(true)
-    vi.useRealTimers()
+    expect(flagsState.list[0].cleared).toBe(false)
+  })
+
+  it('undoVerdict sends a real DELETE for a standing real verdict, with no window at all (#780 item 3)', async () => {
+    flagsState.list = [flag('critical_port', '203.0.113.9')]
+    const id = flagsState.list[0].id
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      flag('critical_port', '203.0.113.9', { id, verdict: 'real', verdictBy: 'alice', verdictAt: 't' }),
+    )
+    await flagsState.judgeReal(id, 'alice')
+    expect(flagsState.isUndoable(id)).toBe(true)
+
+    vi.mocked(deleteFlagVerdict).mockResolvedValue(flag('critical_port', '203.0.113.9', { id, cleared: false }))
+    await flagsState.undoVerdict(id)
+
+    expect(deleteFlagVerdict).toHaveBeenCalledWith(id)
+    expect(flagsState.list[0].verdict).toBeUndefined()
+    expect(flagsState.isUndoable(id)).toBe(false)
   })
 
   it('undoVerdict reverts the optimistic reopen on failure and rethrows', async () => {
