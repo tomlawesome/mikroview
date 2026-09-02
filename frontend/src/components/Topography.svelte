@@ -140,9 +140,16 @@
     return { hosts: shown, more: z.hostCount - shown.length }
   }
 
+  // Shared by ribPath and the internet-edge limbs (#726: "bundle the
+  // corridor, fan at the waist") so a rib and its edge cannot drift
+  // apart -- both draw the same slot for the same lane.
+  function slotSpread(i: number, n: number): number {
+    return n === 1 ? 0 : -55 + (110 / (n - 1)) * i
+  }
+
   function ribPath(i: number, n: number): string {
     const x = laneX(i, n)
-    const spread = n === 1 ? 0 : -55 + (110 / (n - 1)) * i
+    const spread = slotSpread(i, n)
     return `M ${700 + spread} 302 C ${700 + spread * 2.2} 380, ${x + (700 - x) * 0.25} 420, ${x} 480`
   }
 
@@ -161,14 +168,17 @@
   const WAIST = { x: 700, y: 312 }
   const EDGE_CAP = 12
 
-  type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'any' }
+  // `idx` is only set for 'zone' anchors -- an internet edge's own slot
+  // is its zone end's lane index (#726), so it rides along with the
+  // anchor rather than being re-derived from the edge's position.
+  type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'any'; idx?: number }
 
   function anchorOf(iface: string): EdgeAnchor | null {
     if (iface === '') return { ...WAIST, kind: 'any' }
     if (iface === zonesState.wanInterface) return { x: 700, y: 104, kind: 'internet' }
     const i = zones.findIndex((z) => z.id === iface)
     if (i === -1) return null
-    return { x: laneX(i, zones.length), y: 484, kind: 'zone' }
+    return { x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }
   }
 
   // A line between two anchors, shared by both lenses: the Policy lens
@@ -226,16 +236,51 @@
     return { drawn, undrawn }
   })
 
-  // A refusal dies on the waist's near side, so its bar is never behind
-  // the island: arriving from the internet it dies at the top edge,
-  // from a lane at the bottom.
-  function deathPoint(l: Line): { x: number; y: number } {
-    return { x: WAIST.x + l.off.x, y: (l.from.y < 268 ? 226 : WAIST.y) + l.off.y }
+  // #726 ("bundle the corridor, fan at the waist"): an edge whose far
+  // end is the internet no longer runs through the single WAIST point --
+  // it draws only the limb between its lane's own slot and the router
+  // card, and the corridor above carries one shared trunk instead. An
+  // edge to "anywhere" (kind 'any') is unaffected -- it still crosses at
+  // WAIST, per ANY_CLEAR above.
+  function isInternetEdge(l: Line): boolean {
+    return (l.from.kind === 'internet' && l.to.kind === 'zone') || (l.from.kind === 'zone' && l.to.kind === 'internet')
   }
 
-  // The visible line: a cubic pulled through the waist, or dying there.
+  // The lane end's own slot -- shared by the limb, its death point and
+  // its badge, so all three agree on where a given lane's internet edge
+  // rides. Keyed off the lane's index in `zones`, never the edge's
+  // position in the edge list.
+  function internetSlotSpread(l: Line): number {
+    const laneAnchor = l.from.kind === 'zone' ? l.from : l.to
+    return slotSpread(laneAnchor.idx ?? 0, zones.length)
+  }
+
+  // A refusal dies on the waist's near side, so its bar is never behind
+  // the island: arriving from the internet it dies at the top edge,
+  // from a lane at the bottom. An internet edge's death point takes its
+  // own lane's slot on the x axis rather than the shared waist x, so two
+  // refusals to different lanes no longer coincide (#726).
+  function deathPoint(l: Line): { x: number; y: number } {
+    const x = isInternetEdge(l) ? 700 + internetSlotSpread(l) : WAIST.x
+    return { x: x + l.off.x, y: (l.from.y < 268 ? 226 : WAIST.y) + l.off.y }
+  }
+
+  // The visible line: a cubic pulled through the waist, dying there, or
+  // (for an internet edge) the limb alone -- ribPath's own cubic,
+  // reversed, landing on the lane's slot rather than the waist (#726).
   function edgePath(l: Line): string {
     const { from, to, off } = l
+    if (isInternetEdge(l) && l.crosses) {
+      const spread = internetSlotSpread(l)
+      const laneAnchor = from.kind === 'zone' ? from : to
+      const waistPt = { x: 700 + spread, y: 302 }
+      const laneCtrl = { x: laneAnchor.x + (700 - laneAnchor.x) * 0.25, y: 420 }
+      const waistCtrl = { x: 700 + spread * 2.2, y: 380 }
+      const pt = (p: { x: number; y: number }) => `${p.x + off.x} ${p.y + off.y}`
+      return from.kind === 'zone'
+        ? `M ${pt(laneAnchor)} C ${pt(laneCtrl)}, ${pt(waistCtrl)}, ${pt(waistPt)}`
+        : `M ${pt(waistPt)} C ${pt(waistCtrl)}, ${pt(laneCtrl)}, ${pt(laneAnchor)}`
+    }
     const w = { x: WAIST.x + off.x, y: WAIST.y + off.y }
     if (l.crosses) {
       return `M ${from.x + off.x} ${from.y + off.y} C ${w.x} ${w.y}, ${w.x} ${w.y}, ${to.x + off.x} ${to.y + off.y}`
@@ -297,6 +342,22 @@
       return {
         x: dp.x + (dx / len) * back + off.x * 4.2 + p.x * BADGE_CLEAR * side,
         y: dp.y + (dy / len) * back + off.y * 4.2 + p.y * BADGE_CLEAR * side,
+      }
+    }
+    if (isInternetEdge(l)) {
+      // On the limb itself, measured from the waist end -- the corridor
+      // stagger above has nothing left to separate now that each lane
+      // has its own slot (#726).
+      const spread = internetSlotSpread(l)
+      const waistPt = { x: 700 + spread, y: 302 }
+      const laneAnchor = from.kind === 'zone' ? from : to
+      const dx = laneAnchor.x - waistPt.x
+      const dy = laneAnchor.y - waistPt.y
+      const f = 0.35 + (i % 4) * 0.13
+      const p = perp(dx, dy)
+      return {
+        x: waistPt.x + dx * f + off.x * 4.2 + p.x * BADGE_CLEAR * side,
+        y: waistPt.y + dy * f + off.y * 4.2 + p.y * BADGE_CLEAR * side,
       }
     }
     // Past the waist, toward the destination, on its own side -- and
@@ -1686,9 +1747,12 @@
            real map, never a fabricated layer. "Zones" (index 2) is
            unchanged from today's card. -->
       <g class="camera" class:cam-clients={altitude === 0} class:cam-services={altitude === 1} class:cam-survey={altitude === 3}>
+      <!-- The trunk: router to internet, one line, every lens, never
+           per-edge (#726 -- "bundle the corridor, fan at the waist").
+           Individual edges fan at the waist card instead; see
+           edgePath's internet-edge branch. -->
+      <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
       {#if lens === 'traffic'}
-        <!-- The one-way spine: internet into the waist. -->
-        <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
         {#if eps > 0}
           <circle class="mote" r="2.5" fill="var(--accent)" />
         {/if}
