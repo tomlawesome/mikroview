@@ -283,11 +283,19 @@
 
   // The row reads the proposal while one is open and what is running
   // otherwise -- round 39's own `data-m` variants of this line, which
-  // restate what the figure under the handle would buy.
+  // restate what the figure under the handle would buy. The ceiling
+  // shown is the proposed one while a drag is in progress, but held
+  // (#842) always reads the live count: dragging the slider changes what
+  // the buffer is allowed to hold, not how much it holds right now.
   const memoryRow = $derived.by(() => {
     const stats = appState.stats
     if (!mem || !stats) return null
-    return bufferRow(memoryProposal?.proposed ?? mem.maxMemory, mem.bytesPerEvent, stats.eventsPerSecond)
+    return bufferRow(
+      memoryProposal?.proposed ?? mem.maxMemory,
+      mem.bytesPerEvent,
+      stats.eventsPerSecond,
+      stats.count,
+    )
   })
 
   // Where the shrink's cut falls on the hours bar, in the bar's own
