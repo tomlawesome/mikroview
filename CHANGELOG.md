@@ -420,6 +420,14 @@ rewritten.
   index can narrow it to the events it might match, or whether it is
   evaluated against every event instead. `POST /api/definitions`'s
   refusal of `intent=detection` is gone, since it is no longer true.
+- **The learning shelf says when the record is still thin** (#640). A
+  freshly-deployed mikroview flags plenty before it has learned what is
+  normal, and until now nothing said why. While fewer than five
+  expectations have been recorded, the shelf now reads *"Flags will be
+  noisy until mikroview has learned what is normal here — N
+  expectation(s) recorded so far. Judge each flag and the inbox
+  settles."* — viewer-readable, since an expectation is not owner-only
+  information.
 
 ### Changed
 
