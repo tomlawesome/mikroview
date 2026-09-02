@@ -301,6 +301,14 @@ check(
   'this scenario left no definitions of its own behind',
 )
 
-check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors.slice(0, 3))}`)
+// The clone refusal above is a 400 this scenario asks for on purpose, and
+// the browser logs every 4xx as a failed resource load. Filtered here, as
+// live-filter-refetch-failure.mjs does for its 503s, rather than loosening
+// the shared helper: any other 400 is still a defect.
+const unexpectedErrors = consoleErrors.filter((e) => !/400 \(Bad Request\)/.test(e))
+check(
+  unexpectedErrors.length === 0,
+  `no unexpected console errors -- got ${JSON.stringify(unexpectedErrors.slice(0, 3))}`,
+)
 
 done()
