@@ -51,6 +51,7 @@
   import { zonesState } from '../lib/zones.svelte'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
   import { topologyNavState } from '../lib/topologyNav.svelte'
+  import { watchDraftForFlag } from '../lib/watchDraft'
   import type { Flag, FlagType, FirewallEvent, Verdict } from '../lib/types'
 
   // "watch this pathway" / "watch this source" (#761 item 3): a flag
@@ -109,6 +110,33 @@
     const who = extractSourceIp(f.target)
     if (!who) return
     topologyNavState.requestWatchDraft({ who, toward: pathwayToward(f), mode: 'expect' })
+    appState.view = 'watchlist'
+  }
+
+  // "watch for this" (#641): the offer that stays behind on a resolved
+  // flag's undo line. A watcher is a tripwire finer than the detector --
+  // the detector brings a resolved flag back only when the host
+  // re-crosses its threshold, while a watch fires on the first line that
+  // reappears, which is when you want to hear the block did not hold.
+  //
+  // Same handoff as the two above, with two additions the draft carries
+  // back: the provenance of what was prefilled, and the fact that the
+  // operator came from here, so saving *or* cancelling returns them to
+  // the inbox rather than leaving them on the watchlist.
+  //
+  // Offered only where watchDraftForFlag can fill it honestly -- a flag
+  // whose detector recorded no pairs has nothing to watch for, and the
+  // drawer's own `watch this source` is still the way to watch the host
+  // at large. Same gate-rather-than-empty-form grammar as
+  // canWatchPathway above.
+  function canWatchForThis(f: Flag): boolean {
+    return watchDraftForFlag(f) !== null
+  }
+
+  function watchForThis(f: Flag) {
+    const fill = watchDraftForFlag(f)
+    if (!fill) return
+    topologyNavState.requestWatchDraft(fill)
     appState.view = 'watchlist'
   }
 
@@ -794,6 +822,22 @@
               undoCall(f)
             }}>undo</button
           >
+          {#if kind === 'resolved' && canEdit && canWatchForThis(f)}
+            <!-- "Resolved — undo · watch for this" (#641): the offer
+                 rides on the line that already stays behind, so
+                 resolving and setting a tripwire are one gesture rather
+                 than two errands. Offered, never automatic -- the
+                 operator can resolve and decline, and the flag stays
+                 resolved either way. -->
+            <span class="vsep" aria-hidden="true">·</span>
+            <button
+              class="olink"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                watchForThis(f)
+              }}>watch for this</button
+            >
+          {/if}
         </span>
       {:else if canEdit}
         <span class="vrow">
