@@ -16,6 +16,7 @@
 package rules
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,6 +39,54 @@ type Usage struct {
 	Count     uint64    `json:"count"`
 }
 
+// persistedState is the on-disk JSON shape persistLocked writes and
+// OpenWithBackend reads back: an object holding recordingSince (see
+// Store.RecordingSince) alongside every rule's usage record. Reads
+// either this object shape or the bare `[...]` array this package wrote
+// before RecordingSince existed (issue #701) -- see decodePersisted.
+type persistedState struct {
+	RecordingSince time.Time `json:"recordingSince"`
+	Rules          []*Usage  `json:"rules"`
+}
+
+// decodePersisted parses data as either persistedState's current object
+// shape or the bare `[...]` array this package wrote before
+// RecordingSince existed, distinguished by the first non-whitespace
+// byte -- same convention flags.Store's own persistedState uses for its
+// pre-exclusions upgrade (see that type's Open doc comment). The
+// bare-array shape has no stamp to report, so it always returns a zero
+// RecordingSince; OpenWithBackend infers one for that case.
+func decodePersisted(data []byte) (time.Time, []*Usage, error) {
+	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && trimmed[0] == '[' {
+		var list []*Usage
+		if err := json.Unmarshal(data, &list); err != nil {
+			return time.Time{}, nil, err
+		}
+		return time.Time{}, list, nil
+	}
+	var state persistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return time.Time{}, nil, err
+	}
+	return state.RecordingSince, state.Rules, nil
+}
+
+// earliestFirstSeen returns the earliest FirstSeen across byRule, or the
+// zero Time if byRule is empty. OpenWithBackend uses this to infer
+// RecordingSince for a document that predates the field: the earliest
+// moment this store can actually prove it was recording. If byRule is
+// also empty there is nothing to infer from, and OpenWithBackend falls
+// back to the load time -- recording cannot have started before now.
+func earliestFirstSeen(byRule map[string]*Usage) time.Time {
+	var earliest time.Time
+	for _, u := range byRule {
+		if earliest.IsZero() || u.FirstSeen.Before(earliest) {
+			earliest = u.FirstSeen
+		}
+	}
+	return earliest
+}
+
 // Store holds every known rule label's Usage record, keyed by rule
 // label, safe for concurrent use. The zero value is not usable;
 // construct with Open.
@@ -50,6 +99,11 @@ type Store struct {
 	// no-op on a nil receiver.
 	wb     *persist.WriteBehind
 	byRule map[string]*Usage
+	// recordingSince is when this store started recording rule usage --
+	// see RecordingSince's doc comment. Set once, during construction in
+	// OpenWithBackend, and never modified afterward, so reading it needs
+	// no lock.
+	recordingSince time.Time
 }
 
 // Open loads path if it exists (a missing file is the expected
@@ -77,8 +131,8 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 		OnSaveError: func(msg string) { persistLog.Error(msg) },
 		OnConflict:  func(msg string) { persistLog.Warn(msg) },
 	}, func(data []byte) error {
-		var list []*Usage
-		if err := json.Unmarshal(data, &list); err != nil {
+		since, list, err := decodePersisted(data)
+		if err != nil {
 			return err
 		}
 		for _, u := range list {
@@ -89,13 +143,41 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			}
 			s.byRule[u.Rule] = u
 		}
+		s.recordingSince = since
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	// No document existed at all (fresh store), or one existed but
+	// predates RecordingSince (the bare-array shape, or -- defensively
+	// -- an object with a zero stamp): infer it. See earliestFirstSeen's
+	// doc comment for why FirstSeen is the right source and why "now" is
+	// the right fallback when there is nothing to infer from.
+	if s.recordingSince.IsZero() {
+		if since := earliestFirstSeen(s.byRule); !since.IsZero() {
+			s.recordingSince = since
+		} else {
+			s.recordingSince = time.Now()
+		}
+	}
 	s.wb = wb
 	return s, nil
+}
+
+// RecordingSince reports when this store started recording rule usage.
+// Set once and preserved across every subsequent Open/reopen, so it
+// never moves forward the way a per-process "when did I start" would --
+// see decodePersisted and earliestFirstSeen for how it is established
+// the first time a document is missing it.
+//
+// This is the honesty bound issue #701's owner decision requires: a
+// client can already derive "how many distinct rules have fired" from
+// List(), but must not present that count against a fixed seven-day
+// window wider than what this store actually covered. Immutable after
+// construction, so safe for concurrent use without a lock.
+func (s *Store) RecordingSince() time.Time {
+	return s.recordingSince
 }
 
 // Flush forces this store's write-behind writer to persist whatever is
@@ -252,7 +334,12 @@ func (s *Store) persistLocked() {
 		return
 	}
 
-	data, err := json.MarshalIndent(s.listLocked(), "", "  ")
+	list := s.listLocked()
+	rules := make([]*Usage, len(list))
+	for i := range list {
+		rules[i] = &list[i]
+	}
+	data, err := json.MarshalIndent(persistedState{RecordingSince: s.recordingSince, Rules: rules}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding rule usage for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
