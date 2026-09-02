@@ -26,13 +26,14 @@
   import { buildFilterChips, type FilterChip } from '../lib/filterChips'
   import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
   import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
+  import FilterPresetsMenu from './FilterPresetsMenu.svelte'
 
-  // Presets and Export to CSV are later additions round 29's ratified
-  // filter row does not draw (#683 correction, 2026-08-31: "anything the
-  // ratified scene does not draw at all ... does not get a home
-  // invented for it"). Their own code and tests are untouched --
-  // FilterPresetsMenu.svelte and lib/export.ts still work, just aren't
-  // mounted here; see the issue's gap list for where they go next.
+  // Saved filters have a drawn home now (round 37: "saved filters are
+  // the box's business"), so FilterPresetsMenu is mounted inside the box
+  // below rather than left as the gap #683 recorded. Export went the
+  // other way and is not here: round 37 draws `csv ↓` as a verb on the
+  // lines held on screen, beside `wipe` on the whisper's own line, so
+  // lib/export.ts is mounted from Whisper.svelte.
 
   // Phone-width only, mirroring what the retired hamburger did (#544):
   // Toolbar.svelte:64 already carries this control at desktop width, so
@@ -280,6 +281,12 @@
           if (e.key === 'Enter') expanded = true
         }}
       />
+      <!-- Round 37's `saved ▾`, at the box's own right end (its
+           `margin-left: auto` puts it there). Inside the box, not
+           beside it: a saved filter is a filter. Its own clicks are
+           contained so reaching for one does not also unfold the strip
+           this box discloses -- see the component. -->
+      <FilterPresetsMenu />
     </div>
     <span class="spans" role="group" aria-label="How far back the stream shows — {reachWords}">
       {#each SPANS as span (span.key)}

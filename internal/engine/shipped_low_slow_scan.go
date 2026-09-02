@@ -236,12 +236,25 @@ func (d *lowSlowScanDefinition) Evaluate(e store.Event) {
 	distinctPorts := tr.ports.Values(now, d.window, portFilter)
 	distinctHosts := tr.hosts.Values(now, d.window, hostFilter)
 
+	// Size is the distinct-port count. This definition is the one shipped
+	// case with two count thresholds it must clear (ports and hosts), so
+	// which one is "the" size is a choice, and it is the port breadth:
+	// it is the axis the detector is named for and the one its Detail
+	// leads with. That makes an expectation here narrower than it looks
+	// -- a source whose host breadth grows while its port breadth does
+	// not stays absorbed -- but strictly narrower than the alternative,
+	// which is declaring no size at all and absorbing everything forever.
+	// Sizing on the dominant axis returns more often than a size-less
+	// expectation would and never less, so it claims nothing it cannot
+	// support. See ShippedSizeMeasure.
+	size := portCount
 	d.emit(Emission{
 		Target: e.SrcIP,
 		Detail: fmt.Sprintf(
 			"%d distinct ports, %d distinct hosts over %s (%.0f%% drop/reject, %.1fσ above this source's normal breadth)",
 			portCount, hostCount, d.window, observedDropRatio*100, before.ZScore),
 		Confidence: &confidence,
+		Size:       &size,
 		Ports:      sortedPortsCapped(distinctPorts),
 		Hosts:      sortedHostsCapped(distinctHosts),
 		Country:    e.SrcCountry,

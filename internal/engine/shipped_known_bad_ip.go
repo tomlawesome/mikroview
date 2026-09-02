@@ -165,6 +165,8 @@ func (d *knownBadIPDefinition) Evaluate(e store.Event) {
 		Detail:     fmt.Sprintf("matches %s (%s)", label, cidr),
 		Confidence: &confidence,
 		// No Evidence: internal/detect passed flags.Evidence{} explicitly.
+		// No Size: list membership is the signal, independent of volume,
+		// so this definition declares none. See ShippedSizeMeasure.
 		Country:   e.SrcCountry,
 		SourceIP:  e.SrcIP,
 		EventTime: e.ReceivedAt,
