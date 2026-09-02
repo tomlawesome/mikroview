@@ -96,6 +96,23 @@ describe('round 39 draws these exact figures', () => {
     )
   })
 
+  // #842: the live-check reads the held count -- the number right before
+  // "of" -- and waits for it to climb, so it has to be the ring's exact
+  // occupancy, not the coarsened capacity beside it.
+  it('puts the live held count before the ceiling when given one', () => {
+    expect(bufferRow(120 * MIB, BYTES_PER_EVENT, RATE, 8412)).toBe(
+      "120 MiB · 8 412 of ~201 000 events · ~9 h at today's rate",
+    )
+    // A small count is not rounded to "0" or coarsened away.
+    expect(bufferRow(120 * MIB, BYTES_PER_EVENT, RATE, 3)).toBe(
+      "120 MiB · 3 of ~201 000 events · ~9 h at today's rate",
+    )
+    // An empty ring reads "0", not a blank or a dash.
+    expect(bufferRow(120 * MIB, BYTES_PER_EVENT, RATE, 0)).toBe(
+      "120 MiB · 0 of ~201 000 events · ~9 h at today's rate",
+    )
+  })
+
   it('says the consequence of the grow the drawing draws', () => {
     const p = describeProposal({
       proposed: 480 * MIB,

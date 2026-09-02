@@ -75,13 +75,18 @@ check(
 // The memory group's buffer count is the honest one to pin: it is a
 // whole number the server publishes, so a placeholder or a stale render
 // is visible as a number that does not move when more events land.
+//
+// The row's first figure is the MiB ceiling (#796, since #823) -- a
+// configured budget, not traffic, so it never moves on its own. The held
+// count (#842) is the live one, and it sits right before " of " ("8 412
+// of ~201 000 events"), so that is what this scenario reads and waits on.
 
 const BUFFER_ROW = '.stsection:has(h3:text-is("memory")) .orow:has-text("event buffer") .ov'
 
 const bufferCount = () =>
   page.$eval(BUFFER_ROW, (el) => {
-    const m = el.textContent.replace(/,/g, '').match(/(\d+)/)
-    return m ? Number(m[1]) : null
+    const m = el.textContent.match(/([\d,\s ]+)\s+of\s/)
+    return m ? Number(m[1].replace(/\D/g, '')) : null
   })
 
 const before = await bufferCount()
@@ -96,15 +101,17 @@ const climbed = await page
       // exist. And deliberately no fallback to "the first number on the
       // page": the ingest group's events/s moves on its own, so a
       // fallback would let this check pass without ever reading the
-      // buffer.
+      // buffer. Reads the held count before " of ", not the row's first
+      // figure, which has been the MiB ceiling -- a static budget -- since
+      // #823 (#842).
       const og = [...document.querySelectorAll('.stsection')].find(
         (g) => g.querySelector('h3')?.textContent.trim() === 'memory',
       )
       const row = og && [...og.querySelectorAll('.orow')].find((r) => r.textContent.includes('event buffer'))
       const el = row?.querySelector('.ov')
       if (!el) return false
-      const m = el.textContent.replace(/,/g, '').match(/(\d+)/)
-      return m ? Number(m[1]) > was : false
+      const m = el.textContent.match(/([\d,\s ]+)\s+of\s/)
+      return m ? Number(m[1].replace(/\D/g, '')) > was : false
     },
     before,
     { timeout: 20000 },
