@@ -281,6 +281,26 @@ type Flag struct {
 	// (additive, no migration needed) so the persisted shape and its
 	// round trip are proven ahead of anything setting it to true.
 	Provisional bool `json:"provisional,omitempty"`
+	// Size is this firing's own size: the measure the detector compares
+	// against its threshold (#640) -- distinct ports for port_scan,
+	// events in the window for activity_spike, and so on. Supplied by
+	// whatever raised the flag; see internal/engine's shipped size
+	// declarations for what each detector calls its size.
+	//
+	// nil (omitted) means the detector declares no size, the same
+	// "nil means not scored" convention Confidence above already uses.
+	// It is what an expectation on this pair records, and what a later
+	// firing is judged against -- see Exclusion.Absorbs.
+	Size *int `json:"size,omitempty"`
+	// ExpectedSize is the size an expectation for this (Type, Target)
+	// had recorded at the moment this flag was raised past it -- set
+	// only on a firing that an existing expectation refused to absorb,
+	// so a card can read "expected up to 30, saw 120" from
+	// ExpectedSize and Size together.
+	//
+	// nil (omitted) is the ordinary case: no expectation exists for this
+	// pair, so nothing was expected and nothing was exceeded.
+	ExpectedSize *int `json:"expectedSize,omitempty"`
 	// Verdict is an operator's judgement of this flag (#638): expected
 	// (legitimate traffic), noise (real traffic, wrong threshold) or
 	// real (genuine concern). Empty (omitted from JSON) means unjudged
@@ -353,16 +373,99 @@ type FlagTimeBucket struct {
 	ByType map[Type]uint64 `json:"byType"`
 }
 
+// ExpectationTolerance is the one number an expectation is allowed to
+// grow by before it stops absorbing (#640): a firing whose size is
+// within 1.5x the recorded size is normal for this host, and anything
+// above that is the behaviour having changed enough to be worth a
+// human's attention again.
+//
+// Deliberately a single package-level constant rather than a per-
+// expectation or per-detector knob. The owner's design (#640) states one
+// factor, shown on the ledger row, and a tolerance an operator can tune
+// per entry is a threshold by another name -- the same global-threshold
+// raise that issue rejected, just spelled locally. If this ever needs to
+// vary it becomes a real design question, not a field quietly added.
+const ExpectationTolerance = 1.5
+
 // Exclusion is one permanently-excluded (Type, Target) pair -- see
 // Store.Exclude's doc comment. ID is the same flagID(Type, Target) key
 // flags themselves use, included so a caller (the admin exclusions API)
 // can operate on an entry without recomputing it and without ambiguity
 // from splitting it back apart (Target can itself contain ":", e.g. an
 // IPv6 address, which would make that split ambiguous).
+//
+// #640 grew it from a flat "never flag this again" into a *sized*
+// expectation: "this much of this, from this host, is normal." The key
+// is unchanged -- still (Type, Target) -- and every added field is
+// additive JSON with an omit-when-unset tag, so an exclusion written
+// before this change reads back with Size nil and keeps meaning exactly
+// what it always meant. There is no migration and none is needed.
 type Exclusion struct {
 	ID     string `json:"id"`
 	Type   Type   `json:"type"`
 	Target string `json:"target"`
+	// Size is the measure recorded when this expectation was made --
+	// whatever the detector declares its size to be (distinct ports for
+	// port_scan, events in the window for activity_spike, and so on: see
+	// internal/engine's shipped size declarations). Compared against a
+	// later firing's own size through Absorbs.
+	//
+	// nil means "this expectation has no size", which is both the
+	// pre-#640 shape read back off disk and what a detector that
+	// declares no size produces. It reads as the original, blunter
+	// meaning: ignore this host on this detector outright. That is a
+	// deliberate, documented fallback, not a degraded case -- some
+	// detectors genuinely have no count to be normal at (device_silence
+	// is an absence, known_bad_ip is list membership), and pretending
+	// otherwise would put a made-up number on the ledger.
+	Size *int `json:"size,omitempty"`
+	// Absorbed counts firings this expectation has suppressed. It is the
+	// evidence the entry is earning its place -- the ledger (#640 part C)
+	// shows it, and an expectation absorbing nothing is a candidate for
+	// pruning.
+	Absorbed uint64 `json:"absorbed,omitempty"`
+	// Since is when this expectation was first recorded. Zero (omitted)
+	// for an exclusion written before #640, which has no such record --
+	// the ledger renders that absence rather than inventing a date.
+	Since time.Time `json:"since,omitzero"`
+}
+
+// Absorbs reports whether a firing of the given observed size is still
+// covered by this expectation -- true means suppress it and count it,
+// false means the behaviour has outgrown what was recorded and the flag
+// must be raised again carrying both numbers.
+//
+// Three cases, in the order they are decided:
+//
+//   - e.Size nil: a size-less expectation absorbs everything, forever.
+//     That is the pre-#640 exclusion's meaning kept intact, and the
+//     meaning of an expectation on a detector that declares no size.
+//   - observed nil against a sized expectation: absorb. This should not
+//     arise (the expectation's own size came from a firing of the same
+//     detector, so that detector does declare one), but if a detector's
+//     declaration ever changes underneath a stored entry, the honest
+//     answer is that nothing measurable grew. Re-raising would mean
+//     printing "expected up to 30, saw <nothing>", which is a claim we
+//     cannot support.
+//   - both sized: absorbed while observed is within ExpectationTolerance
+//     times the recorded size, inclusive.
+func (e Exclusion) Absorbs(observed *int) bool {
+	if e.Size == nil || observed == nil {
+		return true
+	}
+	return float64(*observed) <= float64(*e.Size)*ExpectationTolerance
+}
+
+// Ceiling is the largest size this expectation still absorbs -- the
+// recorded size scaled by ExpectationTolerance and truncated, since a
+// size is a whole count. Reports ok=false for a size-less expectation,
+// which has no ceiling because it absorbs everything. For display and
+// for callers that want the number without re-deriving the tolerance.
+func (e Exclusion) Ceiling() (int, bool) {
+	if e.Size == nil {
+		return 0, false
+	}
+	return int(float64(*e.Size) * ExpectationTolerance), true
 }
 
 // persistedState is the on-disk JSON shape written by persistLocked and
@@ -539,7 +642,7 @@ func flagID(t Type, target string) string {
 // DefaultConfig are kept in internal/detect for tests that don't need
 // their own full configurability.
 func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", false, now)
+	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", false, nil, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -548,7 +651,7 @@ func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
 // confident it is in this specific flag (0-100) rather than a simple
 // deterministic threshold crossing -- see Flag.Confidence.
 func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, Evidence{}, "", false, now)
+	isNew, f := s.add(t, target, detail, &confidence, Evidence{}, "", false, nil, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -558,7 +661,7 @@ func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int,
 // exactly what was touched, not just a count -- see Evidence and
 // Flag.Country.
 func (s *Store) AddWithDetail(t Type, target, detail string, confidence int, evidence Evidence, country string, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, evidence, country, false, now)
+	isNew, f := s.add(t, target, detail, &confidence, evidence, country, false, nil, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -572,7 +675,7 @@ func (s *Store) AddWithDetail(t Type, target, detail string, confidence int, evi
 // trip are proven ahead of anything depending on them. See
 // TestAddProvisionalPersistsAndSurvivesReload.
 func (s *Store) AddProvisional(t Type, target, detail string, confidence int, evidence Evidence, country string, provisional bool, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, evidence, country, provisional, now)
+	isNew, f := s.add(t, target, detail, &confidence, evidence, country, provisional, nil, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -592,8 +695,15 @@ func (s *Store) AddProvisional(t Type, target, detail string, confidence int, ev
 // its absence. That is the gap FlagsSink's own doc comment said was
 // worth widening this API to close rather than papering over; this is
 // the widening.
-func (s *Store) AddEmission(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, confidence, evidence, country, provisional, now)
+// size is this firing's own size (#640), nil for a definition that
+// declares none -- the value an expectation for this (Type, Target) is
+// judged against, and recorded by a later ClearAndExclude. Only this
+// entry point takes one: it is the only raise path with an Emission
+// behind it, and every other Add* above belongs to a caller that has no
+// size to offer. They pass nil, which is the same "no size" the
+// declares-none case already means.
+func (s *Store) AddEmission(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, size *int, now time.Time) bool {
+	isNew, f := s.add(t, target, detail, confidence, evidence, country, provisional, size, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -607,20 +717,47 @@ func (s *Store) maybeNotify(isNew bool, f Flag) {
 	}
 }
 
-func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, now time.Time) (bool, Flag) {
+func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, size *int, now time.Time) (bool, Flag) {
 	id := flagID(t, target)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// A permanently excluded (Type, Target) never raises, silently -- no
-	// entry is created, updated, or revived, and the caller sees "not a
-	// new episode" so nothing downstream (notifications, reputation
-	// lookups) fires either. See Store.Exclude's doc comment for why
-	// this is a deliberate permanent no-op rather than a raise that then
-	// gets auto-cleared.
-	if _, excluded := s.excluded[id]; excluded {
-		return false, Flag{}
+	// An expectation for this (Type, Target) is consulted before
+	// anything else, and this is the one place that check lives (#640).
+	//
+	// It sits here, in add(), rather than in internal/engine's flags sink
+	// for two reasons. Every raise path in the product funnels through
+	// this function -- the engine's sink, main.go's new_device raise,
+	// and any future caller -- so one check covers all of them and none
+	// can be written that quietly bypasses it. And absorbing a firing
+	// means incrementing the expectation's own counter, which is store
+	// state under the lock this function already holds; doing it a layer
+	// up would mean reaching back into the store for a second, separately
+	// locked call on every suppressed firing, with the raise decision and
+	// the count that justifies it able to disagree in between.
+	//
+	// Within tolerance: silently absorbed and counted -- no entry is
+	// created, updated, or revived, and the caller sees "not a new
+	// episode" so nothing downstream (notifications, reputation lookups)
+	// fires either. See Store.Exclude's doc comment for why this is a
+	// deliberate no-op rather than a raise that then gets auto-cleared.
+	//
+	// Above tolerance: the expectation no longer covers what this host is
+	// doing, so the flag is raised carrying both numbers (see
+	// Flag.ExpectedSize). The expectation is left exactly as it was --
+	// raising the recorded size is an operator's judgement, made by
+	// saying Expected again (ClearAndExclude), never something the store
+	// does to itself on the strength of the traffic that broke it.
+	var expectedSize *int
+	if ex, excluded := s.excluded[id]; excluded {
+		if ex.Absorbs(size) {
+			ex.Absorbed++
+			s.excluded[id] = ex
+			s.persistLocked()
+			return false, Flag{}
+		}
+		expectedSize = copyIntPtr(ex.Size)
 	}
 
 	f, ok := s.byID[id]
@@ -646,6 +783,12 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 	f.Confidence = mergeConfidence(confidence, f.ReputationFloor)
 	f.Evidence = evidence
 	f.Country = country
+	// Size/ExpectedSize describe this firing, so they are refreshed on
+	// every call like Detail above, not fixed at episode start: a re-fire
+	// that has grown further past an expectation must say so with its own
+	// current numbers, not the ones the episode opened with.
+	f.Size = copyIntPtr(size)
+	f.ExpectedSize = expectedSize
 	// Provisional is fixed at episode start (isNew: first-ever raise, or
 	// a revival from Cleared), same as FirstSeen just above -- not
 	// overwritten on a plain re-fire of an already-active episode.
@@ -752,6 +895,18 @@ func mergeConfidence(fresh, floor *int) *int {
 	default:
 		return fresh
 	}
+}
+
+// copyIntPtr returns an independent copy of p, so a *int stored on a
+// Flag or an Exclusion is never aliased to a caller's variable that
+// could change underneath it -- the same guard internal/engine's own
+// copyIntPtr (router.go) applies when translating an Emission.
+func copyIntPtr(p *int) *int {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // RaiseConfidenceFloor raises id's confidence to at least floor, if the
@@ -971,15 +1126,37 @@ func (s *Store) UndoVerdict(id string) (Flag, bool) {
 	return *f, true
 }
 
-// ClearAndExclude is the "Clear and never flag this again" action:
-// clears id's current episode (if still active) and permanently
-// excludes its (Type, Target) going forward, in one atomic step under a
-// single lock. Reports whether id was known at all, the same true/false
-// contract as Clear -- an unknown ID is a no-op, not an error, for the
-// same reason Clear's doc comment gives. Unlike Clear, this succeeds
-// (and still records the exclusion) even if the flag was already
-// cleared, since the point of this call is future suppression, not the
-// current episode's state.
+// ClearAndExclude records an expectation from a flag: it clears id's
+// current episode (if still active) and records "this much of this, from
+// this host, is normal" for its (Type, Target) going forward, in one
+// atomic step under a single lock. Reports whether id was known at all,
+// the same true/false contract as Clear -- an unknown ID is a no-op, not
+// an error, for the same reason Clear's doc comment gives. Unlike Clear,
+// this succeeds (and still records the expectation) even if the flag was
+// already cleared, since the point of this call is future suppression,
+// not the current episode's state.
+//
+// The expectation's size is the flag's own Size -- the firing the
+// operator just looked at and judged normal, not a number typed in --
+// so what gets suppressed is bounded by what was actually seen. A flag
+// from a detector that declares no size records a size-less expectation,
+// which is the older, blunter "ignore this host on this detector"
+// (see Exclusion.Size).
+//
+// Calling it again on a pair that already has an expectation is how the
+// recorded size is *raised*: a firing that broke the old ceiling and was
+// judged normal anyway becomes the new normal. Three deliberate
+// restrictions on that:
+//
+//   - The size only ever goes up. A quieter firing later does not
+//     silently narrow an expectation the operator widened on purpose.
+//   - A size-less expectation stays size-less. It already absorbs
+//     everything, so attaching a size would *narrow* it -- turning
+//     "ignore this outright" into a ceiling the operator never asked
+//     for, which is a suppression quietly becoming a re-raise.
+//   - Absorbed and Since are kept. They are the entry's history, and the
+//     ledger's evidence that it has been earning its place; a raise is
+//     the same expectation grown, not a new one.
 func (s *Store) ClearAndExclude(id string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -993,8 +1170,19 @@ func (s *Store) ClearAndExclude(id string, now time.Time) bool {
 		s.clearedCount++
 		f.ClearedAt = now
 	}
-	if _, already := s.excluded[id]; !already {
-		s.excluded[id] = Exclusion{ID: id, Type: f.Type, Target: f.Target}
+	if existing, already := s.excluded[id]; already {
+		if existing.Size != nil && f.Size != nil && *f.Size > *existing.Size {
+			existing.Size = copyIntPtr(f.Size)
+			s.excluded[id] = existing
+		}
+	} else {
+		s.excluded[id] = Exclusion{
+			ID:     id,
+			Type:   f.Type,
+			Target: f.Target,
+			Size:   copyIntPtr(f.Size),
+			Since:  now,
+		}
 	}
 	s.persistLocked()
 	return true
@@ -1041,6 +1229,13 @@ func (s *Store) ClearAll(now time.Time) int {
 // (nothing was solved) or it doesn't (permanent exclusion was what was
 // wanted all along). Idempotent: excluding an already-excluded pair is a
 // no-op.
+//
+// This is the size-less form (see Exclusion.Size): it records no size
+// and so absorbs every future firing of that pair regardless of how far
+// the behaviour grows. ClearAndExclude is what records a *sized*
+// expectation from a flag the operator actually looked at (#640); this
+// entry point has no flag to take a size from, and inventing one would
+// put a number on the ledger nobody measured.
 func (s *Store) Exclude(t Type, target string) {
 	id := flagID(t, target)
 
@@ -1101,6 +1296,23 @@ func (s *Store) Excluded(t Type, target string) bool {
 	return ok
 }
 
+// Expectation returns the recorded expectation for (t, target) and
+// whether one exists at all -- the sized counterpart to Excluded above,
+// for a caller (the ledger, a test) that needs the recorded size,
+// absorbed count and since-when rather than only the yes/no. Returns a
+// copy: the Size pointer it carries is independent of the stored entry,
+// so a caller cannot mutate store state through it.
+func (s *Store) Expectation(t Type, target string) (Exclusion, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.excluded[flagID(t, target)]
+	if !ok {
+		return Exclusion{}, false
+	}
+	e.Size = copyIntPtr(e.Size)
+	return e, true
+}
+
 // ListExclusions returns every currently-excluded (Type, Target) pair,
 // sorted by ID for a stable display order -- the admin-only surface
 // (see internal/api's callerIsAdminOrOpen-gated exclusions endpoints)
@@ -1111,6 +1323,9 @@ func (s *Store) ListExclusions() []Exclusion {
 
 	out := make([]Exclusion, 0, len(s.excluded))
 	for _, e := range s.excluded {
+		// Independent Size pointer, same reason Expectation copies it:
+		// a listed entry must not be a handle onto store state.
+		e.Size = copyIntPtr(e.Size)
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
