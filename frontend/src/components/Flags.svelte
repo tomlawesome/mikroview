@@ -16,20 +16,25 @@
   // watchlist table (#676) reads as the same surface because it was
   // ported from the same scene.
   //
-  // What this surface deliberately does *not* carry: the verdict row,
-  // confidence, exclusions, campaign grouping, the density picker, the
-  // recently-cleared list, the reputation/evidence panels and the
-  // per-flag abuse check. Round 29 draws no home for any of them, and
-  // the owner's ruling (2026-08-31, #688) is to build the ratified scene
-  // and record the gaps rather than squeeze them in. The stores and API
-  // behind them are untouched and still tested -- see the issue's gap
-  // list for what has to find a home before it comes back.
+  // #780 (rounds 34-35) gave three of round 29's recorded gaps a home:
+  // the verdict trio now lives in every row's own `CALL IT` column
+  // (`.vc`/`.vrow`/`.stamp`) rather than a drawer, no longer gated on
+  // `provisional` since the backend takes a verdict on any flag
+  // (store.go:915); a called flag stays in place, dimmed with its stamp
+  // and (where reversible) an undo, until the tab is left -- the
+  // recently-cleared list, in place rather than a separate page; and the
+  // exclusions body is a second `<tbody>` under the flags, admin-only,
+  // fed by `fetchExclusions`/`removeExclusion`. `never again` stays in
+  // the drawer alone, since it is the one verdict that wants a second
+  // look. Confidence, campaign grouping, the density picker and the
+  // reputation/evidence panels are still deliberately absent -- see
+  // #691 for what remains.
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { anyBaselineWarming } from '../lib/learningShelf'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
-  import { fetchFlagEpisode } from '../lib/api'
+  import { fetchExclusions, fetchFlagEpisode, removeExclusion } from '../lib/api'
   import { familyOf } from '../lib/flagPalette'
   import { formatHM, formatTime } from '../lib/format'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
@@ -39,7 +44,7 @@
   import { zonesState } from '../lib/zones.svelte'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
   import { topologyNavState } from '../lib/topologyNav.svelte'
-  import type { Flag, FlagType, FirewallEvent } from '../lib/types'
+  import type { Exclusion, Flag, FlagType, FirewallEvent } from '../lib/types'
 
   // "watch this pathway" / "watch this source" (#761 item 3): a flag
   // writes the watchlist tab's draft for it rather than making the
@@ -101,7 +106,11 @@
   }
 
   // Same gate the rail uses for the engine room's watchers station --
-  // here it decides only whether the empty state offers the audit log.
+  // here it decides whether the empty state offers the audit log, and
+  // (#780) whether `never again`/the exclusions body render at all:
+  // POST /api/flags/{id}/clear-permanent and both exclusions endpoints
+  // are accessAdmin (internal/api/authz_matrix_test.go), unlike the
+  // verdict trio and its undo below, which are user tier.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
   // #653: clearing a flag is a user-tier action -- a viewer may watch
   // what mikroview is seeing but not change what it shows. Absent rather
@@ -120,10 +129,9 @@
 
   let expandedId: string | null = $state(null)
 
-  function toggleExpanded(f: Flag) {
-    expandedId = expandedId === f.id ? null : f.id
-    if (expandedId === f.id) loadEpisode(f)
-  }
+  // toggleExpanded is defined further down (#780), once verdictKind
+  // exists for it to consult -- a resolved, non-real row no longer
+  // opens a drawer (see its own doc comment there).
 
   // The drawer's episode (#633, rounds 18-19/29): the flag's own events,
   // fetched once per flag on first open via the #29 around+window
@@ -253,15 +261,48 @@
   // honest label, not a key the sixteen-entry table above could know.
   const labelFor = (t: FlagType) => TYPE_LABELS[t] ?? t
 
+  // Ids this visit judged/cleared/excluded, kept in the settled or
+  // shelf table -- dimmed, carrying their stamp -- rather than dropped
+  // the instant the server marks them cleared (#780 items 2/4: "the
+  // recently-cleared list, in place", staying until the tab is left).
+  // `real` needs no entry here: judgeReal never sets `cleared`, so that
+  // row stays in `active`/`provisionalActive` on its own. Reset only by
+  // remounting the component -- there is no other "leaving the tab"
+  // hook available to a page that stays mounted underneath a deck card
+  // (see App.svelte), so a fresh visit's own actions start the list
+  // over, same as `episodes`/`expandedId` above already do.
+  let pinnedIds = $state<string[]>([])
+  // The stamp text for a pinned row that carries no verdict at all --
+  // `clear with a note` and `never again` both just set `cleared`
+  // (flags.svelte.ts's `clear`/`clearPermanent`), so there is nothing
+  // on the Flag itself to read the right word back off, unlike
+  // expected/noise/real (verdictKind below reads those straight off
+  // `f.verdict`).
+  let pinnedKind = $state<Record<string, 'cleared' | 'never'>>({})
+
+  function pin(id: string, kind?: 'cleared' | 'never') {
+    if (!pinnedIds.includes(id)) pinnedIds = [...pinnedIds, id]
+    if (kind) pinnedKind = { ...pinnedKind, [id]: kind }
+  }
+
+  function unpin(id: string) {
+    pinnedIds = pinnedIds.filter((pid) => pid !== id)
+    if (id in pinnedKind) {
+      const { [id]: _removed, ...rest } = pinnedKind
+      pinnedKind = rest
+    }
+  }
+
   // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
   // see internal/flags.Store.List()) so a flag's position is fixed the
   // moment it first appears. lastSeen updates on every re-fire, not just
   // creation, so sorting by it made an already-visible row you're
   // reading jump to the top of the list the instant it (or anything
-  // else) re-fired on the next 5s poll.
+  // else) re-fired on the next 5s poll. `pinnedIds` keeps a just-called
+  // row exactly here rather than letting `!f.cleared` drop it (#780).
   const active = $derived(
     flagsState.list
-      .filter((f) => !f.cleared && !f.provisional)
+      .filter((f) => !f.provisional && (!f.cleared || pinnedIds.includes(f.id)))
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
   const cleared = $derived(flagsState.list.filter((f) => f.cleared))
@@ -272,10 +313,11 @@
   // of flagsState.activeCount) so trusted and untrusted judgements are
   // never interleaved in one time-ordered list -- the issue's ruling.
   // Same fixed firstSeen order as the settled table, for the same
-  // reason: a row must not jump mid-read when it re-fires.
+  // reason: a row must not jump mid-read when it re-fires. Same pinning
+  // as `active` above once a shelf row is judged/cleared.
   const provisionalActive = $derived(
     flagsState.list
-      .filter((f) => !f.cleared && f.provisional)
+      .filter((f) => f.provisional && (!f.cleared || pinnedIds.includes(f.id)))
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
 
@@ -296,25 +338,71 @@
 
   const showShelf = $derived(provisionalActive.length > 0 || warming)
 
-  // Verdicts (#642, through #638's store paths): offered on shelf rows
-  // only. The settled table's missing verdict row is #688's recorded
-  // gap and stays recorded -- the shelf is a new surface round 30 never
-  // drew, so carrying verdicts here does not reopen that ruling.
-  // expected/noise judge-and-clear (Undo offered briefly, below); real
-  // records the verdict and the flag stays put.
-  let lastJudged = $state<{ id: string; verdict: 'expected' | 'noise' } | null>(null)
+  // The verdict trio (#638's store paths, #780's row column): offered on
+  // every open row, settled or shelf -- the backend takes a verdict on
+  // any flag (store.go:915), so this is no longer gated on
+  // `provisional` the way the old drawer-only buttons were (#688's own
+  // recorded gap, closed by this issue). What a done row's `CALL IT`
+  // cell shows -- null while still open and callable.
+  type StampKind = 'expected' | 'noise' | 'real' | 'cleared' | 'never'
 
-  async function judge(f: Flag, verdict: 'expected' | 'noise') {
+  function verdictKind(f: Flag): StampKind | null {
+    if (f.verdict === 'real' || f.verdict === 'expected' || f.verdict === 'noise') return f.verdict
+    return pinnedKind[f.id] ?? null
+  }
+
+  // The three verdict inks are `.stamp.expected/.noise/.real`; `cleared`
+  // and `never` fall through to the stamp's own quiet default ink
+  // (ink-3), per the issue's "stamps CLEARED/NEVER AGAIN in ink-3".
+  function stampInk(kind: StampKind): string {
+    return kind === 'expected' || kind === 'noise' || kind === 'real' ? kind : ''
+  }
+
+  function stampText(kind: StampKind): string {
+    return kind === 'never' ? 'never again' : kind
+  }
+
+  // Only a verdict the backend can actually reverse gets an Undo:
+  // expected/noise/real all go through DELETE /api/flags/verdict/{id}
+  // (flagsState.undoVerdict), but a plain clear or a permanent exclude
+  // set no verdict at all, so there is nothing for that call to undo --
+  // store.go's UndoVerdict only reopens a flag its own verdict cleared.
+  function canUndo(kind: StampKind): boolean {
+    return kind === 'expected' || kind === 'noise' || kind === 'real'
+  }
+
+  // A resolved, non-real row is inert (round 35's `close(r)`): its
+  // caret is gone from the CALL IT cell (see the flagRows snippet
+  // below), so a click elsewhere on the row must not still open a
+  // drawer nothing points back to.
+  function toggleExpanded(f: Flag) {
+    const kind = verdictKind(f)
+    if (kind !== null && kind !== 'real') return
+    expandedId = expandedId === f.id ? null : f.id
+    if (expandedId === f.id) loadEpisode(f)
+  }
+
+  async function callVerdict(f: Flag, verdict: 'expected' | 'noise') {
     error = null
+    // Pinned *before* the call, not after: flagsState.judgeAndClear
+    // flips `cleared` optimistically the instant it runs, synchronously,
+    // well before its own network request resolves. Pinning only on
+    // success left a window where `!f.cleared` alone decided whether the
+    // row stayed in `active`/`provisionalActive` -- it did not, so the
+    // row (and the whole shelf section, if this was its last one)
+    // vanished for the round trip and reappeared as a fresh element
+    // once the response landed, rather than staying put for the flash.
+    pin(f.id)
+    if (expandedId === f.id) expandedId = null
     try {
       await flagsState.judgeAndClear(f.id, verdict)
-      lastJudged = { id: f.id, verdict }
     } catch (err) {
+      unpin(f.id)
       reportFailure('Could not record the verdict', err)
     }
   }
 
-  async function judgeRealVerdict(f: Flag) {
+  async function callReal(f: Flag) {
     error = null
     try {
       await flagsState.judgeReal(f.id, authState.username ?? '')
@@ -323,15 +411,87 @@
     }
   }
 
-  async function undoJudgement() {
-    if (!lastJudged) return
-    const id = lastJudged.id
-    lastJudged = null
+  async function undoCall(f: Flag) {
     error = null
     try {
-      await flagsState.undoVerdict(id)
+      await flagsState.undoVerdict(f.id)
+      unpin(f.id)
     } catch (err) {
+      // Left pinned: flagsState.undoVerdict reverts its own optimistic
+      // reopen on failure, so the flag is still exactly as done as it
+      // was before this click -- unpinning it here would drop the row
+      // from the table out from under a stamp that is still true.
       reportFailure('Could not undo the verdict', err)
+    }
+  }
+
+  // `never again` (#780 item 4, round 28's arm-then-confirm -- the same
+  // idiom Watchlist's own `remove` uses): one click arms it red as
+  // "confirm", a second calls clearPermanent, any other click disarms.
+  // Admin-only (POST /api/flags/{id}/clear-permanent is accessAdmin),
+  // unlike the trio above.
+  let neverArmedId: string | null = $state(null)
+
+  function neverLabel(f: Flag): string {
+    return neverArmedId === f.id ? `confirm — ${labelFor(f.type)} never fires again for ${f.target}` : 'never again'
+  }
+
+  async function clickNever(f: Flag) {
+    if (neverArmedId !== f.id) {
+      neverArmedId = f.id
+      return
+    }
+    neverArmedId = null
+    error = null
+    // Pinned before the call, same reasoning as callVerdict above --
+    // clearPermanent optimistically flips `cleared` synchronously too.
+    pin(f.id, 'never')
+    if (expandedId === f.id) expandedId = null
+    try {
+      await flagsState.clearPermanent(f.id)
+      await loadExclusions()
+    } catch (err) {
+      unpin(f.id)
+      reportFailure('Could not exclude this flag permanently', err)
+    }
+  }
+
+  // The exclusions body (#780 item 5): a second `<tbody>` under the
+  // flags, admin-only (both endpoints are accessAdmin, see
+  // isAdminOrOpen's own comment above). Hidden until asked for, like
+  // round 33's set-aside rows. Exclusion carries no `since`/`by` yet
+  // (store.go:362, #750) -- left out here rather than invented.
+  let exclusions = $state<Exclusion[]>([])
+  let showExclusions = $state(false)
+  let expandedExclusionId: string | null = $state(null)
+
+  async function loadExclusions() {
+    if (!isAdminOrOpen) return
+    try {
+      exclusions = await fetchExclusions()
+    } catch (err) {
+      reportFailure('Could not load the exclusions list', err)
+    }
+  }
+
+  $effect(() => {
+    if (isAdminOrOpen) loadExclusions()
+  })
+
+  function toggleExclusion(e: Exclusion) {
+    expandedExclusionId = expandedExclusionId === e.id ? null : e.id
+  }
+
+  async function letItFireAgain(e: Exclusion) {
+    error = null
+    const prev = exclusions
+    exclusions = exclusions.filter((x) => x.id !== e.id)
+    if (expandedExclusionId === e.id) expandedExclusionId = null
+    try {
+      await removeExclusion(e.id)
+    } catch (err) {
+      exclusions = prev
+      reportFailure('Could not remove this exclusion', err)
     }
   }
 
@@ -535,9 +695,19 @@
 
   async function clear(id: string, note?: string) {
     error = null
+    // #780 item 2: "clear with a note" stamps CLEARED the same way a
+    // verdict does -- pinned in place, dimmed, drawer closed. No Undo:
+    // a plain clear sets no verdict, and store.go's UndoVerdict only
+    // reopens a flag its own verdict cleared. Pinned *before* the call
+    // -- same reasoning as callVerdict above -- since flagsState.clear
+    // flips `cleared` optimistically, synchronously, ahead of its own
+    // network request.
+    pin(id, 'cleared')
+    if (expandedId === id) expandedId = null
     try {
       await flagsState.clear(id, note)
     } catch (err) {
+      unpin(id)
       reportFailure('Could not clear this flag', err)
     }
   }
@@ -554,11 +724,13 @@
          lives in the bar's own ⚑ mark. The name survives for screen
          readers, where it is not competing for space. -->
     <section aria-label="Active flags ({active.length})">
-      {#if active.length === 0}
+      {#if active.length === 0 && !(isAdminOrOpen && exclusions.length > 0)}
         <!-- The honest cleared state (round 26, drawn as `.caempty` in
              round 29's scene): zero open is a fact with a history, not a
              blank. When something was cleared, say when, and stand by
-             the audit-log promise the clear-all bubble makes. -->
+             the audit-log promise the clear-all bubble makes. Skipped
+             when the exclusions body (#780 item 5) has something to
+             show even with nothing open, below. -->
         <div class="caempty">
           <span class="cae-mark">✓</span>
           <div>
@@ -610,7 +782,10 @@
                   age <span class="dir">{dirGlyph('age')}</span>
                 </button>
               </th>
-              <th></th>
+              <!-- CALL IT (#780 item 1): no filter input under this head --
+                   verdicts are given, not searched. Blank for a viewer,
+                   who gets no chips to call anything with. -->
+              <th class="vc">{canEdit ? 'call it' : ''}</th>
             </tr>
             <tr class="filters">
               <td><input bind:value={filters.type} placeholder="filter" aria-label="Filter by flag type" /></td>
@@ -621,16 +796,21 @@
               <td></td>
             </tr>
           </thead>
-          <tbody>
-            {#if sortedActive.length === 0}
-              <tr>
-                <td class="empty" colspan="6">No flags match these filters.</td>
-              </tr>
-            {/if}
-            {#each sortedActive as f (f.id)}
-              {@render flagRows(f, false)}
-            {/each}
-          </tbody>
+          {#if active.length > 0}
+            <tbody>
+              {#if sortedActive.length === 0}
+                <tr>
+                  <td class="empty" colspan="6">No flags match these filters.</td>
+                </tr>
+              {/if}
+              {#each sortedActive as f (f.id)}
+                {@render flagRows(f, false)}
+              {/each}
+            </tbody>
+          {/if}
+          {#if isAdminOrOpen && exclusions.length > 0}
+            {@render exclusionsBody()}
+          {/if}
         </table>
       {/if}
     </section>
@@ -662,7 +842,7 @@
                 <th>evidence</th>
                 <th class="num">count</th>
                 <th>age</th>
-                <th></th>
+                <th class="vc">{canEdit ? 'call it' : ''}</th>
               </tr>
             </thead>
             <tbody>
@@ -682,23 +862,33 @@
         {/if}
       </section>
     {/if}
-
-    <!-- Outside the shelf on purpose: judging the shelf's last flag can
-         unmount the shelf itself, and the Undo offer must survive that. -->
-    {#if lastJudged && flagsState.isUndoable(lastJudged.id)}
-      <p class="undo-line" role="status">
-        Judged {lastJudged.verdict}.
-        <button class="olink" onclick={undoJudgement}>Undo</button>
-      </p>
-    {/if}
   </div>
 </div>
+
+<!-- Disarms `never again`'s confirm on any click that isn't the button
+     itself -- the button's own onclick stops propagation, so this only
+     ever fires for a click elsewhere (#780 item 4, same idiom as
+     Watchlist's own armed `remove`). -->
+<svelte:window onclick={() => (neverArmedId = null)} />
 
 {#snippet flagRows(f: Flag, provisional: boolean)}
   {@const family = familyOf(f.type)}
   {@const open = expandedId === f.id}
   {@const ep = episodes[f.id]}
-  <tr class="frow" class:open class:provisional style="--ft: {family.ink}" onclick={() => toggleExpanded(f)}>
+  {@const kind = verdictKind(f)}
+  <tr
+    class="frow"
+    class:open
+    class:provisional
+    class:struck={kind !== null}
+    class:fdone={kind !== null && kind !== 'real'}
+    class:isreal={kind === 'real'}
+    class:expected={kind === 'expected'}
+    class:noise={kind === 'noise'}
+    class:real={kind === 'real'}
+    style="--ft: {family.ink}"
+    onclick={() => toggleExpanded(f)}
+  >
     <td class="fmark">{family.mark} {labelFor(f.type)}{#if provisional}<span class="ptag">provisional</span>{/if}</td>
     <td class="k">
       {#if isFilterable(f)}
@@ -719,21 +909,71 @@
     <td>{f.detail}</td>
     <td class="num">{f.count}×</td>
     <td class="t">{formatFlagAge(f.lastSeen, appState.now)}</td>
-    <td class="disc">
-      <!-- The row's one affordance (rounds 18-19/29): the
-           chevron rotates rather than swapping glyphs, so the
-           open state reads at a glance down a striped list. -->
-      <button
-        class="openc"
-        aria-expanded={open}
-        aria-label="{open ? 'Close' : 'Open'} the drawer for this flag"
-        onclick={(ev) => {
-          ev.stopPropagation()
-          toggleExpanded(f)
-        }}
-      >
-        ▸
-      </button>
+    <td class="vc">
+      <!-- CALL IT (#780): a stamp once judged, the trio while it's
+           still open and callable. A chip/undo click never toggles the
+           drawer, same stopPropagation guard the "where" link and
+           caret already use above. -->
+      {#if kind}
+        <span class="vdone">
+          <span class="stamp {stampInk(kind)}">{stampText(kind)}</span>
+          {#if canUndo(kind)}
+            <button
+              class="olink"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                undoCall(f)
+              }}>undo</button
+            >
+          {/if}
+        </span>
+      {:else if canEdit}
+        <span class="vrow">
+          <button
+            class="v expected"
+            title="Normal for this network — records the verdict and clears the flag"
+            onclick={(ev) => {
+              ev.stopPropagation()
+              callVerdict(f, 'expected')
+            }}><i>✓</i>expected</button
+          >
+          <button
+            class="v noise"
+            title="Not meaningful — records the verdict and clears the flag"
+            onclick={(ev) => {
+              ev.stopPropagation()
+              callVerdict(f, 'noise')
+            }}><i>~</i>noise</button
+          >
+          <button
+            class="v real"
+            title="A real finding — records the verdict; the flag stays"
+            onclick={(ev) => {
+              ev.stopPropagation()
+              callReal(f)
+            }}><i>✱</i>real</button
+          >
+        </span>
+      {/if}
+      {#if kind === null || kind === 'real'}
+        <!-- The row's one affordance (rounds 18-19/29): the
+             chevron rotates rather than swapping glyphs, so the
+             open state reads at a glance down a striped list.
+             Dropped once a non-real verdict lands (#780 item 2,
+             round 35's `close(r)`): a dimmed row is inert, beyond
+             its stamp and undo. -->
+        <button
+          class="openc"
+          aria-expanded={open}
+          aria-label="{open ? 'Close' : 'Open'} the drawer for this flag"
+          onclick={(ev) => {
+            ev.stopPropagation()
+            toggleExpanded(f)
+          }}
+        >
+          ▸
+        </button>
+      {/if}
     </td>
   </tr>
   {#if open}
@@ -758,7 +998,19 @@
                evidence itself -- the headline stands alone
                as the drawer's first words, the story running
                on from it in sentences. See flagNarrative.ts. -->
-          <p class="story"><b class="headline">{headlineFor(f)}</b> {storyFor(f)}</p>
+          <p class="story">
+            {#if f.verdict === 'real' && f.verdictAt}
+              <!-- #780 item 3: the story leads with this rather
+                   than only the row's stamp carrying the news --
+                   a flag arriving already verdict==='real' (from
+                   another session) reads the same way. -->
+              <span class="called"
+                >Called real at {formatHM(f.verdictAt)} by {f.verdictBy}. It stays open until it is cleared; a fresh
+                episode asks again.</span
+              >
+            {/if}
+            <b class="headline">{headlineFor(f)}</b> {storyFor(f)}
+          </p>
           <div class="side">
             <span class="lab">the episode</span>
             {#if Array.isArray(ep) && ep.length > 0}
@@ -816,32 +1068,6 @@
             {:else if canEdit && canWatchSource(f)}
               <button class="act" onclick={() => watchThisSource(f)}>watch this source</button>
             {/if}
-            {#if provisional && canEdit}
-              <!-- The verdict loop (#491/#638): the tuning
-                   feedback a provisional flag exists to
-                   gather. expected/noise clear the flag as
-                   they record; real records and the flag
-                   stays as history. -->
-              {#if f.verdict}
-                <span class="verdictline">judged {f.verdict} by {f.verdictBy}</span>
-              {:else}
-                <button
-                  class="act"
-                  title="Normal for this network — records the verdict and clears the flag"
-                  onclick={() => judge(f, 'expected')}>expected</button
-                >
-                <button
-                  class="act"
-                  title="Not meaningful — records the verdict and clears the flag"
-                  onclick={() => judge(f, 'noise')}>noise</button
-                >
-                <button
-                  class="act"
-                  title="A real finding — records the verdict; the flag stays"
-                  onclick={() => judgeRealVerdict(f)}>real</button
-                >
-              {/if}
-            {/if}
             {#if noteFor === f.id}
               <!-- The note is optional: confirming with an
                    empty one is exactly a plain clear. -->
@@ -863,11 +1089,93 @@
             {:else if canEdit}
               <button class="act quiet" onclick={() => openNote(f.id)}>clear with a note</button>
             {/if}
+            {#if isAdminOrOpen}
+              <!-- `never again` (#780 item 4): the one verdict left in
+                   the drawer, alone at the right of the action row
+                   (`.never { margin-left: auto }`) -- it wants a
+                   second look and the drawer is where the evidence is.
+                   Round 28's arm-then-confirm, admin-only per
+                   clear-permanent's own authz tier. -->
+              <button
+                class="act quiet never"
+                class:armed={neverArmedId === f.id}
+                onclick={(ev) => {
+                  ev.stopPropagation()
+                  clickNever(f)
+                }}
+              >
+                {neverLabel(f)}
+              </button>
+            {/if}
           </div>
         </div>
       </td>
     </tr>
   {/if}
+{/snippet}
+
+{#snippet exclusionsBody()}
+  <!-- The exclusions body (#780 item 5): a second tbody under the
+       flags, in the flag row's own grammar with the type's ink off --
+       mikroview does not look at these pairs any more. Sort and filter
+       (above) leave this body alone; it is fed and iterated on its own. -->
+  <tbody>
+    <tr class="excl-divider">
+      <td colspan="6">
+        <span class="excl-label"
+          >never again · <b>{exclusions.length}</b> pair{exclusions.length === 1 ? '' : 's'} mikroview no longer flags</span
+        >
+        <button class="olink excl-toggle" onclick={() => (showExclusions = !showExclusions)}>
+          {showExclusions ? 'hide them' : 'show them'}
+        </button>
+      </td>
+    </tr>
+    {#if showExclusions}
+      {#each exclusions as e (e.id)}
+        {@const exFamily = familyOf(e.type)}
+        {@const exOpen = expandedExclusionId === e.id}
+        <tr class="frow fx" class:open={exOpen} onclick={() => toggleExclusion(e)}>
+          <td class="fmark">{exFamily.mark} {labelFor(e.type)}</td>
+          <td class="k"><span class="wl-plain">{e.target === 'global' ? 'network-wide' : e.target}</span></td>
+          <td>never again</td>
+          <td class="num">—</td>
+          <td class="t">—</td>
+          <td class="vc">
+            <button
+              class="openc"
+              aria-expanded={exOpen}
+              aria-label="{exOpen ? 'Close' : 'Open'} the drawer for this exclusion"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                toggleExclusion(e)
+              }}
+            >
+              ▸
+            </button>
+          </td>
+        </tr>
+        {#if exOpen}
+          <tr class="drawer fx">
+            <td colspan="6">
+              <div class="dwr-in">
+                <p class="story">
+                  Told never to flag this again. Nothing about this pair is counted or held now — mikroview simply
+                  does not look.
+                </p>
+                <dl class="pair-facts">
+                  <div><dt>flag</dt><dd>{labelFor(e.type)}</dd></div>
+                  <div><dt>target</dt><dd>{e.target === 'global' ? 'network-wide' : e.target}</dd></div>
+                </dl>
+                <div class="dwr-acts">
+                  <button class="act" onclick={() => letItFireAgain(e)}>let it fire again</button>
+                </div>
+              </div>
+            </td>
+          </tr>
+        {/if}
+      {/each}
+    {/if}
+  </tbody>
 {/snippet}
 
 <style>
@@ -1012,9 +1320,17 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .ftable tbody td.disc {
+  /* CALL IT (#780): right-aligned like the record's `.panel td.vc` --
+     the trio/stamp and caret hug the row's own right edge. */
+  .ftable thead th.vc,
+  .shelf-heads th.vc {
+    text-align: right;
+  }
+
+  .ftable tbody td.vc {
     width: 1%;
     white-space: nowrap;
+    text-align: right;
   }
 
   .frow {
@@ -1103,6 +1419,275 @@
 
   .openc[aria-expanded='true'] {
     transform: rotate(90deg);
+  }
+
+  /* ============================================================
+     CALL IT (#780, rounds 34-35): the verdict trio moves from the
+     drawer into the row itself. Ported from docs/design/concepts/
+     round-35/verdicts-in-row.html's .vrow/.stamp/tr.frow.struck/
+     .vdone/the lens bar, mapped onto this app's own tokens the way
+     EngineRoom.svelte's settings-doors port already does (--ok ->
+     --accept); --now/--alarm/--hair-2 are this app's own names
+     verbatim, so they carry over unchanged.
+     ============================================================ */
+  .vrow {
+    display: inline-flex;
+    gap: 6px;
+    vertical-align: middle;
+    margin-right: 12px;
+  }
+
+  .vrow button.v {
+    --vc: var(--fg-muted);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 1px 9px 1px 7px;
+    cursor: pointer;
+    line-height: 16px;
+    transition:
+      color 0.15s,
+      border-color 0.15s,
+      background 0.15s,
+      transform 0.15s;
+  }
+
+  .vrow button.v i {
+    font-style: normal;
+    color: var(--vc);
+    margin-right: 5px;
+    font-weight: 700;
+  }
+
+  .vrow button.v.expected {
+    --vc: var(--accept);
+  }
+
+  .vrow button.v.noise {
+    --vc: var(--now);
+  }
+
+  .vrow button.v.real {
+    --vc: var(--alarm);
+  }
+
+  .vrow button.v:hover {
+    color: var(--vc);
+    border-color: var(--vc);
+    background: color-mix(in srgb, var(--vc) 12%, transparent);
+    transform: translateY(-1px);
+  }
+
+  /* The stamp: a verdict pressed onto the row in its own ink. */
+  .stamp {
+    --vc: var(--fg-dim);
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--vc);
+    border: 1.5px solid var(--vc);
+    border-radius: 3px;
+    padding: 1px 7px 1px 8px;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vc) 35%, transparent);
+    animation: stamp-in 0.28s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+    vertical-align: middle;
+  }
+
+  .stamp.expected {
+    --vc: var(--accept);
+  }
+
+  .stamp.noise {
+    --vc: var(--now);
+  }
+
+  .stamp.real {
+    --vc: var(--alarm);
+  }
+
+  @keyframes stamp-in {
+    from {
+      transform: scale(1.9);
+      opacity: 0;
+    }
+    60% {
+      opacity: 1;
+    }
+    to {
+      transform: scale(1);
+    }
+  }
+
+  /* The row takes the ink for a moment as the stamp lands. */
+  .frow.struck td {
+    animation: struck 0.7s ease-out both;
+  }
+
+  @keyframes struck {
+    from {
+      background: color-mix(in srgb, var(--sc, var(--fg-dim)) 16%, transparent);
+    }
+  }
+
+  .frow.struck.expected {
+    --sc: var(--accept);
+  }
+
+  .frow.struck.noise {
+    --sc: var(--now);
+  }
+
+  .frow.struck.real {
+    --sc: var(--alarm);
+  }
+
+  /* Takes the trio's place in the same cell, so the column never
+     moves. */
+  .vdone {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    vertical-align: middle;
+  }
+
+  .vdone + .openc {
+    margin-left: 16px;
+  }
+
+  /* Called real: leads the story (see the drawer's .story above). */
+  .story .called {
+    display: block;
+    color: var(--fg-dim);
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+
+  /* Called real: the stamp takes the chips' place and the row's own
+     bar swells -- a lens over the 3px family stripe, its ends arcing
+     back into it rather than stepping against the rows around it.
+     Always alarm ink, regardless of the flag's own family colour: real
+     is the one state every family shares the same urgency for. */
+  .frow td:first-child {
+    position: relative;
+  }
+
+  .frow td:first-child::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--alarm);
+    opacity: 0;
+    border-radius: 0 4px 4px 0 / 0 10px 10px 0;
+    transition:
+      width 0.35s ease,
+      opacity 0.35s ease;
+  }
+
+  .frow.isreal td:first-child::before {
+    width: 7px;
+    opacity: 1;
+  }
+
+  /* A flag that has been called (anything but real): dims in place,
+     keeps its row, until the tab is left (#780 items 2/4 -- the
+     recently-cleared list, in place). Its CALL IT cell stays at full
+     opacity so the stamp and undo stay legible. */
+  .frow.fdone td {
+    opacity: 0.45;
+  }
+
+  .frow.fdone td:first-child {
+    box-shadow: none !important;
+  }
+
+  .frow.fdone td:last-child {
+    opacity: 1;
+  }
+
+  /* never again (#780 item 4): round 28's arm-then-confirm, same idiom
+     as Watchlist's own armed `remove`. */
+  .dwr-acts .never {
+    margin-left: auto;
+  }
+
+  .dwr-acts .never.armed {
+    color: var(--alarm);
+    border-color: var(--alarm);
+  }
+
+  /* The exclusions body (#780 item 5): a second tbody under the flags,
+     type ink off -- mikroview does not look at these pairs any more. */
+  .excl-divider td {
+    padding-top: 16px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    color: var(--fg-dim);
+  }
+
+  .excl-divider b {
+    color: var(--fg-muted);
+    font-weight: 600;
+  }
+
+  .excl-toggle {
+    margin-left: 12px;
+  }
+
+  .frow.fx .fmark {
+    color: var(--fg-dim) !important;
+  }
+
+  .frow.fx td:first-child,
+  tr.drawer.fx > td {
+    box-shadow: none !important;
+  }
+
+  .frow.fx td {
+    opacity: 0.7;
+  }
+
+  .frow.fx.open td {
+    opacity: 1;
+  }
+
+  .pair-facts {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 24px;
+    margin: 0 0 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+
+  .pair-facts div {
+    display: flex;
+    gap: 6px;
+  }
+
+  .pair-facts dt {
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 9px;
+  }
+
+  .pair-facts dd {
+    margin: 0;
+    color: var(--fg-muted);
   }
 
   .empty {
@@ -1349,21 +1934,24 @@
     color: var(--fg-dim);
   }
 
-  .verdictline {
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    color: var(--fg-dim);
-  }
-
-  .undo-line {
-    margin: 0;
-    font-size: 12px;
-    color: var(--fg-muted);
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .openc {
       transition: none;
+    }
+
+    /* #780: the stamp's thump, the row's flash and the chip's hover
+       lift all turn off -- the lens bar's width/opacity transition
+       already shares .frow td:first-child::before's own declaration,
+       so it is covered by the blanket rule below rather than repeated. */
+    .stamp,
+    .frow.struck td,
+    .frow td:first-child::before {
+      animation: none;
+      transition: none;
+    }
+
+    .vrow button.v:hover {
+      transform: none;
     }
   }
 </style>
