@@ -200,7 +200,15 @@
   // can be followed (#726: measured, 0.30 of the run within 4 units).
   // It keeps its anchor and takes a wider lane instead, so it still
   // reads as leaving the same island toward the same waist.
-  const ANY_CLEAR = 13
+  //
+  // 26, not the 13 this started at: once internet edges landed on their
+  // own slots (#726's bundle decision) the lane holding the middle slot
+  // ends its limb 10 units from the waist, which is where an "anywhere"
+  // edge dies -- so the old clearance smeared those two together again
+  // for that one lane. The gate caught it on the real map. Measured, the
+  // fault clears at 15 and holds from 22 up; 26 keeps a margin without
+  // reading as a line detached from its own island.
+  const ANY_CLEAR = 26
 
   function lineFor(fromIface: string, toIface: string, crosses: boolean): Line | null {
     const from = anchorOf(fromIface)
