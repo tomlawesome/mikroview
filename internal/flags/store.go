@@ -152,9 +152,12 @@ const flagTimeSeriesMinutes = 60
 //     (capped, see internal/detect's maxEvidenceHosts).
 //   - NAT: repeated_drops' triggering event's NAT translation info,
 //     when present.
-//   - Pairs/PairsTotal/PairsTotalIsFloor (#654): critical_port's distinct
+//   - Pairs/PairsTotal/PairsTotalIsFloor (#654): the distinct
 //     (destination host, destination port) combinations actually seen
-//     together, capped for display at internal/engine's maxEvidencePairs
+//     together -- critical_port's, and since #641 outbound_anomaly's and
+//     internal_recon's, which is what makes an expected verdict able to
+//     permit exactly what a device was seen doing rather than the cross
+//     product of two lists. Capped for display at internal/engine's maxEvidencePairs
 //     (== maxEvidencePorts, see that constant's own doc comment for why).
 //     Ports and Hosts above are independent sets -- crossing them implies
 //     every combination was seen, which for a detector recording many of
@@ -499,6 +502,56 @@ type Exclusion struct {
 	// for an exclusion written before #640, which has no such record --
 	// the ledger renders that absence rather than inventing a date.
 	Since time.Time `json:"since,omitzero"`
+	// Permitted is what each expected verdict on this pair wrote onto the
+	// watchlist as well as here (#641): the device's evidence pairs,
+	// recorded as permitted destinations on its inverted entry. One
+	// record per verdict, appended in the order the verdicts were given.
+	//
+	// It lives on the expectation rather than in a store of its own
+	// because the two halves are one act and the ledger (#640 part C)
+	// shows them together: the detector learned a size, and the device
+	// was allowed these destinations. Part C is what prunes them; this
+	// package only has to be able to say what was added, by which
+	// verdict, and when -- see PermittedRecord.
+	//
+	// Additive, omitted when empty, so an expectation recorded before
+	// #641 reads back with nothing here and means exactly what it did.
+	Permitted []PermittedRecord `json:"permitted,omitempty"`
+}
+
+// PermittedRecord is one expected verdict's write onto the watchlist --
+// the reversible half of an automatic step (#641).
+//
+// Written by the API layer through Store.RecordPermitted rather than by
+// SetVerdict itself: this store holds flags, and the entry the
+// destinations landed on is an expectation definition in
+// internal/engine's store, which this package neither imports nor should.
+// What it does own is the *record* -- undo has to know exactly what to
+// take back, and the ledger has to be able to show it.
+type PermittedRecord struct {
+	// EntryID is the inverted watchlist entry the destinations were
+	// written to.
+	EntryID string `json:"entryId"`
+	// Dests is what was permitted, in the flag's own evidence order.
+	// Stored as this package's HostPort rather than
+	// watchlist.PermittedDest for the same reason HostPort exists at all:
+	// the persisted shape belongs here, not to whichever package happens
+	// to consume it.
+	Dests []HostPort `json:"dests,omitempty"`
+	// CreatedEntry records that this verdict is what brought the entry
+	// into existence -- there was no inverted entry for the device, so
+	// one was created in its observing state to hold the permission.
+	// Undo removes an entry it created and nothing else has touched;
+	// without this bit it could not tell that entry from one the
+	// operator made themselves.
+	CreatedEntry bool `json:"createdEntry,omitempty"`
+	// Verdict is the judgement that wrote this. Always VerdictExpected
+	// today -- it is the only verdict that permits anything -- and stated
+	// rather than assumed so the ledger reads what happened off the
+	// record instead of inferring it from the record's existence.
+	Verdict Verdict `json:"verdict,omitempty"`
+	// At is when it was written.
+	At time.Time `json:"at,omitzero"`
 }
 
 // Absorbs reports whether a firing of the given observed size is still
@@ -1431,8 +1484,96 @@ func (s *Store) Expectation(t Type, target string) (Exclusion, bool) {
 	if !ok {
 		return Exclusion{}, false
 	}
+	return copyExclusion(e), true
+}
+
+// copyExclusion detaches an Exclusion from store state before it is
+// handed out: an independent Size pointer, and an independent Permitted
+// slice (whose own Dests slices are copied too). Without it a caller
+// holding a listed entry could mutate what the store is about to
+// consult, which for Permitted matters more than for Size -- undo reads
+// it to decide what to take off the watchlist.
+func copyExclusion(e Exclusion) Exclusion {
 	e.Size = copyIntPtr(e.Size)
-	return e, true
+	if len(e.Permitted) > 0 {
+		recs := make([]PermittedRecord, len(e.Permitted))
+		for i, r := range e.Permitted {
+			r.Dests = append([]HostPort(nil), r.Dests...)
+			recs[i] = r
+		}
+		e.Permitted = recs
+	}
+	return e
+}
+
+// Get returns one flag by id, and whether it exists -- the read every
+// caller that has to know a flag's state *before* changing it needs
+// (internal/api's verdict handler, which reads the verdict it is about
+// to replace so it can reverse what that verdict wrote onto the
+// watchlist). A copy, like every other read here.
+func (s *Store) Get(id string) (Flag, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	f, ok := s.byID[id]
+	if !ok {
+		return Flag{}, false
+	}
+	return *f, true
+}
+
+// RecordPermitted attaches rec to the expectation recorded for flagID --
+// what an expected verdict permitted on the watchlist, alongside the
+// size it learned (#641). Reports whether there was an expectation to
+// attach it to: there is nothing to record against a flag that never
+// recorded one, and inventing an entry here would put a permission on
+// the ledger with no expectation beside it.
+//
+// Appends rather than replaces. A second expected verdict on the same
+// pair (the firing came back past the ceiling and was judged normal
+// again) permits whatever that firing saw, which may be pairs the first
+// never did -- and undoing the second must take back only its own
+// additions. One record per verdict is what makes that exact.
+func (s *Store) RecordPermitted(flagID string, rec PermittedRecord) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e, ok := s.excluded[flagID]
+	if !ok {
+		return false
+	}
+	rec.Dests = append([]HostPort(nil), rec.Dests...)
+	e.Permitted = append(e.Permitted, rec)
+	s.excluded[flagID] = e
+	s.persistLocked()
+	return true
+}
+
+// WithdrawPermitted removes and returns the most recent PermittedRecord
+// for flagID -- the one the verdict now being undone or re-judged wrote
+// -- so its caller can take those destinations back off the watchlist.
+// Reports false when there is nothing recorded, which is the ordinary
+// case for every flag that was never judged expected and for one whose
+// evidence carried no pairs to permit.
+//
+// Called before the verdict itself is reversed, deliberately: undoing an
+// expected verdict that created the expectation deletes the expectation
+// outright (see undoExpectationLocked), and this record goes with it.
+func (s *Store) WithdrawPermitted(flagID string) (PermittedRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e, ok := s.excluded[flagID]
+	if !ok || len(e.Permitted) == 0 {
+		return PermittedRecord{}, false
+	}
+	last := e.Permitted[len(e.Permitted)-1]
+	e.Permitted = e.Permitted[:len(e.Permitted)-1]
+	if len(e.Permitted) == 0 {
+		e.Permitted = nil
+	}
+	s.excluded[flagID] = e
+	s.persistLocked()
+	return last, true
 }
 
 // ListExclusions returns every recorded expectation, sorted by ID for a
@@ -1445,10 +1586,9 @@ func (s *Store) ListExclusions() []Exclusion {
 
 	out := make([]Exclusion, 0, len(s.excluded))
 	for _, e := range s.excluded {
-		// Independent Size pointer, same reason Expectation copies it:
-		// a listed entry must not be a handle onto store state.
-		e.Size = copyIntPtr(e.Size)
-		out = append(out, e)
+		// Detached, same reason Expectation detaches: a listed entry must
+		// not be a handle onto store state.
+		out = append(out, copyExclusion(e))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
