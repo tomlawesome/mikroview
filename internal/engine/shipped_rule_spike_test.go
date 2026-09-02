@@ -406,7 +406,7 @@ func TestShippedRuleSpike_RefireClearRevive(t *testing.T) {
 	// Clear, then keep the burst going: the same record revives rather
 	// than a new one appearing beside it.
 	clearAt := firstAt.Add(2 * time.Second)
-	if !fs.Clear(f2.ID, clearAt) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", clearAt); !ok {
 		t.Fatal("expected Clear to succeed on the active flag")
 	}
 	reviveAt := clearAt.Add(time.Second)

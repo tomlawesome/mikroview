@@ -71,11 +71,58 @@ vi.mock('../lib/api', () => ({
         distance: { threshold: { shipped: 5, current: 3 } },
         replay: { known: true, capable: true },
       },
+      // An operator-authored detector: structure stored as data (#502),
+      // which is what makes it the one row on this bench the server can
+      // copy (#810). Paused, so the run/pause wording stays unambiguous
+      // for the rows above.
+      {
+        id: 'ssh_hammering',
+        name: 'SSH hammering',
+        intent: 'detection',
+        kind: 'declarative',
+        enabled: false,
+        scope: {},
+        params: { threshold: 5, window: '1m0s' },
+        provenance: { origin: 'custom' },
+        detection: {
+          conditions: [{ field: 'destinationPort', operator: 'equals', values: ['22'] }],
+          key: 'perSource',
+          counting: 'total',
+          detailTemplate: '{Count} attempts against port 22 from {SourceAddress}',
+        },
+        available: true,
+        replay: { known: true, capable: true },
+      },
     ],
     coverageEvidence: { complete: true },
   })),
-  fetchDefinitionSchema: vi.fn(async () => ({ port_scan: PORT_SCAN_SCHEMA })),
+  fetchDefinitionSchema: vi.fn(async () => ({
+    port_scan: PORT_SCAN_SCHEMA,
+    ssh_hammering: PORT_SCAN_SCHEMA,
+    'copy-1': PORT_SCAN_SCHEMA,
+  })),
   updateDefinition: vi.fn(async () => ({ id: 'port_scan' })),
+  replayDefinition: vi.fn(async () => ({
+    receipt: {
+      window: {
+        start: '2026-09-02T08:00:00Z',
+        end: '2026-09-02T12:12:00Z',
+        duration: '4h12m0s',
+        eventCount: 8421,
+      },
+      emissionCount: 3,
+      sample: [
+        { at: '2026-09-02T09:04:00Z', target: '203.0.113.9', detail: '', provisional: false },
+        { at: '2026-09-02T10:20:00Z', target: '198.51.100.4', detail: '', provisional: false },
+        // The same host twice: the sample is one entry per emission, the
+        // slot names hosts.
+        { at: '2026-09-02T11:31:00Z', target: '203.0.113.9', detail: '', provisional: false },
+      ],
+      sampleTruncated: false,
+      corpusTruncated: false,
+      anyProvisional: false,
+    },
+  })),
   resetDefinition: vi.fn(async () => ({ id: 'port_scan' })),
   cloneDefinition: vi.fn(async () => ({ id: 'copy-1' })),
   fetchEntities: vi.fn(async () => [
@@ -335,21 +382,87 @@ describe('reset', () => {
   })
 })
 
+// #810. Clone is offered on the rows where it can succeed and nowhere
+// else: a custom detector is stored structure the server copies, a
+// shipped one is Go keyed by its own id and always refuses.
 describe('clone', () => {
-  it('creates the copy with no prompt in between, under the "(copy)" name', async () => {
+  // The copy as the server hands it back on the refresh that follows:
+  // a second custom detector, paused, under the "(copy)" name.
+  const COPY = {
+    id: 'copy-1',
+    name: 'SSH hammering (copy)',
+    intent: 'detection',
+    kind: 'declarative',
+    enabled: false,
+    scope: {},
+    params: { threshold: 5, window: '1m0s' },
+    provenance: { origin: 'custom' },
+    detection: {
+      conditions: [{ field: 'destinationPort', operator: 'equals', values: ['22'] }],
+      key: 'perSource',
+      counting: 'total',
+      detailTemplate: '{Count} attempts against port 22 from {SourceAddress}',
+    },
+    available: true,
+    replay: { known: true, capable: true },
+  }
+
+  // Returns the copy alongside everything already listed, which is what
+  // the bench re-reads after a successful clone.
+  async function withCopyOnRefresh() {
+    const { definitions, coverageEvidence } = await api.fetchDefinitions()
+    vi.mocked(api.fetchDefinitions).mockResolvedValueOnce({
+      definitions: [...definitions, COPY],
+      coverageEvidence,
+    } as never)
+  }
+
+  it('is offered on a custom detector', async () => {
     render(EngineRoomWatchers, { canEdit: true })
-    await open()
-    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
-    await settle()
-    expect(api.cloneDefinition).toHaveBeenCalledWith('port_scan', 'Port scan (copy)')
+    await open('SSH hammering')
+    expect(screen.getByRole('button', { name: 'Clone' })).toBeTruthy()
   })
 
-  it('pauses the copy, so a half-edited detector never runs', async () => {
+  it('is not offered on a shipped one, whose logic no copy could carry', async () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
+    expect(screen.queryByRole('button', { name: 'Clone' })).toBeNull()
+    // The rest of the foot is untouched: this hides one button, not the
+    // panel it sits in.
+    expect(screen.getByRole('button', { name: 'Reset to stock' })).toBeTruthy()
+  })
+
+  it('creates the copy with no prompt in between, under the "(copy)" name', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
     await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
     await settle()
-    expect(api.updateDefinition).toHaveBeenCalledWith('copy-1', { enabled: false })
+    expect(api.cloneDefinition).toHaveBeenCalledWith('ssh_hammering', 'SSH hammering (copy)')
+  })
+
+  it('leaves the pause to the server rather than a second request of its own', async () => {
+    // The server stores the copy disabled, so nothing here has to. A
+    // follow-up PUT could fail on its own and leave a running duplicate
+    // of a detector the operator is halfway through editing.
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+    expect(api.updateDefinition).not.toHaveBeenCalled()
+  })
+
+  it('opens the copy expanded, with its name selected to be typed over', async () => {
+    await withCopyOnRefresh()
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+
+    const copyRow = screen.getByRole('button', { expanded: true, name: /SSH hammering \(copy\)/ })
+    expect(copyRow).toBeTruthy()
+    const name = screen.getByLabelText('Name') as HTMLInputElement
+    expect(name.value).toBe('SSH hammering (copy)')
+    expect(document.activeElement).toBe(name)
   })
 
   it('shows the server’s refusal in its own words when a definition cannot be cloned', async () => {
@@ -357,11 +470,151 @@ describe('clone', () => {
       'a shipped definition cannot be cloned: its logic is compiled into this binary and keyed by its own id, so a copy would evaluate nothing. Override its params instead (PUT /api/definitions/{id}).'
     vi.mocked(api.cloneDefinition).mockResolvedValueOnce(refusal)
     render(EngineRoomWatchers, { canEdit: true })
-    await open()
+    await open('SSH hammering')
     await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
     await settle()
     expect(screen.getByText(refusal)).toBeTruthy()
+  })
+})
+
+// #786. What is worth pinning about the slot, rather than about the
+// wrapper next door (lib/api.test.ts, which pins the two shapes coming
+// back as values):
+//
+//   - the receipt and the decline land in the *same* slot, and the
+//     decline is not dressed as an error -- it is an honest limit of the
+//     traffic held, so it carries the panel's quiet ink, not .error's.
+//   - a truncation flag reads as "at least", and the two flags are not
+//     interchangeable: a cut-short corpus makes the *count* a floor, a
+//     bounded sample makes only the *list* partial.
+//   - Try never blocks Save, before or after either answer.
+describe('try', () => {
+  async function press(name = 'Try') {
+    await fireEvent.click(screen.getByRole('button', { name }))
+    await settle()
+  }
+
+  it('replays the candidate numbers as typed, without saving them', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await fireEvent.input(screen.getByRole('spinbutton', { name: /Threshold/ }), {
+      target: { value: '9' },
+    })
+    await press()
+    // window and threshold only: the engine's replay candidate is that
+    // closed set (replayParamSchema), and a third param name is refused
+    // outright rather than ignored.
+    expect(api.replayDefinition).toHaveBeenCalledWith('port_scan', {
+      threshold: 9,
+      window: '60s',
+    })
+    // A trial is not an edit. Nothing about the definition the engine is
+    // evaluating may change because someone asked a question about it.
     expect(api.updateDefinition).not.toHaveBeenCalled()
+  })
+
+  it('says what would have fired, over the window it was counted across', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('Would have fired 3 times in the last 4h 12m')).toBeTruthy()
+  })
+
+  it('lists the hosts that would have been flagged, each once', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('203.0.113.9')).toBeTruthy()
+    expect(screen.getByText('198.51.100.4')).toBeTruthy()
+    // The third sample entry is the first host again; the slot names
+    // hosts, not sample rows.
+    expect(screen.getAllByText('203.0.113.9')).toHaveLength(1)
+  })
+
+  it('reads a cut-short corpus as "at least", because the count is then a floor', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce({
+      receipt: {
+        window: { start: '', end: '', duration: '4h12m0s', eventCount: 1_000_000 },
+        emissionCount: 3,
+        sample: [],
+        sampleTruncated: false,
+        corpusTruncated: true,
+        anyProvisional: false,
+      },
+    })
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('Would have fired at least 3 times in the last 4h 12m')).toBeTruthy()
+  })
+
+  it('says "at least these" of a bounded sample, and leaves the count exact', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce({
+      receipt: {
+        window: { start: '', end: '', duration: '4h12m0s', eventCount: 8421 },
+        emissionCount: 40,
+        sample: [{ at: '', target: '203.0.113.9', detail: '', provisional: false }],
+        sampleTruncated: true,
+        corpusTruncated: false,
+        anyProvisional: false,
+      },
+    })
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('at least these')).toBeTruthy()
+    // The sample being bounded says nothing about the total, so the
+    // count line stays exact.
+    expect(screen.getByText('Would have fired 40 times in the last 4h 12m')).toBeTruthy()
+  })
+
+  it('shows a decline in the same slot, in grey rather than in the error ink', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce({
+      decline: {
+        reason: 'corpus covers 4h12m0s (8421 event(s)), shorter than this definition’s window',
+        corpusSpan: '4h12m0s',
+        definitionWindow: '24h0m0s',
+      },
+    })
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    // "1d 0h", not "24h": formatDurationShort drops to days at 24 hours,
+    // and the decline uses the same helper every other duration on this
+    // panel does rather than a second way of saying a length.
+    const said = screen.getByText("Can't replay: needs a 1d 0h window, only 4h 12m held")
+    expect(said.classList.contains('error')).toBe(false)
+    expect(said.classList.contains('declined')).toBe(true)
+  })
+
+  it('never blocks Save -- before, during or after either answer', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    await press()
+    expect(save.disabled).toBe(false)
+  })
+
+  it('shows a refusal in the server’s own words, without a slot answer', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce(
+      'no event corpus is available to replay against',
+    )
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('no event corpus is available to replay against')).toBeTruthy()
+    expect(screen.queryByText(/Would have fired/)).toBeNull()
+  })
+
+  it('clears the slot when the panel is reopened, so no receipt outlives its numbers', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText(/Would have fired/)).toBeTruthy()
+    await fireEvent.click(screen.getByRole('button', { expanded: true }))
+    await open()
+    expect(screen.queryByText(/Would have fired/)).toBeNull()
   })
 })
 

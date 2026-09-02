@@ -27,6 +27,13 @@
   //     app already knows -- hosts from Entities, rule labels from the
   //     router-pushed filter tables.
   //   - reset, clone, save and cancel at the foot.
+  //
+  // #786 added Try beside Save: the candidate numbers as typed are
+  // replayed over the traffic mikroview still holds, and the answer --
+  // a receipt or an honest decline -- lands in one slot under the
+  // fields. Changing a threshold used to be a guess with no shown
+  // workings; the receipt is what turns it into a checked change.
+  //
   // #640's expectations ledger -- the station's second section, under
   // the bench. Its own component, so this file stays the bench.
   import ExpectationsLedger from './ExpectationsLedger.svelte'
@@ -52,6 +59,8 @@
     type ParamField,
     type ScopeDraft,
   } from '../lib/definitionEditor'
+  import { formatDurationShort, parseGoDurationSeconds } from '../lib/format'
+  import type { ReplayReceipt, ReplayResult } from '../lib/types'
 
   // canEdit (#653's middle tier): running the detector bench -- enabling
   // or pausing a detector, editing its scope, tuning its thresholds -- is
@@ -79,6 +88,19 @@
   let errors = $state<Partial<Record<string, string>>>({})
   let saving = $state<Partial<Record<string, boolean>>>({})
   let busy = $state(false)
+
+  // What the last Try answered for the open panel, and whether one is in
+  // flight (#786). One value rather than a map keyed by detector, for the
+  // same reason the draft above is one object: only one panel exists at a
+  // time, and a map would keep a stale receipt alive for a row nobody is
+  // looking at -- a receipt read against the wrong row's numbers is worse
+  // than no receipt.
+  //
+  // Deliberately outside `busy`: Try never blocks Save. Pressing it
+  // disables Try alone, so the numbers as typed can still be saved while
+  // a replay is in flight, or after one declined.
+  let replay = $state<ReplayResult | null>(null)
+  let trying = $state(false)
 
   // Set when a row is opened by cloning, so the copy's name field takes
   // focus the moment it renders (#787 decision C). Cleared once used, so
@@ -133,11 +155,22 @@
     scope = scopeDraftFrom(d.scope)
     adding = { hosts: '', ports: '', rules: '' }
     addError = {}
+    // A receipt is an answer about the numbers that were in the fields
+    // when Try was pressed, so it cannot outlive them -- reopening a
+    // panel, or opening a different row, starts with an empty slot rather
+    // than a receipt the operator would reasonably read as being about
+    // what is now on screen.
+    replay = null
+  }
+
+  function closePanel() {
+    openRow = null
+    replay = null
   }
 
   function togglePanel(name: string) {
     if (openRow === name) {
-      openRow = null
+      closePanel()
       return
     }
     openPanel(name)
@@ -190,7 +223,62 @@
     scope[axis] = removeChip(scope[axis], value)
   }
 
-  // --- the foot's four actions ------------------------------------------
+  // --- try: the candidate numbers, replayed (#786) ------------------------
+
+  // Which of the panel's fields a replay candidate may carry. The engine's
+  // replay candidate is a closed set of two params -- window and threshold
+  // (engine's replayParamSchema, internal/engine/replay_declarative.go) --
+  // and the server refuses any name outside it outright, so sending the
+  // whole panel would turn Try into a guaranteed refusal for every
+  // detector that declares a third param. Nothing serves that set to the
+  // client the way GET /api/definitions/schema serves the full one, which
+  // is why it is named here; recorded as a gap on #786 rather than left
+  // as a silent constant.
+  const REPLAYABLE_PARAMS = ['window', 'threshold']
+
+  // Try replays the candidate numbers as typed over the traffic still
+  // held, and puts the answer in the slot under the fields. It writes
+  // nothing -- the definition the engine is evaluating is exactly as it
+  // was, whether the receipt is encouraging or not.
+  //
+  // A decline is not an error and is not stored as one: it goes into the
+  // same slot as a receipt, in the panel, in the quiet ink. Only a
+  // refusal -- no corpus, a definition this binary cannot replay at all
+  // -- reaches the row's error line, in the server's own words, the way
+  // the clone refusal already does.
+  async function tryRow(name: string) {
+    trying = true
+    replay = null
+    const candidate = paramsFromFields(
+      fields.filter((f) => REPLAYABLE_PARAMS.includes(f.schema.name)),
+    )
+    const result = await detectorSettingsState.replay(name, candidate)
+    trying = false
+    if (typeof result === 'string') {
+      errors[name] = result
+      return
+    }
+    errors[name] = undefined
+    replay = result
+  }
+
+  // A receipt's sample holds one entry per emission, so a host that would
+  // have been flagged three times appears three times. The slot names the
+  // hosts that would have been flagged, not how many entries the sample
+  // has, so each one is listed once.
+  function flaggedHosts(receipt: ReplayReceipt): string[] {
+    return [...new Set(receipt.sample.map((s) => s.target))]
+  }
+
+  // Durations arrive as Go duration strings ("4h12m0s") throughout the
+  // definitions surface; this is the same read-then-render pair the
+  // panel's own duration fields use, so a replay and a window field never
+  // say the same length two different ways.
+  function asDuration(goDuration: string): string {
+    return formatDurationShort(parseGoDurationSeconds(goDuration))
+  }
+
+  // --- the foot's actions -------------------------------------------------
 
   async function save(name: string) {
     const d = detectorSettingsState.list.find((x) => x.name === name)
@@ -209,7 +297,7 @@
     saving[name] = false
     busy = false
     errors[name] = err ?? undefined
-    if (!err) openRow = null
+    if (!err) closePanel()
   }
 
   // Reset puts the detector's params back to exactly what it shipped
@@ -232,26 +320,26 @@
   // C): the copy is created, paused so a half-edited detector never runs,
   // and its own panel opens with the name selected.
   //
-  // The server refuses to clone a definition whose logic is compiled into
-  // this binary rather than stored as data, and its refusal names the
-  // operation that does exist instead (overriding the original's params).
-  // That sentence is shown as-is: rewording it would throw away the only
-  // useful half.
+  // The pause is the server's (#810): POST .../clone stores a custom
+  // detection's copy disabled, so there is no second request here that
+  // could fail on its own and leave a running duplicate behind.
+  //
+  // The button only appears on a custom row, so a refusal is no longer
+  // the expected outcome -- but one is still shown verbatim if the
+  // server ever declines, rather than reworded into something that says
+  // less than the reason it gave.
   async function cloneRow(name: string) {
     const d = detectorSettingsState.list.find((x) => x.name === name)
     busy = true
     saving[name] = true
     const result = await detectorSettingsState.clone(name, cloneName(d?.label ?? name))
+    saving[name] = false
+    busy = false
     if (typeof result === 'string') {
-      saving[name] = false
-      busy = false
       errors[name] = result
       return
     }
     errors[name] = undefined
-    await detectorSettingsState.edit(result.id, { enabled: false })
-    saving[name] = false
-    busy = false
     openPanel(result.id)
     focusName = true
   }
@@ -563,24 +651,76 @@
             </div>
           {/if}
 
+          <!-- One slot under the fields for whatever the last Try
+               answered (#786): a receipt or a decline, never both, which
+               is how the server answers too. -->
+          {#if replay?.receipt}
+            {@const receipt = replay.receipt}
+            <div class="tried">
+              <p class="tried-count">
+                <!-- "at least" where the corpus read was cut short: the
+                     count is then a floor, not a total. sampleTruncated
+                     does not touch this line -- a bounded sample leaves
+                     the count exact. -->
+                Would have fired {receipt.corpusTruncated ? 'at least ' : ''}{receipt.emissionCount}
+                {receipt.emissionCount === 1 ? 'time' : 'times'} in the last
+                {asDuration(receipt.window.duration)}
+              </p>
+              {#if receipt.sample.length > 0}
+                <ul class="tried-hosts">
+                  {#each flaggedHosts(receipt) as host (host)}
+                    <li>{host}</li>
+                  {/each}
+                </ul>
+                {#if receipt.sampleTruncated}
+                  <!-- The sample is bounded server-side, so the hosts
+                       above are some of them, not all of them -- the same
+                       "at least" the count line uses for a truncated
+                       corpus, said about the list instead. -->
+                  <p class="tried-more">at least these</p>
+                {/if}
+              {/if}
+            </div>
+          {:else if replay?.decline}
+            {@const decline = replay.decline}
+            <!-- Grey, not red: the corpus being shorter than the window
+                 this definition needs is an honest limit of the traffic
+                 held, not a failure of anything the operator did. -->
+            <p class="tried declined">
+              Can't replay: needs a {asDuration(decline.definitionWindow)} window, only
+              {asDuration(decline.corpusSpan)} held
+            </p>
+          {/if}
+
           <div class="actions">
             <span class="actions-left">
               <button type="button" class="quiet" disabled={busy} onclick={() => resetRow(d.name)}>
                 Reset to stock
               </button>
-              <button type="button" class="quiet" disabled={busy} onclick={() => cloneRow(d.name)}>
-                Clone
-              </button>
+              <!-- Offered only where it can succeed (#810). A shipped
+                   detector's logic is Go keyed by its own id, so the
+                   server refuses to copy it and always will; a button
+                   whose only outcome is that refusal is worse than no
+                   button. Starting a custom detector from a shipped one
+                   is a different operation, and #829 owns it. -->
+              {#if d.origin === 'custom'}
+                <button type="button" class="quiet" disabled={busy} onclick={() => cloneRow(d.name)}>
+                  Clone
+                </button>
+              {/if}
             </span>
-            <!-- SLOT FOR #786's "Try" BUTTON. Replay from the same bench
-                 belongs here, between the destructive-ish pair on the
+            <!-- Try (#786) sits between the destructive-ish pair on the
                  left and the commit pair on the right: trying a candidate
                  threshold against the stored corpus is what an operator
                  does *before* Save, so it sits immediately beside it.
-                 Deliberately not built here -- #786 owns it. -->
+                 Disabled only while its own replay is in flight -- never
+                 on `busy`, because Try must never block Save. -->
             <span class="actions-right">
-              <button type="button" class="cancel" disabled={busy} onclick={() => (openRow = null)}>
+              <button type="button" class="cancel" disabled={busy} onclick={closePanel}>
                 Cancel
+              </button>
+              <button type="button" class="try" disabled={trying} onclick={() => tryRow(d.name)}>
+                {trying ? 'trying…' : 'Try'}
               </button>
               <button type="button" class="save" disabled={busy} onclick={() => save(d.name)}>
                 {saving[d.name] ? 'saving…' : 'Save'}
@@ -904,6 +1044,7 @@
 
   .quiet,
   .cancel,
+  .try,
   .save {
     border-radius: 5px;
     padding: 5px 10px;
@@ -920,7 +1061,12 @@
     color: var(--accent);
   }
 
-  .cancel {
+  /* Try carries Cancel's ink, not Save's: it is a real button rather than
+     one of the left pair's quiet ones, but it commits nothing, and giving
+     it the accent fill would put two primary-looking actions side by side
+     at the foot of the panel. */
+  .cancel,
+  .try {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--fg-muted);
@@ -935,8 +1081,49 @@
 
   .quiet:disabled,
   .cancel:disabled,
+  .try:disabled,
   .save:disabled {
     opacity: 0.6;
     cursor: default;
+  }
+
+  /* The replay slot, in the panel's own secondary-fact ink (see .note and
+     .learning above) rather than a status colour of its own: the receipt
+     states its count in words, and the decline is an honest limit rather
+     than an error, so neither has anything for colour to add. */
+  .tried {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11.5px;
+    color: var(--fg-muted);
+    line-height: 1.5;
+  }
+
+  .tried-count {
+    margin: 0;
+    color: var(--fg);
+  }
+
+  .declined {
+    color: var(--fg-muted);
+  }
+
+  .tried-hosts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+
+  .tried-more {
+    margin: 0;
+    color: var(--fg-dim);
   }
 </style>
