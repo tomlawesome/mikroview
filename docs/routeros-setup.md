@@ -308,7 +308,18 @@ not the address you declared as `sourceIp`. If pushes return `200` in
 the audit log but the "i" popups still say no data has been pushed,
 check whether the device id the token is scoped to actually matches the
 `deviceId` on the events you're looking at — a mismatched source
-address is the most likely cause.
+address is the most likely cause. The setup wizard's step 2 names it
+when it sees it (a declared router that has sent nothing while an
+undeclared address streams) and prints the fix. Keeping the declared
+address is the recommended one, because the token and the tables it
+pushes follow that identity, so nothing has to be reissued:
+
+```
+/system logging action set mikroview src-address=<the address you declared as sourceIp>
+```
+
+The alternative is changing `sourceIp` to the arriving address and
+restarting — then reissue any token minted for the old identity.
 
 Or via the API:
 

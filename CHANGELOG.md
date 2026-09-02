@@ -18,6 +18,27 @@ rewritten.
 
 ### Added
 
+- **The setup wizard names a multi-homed router's source-address
+  split** (#442). A router holds an address on every network it routes,
+  and its logs arrive stamped with whichever one faces mikroview --
+  often not the one declared as `sourceIp`. The declared router then
+  sits silent while the real stream auto-discovers under another
+  address, and a token minted for the declared identity enriches
+  nothing: pushes return 200 and the popups still say no data. Step 2
+  (Send logs) now reads this as partial -- "Connected — but from
+  10.0.20.1, an address you haven't declared, while 192.168.88.1, which
+  you declared in config.yaml, has sent nothing" -- states that
+  mikroview cannot tell whether the two are one router, and prints the
+  fix with the operator's values: keep the declared address by setting
+  `src-address` on the router's logging action (recommended, because the
+  token and its pushed tables follow the declared identity), or change
+  `sourceIp` and reissue the token. Two genuinely different routers is
+  not an error; the notice clears itself when the declared one sends its
+  first log. The router cards on Entities and the viewer's Fleet carry a
+  one-line echo pointing at step 2. `GET /api/devices` gains
+  `multihomedCandidates` on a configured device that has received nothing
+  while undeclared devices stream -- every arriving address, never a
+  pick. Detection itself shipped in #499.
 - **The watchers station now lists what it has been told to expect**
   (#640, part C). An **Expected** verdict teaches mikroview that a
   certain amount of a certain thing, from a certain host, is normal
