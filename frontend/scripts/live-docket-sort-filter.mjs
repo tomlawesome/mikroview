@@ -33,10 +33,21 @@ async function api(page, method, path, body) {
 // Two distinct sources, unused by every other scenario in this directory
 // (#590's collision reasoning) -- different scan sizes so the flags also
 // carry different `count`, which is what the count column sorts on.
+// Both scans must clear port_scan's threshold, which is 15 distinct ports
+// inside 60 seconds (registry_test.go:143; definitions_migrate_test.go:123
+// pins the DefaultConfig value). scripts/live-env.sh's portscan feeder sends
+// exactly n distinct destination ports (`1000+i`), so the old LOW of 6 was
+// below the bar and never raised a flag at all -- this scenario has not been
+// able to see its own low-count row since #649 wrote it. It went unnoticed
+// because the scenario died earlier, on the card-grid selectors #688 retired.
+//
+// 18 and 30, not 16 and 17: the counts have to be far enough apart to order
+// unambiguously, and far enough above 15 to survive a lost event, the same
+// margin live-flags-clearing takes ("20, not 15").
 const LOW_IP = '198.51.100.120'
 const HIGH_IP = '198.51.100.121'
-feedPortScan(6, LOW_IP)
-feedPortScan(18, HIGH_IP)
+feedPortScan(18, LOW_IP)
+feedPortScan(30, HIGH_IP)
 
 const { page } = await session()
 
