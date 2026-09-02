@@ -304,6 +304,7 @@ func TestSizedExpectationPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	raiseSized(s1, TypePortScan, "203.0.113.9", intPtr(30), since)
 	s1.SetVerdict(flagID(TypePortScan, "203.0.113.9"), VerdictExpected, "operator", since)
 	raiseSized(s1, TypePortScan, "203.0.113.9", intPtr(40), since.Add(time.Minute)) // absorbed
@@ -316,6 +317,10 @@ func TestSizedExpectationPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-opening the persisted store failed: %v", err)
 	}
+	// #836: s2 is mutated below (raiseSized, to prove the reloaded
+	// ceiling is still enforced), so its own write-behind persister must
+	// also be stopped before the test returns -- see closeForTest.
+	closeForTest(t, s2)
 
 	ex, ok := s2.Expectation(TypePortScan, "203.0.113.9")
 	if !ok {

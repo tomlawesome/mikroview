@@ -66,11 +66,29 @@ async function openAndCheck(label) {
 async function checkFleetFromBottomBar(target, expectedCard) {
   await target.setViewportSize({ width: 390, height: 844 })
   await target.waitForSelector('.bottom-bar', { timeout: 5000 })
+  // A group of one navigates straight there and raises no sheet
+  // (BottomBar.svelte:153-158's activateGroup), and says so on the button:
+  // aria-haspopup is set only when the group has more than one item (:194).
+  // That is exactly a viewer's Admin group -- Settings and Entities carry
+  // `edit: true` and Run setup `admin: true`, so Fleet is the only row left
+  // (navGroups.ts) -- while an admin's has four. Waiting unconditionally for
+  // the dialog made this helper correct for an admin and wrong for a viewer,
+  // which is what gate run five caught. Read the button, then take whichever
+  // path the app is actually offering.
+  const adminGroup = target.locator('.bottom-bar .group-btn', { has: target.locator('.label:text-is("Admin")') })
+  const opensSheet = (await adminGroup.getAttribute('aria-haspopup')) === 'dialog'
   await target.click('.bottom-bar .group-btn .label:text-is("Admin")')
-  await target.waitForSelector('[role="dialog"]', { timeout: 5000 })
-  const sheetItems = await target.$$eval('.sheet .sheet-item .label', (els) => els.map((e) => e.textContent.trim()))
-  await target.click('.sheet .sheet-item .label:text-is("Fleet")')
-  await target.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
+  let sheetItems
+  if (opensSheet) {
+    await target.waitForSelector('[role="dialog"]', { timeout: 5000 })
+    sheetItems = await target.$$eval('.sheet .sheet-item .label', (els) => els.map((e) => e.textContent.trim()))
+    await target.click('.sheet .sheet-item .label:text-is("Fleet")')
+    await target.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
+  } else {
+    // The tap has already navigated. The group's one row is its own label,
+    // so report it as the item list the caller checks Fleet against.
+    sheetItems = ['Fleet']
+  }
   await target.waitForSelector(`.card[data-card="${expectedCard}"] >> text=/● LIVE|◌ QUIET|◌ NEVER SEEN/`, {
     timeout: 5000,
   })
@@ -160,6 +178,14 @@ await page.click(`${PEOPLE} .ogfoot .olink`)
 await page.waitForSelector(`${PEOPLE} .pform`)
 await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, VIEWER_USER)
 await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, VIEWER_PASS)
+// #653 gave the form a tier choice and defaulted it to "can change
+// things". Without this click the account below is a *user*, not a
+// viewer -- which is what this section had been creating since #653, so
+// every "absent for a viewer" claim under it was really proving the user
+// tier's grammar under a viewer's name. It went unnoticed because the
+// rows it checks (Users, Tokens, Detectors, Entities, Run setup…) are
+// admin-gated, so they are absent for a user too and the checks passed.
+await page.click(`${PEOPLE} .pform button:has-text("can only look")`)
 await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`)
 check(true, `the viewer account "${VIEWER_USER}" is created from the people group`)
@@ -197,10 +223,20 @@ await viewerPage.keyboard.press('Escape')
 await viewerPage.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
 
 // Settings and Fleet both left this menu in #647 too -- Settings is a deck destination now (SCENES), Fleet is
-// bottom-bar-only -- so "still reachable for a viewer, with no admin gate" is proved the same two ways the admin
-// half of this scenario proved it above, not by reading this menu.
-await goTo(viewerPage, 'Settings')
-check(true, "Settings is reachable for a viewer too -- the one Admin destination that is deliberately viewer-readable")
+// bottom-bar-only -- so what each tier can reach is proved off the deck's own rail and the bottom bar, not by
+// reading this menu.
+//
+// A viewer's rail carries neither Settings nor Entities. This line used to assert the opposite -- "the one Admin
+// destination that is deliberately viewer-readable" -- which was true under #490 and stale from #657, whose
+// ratified matrix ruled both out of a viewer's navigation entirely ("a page whose purpose is making a change is
+// noise to someone who cannot", deckCards.ts:25-27). Nothing else lets a viewer in either: navigation is
+// `appState.view` mutation from the UI only, there are no URL routes, so a viewer has no route to Settings at
+// all. Asserted as absence, per #783.
+const viewerRail = await viewerPage.$$eval('.roll-rail button.rail-name', (els) => els.map((e) => e.textContent.trim()))
+for (const absent of ['Settings', 'Entities']) {
+  check(!viewerRail.includes(absent), `${absent} is absent from a viewer's roll rail (#657), got ${JSON.stringify(viewerRail)}`)
+}
+check(viewerRail.includes('Fleet'), `Fleet stands in for both on a viewer's rail (deckCards.ts), got ${JSON.stringify(viewerRail)}`)
 
 const viewerSheetItems = await checkFleetFromBottomBar(viewerPage, 'fleet')
 check(

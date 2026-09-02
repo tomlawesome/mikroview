@@ -25,6 +25,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/settings"
 	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
@@ -223,6 +224,19 @@ type Server struct {
 	// that package's design.
 	RouterState *routerstate.Store
 
+	// Settings holds the small set of configuration an admin may change
+	// from inside the running app rather than in config.yaml -- today,
+	// the event buffer's size (#796). Backs PUT /api/settings/store; see
+	// settings.go. Nil is a valid state (a Server built without one, as
+	// most tests are): the PUT then refuses rather than pretending to
+	// store anything.
+	Settings *settings.Store
+	// memory is the event-buffer figure in effect and the range it may
+	// move within -- see settings.go. Populated by InitMemory at boot;
+	// unexported because it carries a mutex and an atomic, which a
+	// struct literal cannot safely fill in.
+	memory memoryState
+
 	// Setup holds what has been observed of each router's setup, for the
 	// guided wizard (#320). Nil in tests that do not exercise it, which
 	// handleSetupStatus tolerates.
@@ -305,6 +319,12 @@ func (s *Server) routes() []route {
 		// handleStatsTops' own doc comment for why this is a separate
 		// route rather than a field on /api/stats above.
 		{http.MethodGet, "/api/stats/tops", s.handleStatsTops},
+		// The one setting an admin may change from inside the app (#796).
+		// No matching GET: the memory group's whole state rides on
+		// /api/stats' "memory" object, which every open tab is already
+		// polling for the count and capacity beside it -- see
+		// handleStats for why one payload rather than two.
+		{http.MethodPut, "/api/settings/store", s.handleStoreSettingsUpdate},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
