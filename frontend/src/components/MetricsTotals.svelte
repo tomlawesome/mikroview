@@ -3,10 +3,14 @@
   //
   // The ledger (#488, docs/design/screens/metrics/DESIGN.md): "the
   // cards' totals (top rules, top talkers, by device) open the Table
-  // view, and the Register carries them as its ledger strip".
+  // view".
   //
-  // One component for both, so the two views cannot answer the same
-  // magnitude question differently. Deliberately *not* BarList: BarList
+  // Rounds 36-37 (#803) gave it one home rather than two: the band above
+  // the Table's minutes. The Register used to carry a copy as a strip
+  // under its paper; it no longer does, so there is no second place the
+  // same magnitude question can be answered differently.
+  //
+  // Deliberately *not* BarList: BarList
   // draws a bordered, elevated card, and cards are exactly what the
   // ratified design removed here -- "their answers live in the ledger
   // below, which owns magnitude and never pretends to own time". The
@@ -153,25 +157,42 @@
 </div>
 
 <style>
-  /* Same grid as MetricsTable's `.saved .widgets` -- one arrangement for
-     both card areas on this scene rather than two different grids
-     (#716: "cards arrange around it careless"). */
+  /* Round 37's `.ledger` (#803): six columns across the head of the table
+     view, gap 28. The six are a fixed set, not a variable one, so they
+     are declared as six tracks rather than auto-fitted to a minimum
+     width -- which is what put five across a wide band and left the
+     sixth stranded on its own row. `minmax(0, 1fr)` rather than `1fr` so
+     a long rule name ellipsises inside its track instead of widening it
+     and pushing the rest out of true. */
   .ledger-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 28px;
   }
 
-  /* Each column gets a visible boundary so it reads as its own box,
-     rather than blurring into the next one across a bare 22px gap
-     (#716). Ported from BarList's card treatment (BarList.svelte's
-     `.bar-list`) -- the app's existing bordered-card look -- rather
-     than inventing a second one. */
+  /* Narrower than the band the six were drawn for: fold to three, then
+     two, rather than crushing six tracks past the point a label or a bar
+     can be read. */
+  @media (max-width: 1180px) {
+    .ledger-strip {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 22px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .ledger-strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  /* Bars, no boxes (#803, and this file's own opening comment): #716's
+     bordered elevated card is gone. The ledger is one band of six ranked
+     answers under the table view's head rule, and six boxes inside a
+     ruled band is a border drawn twice. The bars carry the magnitude;
+     the h4 names the question. */
   .column {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px 16px;
+    min-width: 0;
   }
 
   /* #716: 9px at --fg-dim was too faint to find at a glance. Bumped to
@@ -226,10 +247,13 @@
     background: var(--chart-traffic);
   }
 
+  /* Round 37's `.lrow .c`: the figure is the answer, so it carries the
+     weight the label does not. */
   .count {
     flex: none;
     font-family: var(--font-mono);
     font-size: 11px;
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
     color: var(--fg);
   }
