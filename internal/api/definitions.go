@@ -30,14 +30,19 @@ import (
 // response, plus the operator actions an expectation has of its own
 // (promote, observing).
 //
-// Access is admin-only for every route here, exactly matching what the
-// two removed surfaces enforced. #385 records the owner decision that
-// non-admins should eventually see settings surfaces read-only, but that
-// belongs to phase 2's RBAC work: shipping a read-open route now that
-// phase 2 might have to narrow is worse than shipping it closed and
-// widening it deliberately. Every row is recorded in
-// authz_matrix_test.go, which is what forces the question to be answered
-// rather than inherited.
+// Access is user-tier for every route here bar one: each checks
+// callerIsUser, so an admin or a user reaches it and a viewer does not.
+// The exception is handleDefinitionsList, which is open to any signed-in
+// session including viewer -- see its own doc comment.
+//
+// This surface shipped admin-only, matching what the two removed
+// surfaces enforced, and #653 widened it: running the detector bench --
+// enabling a detector, editing its scope, tuning its thresholds -- is a
+// normal operational action rather than an owner-level one, so it
+// belongs to the middle tier that issue introduced. A viewer therefore
+// still reads the whole list, and changes nothing in it. Every row is
+// recorded in authz_matrix_test.go, which is what forces the question to
+// be answered rather than inherited.
 
 // definitionView is one definition as this API serves it: the whole
 // envelope, plus the four things a caller cannot derive from it --
