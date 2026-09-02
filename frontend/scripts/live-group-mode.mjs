@@ -28,7 +28,7 @@ check(normalRows > 0, `the live view renders rows (${normalRows})`)
 check(await page.isVisible('.grid .cell.time'), 'rows show a time')
 
 // --- Turning it on collapses repeats ------------------------------------
-await page.click('button:text-is("Group")')
+await page.click('.whisper .hand-btn:text-is("group")')
 await page.waitForTimeout(500)
 
 const groupedRows = await rowCount()
@@ -85,7 +85,7 @@ if (counts.length > 0) {
 }
 
 // --- Off again ----------------------------------------------------------
-await page.click('button:text-is("Group")')
+await page.click('.whisper .hand-btn:text-is("group")')
 await page.waitForTimeout(500)
 check((await rowCount()) === normalRows, 'turning it off restores every row')
 
@@ -109,16 +109,16 @@ await page.waitForTimeout(400)
 const mobileCards = await page.$$eval('button.card', (els) => els.length)
 check(mobileCards > 0, `phone width renders the card layout (${mobileCards} cards)`)
 check(
-  !(await page.isVisible('button:text-is("Group")')),
-  'the Group button is absent at phone width, where grouping has no effect',
+  !(await page.isVisible('.whisper .hand-btn:text-is("group")')),
+  'the group toggle is absent at phone width, where grouping has no effect',
 )
 
 // Back to desktop width: the control returns, and returns usable.
 await page.setViewportSize({ width: 1280, height: 720 })
 await page.waitForTimeout(400)
 check(
-  await page.isVisible('button:text-is("Group")'),
-  'the Group button comes back at desktop width',
+  await page.isVisible('.whisper .hand-btn:text-is("group")'),
+  'the group toggle comes back at desktop width',
 )
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
