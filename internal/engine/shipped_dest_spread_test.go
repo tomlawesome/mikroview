@@ -280,7 +280,7 @@ func TestShippedOutboundAnomaly_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(26*time.Second)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", t0.Add(26*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	d.Evaluate(store.Event{SrcIP: src, DstIP: pub3(26), DstPort: 443, ReceivedAt: t0.Add(27 * time.Second)})
@@ -701,7 +701,7 @@ func TestShippedInternalRecon_FieldsRefireClearRevive(t *testing.T) {
 		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
 	}
 
-	if !fs.Clear(f2.ID, t0.Add(11*time.Second)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", t0.Add(11*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	d.Evaluate(store.Event{SrcIP: src, DstIP: lan3(11), DstPort: 445, ReceivedAt: t0.Add(12 * time.Second)})
@@ -725,5 +725,106 @@ func TestShippedInternalRecon_FieldsRefireClearRevive(t *testing.T) {
 func TestShippedInternalReconIsNotAGroupReputationCandidate(t *testing.T) {
 	if shippedGroupReputationIDs["internal_recon"] {
 		t.Error("internal_recon must not use the group reputation sink -- its destinations are never public")
+	}
+}
+
+// TestShippedOutboundAnomalyRecordsEvidencePairs is #641's first piece:
+// the destinations these two definitions count are recorded with the
+// port each was reached on, so an expected verdict can permit exactly
+// what the device was seen doing (watchlist.PermittedDest) instead of
+// crossing a host list against a port list.
+func TestShippedOutboundAnomalyRecordsEvidencePairs(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedDestSpreadDefinition(t, "outbound_anomaly", FlagsSink(fs),
+		Params{"threshold": 2, "window": time.Minute.String()}, Scope{}, true)
+
+	now := time.Now()
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.1", DstPort: 443, ReceivedAt: now})
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.1", DstPort: 8443, ReceivedAt: now.Add(time.Second)})
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.2", DstPort: 443, ReceivedAt: now.Add(2 * time.Second)})
+
+	f := dsFlag(fs, flags.TypeOutboundAnomaly)
+	if f == nil {
+		t.Fatalf("expected an outbound_anomaly flag, got %+v", fs.List())
+	}
+	want := []flags.HostPort{
+		{Host: "203.0.113.1", Port: 443},
+		{Host: "203.0.113.1", Port: 8443},
+		{Host: "203.0.113.2", Port: 443},
+	}
+	if len(f.Evidence.Pairs) != len(want) {
+		t.Fatalf("Pairs = %+v, want %+v", f.Evidence.Pairs, want)
+	}
+	for i, p := range want {
+		if f.Evidence.Pairs[i] != p {
+			t.Errorf("Pairs[%d] = %+v, want %+v (host then port, as EvidenceSet.Pairs orders)", i, f.Evidence.Pairs[i], p)
+		}
+	}
+	if f.Evidence.PairsTotal != len(want) {
+		t.Errorf("PairsTotal = %d, want %d", f.Evidence.PairsTotal, len(want))
+	}
+	// Two ports to one host is two pairs but one destination -- the
+	// threshold is counted on destinations, and this pins that the
+	// second ring did not change that.
+	if f.Size == nil || *f.Size != 2 {
+		t.Errorf("Size = %v, want 2 distinct destinations", f.Size)
+	}
+}
+
+// TestShippedInternalReconRecordsEvidencePairs is the same claim for the
+// internal half -- both definitions this file builds are turned on
+// together by #641, so both are pinned rather than one standing for the
+// other.
+func TestShippedInternalReconRecordsEvidencePairs(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedDestSpreadDefinition(t, "internal_recon", FlagsSink(fs),
+		Params{"threshold": 3, "window": time.Minute.String()}, Scope{}, true)
+
+	now := time.Now()
+	for i := 1; i <= 3; i++ {
+		d.Evaluate(store.Event{
+			SrcIP: "192.168.1.50", DstIP: fmt.Sprintf("192.168.1.%d", 100+i), DstPort: 445,
+			ReceivedAt: now.Add(time.Duration(i) * time.Second),
+		})
+	}
+	f := dsFlag(fs, flags.TypeInternalRecon)
+	if f == nil {
+		t.Fatalf("expected an internal_recon flag, got %+v", fs.List())
+	}
+	if len(f.Evidence.Pairs) != 3 {
+		t.Fatalf("Pairs = %+v, want three (destination, 445) pairs", f.Evidence.Pairs)
+	}
+	for _, p := range f.Evidence.Pairs {
+		if p.Port != 445 {
+			t.Errorf("pair %+v: port must be the one the destination was reached on", p)
+		}
+	}
+}
+
+// TestShippedDestSpreadPairsSkipUntrackedAndPortlessEvents pins the two
+// gates on recording a pair: a destination this direction does not count
+// is not this definition's evidence whichever port it used, and a line
+// with no destination port yields no pair at all -- {host, 0} is a pair
+// nothing could permit or match (watchlist.matchNonInverted refuses a
+// zero port outright).
+func TestShippedDestSpreadPairsSkipUntrackedAndPortlessEvents(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedDestSpreadDefinition(t, "outbound_anomaly", FlagsSink(fs),
+		Params{"threshold": 2, "window": time.Minute.String()}, Scope{}, true)
+
+	now := time.Now()
+	// An internal destination: counted by the other direction, not this one.
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "192.168.1.9", DstPort: 445, ReceivedAt: now})
+	// A public destination with no port on the line.
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.7", ReceivedAt: now.Add(time.Second)})
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.8", DstPort: 443, ReceivedAt: now.Add(2 * time.Second)})
+
+	f := dsFlag(fs, flags.TypeOutboundAnomaly)
+	if f == nil {
+		t.Fatalf("expected an outbound_anomaly flag, got %+v", fs.List())
+	}
+	want := flags.HostPort{Host: "203.0.113.8", Port: 443}
+	if len(f.Evidence.Pairs) != 1 || f.Evidence.Pairs[0] != want {
+		t.Errorf("Pairs = %+v, want exactly [%+v]", f.Evidence.Pairs, want)
 	}
 }
