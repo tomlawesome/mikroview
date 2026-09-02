@@ -229,26 +229,26 @@
   // C): the copy is created, paused so a half-edited detector never runs,
   // and its own panel opens with the name selected.
   //
-  // The server refuses to clone a definition whose logic is compiled into
-  // this binary rather than stored as data, and its refusal names the
-  // operation that does exist instead (overriding the original's params).
-  // That sentence is shown as-is: rewording it would throw away the only
-  // useful half.
+  // The pause is the server's (#810): POST .../clone stores a custom
+  // detection's copy disabled, so there is no second request here that
+  // could fail on its own and leave a running duplicate behind.
+  //
+  // The button only appears on a custom row, so a refusal is no longer
+  // the expected outcome -- but one is still shown verbatim if the
+  // server ever declines, rather than reworded into something that says
+  // less than the reason it gave.
   async function cloneRow(name: string) {
     const d = detectorSettingsState.list.find((x) => x.name === name)
     busy = true
     saving[name] = true
     const result = await detectorSettingsState.clone(name, cloneName(d?.label ?? name))
+    saving[name] = false
+    busy = false
     if (typeof result === 'string') {
-      saving[name] = false
-      busy = false
       errors[name] = result
       return
     }
     errors[name] = undefined
-    await detectorSettingsState.edit(result.id, { enabled: false })
-    saving[name] = false
-    busy = false
     openPanel(result.id)
     focusName = true
   }
@@ -565,9 +565,17 @@
               <button type="button" class="quiet" disabled={busy} onclick={() => resetRow(d.name)}>
                 Reset to stock
               </button>
-              <button type="button" class="quiet" disabled={busy} onclick={() => cloneRow(d.name)}>
-                Clone
-              </button>
+              <!-- Offered only where it can succeed (#810). A shipped
+                   detector's logic is Go keyed by its own id, so the
+                   server refuses to copy it and always will; a button
+                   whose only outcome is that refusal is worse than no
+                   button. Starting a custom detector from a shipped one
+                   is a different operation, and #829 owns it. -->
+              {#if d.origin === 'custom'}
+                <button type="button" class="quiet" disabled={busy} onclick={() => cloneRow(d.name)}>
+                  Clone
+                </button>
+              {/if}
             </span>
             <!-- SLOT FOR #786's "Try" BUTTON. Replay from the same bench
                  belongs here, between the destructive-ish pair on the
