@@ -8,14 +8,14 @@
 // Clear all -- so both actions run against real server state rather than
 // a mocked click handler.
 //
-// Assertions are scoped to specific cards (by their target IP) and to
+// Assertions are scoped to specific rows (by their target IP) and to
 // count *deltas*, not fixed totals: the synthetic burst this needs to
 // trigger a real port_scan also trips a real rule_spike on the shared
 // log-prefix's own hit rate (confirmed by hand -- every request logged
 // as `scan-src`, and ~40 of them inside its window is exactly what
 // rule_spike watches for). That is the detector working correctly on
 // synthetic traffic shaped like a real one, not a defect to work around
-// by asserting an exact card count that real detector timing can't
+// by asserting an exact row count that real detector timing can't
 // actually promise.
 //
 // #539: the "Permanently clear" step below creates a real, server-side
@@ -68,7 +68,7 @@
 // under a second -- can land back in this scenario before App.svelte's
 // own next refresh has caught up, and the Flags view then renders from
 // a stale pre-scan snapshot that still shows both targets cleared. That
-// produced exactly this bug's symptom (a card that should be active
+// produced exactly this bug's symptom (a row that should be active
 // reading as cleared) for a different reason than #539 itself, on every
 // run after the first. Feeding first and logging the real session in
 // afterward, as originally written, keeps that timer's first tick safely
@@ -77,7 +77,29 @@
 import { request } from 'playwright'
 import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
 
-const ACTIVE = 'section[aria-labelledby="active-heading"] .card'
+// The flags tab is a table now, not a card grid (#688, commit 68fd460):
+// one `tr.frow` per open flag (Flags.svelte:701). The section around it
+// names itself with `aria-label="Active flags (N)"` (Flags.svelte:556)
+// instead of pointing at a heading, because round 30 draws no heading
+// over the table at all -- the count lives in the scene bar's own flag
+// mark (Flags.svelte:552-555). Hence the prefix match: the label carries
+// a live count, so it is never a fixed string.
+//
+// The section scope is load-bearing, not tidiness. The learning shelf
+// below (Flags.svelte:646) draws its provisional flags as `tr.frow` too,
+// so an unscoped `.frow` would count untrusted flags as open ones and
+// quietly break every count delta below. Scoping also keeps `.card` --
+// which still exists in the app shell, as the deck's own cards -- out of
+// reach.
+const ACTIVE = 'section[aria-label^="Active flags"] tr.frow'
+
+// A click target that is deliberately not a control: the ratified table's
+// last header cell is empty (Flags.svelte:613), so clicking it is a real
+// "somewhere else" click that changes nothing. This used to be
+// `h2:has-text("Active")`, and that heading is gone with the card grid --
+// the only `h2` left on the surface is the learning shelf's own.
+const ELSEWHERE = 'section[aria-label^="Active flags"] .ftable thead th:last-child'
+
 const PERMANENT_EXCLUSION_ID = 'port_scan:198.51.100.78'
 
 /**
@@ -93,7 +115,12 @@ async function resetExclusion(requester) {
   })
 }
 
-function cardFor(page, text) {
+// hasText against the whole row still finds a flag by its target: the IP
+// is the row's `td.k` (its `button.wl`, or the plain "network-wide" span
+// for a flag with nothing to point at) -- Flags.svelte:703-718. The
+// drawer is a sibling `tr.drawer`, not nested inside the row, so an open
+// drawer's text cannot make a row match something it does not carry.
+function rowFor(page, text) {
   return page.locator(ACTIVE, { hasText: text })
 }
 
@@ -134,7 +161,7 @@ for (const ip of ['198.51.100.77', '198.51.100.78']) {
   firstRaised.push(raised)
 }
 
-// The split-button flow below needs both cards to actually exist, and
+// The split-button flow below needs both rows to actually exist, and
 // the Clear all section further down needs the split-button flow to have
 // run (it asserts against the one exclusion that flow creates). Running
 // either against a flag that never reached the server used to crash the
@@ -142,92 +169,74 @@ for (const ip of ['198.51.100.77', '198.51.100.78']) {
 // the real, upstream reason (#450).
 if (firstRaised.every((r) => r.ok)) {
   await openMenuView('Flags')
-  await page.waitForSelector('.card .type', { timeout: 15000 })
+  // Land on a rendered flag row, not on the old card's `.type` label:
+  // the type now sits in the row's `td.fmark`, alongside the family mark
+  // (Flags.svelte:702). This wait is what threw before its first
+  // assertion once #688 landed.
+  await page.waitForSelector(`${ACTIVE} td.fmark`, { timeout: 15000 })
 
-  check(await cardFor(page, '198.51.100.77').isVisible(), 'the first port scan raised its own flag')
-  check(await cardFor(page, '198.51.100.78').isVisible(), 'the second port scan raised its own flag')
+  check(await rowFor(page, '198.51.100.77').isVisible(), 'the first port scan raised its own flag')
+  check(await rowFor(page, '198.51.100.78').isVisible(), 'the second port scan raised its own flag')
 
   // --- Split button: main segment behaves exactly like the old Clear ---
-  // The actions live in the drawer now (#633, rounds 18-19): the card's
+  // The actions live in the drawer now (#633, rounds 18-19): the row's
   // one affordance is the chevron, and Clear sits across the drawer's
   // foot -- so every clear below opens the drawer first.
+  //
+  // NOT RESELECTED, deliberately -- this whole section is stopped on a
+  // recorded gap, not on drift, and nothing below it is a selector I can
+  // honestly repoint. The split button is not merely elsewhere in the
+  // ratified table; it does not exist. There is no `.split-main`,
+  // `.split-arrow`, `.split-menu` or `.split-menu-item` anywhere in
+  // frontend/src, and no "Permanently clear" control on any surface.
+  // The drawer's whole action foot is `open in stream`, the watch
+  // handoffs, the provisional verdicts and `clear with a note`
+  // (Flags.svelte:810-865) -- a plain clear survives as an empty note
+  // (Flags.svelte:846-847), but the arrow segment, its dropdown, the
+  // keyboard path through it and the exclusion it created have no
+  // counterpart at all.
+  //
+  // That is #688's own recorded gap list speaking, not an oversight to
+  // patch over: Flags.svelte:19-26 names *exclusions* among what round
+  // 29's scene deliberately does not carry, on the owner's 2026-08-31
+  // ruling to build the ratified surface and record what falls out.
+  // Exclusions.svelte is still in the tree and still describes itself as
+  // Flags' admin-only Exclusions tab (#547), but nothing imports or
+  // renders it any more, and the docket's tabs are flags / watchlist /
+  // audit log (SceneBar.svelte:77-99) -- so the Exclusions-tab count
+  // assertion below has no element to find either.
+  //
+  // Repointing these at `clear with a note` would not be reselection: it
+  // would quietly turn assertions about the split button's segments and
+  // its permanent-clear path into assertions about a different control
+  // that makes a weaker claim. Left standing, failing honestly, until
+  // the gap is resolved and it is clear what these should assert.
 
-  const first = cardFor(page, '198.51.100.77')
-  await first.locator('.openc').click()
-  await first.locator('.split-main').waitFor({ timeout: 5000 })
+  // Pinned as absence rather than left to throw. `.split-main`'s waitFor is an
+  // uncaught rejection, so leaving this standing does not fail honestly -- it
+  // kills the scenario on this line and takes the Clear-all section below with
+  // it, which is reselected, correct, and has nothing to do with this gap.
+  //
+  // Same treatment live-metrics-views gives the unmounted cross-section and
+  // live-viewer-surfaces gives the missing READ-ONLY declaration: assert the
+  // present truth, name the issue, keep the rest of the scenario running.
+  //
+  // #691 owns this one by name -- "Permanent exclusion -- `clearPermanent`
+  // (`flags.svelte.ts:175`) -> `POST /api/flags/{id}/clear-permanent`. No UI
+  // caller." -- together with the orphaned Exclusions.svelte behind the tab
+  // count. When it comes back, restore the twelve assertions this replaced:
+  //
+  //   the old two-button row is gone, and `.split-main` is present
+  //   `.split-arrow` is present for an admin, in the drawer
+  //   the main segment clears exactly that one flag
+  //   the arrow segment is focusable and labelled for the keyboard
+  //   Enter opens the dropdown; Escape closes it; an outside click closes it
+  //   the dropdown reopens on a click
+  //   Tab reaches "Permanently clear" and Enter activates it
+  //   the row goes, and the Exclusions tab count rises by one (#539, #547)
   check(
-    !(await page.isVisible('button:has-text("Clear, never flag again")')),
-    'the old two-button row is gone',
-  )
-  check(await page.isVisible('.split-arrow'), 'the split-button arrow segment is present for an admin, in the drawer')
-
-  const before = await activeCount(page)
-  await first.locator('.split-main').click()
-  await page.waitForTimeout(400)
-  check(
-    (await activeCount(page)) === before - 1 && !(await cardFor(page, '198.51.100.77').isVisible()),
-    'clicking the main Clear segment clears just that one flag, same as before',
-  )
-
-  // --- Split dropdown: keyboard accessibility, on the other scan's card ---
-
-  const target = cardFor(page, '198.51.100.78')
-  await target.locator('.openc').click()
-  await target.locator('.split-arrow').waitFor({ timeout: 5000 })
-  await target.locator('.split-arrow').focus()
-  check(
-    await page.evaluate(() => document.activeElement?.classList.contains('split-arrow')),
-    'the arrow segment is reachable by keyboard focus',
-  )
-  await page.keyboard.press('Enter')
-  await page.waitForTimeout(200)
-  check(await page.isVisible('.split-menu'), 'Enter on the focused arrow segment opens the dropdown')
-  check(
-    await page.isVisible('.split-menu-item:has-text("Permanently clear")'),
-    'the dropdown item is renamed to "Permanently clear"',
-  )
-
-  await page.keyboard.press('Escape')
-  await page.waitForTimeout(200)
-  check(!(await page.isVisible('.split-menu')), 'Escape closes the dropdown')
-
-  // Outside click also closes it.
-  await target.locator('.split-arrow').click()
-  await page.waitForTimeout(200)
-  check(await page.isVisible('.split-menu'), 'the dropdown reopens on a click')
-  await page.click('h2:has-text("Active")')
-  await page.waitForTimeout(200)
-  check(!(await page.isVisible('.split-menu')), 'a click outside the split button closes the dropdown')
-
-  // Permanently clear it via the menu item, keyboard-driven end to end:
-  // focus the arrow, open with Enter, reach the item with Tab, activate
-  // with Enter.
-  await target.locator('.split-arrow').focus()
-  await page.keyboard.press('Enter')
-  await page.waitForTimeout(200)
-  await page.keyboard.press('Tab')
-  check(
-    await page.evaluate(() => document.activeElement?.classList.contains('split-menu-item')),
-    'Tab from the open arrow segment reaches the menu item',
-  )
-  await page.keyboard.press('Enter')
-
-  // The *card* must go, not the global count drop by exactly one: on the
-  // shared suite instance the 20-port scans' own late rule_spike flag
-  // can land in this same window and hold the count level, which failed
-  // this leg for a reason that had nothing to do with the keyboard path.
-  // The Exclusions-tab check below still proves the clear was permanent.
-  await target.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {})
-  check(
-    !(await target.isVisible()),
-    'the permanent-clear menu item still clears the flag, keyboard-driven',
-  )
-  // #547: the standalone Exclusions page (and its "Permanently-excluded"
-  // pointer here) is gone -- exclusions are now Flags' own Exclusions
-  // tab, carrying a quiet, outlined count instead of a pointer sentence.
-  check(
-    await page.isVisible('[role="tab"]:has-text("Exclusions") .count'),
-    'the Exclusions tab carries a count once an exclusion exists',
+    (await page.locator('.split-main, .split-arrow, .split-menu, .split-menu-item').count()) === 0,
+    "no split button renders on a flag row (#691 gap, not this scenario's to fix)",
   )
 
   // --- Clear all: click-again confirm ---
@@ -247,24 +256,24 @@ if (firstRaised.every((r) => r.ok)) {
     secondRaised.push(raised)
   }
 
-  // Clear all needs all three cards actually present -- same reasoning
+  // Clear all needs all three rows actually present -- same reasoning
   // as the outer guard above (#450).
   if (secondRaised.every((r) => r.ok)) {
     await page.reload({ waitUntil: 'networkidle' })
     await openMenuView('Flags')
-    await page.waitForSelector('.card .type', { timeout: 15000 })
+    await page.waitForSelector(`${ACTIVE} td.fmark`, { timeout: 15000 })
 
-    // Wait for each flag rather than for "a card exists". Three scans were
+    // Wait for each flag rather than for "a row exists". Three scans were
     // just fed and the detector raises them independently, so waiting on the
-    // first card to appear and then asserting all three are present is a
+    // first row to appear and then asserting all three are present is a
     // race -- it caught the third one missing on a local run. Waiting for
     // each makes the assertion about Clear all, which is what this section
     // is for.
     for (const ip of ['198.51.100.79', '198.51.100.80', '198.51.100.81']) {
-      await cardFor(page, ip)
+      await rowFor(page, ip)
         .waitFor({ timeout: 20000 })
         .catch(() => {})
-      check(await cardFor(page, ip).isVisible(), `flag for ${ip} is active before Clear all`)
+      check(await rowFor(page, ip).isVisible(), `flag for ${ip} is active before Clear all`)
     }
 
     // Clear all is the docket tab row's outlined bubble now (rounds
@@ -279,8 +288,12 @@ if (firstRaised.every((r) => r.ok)) {
     const armedCount = await activeCount(page)
 
     // A click anywhere else disarms it without clearing, so an armed
-    // bubble cannot ambush a later stray click.
-    await page.click('h2:has-text("Active")')
+    // bubble cannot ambush a later stray click. The "anywhere else" is
+    // the table's own empty last header cell now (see ELSEWHERE): the
+    // Active heading this used to click went with the card grid, and the
+    // disarm listens on the window (Docket.svelte's onWindowClick), so
+    // any inert element makes the same point.
+    await page.click(ELSEWHERE)
     await page.waitForTimeout(150)
     check(!(await page.isVisible('.docket .bubble.armed')), 'a click anywhere else disarms it without a second click')
     check((await activeCount(page)) === armedCount, 'nothing was cleared by an arm that was never confirmed')
@@ -294,11 +307,19 @@ if (firstRaised.every((r) => r.ok)) {
     check((await activeCount(page)) === 0, 'the second click actually clears every active flag, including the extra rule_spike')
 
     // Regular clears only -- Clear all must never create an exclusion.
+    //
+    // Zero, not one. The baseline used to be the single exclusion the
+    // split-button's permanent-clear left behind; that section is pinned as
+    // absence above while #691 has no UI caller for clearPermanent, so nothing
+    // creates an exclusion in this run any more. The claim is unchanged and
+    // still worth making -- Clear all must not permanently exclude anything --
+    // it is only the baseline it counts against that moved. Restore the 1 when
+    // the split button comes back.
     const excludedResp = await page.request.get(`${process.env.MV_URL}/api/flags/exclusions`)
     const excludedBody = await excludedResp.json()
     check(
-      (excludedBody.exclusions ?? []).length === 1,
-      `Clear all created no new exclusions -- still just the one from the split-button test (${(excludedBody.exclusions ?? []).length})`,
+      (excludedBody.exclusions ?? []).length === 0,
+      `Clear all created no exclusions (${(excludedBody.exclusions ?? []).length})`,
     )
 
     // Reload to confirm the clears persisted server-side, not just in the
@@ -306,8 +327,15 @@ if (firstRaised.every((r) => r.ok)) {
     await page.reload({ waitUntil: 'networkidle' })
     await openMenuView('Flags')
     await page.waitForTimeout(500)
+    // The empty state is round 26's honest cleared state now, drawn as
+    // `.caempty` inside the active section (Flags.svelte:557-578): with
+    // something just cleared it reads "Nothing open." and then says when
+    // and where the cleared flags went. "Nothing flagged right now" was
+    // the card grid's wording and is nowhere on the surface.
     check(
-      await page.isVisible('text=Nothing flagged right now'),
+      await page
+        .locator(`section[aria-label^="Active flags"] .caempty`, { hasText: 'Nothing open' })
+        .isVisible(),
       'the cleared state survived a reload -- Clear all reached the server, not just the local optimistic update',
     )
   } else {

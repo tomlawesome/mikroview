@@ -103,7 +103,9 @@ func (d *staleRuleDefinition) Tick(now time.Time) {
 				idleDays, u.LastSeen.Format(time.RFC3339), u.FirstSeen.Format(time.RFC3339), u.Count),
 			// No Confidence: internal/detect used flags.Store.Add. There
 			// is no statistical judgement here to score -- the rule either
-			// has fired inside maxAge or it has not.
+			// has fired inside maxAge or it has not. No Size for the same
+			// reason: it is judged on elapsed time, not a count. See
+			// ShippedSizeMeasure.
 			EventTime: now,
 		})
 	}
