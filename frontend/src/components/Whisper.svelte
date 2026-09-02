@@ -24,12 +24,30 @@
   // drops only) -- an artifact of each branch's demo copy being written
   // separately, not a stated rule about which fact matters when. This
   // shows whichever of the four are actually available for the active
-  // window every time, and drops the mockup's redundant "autoscroll:
-  // on/off" clause -- the scene bar's own Autoscroll button already is
-  // that state's one source of truth (see whisper.svelte.ts's seek).
+  // window every time. Round 36 settles where "autoscroll: on/off" went:
+  // it leaves the prose and becomes the `following` verb in the hand
+  // below, so the state is a control rather than a sentence about one.
+  //
+  // ---- The hand (rounds 36-38, `#s5` `.spans.hand` + `#hwipe`/`#hcsv`)
+  //
+  // The whisper commands the stream, and its own seek is what stops the
+  // lines following -- so the verbs sit right of its facts rather than
+  // anywhere else: `following · pause · group` in the span pills'
+  // segmented idiom, then `wipe` and `csv ↓` as quiet pills. Before
+  // this they had no home at all: round 30 retired the toolbar that
+  // carried them and SceneBar recorded them as gaps, which turned
+  // Autoscroll from a toggle into a one-way trapdoor (#749).
+  //
+  // Following is two-way here, which is that defect drawn shut. A seek
+  // or a fence turns it off and the pill reads `follow` in the now ink
+  // until it is taken; taking it follows again and clears the cursor
+  // and the window -- see whisperState.resumeFollowing.
   import { appState } from '../lib/state.svelte'
   import { whisperState } from '../lib/whisper.svelte'
-  import { formatEps, formatHM } from '../lib/format'
+  import { groupModeState } from '../lib/groupMode.svelte'
+  import { viewportState } from '../lib/viewport.svelte'
+  import { downloadEventsCsv } from '../lib/export'
+  import { formatEps, formatHM, formatTime } from '../lib/format'
   import {
     WHISPER_WINDOW_MINUTES,
     bucketAt,
@@ -305,6 +323,26 @@
   })
 
   const statReady = $derived(appState.stats !== null)
+
+  // ---- the hand ----
+
+  // What `csv ↓` would give, said on the control itself rather than
+  // discovered by downloading it. The same set the table is drawn from
+  // (the buffer this screen holds, under the filter that is on), so the
+  // figure and the rows are one thing.
+  const heldEvents = $derived(appState.filteredEvents)
+
+  function toggleFollow() {
+    if (appState.autoscroll) whisperState.stopFollowing()
+    else whisperState.resumeFollowing()
+  }
+
+  // hh:mm:ss for a moment the interface is reporting back ("held at",
+  // "wiped") -- the same clock the time column reads in, without its
+  // milliseconds, which are precision nobody needs to hear a hold in.
+  function clock(ms: number): string {
+    return formatTime(new Date(ms).toISOString())
+  }
 </script>
 
 <div
@@ -350,13 +388,32 @@
     {#if !statReady}
       <span class="dim">gathering the last {WHISPER_WINDOW_MINUTES} minutes…</span>
     {:else}
-      {#if statWindow.kind === 'fence'}
-        <b class="k">fenced {hm(statWindow.start)}–{hm(statWindow.end)}</b>
-      {:else if statRate !== null}
-        <b class="k">{formatEps(statRate)}/s</b>
-        {statWindow.kind === 'seek' ? hm(statWindow.ms) : 'now'}
+      <!-- The two facts the hand creates, ahead of the window's own
+           (round 36: `paused` holds the lines and the stat counts what
+           waits; a wipe says when it happened). Neither is recoverable
+           from the buffer afterwards, which is why appState records the
+           moment -- and the wipe clause stands only while the lines are
+           still gone, since once they are back "wiped at" is no longer
+           what is true of what you are looking at. -->
+      {#if appState.paused && appState.pausedAt !== null}
+        <b class="k">held at {clock(appState.pausedAt)}</b>
+        {' · '}<b class="k">{appState.pendingCount}</b>{' arrived since, waiting · '}
+      {:else if appState.wipedAt !== null && appState.events.length === 0}
+        <b class="k">wiped {clock(appState.wipedAt)}</b>{' · '}
       {/if}
-      {' · '}
+      <!-- The rate stands down while the stream is held: "34/s now" is a
+           reading off a stream the reader has just stopped watching, and
+           the held clause above has already said what is happening
+           instead. The drawing does the same (round 36's stat drops its
+           first clause when paused). The separator rides inside each
+           branch rather than after them, so a branch that says nothing
+           does not leave a leading "·" behind. -->
+      {#if statWindow.kind === 'fence'}
+        <b class="k">fenced {hm(statWindow.start)}–{hm(statWindow.end)}</b>{' · '}
+      {:else if statRate !== null && !appState.paused}
+        <b class="k">{formatEps(statRate)}/s</b>
+        {statWindow.kind === 'seek' ? hm(statWindow.ms) : 'now'}{' · '}
+      {/if}
       {#if statDropShare === null}
         <span class="dim">no drops recorded yet</span>
       {:else}
@@ -370,6 +427,64 @@
       {/if}
     {/if}
   </span>
+
+  <!-- The hand. Real buttons, not the mockup's role="button" spans: each
+       one is a toggle a keyboard has to reach and a screen reader has to
+       be able to read the state of, which aria-pressed on a real button
+       gives for nothing. The pills' own look is ported from the drawing
+       (`.spans`/`.spans .on`, `.hand .on`, `#hpause.on`, `#hfollow:not(.on)`). -->
+  <span class="spans hand" role="group" aria-label="The stream's hand">
+    <button
+      type="button"
+      class="hand-btn follow"
+      class:on={appState.autoscroll}
+      aria-pressed={appState.autoscroll}
+      title={appState.autoscroll
+        ? 'Follow the newest line as it arrives — off while you are reading back'
+        : 'Following is off — the table stays put where you left it. Follow the newest line again, clearing the cursor and the window'}
+      onclick={toggleFollow}>{appState.autoscroll ? 'following' : 'follow'}</button
+    >
+    <button
+      type="button"
+      class="hand-btn held"
+      class:on={appState.paused}
+      aria-pressed={appState.paused}
+      title="Hold the lines where they are; what arrives waits, counted"
+      onclick={() => appState.togglePause()}>{appState.paused ? 'paused' : 'pause'}</button
+    >
+    <!-- Absent at phone width, where it would do nothing: below 700px
+         LiveTable renders EventCardMobile, which has no grouped-row path
+         at all. Carried over from the retired scene-bar control, which
+         was hidden there for the same reason -- a toggle that changes
+         nothing is worse than one that is not offered. -->
+    {#if !viewportState.isMobile}
+      <button
+        type="button"
+        class="hand-btn"
+        class:on={groupModeState.enabled}
+        aria-pressed={groupModeState.enabled}
+        title="Fold repeats of the same line into one, with a count"
+        onclick={() => groupModeState.toggle()}>group</button
+      >
+    {/if}
+  </span>
+
+  <button
+    type="button"
+    class="wpill"
+    title="Wipe the lines held on this screen — the server keeps its own"
+    onclick={() => appState.clearBuffer()}>wipe</button
+  >
+  <!-- Says what it gives before it gives it, and is absent as a working
+       control when there is nothing to give -- disabled rather than
+       hidden, so the way to an export never silently stops existing. -->
+  <button
+    type="button"
+    class="wpill"
+    disabled={heldEvents.length === 0}
+    title="The lines held on this screen, as a CSV file — {heldEvents.length} rows, every column"
+    onclick={() => downloadEventsCsv(heldEvents)}>csv ↓</button
+  >
 
   <p class="sr-only" role="status">{announcement}</p>
 </div>
@@ -446,6 +561,86 @@
 
   .wstat .dim {
     color: var(--fg-dim);
+  }
+
+  /* Round 30's `.spans` idiom, which the span pills on the filter line
+     already wear -- the hand borrows it rather than inventing a third
+     kind of toggle for the same page. */
+  .spans {
+    flex: none;
+    display: flex;
+    gap: 2px;
+    font: 10.5px var(--font-mono);
+    color: var(--fg-dim);
+  }
+
+  .hand-btn {
+    padding: 3px 9px;
+    border-radius: 6px;
+    /* Transparent at rest rather than absent, so a pill lighting up
+       does not shove its neighbours a pixel sideways. */
+    border: 1px solid transparent;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .hand-btn:hover {
+    color: var(--fg);
+  }
+
+  .hand-btn.on {
+    color: var(--accent);
+    background: var(--bg-elevated);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+
+  /* A hold is attention, not alarm, so it takes the now ink -- the same
+     ink the cursor and the fence band are already drawn in. */
+  .hand-btn.held.on {
+    color: var(--now);
+    background: var(--bg-elevated);
+    border-color: color-mix(in srgb, var(--now) 50%, transparent);
+  }
+
+  /* "Held is a state worth noticing: the way back wears the now ink
+     until it is taken" (round 36). This is the one control here that is
+     louder switched *off* than on, and deliberately so -- a stream that
+     has quietly stopped following is exactly what #749 was. */
+  .hand-btn.follow:not(.on) {
+    color: var(--now);
+    border-color: color-mix(in srgb, var(--now) 50%, transparent);
+  }
+
+  .hand-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* `wipe` and `csv ↓`: quiet pills, from the drawing's own `.wfence`. */
+  .wpill {
+    flex: none;
+    font: 600 10px var(--font-mono);
+    letter-spacing: 0.06em;
+    color: var(--fg-dim);
+    background: transparent;
+    border: 1px solid var(--hair-2);
+    border-radius: 999px;
+    padding: 3px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .wpill:hover:not(:disabled) {
+    color: var(--fg);
+    border-color: var(--fg-muted);
+  }
+
+  .wpill:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* Clipped rather than hidden -- display:none would remove the live

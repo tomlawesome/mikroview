@@ -5,10 +5,11 @@ import {
   formatRelative,
   formatDurationShort,
   formatTimeMs,
-  formatUptimeFull,
+  formatUptimeDaysHours,
   formatBufferDepth,
   parseGoDurationSeconds,
   formatDaysSince,
+  formatDayMonth,
 } from './format'
 
 describe('formatTimeMs', () => {
@@ -85,21 +86,27 @@ describe('formatDurationShort', () => {
   })
 })
 
-describe('formatUptimeFull', () => {
-  it('always shows all four units, zero-padding only the seconds', () => {
-    expect(formatUptimeFull(3 * 86_400 + 4 * 3600 + 12 * 60 + 5)).toBe('3d 4h 12m 05s')
+describe('formatUptimeDaysHours', () => {
+  it('renders the drawn form -- days and hours, spaced', () => {
+    expect(formatUptimeDaysHours(12 * 86_400 + 4 * 3600)).toBe('12 d 4 h')
   })
 
   it('shows a zero days unit rather than dropping it under a day', () => {
-    expect(formatUptimeFull(3 * 60 + 9)).toBe('0d 0h 3m 09s')
+    expect(formatUptimeDaysHours(3 * 3600 + 9 * 60)).toBe('0 d 3 h')
+  })
+
+  // The point of the two-unit form: minutes and seconds are discarded,
+  // so a menu left open for a minute renders the same string throughout.
+  it('ignores the minutes and seconds under the hour', () => {
+    expect(formatUptimeDaysHours(2 * 86_400 + 5 * 3600 + 59 * 60 + 59)).toBe('2 d 5 h')
   })
 
   it('renders zero as all-zero units', () => {
-    expect(formatUptimeFull(0)).toBe('0d 0h 0m 00s')
+    expect(formatUptimeDaysHours(0)).toBe('0 d 0 h')
   })
 
   it('never goes negative', () => {
-    expect(formatUptimeFull(-50)).toBe('0d 0h 0m 00s')
+    expect(formatUptimeDaysHours(-50)).toBe('0 d 0 h')
   })
 })
 
@@ -158,5 +165,23 @@ describe('formatDaysSince', () => {
   it('says "under a day" inside the first 24h rather than "0 d"', () => {
     const anHourAgo = new Date(Date.now() - 3600_000).toISOString()
     expect(formatDaysSince(anHourAgo)).toBe('under a day')
+  })
+})
+
+// #640's returning cards say when a pair was last judged. Day and month
+// only: the locale decides the order ("2 Sept" here, "Sep 2" in a US
+// one), so these assert on what the helper does rather than on one
+// locale's spelling of it.
+describe('formatDayMonth', () => {
+  it('renders a bare day and short month, with no year and no clock time', () => {
+    const out = formatDayMonth('2026-09-02T09:00:00Z')
+    expect(out).toContain('2')
+    expect(out).toContain('Sep')
+    expect(out).not.toContain('2026')
+    expect(out).not.toContain(':')
+  })
+
+  it('returns the input unchanged when it does not parse, same as its neighbours', () => {
+    expect(formatDayMonth('not a date')).toBe('not a date')
   })
 })

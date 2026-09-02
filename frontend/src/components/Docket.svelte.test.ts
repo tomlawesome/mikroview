@@ -8,20 +8,16 @@ import { flushSync } from 'svelte'
 // always Flags (appState.view defaults to 'fall', which the tab
 // derivation falls back from) and its watchlist/audit panes are also
 // pulled in statically -- these stop every store reached by any of the
-// three tabs (flagsState, exclusionsState, watchlistState, suggestState,
+// three tabs (flagsState, watchlistState, suggestState,
 // matchesState, auditState) from reaching for the network when they
 // initialise under jsdom. Same list Flags.svelte.test.ts and
 // Watchlist.svelte.test.ts already needed, unioned.
 vi.mock('../lib/api', () => ({
   fetchFlags: vi.fn(async () => ({ flags: [], timeSeries: [] })),
-  clearFlag: vi.fn(),
   clearAllFlags: vi.fn(),
-  clearFlagPermanent: vi.fn(),
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),
   fetchFlagEpisode: vi.fn(),
-  fetchExclusions: vi.fn(async () => []),
-  removeExclusion: vi.fn(),
   fetchWatchlistEntries: vi.fn(async () => ({ entries: [], coverage: {} })),
   createWatchlistEntry: vi.fn(),
   updateWatchlistEntry: vi.fn(),
@@ -38,10 +34,8 @@ vi.mock('../lib/api', () => ({
   fetchAuditLog: vi.fn(async () => ({ entries: [], hasMore: false })),
 }))
 
-import { fetchExclusions } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { flagsState } from '../lib/flags.svelte'
-import { exclusionsState } from '../lib/exclusions.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { suggestState } from '../lib/suggest.svelte'
 import { matchesState } from '../lib/matches.svelte'
@@ -91,14 +85,7 @@ function testFlag(overrides: Partial<Flag> = {}): Flag {
 describe('Docket tiers (#653)', () => {
   beforeEach(() => {
     vi.resetAllMocks()
-    // Flags.svelte's $effect refreshes exclusionsState for every admin
-    // render (not only when its own tab is open) so its count can sit on
-    // the tab -- resetAllMocks strips the factory's default resolved
-    // value, so an admin test would otherwise read exclusionsState.list
-    // as undefined mid-render. Same fix Flags.svelte.test.ts needed.
-    vi.mocked(fetchExclusions).mockResolvedValue([])
     flagsState.list = []
-    exclusionsState.list = []
     watchlistState.entries = []
     watchlistState.coverage = {}
     suggestState.candidates = []

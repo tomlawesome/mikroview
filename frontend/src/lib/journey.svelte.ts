@@ -21,15 +21,51 @@ import { wizardState } from './wizard.svelte'
 
 export type JourneyPhase = 'idle' | 'attach' | 'connecting' | 'glass' | 'touring'
 
-// How long the "connecting and building" beat holds before it can move
-// on its own. Not a wait for real evidence: #646's attach beat pastes
-// only the two syslog lines (setupsteps.ts's syslogCommands), the same
-// "whole of setup, for now" the owner ratified in round 27 -- a router
-// whose certificate is not yet trusted will not actually reach this
-// instance, so gating on a real event risks a beat that never ends. A
-// fixed pause is the honest choice over a spinner that might hang
-// forever; the wizard walks the fuller checklist afterward, on evidence.
-export const CONNECTING_MS = 3200
+// The glass's own sentence, round 27's beat 3 verbatim: "Six cards.
+// About two minutes." Six cards to two minutes is twenty seconds a
+// card, so the estimate moves with the deck instead of being fixed
+// prose -- #647 grew an admin's deck to seven, and a viewer's is the
+// six the round drew.
+export const TOUR_SECONDS_PER_CARD = 20
+
+const NUMBER_WORDS = [
+  'zero',
+  'one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+  'ten',
+  'eleven',
+  'twelve',
+]
+
+// Words up to twelve, digits past it -- the round writes "Six cards",
+// not "6 cards", and a deck that ever grew past a dozen would read
+// worse spelled out than numbered.
+function inWords(n: number): string {
+  return NUMBER_WORDS[n] ?? String(n)
+}
+
+// tourMinutes never rounds down to nothing: a short deck still takes a
+// moment to walk, and "About zero minutes" is not a sentence.
+export function tourMinutes(cardCount: number): number {
+  return Math.max(1, Math.round((cardCount * TOUR_SECONDS_PER_CARD) / 60))
+}
+
+// tourLengthSentence is the glass's second line. Kept here rather than
+// inline in JourneyGlass.svelte so the arithmetic and the wording are
+// testable without driving a render.
+export function tourLengthSentence(cardCount: number): string {
+  const cards = `${inWords(cardCount)} ${cardCount === 1 ? 'card' : 'cards'}`
+  const minutes = tourMinutes(cardCount)
+  const length = minutes === 1 ? 'a minute' : `${inWords(minutes)} minutes`
+  return `${cards.charAt(0).toUpperCase()}${cards.slice(1)}. About ${length}. It ends at the wizard either way.`
+}
 
 class JourneyState {
   phase = $state<JourneyPhase>('idle')
@@ -56,15 +92,31 @@ class JourneyState {
     this.cardIndex = 0
   }
 
-  // fromAttach moves to the connecting beat once the operator has (or
-  // says they have) pasted the two lines. Rolls the deck to the fall
-  // first, since beats 4 and 5 both play out "over the live fall"
-  // (round 27's own words).
+  // fromAttach moves to the waiting beat once the operator has (or says
+  // they have) pasted the two lines. Rolls the deck to the fall first,
+  // since beats 4 and 5 both play out "over the live fall" (round 27's
+  // own words).
   fromAttach() {
     appState.view = 'fall'
     this.phase = 'connecting'
   }
 
+  // arrived is the gate on beat 3 (#750 B1, owner ruling 2026-09-02):
+  // round 27 draws "MikroView is flowing" *after* beat 2's "13:46 --
+  // the first line lands", so the glass waits on a line actually
+  // landing and never on a clock. Until one does, the waiting beat says
+  // exactly that and keeps the two router lines up to paste. This
+  // replaces a fixed 3.2s pause that claimed evidence had arrived when
+  // nothing had -- a router whose certificate is not yet trusted never
+  // reaches this instance, and the old beat told it that it had.
+  get arrived(): boolean {
+    return appState.events.length > 0
+  }
+
+  // Called by JourneyGlass.svelte the moment `arrived` turns true. A
+  // one-way move: the client buffer is bounded and can age out, and a
+  // glass that fell back to "nothing has arrived yet" after the fall had
+  // plainly poured would be a lie in the other direction.
   fromConnecting() {
     this.phase = 'glass'
   }

@@ -36,9 +36,62 @@ rewritten.
   otherwise see is absent) and `DELETE /api/flags/expectations/{id}`
   (user tier and audit-logged, matching the verdict that records one:
   the operator who can call a flag expected can take it back). A viewer
-  reads the ledger and gets no Forget button. Nothing removed; the
-  admin-only exclusions API is untouched by this change and is retired
-  by #640's part B.
+  reads the ledger and gets no Forget button. Nothing removed here;
+  part B (above) retired the admin-only exclusions API this replaces.
+- **A detector's candidate numbers can be tried before they are saved**
+  (#786). Changing a threshold was a guess with no shown workings: the
+  new value went live, and whether it was right showed up later as flags
+  that did or did not arrive. A **Try** button now sits at the foot of an
+  expanded detector row, beside Save. Pressing it replays the numbers as
+  typed over the traffic mikroview still holds -- the detector's own
+  logic, with the candidate window and threshold substituted for its
+  stored ones -- and puts the answer in one slot under the fields. Either
+  a receipt: *"Would have fired 3 times in the last 4h 12m"*, with the
+  hosts that would have been flagged listed beneath it. Or a decline:
+  *"Can't replay: needs a 6h window, only 4h 12m held"*, in the same
+  slot, in grey rather than red, because a corpus shorter than the
+  detector's own window is an honest limit of the traffic held rather
+  than an error, and reporting "it would have fired zero times" instead
+  would be a claim nothing established. Where the server says its read
+  was cut short, the count reads "at least"; where the listed sample is
+  bounded, the hosts read "at least these". Try writes nothing -- the
+  detector the engine is evaluating is untouched, whether the receipt is
+  encouraging or not -- and it never blocks Save. New `replayDefinition`
+  wrapper over `POST /api/definitions/{id}/replay`, which existed
+  server-side but had no caller anywhere in the client. Two known limits,
+  recorded rather than hidden: the receipt is shown without the
+  live-firing comparison beside it, because nothing in the app or the API
+  can produce that number for a window hours long (the flag time series
+  counts newly-raised episodes rather than firings, covers only the last
+  sixty minutes, and starts empty after a restart); and a candidate
+  carries only the window and the threshold, which is the closed set the
+  engine's replay accepts -- a detector's other tuning fields are saved
+  as normal but are not part of what Try asks.
+- **A live memory control for the event buffer, not just a config-file
+  setting** (#796). Settings' memory group now carries a slider under
+  the hours bar: dragging it only proposes a figure, and nothing changes
+  until you press apply. Applying it -- from the UI, or directly via the
+  new `PUT /api/settings/store` (admin-only, audit-logged as
+  `settings.store_max_memory`) -- stores the figure and resizes the
+  running ring immediately: growing it keeps everything already held,
+  shrinking it drops the oldest events first. An out-of-range figure is
+  refused with a 400 rather than clamped. Once set, the stored figure
+  wins over `store.maxMemory` in `config.yaml` on every future restart
+  too -- mikroview says so in the startup log, and deleting the new
+  `store.settingsStorePath` document (`/var/lib/mikroview/settings.json`
+  by default) is how you go back to the file's figure. The allowed range
+  is worked out per host at startup: 32MiB at the low end, and at the
+  high end whatever's left of the smaller of the cgroup memory limit or
+  the machine's RAM once a quarter of it (or 256MiB, whichever's larger)
+  is reserved as headroom and the same 1.47x ring-to-resident overhead
+  CFG-0012 already quotes is priced in -- so the slider never offers a
+  figure the host would be OOM-killed for taking, and never reports a
+  deliberately large `config.yaml` budget as out of range. `GET
+  /api/stats` gains a `memory` object (`maxMemory`, `min`, `max`,
+  `hostTotal`, `bytesPerEvent`, `resident`, `stored`) so any reader sees
+  the same numbers the UI does, and the setting is now included in
+  `-backup`/`-restore` alongside every other store. A viewer sees the
+  bar and the figure; only an admin is offered the drag.
 - **A detector's thresholds and windows can be edited in the app**
   (#787). Until now the only thing the watchers station could change was
   a detector's *scope* -- which hosts, ports or rules it watches -- and
@@ -66,12 +119,16 @@ rewritten.
   hidden, never disabled, the same grammar the run/pause tick already
   used. New `fetchDefinitionSchema` and `getDefinition` wrappers;
   `resetDefinition` and `cloneDefinition` have callers for the first
-  time. Known limit, recorded rather than hidden: the clone button
-  reaches the server's own refusal for every detector currently on the
-  bench, because `POST /api/definitions/{id}/clone` copies an
-  expectation and refuses a definition whose logic is compiled into the
-  binary. The refusal is shown in the server's words, which name the
-  operation that does exist instead.
+  time. **Clone** copies a detector you wrote -- its match conditions,
+  its aggregation and its tuning -- into a second detector that appears
+  paused, already expanded, with its name selected to be typed over, so
+  authoring a variant is one press and a rename (#810). It is offered
+  only on those rows: a shipped detector's logic is Go compiled into
+  this binary and keyed by its own id, so a copy of it would list, look
+  configurable and evaluate nothing -- the server refuses, and the
+  button is not there to press. Overriding a shipped detector's params
+  is the operation that exists for it; starting a custom detector *from*
+  one needs a conditions editor and is filed as #829.
 - **A demo seeder that exercises the whole interface, not just syslog**
   (#687). Every UI review this project has run was hampered by a demo
   that only ever sent syslog: one lane on the fall, no pushed rule/NAT/
@@ -386,6 +443,46 @@ rewritten.
   detector outright. Silences recorded before this release have no size
   and keep that same meaning; nothing needs migrating.
 
+- **Every flag now ends with a judgement: expected, checked,
+  investigate or resolved** (#640, part B: API and the verdict row). The
+  flags tab offers **expected · checked · investigate** on a fresh flag,
+  and **expected · resolved** once something is being investigated. All
+  four are available to any signed-in user, not just an admin, through
+  `POST /api/flags/{id}/verdict`.
+
+  - **expected** is what records an expectation now (see part A's entry
+    below): normal for this host, at the size you just looked at.
+  - **checked** means "looked suspicious, checked, fine this time". It
+    clears the flag and suppresses nothing, but it is remembered: if
+    the same detector fires on the same host again, the flag comes back
+    saying *you checked this on 2 Sept and found it fine*.
+  - **investigate** leaves the flag open while you work on it.
+  - **resolved** means dealt with, normally by a firewall change. It
+    clears the flag and deliberately does not suppress anything: a line
+    only reaches mikroview if the firewall let it get that far, so a
+    correct fix makes the lines stop. If the same circumstances recur
+    the flag returns, reading *resolved on 2 Sept -- it's back*, because
+    the fix was not what was intended. Wanting to keep logging those
+    drops is an expected verdict at that rate, not a resolved one.
+
+  A flag that returns past an expectation says so on its own row --
+  "expected up to 30, saw 120", the two real numbers -- and saying
+  expected again raises the recorded size. Undo still sits beside the
+  stamp for as long as the flag carries the verdict, and undoing an
+  expected verdict now withdraws the expectation it recorded rather than
+  leaving a suppression standing behind a re-opened flag.
+
+  Verdicts and their undo are audit-logged, carrying the verdict as the
+  entry's detail. The exclude-forever action they replace was admin-only
+  and logged; these are user-tier, so the record of who decided a pair
+  stops being flagged matters more, not less.
+
+  The expectations themselves are not listed anywhere in the interface
+  yet -- one made by mistake can only be withdrawn by undoing the
+  verdict while the row is still in front of you. The ledger that lists
+  them, with absorbed counts, and lets you prune them is the remaining
+  part of #640.
+
 - **Metrics: the hourline reads every series, and the ledger sits above
   the table's minutes** (#803, design rounds 36-37). The line under the
   scene bar used to answer the minute under the cursor with a ratio that
@@ -456,6 +553,47 @@ rewritten.
   than a row of solid tents.
 
 ### Removed
+
+- **The Noise verdict, the plain Clear control, "never flag this again"
+  and the exclusions API are gone** (#640), wholesale, with no aliases
+  and no stub endpoints. Each is replaced by a verdict, above:
+
+  - **Noise** existed only to feed a threshold-suggestion generator the
+    owner dropped: raising a detector's threshold hides real events for
+    every host in order to quiet one. Gone from the UI, the API and the
+    store; `POST /api/flags/{id}/verdict` now rejects `"noise"` as an
+    unrecognised verdict rather than accepting it as anything.
+  - **The plain Clear** (`POST /api/flags/{id}/clear`, and the drawer's
+    "clear with a note") dismissed a flag without recording what you
+    concluded. **checked** is that action with the conclusion kept.
+    "Clear all" is unchanged -- it still clears every active flag in one
+    request, records nothing, and suppresses nothing.
+  - **"Clear and never flag this again"**
+    (`POST /api/flags/{id}/clear-permanent`) silenced a (detector,
+    target) pair outright, forever. **expected** does the same job
+    bounded by the size of the firing you judged, so a host that grows
+    past it comes back.
+  - **The admin exclusions API** (`GET /api/flags/exclusions`,
+    `DELETE /api/flags/exclusions/{id}`) and the Exclusions tab that
+    read it are removed. Their replacement -- a ledger of expectations
+    with their sizes and absorbed counts -- is the remaining part of
+    #640; until it lands there is no screen or endpoint that lists
+    recorded expectations.
+
+  Expectations recorded before this release are untouched, and an
+  operator's stored data needs no migration. Anything scripted against
+  the four removed endpoints will now get a 404 or a 400 rather than a
+  quiet no-op.
+- **`Definition.Suppressions` is gone** (#640). The per-definition
+  suppression list was modelled on the definition envelope in #401 and
+  never given matching semantics -- nothing ever consulted it before an
+  emission. #640 settles on one suppression mechanism, so the field is
+  removed rather than left as a second, silent one: from the definition
+  envelope, from `GET /api/definitions`' response, from
+  `PUT /api/definitions/{id}`'s accepted fields (a request that sends
+  `suppressions` now has that field ignored), and from the frontend
+  types. Any value stored in an existing definitions document is simply
+  not read back.
 
 - **The `system` and `light` themes are gone** (#708), wholesale. Round
   30 -- the ratified design -- is dark throughout, and dark stops being

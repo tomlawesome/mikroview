@@ -59,12 +59,17 @@ export function formatHM(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
-// formatDayMonth renders a timestamp as a bare day and month -- "2 Sep"
-// -- for facts whose age matters but whose clock time does not, like an
-// expectation's "since" on #640's ledger. Same convention AuditLog's own
-// day grouping already uses, exported here rather than copied a second
-// time. Returns the input unchanged when it isn't a date, as every other
-// formatter in this file does.
+// formatDayMonth renders a date as a bare day and short month -- "2
+// Sept" in a UK locale, "Sep 2" in a US one. For the returning-flag
+// cards (#640), which say when a pair was last judged ("you checked this
+// on 2 Sept and found it fine"): the day is what the operator needs to
+// place the event, and a clock time would imply a precision the sentence
+// is not making a claim about.
+//
+// Locale-driven like every other helper here (formatTime, formatHM),
+// rather than a hand-built month table: the browser already knows how
+// this reader writes a date. Returns the original string unchanged if it
+// does not parse, same as its neighbours.
 export function formatDayMonth(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
@@ -92,19 +97,21 @@ export function formatDurationShort(totalSeconds: number): string {
   return `${d}d ${h % 24}h`
 }
 
-// formatUptimeFull renders a duration in seconds as all four units --
-// "3d 4h 12m 05s" -- for the toolbar's server-uptime readout, which sits
-// right beside the connection indicator and wants a fixed-width,
-// always-fully-qualified string rather than formatDurationShort's
-// "drop to the two units that matter" summary. Seconds are zero-padded
-// so the string doesn't twitch in width every ten ticks.
-export function formatUptimeFull(totalSeconds: number): string {
+// formatUptimeDaysHours renders a duration in seconds as days and hours
+// only -- "12 d 4 h" -- for the account menu's foot, where uptime sits
+// beside the version: "0.9 · AGPL-3.0 · up 12 d 4 h".
+//
+// Two units, and no smaller one, is the ratified design rather than a
+// simplification (round 37, accepted by the owner 2026-09-02): "a
+// ticking second is a clock, not a fact". The counter underneath still
+// advances every second; reading only these two units off it means the
+// rendered string changes once an hour, so a menu left open does not
+// twitch. Both units always appear, so the string keeps one shape.
+export function formatUptimeDaysHours(totalSeconds: number): string {
   const s = Math.max(0, Math.round(totalSeconds))
   const days = Math.floor(s / 86_400)
   const hours = Math.floor((s % 86_400) / 3600)
-  const minutes = Math.floor((s % 3600) / 60)
-  const seconds = s % 60
-  return `${days}d ${hours}h ${minutes}m ${String(seconds).padStart(2, '0')}s`
+  return `${days} d ${hours} h`
 }
 
 // parseGoDurationSeconds reads a Go time.Duration.String() value (the
