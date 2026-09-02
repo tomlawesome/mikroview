@@ -4,7 +4,7 @@
 // page (#548) when #490 folded it into the engine room's watchers station
 // (EngineRoomWatchers.svelte). Kept as its own module rather than inlined
 // there because it is pure data, independent of how the bench renders it.
-import type { DetectorScope, LearningFloor, LearningState, ListMode } from './types'
+import type { DetectorScope, LearningFloor, LearningState } from './types'
 
 export interface DetectorInfo {
   label: string
@@ -201,41 +201,13 @@ export function scopeSummary(sc: DetectorScope): string {
   return parts.length > 0 ? parts.join(', ') : 'watching everything in range'
 }
 
-export function parseList(v: string): string[] {
-  return v
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-}
-
-export function parsePorts(v: string): number[] {
-  return parseList(v)
-    .map((s) => Number(s))
-    .filter((n) => Number.isInteger(n) && n > 0)
-}
-
-export interface DetectorDraft {
-  hosts: string
-  ports: string
-  rules: string
-  hostsMode: ListMode
-  portsMode: ListMode
-  rulesMode: ListMode
-  classification: DetectorScope['classification']
-}
-
-export function draftFrom(scope: DetectorScope | undefined): DetectorDraft {
-  const sc = scope ?? {}
-  return {
-    hosts: (sc.hosts ?? []).join(', '),
-    ports: (sc.ports ?? []).join(', '),
-    rules: (sc.rules ?? []).join(', '),
-    hostsMode: sc.hostsMode ?? '',
-    portsMode: sc.portsMode ?? '',
-    rulesMode: sc.rulesMode ?? '',
-    classification: sc.classification ?? '',
-  }
-}
+// DetectorDraft/draftFrom/parseList/parsePorts lived here until #787:
+// the comma-separated-string editing model, where a scope axis was one
+// text box the operator typed "22, 3389" into and this module split back
+// apart. Each axis is now a set of removable chips (lib/definitionEditor
+// .ts's ScopeDraft), so nothing joins or splits those strings any more
+// and the four are gone rather than left as an unused second way to
+// represent the same thing -- AGENTS.md's "removals are wholesale".
 
 const SECONDS_PER_DAY = 86400
 
