@@ -152,9 +152,12 @@ const flagTimeSeriesMinutes = 60
 //     (capped, see internal/detect's maxEvidenceHosts).
 //   - NAT: repeated_drops' triggering event's NAT translation info,
 //     when present.
-//   - Pairs/PairsTotal/PairsTotalIsFloor (#654): critical_port's distinct
+//   - Pairs/PairsTotal/PairsTotalIsFloor (#654): the distinct
 //     (destination host, destination port) combinations actually seen
-//     together, capped for display at internal/engine's maxEvidencePairs
+//     together -- critical_port's, and since #641 outbound_anomaly's and
+//     internal_recon's, which is what makes an expected verdict able to
+//     permit exactly what a device was seen doing rather than the cross
+//     product of two lists. Capped for display at internal/engine's maxEvidencePairs
 //     (== maxEvidencePorts, see that constant's own doc comment for why).
 //     Ports and Hosts above are independent sets -- crossing them implies
 //     every combination was seen, which for a detector recording many of
