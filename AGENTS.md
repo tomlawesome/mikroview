@@ -242,6 +242,15 @@ single-tenant -- one branch, one work tree -- so the script takes a lock
 holds it (#809); wait for that run, or if it looks dead, follow the
 `ssh ... rm -r ~/gate-lock` hint the refusal prints.
 
+**The host's standing tenant is the `dev` loop.** `scripts/gate-dev-loop.sh`
+runs the gate on every new `origin/dev` commit through the same script and
+lock, keeps each log as `~/projects/.gate-logs/mikroview/gate-<sha>.log`
+and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN` lines to `loop.log` there
+(#831). It takes the lock like any other run, so a manual
+`make live-check-remote` simply waits its turn -- or refuses, if the loop
+is mid-run; check `loop.log` for a `START` without an `END` before
+clearing a lock that looks stale.
+
 `git push` rather than rsync or a clone, because authentication then
 happens from this side: nothing has to live over there. Only new objects
 cross after the first run, `node_modules` and `worktrees/` never do, and
