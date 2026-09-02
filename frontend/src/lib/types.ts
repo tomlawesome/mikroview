@@ -433,6 +433,64 @@ export interface DefinitionReplayability {
   reason?: string
 }
 
+// What one replay covered (internal/api's windowView, engine.Window).
+// Mandatory on a receipt and never omitted: a count without the window it
+// was counted over is the overclaim #403's contract exists to rule out.
+// duration is a Go duration string ("4h12m0s") -- read it with
+// parseGoDurationSeconds, the same way a duration param is read.
+export interface ReplayWindow {
+  start: string
+  end: string
+  duration: string
+  eventCount: number
+}
+
+// One emission a replay would have produced (internal/api's sampleView),
+// bounded server-side -- see ReplayReceipt.sampleTruncated.
+export interface ReplaySample {
+  at: string
+  target: string
+  detail: string
+  ports?: number[]
+  hosts?: string[]
+  labels?: string[]
+  provisional: boolean
+}
+
+// The answer when the corpus was long enough to answer honestly
+// (internal/api's receiptView, engine.Receipt).
+//
+// The two truncation flags are separate facts and not interchangeable:
+// corpusTruncated means the corpus read was cut short, so emissionCount
+// is a floor rather than a total; sampleTruncated means only that the
+// listed sample is bounded, with emissionCount still exact.
+export interface ReplayReceipt {
+  window: ReplayWindow
+  emissionCount: number
+  sample: ReplaySample[]
+  sampleTruncated: boolean
+  corpusTruncated: boolean
+  anyProvisional: boolean
+}
+
+// The answer when it could not be answered honestly (internal/api's
+// declineView, engine.Decline): the corpus held less traffic than the
+// definition's window needs. corpusSpan and definitionWindow are Go
+// duration strings, like ReplayWindow.duration.
+export interface ReplayDecline {
+  reason: string
+  corpusSpan: string
+  definitionWindow: string
+}
+
+// Exactly one of receipt or decline is set, mirroring engine.Result's own
+// structural either/or -- a caller has to handle the decline rather than
+// reading a short corpus as a receipt with a suspiciously small count.
+export interface ReplayResult {
+  receipt?: ReplayReceipt
+  decline?: ReplayDecline
+}
+
 export interface Definition {
   id: string
   name: string
