@@ -695,6 +695,22 @@ export interface Exclusion {
   id: string
   type: FlagType
   target: string
+  // #640 turned an exclusion into a sized expectation, and these three
+  // are what the ledger (ExpectationsLedger.svelte) reads. All optional
+  // because the Go side omits them when empty and because an entry
+  // recorded before #640 genuinely has none.
+  //
+  // size is the measure recorded when the expectation was made -- the
+  // firing the operator judged normal. Absent (not zero) means the
+  // detector declares no size, which is the older, blunter "ignore this
+  // host on this detector": the row reads "any size" rather than "up
+  // to 0", which is the opposite meaning.
+  size?: number
+  // How many firings this expectation has suppressed -- the ledger's
+  // evidence that it is earning its place.
+  absorbed?: number
+  // When the expectation was first recorded, RFC 3339.
+  since?: string
 }
 
 // An operator's triage judgement on a flag (issue #638) -- set once via
