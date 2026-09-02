@@ -7,6 +7,7 @@ import type {
   AuthSession,
   CoverageEvidence,
   Definition,
+  DefinitionParamSchema,
   DetectorScope,
   Device,
   Entity,
@@ -20,9 +21,11 @@ import type {
   HourTopBucket,
   MACRegistryEntry,
   PersistenceInfo,
+  ReplayResult,
   ReputationResult,
   RuleUsage,
   Stats,
+  StoreMemory,
   SetupMark,
   SetupStatus,
   Suggestion,
@@ -1008,4 +1011,97 @@ export async function deleteCoverageDeclaration(key: string): Promise<string | n
   const res = await deleteJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`)
   if (res.ok) return null
   return (await res.text()) || `deleteCoverageDeclaration: ${res.status}`
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Settings (#796)
+//
+// Appended as its own delimited block at the end of the file, rather
+// than slotted in beside a related function, so this file's other
+// in-flight changes and this one do not land on the same lines.
+// ─────────────────────────────────────────────────────────────────────
+
+// setStoreMaxMemory sets the event buffer's size on the running server:
+// it stores the figure and resizes the ring, oldest events first when
+// the new size is smaller. There is no matching read -- the current
+// figure and its bounds ride GET /api/stats, so the memory group's
+// slider and the count beside it are always one snapshot.
+//
+// Admin-only server-side (internal/api's handleStoreSettingsUpdate); a
+// viewer or user is never offered the drag in the first place, so a 403
+// here means a stale page rather than a normal path.
+//
+// Returns the server's new state on success, or its own words on
+// failure -- the same shape putCoverageDeclaration above uses, so the
+// caller can show the reason it was refused rather than a status code.
+export async function setStoreMaxMemory(bytes: number): Promise<StoreMemory | string> {
+  const res = await putJSON('/api/settings/store', { maxMemory: bytes })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setStoreMaxMemory: ${res.status}`
+}
+
+// ===========================================================================
+// Definitions editor (issues #787, #786)
+//
+// The two reads the watchers station's in-place editing panel needs
+// beyond the list it already fetches, and the replay its Try button
+// asks for (#786) -- a POST that writes nothing. The writes it drives
+// (updateDefinition, resetDefinition, cloneDefinition) are defined
+// further up beside fetchDefinitions and are not duplicated here.
+// ===========================================================================
+
+// fetchDefinitionSchema reads every param schema this deployment's
+// definitions declare, keyed by definition id (GET
+// /api/definitions/schema, internal/api's handleDefinitionsSchema).
+//
+// This is the one source the editor renders its typed threshold/window
+// fields from -- deliberately not the paramSchema copy that also rides on
+// each definition in the list response. Both carry the same server value
+// today, and reading the dedicated endpoint is what keeps that true: a
+// control built from whichever copy happened to be in hand is how two
+// answers to "what does this param accept" start to drift, which is the
+// duplication docs/decisions/evaluation-engine.md section 4 exists to
+// remove.
+export async function fetchDefinitionSchema(): Promise<Record<string, DefinitionParamSchema[]>> {
+  const res = await fetch('/api/definitions/schema')
+  if (!res.ok) throw new ApiError(`fetchDefinitionSchema: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.schemas ?? {}
+}
+
+// getDefinition reads one definition by id, with its provenance and its
+// distance from stock (GET /api/definitions/{id}). Used to re-read a
+// single row after an edit rather than re-listing every definition and
+// recomputing coverage evidence to see one changed threshold.
+export async function getDefinition(id: string): Promise<Definition> {
+  const res = await fetch(`/api/definitions/${encodeURIComponent(id)}`)
+  if (!res.ok) throw new ApiError(`getDefinition: ${res.status}`, res.status)
+  return await res.json()
+}
+
+// replayDefinition re-runs one definition over the retained event corpus
+// with candidate params, and answers what it would have done (POST
+// /api/definitions/{id}/replay, internal/api's handleDefinitionsReplay).
+// Writes nothing: the definition the engine evaluates is untouched.
+//
+// A decline -- "the corpus is shorter than this definition's window, so
+// this question cannot be answered honestly" -- comes back as a *value*
+// on ReplayResult, not as a thrown error and not as a receipt of zero.
+// It is an honest limit of the traffic held, and the one thing a caller
+// must not do is show it as a failure: "it would have fired zero times"
+// and "this cannot be asked yet" are different answers, which is why
+// engine.Result keeps them structurally apart (#403) and why this
+// wrapper does too.
+//
+// A genuine refusal (no corpus, not user-tier, a candidate param this
+// definition's replay does not accept) is still the string every other
+// definitions writer returns, so one `typeof result === 'string'` check
+// separates "the server would not do it" from "here is the answer".
+export async function replayDefinition(
+  id: string,
+  params: Record<string, unknown>,
+): Promise<ReplayResult | string> {
+  const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/replay`, { params })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `replayDefinition: ${res.status}`
 }

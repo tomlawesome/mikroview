@@ -166,10 +166,39 @@ export interface Stats {
   // eviction moves this one and leaves that one alone (#703).
   oldestHeld: string | null
   connectedClients: number
+  // The event buffer's budget, the range it may be moved within, and
+  // what the process is actually costing (#796) -- mirrors
+  // internal/api.StoreSettings. Optional so a test fixture or an older
+  // server that does not send it leaves the memory control absent
+  // rather than drawing a slider over undefined bounds.
+  memory?: StoreMemory
   // Syslog listener saturation -- mirrors internal/syslog.ListenerStats.
   // Optional so an older server (or a test fixture) that does not send
   // it simply shows nothing rather than rendering NaN.
   syslog?: SyslogListenerStats
+}
+
+// Mirrors internal/api.StoreSettings (#796). Every figure is in bytes.
+export interface StoreMemory {
+  // store.maxMemory in effect right now.
+  maxMemory: number
+  // The ends of the slider. See internal/config.MaxMemoryCeiling for the
+  // headroom rule that produced max.
+  min: number
+  max: number
+  // What max is a share of -- the cgroup limit if the server is in one,
+  // otherwise the machine's RAM. Zero when the server could read
+  // neither, in which case the track's right-hand end says the ceiling
+  // is a conservative default rather than naming a total nobody knows.
+  hostTotal: number
+  // internal/config.AssumedBytesPerEvent, so a proposed budget turns
+  // into an event count without a second copy of that constant here.
+  bytesPerEvent: number
+  // What the server process currently holds from the operating system.
+  resident: number
+  // Whether the figure came from the settings store rather than
+  // config.yaml.
+  stored: boolean
 }
 
 // Mirrors internal/syslog.ListenerStats. The connection pool is finite,
@@ -372,6 +401,17 @@ export interface DetectorSettings {
   // rather than the threshold it fires at).
   params?: Record<string, unknown>
   paramSchema?: DefinitionParamSchema[]
+  // Carried through from Definition.provenance.origin (#787). The
+  // editing panel needs it because two of its actions are only offered
+  // where the server can perform them: a shipped definition's name
+  // belongs to the binary that ships the logic and cannot be renamed,
+  // and reset only means something for one that has stock params to go
+  // back to.
+  origin?: DefinitionOrigin
+  // Whether any param currently differs from what the definition shipped
+  // with -- Definition.distance flattened to the one bit the bench shows
+  // (#787), so a row can say it has been tuned without the panel open.
+  overridden?: boolean
 }
 
 // Mirrors internal/api's definitionView (issue #407) -- one definition
@@ -414,6 +454,64 @@ export interface DefinitionReplayability {
   known: boolean
   capable: boolean
   reason?: string
+}
+
+// What one replay covered (internal/api's windowView, engine.Window).
+// Mandatory on a receipt and never omitted: a count without the window it
+// was counted over is the overclaim #403's contract exists to rule out.
+// duration is a Go duration string ("4h12m0s") -- read it with
+// parseGoDurationSeconds, the same way a duration param is read.
+export interface ReplayWindow {
+  start: string
+  end: string
+  duration: string
+  eventCount: number
+}
+
+// One emission a replay would have produced (internal/api's sampleView),
+// bounded server-side -- see ReplayReceipt.sampleTruncated.
+export interface ReplaySample {
+  at: string
+  target: string
+  detail: string
+  ports?: number[]
+  hosts?: string[]
+  labels?: string[]
+  provisional: boolean
+}
+
+// The answer when the corpus was long enough to answer honestly
+// (internal/api's receiptView, engine.Receipt).
+//
+// The two truncation flags are separate facts and not interchangeable:
+// corpusTruncated means the corpus read was cut short, so emissionCount
+// is a floor rather than a total; sampleTruncated means only that the
+// listed sample is bounded, with emissionCount still exact.
+export interface ReplayReceipt {
+  window: ReplayWindow
+  emissionCount: number
+  sample: ReplaySample[]
+  sampleTruncated: boolean
+  corpusTruncated: boolean
+  anyProvisional: boolean
+}
+
+// The answer when it could not be answered honestly (internal/api's
+// declineView, engine.Decline): the corpus held less traffic than the
+// definition's window needs. corpusSpan and definitionWindow are Go
+// duration strings, like ReplayWindow.duration.
+export interface ReplayDecline {
+  reason: string
+  corpusSpan: string
+  definitionWindow: string
+}
+
+// Exactly one of receipt or decline is set, mirroring engine.Result's own
+// structural either/or -- a caller has to handle the decline rather than
+// reading a short corpus as a receipt with a suspiciously small count.
+export interface ReplayResult {
+  receipt?: ReplayReceipt
+  decline?: ReplayDecline
 }
 
 export interface Definition {

@@ -38,103 +38,29 @@
   import { zonesState } from '../lib/zones.svelte'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
-  import { formatRelative } from '../lib/format'
+  import { formatHM, formatRelative } from '../lib/format'
   import { nightlySummary, windowLabel } from '../lib/watchWindow'
   import { topologyNavState, type PendingWatchDraft } from '../lib/topologyNav.svelte'
-  import TabList from './TabList.svelte'
-  import Suggestions from './Suggestions.svelte'
-  import MatchesTab from './MatchesTab.svelte'
-  import type { WatchlistEntry, WatchlistIdentity, WatchlistMatch, WatchlistPermittedDest } from '../lib/types'
+  import { fetchWatchlistMatches } from '../lib/api'
+  import type {
+    Suggestion,
+    WatchlistEntry,
+    WatchlistIdentity,
+    WatchlistMatch,
+    WatchlistPermittedDest,
+  } from '../lib/types'
   import type { WatchlistEntryRequest } from '../lib/api'
 
   onMount(() => {
     watchlistState.refresh()
     suggestState.refresh()
-    // The ratified table's "last event" column and drawer (#676) read
-    // matchesState's own bulk feed (GET /api/matches?entries=all) --
-    // the same one the Matches tab already loads on arrival there. Loaded
-    // here too so the column and drawer have an answer without requiring
-    // a detour through that tab first.
+    // The ratified table's "last event" column, and round 33's match
+    // list in the drawer, both read matchesState's own bulk feed
+    // (GET /api/matches?entries=all) -- one fetch for the whole table
+    // rather than an N+1 per row. `older ▸` in a drawer pages further
+    // back per entry; see loadOlderMatches.
     matchesState.load()
   })
-
-  // Suggestions is a tab of Watchlist (#547) and Matches is a third
-  // (#584), both per the ratified navigation record. No admin-gating
-  // needed on the tabs themselves -- Watchlist only ever mounts for the
-  // user tier or better in the first place (see navGroups.ts's
-  // `edit: true` on the Watchlist row), and /api/suggestions* agrees
-  // server-side
-  // (internal/api/authz_matrix_test.go).
-  //
-  // Matches sits between the two: it is the evidence the entries beside
-  // it produced, where Suggestions is a separate feed of entries that do
-  // not exist yet.
-  const tabs = [
-    { id: 'watchlist', label: 'Watchlist' },
-    { id: 'matches', label: 'Matches' },
-    { id: 'suggestions', label: 'Suggestions' },
-  ]
-  type TabId = 'watchlist' | 'matches' | 'suggestions'
-  let activeTab = $state<TabId>('watchlist')
-
-  function selectTab(id: string) {
-    activeTab = id as TabId
-    // Before #547, Watchlist and Suggestions were two separate views
-    // that remounted -- and so refetched -- every time you navigated
-    // between them. All three now stay mounted (just hidden) once you
-    // switch away, which loses that free refetch-on-arrival -- most
-    // visibly for accepting a suggestion, which creates a real watchlist
-    // entry that the Watchlist tab would otherwise keep showing its
-    // pre-accept snapshot without. Refreshed here instead, on every
-    // switch, so no tab is ever more than one switch stale.
-    //
-    // For Matches that also means arriving always shows the newest 100
-    // rather than wherever a previous visit's "load older" had walked
-    // back to -- the tab's promise is the recent list, and a stale deep
-    // page is a worse thing to land on than a fresh shallow one.
-    if (activeTab === 'watchlist') watchlistState.refresh()
-    else if (activeTab === 'matches') {
-      // Entries first, then the matches themselves. A row resolves its
-      // entry's name, its mode, and the empty state's coverage sentence
-      // from the entries list, so loading matches against a stale one
-      // renders "(entry removed)" over entries that exist -- an evidence
-      // surface calling a live entry deleted is the worst sentence this
-      // tab could say, and the one it would say silently.
-      //
-      // Not hypothetical, and not only a race at first paint: the page
-      // stays mounted, and nothing else refreshes the entries until
-      // App.svelte's own 60-second coverage interval comes round
-      // (WATCHLIST_COVERAGE_REFRESH_MS). An entry created, renamed or
-      // deleted anywhere else is misdescribed here for up to a minute.
-      // Caught by live-matches-tab.mjs, which found every row named
-      // "(entry removed)" while both entries existed.
-      //
-      // Chained rather than fired together so the names are in place by
-      // the time the rows are, and .catch so a failed entries fetch
-      // still lets the matches load -- a list with imperfect names beats
-      // no list at all.
-      watchlistState
-        .refresh()
-        .catch(() => {})
-        .then(() => matchesState.load())
-    } else suggestState.refresh()
-  }
-
-  // Following a match's entry name back to the entry itself (#584): the
-  // Watchlist tab, that entry's drawer open on the ratified table,
-  // scrolled to. The scroll is deliberate -- the table can be long, and
-  // switching tabs to a row that is open somewhere off-screen looks like
-  // nothing happened. Targets the ratified table's own row (#761
-  // retired the second "Entries" card list this used to point at, see
-  // watchDrawerId below) rather than a dead anchor.
-  async function openEntry(entryId: string) {
-    selectTab('watchlist')
-    watchDrawerId = entryId
-    await tick()
-    // Optional-call rather than assumed: jsdom has no layout, so
-    // scrollIntoView is not implemented there.
-    document.getElementById(`watch-${entryId}`)?.scrollIntoView?.({ block: 'center' })
-  }
 
   function sourceLabel(e: WatchlistEntry): string {
     if (e.source?.mac) return e.source.mac
@@ -194,6 +120,157 @@
       if (!best || new Date(m.lastSeen) > new Date(best.lastSeen)) best = m
     }
     return best
+  }
+
+  // --- Round 33: what a watch matched, in the watch's own drawer -------
+  //
+  // Round 30 put one last-match line at the foot of the drawer's story
+  // column. Round 33 grows that line into a short list -- the one
+  // accepted thing that changes shape, and it changes by growing rather
+  // than being redrawn (round-33/README.md). The verbatim `.lines`
+  // element the watch drawer used to carry is gone: round 33's watch
+  // drawers draw `.matches` in its place (the six `.lines` left in
+  // suggestions-matches.html are all in the flags panel).
+  const MATCH_LINES = 3
+  // 20 per `older ▸`, as #771 specifies -- a drawer is a glance, not the
+  // 100-row page the retired Matches tab walked back through.
+  const OLDER_PAGE = 20
+  // The per-device page can be all another watch's records when two
+  // entries share a mac/ip (see canLoadOlder's comment). One click walks
+  // up to this many such pages looking for this entry's own records
+  // before giving up for the click, so a long run of the other watch's
+  // traffic cannot hang the button -- it just leaves `older ▸` pressable
+  // again rather than declaring the entry exhausted.
+  const MAX_OLDER_PAGES = 5
+
+  // Older pages, per entry. Keyed by entry id and kept separate from
+  // matchesState.records, which is the shared newest-100-network-wide
+  // feed every row's "last event" reads: paging one drawer back in time
+  // must not move another row's column.
+  let olderMatches = $state<Record<string, WatchlistMatch[]>>({})
+  let olderLoadingId = $state<string | null>(null)
+  let olderExhausted = $state<Record<string, boolean>>({})
+  let olderError = $state<Record<string, string>>({})
+
+  // Every match this drawer can show, newest first: the shared feed's
+  // records for this entry plus anything `older ▸` has pulled in,
+  // de-duplicated by id because the two sources overlap by construction.
+  function matchesFor(entryId: string): WatchlistMatch[] {
+    const seen = new Set<string>()
+    const out: WatchlistMatch[] = []
+    for (const m of [...matchesState.records, ...(olderMatches[entryId] ?? [])]) {
+      if (m.entryId !== entryId || seen.has(m.id)) continue
+      seen.add(m.id)
+      out.push(m)
+    }
+    out.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())
+    return out
+  }
+
+  // `older ▸` asks the per-device query for this watch's own source and
+  // keeps the records whose entryId is this watch. The backend has no
+  // per-entry filter (internal/api/matches.go's handleMatchesQuery takes
+  // mac/ip or entries=all, never an entry id), so the filtering is the
+  // client's -- exactly the gap round-33/README.md records against #691.
+  //
+  // An unscoped entry has no mac or ip to ask by, and fetchWatchlistMatches
+  // requires one, so those drawers are not offered the control at all
+  // rather than being offered one that can only 400.
+  function canLoadOlder(e: WatchlistEntry): boolean {
+    return !!(e.source?.mac || e.source?.ip) && !olderExhausted[e.id]
+  }
+
+  async function loadOlderMatches(e: WatchlistEntry) {
+    if (olderLoadingId === e.id || !canLoadOlder(e)) return
+    const shown = matchesFor(e.id)
+    const known = new Set(shown.map((m) => m.id))
+    // The cursor is the oldest record already shown, then the oldest
+    // record of whichever page came back last. `until` filters on
+    // firstSeen server-side, so this cannot skip a record; it can repeat
+    // one, which matchesFor's own de-duplication absorbs (the same
+    // argument matches.svelte.ts makes at length for the merged feed's
+    // cursor).
+    let cursor = shown[shown.length - 1]?.lastSeen
+    olderLoadingId = e.id
+    olderError = { ...olderError, [e.id]: '' }
+    try {
+      const collected: WatchlistMatch[] = []
+      let exhausted = false
+      for (let i = 0; i < MAX_OLDER_PAGES; i++) {
+        const page = await fetchWatchlistMatches({
+          mac: e.source?.mac,
+          ip: e.source?.ip,
+          until: cursor,
+          limit: OLDER_PAGE,
+        })
+        if (page.length === 0) {
+          exhausted = true
+          break
+        }
+        const mine = page.filter((m) => m.entryId === e.id)
+        const fresh = mine.filter((m) => !known.has(m.id))
+        for (const m of fresh) known.add(m.id)
+        collected.push(...fresh)
+        // Advance past the whole page -- every record the server
+        // returned, not just this entry's -- because the backend pages
+        // by device identity, not by entry (see canLoadOlder's comment).
+        // Advancing only past "mine" would re-fetch another watch's
+        // records on the same identity forever.
+        cursor = page[page.length - 1]?.lastSeen ?? cursor
+        // Exhaustion means the server ran out, i.e. a short page. It is
+        // never "this page had nothing for this entry" -- a full page
+        // can legitimately hold zero of this entry's records when
+        // another watch shares its mac/ip.
+        if (page.length < OLDER_PAGE) {
+          exhausted = true
+          break
+        }
+        // Found something for this entry: stop here rather than keep
+        // paging past what this click asked to reveal.
+        if (fresh.length > 0) break
+      }
+      olderMatches = { ...olderMatches, [e.id]: [...(olderMatches[e.id] ?? []), ...collected] }
+      olderExhausted = { ...olderExhausted, [e.id]: exhausted }
+    } catch (err) {
+      olderError = { ...olderError, [e.id]: err instanceof Error ? err.message : String(err) }
+    } finally {
+      olderLoadingId = null
+    }
+  }
+
+  // `when · source → destination:port · n× · rule`, as drawn. The
+  // identity is the matching event's own, never the entry's possibly
+  // unscoped Source -- see matchlog.Tuple and the argument the retired
+  // MatchesTab made for the same choice.
+  function matchSource(m: WatchlistMatch): string {
+    return m.event.srcHostName || m.tuple.source.mac || m.tuple.source.ip || 'unknown source'
+  }
+
+  function matchDest(m: WatchlistMatch): string {
+    return m.event.dstHostName || m.tuple.destIp
+  }
+
+  // The `when` the drawing shows: a clock time for today, a weekday and
+  // a clock time for the rest of the week, a date beyond that (02:14 /
+  // Sat 02:13 / 23 Aug).
+  //
+  // Not formatRelative, which the "last event" column uses: that answers
+  // "how long ago", and a list walking backwards through days needs to
+  // say *which* day or three lines all read "2d ago". Not
+  // toLocaleString() either, which the retired Matches tab used -- a
+  // full date and time does not fit the 74px the drawing gives this
+  // column, and would wrap every line.
+  const SHORT_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  function matchWhen(iso: string): string {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return iso
+    const now = new Date(appState.now)
+    const sameDay =
+      d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+    if (sameDay) return formatHM(iso)
+    const ageDays = (now.getTime() - d.getTime()) / 86_400_000
+    if (ageDays < 7) return `${SHORT_DAYS[d.getDay()]} ${formatHM(iso)}`
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
   }
 
   // The ratified vocabulary (◉ watching / ○ ring broken), in the
@@ -332,11 +409,20 @@
   }
 
   let watchDrawerId: string | null = $state(null)
+  // A suggestion's drawer opens exactly as a watch's does, but the two
+  // bodies keep separate ids: a suggested row is not a watch, and
+  // opening one should not close the watch drawer an operator was
+  // reading it against.
+  let suggestDrawerId: string | null = $state(null)
   let pausingId = $state<string | null>(null)
   let wtError = $state<string | null>(null)
 
   function toggleWatchDrawer(id: string) {
     watchDrawerId = watchDrawerId === id ? null : id
+  }
+
+  function toggleSuggestDrawer(id: string) {
+    suggestDrawerId = suggestDrawerId === id ? null : id
   }
 
   // #724's second click: a dial panel row's own destination, not just the
@@ -734,52 +820,288 @@
     return list
   })
 
-  // --- Round-30 fidelity flags (#700, #691) --------------------------
+  // --- Round 33: suggestions, a second body under the watches ---------
   //
-  // The ratified mockup (docs/design/concepts/round-30/shots/
-  // docket-watchlist.png, the-whole.html #s7's `#p-watch` panel, carried
-  // forward verbatim by round 31's watchlist-managed.html) draws one
-  // flat watch table under the docket's tabs -- watch / boundary /
-  // window / state / last event, one header row, one filter row
-  // directly beneath it, nothing else. What it does not draw -- the
-  // Watchlist/Matches/Suggestions sub-tab row and the "Watches" page
-  // heading (round 30: "no page heading and no strap, anywhere" --
-  // owner, 2026-08-31) -- is real, shipped capability (#547, #584) the
-  // ratified design simply doesn't describe, and stays unmounted behind
-  // its own typed flag rather than deleted, same pattern as LiveTable's
-  // RESIZE_HANDLES_ENABLED. Bringing either back is tracked on #691.
+  // "A suggestion is a watch that has not been said yes to, and a match
+  // is a line in the watch's own drawer" (round-33/README.md). So there
+  // are no sub-tabs: the Watchlist/Matches/Suggestions strip and the two
+  // components behind it are gone outright rather than left unmounted
+  // behind a flag, because #771 gives both the capabilities they carried
+  // a drawn home here. AGENTS.md's "removals are wholesale" applies once
+  // nothing still needs the old surface to reach them.
   //
-  // The second surface these flags used to guard -- "Manage entries",
-  // the add/edit form and the "Entries" card list (#243, #649) -- is
-  // gone outright rather than joining this list: #761 made every
-  // capability it carried reachable from the ratified table's own
-  // drawer, and AGENTS.md's "removals are wholesale" applies once
-  // nothing still needs the old surface to reach it.
-  const WATCHLIST_SUBTABS_ENABLED: boolean = false
+  // The cross-watch matches view the retired Matches tab also offered
+  // (GET /api/matches?entries=all as a page of its own) is deliberately
+  // not rehoused: round 33 records it as a stream lens rather than a
+  // docket thing, and it is tracked on #691. fetchRecentMatches stays --
+  // it is what feeds the table's own "last event" column and every
+  // drawer's match list.
+  let showAside = $state(false)
+  let suggestBusyId = $state<string | null>(null)
+  let suggestError = $state<string | null>(null)
+  // `start over` uses round 28's arm-then-confirm, the same idiom as
+  // `remove` above: one click arms, a second commits, any other click
+  // disarms (the svelte:window handler below).
+  let armedReset = $state(false)
+  let resetting = $state(false)
+  // Set once a reset has been confirmed, so the watch body can say
+  // "Started over." where the rows were rather than falling back to the
+  // ordinary "No watches yet" empty row -- a different sentence for a
+  // different cause.
+  let startedOverAt = $state<string | null>(null)
+
+  // Suggestions never join watchRows, so round 31's sort and filter --
+  // which derive from watchlistState.entries alone -- leave this body
+  // alone by construction, as the drawing requires. A suggested row
+  // sorts and filters with nothing: it is not a watch.
+  const openSuggestions = $derived(suggestState.candidates.filter((c) => c.status === 'off'))
+  const asideSuggestions = $derived(suggestState.candidates.filter((c) => c.status === 'hide'))
+  // Shown rows: the open ones, and the set-aside ones after `show them`.
+  const suggestionRows = $derived(showAside ? [...openSuggestions, ...asideSuggestions] : openSuggestions)
+
+  // "from what rb5009 and hap-ax2 pushed" -- the distinct routers the
+  // visible candidates came from, in first-seen order. Falls back to a
+  // shorter heading when nothing names a router, rather than printing
+  // "from what  pushed".
+  const routerNames = $derived.by((): string[] => {
+    const seen: string[] = []
+    for (const c of suggestState.candidates) {
+      if (c.routerDevice && !seen.includes(c.routerDevice)) seen.push(c.routerDevice)
+    }
+    return seen
+  })
+
+  const suggestHeading = $derived(
+    routerNames.length > 0
+      ? `mikroview suggests · from what ${formatList(routerNames)} pushed`
+      : 'mikroview suggests',
+  )
+
+  function formatList(names: string[]): string {
+    if (names.length <= 1) return names[0] ?? ''
+    return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  }
+
+  // The dashed chip per kind, as drawn: where the suggestion came from,
+  // and `· stale — the <thing> is gone` when the justification that
+  // generated it has stopped holding.
+  function suggestionChip(c: Suggestion): string {
+    if (c.status === 'hide') return `◇ set aside${c.updatedAt ? ` — ${sinceDay(c.updatedAt)}` : ''}`
+    if (c.stale) return `◇ suggested · stale — the ${staleThing(c)} is gone`
+    switch (c.kind) {
+      case 'device':
+        return `◇ suggested — a new lease on ${zoneOfSuggestion(c)}`
+      case 'port':
+        return `◇ suggested — from drop rule ${c.name}`
+      case 'addressList':
+        return `◇ suggested — address list ${c.addressList ?? c.name}`
+    }
+  }
+
+  function staleThing(c: Suggestion): string {
+    return c.kind === 'device' ? 'lease' : c.kind === 'port' ? 'rule' : 'list'
+  }
+
+  // Where a suggested device sits, for the chip's "a new lease on iot".
+  //
+  // Deliberately not CIDR arithmetic: the pushed address table gives
+  // zones a cidr, but nothing in this codebase matches an address into
+  // one, and inventing subnet maths here would be a new rule in a
+  // component rather than a shared one. An address already observed as a
+  // host of a zone resolves to that zone's name; anything else reads as
+  // its own address, which says where the lease is without claiming a
+  // zone mikroview has not actually placed it in.
+  function zoneOfSuggestion(c: Suggestion): string {
+    const ip = c.source?.ip
+    if (!ip) return sourceOfSuggestion(c)
+    const zone = zonesState.zones.find((z) => z.hosts.some((h) => h.ip === ip))
+    return zone?.name ?? ip
+  }
+
+  // The identity a suggestion would be scoped to, in the same grammar
+  // sourceLabel gives a real watch.
+  function sourceOfSuggestion(c: Suggestion): string {
+    return c.source?.mac || c.source?.ip || c.name || 'any source'
+  }
+
+  // The boundary column, in the watch row grammar the drawing uses: a
+  // device fence reads "<zone> → wherever it goes", a port suggestion
+  // carries the ports it would record, and an address list names the
+  // list. A port candidate's destination is not something the candidate
+  // carries (internal/suggest records the rule's ports, not a resolved
+  // destination zone), so the row says the ports rather than inventing
+  // a "→ lan" the data does not support.
+  function suggestionBoundary(c: Suggestion): string {
+    switch (c.kind) {
+      case 'device':
+        return `${zoneOfSuggestion(c)} → wherever it goes`
+      case 'port': {
+        const ports = c.ports?.length ? c.ports.map((p) => `:${p}`).join(', ') : 'any port'
+        return `${sourceOfSuggestion(c)} → ${ports}`
+      }
+      case 'addressList':
+        return `internet → address list ${c.addressList ?? c.name}`
+    }
+  }
+
+  // The side column's label: "the lease / the rule / the list, as
+  // pushed" -- and "as last pushed" for a stale one, which is the
+  // honest tense for something the router no longer has.
+  function suggestionSideLabel(c: Suggestion): string {
+    const thing = staleThing(c)
+    return c.stale ? `the ${thing}, as last pushed` : `the ${thing}, as pushed`
+  }
+
+  // The side column, "as pushed": what the router actually said, so the
+  // operator judges the suggestion against its evidence rather than
+  // against its wording. Only fields the candidate really carries are
+  // listed -- an absent one is dropped rather than rendered empty.
+  function suggestionFacts(c: Suggestion): { label: string; value: string }[] {
+    const facts: { label: string; value: string }[] = []
+    if (c.kind === 'device') {
+      if (c.name) facts.push({ label: 'host', value: c.name })
+      if (c.source?.mac) facts.push({ label: 'mac', value: c.source.mac })
+      if (c.source?.ip) {
+        const zone = zoneOfSuggestion(c)
+        facts.push({ label: 'address', value: zone === c.source.ip ? c.source.ip : `${c.source.ip} · ${zone}` })
+      }
+    } else if (c.kind === 'port') {
+      if (c.name) facts.push({ label: 'rule', value: c.name })
+      if (c.ports?.length) facts.push({ label: 'dst-port', value: c.ports.join(', ') })
+    } else {
+      facts.push({ label: 'name', value: c.addressList ?? c.name })
+    }
+    if (c.routerDevice) facts.push({ label: c.stale ? 'last pushed' : 'pushed by', value: c.routerDevice })
+    if (c.firstSeen) facts.push({ label: 'first seen', value: formatHM(c.firstSeen) })
+    return facts
+  }
+
+  // The drawer's headline, per kind, as drawn: a device is a host
+  // nothing covers, a port is a rule the router already enforces, and a
+  // list is a list. The sentence after it is always the candidate's own
+  // justification, so the reasoning an operator judges is the
+  // generator's rather than a UI paraphrase of it.
+  function suggestionHeadline(c: Suggestion): string {
+    if (c.stale) return 'Was on the router; is not now.'
+    switch (c.kind) {
+      case 'device':
+        return 'A new host, not yet watched.'
+      case 'port':
+        return 'Your router already refuses this.'
+      case 'addressList':
+        return 'A list the router keeps.'
+    }
+  }
+
+  // A candidate id routinely carries a raw NUL byte -- it is the
+  // generator's own join separator (see Suggestion's doc comment in
+  // types.ts). That is fine in a JS string and fine in a URL once
+  // encodeURIComponent has had it, but it has no business in a DOM id,
+  // where it would produce an attribute no CSS selector can address.
+  // Reduced to a hook that is safe to select on; the real id is what
+  // every API call still uses.
+  function suggestionDomId(c: Suggestion): string {
+    return c.id.replace(/[^a-zA-Z0-9_-]+/g, '-')
+  }
+
+  // The two accept verbs the drawing names, by kind: a device becomes an
+  // inverted entry that observes first, a port becomes a non-inverted
+  // one where every attempt is a match. That is what the server actually
+  // does with each kind (internal/api's handleSuggestionsAccept), so the
+  // verb is a promise the backend keeps.
+  function acceptVerb(c: Suggestion): string {
+    return c.kind === 'device' ? 'watch it — it learns first' : 'watch it — every attempt is a match'
+  }
+
+  async function acceptOne(c: Suggestion) {
+    suggestBusyId = c.id
+    suggestError = null
+    const result = await suggestState.accept(c.id)
+    if (typeof result === 'string') suggestError = result
+    else {
+      // The accepted row moves up among the watches, so the watch list
+      // has to be refetched for it to appear there at all -- accept
+      // creates a real entry server-side, and suggestState.refresh()
+      // only reloads the candidate pool.
+      await watchlistState.refresh()
+      // A watch that did not exist a moment ago is what the drawer now
+      // describes, so open it there rather than leaving the operator to
+      // find where the row went.
+      watchDrawerId = result.entry.id
+      startedOverAt = null
+      await tick()
+      document.getElementById(`watch-${result.entry.id}`)?.scrollIntoView?.({ block: 'center' })
+    }
+    suggestBusyId = null
+  }
+
+  async function hideOne(c: Suggestion) {
+    suggestBusyId = c.id
+    suggestError = null
+    const err = await suggestState.hide(c.id)
+    if (err) suggestError = err
+    else if (suggestDrawerId === c.id) suggestDrawerId = null
+    suggestBusyId = null
+  }
+
+  async function unhideOne(c: Suggestion) {
+    suggestBusyId = c.id
+    suggestError = null
+    const err = await suggestState.unhide(c.id)
+    if (err) suggestError = err
+    else if (suggestDrawerId === c.id) suggestDrawerId = null
+    suggestBusyId = null
+  }
+
+  // `start over — wipe every watch`: the reset deletes every watchlist
+  // entry and regenerates the candidate pool from a fresh look at what
+  // the routers pushed. Armed first, per round 28.
+  async function armOrStartOver() {
+    if (!armedReset) {
+      armedReset = true
+      return
+    }
+    armedReset = false
+    resetting = true
+    suggestError = null
+    const err = await suggestState.reset()
+    if (err) suggestError = err
+    else {
+      // The entries really are gone server-side, so the table has to be
+      // refetched rather than assumed empty -- and the eye in the chrome
+      // reads whatever watchlistState now holds, which is nothing.
+      await watchlistState.refresh()
+      watchDrawerId = null
+      suggestDrawerId = null
+      olderMatches = {}
+      olderExhausted = {}
+      startedOverAt = new Date().toISOString()
+    }
+    resetting = false
+  }
+
+  // --- Round-30 fidelity flag (#700, #691) ----------------------------
+  //
+  // Round 30: "no page heading and no strap, anywhere" (owner,
+  // 2026-08-31). The heading stays unmounted behind its own typed flag
+  // rather than deleted, same pattern as LiveTable's
+  // RESIZE_HANDLES_ENABLED; bringing it back is tracked on #691.
   const WATCH_HEADING_ENABLED: boolean = false
 </script>
 
-<!-- "remove" (#761 item 5, round 28's clear-all gesture): one click arms
-     it, a second removes, any other click disarms -- same idiom as
-     Docket.svelte's own clear-all bubble. -->
-<svelte:window onclick={() => (armedRemoveId = null)} />
+<!-- "remove" (#761 item 5) and "start over" (#771 item 6) both use round
+     28's clear-all gesture: one click arms it, a second commits, any
+     other click disarms -- same idiom as Docket.svelte's own clear-all
+     bubble. -->
+<svelte:window
+  onclick={() => {
+    armedRemoveId = null
+    armedReset = false
+  }}
+/>
 
 <div class="watchlist-page">
-  {#if WATCHLIST_SUBTABS_ENABLED}
-    <TabList {tabs} selected={activeTab} onselect={selectTab} label="Watchlist views" />
-  {/if}
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -- role and tabindex
-       both turn on together with WATCHLIST_SUBTABS_ENABLED (undefined/
-       undefined when off, 'tabpanel'/0 when on); the checker can't
-       follow that they're tied to the same flag. -->
-  <div
-    class="page scrollbar"
-    role={WATCHLIST_SUBTABS_ENABLED ? 'tabpanel' : undefined}
-    id="panel-watchlist"
-    aria-labelledby={WATCHLIST_SUBTABS_ENABLED ? 'tab-watchlist' : undefined}
-    tabindex={WATCHLIST_SUBTABS_ENABLED ? 0 : undefined}
-    hidden={WATCHLIST_SUBTABS_ENABLED && activeTab !== 'watchlist'}
-  >
+  <div class="page scrollbar" id="panel-watchlist">
   <!-- The ratified table (#676/#761, round 29/31's docket scene: watch ·
        boundary · window · state · last event, rows opening as drawers
        like the flags tab -- and, since #761, the table's own draft row
@@ -798,9 +1120,13 @@
       <h3 id="watch-heading" class="section-title">Watches</h3>
     {/if}
     {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
-    {#if watchlistState.entries.length === 0 && !draftOpen}
-      <p class="empty">No watches yet -- add one with the button above.</p>
-    {:else}
+    <!-- The table always renders, even with no watches at all: round 33
+         hangs the suggestions body off the same table, so a page that
+         dropped the table when the watchlist was empty would take the
+         suggestions -- the one thing that tells an operator with no
+         watches what to do next -- down with it. The empty case is a row
+         inside the body instead, which is also what the drawing shows
+         after `start over`. -->
       <table class="watch-table">
         <thead>
           <tr>
@@ -936,7 +1262,21 @@
               </td>
             </tr>
           {/if}
-          {#if sortedWatchRows.length === 0}
+          {#if sortedWatchRows.length === 0 && startedOverAt && watchlistState.entries.length === 0}
+            <!-- ROUND 33 item 6: what `start over` leaves behind. A
+                 different sentence from an ordinary empty watchlist,
+                 because it has a different cause and an operator who
+                 just wiped every watch needs telling what happens next
+                 rather than being told there is nothing here. -->
+            <tr class="wempty">
+              <td colspan="6">
+                <span class="cae-mark">↺</span>
+                <b>Started over.</b><br />
+                Every watch is gone as of {formatHM(startedOverAt)}; the suggestions below are being rebuilt from the
+                next push. The audit log has who did it.
+              </td>
+            </tr>
+          {:else if sortedWatchRows.length === 0}
             <tr>
               <td class="empty-row" colspan="6">
                 {watchlistState.entries.length === 0 ? 'No watches yet.' : 'No watches match these filters.'}
@@ -1028,7 +1368,45 @@
                       {:else}
                         <div class="dcol">
                           <p class="story"><b>{story.headline}</b> {story.body}</p>
-                          <div class="lines">{row.lastMatch ? row.lastMatch.event.raw : 'No matching line in the recent log.'}</div>
+                        </div>
+                        <!-- ROUND 33 item 1: what it matched. This block
+                             stands where round 30 put the single
+                             last-match line -- the foot of the drawer's
+                             story column -- and is the same thing grown
+                             into a list. No `provisional` mark: the
+                             field is always false today (#406). -->
+                        {@const shown = matchesFor(row.entry.id)}
+                        <div class="matches">
+                          {#if shown.length === 0}
+                            <span class="lab">what it matched</span>
+                            <p class="ep-note">Nothing in the recent log yet.</p>
+                          {:else}
+                            <span class="lab">what it matched · last {Math.min(MATCH_LINES, shown.length)} of {shown.length}</span>
+                            <ul class="mlist">
+                              {#each shown.slice(0, MATCH_LINES) as m (m.id)}
+                                <li>
+                                  <span class="w">{matchWhen(m.lastSeen)}</span>
+                                  <span class="k">{matchSource(m)} → {matchDest(m)}<i>:{m.tuple.port}</i></span>
+                                  <span class="t">{m.count}× · {m.event.ruleLabel}</span>
+                                </li>
+                              {/each}
+                            </ul>
+                            {#if olderError[row.entry.id]}
+                              <p class="error" role="alert">{olderError[row.entry.id]}</p>
+                            {/if}
+                            {#if canLoadOlder(row.entry)}
+                              <button
+                                class="slink older"
+                                disabled={olderLoadingId === row.entry.id}
+                                onclick={(ev) => {
+                                  ev.stopPropagation()
+                                  loadOlderMatches(row.entry)
+                                }}
+                              >
+                                {olderLoadingId === row.entry.id ? 'loading…' : 'older ▸'}
+                              </button>
+                            {/if}
+                          {/if}
                         </div>
                         <div class="side">
                           {#if row.learning}
@@ -1116,34 +1494,147 @@
             {/each}
           {/if}
         </tbody>
+
+        <!-- ROUND 33 items 2-6: SUGGESTIONS. What mikroview would watch,
+             from what the routers pushed -- a second body of the same
+             table, under the watches, in the same row grammar. A
+             suggestion is a watch that has not been said yes to, so it
+             is not in watchRows and round 31's sort and filter (which
+             derive from watchlistState.entries) leave it alone. -->
+        <tbody id="sugg">
+          <tr class="sdiv">
+            <td colspan="6">
+              <span class="sdl">{suggestHeading} · <b>{openSuggestions.length}</b></span>
+              <span class="sdr">
+                {#if asideSuggestions.length > 0}
+                  <button
+                    type="button"
+                    class="slink"
+                    onclick={(ev) => {
+                      ev.stopPropagation()
+                      showAside = !showAside
+                    }}
+                  >
+                    <b>{asideSuggestions.length}</b> set aside · {showAside ? 'hide them' : 'show them'}
+                  </button>
+                {/if}
+                <button
+                  type="button"
+                  class="slink quiet"
+                  class:armed={armedReset}
+                  disabled={resetting}
+                  onclick={(ev) => {
+                    ev.stopPropagation()
+                    armOrStartOver()
+                  }}
+                >
+                  {resetting
+                    ? 'starting over…'
+                    : armedReset
+                      ? 'confirm — every watch goes, and it suggests afresh'
+                      : 'start over — wipe every watch'}
+                </button>
+              </span>
+            </td>
+          </tr>
+
+          {#if suggestError}
+            <tr><td colspan="6"><p class="error" role="alert">{suggestError}</p></td></tr>
+          {/if}
+
+          {#each suggestionRows as c (c.id)}
+            {@const aside = c.status === 'hide'}
+            <tr
+              class="wt-row"
+              class:wt-sugg={!aside}
+              class:wt-aside={aside}
+              id="suggestion-{suggestionDomId(c)}"
+              onclick={() => toggleSuggestDrawer(c.id)}
+            >
+              <td class="k">{c.name || '(unnamed)'}</td>
+              <td>{suggestionBoundary(c)}</td>
+              <td class="t">always</td>
+              <td><span class="wchip2 sugg">{suggestionChip(c)}</span></td>
+              <td class="t">—</td>
+              <td>
+                <button
+                  class="openc"
+                  aria-expanded={suggestDrawerId === c.id}
+                  aria-label="{suggestDrawerId === c.id ? 'Close' : 'Open'} the drawer for the suggestion {c.name}"
+                  onclick={(ev) => {
+                    ev.stopPropagation()
+                    toggleSuggestDrawer(c.id)
+                  }}
+                >
+                  ▸
+                </button>
+              </td>
+            </tr>
+            {#if suggestDrawerId === c.id}
+              <tr class="wt-drawer" class:wt-sugg={!aside} class:wt-aside={aside}>
+                <td colspan="6">
+                  <div class="dwr">
+                    <div class="dcol">
+                      <!-- The story is the candidate's own justification:
+                           why the router's data suggested this at all.
+                           Written server-side (internal/suggest), so the
+                           sentence an operator judges is the generator's
+                           own reasoning, not a UI paraphrase of it. -->
+                      <p class="story">
+                        {#if aside}
+                          <b>Set aside.</b> Kept here, quiet, until you bring it back; if what suggested it goes, it
+                          goes with it.
+                        {:else if c.stale}
+                          <b>{suggestionHeadline(c)}</b>
+                          {c.justification} Watch it anyway and it watches nothing. Better to let it go.
+                        {:else}
+                          <b>{suggestionHeadline(c)}</b>
+                          {c.justification}
+                        {/if}
+                      </p>
+                    </div>
+                    <div class="side">
+                      <span class="lab">{suggestionSideLabel(c)}</span>
+                      <ul class="seen facts">
+                        {#each suggestionFacts(c) as f (f.label)}
+                          <li><span class="t">{f.label}</span><span class="k">{f.value}</span></li>
+                        {/each}
+                      </ul>
+                    </div>
+                    <div class="dwr-acts">
+                      {#if aside}
+                        <!-- ROUND 33 item 5: one verb, and nothing is
+                             ever thrown away from here. -->
+                        <button class="act quiet" disabled={suggestBusyId === c.id} onclick={() => unhideOne(c)}>
+                          {suggestBusyId === c.id ? 'Saving…' : 'bring it back'}
+                        </button>
+                      {:else if c.stale}
+                        <!-- ROUND 33 item 4: a stale one leads with the
+                             honest verb, and keeps the other quiet. -->
+                        <button class="act" disabled={suggestBusyId === c.id} onclick={() => hideOne(c)}>
+                          {suggestBusyId === c.id ? 'Saving…' : 'let it go'}
+                        </button>
+                        <button class="act quiet" disabled={suggestBusyId === c.id} onclick={() => acceptOne(c)}>
+                          watch it anyway
+                        </button>
+                      {:else}
+                        <button class="act" disabled={suggestBusyId === c.id} onclick={() => acceptOne(c)}>
+                          {suggestBusyId === c.id ? 'Saving…' : acceptVerb(c)}
+                        </button>
+                        <button class="act quiet" disabled={suggestBusyId === c.id} onclick={() => hideOne(c)}>
+                          not this
+                        </button>
+                      {/if}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            {/if}
+          {/each}
+        </tbody>
       </table>
-    {/if}
   </section>
   </div>
-
-  {#if WATCHLIST_SUBTABS_ENABLED}
-    <div
-      class="tab-panel"
-      role="tabpanel"
-      id="panel-matches"
-      aria-labelledby="tab-matches"
-      tabindex="0"
-      hidden={activeTab !== 'matches'}
-    >
-      <MatchesTab entries={watchlistState.entries} coverage={watchlistState.coverage} onopenentry={openEntry} />
-    </div>
-
-    <div
-      class="tab-panel"
-      role="tabpanel"
-      id="panel-suggestions"
-      aria-labelledby="tab-suggestions"
-      tabindex="0"
-      hidden={activeTab !== 'suggestions'}
-    >
-      <Suggestions />
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -1154,33 +1645,9 @@
     flex-direction: column;
   }
 
-  /* Every non-Watchlist panel is a full-height column holding one
-     component -- one rule rather than one class per tab. */
-  .tab-panel {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* The `hidden` attribute on each panel is not enough on its own. Its
-     `display: none` comes from the UA stylesheet, and *any* author
-     declaration outranks a UA one whatever its specificity -- so the
-     `display: flex` above (and on .page below) wins, and a "hidden"
-     panel renders anyway, stacked under the selected one. Confirmed in
-     Chromium, not deduced: a hidden element carrying a class with
-     `display: flex` computes to `flex` and Playwright reports it
-     visible.
-
-     Present since the tabs landed (#547) and invisible to the tests,
-     which assert on the `hidden` attribute rather than on what a browser
-     does with it. Fixed here rather than left, because a third panel
-     makes it three surfaces deep instead of two. */
-  .page[hidden],
-  .tab-panel[hidden] {
-    display: none;
-  }
-
+  /* `.tab-panel`, and the `[hidden]` override that stopped a
+     "hidden" panel rendering anyway, both went with the sub-tabs
+     (#771): there is one panel now, and it is never hidden. */
   .page {
     flex: 1;
     min-height: 0;
@@ -1210,12 +1677,6 @@
     color: var(--fg);
   }
 
-  .empty {
-    margin: 0;
-    color: var(--fg-dim);
-    font-size: 13px;
-    padding: 10px 0;
-  }
 
   button:disabled {
     opacity: 0.6;
@@ -1422,13 +1883,11 @@
     font-weight: 600;
   }
 
-  .dwr .lines {
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    color: var(--fg-dim);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
+  /* Round 33 replaced the drawer's verbatim `.lines` element with the
+     `.matches` list below -- round 33's watch drawers draw no `.lines`
+     at all (the six left in suggestions-matches.html are the flags
+     panel's). Removed rather than left unused: an unreferenced selector
+     is dead style, and svelte-check reports it as one. */
 
   .dwr .side {
     grid-column: 2;
@@ -1696,5 +2155,221 @@
     .openc {
       transition: none;
     }
+  }
+
+  /* ============================================================
+     ROUND 33 — SUGGESTIONS AND MATCHES
+     (docs/design/concepts/round-33/suggestions-matches.html).
+     Additive to round 31's docket; the one thing that grows is
+     round 30's single last-match line, which becomes the first
+     line of a list.
+     ============================================================ */
+
+  /* what a watch matched: the drawer's log, where the last-match
+     line was. Column 1, so it sits at the foot of the story
+     column rather than beside it. */
+  .matches {
+    grid-column: 1;
+  }
+
+  .matches .lab {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .matches .ep-note {
+    margin: 4px 0 0;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--fg-muted);
+  }
+
+  .mlist {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+  }
+
+  .mlist li {
+    display: grid;
+    grid-template-columns: 74px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .mlist .w,
+  .mlist .t {
+    color: var(--fg-dim);
+  }
+
+  .mlist .k {
+    color: var(--fg);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .mlist .k i {
+    color: var(--fg-dim);
+    font-style: normal;
+  }
+
+  .slink {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--accent);
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: none;
+  }
+
+  .slink:hover {
+    text-decoration: underline;
+  }
+
+  .slink:disabled {
+    cursor: default;
+    opacity: 0.6;
+    text-decoration: none;
+  }
+
+  .slink.quiet {
+    color: var(--fg-dim);
+  }
+
+  .slink.armed {
+    color: var(--alarm);
+    text-decoration: none;
+  }
+
+  .matches .older {
+    display: inline-block;
+    margin-top: 6px;
+  }
+
+  /* suggestions: a second body, its own quiet heading, dashed ink
+     until said yes to */
+  #sugg .sdiv td {
+    padding: 22px 10px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #sugg .sdiv .sdl {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  #sugg .sdiv .sdl b {
+    color: var(--fg-muted);
+    font-weight: 600;
+  }
+
+  #sugg .sdiv .sdr {
+    float: right;
+    display: inline-flex;
+    gap: 18px;
+  }
+
+  #sugg .sdiv .sdr b {
+    font-weight: 600;
+  }
+
+  /* the heading's two verbs wear the drawer's pill, so they read as
+     things to do, not notes (owner, 2026-09-01: "you didn't explain
+     start over" -- so the reset says what it does before it is
+     clicked) */
+  #sugg .sdiv .sdr .slink {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 12px;
+  }
+
+  #sugg .sdiv .sdr .slink:hover {
+    border-color: var(--accent);
+    text-decoration: none;
+  }
+
+  #sugg .sdiv .sdr .slink.quiet:hover {
+    border-color: var(--fg-dim);
+  }
+
+  #sugg .sdiv .sdr .slink.armed {
+    border-color: var(--alarm);
+  }
+
+  .wchip2.sugg {
+    color: var(--fg-dim);
+    border-style: dashed;
+    border-color: var(--border);
+    background: transparent;
+  }
+
+  tr.wt-row.wt-sugg td.k,
+  tr.wt-row.wt-aside td.k {
+    color: var(--fg-muted);
+  }
+
+  tr.wt-row.wt-sugg td:first-child,
+  tr.wt-drawer.wt-sugg > td {
+    box-shadow: inset 3px 0 0 var(--border);
+  }
+
+  tr.wt-row.wt-aside td:first-child,
+  tr.wt-drawer.wt-aside > td {
+    box-shadow: inset 3px 0 0 transparent;
+  }
+
+  /* set aside: dimmer ink, still legible -- nothing is ever thrown
+     away from here */
+  tr.wt-row.wt-aside td {
+    opacity: 0.6;
+  }
+
+  .seen.facts li {
+    grid-template-columns: 84px 1fr;
+  }
+
+  .seen.facts .t {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 9.5px;
+  }
+
+  /* what `start over` leaves behind, where the rows were */
+  tr.wempty td {
+    text-align: center;
+    padding: 48px 0 40px;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    color: var(--fg-muted);
+    line-height: 1.7;
+  }
+
+  tr.wempty b {
+    color: var(--fg);
+  }
+
+  tr.wempty .cae-mark {
+    display: block;
+    font-size: 20px;
+    color: var(--accent);
+    margin-bottom: 6px;
   }
 </style>
