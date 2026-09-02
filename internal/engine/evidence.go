@@ -453,3 +453,25 @@ func sortedHostsCapped(m map[string]struct{}) []string {
 	}
 	return out
 }
+
+// sortedPairsCapped is sortedHostsCapped for pairs, ordered and capped
+// exactly as EvidenceSet.Pairs orders and caps its own (host then port,
+// maxEvidencePairs) -- #641 gave the programmatic dest_spread
+// definitions pairs to record, and their evidence must read the same way
+// a declarative definition's does rather than in its own order.
+func sortedPairsCapped(m map[HostPort]struct{}) []HostPort {
+	out := make([]HostPort, 0, len(m))
+	for p := range m {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Port < out[j].Port
+	})
+	if len(out) > maxEvidencePairs {
+		out = out[:maxEvidencePairs]
+	}
+	return out
+}
