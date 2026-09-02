@@ -30,19 +30,26 @@
   //     row's own bordered panel went the same way (#718's "boxes in
   //     boxes"): the label stays, the frame around already-bordered
   //     cards does not.
-  //  2. A tab strip -- hosts / rules / ports (#681, a deliberate
-  //     departure from the ratified round-29 scene, recorded on that
-  //     issue rather than smuggled in) -- over one table per tab, the
-  //     docket's own tab vocabulary (Docket.svelte) reused rather than
-  //     inventing new furniture. hosts is the ratified table exactly as
-  //     #675 built it and stays the default. rules and ports exist
-  //     because naming in context has nowhere to happen: a rule that is
-  //     in a router's pushed rule table but has never fired has no row
-  //     anywhere else to click (#681's owner decision), so it needs its
-  //     own surface, whether or not it has ever fired. The old page's
-  //     separate add-entity form is still gone -- these tabs name what
-  //     has actually arrived (fired) or been pushed (a rule), never a
-  //     blank invented row.
+  //  2. Three views -- hosts / rules / ports (#681, drawn in rounds
+  //     37-38 and built by #804) -- over one table. Not tabs: the
+  //     metrics page's own idiom, three view names carrying their
+  //     counts, one underlined, because rules and ports are names too
+  //     and so are views of one set of named things rather than three
+  //     destinations. hosts is the ratified table exactly as #675 built
+  //     it and stays the default. rules and ports exist because naming
+  //     in context has nowhere to happen: a rule that is in a router's
+  //     pushed rule table but has never fired has no row anywhere else
+  //     to click (#681's owner decision), so it needs its own surface,
+  //     whether or not it has ever fired. The old page's separate
+  //     add-entity form is still gone -- these views name what has
+  //     actually arrived (fired) or been pushed (a rule), never a blank
+  //     invented row.
+  //
+  //     No descriptor line sits under a view. Round 37 drew one under
+  //     each explaining where that kind of name comes from; round 38
+  //     removed all four on the owner's word (2026-09-02: "Remove all
+  //     these little descriptor lines on the entities views, I don't
+  //     want them"). Where a name comes from is documentation.
   //
   // mac/first-seen/last-seen have no existing source (the entity store
   // only ever held label/tags, and the client event buffer is far too
@@ -65,11 +72,16 @@
   // #445's router-lookup popup already decodes the other direction. A
   // rule with no log-prefix, or one that doesn't follow the convention,
   // can never produce a firing event carrying a label either (payload.go
-  // -- "an unlogged rule must stay unnameable"), so it is left off this
-  // tab rather than shown as an unnameable dead end.
+  // -- "an unlogged rule must stay unnameable"). It used to be left off
+  // this view for that reason; rounds 37-38 draw it present instead,
+  // showing its number -- "#17 — no comment on the router" -- because
+  // the rule is on the router and fires on the router, so a rules view
+  // that omits it is not the rule table. It stays unnameable: the row
+  // is plain dim text with no rename affordance, for every tier.
   import { onMount, tick } from 'svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
+  import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { zonesState } from '../lib/zones.svelte'
@@ -91,6 +103,29 @@
 
   // --- routers (folded in from Fleet, #647; cards since #675) ---------
   const routerRows = $derived(sortedDevices(appState.devices))
+
+  // A router that pushes but is not in the devices config is drawn as a
+  // state of the dashed third slot (rounds 37-38, `#ent.unreg`), not as
+  // one more card in the fleet: the empty berth advertises an address,
+  // and this is that address answering. So the berth gives way to it
+  // rather than sitting alongside -- the slot says either "point a
+  // router here" or "something is pointed here and has no name yet",
+  // never both.
+  //
+  // This is the one fact the round-30 device-status strip carried that
+  // had no home once that strip became the router cards (round-37
+  // README). `configured` is the registry's own word for it, the same
+  // field Fleet and Topography already read.
+  const registeredRouters = $derived(routerRows.filter((d) => d.configured))
+  const unregisteredRouters = $derived(routerRows.filter((d) => !d.configured))
+
+  // Renaming is an edit, so the viewer tier does not get the affordance
+  // and its names stop looking clickable. Nothing on this page says why:
+  // the read-only fact is declared once, on the account chip
+  // (AccountMenu.svelte), which is #548's ratified grammar and where
+  // rounds 37-38 put the sentence. Repeating it per row -- or per page,
+  // or as a lock on every control -- is what that grammar rules out.
+  const canRename = $derived(authState.canEdit)
 
   let status = $state<SetupStatus | null>(null)
 
@@ -309,30 +344,87 @@
     return m
   })
 
+  // A pushed rule that yields no slug still gets a row (rounds 37-38:
+  // "a rule with no comment on the router shows its number"). Silence
+  // would be the worse answer -- the rule exists on the router and fires
+  // on the router, so a rules view that omits it is not the rule table.
+  //
+  // It cannot be named here, and that is not a limitation to work
+  // around: the slug is how an event names the rule it fired, so a rule
+  // with no usable log-prefix has no stable key to hang a name on (see
+  // ruleLabelFromLogPrefix's own note, and payload.go's FilterRule doc
+  // for the same rule on the push side). These rows therefore render as
+  // plain dim text with no rename affordance, for every tier.
+  //
+  // `comment` is read directly rather than inferred from the missing
+  // slug: a rule can have a comment and still not log, and telling that
+  // operator "no comment on the router" would be a plain untruth.
+  interface UncommentedRule {
+    key: string
+    display: string
+    chain: string
+    action: string
+  }
+
+  const unnamedPushedRules = $derived.by((): UncommentedRule[] => {
+    const out: UncommentedRule[] = []
+    for (const d of routerRows) {
+      for (const r of routerRulesRaw[d.id] ?? []) {
+        if (ruleLabelFromLogPrefix(r.logPrefix)) continue
+        out.push({
+          // Scoped by device: `ordinal` counts from the top of one
+          // router's table, so two routers both have a rule #17.
+          key: `${d.id}:#${r.ordinal}`,
+          display: r.comment.trim() || `#${r.ordinal} — no comment on the router`,
+          chain: r.chain,
+          action: r.action,
+        })
+      }
+    }
+    return out
+  })
+
   interface RuleRow {
     key: string // the rule slug -- the entity key
     label: string
     chain: string | null
     action: string | null
     lastFired: string | null // usage.lastSeen -- null means never fired
+    // Set only on a pushed rule with no usable log-prefix: what to show
+    // in the name column, and the flag that it can never be renamed.
+    unnameable: string | null
   }
 
   const ruleRows = $derived.by((): RuleRow[] => {
     const keys = new Set<string>([...pushedRules.keys(), ...ruleEntities.map((e) => e.key), ...rulesUsage.map((u) => u.rule)])
-    return [...keys]
-      .map((key): RuleRow => {
-        const pushed = pushedRules.get(key) ?? null
-        const usage = usageByRule.get(key) ?? null
-        const entity = ruleEntities.find((e) => e.key === key)
-        return {
-          key,
-          label: entity?.label ?? '',
-          chain: pushed?.chain ?? null,
-          action: pushed?.action ?? null,
-          lastFired: usage?.lastSeen ?? null,
-        }
-      })
-      .sort((a, b) => (a.label || a.key).localeCompare(b.label || b.key))
+    const named = [...keys].map((key): RuleRow => {
+      const pushed = pushedRules.get(key) ?? null
+      const usage = usageByRule.get(key) ?? null
+      const entity = ruleEntities.find((e) => e.key === key)
+      return {
+        key,
+        label: entity?.label ?? '',
+        chain: pushed?.chain ?? null,
+        action: pushed?.action ?? null,
+        lastFired: usage?.lastSeen ?? null,
+        unnameable: null,
+      }
+    })
+    const unnamed = unnamedPushedRules.map(
+      (r): RuleRow => ({
+        key: r.key,
+        label: '',
+        chain: r.chain,
+        action: r.action,
+        // No slug means no event can ever name this rule, so there is no
+        // usage record to read a firing time from.
+        lastFired: null,
+        unnameable: r.display,
+      }),
+    )
+    return [...named, ...unnamed].sort((a, b) =>
+      (a.unnameable || a.label || a.key).localeCompare(b.unnameable || b.label || b.key),
+    )
   })
 
   // --- ports tab: every port named, plus every port seen in traffic
@@ -378,26 +470,23 @@
       })
   })
 
-  // --- tab strip (#681): hosts / rules / ports, the docket's own tab
-  // vocabulary (Docket.svelte) over this page's one table, not a new
-  // kind of furniture. hosts is the default -- the ratified scene's own
-  // table, unchanged. -------------------------------------------------
+  // --- the three views (#804, rounds 37-38): hosts / rules / ports.
   //
-  // Off for round-30 fidelity: round 30's #ent draws the entities table
-  // directly under the router cards, one table of named things, with no
-  // tab strip -- the tabs are unmounted, not deleted (#700, #691). Typed
-  // rather than inferred so the block stays reachable to the type
-  // checker -- a bare `false` narrows to `never` and reports it as
-  // unreachable. Same pattern as LiveTable's RESIZE_HANDLES_ENABLED,
-  // MetricsRegister's LEDGER_ENABLED and Topography's
-  // DEGRADED_NOTE_ENABLED. activeTab stays 'hosts' and is never changed
-  // while the strip is unmounted, so the hosts table -- the ratified
-  // round-29/round-30 table -- is what always renders; naming rules and
-  // ports in context is real work tracked on #681, not lost, and
-  // remounting the strip is all #691 needs to do to bring it back.
-  type Tab = 'hosts' | 'rules' | 'ports'
-  const TABS_ENABLED: boolean = false
-  let activeTab = $state<Tab>('hosts')
+  // Not tabs. #681 built a tab strip here and round 30 drew none, so it
+  // sat behind a TABS_ENABLED gate; rounds 37-38 resolve that by drawing
+  // the metrics page's own idiom instead -- three view names carrying
+  // their counts, "hosts 23 · rules 41 · ports 12", one underlined, over
+  // the same table. Rules and ports are names too, so they are views of
+  // one set of named things rather than three destinations, and the
+  // table under them keeps its look and feel across a switch. The gate
+  // is gone with the furniture it was hiding.
+  //
+  // The switch is the shipped `.sw` pattern from the metrics view
+  // switcher (SceneBar.svelte), so the two read as one idiom rather than
+  // as a lookalike -- buttons, not the drawing's bare spans, so the
+  // views are reachable and operable from the keyboard.
+  type EntityView = 'hosts' | 'rules' | 'ports'
+  let activeView = $state<EntityView>('hosts')
 
   // ---- inline rename (issue #675: rename lives in the table, not a
   // separate form; #681 generalizes it across all three tabs -- same
@@ -474,7 +563,7 @@
     <div class="og">
       <h3>routers — every one that pushes here</h3>
         <div class="fcards">
-          {#each routerRows as d (d.id)}
+          {#each registeredRouters as d (d.id)}
             {@const st = deviceState(d, appState.now)}
             {@const detail = routerDetail[d.id]}
             <div class="fcard" class:live={d.status === 'live'}>
@@ -500,7 +589,24 @@
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
             </div>
           {/each}
-          <div class="fcard berth" class:open={berthOpen}>
+          {#each unregisteredRouters as d (d.id)}
+            {@const detail = routerDetail[d.id]}
+            <div class="fcard unreg">
+              <div class="fhead">
+                <b>{d.name || d.sourceIp}</b><span class="fstate warn">● PUSHING · UNREGISTERED</span>
+              </div>
+              <div class="frow">
+                {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
+                · pushing since {formatHM(d.firstSeen)} · {ratePerSecond(appState.events, d.id, appState.now)} events/s now
+              </div>
+              <div class="frow dim">its lines are kept; it has no name and no zones until it is registered</div>
+              {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
+                <div class="frow dim">{detail.ruleCount} rule{detail.ruleCount === 1 ? '' : 's'} pushed</div>
+              {/if}
+            </div>
+          {/each}
+          {#if unregisteredRouters.length === 0}
+            <div class="fcard berth" class:open={berthOpen}>
             {#if berthOpen}
               <div class="berth-panel" role="group" aria-label="Add a router">
                 <button type="button" class="berth-close" use:focusOnOpen onclick={closeBerth} aria-label="Close">✕</button>
@@ -524,27 +630,36 @@
                 aria-label="Add a router"
               ></button>
             {/if}
-          </div>
+            </div>
+          {/if}
         </div>
     </div>
 
-    {#if TABS_ENABLED}
-      <!-- Unmounted for round-30 fidelity -- see the comment on
-           TABS_ENABLED above. Not deleted: tracked on #691/#681. -->
-      <div class="tab-row" role="tablist" aria-label="Entities">
-        <button class="tab" class:on={activeTab === 'hosts'} role="tab" aria-selected={activeTab === 'hosts'} onclick={() => (activeTab = 'hosts')}>
-          hosts
-        </button>
-        <button class="tab" class:on={activeTab === 'rules'} role="tab" aria-selected={activeTab === 'rules'} onclick={() => (activeTab = 'rules')}>
-          rules
-        </button>
-        <button class="tab" class:on={activeTab === 'ports'} role="tab" aria-selected={activeTab === 'ports'} onclick={() => (activeTab = 'ports')}>
-          ports
-        </button>
-      </div>
-    {/if}
+    <!-- The three views: names with their counts, one underlined, over
+         one table. No descriptor line under them (round 38). -->
+    <div class="eviews" id="eviews" role="group" aria-label="Which names: hosts, rules or ports">
+      <button
+        class="ev"
+        class:on={activeView === 'hosts'}
+        data-v="hosts"
+        aria-pressed={activeView === 'hosts'}
+        onclick={() => (activeView = 'hosts')}>hosts <em>{rows.length}</em></button
+      ><button
+        class="ev"
+        class:on={activeView === 'rules'}
+        data-v="rules"
+        aria-pressed={activeView === 'rules'}
+        onclick={() => (activeView = 'rules')}>rules <em>{ruleRows.length}</em></button
+      ><button
+        class="ev"
+        class:on={activeView === 'ports'}
+        data-v="ports"
+        aria-pressed={activeView === 'ports'}
+        onclick={() => (activeView = 'ports')}>ports <em>{portRows.length}</em></button
+      >
+    </div>
 
-    {#if activeTab === 'hosts'}
+    {#if activeView === 'hosts'}
       <table class="etable">
         <thead>
           <tr>
@@ -572,10 +687,12 @@
                     onblur={() => onRenameBlur('host', row.key)}
                     disabled={renameSaving}
                   />
-                {:else}
+                {:else if canRename}
                   <button type="button" class="rename-btn" onclick={() => startRename('host', row.key, row.label)} title="Click to rename">
                     {row.label || '— click to name —'}
                   </button>
+                {:else}
+                  <span class="static-name" class:dim={!row.label}>{row.label || '—'}</span>
                 {/if}
               </td>
               <td>
@@ -602,10 +719,7 @@
           {/if}
         </tbody>
       </table>
-      <p class="oghint table-hint">
-        a name is yours to give — click one to rename it; the router's own names arrive with its pushes
-      </p>
-    {:else if activeTab === 'rules'}
+    {:else if activeView === 'rules'}
       <table class="etable">
         <thead>
           <tr>
@@ -619,7 +733,9 @@
           {#each ruleRows as row (row.key)}
             <tr>
               <td class="k">
-                {#if isRenaming('rule', row.key)}
+                {#if row.unnameable}
+                  <span class="static-name dim">{row.unnameable}</span>
+                {:else if isRenaming('rule', row.key)}
                   <input
                     class="rename-input"
                     type="text"
@@ -630,10 +746,12 @@
                     onblur={() => onRenameBlur('rule', row.key)}
                     disabled={renameSaving}
                   />
-                {:else}
+                {:else if canRename}
                   <button type="button" class="rename-btn" onclick={() => startRename('rule', row.key, row.label)} title="Click to rename">
                     {row.label || row.key}
                   </button>
+                {:else}
+                  <span class="static-name">{row.label || row.key}</span>
                 {/if}
               </td>
               <td class="dim">{row.chain ?? '—'}</td>
@@ -651,9 +769,6 @@
           {/if}
         </tbody>
       </table>
-      <p class="oghint table-hint">
-        a name is yours to give — click one to rename it; a rule that has never fired still gets a row, not silence
-      </p>
     {:else}
       <table class="etable">
         <thead>
@@ -678,10 +793,12 @@
                     onblur={() => onRenameBlur('port', row.key)}
                     disabled={renameSaving}
                   />
-                {:else}
+                {:else if canRename}
                   <button type="button" class="rename-btn" onclick={() => startRename('port', row.key, row.label)} title="Click to rename">
-                    {row.label || '— click to name —'}
+                    {row.label || '— · unnamed'}
                   </button>
+                {:else}
+                  <span class="static-name" class:dim={!row.label}>{row.label || '— · unnamed'}</span>
                 {/if}
               </td>
               <td>{row.key}</td>
@@ -696,9 +813,6 @@
           {/if}
         </tbody>
       </table>
-      <p class="oghint table-hint">
-        a name is yours to give — click one to rename it; a port earns its row by showing up in traffic
-      </p>
     {/if}
   </div></div>
 </div>
@@ -738,39 +852,45 @@
     color: var(--fg-dim);
   }
 
-  /* --- the tab strip (#681): the docket's own tab vocabulary
-     (Docket.svelte's .tab-row/.tab), reused rather than reinvented. --- */
-  .tab-row {
+  /* --- the three views (rounds 37-38's `.eviews`): quiet sans names
+     carrying their counts, the active one in full ink over an accent
+     rule. The same idiom as the metrics view switcher (SceneBar's
+     `.sw`), which is the point -- one way of choosing a view of one
+     data set, not a second kind of furniture. --- */
+  .eviews {
     display: flex;
-    align-items: center;
-    gap: 4px;
-    margin-bottom: 10px;
+    gap: 16px;
+    align-items: baseline;
+    margin: 14px 0 8px;
   }
 
-  .tab {
+  .ev {
     background: transparent;
     border: none;
-    border-bottom: 2px solid transparent;
+    border-bottom: 1px solid transparent;
+    padding: 0 0 2px;
+    font: 500 11px var(--font-sans);
     color: var(--fg-dim);
-    font-size: 13px;
-    padding: 4px 10px 6px;
     cursor: pointer;
   }
 
-  .tab:hover {
-    color: var(--fg-muted);
+  .ev:hover {
+    color: var(--fg);
   }
 
-  .tab.on {
+  .ev.on {
     color: var(--fg);
     border-bottom-color: var(--accent);
   }
 
-  .oghint {
-    margin: 8px 0 0;
-    font-size: 11.5px;
-    font-style: italic;
+  /* The count rides its name in the tables' own mono, a size down and
+     dim, so the name stays the thing being read. */
+  .ev em {
+    font-style: normal;
+    font-family: var(--font-mono);
+    font-size: 10px;
     color: var(--fg-dim);
+    margin-left: 3px;
   }
 
   .dim {
@@ -795,6 +915,15 @@
 
   .fcard.live {
     border-color: var(--hair-2);
+  }
+
+  /* The unregistered router, standing in the berth's slot (rounds
+     37-38). Its border is --now -- the time/attention ink, not --alarm:
+     a router that pushes without being registered is something to look
+     at, not something going wrong, and its lines are being kept either
+     way. No new colour is introduced for it. */
+  .fcard.unreg {
+    border-color: color-mix(in srgb, var(--now) 45%, transparent);
   }
 
   /* The empty berth (#718): a further grid cell in .fcards, same
@@ -937,6 +1066,12 @@
     color: var(--fg-dim);
   }
 
+  /* PUSHING · UNREGISTERED: the time/attention ink, not the alarm one
+     (see .fcard.unreg). */
+  .fstate.warn {
+    color: var(--now);
+  }
+
   .fcard .frow {
     padding: 3px 0;
   }
@@ -985,6 +1120,16 @@
 
   .etable td.k {
     color: var(--fg);
+  }
+
+  /* A name nobody here can change: the read-only viewer's rows, and any
+     tier's view of a rule with no comment on the router. Plain text --
+     no hover, no dashed edge, no text cursor -- so it does not look
+     clickable, which is the whole of what rounds 37-38 ask of it. The
+     row says nothing about why; the account chip already did. */
+  .static-name {
+    font: inherit;
+    color: inherit;
   }
 
   .rename-btn {
