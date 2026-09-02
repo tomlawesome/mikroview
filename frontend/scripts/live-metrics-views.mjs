@@ -186,8 +186,17 @@ check(
 )
 
 // Two chart inks only: no per-series hue cycling survived the rewrite.
-const inks = await page.$$eval('.drum svg path', (els) =>
-  [...new Set(els.map((e) => getComputedStyle(e).fill))].sort(),
+//
+// The drum draws its data as mirrored strokes, not filled shapes
+// (MetricsSeismograph.svelte:177-178 -- `<line class="stroke outer">` and
+// `.inner`), so the ink to count is their stroke: --chart-traffic and
+// --chart-refused, the two the CSS sets at lines 233-240. The previous
+// query asked for `fill` on `path`, and the component has never rendered
+// a path -- it collected nothing and reported an empty list as a failure.
+// The amber time marks (midline, brink, cursor) are deliberately out of
+// scope: amber is time, not a series ink.
+const inks = await page.$$eval('.drum svg line.stroke', (els) =>
+  [...new Set(els.map((e) => getComputedStyle(e).stroke))].sort(),
 )
 check(inks.length > 0 && inks.length <= 2, `two chart inks only -- got ${JSON.stringify(inks)}`)
 
@@ -314,18 +323,25 @@ check(
 // Amber is time. A cursor drawn in a series ink would be the record's
 // one colour rule broken on the most prominent mark on the page.
 check(registerCursor?.timeColour === true, `the cursor wears the time colour -- got ${registerCursor?.stroke}`)
-const crossSection = (await page.locator('.cross-section h3').textContent()).trim()
+// The cross-section panel is unmounted for round 30
+// (MetricsRegister.svelte:118, `CROSS_SECTION_ENABLED = false`): the
+// minute under the cursor is read from the scene's own header line rather
+// than an aside, and the panel's empty-state instruction was part of the
+// printed apparatus the round struck everywhere. Unmounted, not deleted;
+// tracked on #691.
+//
+// Pinned as the present truth rather than the stale claim -- the same
+// treatment live-engine-room.mjs gives the missing READ-ONLY declaration.
+// Waiting on the panel instead throws, and the throw costs this scenario
+// every check below it: the persisted preference, the reload, and the
+// whole keyboard contract. When #691 remounts the panel, restore the two
+// assertions this replaced:
+//
+//   .cross-section h3          -> `The minute ${chosenMinute}`
+//   .cross-section .xs-row dt  -> 8 rows, the last of them "flag episodes"
 check(
-  crossSection === `The minute ${chosenMinute}`,
-  `the register reads the same minute across the page -- got "${crossSection}"`,
-)
-
-// The cursor reads the whole minute, not one series: every traffic
-// series plus the episode count is in the cross-section.
-const crossRows = await page.$$eval('.cross-section .xs-row dt', (els) => els.map((e) => e.textContent.trim()))
-check(
-  crossRows.length === 8 && crossRows[crossRows.length - 1] === 'flag episodes',
-  `the cursor reads every series at once -- got ${JSON.stringify(crossRows)}`,
+  (await page.locator('.cross-section').count()) === 0,
+  "no cross-section panel renders (#691 gap, not this scenario's to fix)",
 )
 
 // --- The preference is persisted, and applied before first paint ---------
