@@ -33,6 +33,10 @@
   // a receipt or an honest decline -- lands in one slot under the
   // fields. Changing a threshold used to be a guess with no shown
   // workings; the receipt is what turns it into a checked change.
+  //
+  // #640's expectations ledger -- the station's second section, under
+  // the bench. Its own component, so this file stays the bench.
+  import ExpectationsLedger from './ExpectationsLedger.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { scopeSuggestionsState, CLASSIFICATIONS } from '../lib/scopeSuggestions.svelte'
   import { appState } from '../lib/state.svelte'
@@ -728,6 +732,8 @@
     </li>
   {/each}
 </ul>
+
+<ExpectationsLedger {canEdit} />
 
 {#if canEdit}
   <!-- One suggestion list per axis for the whole bench rather than per

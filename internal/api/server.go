@@ -352,6 +352,12 @@ func (s *Server) routes() []route {
 		// route in this table already uses (definitions/{id},
 		// tokens/{id}, users/{id}).
 		{http.MethodDelete, "/api/flags/verdict/{id}", s.handleFlagsVerdictUndo},
+		// #640's ledger. Same literal-then-wildcard shape as the DELETE
+		// route above it, for the reason the comment above gives: a
+		// wildcard-then-literal fourth segment under /api/flags/ cannot
+		// be registered alongside it.
+		{http.MethodGet, "/api/flags/expectations", s.handleExpectationsList},
+		{http.MethodDelete, "/api/flags/expectations/{id}", s.handleExpectationForget},
 
 		// The one definitions surface (issue #407), replacing
 		// /api/detectors and /api/watchlist/entries wholesale. A shipped

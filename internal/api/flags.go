@@ -218,3 +218,58 @@ func (s *Server) handleFlagsClearAll(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": n})
 }
+
+// handleExpectationsList serves the ledger (#640 part C): every
+// expectation this deployment has recorded -- what the operator has
+// told mikroview is normal here -- with each entry's recorded size,
+// how many firings it has absorbed and when it was first made (see
+// flags.Exclusion).
+//
+// Viewer tier, the same "core read" as GET /api/flags. An expectation
+// is the reason a firing that would otherwise be on the flags card is
+// not, so a caller who may read the flags but not the expectations
+// behind them is reading half the story -- and reading the ledger
+// changes nothing, which is the line #653 drew for the viewer tier.
+//
+// It reads the same entries handleExclusionsList above serves. The two
+// differ in who they are for, not in what they read: that one is the
+// admin's undo surface for the admin-only clear-permanent, this one is
+// the operator's own record of what they have taught this instance.
+// #640's part B retires exclude-forever and the admin pair with it,
+// leaving this pair as the only view of them; splitting the delivery
+// is why both exist at once here rather than either being a shim.
+func (s *Server) handleExpectationsList(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"expectations": s.Flags.ListExclusions()})
+}
+
+// handleExpectationForget removes one expectation, so its (Type,
+// Target) raises again from its next firing -- the ledger's per-row
+// Forget control.
+//
+// User tier, matching POST /api/flags/{id}/verdict rather than the
+// admin gate on handleExclusionRemove above: the operator who can say
+// "expected" can take it back, and an undo must not be harder to reach
+// than the thing it undoes. The asymmetry on the admin pair is not
+// duplicated here because it follows from *its* creating action being
+// admin-only, and because forgetting only ever re-arms detection --
+// the safe direction, unlike the exclusion that created it.
+//
+// 204 with no body on success, 404 when no expectation has that id.
+// Deliberately not handleExclusionRemove's "no-op, not an error" 200:
+// there the caller may be a stale affordance racing a page that moved
+// on, while here the operator clicked a row they can see, so a silent
+// success on an unknown id would leave the ledger looking pruned when
+// nothing was.
+func (s *Server) handleExpectationForget(w http.ResponseWriter, r *http.Request) {
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
+		return
+	}
+	id := r.PathValue("id")
+	if !s.Flags.RemoveExclusionByID(id) {
+		http.Error(w, "expectation not found", http.StatusNotFound)
+		return
+	}
+	s.Audit.Record(auditActor(r), "flag.expectation_forget", id, "")
+	w.WriteHeader(http.StatusNoContent)
+}
