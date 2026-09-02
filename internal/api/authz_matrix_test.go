@@ -170,6 +170,8 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/routeros/{device}/addresses", accessViewer,
 		"the pushed /ip/address table (#627), same tier as the rules/NAT rows above"},
 	{http.MethodGet, "/api/flags", accessViewer, "core read"},
+	{http.MethodGet, "/api/flags/expectations", accessViewer,
+		"core read (#640's ledger): an expectation is the reason a firing is absent from the flags card above, so a caller who may read the flags but not the expectations behind them is reading half the story -- and reading the ledger changes nothing. Deliberately NOT in readOnlyRoutes: nothing asked for it to be token-reachable"},
 
 	// -- Operational writes (user tier) ---------------------------------
 	//
@@ -194,6 +196,12 @@ var authzMatrix = []routeExpectation{
 			"reversing a judgement is no more dangerous than making one. Not \"/{id}/verdict\": see the " +
 			"registration comment in server.go for why that shape can't be registered here. Tightened from " +
 			"viewer to user tier by #653, same reasoning as clear-all above"},
+	{http.MethodDelete, "/api/flags/expectations/{id}", accessUser,
+		"#640's Forget control on the ledger -- same tier as the verdict that records an expectation, since " +
+			"the operator who can say \"expected\" can take it back, and an undo must not be harder to reach " +
+			"than the thing it undoes. Not the admin gate on DELETE /api/flags/exclusions/{id} below: that " +
+			"one follows its creating action (clear-permanent) being admin-only, and forgetting only ever " +
+			"re-arms detection, which is the safe direction"},
 
 	// -- Admin only ----------------------------------------------------
 	{http.MethodPost, "/api/flags/{id}/clear-permanent", accessAdmin,

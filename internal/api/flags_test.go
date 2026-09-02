@@ -956,3 +956,234 @@ func TestHandleFlagsClearAllOnEmptyStoreSkipsAudit(t *testing.T) {
 		}
 	}
 }
+
+// --- #640's expectations ledger --------------------------------------
+//
+// The ledger is the record that an expectation is earning its place, so
+// what these pin is that the endpoint carries the three facts a row is
+// made of -- recorded size, absorbed count, since when -- and not just
+// the (Type, Target) pair the older exclusions list already served.
+
+func TestHandleExpectationsListServesTheLedger(t *testing.T) {
+	s, _ := newTestServer(t)
+	size := 20
+	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", nil, flags.Evidence{}, "", false, &size, time.Now())
+	flagID := s.Flags.List()[0].ID
+	if !s.Flags.ClearAndExclude(flagID, time.Now()) {
+		t.Fatal("expected the flag to be known to ClearAndExclude")
+	}
+	// A firing inside the tolerance, so the row has an absorbed count to
+	// report -- a zero could not tell "never absorbed anything" from
+	// "the field is not served at all".
+	within := 25
+	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.9", "25 distinct ports in 60s", nil, flags.Evidence{}, "", false, &within, time.Now())
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/flags/expectations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Expectations []flags.Exclusion `json:"expectations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Expectations) != 1 {
+		t.Fatalf("expected 1 expectation, got %+v", body.Expectations)
+	}
+	e := body.Expectations[0]
+	if e.ID != flagID || e.Type != flags.TypePortScan || e.Target != "203.0.113.9" {
+		t.Errorf("unexpected expectation identity: %+v", e)
+	}
+	if e.Size == nil || *e.Size != size {
+		t.Errorf("size = %v, want %d -- the ledger row's \"up to N\"", e.Size, size)
+	}
+	if e.Absorbed != 1 {
+		t.Errorf("absorbed = %d, want 1", e.Absorbed)
+	}
+	if e.Since.IsZero() {
+		t.Error("since is zero -- the row cannot say when the expectation was made")
+	}
+}
+
+// A detector that declares no size records a size-less expectation, and
+// the ledger has to be able to tell that from a size of zero: the row
+// reads "any size" for one and "up to 0" for the other, which are
+// opposite meanings.
+func TestHandleExpectationsListKeepsASizelessExpectationSizeless(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypeGlobalSpike, "all", "spike", time.Now())
+	if !s.Flags.ClearAndExclude(s.Flags.List()[0].ID, time.Now()) {
+		t.Fatal("expected the flag to be known to ClearAndExclude")
+	}
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/flags/expectations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Expectations []flags.Exclusion `json:"expectations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Expectations) != 1 || body.Expectations[0].Size != nil {
+		t.Errorf("expected one size-less expectation, got %+v", body.Expectations)
+	}
+}
+
+func TestHandleExpectationForgetRemovesItAndRearmsDetection(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Exclude(flags.TypePortScan, "203.0.113.9")
+	id := s.Flags.ListExclusions()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	if s.Flags.Excluded(flags.TypePortScan, "203.0.113.9") {
+		t.Error("expected the expectation to be gone from the store, not just from the response")
+	}
+	// Forgetting is only worth anything if the pair can flag again.
+	if !s.Flags.Add(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", time.Now()) {
+		t.Error("expected a forgotten pair to raise a new episode")
+	}
+}
+
+// 404, not handleExclusionRemove's no-op 200: the operator clicked a row
+// they could see, so a silent success would leave the ledger looking
+// pruned when nothing was.
+func TestHandleExpectationForgetUnknownIDReturns404(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/nope", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for an unknown expectation", resp.StatusCode)
+	}
+}
+
+func TestHandleExpectationForgetIsAuditLogged(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Exclude(flags.TypePortScan, "203.0.113.9")
+	id := s.Flags.ListExclusions()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	resp, err := adminClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	var found bool
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "flag.expectation_forget" && e.Target == id {
+			found = true
+			if e.Actor != "admin" {
+				t.Errorf("audit entry actor = %q, want admin", e.Actor)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a flag.expectation_forget audit entry for %s, got: %+v", id, s.Audit.Query(audit.Query{}).Entries)
+	}
+}
+
+// The tier split the ledger is built on: a viewer may read it -- an
+// expectation explains why a flag it can see is absent -- but only a
+// user may forget one.
+func TestHandleExpectationsViewerReadsButCannotForget(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Exclude(flags.TypePortScan, "203.0.113.9")
+	id := s.Flags.ListExclusions()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
+
+	listResp, err := viewerClient.Get(ts.URL + "/api/flags/expectations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a viewer to read the ledger, got %d", listResp.StatusCode)
+	}
+
+	viewerDelete, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
+	viewerDelete.Header.Set(csrfHeaderName, csrfHeaderValue)
+	viewerResp, err := viewerClient.Do(viewerDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer viewerResp.Body.Close()
+	if viewerResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a viewer forget to be forbidden, got %d", viewerResp.StatusCode)
+	}
+	if !s.Flags.Excluded(flags.TypePortScan, "203.0.113.9") {
+		t.Error("a refused forget must have no effect")
+	}
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+
+	userDelete, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
+	userDelete.Header.Set(csrfHeaderName, csrfHeaderValue)
+	userResp, err := userClient.Do(userDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer userResp.Body.Close()
+	if userResp.StatusCode != http.StatusNoContent {
+		t.Errorf("expected a user forget to succeed with 204, got %d", userResp.StatusCode)
+	}
+}
