@@ -166,7 +166,7 @@ func TestShippedOffHours_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if !fs.Clear(f2.ID, day15.Add(time.Minute)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", day15.Add(time.Minute)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	reviveAt := day15.Add(2 * time.Minute)

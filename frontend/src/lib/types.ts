@@ -445,12 +445,6 @@ export interface DefinitionProvenance {
   shippedParams?: Record<string, unknown>
 }
 
-export interface DefinitionSuppression {
-  id: string
-  target: string
-  reason?: string
-}
-
 // A definition either produces a replay receipt or declares why it never
 // can; known is false only when the server could not build it at all.
 // Kept as three fields rather than collapsed into one, because "cannot
@@ -460,6 +454,64 @@ export interface DefinitionReplayability {
   known: boolean
   capable: boolean
   reason?: string
+}
+
+// What one replay covered (internal/api's windowView, engine.Window).
+// Mandatory on a receipt and never omitted: a count without the window it
+// was counted over is the overclaim #403's contract exists to rule out.
+// duration is a Go duration string ("4h12m0s") -- read it with
+// parseGoDurationSeconds, the same way a duration param is read.
+export interface ReplayWindow {
+  start: string
+  end: string
+  duration: string
+  eventCount: number
+}
+
+// One emission a replay would have produced (internal/api's sampleView),
+// bounded server-side -- see ReplayReceipt.sampleTruncated.
+export interface ReplaySample {
+  at: string
+  target: string
+  detail: string
+  ports?: number[]
+  hosts?: string[]
+  labels?: string[]
+  provisional: boolean
+}
+
+// The answer when the corpus was long enough to answer honestly
+// (internal/api's receiptView, engine.Receipt).
+//
+// The two truncation flags are separate facts and not interchangeable:
+// corpusTruncated means the corpus read was cut short, so emissionCount
+// is a floor rather than a total; sampleTruncated means only that the
+// listed sample is bounded, with emissionCount still exact.
+export interface ReplayReceipt {
+  window: ReplayWindow
+  emissionCount: number
+  sample: ReplaySample[]
+  sampleTruncated: boolean
+  corpusTruncated: boolean
+  anyProvisional: boolean
+}
+
+// The answer when it could not be answered honestly (internal/api's
+// declineView, engine.Decline): the corpus held less traffic than the
+// definition's window needs. corpusSpan and definitionWindow are Go
+// duration strings, like ReplayWindow.duration.
+export interface ReplayDecline {
+  reason: string
+  corpusSpan: string
+  definitionWindow: string
+}
+
+// Exactly one of receipt or decline is set, mirroring engine.Result's own
+// structural either/or -- a caller has to handle the decline rather than
+// reading a short corpus as a receipt with a suspiciously small count.
+export interface ReplayResult {
+  receipt?: ReplayReceipt
+  decline?: ReplayDecline
 }
 
 export interface Definition {
@@ -473,7 +525,6 @@ export interface Definition {
   params?: Record<string, unknown>
   paramSchema?: DefinitionParamSchema[]
   provenance: DefinitionProvenance
-  suppressions?: DefinitionSuppression[]
   available: boolean
   // Present only where a param differs from what the definition shipped
   // with -- an empty object and an absent key both mean "stock".
@@ -687,8 +738,10 @@ export interface Evidence {
   ports?: number[]
   hosts?: string[]
   nat?: NATInfo
-  // pairs/pairsTotal/pairsTotalIsFloor (#654): currently only
-  // critical_port. pairs is capped the same way ports/hosts are (see
+  // pairs/pairsTotal/pairsTotalIsFloor (#654): critical_port, and since
+  // #641 outbound_anomaly and internal_recon, whose pairs are what an
+  // expected verdict permits and what a "watch for this" draft is built
+  // from. pairs is capped the same way ports/hosts are (see
   // internal/engine's maxEvidencePairs); pairsTotal is the distinct-pair
   // count before that display cap, present only when the cap actually
   // truncated the list -- absent (undefined) means pairs is already the
@@ -716,23 +769,47 @@ export interface Evidence {
   srcMac?: string
 }
 
-// Mirrors internal/flags.Exclusion's JSON tags -- one permanently-
-// excluded (Type, Target) pair (see flags.svelte.ts's clearPermanent and
-// exclusions.svelte.ts). id is the same flagID(Type, Target) key a
+// Mirrors internal/flags.Exclusion's JSON tags -- one recorded
+// expectation for a (Type, Target) pair (#640; read by
+// ExpectationsLedger.svelte). id is the same flagID(Type, Target) key a
 // Flag's own id already uses.
 export interface Exclusion {
   id: string
   type: FlagType
   target: string
+  // #640 turned an exclusion into a sized expectation, and these three
+  // are what the ledger (ExpectationsLedger.svelte) reads. All optional
+  // because the Go side omits them when empty and because an entry
+  // recorded before #640 genuinely has none.
+  //
+  // size is the measure recorded when the expectation was made -- the
+  // firing the operator judged normal. Absent (not zero) means the
+  // detector declares no size, which is the older, blunter "ignore this
+  // host on this detector": the row reads "any size" rather than "up
+  // to 0", which is the opposite meaning.
+  size?: number
+  // How many firings this expectation has suppressed -- the ledger's
+  // evidence that it is earning its place.
+  absorbed?: number
+  // When the expectation was first recorded, RFC 3339.
+  since?: string
 }
 
-// An operator's triage judgement on a flag (issue #638) -- set once via
-// POST /api/flags/{id}/verdict and never re-asked afterward. 'expected'
-// (legitimate traffic) and 'noise' (real traffic, wrong threshold) both
-// clear the flag as a side effect of judging it; 'real' (genuine
-// concern) does not, and is the invariant that later auto-tune must
-// never contradict by suggesting a threshold that would have dropped it.
-export type Verdict = 'expected' | 'noise' | 'real'
+// An operator's judgement of a flag (#640), set via
+// POST /api/flags/{id}/verdict. Every flag ends as one of these four --
+// there is no way to dismiss one without a judgement:
+//
+//   - 'expected': normal for this host, at this size. Clears, and
+//     records an expectation that absorbs further firings within 1.5x
+//     the size this one had.
+//   - 'checked': looked at, fine this time. Clears, suppresses nothing,
+//     and is remembered so a re-fire can say when it was checked.
+//   - 'investigate': of concern, being looked at. The one verdict that
+//     leaves the flag open; the row then offers expected or resolved.
+//   - 'resolved': dealt with, normally by a firewall change. Clears, and
+//     deliberately does not suppress -- if it comes back, the fix was
+//     not what was intended.
+export type Verdict = 'expected' | 'checked' | 'investigate' | 'resolved'
 
 export interface Flag {
   id: string
@@ -769,13 +846,30 @@ export interface Flag {
   // not flip to false in place if the same episode's baseline later
   // clears its floor (see internal/flags.Store.add's own doc comment).
   provisional?: boolean
-  // Verdict/verdictBy/verdictAt (#638): all three present together or
-  // all absent -- absent means never judged, not "judged with no
+  // Verdict/verdictBy/verdictAt (#638, #640): all three present together
+  // or all absent -- absent means never judged, not "judged with no
   // opinion." verdictBy is the account that judged it; verdictAt is
   // RFC3339.
   verdict?: Verdict
   verdictBy?: string
   verdictAt?: string
+  // priorVerdict/priorVerdictAt (#640): the checked or resolved
+  // judgement this pair carried the last time it was cleared, kept
+  // across the re-fire that resets `verdict`. Present only on a flag
+  // that has come back after one of those two verdicts -- which is
+  // exactly when the card says "you checked this on 2 Sept and found it
+  // fine" or "resolved on 2 Sept -- it's back".
+  priorVerdict?: Verdict
+  priorVerdictAt?: string
+  // size/expectedSize (#640): this firing's own size (the measure the
+  // detector compares against its threshold -- distinct ports for
+  // port_scan, and so on), and the size an expectation for this pair had
+  // recorded when this firing broke past it. expectedSize is present
+  // only on a firing an expectation refused to absorb, so its presence
+  // is exactly the "expected up to 30, saw 120" case. Both absent for a
+  // detector that declares no size.
+  size?: number
+  expectedSize?: number
 }
 
 // Mirrors internal/flags.FlagTimeBucket's JSON tags -- same shape

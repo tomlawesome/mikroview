@@ -342,8 +342,8 @@ raw() {
 
 # portscan N [source-ip] -- N distinct destination ports from one source
 # IP, inside the default port-scan window, so a real port_scan flag gets
-# raised rather than synthesized -- for scenarios (live-exclusions.mjs,
-# live-flags-clearing.mjs) that need an actual flag to clear/exclude, not
+# raised rather than synthesized -- for scenarios (live-verdicts.mjs,
+# live-flags-expectations.mjs) that need an actual flag to judge, not
 # just events in the table. source-ip defaults to 198.51.100.77;
 # pass a different one to raise a second, independent flag.
 portscan() {
@@ -356,6 +356,24 @@ for i in range(n):
           f"{src}:{40000+i}->192.168.1.10:{1000+i}, len 60")
 PY
   echo "sent a ${1:-20}-port scan from ${2:-198.51.100.77}" >&2
+}
+
+# recon N [source-ip] [dest-port] -- N distinct *internal* destinations
+# from one LAN source inside internal_recon's default 60s window, each
+# reached on a stated port, so a real internal_recon flag is raised
+# carrying evidence pairs (#641) rather than the test synthesizing them.
+# source-ip defaults to 192.168.1.60 and the port to 445; pass a
+# different source to raise a second, independent flag.
+recon() {
+  python3 - "${1:-12}" "${2:-192.168.1.60}" "${3:-445}" <<'PY' | send_tls
+import sys
+n, src, port = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+for i in range(n):
+    print(f"firewall,info D|recon-src| forward: in:ether1 out:bridge1, "
+          f"connection-state:new, proto TCP (SYN), "
+          f"{src}:{40000+i}->192.168.1.{100+i}:{port}, len 60")
+PY
+  echo "sent a ${1:-12}-destination internal sweep from ${2:-192.168.1.60} on port ${3:-445}" >&2
 }
 
 down() {
@@ -372,6 +390,7 @@ case "${1:-}" in
   syslog) shift; syslog "$@" ;;
   raw) shift; raw "$@" ;;
   portscan) shift; portscan "$@" ;;
+  recon) shift; recon "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|syslog N [label]|raw LINE|portscan N [src-ip]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|syslog N [label]|raw LINE|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
 esac

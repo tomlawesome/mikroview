@@ -309,7 +309,7 @@ func (s *DefinitionsStore) GetExpectation(id string) (watchlist.Entry, bool, err
 // "shipped definitions are disabled-never-deleted" invariant (#401) holds
 // exactly where it was written to hold.
 //
-// Enabled, Scope, Suppressions and Description are carried over from the
+// Enabled, Scope and Description are carried over from the
 // existing definition when one exists: they are envelope properties an
 // operator sets through the definitions API, not properties of the entry,
 // and an entry edit must not silently reset them.
@@ -371,7 +371,6 @@ func (s *DefinitionsStore) writeExpectationLocked(e watchlist.Entry, countAsNew 
 		// UpsertExpectation's own doc comment.
 		def.Enabled = previous.Enabled
 		def.Scope = previous.Scope
-		def.Suppressions = previous.Suppressions
 		if previous.Description != "" {
 			def.Description = previous.Description
 		}
