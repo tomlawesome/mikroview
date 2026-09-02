@@ -280,6 +280,16 @@ type Server struct {
 	// window for the one production caller of SetEnabledAndScope (this
 	// handler); zero value is ready to use, same as ingestAuditMu above.
 	definitionsEnabledScopeMu sync.Mutex
+
+	// verdictWatchlistMu serializes the verdict handlers' compound work
+	// (issue #641): an expected verdict writes an expectation into the
+	// flags store *and* permitted destinations onto the device's inverted
+	// watchlist entry, and undoing or re-judging it takes both back. Two
+	// verdicts about the same device interleaving could let one's
+	// promotion land inside the other's withdrawal, leaving the device
+	// permitted somewhere no record still claims. Zero value is ready to
+	// use, same as the two above.
+	verdictWatchlistMu sync.Mutex
 }
 
 // route is one registered endpoint. Routes are declared as data rather

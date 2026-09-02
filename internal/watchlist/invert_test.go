@@ -80,3 +80,54 @@ func TestPromoteDoesNotChangeObserving(t *testing.T) {
 		t.Error("Promote must not change Observing -- that is the caller's job")
 	}
 }
+
+// Unpermit (#641) is what makes an automatic permission reversible: an
+// expected verdict permits a flag's evidence pairs, and undoing it takes
+// back exactly those.
+func TestUnpermitRemovesOnlyTheNamedPairs(t *testing.T) {
+	e := inverted("e1", nil)
+	e.Promote([]PermittedDest{
+		{DestIP: "10.0.0.5", Port: 8883},
+		{DestIP: "10.0.0.6", Port: 443},
+	})
+
+	e.Unpermit([]PermittedDest{{DestIP: "10.0.0.5", Port: 8883}})
+
+	if len(e.Permitted) != 1 || e.Permitted[0].DestIP != "10.0.0.6" {
+		t.Errorf("Permitted = %+v, want only the pair that was not named", e.Permitted)
+	}
+}
+
+// A pair that is not permitted is a no-op, not an error: an undo may be
+// reversing a permission something else has already removed.
+func TestUnpermitIsIdempotentAndIgnoresUnknownPairs(t *testing.T) {
+	e := inverted("e1", nil)
+	e.Promote([]PermittedDest{{DestIP: "10.0.0.5", Port: 8883}})
+
+	e.Unpermit([]PermittedDest{{DestIP: "10.0.0.9", Port: 22}})
+	if len(e.Permitted) != 1 {
+		t.Errorf("Permitted = %+v, want the unrelated pair untouched", e.Permitted)
+	}
+
+	pair := []PermittedDest{{DestIP: "10.0.0.5", Port: 8883}}
+	e.Unpermit(pair)
+	e.Unpermit(pair)
+	if len(e.Permitted) != 0 {
+		t.Errorf("Permitted = %+v, want empty", e.Permitted)
+	}
+}
+
+// Unpermit is deliberately not Promote's mirror image: a pair removed
+// here does not reappear in Observed, because an expected verdict's
+// pairs came from a flag's evidence and may never have been observed by
+// this entry at all.
+func TestUnpermitDoesNotRestoreObserved(t *testing.T) {
+	e := inverted("e1", nil)
+	e.Promote([]PermittedDest{{DestIP: "10.0.0.5", Port: 8883}})
+
+	e.Unpermit([]PermittedDest{{DestIP: "10.0.0.5", Port: 8883}})
+
+	if len(e.Observed) != 0 {
+		t.Errorf("Observed = %+v, want nothing put back", e.Observed)
+	}
+}
