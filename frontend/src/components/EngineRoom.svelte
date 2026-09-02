@@ -48,9 +48,11 @@
   import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
   import { fetchSetupStatus, fetchDevices } from '../lib/api'
+  import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
+  import MemoryControl from './MemoryControl.svelte'
   import { usersState } from '../lib/users.svelte'
   import { tokensState } from '../lib/tokens.svelte'
-  import { formatEps, formatHM, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
+  import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf, pushScript } from '../lib/setupsteps'
   import type { SetupStatus, FlagType, Device } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
@@ -250,14 +252,56 @@
     return sums.map((v) => v / max)
   })
 
-  const oldestHeld = $derived.by(() => {
-    const series = appState.stats?.timeSeries ?? []
-    return series.length > 0 ? formatHM(series[0].time) : null
+  // The bar's left end is how far back the buffer actually reaches --
+  // stats.oldestHeld, the store's own oldest surviving event (#703) --
+  // not the start of the one-hour time series the shading is drawn
+  // from. Those two are the same only while the buffer holds less than
+  // an hour; past that, the series start is always 59 minutes ago and
+  // labelling it "the oldest event still held" told an operator with
+  // nine hours of buffer that they had one. The shrink preview below
+  // measures its cut along this axis, so it has to be the real one.
+  const oldestHeldAt = $derived.by(() => {
+    const iso = appState.stats?.oldestHeld
+    if (!iso) return null
+    const t = Date.parse(iso)
+    return Number.isFinite(t) ? t : null
   })
+  const oldestHeld = $derived(oldestHeldAt === null ? null : clockTime(oldestHeldAt))
 
   const retentionHours = $derived(
     appState.stats ? Math.max(1, Math.round(appState.stats.windowSeconds / 3600)) : null,
   )
+
+  // --- memory: the buffer's size is a control (#796, round 39) ---------
+  //
+  // The track itself lives in MemoryControl.svelte, shared with the
+  // setup wizard so the two copies of a control that spends the host's
+  // memory cannot drift apart. What stays here is the half only this
+  // page has: the hours bar, and the cut a shrink would make in it.
+  const mem = $derived(appState.stats?.memory ?? null)
+  let memoryProposal = $state<Proposal | null>(null)
+
+  // The row reads the proposal while one is open and what is running
+  // otherwise -- round 39's own `data-m` variants of this line, which
+  // restate what the figure under the handle would buy.
+  const memoryRow = $derived.by(() => {
+    const stats = appState.stats
+    if (!mem || !stats) return null
+    return bufferRow(memoryProposal?.proposed ?? mem.maxMemory, mem.bytesPerEvent, stats.eventsPerSecond)
+  })
+
+  // Where the shrink's cut falls on the hours bar, in the bar's own
+  // coordinates, or null when nothing would fall away. Placed along the
+  // real reach (oldestHeldAt -> now), which is the axis the bar's own
+  // end labels already claim.
+  const memoryCut = $derived.by(() => {
+    const cutAt = memoryProposal?.newOldest
+    if (cutAt == null || oldestHeldAt === null) return null
+    const span = appState.now - oldestHeldAt
+    if (!(span > 0)) return null
+    const fraction = Math.min(1, Math.max(0, (cutAt - oldestHeldAt) / span))
+    return { x: TRACK_X0 + (TRACK_X1 - TRACK_X0) * fraction, at: clockTime(cutAt) }
+  })
 
   // --- memory: persistence (#677) -------------------------------------
   // Two halves, both live truth rather than the ratified copy's "JSON
@@ -826,38 +870,87 @@
         </div>
       </div>
 
-      <div class="stsection wide">
+      <!-- Round 39's memory group (#796): the hours bar is what is held,
+           the track under it is what is allowed, and dragging the track
+           only proposes -- see docs/design/concepts/round-39/the-whole.html,
+           `#set`, and its README's `#set.mgrow`/`#set.mshrink` states,
+           which are the mgrow/mshrink classes on this section. -->
+      <div
+        id="memg"
+        class="stsection wide"
+        class:mgrow={memoryProposal?.kind === 'grow'}
+        class:mshrink={memoryProposal?.kind === 'shrink'}
+      >
         <h3>memory</h3>
         <div class="wleft">
           {#if memSlices.length > 0}
             <svg
               class="stmem"
-              viewBox="0 0 520 40"
+              viewBox="0 0 520 58"
               role="img"
               aria-label="The event buffer, hour by hour; darker stretches held more, the oldest falls away as the newest arrives"
             >
-              <rect x="8" y="14" width="500" height="10" rx="5" fill="var(--bg-hover)" />
+              <rect x="8" y="20" width="500" height="10" rx="5" fill="var(--bg-hover)" />
               {#each memSlices as v, i (i)}
                 <rect
                   x={8 + (500 / memSlices.length) * i}
-                  y="14"
+                  y="20"
                   width={500 / memSlices.length}
                   height="10"
                   fill="var(--accent)"
                   opacity={0.05 + 0.25 * v}
                 />
               {/each}
-              <rect x="504" y="9" width="3" height="20" rx="1.5" fill="var(--now)" />
-              {#if oldestHeld}
-                <text x="8" y="38" class="sp-n">{oldestHeld} — the oldest event still held</text>
+              <rect x="504" y="15" width="3" height="20" rx="1.5" fill="var(--now)" />
+              <!-- The shrink's own half of the consequence: the stretch
+                   that would let go is dimmed on the bar itself and the
+                   new oldest time is marked, so the loss is shown where
+                   it would happen rather than only described. Drawn only
+                   when something really would fall away -- see
+                   describeProposal, which returns no cut for a buffer
+                   that is nowhere near full. -->
+              {#if memoryCut}
+                <g class="mcut">
+                  <rect x="8" y="20" width={Math.max(0, memoryCut.x - 8)} height="10" rx="5" fill="var(--bg)" opacity="0.75" />
+                  <line x1={memoryCut.x} y1="15" x2={memoryCut.x} y2="35" stroke="var(--fg-muted)" stroke-width="1.2" />
+                  <text
+                    x={memoryCut.x > 300 ? memoryCut.x - 4 : memoryCut.x + 4}
+                    y="50"
+                    text-anchor={memoryCut.x > 300 ? 'end' : 'start'}
+                    class="sp-n">{memoryCut.at} — the oldest that {formatSize(
+                      memoryProposal?.proposed ?? 0,
+                    )} would keep</text
+                  >
+                </g>
+              {:else if oldestHeld}
+                <text x="8" y="50" class="sp-n">{oldestHeld} — the oldest event still held</text>
               {/if}
-              <text x="508" y="38" text-anchor="end" class="sp-k">now</text>
+              <text x="508" y="50" text-anchor="end" class="sp-k">now</text>
             </svg>
           {/if}
           <p class="oghint">the oldest falls away as the newest arrives; darker stretches held more</p>
+
+          {#if mem && appState.stats}
+            <!-- The second track: what is allowed, 32 MiB to what this
+                 host can spare, on a doubling scale. Shared with the
+                 setup wizard (MemoryControl.svelte), which offers the
+                 same control and the same sentence once. -->
+            <MemoryControl
+              {mem}
+              stats={appState.stats}
+              canEdit={isAdmin}
+              bind:proposal={memoryProposal}
+              onapplied={() => appState.refreshDevicesAndStats().catch(() => {})}
+            />
+          {/if}
         </div>
         <div class="wrows">
-          {#if appState.stats}
+          {#if appState.stats && memoryRow}
+            <div class="orow">
+              <span>event buffer</span>
+              <span class="ov">{memoryRow}</span>
+            </div>
+          {:else if appState.stats}
             <div class="orow">
               <span>event buffer</span>
               <span class="ov">

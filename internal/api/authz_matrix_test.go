@@ -135,6 +135,14 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/persistence", accessAdmin,
 		"reports which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses (#677's settings persistence row) -- a filesystem path is the same infrastructure-map disclosure /api/config/problems above is admin-gated for, so this follows it rather than defaulting to viewer the way most of Settings' other reads do"},
 
+	{http.MethodPut, "/api/settings/store", accessAdmin,
+		"sets the event buffer's size on the running instance (#796). Admin rather than user tier for two " +
+			"separate reasons, either sufficient: it spends the host's memory, which is an instance-wide cost " +
+			"nobody else can undo from inside the app, and shrinking it destroys held history -- the only route " +
+			"in mikroview by which a caller can discard evidence a viewer or user was relying on. The read half " +
+			"is deliberately not here: the figure and its bounds ride GET /api/stats, so a viewer sees the bar " +
+			"and the number without being able to move it"},
+
 	// -- Any authenticated session (viewer tier) ------------------------
 	{http.MethodGet, "/api/events", accessViewer,
 		"core read: the live firewall event feed"},
@@ -170,6 +178,8 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/routeros/{device}/addresses", accessViewer,
 		"the pushed /ip/address table (#627), same tier as the rules/NAT rows above"},
 	{http.MethodGet, "/api/flags", accessViewer, "core read"},
+	{http.MethodGet, "/api/flags/expectations", accessViewer,
+		"core read (#640's ledger): an expectation is the reason a firing is absent from the flags card above, so a caller who may read the flags but not the expectations behind them is reading half the story -- and reading the ledger changes nothing. Deliberately NOT in readOnlyRoutes: nothing asked for it to be token-reachable"},
 
 	// -- Operational writes (user tier) ---------------------------------
 	//
@@ -181,27 +191,27 @@ var authzMatrix = []routeExpectation{
 	// currently showing, so these tightened to require at least the user
 	// role.
 	{http.MethodPost, "/api/flags/clear-all", accessUser,
-		"same reversibility as the per-flag clear below, at bulk -- regular clears only, never creates an exclusion. Tightened from viewer to user tier by #653: reversible or not, this changes what mikroview is showing, which a viewer may not do"},
-	{http.MethodPost, "/api/flags/{id}/clear", accessUser,
-		"reversible: a cleared flag raises again on the next matching event, so any user may dismiss noise. Tightened from viewer to user tier by #653, same reasoning as clear-all above"},
+		"reversible: a cleared flag raises again on the next matching event, and a bulk clear records no expectation. Tightened from viewer to user tier by #653: reversible or not, this changes what mikroview is showing, which a viewer may not do"},
 	{http.MethodPost, "/api/flags/{id}/verdict", accessUser,
-		"#638: expected/noise are exactly as reversible as the plain clear above (same clearLocked path, " +
-			"see flags.Store.SetVerdict), and real is reversible too -- it clears nothing and creates no " +
-			"exclusion, unlike the admin-only clear-permanent below. Tightened from viewer to user tier by " +
-			"#653, same reasoning as clear-all above"},
+		"#640: the four verdicts, and the only way one flag leaves the inbox now that the plain clear and " +
+			"the admin-only clear-permanent are gone. User tier for all four, per the ratified design: the " +
+			"expectation an expected verdict records is bounded by the firing the operator just looked at " +
+			"and withdrawn by the undo below, where the exclude-forever it replaces was unbounded and " +
+			"admin-only. Audit-logged, so who decided a pair stops being flagged stays answerable. " +
+			"Tightened from viewer to user tier by #653, same reasoning as clear-all above"},
 	{http.MethodDelete, "/api/flags/verdict/{id}", accessUser,
-		"#638's undo affordance for the row above -- same tier as judging in the first place, since " +
-			"reversing a judgement is no more dangerous than making one. Not \"/{id}/verdict\": see the " +
-			"registration comment in server.go for why that shape can't be registered here. Tightened from " +
-			"viewer to user tier by #653, same reasoning as clear-all above"},
+		"#638's undo affordance for the row above, and #640's withdrawal of the expectation an expected " +
+			"verdict recorded -- same tier as judging in the first place, since reversing a judgement is no " +
+			"more dangerous than making one. Not \"/{id}/verdict\": see the registration comment in " +
+			"server.go for why that shape can't be registered here. Tightened from viewer to user tier by " +
+			"#653, same reasoning as clear-all above"},
+	{http.MethodDelete, "/api/flags/expectations/{id}", accessUser,
+		"#640's Forget control on the ledger -- same tier as the verdict that records an expectation, since " +
+			"the operator who can say \"expected\" can take it back, and an undo must not be harder to reach " +
+			"than the thing it undoes. Forgetting only ever re-arms detection, which is the " +
+			"safe direction"},
 
 	// -- Admin only ----------------------------------------------------
-	{http.MethodPost, "/api/flags/{id}/clear-permanent", accessAdmin,
-		"NOT reversible without an admin: permanently suppresses detection for a (type, target) until someone undoes it"},
-	{http.MethodGet, "/api/flags/exclusions", accessAdmin,
-		"the review surface for permanent exclusions"},
-	{http.MethodDelete, "/api/flags/exclusions/{id}", accessAdmin,
-		"undoes an exclusion, re-arming detection"},
 	// The definitions surface (#407). #385 records the owner decision
 	// that non-admins should eventually see settings surfaces read-only;
 	// #490 was that phase 2's RBAC work, widening the list GET below one

@@ -506,11 +506,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	storeCapacity := cfg.Store.Capacity()
-	logging.New("store").Info(fmt.Sprintf(
-		"event buffer: %s reserved for up to %d events (store.maxMemory) -- once traffic arrives, GET /api/stats reports how full it is and how far back it actually reaches",
-		cfg.Store.MaxMemory, storeCapacity))
-	st := store.New(storeCapacity, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
 	// Tell the syslog listener which sources are the operator's declared
 	// routers, so a flood of undeclared ones cannot take every
@@ -547,6 +542,17 @@ func main() {
 		os.Exit(1)
 	}
 	defer persistence.Close()
+
+	// The event buffer is built here rather than before openStorage
+	// because its size is not the config file's to decide on its own
+	// (#796): if an admin has set a figure from inside the app, that one
+	// applies, and reading it needs the storage backend. Allocating the
+	// file's ring first and resizing afterwards would defeat the point
+	// -- an operator whose file asks for more memory than the host has,
+	// and who lowered it in the UI precisely because of that, would find
+	// the instance still failing to start on the figure they replaced.
+	storeMaxMemory, storeCapacity, settingsStore := openStoreSettings(bootCtx, persistence, cfg)
+	st := store.New(storeCapacity, cfg.Store.Retention)
 
 	flagsBackend, err := persistence.backendFor(bootCtx, "flags", cfg.Flags.StorePath)
 	if err != nil {
@@ -1349,6 +1355,7 @@ func main() {
 		Devices:           devices,
 		MACRegistry:       macRegistry,
 		Setup:             setupStore,
+		Settings:          settingsStore,
 		Hub:               h,
 		Reputation:        rep,
 		NetClass:          nc,
@@ -1387,6 +1394,18 @@ func main() {
 		ConfigProblems:    configProblems,
 		Persistence:       persistenceInfo,
 	}
+
+	// The range the memory control may move within, read from this
+	// host's cgroup or RAM once, here, and never again while the process
+	// runs -- see config.MaxMemoryCeiling for the headroom rule. The
+	// figure in effect is passed alongside it so a deployment already
+	// running a deliberately large budget (#244) is never told its own
+	// current value is out of range.
+	memoryBounds := config.MaxMemoryCeiling(storeMaxMemory)
+	logging.New("store").Info(fmt.Sprintf(
+		"event buffer: adjustable from %s to %s from Settings (%s)",
+		memoryBounds.Min, memoryBounds.Max, memoryBoundsBasis(memoryBounds)))
+	srv.InitMemory(storeMaxMemory, memoryBounds)
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())
