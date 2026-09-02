@@ -58,6 +58,51 @@ if ! git diff --quiet HEAD || ! git diff --cached --quiet; then
   exit 1
 fi
 
+# One host, one branch (`gate-run`), one work tree (`~/gate-work`): the gate
+# has always been single-tenant, but until #809 nothing enforced it. A
+# second run used to force-push over the first run's branch and rm -rf the
+# tree the first run was still standing in -- destroying both runs instead
+# of running one after the other. The lock below makes that single-tenancy
+# explicit: a run that cannot take the lock refuses immediately, which is
+# cheaper than two runs that both fail an hour in. See #809.
+# shellcheck disable=SC2317  # only invoked indirectly, via 'trap release_lock EXIT' below
+release_lock() {
+  local status=$?
+  ssh "$HOST" 'rm -rf ~/gate-lock' >/dev/null 2>&1 || true
+  exit "$status"
+}
+
+OWNER_INFO="host=$(hostname) user=$USER ref=$REF sha=$(git rev-parse --short HEAD) pid=$$ start=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Single-quoted so $HOME, $(...) etc. resolve on the far side, not here --
+# same convention as RECLAIM below. HOST_PLACEHOLDER is swapped for the
+# local $HOST after the fact, since it must name the host as this side
+# knows it, for the hint printed on refusal.
+LOCK_ACQUIRE='set -eu
+if mkdir ~/gate-lock 2>/dev/null; then
+  cat > ~/gate-lock/owner
+  exit 0
+fi
+existing=$(cat ~/gate-lock/owner 2>/dev/null || echo "(no owner file)")
+if [ -n "$(find ~/gate-lock -maxdepth 0 -mmin +15 2>/dev/null)" ] && ! docker ps --format "{{.Names}}" | grep -qx mv-gate-run; then
+  echo "==> gate-lock is older than 15 minutes and no mv-gate-run container is running -- treating it as abandoned" >&2
+  echo "==> previous owner: $existing" >&2
+  rm -rf ~/gate-lock
+  mkdir ~/gate-lock
+  cat > ~/gate-lock/owner
+  exit 0
+fi
+echo "another gate run holds HOST_PLACEHOLDER: $existing; wait for it, or if it is dead: ssh HOST_PLACEHOLDER rm -r ~/gate-lock" >&2
+exit 1
+'
+LOCK_ACQUIRE="${LOCK_ACQUIRE//HOST_PLACEHOLDER/$HOST}"
+
+echo "==> taking the gate lock on $HOST"
+if ! ssh "$HOST" "$LOCK_ACQUIRE" <<<"$OWNER_INFO"; then
+  exit 1
+fi
+trap release_lock EXIT
+
 echo "==> pushing the tree"
 ssh "$HOST" 'mkdir -p ~/gate-repo.git && cd ~/gate-repo.git && git rev-parse --is-bare-repository >/dev/null 2>&1 || git init --bare -q'
 git push --force --quiet "$HOST:gate-repo.git" "HEAD:refs/heads/gate-run"
@@ -69,17 +114,35 @@ git push --force --quiet "$HOST:gate-repo.git" "HEAD:refs/heads/gate-run"
 # the image, which can, before each removal. A no-op when the tree or the
 # image is not there yet, which is the first run.
 RECLAIM='if [ -d ~/gate-work ]; then
-  docker run --rm --user 0 -v "$HOME/gate-work:/work" mv-gate:local \
-    chown -R 0:0 /work >/dev/null 2>&1 || true
+  if ! docker run --rm --user 0 -v "$HOME/gate-work:/work" mv-gate:local \
+    chown -R 0:0 /work >/dev/null 2>&1; then
+    echo "==> warning: could not reclaim ~/gate-work through the image -- rm -rf may leave root-owned files behind" >&2
+  fi
 fi'
 
-echo "==> checking out and building the image (cached after the first run)"
-ssh "$HOST" "$RECLAIM
-set -eu
+# A checkout that git clone reports as clean can still be missing tracked
+# files -- #809's other half, where the second run's rm -rf landed mid
+# checkout and the next clone inherited whatever the OS had not yet
+# deleted. status --porcelain would not catch that on its own (a missing
+# tracked file with nothing re-added just looks clean); ls-files --deleted
+# is what actually sees it.
+CHECKOUT_AND_BUILD='set -eu
 rm -rf ~/gate-work
 git clone -q --branch gate-run ~/gate-repo.git ~/gate-work
 cd ~/gate-work
-docker build -q -f live-check.Dockerfile -t mv-gate:local . >/dev/null"
+dirty=$(git status --porcelain)
+deleted=$(git ls-files --deleted)
+if [ -n "$dirty" ] || [ -n "$deleted" ]; then
+  echo "checkout on $(hostname) is incomplete -- refusing to build:" >&2
+  [ -n "$dirty" ] && printf "%s\n" "$dirty" >&2
+  [ -n "$deleted" ] && printf "%s\n" "$deleted" >&2
+  exit 1
+fi
+docker build -q -f live-check.Dockerfile -t mv-gate:local . >/dev/null'
+
+echo "==> checking out and building the image (cached after the first run)"
+ssh "$HOST" "$RECLAIM
+$CHECKOUT_AND_BUILD"
 
 echo "==> running the gate (35-50 minutes)"
 # --user 0 then dropping to ci-gate inside is deliberate, and is what the
@@ -91,7 +154,7 @@ echo "==> running the gate (35-50 minutes)"
 set +e
 ssh "$HOST" "set -eu
   cd ~/gate-work
-  docker run --rm --user 0 --shm-size=1g -v \"\$HOME/gate-work:/work\" -w /work mv-gate:local bash -c '
+  docker run --rm --name mv-gate-run --user 0 --shm-size=1g -v \"\$HOME/gate-work:/work\" -w /work mv-gate:local bash -c '
     set -e
     useradd -m -u 10001 ci-gate
     chown -R ci-gate:ci-gate /work
