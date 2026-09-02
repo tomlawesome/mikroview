@@ -40,6 +40,7 @@ flags:
   storePath: $dir/flags.json
   ruleUsageStorePath: $dir/rule-usage.json
   detectorSettingsStorePath: $dir/detector-settings.json
+store: {settingsStorePath: $dir/settings.json}
 entities: {storePath: $dir/entities.json}
 coverage: {storePath: $dir/coverage.json}
 audit: {storePath: $dir/audit.json}
