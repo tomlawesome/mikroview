@@ -30,7 +30,7 @@ const ver = page.locator('.account .menu .ver')
 await ver.waitFor({ timeout: 10000 })
 
 const first = (await ver.textContent())?.trim()
-check(/up \d+ d \d+ h$/.test(first ?? ''), `the foot ends in days-and-hours uptime (got ${JSON.stringify(first)})`)
+check(/ · up \d+ d \d+ h$/.test(first ?? ''), `the foot ends in days-and-hours uptime, spaced (got ${JSON.stringify(first)})`)
 
 // The old shape must not come back: no minutes, no seconds, no brackets.
 check(!/\[/.test(first ?? ''), `no brackets around the readout (got ${JSON.stringify(first)})`)
