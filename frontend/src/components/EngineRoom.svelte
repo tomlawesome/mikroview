@@ -465,13 +465,16 @@
 <svelte:window onclick={disarmAll} />
 
 <div class="page scrollbar">
-  <!-- No page heading (#697/#700), which takes the READ-ONLY chip off
+  <!-- No page heading (#697/#700), which took the READ-ONLY chip off
        this page with it: the chip lived in the header, and round 30
-       draws no replacement anywhere. #548's grammar -- read-only
-       declared once, in words, never by disabling every control -- now
-       has nowhere to be said, recorded as a gap on #691 rather than
-       quietly dropped. keys and people stay gated on isAdmin either
-       way. -->
+       drew no replacement anywhere. That left #548's grammar --
+       read-only declared once, in words, never by disabling every
+       control -- with nowhere to be said, recorded here as a gap.
+       Rounds 37-38 close it (#804): the sentence is now on the account
+       chip, "anna (viewer) · read-only" (AccountMenu.svelte), which is
+       the one place every screen already says who you are, so it is
+       said once for the whole app rather than once per page. Nothing is
+       owed here. keys and people stay gated on isAdmin either way. -->
 
   <div class="setlay">
     <div class="og deckcol">
