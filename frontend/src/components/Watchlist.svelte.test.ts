@@ -422,6 +422,37 @@ describe('The match list in a watch drawer (#771)', () => {
     expect(drawer.textContent).not.toContain('r3')
   })
 
+  it('a full page carrying none of this entry\'s records does not mark it exhausted -- the pager keeps walking back for one that does (#819)', async () => {
+    vi.mocked(fetchRecentMatches).mockResolvedValue([matchRecord('m1', 'e1', '2026-08-24T10:00:00Z', 1, 'r1')])
+    // A full OLDER_PAGE page that happens to be entirely another watch
+    // sharing this mac, then a full page that is all this entry's own --
+    // the exact shape loadOlderMatches's own comment on Watchlist.svelte
+    // says a shared identity can produce.
+    const otherPage = Array.from({ length: 20 }, (_, i) =>
+      matchRecord(`other-${i}`, 'other-entry', `2026-08-24T09:${String(40 - i).padStart(2, '0')}:00Z`, 1, 'ro'),
+    )
+    const minePage = Array.from({ length: 20 }, (_, i) =>
+      matchRecord(`mine-${i}`, 'e1', `2026-08-24T08:${String(40 - i).padStart(2, '0')}:00Z`, 1, 'rm'),
+    )
+    vi.mocked(fetchWatchlistMatches).mockResolvedValueOnce(otherPage).mockResolvedValueOnce(minePage)
+    await renderWatchlist([entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } })])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /Open the drawer/ }))
+    flushSync()
+    let drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    await fireEvent.click(within(drawer).getByRole('button', { name: 'older ▸' }))
+    await settle()
+
+    // One click did not stop at the first, entirely-foreign page -- it
+    // asked again and found this entry's own records further back.
+    expect(fetchWatchlistMatches).toHaveBeenCalledTimes(2)
+    drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.querySelector('.matches .lab')?.textContent).toContain('last 3 of 21')
+    // A full page that happened to carry none of this entry's records
+    // must never read as "nothing older": the control stays offered.
+    expect(within(drawer).getByRole('button', { name: 'older ▸' })).toBeTruthy()
+  })
+
   it('offers no older ▸ for an entry with neither a mac nor an ip -- there is nothing to query the match log by', async () => {
     vi.mocked(fetchRecentMatches).mockResolvedValue([matchRecord('m1', 'e1', '2026-08-24T10:00:00Z', 1, 'r1')])
     await renderWatchlist([entry('e1', 'unscoped watch', {})])

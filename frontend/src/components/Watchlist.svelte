@@ -135,6 +135,13 @@
   // 20 per `older ▸`, as #771 specifies -- a drawer is a glance, not the
   // 100-row page the retired Matches tab walked back through.
   const OLDER_PAGE = 20
+  // The per-device page can be all another watch's records when two
+  // entries share a mac/ip (see canLoadOlder's comment). One click walks
+  // up to this many such pages looking for this entry's own records
+  // before giving up for the click, so a long run of the other watch's
+  // traffic cannot hang the button -- it just leaves `older ▸` pressable
+  // again rather than declaring the entry exhausted.
+  const MAX_OLDER_PAGES = 5
 
   // Older pages, per entry. Keyed by entry id and kept separate from
   // matchesState.records, which is the shared newest-100-network-wide
@@ -176,29 +183,54 @@
   async function loadOlderMatches(e: WatchlistEntry) {
     if (olderLoadingId === e.id || !canLoadOlder(e)) return
     const shown = matchesFor(e.id)
-    const oldest = shown[shown.length - 1]
+    const known = new Set(shown.map((m) => m.id))
+    // The cursor is the oldest record already shown, then the oldest
+    // record of whichever page came back last. `until` filters on
+    // firstSeen server-side, so this cannot skip a record; it can repeat
+    // one, which matchesFor's own de-duplication absorbs (the same
+    // argument matches.svelte.ts makes at length for the merged feed's
+    // cursor).
+    let cursor = shown[shown.length - 1]?.lastSeen
     olderLoadingId = e.id
     olderError = { ...olderError, [e.id]: '' }
     try {
-      const page = await fetchWatchlistMatches({
-        mac: e.source?.mac,
-        ip: e.source?.ip,
-        // The cursor is the oldest record already shown. `until` filters
-        // on firstSeen server-side, so this cannot skip a record; it can
-        // repeat one, which matchesFor's own de-duplication absorbs (the
-        // same argument matches.svelte.ts makes at length for the merged
-        // feed's cursor).
-        until: oldest?.lastSeen,
-        limit: OLDER_PAGE,
-      })
-      const mine = page.filter((m) => m.entryId === e.id)
-      const known = new Set(shown.map((m) => m.id))
-      const fresh = mine.filter((m) => !known.has(m.id))
-      olderMatches = { ...olderMatches, [e.id]: [...(olderMatches[e.id] ?? []), ...fresh] }
-      // A page that adds nothing this entry has not already got is the
-      // end of the walk. Reported as "nothing older" rather than left
-      // offering a control that can no longer do anything.
-      olderExhausted = { ...olderExhausted, [e.id]: fresh.length === 0 || page.length < OLDER_PAGE }
+      const collected: WatchlistMatch[] = []
+      let exhausted = false
+      for (let i = 0; i < MAX_OLDER_PAGES; i++) {
+        const page = await fetchWatchlistMatches({
+          mac: e.source?.mac,
+          ip: e.source?.ip,
+          until: cursor,
+          limit: OLDER_PAGE,
+        })
+        if (page.length === 0) {
+          exhausted = true
+          break
+        }
+        const mine = page.filter((m) => m.entryId === e.id)
+        const fresh = mine.filter((m) => !known.has(m.id))
+        for (const m of fresh) known.add(m.id)
+        collected.push(...fresh)
+        // Advance past the whole page -- every record the server
+        // returned, not just this entry's -- because the backend pages
+        // by device identity, not by entry (see canLoadOlder's comment).
+        // Advancing only past "mine" would re-fetch another watch's
+        // records on the same identity forever.
+        cursor = page[page.length - 1]?.lastSeen ?? cursor
+        // Exhaustion means the server ran out, i.e. a short page. It is
+        // never "this page had nothing for this entry" -- a full page
+        // can legitimately hold zero of this entry's records when
+        // another watch shares its mac/ip.
+        if (page.length < OLDER_PAGE) {
+          exhausted = true
+          break
+        }
+        // Found something for this entry: stop here rather than keep
+        // paging past what this click asked to reveal.
+        if (fresh.length > 0) break
+      }
+      olderMatches = { ...olderMatches, [e.id]: [...(olderMatches[e.id] ?? []), ...collected] }
+      olderExhausted = { ...olderExhausted, [e.id]: exhausted }
     } catch (err) {
       olderError = { ...olderError, [e.id]: err instanceof Error ? err.message : String(err) }
     } finally {
