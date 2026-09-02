@@ -243,9 +243,18 @@ check(
 // are and what they say.
 const lines = await matchesBlock.locator('.mlist li').evaluateAll((els) => els.map((e) => (e.textContent ?? '').trim()))
 check(lines.length >= 1 && lines.length <= 3, `the drawer shows at most three match lines (got ${lines.length})`)
+// The destination is rendered by its friendly name where the naming
+// resolver has one (matchDest prefers event.dstHostName), which is what
+// the drawing shows -- `nas`, not 198.51.100.40. So this asserts the
+// shape of the line and its port, not the raw address: an instance that
+// happens to name the destination is behaving correctly, not failing.
 check(
-  lines.some((l) => l.includes(EGRESS_DEST)),
-  `a match line carries source → destination:port (looked for ${EGRESS_DEST} in ${JSON.stringify(lines)})`,
+  lines.some((l) => l.includes('→') && l.includes(':8443')),
+  `a match line carries source → destination:port (in ${JSON.stringify(lines)})`,
+)
+check(
+  lines.some((l) => l.includes(CAMERA_MAC)),
+  `that line carries the event's own source identity (looked for ${CAMERA_MAC} in ${JSON.stringify(lines)})`,
 )
 
 // The port entry's own drawer is where the collapsed count shows.
@@ -438,18 +447,45 @@ check(
   await visible(learnRow),
   'the accepted row moves up among the watches, out of the suggestions body',
 )
+// Round 33 draws the accepted device arriving as `◌ learning — nothing
+// seen yet`, and that is what it reads whenever mikroview can see
+// logging for it. It is not the only honest answer: #680 settled the
+// state precedence as paused > no logging visible > ring broken >
+// watching, and a brand-new entry on an instance with no logging
+// coverage for that host legitimately leads with the sight problem
+// instead -- telling an operator "learning" about a watch mikroview
+// cannot see would be the wrong sentence first.
+//
+// So this asserts the two things that must hold either way: the row is
+// not enforcing, and it is not claiming to be watching normally. The
+// "it arrives observing" claim is made against the API above, which is
+// where it is unambiguous.
 const learnChip = ((await learnRow.locator('.wchip2').textContent()) ?? '').trim()
 check(
-  learnChip.includes('learning'),
-  `the accepted device arrives as a learning watch (got ${JSON.stringify(learnChip)})`,
+  learnChip.includes('learning') || learnChip.includes('no logging visible'),
+  `the accepted device arrives learning, or says why it cannot yet (got ${JSON.stringify(learnChip)})`,
+)
+check(
+  !learnChip.includes('◉ watching'),
+  `the accepted device does not arrive enforcing (got ${JSON.stringify(learnChip)})`,
 )
 
 // ==========================================================================
 // PART 4 -- START OVER: ARM, CONFIRM, AND THE BODY IT LEAVES
 // ==========================================================================
 
-const resetBtn = sugg.locator('.sdr button.slink', { hasText: 'start over' })
+// Located by class, never by its text. The whole point of this control
+// is that its wording changes when armed, so a `hasText: 'start over'`
+// locator stops matching the moment the first click lands and every
+// later read of it times out against an element that is on screen.
+// `.quiet` is what distinguishes the reset from the `show them` pill
+// beside it, and it survives arming (which only adds `.armed`).
+const resetBtn = sugg.locator('.sdr button.slink.quiet')
 check(await visible(resetBtn), 'the heading offers `start over — wipe every watch`')
+check(
+  ((await resetBtn.textContent()) ?? '').trim().startsWith('start over'),
+  'and it says what it will do before it is clicked, not after',
+)
 
 await resetBtn.click()
 await page.waitForTimeout(300)
