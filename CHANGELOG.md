@@ -18,6 +18,27 @@ rewritten.
 
 ### Added
 
+- **The watchers station now lists what it has been told to expect**
+  (#640, part C). An **Expected** verdict teaches mikroview that a
+  certain amount of a certain thing, from a certain host, is normal
+  here. Until now nothing in the interface said what it had learned, so
+  a flag that stopped appearing was indistinguishable from a detector
+  that had quietly stopped working. A new section under the detector
+  bench (**Settings ▸ detection ▸ tune…**) lists every expectation:
+  detector, host, the size recorded when it was made ("up to 30", or
+  "any size" for a detector that declares no size), how many firings it
+  has absorbed since, and when it was made. **Forget** on a row removes
+  it and that pair raises again from its next firing. The absorbed count
+  is the point of the list -- an expectation that has absorbed nothing
+  for months is visibly not earning its place. Two new endpoints back
+  it: `GET /api/flags/expectations` (any signed-in user, the same tier
+  as `GET /api/flags` -- an expectation is the reason a flag you would
+  otherwise see is absent) and `DELETE /api/flags/expectations/{id}`
+  (user tier and audit-logged, matching the verdict that records one:
+  the operator who can call a flag expected can take it back). A viewer
+  reads the ledger and gets no Forget button. Nothing removed; the
+  admin-only exclusions API is untouched by this change and is retired
+  by #640's part B.
 - **A detector's thresholds and windows can be edited in the app**
   (#787). Until now the only thing the watchers station could change was
   a detector's *scope* -- which hosts, ports or rules it watches -- and
