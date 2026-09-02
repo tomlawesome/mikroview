@@ -106,6 +106,23 @@ check(
         inInterface: 'ether6',
         outInterface: 'bridge6',
       },
+      {
+        // #801's quiet band: a boundary that really does log and that
+        // nothing in this suite ever feeds, so it is empty for an
+        // honest reason. That is the whole distinction round 36 asks
+        // the fall to draw -- this band and the silent ether9/bridge9
+        // one above are both blank, and only this one is blank because
+        // nothing came.
+        ordinal: 3,
+        comment: 'quiet by choice',
+        chain: 'forward',
+        action: 'drop',
+        srcAddressList: '',
+        logPrefix: 'D|quiet-lane|',
+        log: true,
+        inInterface: 'ether7',
+        outInterface: 'bridge7',
+      },
     ],
   })) === 200,
   'the filter-rule table is accepted through the real ingest endpoint',
@@ -168,15 +185,23 @@ check(
 )
 
 // --- Visible cadence on the observed boundary ------------------------------
-// Holding *or* alarm-fired, not holding alone: on the shared suite
+// WATCHED *or* a named flag, not WATCHED alone: on the shared suite
 // instance, another scenario's port-scan flag can sit inside the fall's
-// window and flip this band's caption to ALARM FIRED. Both are the
+// window and flip this band's caption to "✱ TYPE". Both are the
 // observed side of the honesty distinction -- what this scenario must
 // rule out is the band reading quiet, dark or unknown.
+//
+// "WATCHED", not round 30's "WATCH HOLDING ✓": the owner retired that
+// wording and its tick in round 36 (#790, #801) -- "watched in green
+// says everything we need".
 const observedCaption = (await observedBand.locator('.band-caption').first().textContent())?.trim() ?? ''
 check(
-  /WATCH HOLDING|ALARM FIRED/.test(observedCaption),
+  /^(WATCHED|✱ )/.test(observedCaption),
   `the observed boundary with real traffic reads as observed -- got "${observedCaption}"`,
+)
+check(
+  !observedCaption.includes('✓'),
+  `the band caption carries no tick -- the ink is the verdict (got "${observedCaption}")`,
 )
 
 // --- Restored per-port carriers (Fable's 2026-08-29 review, twice: the
@@ -241,8 +266,61 @@ const carrierCount = await capBand.locator('.carrier-hit').count()
 check(carrierCount === 8, `at most 8 carriers render per band -- got ${carrierCount}`)
 const quieterText = await capBand.locator('.quieter').textContent()
 check(
-  quieterText?.trim() === '+4 quieter',
-  `the remaining 4 ports fold into a "+n quieter" affordance -- got "${quieterText}"`,
+  quieterText?.trim() === '+4 quieter ▸',
+  `the remaining 4 ports fold into a "+n quieter ▸" affordance -- got "${quieterText}"`,
+)
+// #801: it sits beneath that band's port labels now, not inside the
+// fall -- the drawing puts it below the foot, where it reads as one
+// more of the band's names rather than a mark in its traffic.
+const quieterY = Number(await capBand.locator('.quieter').getAttribute('y'))
+const portLabelY = Number(await page.locator('.fall .carrier-label').first().getAttribute('y'))
+check(
+  quieterY > portLabelY,
+  `"+n quieter ▸" sits below the port labels -- got y=${quieterY} against labels at y=${portLabelY}`,
+)
+
+// --- #801: the empty band's quiet statement, and the window-cap chip ------
+// The distinction the drawing is after: two blank columns side by side,
+// one blank because nothing is logged there and one blank because
+// nothing came. Only the second says "quiet, not dark", and it says it
+// in the quiet ink -- never the dark band's red.
+const quietBand = page.locator('.fall .band').filter({ has: page.locator('.band-label:text-is("ether7 → bridge7")') })
+await quietBand.waitFor({ timeout: 10000 })
+const quietText = (await quietBand.textContent()) ?? ''
+check(
+  quietText.includes('logged — quiet, not dark'),
+  'a logged boundary that caught nothing states it, rather than drawing a blank column',
+)
+check(
+  quietText.includes('nothing in these 15 m'),
+  'the quiet statement counts the window actually drawn, not a fixed span',
+)
+check(
+  (await quietBand.locator('.quiet-anno').count()) === 2 &&
+    (await quietBand.locator('.quiet-anno.bad-anno').count()) === 0,
+  'the quiet statement is in the quiet ink, never the dark red -- quiet is a fact, not a fault',
+)
+check(
+  (await quietBand.locator('.band-caption').textContent())?.trim() === 'WATCHED',
+  'the quiet-but-logged band still reads WATCHED',
+)
+// ...and the dark band next to it still says the opposite thing, so the
+// two states have not collapsed into one.
+check(
+  !((await darkBand.textContent()) ?? '').includes('quiet, not dark'),
+  'a dark boundary never claims to be merely quiet',
+)
+
+// The window-cap chip states a truncated window. This instance's own
+// window is not truncated -- the fall asks for 5 000 events and the
+// suite never puts that many inside one 15-minute span -- so what is
+// assertable here is that the chip stays away when it would be untrue.
+// Deliberately not forced: feeding 5 000 events to make it appear would
+// pollute the shared instance every later scenario reads. The present
+// branch is pinned in Fall.svelte.test.ts instead.
+check(
+  !((await page.locator('.fall .attention').textContent()) ?? '').includes('this window holds more'),
+  'the window-cap chip stays absent while the window really does hold everything',
 )
 
 // --- Honest captioning on the synthetic "other traffic" band --------------
@@ -277,6 +355,32 @@ await page
 await page.waitForSelector('input.rule', { timeout: 5000 })
 const portFilter = await page.inputValue('input[placeholder="Port — number or service"]')
 check(portFilter === '443', `clicking a carrier also fills Stream's port filter -- got "${portFilter}"`)
+
+// --- ...and so does the quieter count, from the band's foot ----------------
+// #801's "Done when": clicking "+n quieter ▸" opens the stream filtered
+// to that boundary -- the way in for the ports too quiet to draw.
+//
+// Deliberately last of the three handoffs, and not where the "+n quieter"
+// assertions above sit. Placed there it was this scenario's *first*
+// navigation to the stream, and the live view's first mount ran past a
+// 5s wait on a loaded host while the two handoffs below passed on the
+// same timeout once warm. It sits at the very bottom of an 800-unit rig
+// inside a scrolling card, so it is also scrolled to rather than assumed
+// on screen.
+await goTo(page, 'The fall')
+await page.waitForSelector('.fall .band', { timeout: 10000 })
+const quieterLink = page
+  .locator('.fall .band')
+  .filter({ has: page.locator('.band-label:text-is("ether6 → bridge6")') })
+  .locator('.quieter')
+await quieterLink.scrollIntoViewIfNeeded()
+await quieterLink.click()
+await page.waitForSelector('input.rule', { timeout: 15000 })
+const quieterIface = await page.inputValue('input[aria-label="Interface"]')
+check(
+  quieterIface === 'ether6' || quieterIface === 'bridge6',
+  `clicking "+n quieter ▸" fills Stream's interface filter -- got "${quieterIface}"`,
+)
 
 // --- prefers-reduced-motion disables the now-line pulse --------------------
 await page.emulateMedia({ reducedMotion: 'reduce' })
