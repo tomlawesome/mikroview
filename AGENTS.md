@@ -462,24 +462,42 @@ from design judgement rather than from process.
 (the body, per the issues rule below), so the next person implements
 against a written model rather than re-deriving it.
 
-## Run it before you ship it
+## The gate runs on `dev`, after the merge
 
-Every change that touches the server, the UI or the CLI gets a live check
-before its PR opens: `make live-check` stands up the real binary with the
-real UI and drives it in a real browser.
+`make live-check` stands up the real binary with the real UI and drives it
+in a real browser. It is the project's real test, and it is no longer a
+step before a PR merges. Owner decision, 2026-09-02: a ~45-minute run per
+PR, one per host, put the gate on the critical path of every merge, and
+opening a second host only turned the queue into stacked PRs.
 
-This is not a substitute for the test suite, and the suite is not a
-substitute for this. Nearly every defect worth finding in this project was
-found by running it, and none of them were visible from the code or from
-`go test`: recovery keys reaching the container log through a terminal
-check that a Docker pty satisfies; CLI commands writing files nothing read
-on a Postgres deployment, reporting success while the operator stayed
-locked out; a filter that became unevaluable only once matching events
-arrived.
+So:
+
+- **A PR merges on green CI plus review.** Nobody waits for a gate run.
+- **The gate runs on `dev` continuously** on the second host: each run
+  starts when the last ends, from a fresh `dev`, and its log is kept with
+  the SHA it ran. A failure that the previous run did not show is filed
+  the same session against the merges in that window and fixed forward
+  before the next promotion. A tripwire, not a turnstile.
+- **One clean run is mandatory before `dev -> preview`.** That is the
+  only place it blocks.
+
+The cost is accepted: a regression can sit on `dev` for a run before it is
+seen, and work stacks on it meanwhile. `dev` is not released from.
+
+Still true: this is not a substitute for the test suite, and the suite is
+not a substitute for this. Nearly every defect worth finding in this
+project was found by running it, and none of them were visible from the
+code or from `go test`: recovery keys reaching the container log through a
+terminal check that a Docker pty satisfies; CLI commands writing files
+nothing read on a Postgres deployment, reporting success while the
+operator stayed locked out; a filter that became unevaluable only once
+matching events arrived.
 
 Add a scenario for the change -- `frontend/scripts/live-<thing>.mjs` --
-rather than running the baseline and calling it done. See
-`.claude/skills/live-check/SKILL.md`.
+in the same PR, so the loop exercises it on the next run. Running the
+gate on the branch before the PR is still worth it for a change that
+reworks a surface (the fix is cheaper before the merge than after), but
+it is a choice, not a rule. See `.claude/skills/live-check/SKILL.md`.
 
 Where something genuinely cannot be exercised here (no RouterOS device, no
 external identity provider), say so plainly in the PR rather than letting
