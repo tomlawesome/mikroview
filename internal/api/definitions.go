@@ -1118,6 +1118,26 @@ type replayRequest struct {
 type replayResponse struct {
 	Receipt *receiptView `json:"receipt,omitempty"`
 	Decline *declineView `json:"decline,omitempty"`
+	// Current is the same replay run again with the definition's live
+	// params -- the number the candidate's receipt is being compared
+	// against ("would have fired 3 times ... currently: 41", #786).
+	//
+	// It has to be measured here, in this request, rather than read off
+	// anything already counted: the flag time series counts new episodes
+	// over the last 60 minutes and Flag.count is re-fires within one
+	// episode, so neither is the same measurement as a receipt, and
+	// putting either beside one would compare two different questions
+	// (#824, gap 1). Running the identical replay over the identical
+	// corpus with only the params changed is the only like-for-like
+	// answer available, and it costs one more pass over traffic already
+	// in memory.
+	//
+	// Omitted when the candidate is empty: the replay then already ran
+	// with the live params, so the receipt above *is* the current
+	// number, and a copy of it beside itself would say nothing. The
+	// nested value never carries a Current of its own for the same
+	// reason.
+	Current *replayResponse `json:"current,omitempty"`
 }
 
 // receiptView is engine.Receipt on the wire. The covered window is
@@ -1167,6 +1187,11 @@ type declineView struct {
 // are different answers, and collapsing them is the overclaim #403's
 // contract exists to rule out.
 //
+// A request carrying a candidate is answered twice: once with the
+// candidate, once with the definition's live params, the second under
+// `current` (#786). See replayResponse.Current for why the comparison
+// has to be measured here rather than read off an existing counter.
+//
 // User-tier (#653), same as the rest of the definitions surface -- see
 // handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsReplay(w http.ResponseWriter, r *http.Request) {
@@ -1196,12 +1221,29 @@ func (s *Server) handleDefinitionsReplay(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	result, err := engine.ReplayDefinition(sd.Definition, engine.NewMemoryCorpus(s.Store), req.Params)
+	corpus := engine.NewMemoryCorpus(s.Store)
+	result, err := engine.ReplayDefinition(sd.Definition, corpus, req.Params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusOK, replayViewFor(result))
+	view := replayViewFor(result)
+	if len(req.Params) > 0 {
+		// The same replay again with the definition's live params (nil
+		// candidate) over the same corpus, so the two numbers differ in
+		// the params and in nothing else -- see replayResponse.Current.
+		if live, err := engine.ReplayDefinition(sd.Definition, corpus, nil); err == nil {
+			current := replayViewFor(live)
+			view.Current = &current
+		}
+		// A failure here is deliberately not the request's failure: the
+		// candidate's receipt is a complete, honest answer to what was
+		// asked, and losing it because the comparison alongside it could
+		// not be computed would trade the answer for the footnote.
+		// Current stays nil, and the caller shows the receipt without a
+		// "currently" beside it.
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func replayViewFor(result engine.Result) replayResponse {
