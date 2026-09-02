@@ -59,6 +59,23 @@ export function formatHM(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+// formatDayMonth renders a date as a bare day and short month -- "2
+// Sept" in a UK locale, "Sep 2" in a US one. For the returning-flag
+// cards (#640), which say when a pair was last judged ("you checked this
+// on 2 Sept and found it fine"): the day is what the operator needs to
+// place the event, and a clock time would imply a precision the sentence
+// is not making a claim about.
+//
+// Locale-driven like every other helper here (formatTime, formatHM),
+// rather than a hand-built month table: the browser already knows how
+// this reader writes a date. Returns the original string unchanged if it
+// does not parse, same as its neighbours.
+export function formatDayMonth(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
 export function formatEps(eps: number): string {
   if (eps < 1) return eps.toFixed(1)
   return Math.round(eps).toString()

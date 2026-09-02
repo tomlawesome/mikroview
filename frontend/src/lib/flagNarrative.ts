@@ -9,7 +9,7 @@
 // sentence below states only what that evidence actually shows. Plain,
 // specific, never scolding: no "malicious", no exclamation, no
 // security-vendor register.
-import { formatHM } from './format'
+import { formatDayMonth, formatHM } from './format'
 import type { Flag, FlagType } from './types'
 
 const SMALL_NUMBERS = [
@@ -192,4 +192,32 @@ export function headlineFor(f: Flag): string {
 
 export function storyFor(f: Flag): string {
   return (STORIES[f.type] ?? defaultStory)(f)
+}
+
+// returningNoteFor is what a flag that has been here before says on its
+// card (#640) -- the issue's own three sentences, in its own words:
+//
+//   - past an expectation: "expected up to 30, saw 120", the two numbers
+//     the store recorded, never a rounded or restated version of them.
+//   - after a checked verdict: "you checked this on 2 Sept and found it
+//     fine".
+//   - after a resolved one: "resolved on 2 Sept -- it's back".
+//
+// null for the ordinary case -- a flag with no history to report says
+// nothing rather than padding the row with a sentence that claims
+// something happened before when nothing did.
+//
+// The expectation line wins where both apply: a firing past an
+// expectation is *why* this flag is on screen at all, where the earlier
+// checked or resolved call is context. Both are true, and saying two
+// things at once in a one-line card would bury the reason.
+export function returningNoteFor(f: Flag): string | null {
+  if (f.expectedSize != null && f.size != null) {
+    return `expected up to ${f.expectedSize}, saw ${f.size}`
+  }
+  if (!f.priorVerdictAt) return null
+  const when = formatDayMonth(f.priorVerdictAt)
+  if (f.priorVerdict === 'checked') return `you checked this on ${when} and found it fine`
+  if (f.priorVerdict === 'resolved') return `resolved on ${when} — it's back`
+  return null
 }

@@ -33,15 +33,11 @@ vi.mock('./lib/api', async (importOriginal) => {
     fetchStats: vi.fn(async () => ({})),
     fetchEventsWindow: vi.fn(async () => []),
     fetchFlags: vi.fn(async () => ({ flags: [], timeSeries: [] })),
-    clearFlag: vi.fn(),
-    clearAllFlags: vi.fn(),
-    clearFlagPermanent: vi.fn(),
-    setFlagVerdict: vi.fn(),
+      clearAllFlags: vi.fn(),
+      setFlagVerdict: vi.fn(),
     deleteFlagVerdict: vi.fn(),
     fetchFlagEpisode: vi.fn(),
-    fetchExclusions: vi.fn(async () => []),
-    removeExclusion: vi.fn(),
-    fetchWatchlistEntries: vi.fn(async () => ({
+        fetchWatchlistEntries: vi.fn(async () => ({
       entries: [{ id: 'e1', name: 'watch 1', enabled: true, createdAt: '2026-01-01T00:00:00Z' }],
       coverage: { e1: 'covered' },
     })),
