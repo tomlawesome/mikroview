@@ -27,6 +27,9 @@
   //     app already knows -- hosts from Entities, rule labels from the
   //     router-pushed filter tables.
   //   - reset, clone, save and cancel at the foot.
+  // #640's expectations ledger -- the station's second section, under
+  // the bench. Its own component, so this file stays the bench.
+  import ExpectationsLedger from './ExpectationsLedger.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { scopeSuggestionsState, CLASSIFICATIONS } from '../lib/scopeSuggestions.svelte'
   import { appState } from '../lib/state.svelte'
@@ -589,6 +592,8 @@
     </li>
   {/each}
 </ul>
+
+<ExpectationsLedger {canEdit} />
 
 {#if canEdit}
   <!-- One suggestion list per axis for the whole bench rather than per

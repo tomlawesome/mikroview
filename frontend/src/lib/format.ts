@@ -59,6 +59,18 @@ export function formatHM(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+// formatDayMonth renders a timestamp as a bare day and month -- "2 Sep"
+// -- for facts whose age matters but whose clock time does not, like an
+// expectation's "since" on #640's ledger. Same convention AuditLog's own
+// day grouping already uses, exported here rather than copied a second
+// time. Returns the input unchanged when it isn't a date, as every other
+// formatter in this file does.
+export function formatDayMonth(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
 export function formatEps(eps: number): string {
   if (eps < 1) return eps.toFixed(1)
   return Math.round(eps).toString()
