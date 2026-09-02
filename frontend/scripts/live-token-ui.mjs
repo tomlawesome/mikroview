@@ -63,13 +63,22 @@ check(known.length > 0, `the instance knows at least one device (${known})`)
 
 const deviceSeg = `${DOOR} .pform .seg[aria-label="which router"]`
 await page.waitForSelector(deviceSeg)
-const options = await page.$$eval(`${deviceSeg} button`, (els) => els.map((e) => e.textContent.trim()).sort())
+// Read the id, not the label. A button shows the device's *name* when it
+// has one (EngineRoom.svelte:731: `d.name && d.name !== d.id ? d.name :
+// d.id`), so the harness's live-router renders as "Live Router" and a
+// text comparison against /api/devices' ids can never match. The id is
+// carried on the button as `data-device-id` (EngineRoom.svelte:725), and
+// it is the identity that matters here anyway -- the token binds to the
+// id, and this list exists to remove the typo trap of free text.
+const options = await page.$$eval(`${deviceSeg} button`, (els) =>
+  els.map((e) => e.getAttribute('data-device-id')).sort(),
+)
 check(
   JSON.stringify(options) === JSON.stringify(known),
   `the pick-list offers exactly the known devices (list=${options} api=${known})`,
 )
 const DEVICE = known[0]
-await page.click(`${deviceSeg} button:has-text("${DEVICE}")`)
+await page.click(`${deviceSeg} button[data-device-id="${DEVICE}"]`)
 
 await page.click(`${DOOR} .pform button:has-text("mint it")`)
 await page.waitForSelector(`${DOOR} .reveal code`)
