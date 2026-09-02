@@ -905,20 +905,20 @@ audit:
   storePath: "/var/lib/mikroview/audit.json"
 ```
 
-Two deliberate scoping decisions, both from issue #112's own explicit
-open question about which flag actions belong here:
+Flag actions are logged even though they are not admin-only, which is a
+deliberate exception to the "log admin actions" rule above:
 
-- **A plain flag clear** (`POST /api/flags/{id}/clear`) is **not**
-  logged -- that endpoint isn't admin-gated at all (any signed-in user
-  can clear a flag), and this is an audit log of *admin* actions.
-- **A permanent flag exclusion** (`POST /api/flags/{id}/clear-permanent`)
-  **is** logged, and is admin-only. It was previously open to any
-  signed-in user and unlogged; that was tightened because an exclusion
-  permanently suppresses detection for that (detector, target) until
-  someone notices and undoes it, which is not something a non-admin --
-  or a single compromised low-privilege credential -- should be able to
-  do silently. Removing an exclusion
-  (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
+- **A verdict** (`POST /api/flags/{id}/verdict`) is logged, carrying the
+  verdict itself as the entry's detail, and **undoing one**
+  (`DELETE /api/flags/verdict/{id}`) is logged too. An `expected`
+  verdict suppresses detection for that (detector, target) pair while
+  it stays within the recorded size, and "who decided this stopped being
+  flagged" has to stay answerable. The admin-only "clear and never flag
+  this again" this replaced was logged for the same reason.
+- **Clear all** (`POST /api/flags/clear-all`) is logged once per call --
+  "cleared N flags", not one entry per flag. It records no judgement and
+  no expectation, so a cleared flag raises again on the next matching
+  event.
 
 Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
@@ -1568,47 +1568,53 @@ alongside ISP/country whenever present.
 
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
-clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
-already-active-again source re-raises it as a fresh entry rather than
-silently resurrecting the old one.
+judges it. Judging an already-active-again source re-raises it as a
+fresh entry rather than silently resurrecting the old one.
+
+### Verdicts: how a flag ends
+
+Every flag ends one of two ways: either the firewall is improved so the
+traffic you do not want stops arriving, or mikroview is told this
+traffic is acceptable, at these characteristics. There is no third bin
+-- nothing is dismissed without a judgement. The row offers **expected ·
+checked · investigate**, and once something is being investigated,
+**expected · resolved**. All four are available to any signed-in user
+(not a viewer), through `POST /api/flags/{id}/verdict`.
+
+| Verdict | What it means | What it does |
+|---|---|---|
+| `expected` | Normal for this host, at this size | Clears the flag and records an expectation: further firings of that detector on that host are absorbed silently while their size stays within **1.5x** the size of the firing you judged. Above that the flag returns, reading "expected up to 30, saw 120"; saying expected again raises the recorded size |
+| `checked` | Looked suspicious, checked, fine this time | Clears the flag. Suppresses nothing, but is remembered: a later firing of the same pair says "you checked this on 2 Sept and found it fine" |
+| `investigate` | Of concern, being looked at | Leaves the flag open, and switches its row to expected · resolved |
+| `resolved` | Dealt with, normally by a firewall change | Clears the flag, and deliberately does **not** suppress. A line only reaches mikroview if the firewall let it get that far, so a correct fix makes the lines stop; if the same circumstances recur the flag returns, reading "resolved on 2 Sept -- it's back". If what you want is to keep logging those drops, that is an expected verdict at that rate, not a resolved one |
+
+Each detector declares what its "size" is -- usually the measure it
+compares against its threshold (distinct ports for `port_scan`, events
+in the window for `activity_spike`). Six declare none, because they have
+no count to be normal at: `device_silence` (an absence has no
+magnitude), `known_bad_ip`, `unexpected_mail_sender` and `stale_rule`
+(deterministic, no threshold), and `global_spike`/`rule_spike` (a rate
+against a moving baseline). An expected verdict on one of those means
+"ignore this host on this detector" outright.
+
+**Undo** is offered beside the stamp for as long as the flag carries the
+verdict. Undoing an expected verdict withdraws the expectation it
+recorded -- removing it, or putting a raised size back where it was.
 
 A **Clear all** button above the active list (issue #198) clears every
 active flag in one request (`POST /api/flags/clear-all`) -- a click-again
 red "Confirm" is the safeguard against an accidental single click, not a
-modal. It performs regular clears only and never creates a permanent
-exclusion; there is no bulk variant of the action below.
+modal. It records no judgement and no expectation, so everything it
+clears raises again on the next matching event; there is no bulk variant
+that suppresses anything.
 
-Each flag's Clear button is a split control: the main segment is the
-plain Clear above, and its arrow segment opens "Permanently clear"
-(`POST /api/flags/{id}/clear-permanent`, **admin-only** once an account
-exists, and recorded in the audit log) -- for a non-admin the arrow
-segment is hidden entirely, leaving a plain Clear button rather than a
-disabled one that would just advertise an action they can't take.
-"Permanently clear" clears the flag *and* permanently
-excludes that exact (detector, target) pair -- from then on it never
-raises again, silently, until the exclusion is removed. This is
-deliberately permanent rather than a timed snooze: a time-limited mute
-either re-fires once it expires (nothing was solved) or it doesn't
-(permanent exclusion was what was wanted all along), so there's no
-in-between "snooze" option. Because "permanent" shouldn't mean
-"unrecoverable by mistake," every current exclusion is listed (and can
-be removed, re-enabling that pair) on its own **Exclusions** tab
-(**Detect ▸ Flags ▸ Exclusions**) -- admin-only, same as every other
-admin-gated endpoint (see [Authentication](#authentication)). It was
-split out of the bottom of the Flags page (issue #207) because
-reviewing exclusions underneath a list of hundreds of active flags was
-a pain.
-
-> **Not on screen at the moment.** The flags tab was rebuilt to its
-> ratified round-29 design in #688, which draws a five-column table with
-> drawers and gives no place to the split Clear control or the
-> Exclusions tab. Both were taken off the tab rather than squeezed into
-> it, and are on #688's gap list to be placed properly. Nothing about
-> the endpoints, the audit-log entries or the exclusion behaviour
-> described above has changed -- `POST /api/flags/{id}/clear-permanent`
-> and the exclusion list API work exactly as written; only the buttons
-> that reached them are absent. The drawer's **clear with a note**
-> action is the plain clear, and it still records the note.
+> **Not on screen yet.** The expectations an `expected` verdict records
+> are not listed anywhere in the UI at the moment, so one made by
+> mistake cannot be reviewed or removed from the interface -- only
+> withdrawn by undoing the verdict that made it, while the row is still
+> in front of you. The ledger that lists every expectation with its
+> recorded size, how many firings it has absorbed and since when, and
+> lets you prune them, is the remaining part of issue #640.
 
 ## New-device detection (optional, on by default)
 
@@ -3033,16 +3039,14 @@ exits, rather than starting the server. See
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
-| `POST /api/flags/{id}/clear` | mark one flag as cleared |
-| `POST /api/flags/clear-all` | clear every currently-active flag in one request -- regular clears only, never creates an exclusion. Audit-logged once per call |
-| `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
-| `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
-| `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
+| `POST /api/flags/clear-all` | clear every currently-active flag in one request -- records no judgement and no expectation. Audit-logged once per call |
+| `POST /api/flags/{id}/verdict` | judge one flag: `expected`, `checked`, `investigate` or `resolved` (see [Verdicts](#verdicts-how-a-flag-ends)). Everything but `investigate` clears it; `expected` also records the sized expectation. Audit-logged |
+| `DELETE /api/flags/verdict/{id}` | undo a verdict: re-opens the flag if that verdict is what cleared it, and withdraws the expectation an `expected` verdict recorded. Audit-logged |
 | `GET /api/definitions` | open to any signed-in user, not admin-gated (#490 -- the engine room's watchers station reads it, and a non-admin can read the room): every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
 | `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. `intent: "detection"` is refused too, for now: a custom detector's match conditions have nowhere on the envelope to be stored yet, so accepting one would create a definition that lists and evaluates nothing. Only expectation definitions can be created here today; custom detector authoring is tracked in issue #502 |
 | `GET /api/definitions/schema` | admin-only: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
 | `GET /api/definitions/{id}` | admin-only: one definition |
-| `PUT /api/definitions/{id}` | admin-only: change any of `enabled`, `scope`, `params`, `suppressions`, `name`/`expectation` (expectations only). An absent field is left alone; a param outside its declared bounds is a 400, never a stored zero. Takes effect on the next ingested event |
+| `PUT /api/definitions/{id}` | admin-only: change any of `enabled`, `scope`, `params`, `name`/`expectation` (expectations only). An absent field is left alone; a param outside its declared bounds is a 400, never a stored zero. Takes effect on the next ingested event |
 | `DELETE /api/definitions/{id}` | admin-only: remove a custom definition. A shipped one is refused with a 409 -- shipped definitions are disabled, never deleted |
 | `POST /api/definitions/{id}/clone` | admin-only: copy an expectation into a new definition with its own id. Refused for a shipped detector, whose logic is keyed by its own id and would evaluate nothing in a copy |
 | `POST /api/definitions/{id}/reset` | admin-only: discard every param override, putting a shipped definition back to what it shipped with |

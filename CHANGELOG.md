@@ -332,6 +332,46 @@ rewritten.
   detector outright. Silences recorded before this release have no size
   and keep that same meaning; nothing needs migrating.
 
+- **Every flag now ends with a judgement: expected, checked,
+  investigate or resolved** (#640, part B: API and the verdict row). The
+  flags tab offers **expected · checked · investigate** on a fresh flag,
+  and **expected · resolved** once something is being investigated. All
+  four are available to any signed-in user, not just an admin, through
+  `POST /api/flags/{id}/verdict`.
+
+  - **expected** is what records an expectation now (see part A's entry
+    below): normal for this host, at the size you just looked at.
+  - **checked** means "looked suspicious, checked, fine this time". It
+    clears the flag and suppresses nothing, but it is remembered: if
+    the same detector fires on the same host again, the flag comes back
+    saying *you checked this on 2 Sept and found it fine*.
+  - **investigate** leaves the flag open while you work on it.
+  - **resolved** means dealt with, normally by a firewall change. It
+    clears the flag and deliberately does not suppress anything: a line
+    only reaches mikroview if the firewall let it get that far, so a
+    correct fix makes the lines stop. If the same circumstances recur
+    the flag returns, reading *resolved on 2 Sept -- it's back*, because
+    the fix was not what was intended. Wanting to keep logging those
+    drops is an expected verdict at that rate, not a resolved one.
+
+  A flag that returns past an expectation says so on its own row --
+  "expected up to 30, saw 120", the two real numbers -- and saying
+  expected again raises the recorded size. Undo still sits beside the
+  stamp for as long as the flag carries the verdict, and undoing an
+  expected verdict now withdraws the expectation it recorded rather than
+  leaving a suppression standing behind a re-opened flag.
+
+  Verdicts and their undo are audit-logged, carrying the verdict as the
+  entry's detail. The exclude-forever action they replace was admin-only
+  and logged; these are user-tier, so the record of who decided a pair
+  stops being flagged matters more, not less.
+
+  The expectations themselves are not listed anywhere in the interface
+  yet -- one made by mistake can only be withdrawn by undoing the
+  verdict while the row is still in front of you. The ledger that lists
+  them, with absorbed counts, and lets you prune them is the remaining
+  part of #640.
+
 - **The docket's flags tab is the ratified round-29 table, not a card
   grid** (#688). One row per open flag -- flag · where · evidence ·
   count · age -- each wearing its flag type's own family ink as a left
@@ -383,6 +423,47 @@ rewritten.
   than a row of solid tents.
 
 ### Removed
+
+- **The Noise verdict, the plain Clear control, "never flag this again"
+  and the exclusions API are gone** (#640), wholesale, with no aliases
+  and no stub endpoints. Each is replaced by a verdict, above:
+
+  - **Noise** existed only to feed a threshold-suggestion generator the
+    owner dropped: raising a detector's threshold hides real events for
+    every host in order to quiet one. Gone from the UI, the API and the
+    store; `POST /api/flags/{id}/verdict` now rejects `"noise"` as an
+    unrecognised verdict rather than accepting it as anything.
+  - **The plain Clear** (`POST /api/flags/{id}/clear`, and the drawer's
+    "clear with a note") dismissed a flag without recording what you
+    concluded. **checked** is that action with the conclusion kept.
+    "Clear all" is unchanged -- it still clears every active flag in one
+    request, records nothing, and suppresses nothing.
+  - **"Clear and never flag this again"**
+    (`POST /api/flags/{id}/clear-permanent`) silenced a (detector,
+    target) pair outright, forever. **expected** does the same job
+    bounded by the size of the firing you judged, so a host that grows
+    past it comes back.
+  - **The admin exclusions API** (`GET /api/flags/exclusions`,
+    `DELETE /api/flags/exclusions/{id}`) and the Exclusions tab that
+    read it are removed. Their replacement -- a ledger of expectations
+    with their sizes and absorbed counts -- is the remaining part of
+    #640; until it lands there is no screen or endpoint that lists
+    recorded expectations.
+
+  Expectations recorded before this release are untouched, and an
+  operator's stored data needs no migration. Anything scripted against
+  the four removed endpoints will now get a 404 or a 400 rather than a
+  quiet no-op.
+- **`Definition.Suppressions` is gone** (#640). The per-definition
+  suppression list was modelled on the definition envelope in #401 and
+  never given matching semantics -- nothing ever consulted it before an
+  emission. #640 settles on one suppression mechanism, so the field is
+  removed rather than left as a second, silent one: from the definition
+  envelope, from `GET /api/definitions`' response, from
+  `PUT /api/definitions/{id}`'s accepted fields (a request that sends
+  `suppressions` now has that field ignored), and from the frontend
+  types. Any value stored in an existing definitions document is simply
+  not read back.
 
 - **The `system` and `light` themes are gone** (#708), wholesale. Round
   30 -- the ratified design -- is dark throughout, and dark stops being
