@@ -5,7 +5,7 @@ import {
   formatRelative,
   formatDurationShort,
   formatTimeMs,
-  formatUptimeFull,
+  formatUptimeDaysHours,
   formatBufferDepth,
   parseGoDurationSeconds,
   formatDaysSince,
@@ -85,21 +85,27 @@ describe('formatDurationShort', () => {
   })
 })
 
-describe('formatUptimeFull', () => {
-  it('always shows all four units, zero-padding only the seconds', () => {
-    expect(formatUptimeFull(3 * 86_400 + 4 * 3600 + 12 * 60 + 5)).toBe('3d 4h 12m 05s')
+describe('formatUptimeDaysHours', () => {
+  it('renders the drawn form -- days and hours, spaced', () => {
+    expect(formatUptimeDaysHours(12 * 86_400 + 4 * 3600)).toBe('12 d 4 h')
   })
 
   it('shows a zero days unit rather than dropping it under a day', () => {
-    expect(formatUptimeFull(3 * 60 + 9)).toBe('0d 0h 3m 09s')
+    expect(formatUptimeDaysHours(3 * 3600 + 9 * 60)).toBe('0 d 3 h')
+  })
+
+  // The point of the two-unit form: minutes and seconds are discarded,
+  // so a menu left open for a minute renders the same string throughout.
+  it('ignores the minutes and seconds under the hour', () => {
+    expect(formatUptimeDaysHours(2 * 86_400 + 5 * 3600 + 59 * 60 + 59)).toBe('2 d 5 h')
   })
 
   it('renders zero as all-zero units', () => {
-    expect(formatUptimeFull(0)).toBe('0d 0h 0m 00s')
+    expect(formatUptimeDaysHours(0)).toBe('0 d 0 h')
   })
 
   it('never goes negative', () => {
-    expect(formatUptimeFull(-50)).toBe('0d 0h 0m 00s')
+    expect(formatUptimeDaysHours(-50)).toBe('0 d 0 h')
   })
 })
 

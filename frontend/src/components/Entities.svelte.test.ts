@@ -7,21 +7,18 @@
 // the ratified scene, which has exactly one table and no other CRUD
 // surface (see this file's own component for the reasoning).
 //
-// #681 adds a tab strip -- hosts/rules/ports -- back over that one
-// table, so the suite below gained its own describe blocks for the two
-// new tabs; the hosts-tab tests above are otherwise untouched (hosts
-// stays the default tab, unchanged).
+// #681 put hosts/rules/ports back over that one table as a tab strip.
+// Round 30 drew no strip, so it was unmounted behind TABS_ENABLED and
+// the rules/ports blocks below were skipped -- every one of their tests
+// reaches its table through a control that was not rendered.
 //
-// Round 30's #ent draws no tab strip at all: the entities table follows
-// the router cards directly, one table of named things, exactly as #675
-// first built it. The strip is unmounted behind TABS_ENABLED (see the
-// comment on that flag in Entities.svelte), not deleted -- #691 tracks
-// remounting it. The tab-strip describe block below now asserts the
-// strip's absence and that hosts renders by default with no way to
-// switch away from it; the rules-tab and ports-tab describe blocks are
-// skipped rather than deleted, since every one of their tests reaches
-// its table by clicking a tab button that round 30 does not render --
-// un-skip them when #691 remounts the strip.
+// Rounds 37-38 (#804) settle it the other way: the three are views, not
+// tabs -- the metrics page's idiom, names carrying their counts, one
+// underlined, over the same table. The gate is gone, so those blocks
+// run again, now clicking a view button instead of a tab. Round 38 also
+// removed the descriptor line under each view on the owner's word, and
+// the read-only viewer is declared once on the account chip rather than
+// anywhere on this page -- both asserted below, as absences.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
@@ -58,6 +55,7 @@ import { entitiesState } from '../lib/entities.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { zonesState } from '../lib/zones.svelte'
+import { authState } from '../lib/auth.svelte'
 import Entities from './Entities.svelte'
 
 async function settle() {
@@ -81,6 +79,11 @@ beforeEach(() => {
   watchlistState.entries = []
   watchlistState.coverage = {}
   zonesState.pushed = []
+  // Renaming is tier-gated since #804 (the read-only viewer), and an
+  // unset role is least-privileged by design (see auth.svelte.ts), so a
+  // suite that exercises renaming has to say who is signed in. The
+  // viewer's own view of the same table has its own block below.
+  authState.role = 'admin'
 })
 
 // A pushed rule: comment is the operator-facing label RouterOS shows,
@@ -519,23 +522,119 @@ describe('Entities named-things table (#675)', () => {
     expect(row?.querySelector('.mk-flagged')?.textContent).toBe('✱ flagged')
   })
 
-  it('states the rename affordance in the footer', async () => {
+  // Round 38 removed the hint under every view on the owner's word
+  // ("Remove all these little descriptor lines on the entities views, I
+  // don't want them"). Asserted as an absence so it cannot creep back.
+  it('prints no descriptor line under the table', async () => {
     const { container } = render(Entities)
     await settle()
 
-    expect(container.querySelector('.table-hint')?.textContent).toContain(
-      "a name is yours to give — click one to rename it; the router's own names arrive with its pushes",
-    )
+    expect(container.querySelector('.table-hint')).toBeNull()
+    expect(container.querySelector('.oghint')).toBeNull()
+    expect(container.textContent).not.toContain('a name is yours to give')
   })
 })
 
-describe('Entities tab strip (#681, unmounted for round-30 fidelity)', () => {
-  it('draws no tab strip -- the entities table follows the router cards directly, and hosts (the ratified table) is what renders since there is no button left to switch away from it (TABS_ENABLED, #691)', async () => {
+// The one fact the round-30 device-status strip carried that had no
+// home once that strip became the router cards: a router that pushes
+// without being registered. Rounds 37-38 make it a state of the dashed
+// third slot rather than one more card in the fleet.
+describe('Entities unregistered router (#804, moved from #802)', () => {
+  const unregistered = [
+    {
+      id: 'disc-10.0.50.1',
+      name: '10.0.50.1',
+      configured: false,
+      status: 'live',
+      firstSeen: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      sourceIp: '10.0.50.1',
+      eventCount: 12,
+      routerosVersion: '7.19.4',
+    },
+  ] as unknown as (typeof appState)['devices']
+
+  it('draws it in the berth\'s slot, saying its lines are kept', async () => {
+    appState.devices = unregistered
+    const { container } = render(Entities)
+    await settle()
+
+    const card = container.querySelector('.fcard.unreg')
+    expect(card).not.toBeNull()
+    expect(card?.querySelector('.fhead b')?.textContent).toBe('10.0.50.1')
+    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · UNREGISTERED')
+    expect(card?.textContent).toContain('RouterOS 7.19.4')
+    expect(card?.textContent).toContain('its lines are kept; it has no name and no zones until it is registered')
+  })
+
+  it('gives way from the berth rather than sitting beside it -- the slot says one thing or the other', async () => {
+    appState.devices = unregistered
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.berth')).toBeNull()
+  })
+
+  it('leaves the berth in place when every router is registered', async () => {
+    appState.devices = [
+      { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 3 },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.unreg')).toBeNull()
+    expect(container.querySelector('.fcard.berth')).not.toBeNull()
+  })
+
+  // It is not one of the fleet's cards: an unregistered router has no
+  // name and no zones, so drawing it as a live router card would claim
+  // both.
+  it('is not drawn as an ordinary router card', async () => {
+    appState.devices = unregistered
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.live')).toBeNull()
+  })
+})
+
+describe('Entities views (#804, rounds 37-38)', () => {
+  it('draws three views with their counts, not tabs, with hosts underlined by default', async () => {
+    fetchEntities.mockResolvedValue([
+      { type: 'host', key: '10.0.10.2', label: 'tom-desktop', tags: [] },
+      { type: 'port', key: '443', label: 'HTTPS', tags: [] },
+    ])
     const { container, queryByRole } = render(Entities)
     await settle()
 
+    // Not tabs: no tablist, and no tab furniture.
     expect(queryByRole('tablist')).toBeNull()
     expect(container.querySelectorAll('.tab').length).toBe(0)
+
+    const views = [...container.querySelectorAll('#eviews [data-v]')]
+    expect(views.map((v) => v.getAttribute('data-v'))).toEqual(['hosts', 'rules', 'ports'])
+    expect(views.map((v) => v.textContent?.replace(/\s+/g, ' ').trim())).toEqual(['hosts 1', 'rules 0', 'ports 1'])
+    expect(views.filter((v) => v.classList.contains('on')).map((v) => v.getAttribute('data-v'))).toEqual(['hosts'])
+  })
+
+  it('switches the table under the views, keeping one table rather than three destinations', async () => {
+    const { container } = render(Entities)
+    await settle()
+
+    const view = (name: string) => container.querySelector<HTMLButtonElement>(`#eviews [data-v="${name}"]`)!
+
+    await fireEvent.click(view('ports'))
+    await settle()
+    expect([...container.querySelectorAll('.etable th')].map((th) => th.textContent)).toEqual([
+      'name',
+      'port',
+      'last seen',
+    ])
+    expect(view('ports').classList.contains('on')).toBe(true)
+    expect(view('hosts').classList.contains('on')).toBe(false)
+
+    await fireEvent.click(view('hosts'))
+    await settle()
     expect([...container.querySelectorAll('.etable th')].map((th) => th.textContent)).toEqual([
       'name',
       'lane',
@@ -546,9 +645,52 @@ describe('Entities tab strip (#681, unmounted for round-30 fidelity)', () => {
       'marks',
     ])
   })
+
+  it('the views are buttons, so the keyboard reaches them', async () => {
+    const { container } = render(Entities)
+    await settle()
+
+    for (const v of container.querySelectorAll('#eviews [data-v]')) {
+      expect(v.tagName).toBe('BUTTON')
+    }
+  })
 })
 
-describe.skip('Entities rules tab (#681) -- skipped while the tab strip is unmounted for round-30 fidelity (TABS_ENABLED, #691): every test below reaches the rules table by clicking a tab button that round 30 does not render. The rules table and its rename path are still implemented in Entities.svelte; un-skip this block when #691 remounts the strip.', () => {
+describe('Entities read-only viewer (#804)', () => {
+  it('gives a viewer no rename affordance -- names are plain text, not buttons', async () => {
+    authState.role = 'viewer'
+    fetchEntities.mockResolvedValue([{ type: 'host', key: '10.0.10.2', label: 'tom-desktop', tags: [] }])
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.rename-btn')).toBeNull()
+    const name = container.querySelector('.etable td.k')
+    expect(name?.textContent?.trim()).toBe('tom-desktop')
+    expect(name?.querySelector('.static-name')).not.toBeNull()
+  })
+
+  // The whole point of the ratified grammar: the fact is said once, on
+  // the account chip, and this page says nothing about it at all.
+  it('says nothing about read-only on the page itself', async () => {
+    authState.role = 'viewer'
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.textContent?.toLowerCase()).not.toContain('read-only')
+    expect(container.textContent?.toLowerCase()).not.toContain('admin')
+  })
+
+  it('still lets a user rename -- read-only is the viewer tier only', async () => {
+    authState.role = 'user'
+    fetchEntities.mockResolvedValue([{ type: 'host', key: '10.0.10.2', label: 'tom-desktop', tags: [] }])
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.rename-btn')).not.toBeNull()
+  })
+})
+
+describe('Entities rules view (#681, reachable again since #804)', () => {
   it('lists a rule that has been pushed but has never fired as its own row, reading as never-fired rather than blank', async () => {
     appState.devices = [
       { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 0 },
@@ -561,7 +703,7 @@ describe.skip('Entities rules tab (#681) -- skipped while the tab strip is unmou
 
     const { container, getByRole } = render(Entities)
     await settle()
-    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await fireEvent.click(getByRole('button', { name: /^rules/ }))
     await settle()
 
     const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('guest-block'))
@@ -585,7 +727,7 @@ describe.skip('Entities rules tab (#681) -- skipped while the tab strip is unmou
 
     const { container, getByRole } = render(Entities)
     await settle()
-    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await fireEvent.click(getByRole('button', { name: /^rules/ }))
     await settle()
 
     const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('LAN to WAN'))
@@ -602,7 +744,7 @@ describe.skip('Entities rules tab (#681) -- skipped while the tab strip is unmou
 
     const { container, getByRole, getByText } = render(Entities)
     await settle()
-    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await fireEvent.click(getByRole('button', { name: /^rules/ }))
     await settle()
 
     await fireEvent.click(getByText('lan-wan'))
@@ -619,7 +761,7 @@ describe.skip('Entities rules tab (#681) -- skipped while the tab strip is unmou
   it('states a true, specific empty state when no router has pushed a rule table yet', async () => {
     const { container, getByRole } = render(Entities)
     await settle()
-    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await fireEvent.click(getByRole('button', { name: /^rules/ }))
     await settle()
 
     expect(container.querySelector('.etable tbody')?.textContent).toContain(
@@ -627,7 +769,12 @@ describe.skip('Entities rules tab (#681) -- skipped while the tab strip is unmou
     )
   })
 
-  it('leaves an unlogged rule off the tab -- it can never fire under a label, so naming it would be a dead end', async () => {
+  // #681 left an unlogged rule off the table entirely, reasoning that a
+  // rule that can never fire under a label would be a dead end to show.
+  // Rounds 37-38 overrule that: the rule is on the router and fires on
+  // the router, so a rules view that omits it is not the rule table. It
+  // appears, and it is simply not nameable.
+  it('shows an unlogged rule by its router comment, with no rename affordance', async () => {
     appState.devices = [
       { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 0 },
     ] as unknown as (typeof appState)['devices']
@@ -638,15 +785,38 @@ describe.skip('Entities rules tab (#681) -- skipped while the tab strip is unmou
 
     const { container, getByRole } = render(Entities)
     await settle()
-    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await fireEvent.click(getByRole('button', { name: /^rules/ }))
     await settle()
 
-    expect(container.textContent).not.toContain('no logging on this one')
-    expect(container.querySelector('.etable tbody')?.textContent).toContain('No router has pushed a rule table yet')
+    const row = container.querySelector('.etable tbody tr')
+    expect(row?.textContent).toContain('no logging on this one')
+    expect(row?.querySelector('.rename-btn')).toBeNull()
+    expect(row?.querySelector('.static-name')).not.toBeNull()
+  })
+
+  // The drawn case: no comment on the router at all, so the rule has no
+  // name to show and states its number instead of going blank.
+  it('shows a rule with no comment on the router by its number', async () => {
+    appState.devices = [
+      { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 0 },
+    ] as unknown as (typeof appState)['devices']
+    fetchRouterRules.mockResolvedValue({
+      available: true,
+      rules: [filterRule({ ordinal: 17, log: false, logPrefix: '', comment: '' })],
+    })
+
+    const { container, getByRole } = render(Entities)
+    await settle()
+    await fireEvent.click(getByRole('button', { name: /^rules/ }))
+    await settle()
+
+    const row = container.querySelector('.etable tbody tr')
+    expect(row?.textContent).toContain('#17 — no comment on the router')
+    expect(row?.querySelector('.rename-btn')).toBeNull()
   })
 })
 
-describe.skip('Entities ports tab (#681) -- skipped while the tab strip is unmounted for round-30 fidelity (TABS_ENABLED, #691): every test below reaches the ports table by clicking a tab button that round 30 does not render. The ports table and its rename path are still implemented in Entities.svelte; un-skip this block when #691 remounts the strip.', () => {
+describe('Entities ports view (#681, reachable again since #804)', () => {
   it('folds a discovered-but-unnamed port into the ports tab', async () => {
     appState.events = [
       { srcIp: '10.0.10.9', dstIp: '10.0.10.1', srcPort: 51413, dstPort: 443, time: new Date().toISOString(), receivedAt: Date.now() },
@@ -654,12 +824,15 @@ describe.skip('Entities ports tab (#681) -- skipped while the tab strip is unmou
 
     const { container, getByRole } = render(Entities)
     await settle()
-    await fireEvent.click(getByRole('tab', { name: 'ports' }))
+    await fireEvent.click(getByRole('button', { name: /^ports/ }))
     await settle()
 
     expect(container.textContent).toContain('51413')
     expect(container.textContent).toContain('443')
-    expect(container.textContent).toContain('— click to name —')
+    // Rounds 37-38: a port nobody has named shows a dash, not an
+    // instruction -- the descriptor lines went with the hint lines.
+    expect(container.textContent).toContain('— · unnamed')
+    expect(container.textContent).not.toContain('click to name')
   })
 
   it('shows an already-named port by its label', async () => {
@@ -667,7 +840,7 @@ describe.skip('Entities ports tab (#681) -- skipped while the tab strip is unmou
 
     const { container, getByRole } = render(Entities)
     await settle()
-    await fireEvent.click(getByRole('tab', { name: 'ports' }))
+    await fireEvent.click(getByRole('button', { name: /^ports/ }))
     await settle()
 
     const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('syncthing'))
