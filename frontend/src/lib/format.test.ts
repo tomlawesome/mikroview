@@ -9,6 +9,7 @@ import {
   formatBufferDepth,
   parseGoDurationSeconds,
   formatDaysSince,
+  formatDayMonth,
 } from './format'
 
 describe('formatTimeMs', () => {
@@ -158,5 +159,23 @@ describe('formatDaysSince', () => {
   it('says "under a day" inside the first 24h rather than "0 d"', () => {
     const anHourAgo = new Date(Date.now() - 3600_000).toISOString()
     expect(formatDaysSince(anHourAgo)).toBe('under a day')
+  })
+})
+
+// #640's returning cards say when a pair was last judged. Day and month
+// only: the locale decides the order ("2 Sept" here, "Sep 2" in a US
+// one), so these assert on what the helper does rather than on one
+// locale's spelling of it.
+describe('formatDayMonth', () => {
+  it('renders a bare day and short month, with no year and no clock time', () => {
+    const out = formatDayMonth('2026-09-02T09:00:00Z')
+    expect(out).toContain('2')
+    expect(out).toContain('Sep')
+    expect(out).not.toContain('2026')
+    expect(out).not.toContain(':')
+  })
+
+  it('returns the input unchanged when it does not parse, same as its neighbours', () => {
+    expect(formatDayMonth('not a date')).toBe('not a date')
   })
 })
