@@ -67,11 +67,12 @@ function address(overrides: Partial<RouterIPAddress> = {}): RouterIPAddress {
   return { address: '10.0.0.1/24', network: '10.0.0.0', interface: 'bridge1', comment: '', ...overrides }
 }
 
-// The internet island: the group holding the card whose name is
-// "Internet", found by that name rather than by document order.
-function internetCardText(container: HTMLElement): string {
+// The internet island's own `.n-cidr` text node -- found by the card
+// whose name is "Internet" rather than by document order -- holding
+// the sibling `.cidr-v` / `.cidr-deg` tspans (the-whole.html:977).
+function internetCardCidr(container: HTMLElement): Element | null {
   const name = [...container.querySelectorAll('.n-name')].find((n) => n.textContent?.trim() === 'Internet')
-  return name?.parentElement?.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+  return name?.parentElement?.querySelector('.n-cidr') ?? null
 }
 
 function watchEntry(overrides: Partial<WatchlistEntry> = {}): WatchlistEntry {
@@ -632,8 +633,17 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
     const { container } = render(Topography)
     flushSync()
 
-    const slots = [...container.querySelectorAll('.n-cidr.deg-slot')].map((n) => n.textContent)
-    expect(slots).toEqual(['from boundaries', 'from boundaries'])
+    // Both sibling tspans are drawn (the-whole.html:1026); `.stage.map-degraded`
+    // is what picks which one shows, so the CSS toggle is asserted through
+    // the root class rather than through textContent, which jsdom never
+    // hides for a `display: none` descendant (vitest.config.ts leaves
+    // `test.css` at its default `false`, same reason LiveTable.svelte.test.ts
+    // gives for not asserting getComputedStyle here).
+    expect(container.querySelector('.stage')?.classList.contains('map-degraded')).toBe(true)
+    const degSlots = [...container.querySelectorAll('.zone .cidr-deg')].map((n) => n.textContent)
+    expect(degSlots).toEqual(['from boundaries', 'from boundaries'])
+    const vSlots = [...container.querySelectorAll('.zone .cidr-v')].map((n) => n.textContent)
+    expect(vSlots).toEqual(['', ''])
   })
 
   it('says "no address pushed" in the wan card\'s slot, and the address once one is pushed', () => {
@@ -643,15 +653,17 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
     zonesState.pushed = []
     const degraded = render(Topography)
     flushSync()
-    expect(internetCardText(degraded.container)).toContain('ether1 · no address pushed')
+    expect(degraded.container.querySelector('.stage')?.classList.contains('map-degraded')).toBe(true)
+    const degradedCidr = internetCardCidr(degraded.container)
+    expect(degradedCidr?.querySelector('.cidr-deg')?.textContent).toBe(' · no address pushed')
+    expect(degradedCidr?.querySelector('.cidr-v')?.textContent).toBe(' · ')
     degraded.unmount()
 
     zonesState.pushed = [address({ interface: 'ether1', address: '203.0.113.7' })]
     const pushed = render(Topography)
     flushSync()
-    const slot = internetCardText(pushed.container)
-    expect(slot).toContain('ether1 · 203.0.113.7')
-    expect(slot).not.toContain('no address pushed')
+    expect(pushed.container.querySelector('.stage')?.classList.contains('map-degraded')).toBe(false)
+    expect(internetCardCidr(pushed.container)?.querySelector('.cidr-v')?.textContent).toBe(' · 203.0.113.7')
   })
 
   it('drops the statement once an address table arrives, leaving no leftover note', () => {
@@ -661,9 +673,9 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
     flushSync()
 
     expect(container.querySelector('.deg-t')).toBeNull()
-    expect(container.querySelector('.deg-slot')).toBeNull()
+    expect(container.querySelector('.stage')?.classList.contains('map-degraded')).toBe(false)
     expect(container.querySelector('.isl.waist')?.getAttribute('height')).toBe('68')
-    expect([...container.querySelectorAll('.n-cidr')].map((n) => n.textContent)).toContain('192.168.1.0/24')
+    expect([...container.querySelectorAll('.n-cidr .cidr-v')].map((n) => n.textContent)).toContain('192.168.1.0/24')
   })
 })
 

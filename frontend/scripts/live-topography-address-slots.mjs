@@ -95,16 +95,32 @@ check(
 
 // --- every address slot reads honestly --------------------------------------
 
-const zoneSlots = await page.locator(`${topo} .zone .n-cidr`).allTextContents()
+// Both sibling tspans are always drawn (the-whole.html:977, :1026);
+// `.stage.map-degraded` is what picks which one shows, so read visibility
+// through Playwright's real browser CSS rather than raw text content,
+// which would concatenate both regardless of which is on screen.
+const zoneCidrDeg = page.locator(`${topo} .zone .cidr-deg`)
+const zoneDegCount = await zoneCidrDeg.count()
+const zoneDegVisible = await Promise.all((await zoneCidrDeg.all()).map((l) => l.isVisible()))
 check(
-  zoneSlots.length > 0 && zoneSlots.every((t) => t.trim() === 'from boundaries'),
-  `every zone card reads "from boundaries" instead of a CIDR (${JSON.stringify(zoneSlots)})`,
+  zoneDegCount > 0 && zoneDegVisible.every(Boolean),
+  `every zone card shows its "from boundaries" fallback tspan (${zoneDegVisible.length} of ${zoneDegCount} visible)`,
 )
-
-const internetText = (await page.locator(`${topo} .isl-card:has-text("Internet")`).first().textContent()) ?? ''
+const zoneDegText = await zoneCidrDeg.allTextContents()
 check(
-  internetText.replace(/\s+/g, ' ').includes('ether1 · no address pushed'),
-  `the wan card's own slot says no address was pushed (${internetText.replace(/\s+/g, ' ').trim()})`,
+  zoneDegText.every((t) => t.trim() === 'from boundaries'),
+  `and it reads "from boundaries" instead of a CIDR (${JSON.stringify(zoneDegText)})`,
+)
+const zoneVVisible = await Promise.all((await page.locator(`${topo} .zone .cidr-v`).all()).map((l) => l.isVisible()))
+check(zoneVVisible.every((v) => v === false), 'and the pushed-CIDR tspan stays hidden behind it')
+
+const wanCidrDeg = page.locator(`${topo} .isl-card:has-text("Internet") .cidr-deg`)
+check(await wanCidrDeg.isVisible(), 'the wan card shows its "no address pushed" fallback tspan')
+const wanDegText = (await wanCidrDeg.textContent()) ?? ''
+check(wanDegText.includes('no address pushed'), `and it says no address was pushed (${wanDegText.trim()})`)
+check(
+  !(await page.locator(`${topo} .isl-card:has-text("Internet") .cidr-v`).isVisible()),
+  'and the wan card\'s address tspan stays hidden behind it',
 )
 
 // --- the way in is real, not just named -------------------------------------
@@ -141,12 +157,18 @@ await page.waitForSelector(`${topo} .zone`, { timeout: 10000 })
 await page.waitForSelector(`${topo} .deg-t`, { state: 'hidden', timeout: 10000 })
 
 check((await page.locator(`${topo} .deg-t`).count()) === 0, 'the statement is gone — no leftover note')
-check((await page.locator(`${topo} .zone .deg-slot`).count()) === 0, 'no zone slot still says "from boundaries"')
+const zoneDegVisibleAfter = await Promise.all(
+  (await page.locator(`${topo} .zone .cidr-deg`).all()).map((l) => l.isVisible()),
+)
+check(
+  zoneDegVisibleAfter.every((v) => v === false),
+  'no zone slot still shows its "from boundaries" fallback tspan',
+)
 check(
   (await page.locator(`${topo} .isl.waist`).getAttribute('height')) === '68',
   'the router card is back to its resting height',
 )
-const pushedSlots = await page.locator(`${topo} .zone .n-cidr`).allTextContents()
+const pushedSlots = await page.locator(`${topo} .zone .cidr-v`).allTextContents()
 check(
   pushedSlots.some((t) => t.trim() === '192.168.1.1/24'),
   `the pushed CIDR is what the slot now holds (${JSON.stringify(pushedSlots)})`,
