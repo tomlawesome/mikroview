@@ -40,10 +40,60 @@ describe('whisperState.setFenceRange', () => {
     expect(whisperState.fenceRange).toEqual({ start: 10 * MIN, end: 12 * MIN })
   })
 
-  it('does not touch Autoscroll on its own -- only a plain seek does that', () => {
+  // Reversed by round 36, deliberately: "a seek or a fence turns it
+  // off". A fence is a window on the past, so lines arriving now would
+  // scroll the reader away from the range they have just drawn. Before
+  // this, fencing left the stream following and the fenced rows walked
+  // off the top of the screen while the reader watched.
+  it('stops the stream following, as a seek does -- a fence is a window on the past', () => {
     appState.autoscroll = true
     whisperState.setFenceRange(1 * MIN, 2 * MIN)
+    expect(appState.autoscroll).toBe(false)
+  })
+})
+
+// #749: seeking set autoscroll false and nothing in the app ever set it
+// back, so the stream stopped following for the rest of the session and
+// only a reload recovered it. Round 36 draws the way back as the same
+// pill the state is read from.
+describe('whisperState.resumeFollowing', () => {
+  it('follows again after a seek -- the one thing #749 had no way to do', () => {
+    whisperState.seek(10 * MIN)
+    expect(appState.autoscroll).toBe(false)
+
+    whisperState.resumeFollowing()
     expect(appState.autoscroll).toBe(true)
+  })
+
+  it('clears the cursor and the window it is leaving, not just the toggle', () => {
+    whisperState.setFenceRange(1 * MIN, 2 * MIN)
+    whisperState.seekMs = 5 * MIN
+
+    whisperState.resumeFollowing()
+    expect(whisperState.seekMs).toBeNull()
+    expect(whisperState.fenceRange).toBeNull()
+  })
+
+  it('follows again after a fence too, not only after a seek', () => {
+    whisperState.setFenceRange(1 * MIN, 2 * MIN)
+    expect(appState.autoscroll).toBe(false)
+
+    whisperState.resumeFollowing()
+    expect(appState.autoscroll).toBe(true)
+  })
+})
+
+describe('whisperState.stopFollowing', () => {
+  it('stops the stream without forgetting where the reader was looking', () => {
+    whisperState.seek(10 * MIN)
+    whisperState.resumeFollowing()
+    whisperState.setFenceRange(1 * MIN, 2 * MIN)
+    appState.autoscroll = true
+
+    whisperState.stopFollowing()
+    expect(appState.autoscroll).toBe(false)
+    // "Stop moving", not "forget the window" -- the drawn fence stands.
+    expect(whisperState.fenceRange).toEqual({ start: 1 * MIN, end: 2 * MIN })
   })
 })
 
