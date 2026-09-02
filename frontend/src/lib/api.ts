@@ -23,6 +23,7 @@ import type {
   HourTopBucket,
   MACRegistryEntry,
   PersistenceInfo,
+  ReplayResult,
   ReputationResult,
   RuleUsage,
   Stats,
@@ -1046,10 +1047,11 @@ export async function deleteCoverageDeclaration(key: string): Promise<string | n
 }
 
 // ===========================================================================
-// Definitions editor (issue #787)
+// Definitions editor (issues #787, #786)
 //
 // The two reads the watchers station's in-place editing panel needs
-// beyond the list it already fetches. The writes it drives
+// beyond the list it already fetches, and the replay its Try button
+// asks for (#786) -- a POST that writes nothing. The writes it drives
 // (updateDefinition, resetDefinition, cloneDefinition) are defined
 // further up beside fetchDefinitions and are not duplicated here.
 // ===========================================================================
@@ -1081,4 +1083,31 @@ export async function getDefinition(id: string): Promise<Definition> {
   const res = await fetch(`/api/definitions/${encodeURIComponent(id)}`)
   if (!res.ok) throw new ApiError(`getDefinition: ${res.status}`, res.status)
   return await res.json()
+}
+
+// replayDefinition re-runs one definition over the retained event corpus
+// with candidate params, and answers what it would have done (POST
+// /api/definitions/{id}/replay, internal/api's handleDefinitionsReplay).
+// Writes nothing: the definition the engine evaluates is untouched.
+//
+// A decline -- "the corpus is shorter than this definition's window, so
+// this question cannot be answered honestly" -- comes back as a *value*
+// on ReplayResult, not as a thrown error and not as a receipt of zero.
+// It is an honest limit of the traffic held, and the one thing a caller
+// must not do is show it as a failure: "it would have fired zero times"
+// and "this cannot be asked yet" are different answers, which is why
+// engine.Result keeps them structurally apart (#403) and why this
+// wrapper does too.
+//
+// A genuine refusal (no corpus, not user-tier, a candidate param this
+// definition's replay does not accept) is still the string every other
+// definitions writer returns, so one `typeof result === 'string'` check
+// separates "the server would not do it" from "here is the answer".
+export async function replayDefinition(
+  id: string,
+  params: Record<string, unknown>,
+): Promise<ReplayResult | string> {
+  const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/replay`, { params })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `replayDefinition: ${res.status}`
 }
