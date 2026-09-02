@@ -41,7 +41,7 @@
   import { anyBaselineWarming } from '../lib/learningShelf'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
-  import { fetchFlagEpisode } from '../lib/api'
+  import { fetchFlagEpisode, fetchExpectations } from '../lib/api'
   import { familyOf } from '../lib/flagPalette'
   import { formatHM, formatTime } from '../lib/format'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
@@ -52,7 +52,7 @@
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { watchDraftForFlag } from '../lib/watchDraft'
-  import type { Flag, FlagType, FirewallEvent, Verdict } from '../lib/types'
+  import type { Flag, FlagType, FirewallEvent, Verdict, Exclusion } from '../lib/types'
 
   // "watch this pathway" / "watch this source" (#761 item 3): a flag
   // writes the watchlist tab's draft for it rather than making the
@@ -357,7 +357,28 @@
     if (canEdit) detectorSettingsState.refresh().catch(() => {})
   })
 
-  const showShelf = $derived(provisionalActive.length > 0 || warming)
+  // The expectations ledger's own thinness (#640, the honesty line):
+  // fetched once per mount, viewer-readable with no role gate -- an
+  // expectation is not owner-only information the way the warming
+  // signal above is. A failed fetch is swallowed the same way as
+  // detectorSettingsState.refresh() above: absence of a claim, not a
+  // false one.
+  let expectations = $state<Exclusion[] | null>(null)
+
+  $effect(() => {
+    fetchExpectations()
+      .then((list) => {
+        expectations = list
+      })
+      .catch(() => {})
+  })
+
+  // Fewer than five recorded expectations counts as "thin" -- the
+  // early-noise line shows until then.
+  const THIN_LEDGER = 5
+  const ledgerThin = $derived(expectations !== null && expectations.length < THIN_LEDGER)
+
+  const showShelf = $derived(provisionalActive.length > 0 || warming || ledgerThin)
 
   // The verdicts (#640, in #780's row column): offered on every open
   // row, settled or shelf -- the backend takes a verdict on any flag, so
@@ -719,6 +740,17 @@
             <span class="shelf-count">— {provisionalActive.length} provisional</span>
           {/if}
         </h2>
+        <!-- "Honesty at the start" (#640): while the ledger is thin,
+             the inbox says so, rather than leaving a noisy start
+             unexplained until the operator has taught it enough to
+             quiet down. -->
+        {#if ledgerThin && expectations}
+          <p class="shelf-honest">
+            Flags will be noisy until mikroview has learned what is normal here — {expectations.length}
+            {expectations.length === 1 ? 'expectation' : 'expectations'} recorded so far. Judge each flag and the inbox
+            settles.
+          </p>
+        {/if}
         {#if provisionalActive.length > 0}
           <!-- The same five ratified columns as the settled table, so
                the two read as one surface; no sort or filter row -- a
@@ -740,7 +772,7 @@
               {/each}
             </tbody>
           </table>
-        {:else}
+        {:else if warming}
           <!-- The warming case with nothing on the shelf yet: the
                answer to "why is it silent", in words -- the point of
                the issue, not decoration. -->
@@ -1692,6 +1724,18 @@
   }
 
   .shelf-warm {
+    margin: 8px 0 0;
+    max-width: 62ch;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--fg-muted);
+  }
+
+  /* The early-noise honesty line (#640): same shape as .shelf-warm --
+     it sits in the same spot for the same reason, just while the
+     ledger rather than the baseline is what is still thin. */
+  .shelf-honest {
     margin: 8px 0 0;
     max-width: 62ch;
     font-family: var(--font-sans);

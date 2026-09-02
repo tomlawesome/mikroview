@@ -58,15 +58,26 @@ rewritten.
   detector the engine is evaluating is untouched, whether the receipt is
   encouraging or not -- and it never blocks Save. New `replayDefinition`
   wrapper over `POST /api/definitions/{id}/replay`, which existed
-  server-side but had no caller anywhere in the client. Two known limits,
-  recorded rather than hidden: the receipt is shown without the
-  live-firing comparison beside it, because nothing in the app or the API
-  can produce that number for a window hours long (the flag time series
-  counts newly-raised episodes rather than firings, covers only the last
-  sixty minutes, and starts empty after a restart); and a candidate
-  carries only the window and the threshold, which is the closed set the
-  engine's replay accepts -- a detector's other tuning fields are saved
-  as normal but are not part of what Try asks.
+  server-side but had no caller anywhere in the client. One known limit,
+  recorded rather than hidden: a candidate carries only the window and
+  the threshold, which is the closed set the engine's replay accepts -- a
+  detector's other tuning fields are saved as normal but are not part of
+  what Try asks.
+- **Try now says what the detector counts as it stands, beside the
+  candidate's count** (#786). *"Would have fired 3 times in the last 4h
+  12m — currently: 41"*: without the second number the first one settles
+  nothing, since a count only means something against the count it would
+  replace. It is measured, not looked up: `POST
+  /api/definitions/{id}/replay` runs the same replay a second time with
+  the detector's live params over the same traffic and returns it as
+  `current`, because nothing already counted asks the same question (the
+  flag time series counts newly-raised episodes over the last sixty
+  minutes, and a flag's own count is re-fires within one episode). Where
+  the live window is longer than the traffic held, the slot says so in
+  the same grey the decline uses rather than showing a number nothing
+  established. No new counter and no new storage; a Try with nothing
+  changed carries no comparison, because its count is the current one
+  already.
 - **A live memory control for the event buffer, not just a config-file
   setting** (#796). Settings' memory group now carries a slider under
   the hours bar: dragging it only proposes a figure, and nothing changes
@@ -420,6 +431,14 @@ rewritten.
   index can narrow it to the events it might match, or whether it is
   evaluated against every event instead. `POST /api/definitions`'s
   refusal of `intent=detection` is gone, since it is no longer true.
+- **The learning shelf says when the record is still thin** (#640). A
+  freshly-deployed mikroview flags plenty before it has learned what is
+  normal, and until now nothing said why. While fewer than five
+  expectations have been recorded, the shelf now reads *"Flags will be
+  noisy until mikroview has learned what is normal here — N
+  expectation(s) recorded so far. Judge each flag and the inbox
+  settles."* — viewer-readable, since an expectation is not owner-only
+  information.
 
 ### Changed
 
@@ -644,6 +663,14 @@ rewritten.
 
 ### Fixed
 
+- **The engine room's event-buffer row lost its live count** (#842).
+  #823's memory slider replaced "8,412 of 201,000 events · ~9 h window"
+  with "120 MiB · ~201 000 events · ~9 h at today's rate" -- the
+  configured ceiling and a reckoning from it, with no number anywhere in
+  the row that the server actually publishes as traffic arrives.
+  `bufferRow()` now takes the live held count and prints it ahead of the
+  ceiling ("120 MiB · 8 412 of ~201 000 events · ~9 h at today's rate"),
+  and the engine room passes the buffer's current occupancy in.
 - **Pages could scroll far past their own content into empty space**
   (#689). Metrics' own sr-only screen-reader region is `position:
   absolute` with no offset of its own, and none of the deck's wrappers
