@@ -4,11 +4,17 @@ import {
   cloneDefinition,
   fetchDefinitionSchema,
   fetchDefinitions,
+  replayDefinition,
   resetDefinition,
   updateDefinition,
   type DefinitionUpdate,
 } from './api'
-import type { DefinitionParamSchema, DetectorScope, DetectorSettings } from './types'
+import type {
+  DefinitionParamSchema,
+  DetectorScope,
+  DetectorSettings,
+  ReplayResult,
+} from './types'
 
 // Live per-detector on/off + scope settings -- admin-only, mirrors
 // flags.svelte.ts's shape.
@@ -130,6 +136,19 @@ class DetectorSettingsState {
   // refusal is returned verbatim rather than reworded: it names the
   // operation that does exist for such a definition, which a generic
   // "clone failed" would throw away.
+  // replay asks what candidate numbers would have done over the traffic
+  // already held (#786's Try). It refreshes nothing on purpose: a replay
+  // writes nothing, so the list it would re-read has not changed, and
+  // re-reading it would make a trial look like an edit.
+  //
+  // The result is returned untouched, decline included. A decline is the
+  // server's honest "this cannot be asked of the corpus held yet", not a
+  // failure, and collapsing it here into an error string is exactly the
+  // distinction engine.Result is shaped to preserve.
+  async replay(name: string, params: Record<string, unknown>): Promise<ReplayResult | string> {
+    return await replayDefinition(name, params)
+  }
+
   async clone(name: string, cloneAs: string): Promise<{ id: string } | string> {
     const result = await cloneDefinition(name, cloneAs)
     if (typeof result === 'string') return result
