@@ -1379,6 +1379,44 @@ describe('#726: distinct edges are not drawn along each other', () => {
     }
   }
 
+  // The gate caught this on the real map when the unit cases above did
+  // not: they only ever hung the "anywhere" edge off lane 1, whose slot
+  // sits at one end of the fan. A lane nearer the middle ends its limb
+  // close to the waist, which is where an "anywhere" edge dies, so the
+  // clearance has to hold for every slot rather than the first one.
+  for (const lane of [1, 2, 3]) {
+    it(`lane ${lane}'s edge to anywhere clears its own limb, whichever slot the lane holds`, () => {
+      zonesState.pushed = Array.from({ length: 3 }, (_, i) => ({
+        address: `10.0.${i + 1}.1/24`,
+        network: `10.0.${i + 1}.0`,
+        interface: `bridge${i + 1}`,
+        comment: `Lane ${i + 1}`,
+      }))
+      appState.events = [
+        ...Array.from({ length: 3 }, (_, i) => event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20` })),
+        event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      ]
+      policyState.anyPushed = true
+      policyState.edges = [
+        ...Array.from({ length: 3 }, (_, i) => policyEdge(`bridge${i + 1}`, 'ether1', [':443'])),
+        policyEdge(`bridge${lane}`, '', [':53']),
+      ]
+      const { container } = render(Topography)
+      flushSync()
+      const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
+      policyTab!.click()
+      flushSync()
+
+      const edges = pathsOf(container, '.edge')
+      expect(edges.length).toBe(4)
+      for (let a = 0; a < edges.length; a++) {
+        for (let b = a + 1; b < edges.length; b++) {
+          expect(sharedRun(edges[a], edges[b])).toBeLessThan(SMEARED)
+        }
+      }
+    })
+  }
+
   it('a five-lane estate bundles the corridor and fans only at the waist', () => {
     // #726's own spec: five lanes to the internet, two of them answered
     // back, and one lane's own "reaches anywhere" edge alongside -- every
