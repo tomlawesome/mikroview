@@ -342,8 +342,8 @@ raw() {
 
 # portscan N [source-ip] -- N distinct destination ports from one source
 # IP, inside the default port-scan window, so a real port_scan flag gets
-# raised rather than synthesized -- for scenarios (live-exclusions.mjs,
-# live-flags-clearing.mjs) that need an actual flag to clear/exclude, not
+# raised rather than synthesized -- for scenarios (live-verdicts.mjs,
+# live-flags-expectations.mjs) that need an actual flag to judge, not
 # just events in the table. source-ip defaults to 198.51.100.77;
 # pass a different one to raise a second, independent flag.
 portscan() {
