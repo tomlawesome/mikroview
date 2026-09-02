@@ -587,6 +587,110 @@ describe('try', () => {
     expect(said.classList.contains('declined')).toBe(true)
   })
 
+  // The candidate's count against the one it would replace (#786). The
+  // server measures it by replaying the live params over the same corpus
+  // in the same request; the slot's job is only to say it beside the
+  // count, quietly, and to say nothing at all when there is nothing to
+  // compare against.
+  it('says what the detector counts as it stands, beside the candidate’s count', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce({
+      receipt: {
+        window: { start: '', end: '', duration: '4h12m0s', eventCount: 8421 },
+        emissionCount: 3,
+        sample: [],
+        sampleTruncated: false,
+        corpusTruncated: false,
+        anyProvisional: false,
+      },
+      current: {
+        receipt: {
+          window: { start: '', end: '', duration: '4h12m0s', eventCount: 8421 },
+          emissionCount: 41,
+          sample: [],
+          sampleTruncated: false,
+          corpusTruncated: false,
+          anyProvisional: false,
+        },
+      },
+    })
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText(/Would have fired 3 times in the last 4h 12m/)).toBeTruthy()
+    const current = screen.getByText('currently: 41')
+    // In the slot's own quiet ink, not a status colour: it is the thing
+    // the candidate is measured against, not a second answer.
+    expect(current.classList.contains('tried-current')).toBe(true)
+    expect(current.classList.contains('error')).toBe(false)
+  })
+
+  it('reads a cut-short corpus as "at least" for the current count too', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce({
+      receipt: {
+        window: { start: '', end: '', duration: '4h12m0s', eventCount: 1_000_000 },
+        emissionCount: 3,
+        sample: [],
+        sampleTruncated: false,
+        corpusTruncated: true,
+        anyProvisional: false,
+      },
+      current: {
+        receipt: {
+          window: { start: '', end: '', duration: '4h12m0s', eventCount: 1_000_000 },
+          emissionCount: 41,
+          sample: [],
+          sampleTruncated: false,
+          corpusTruncated: true,
+          anyProvisional: false,
+        },
+      },
+    })
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('currently: at least 41')).toBeTruthy()
+  })
+
+  it('says a declining live-params answer in the same grey, and keeps the receipt', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce({
+      receipt: {
+        window: { start: '', end: '', duration: '4h12m0s', eventCount: 8421 },
+        emissionCount: 3,
+        sample: [],
+        sampleTruncated: false,
+        corpusTruncated: false,
+        anyProvisional: false,
+      },
+      current: {
+        decline: {
+          reason: 'corpus covers 4h12m0s (8421 event(s)), shorter than this definition’s window',
+          corpusSpan: '4h12m0s',
+          definitionWindow: '24h0m0s',
+        },
+      },
+    })
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    // The candidate was answerable and the comparison was not: what is
+    // missing is the second number, not the receipt.
+    expect(screen.getByText(/Would have fired 3 times in the last 4h 12m/)).toBeTruthy()
+    const current = screen.getByText(/currently: not replayable over the traffic held/)
+    expect(current.classList.contains('tried-current')).toBe(true)
+    expect(current.textContent).toContain('shorter than this definition’s window')
+  })
+
+  it('says nothing about "currently" when the answer carries no current', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    // The default answer here carries none -- as the server's does for a
+    // candidate that changed nothing, where the count *is* the current
+    // one and repeating it beside itself would say nothing.
+    expect(screen.getByText('Would have fired 3 times in the last 4h 12m')).toBeTruthy()
+    expect(screen.queryByText(/currently:/)).toBeNull()
+  })
+
   it('never blocks Save -- before, during or after either answer', async () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
