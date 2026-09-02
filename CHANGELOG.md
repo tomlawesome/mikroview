@@ -431,6 +431,14 @@ rewritten.
   index can narrow it to the events it might match, or whether it is
   evaluated against every event instead. `POST /api/definitions`'s
   refusal of `intent=detection` is gone, since it is no longer true.
+- **The learning shelf says when the record is still thin** (#640). A
+  freshly-deployed mikroview flags plenty before it has learned what is
+  normal, and until now nothing said why. While fewer than five
+  expectations have been recorded, the shelf now reads *"Flags will be
+  noisy until mikroview has learned what is normal here — N
+  expectation(s) recorded so far. Judge each flag and the inbox
+  settles."* — viewer-readable, since an expectation is not owner-only
+  information.
 
 ### Changed
 
@@ -655,6 +663,14 @@ rewritten.
 
 ### Fixed
 
+- **The engine room's event-buffer row lost its live count** (#842).
+  #823's memory slider replaced "8,412 of 201,000 events · ~9 h window"
+  with "120 MiB · ~201 000 events · ~9 h at today's rate" -- the
+  configured ceiling and a reckoning from it, with no number anywhere in
+  the row that the server actually publishes as traffic arrives.
+  `bufferRow()` now takes the live held count and prints it ahead of the
+  ceiling ("120 MiB · 8 412 of ~201 000 events · ~9 h at today's rate"),
+  and the engine room passes the buffer's current occupancy in.
 - **Pages could scroll far past their own content into empty space**
   (#689). Metrics' own sr-only screen-reader region is `position:
   absolute` with no offset of its own, and none of the deck's wrappers

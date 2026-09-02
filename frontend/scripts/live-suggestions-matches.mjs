@@ -504,8 +504,14 @@ check(
   'any other click disarms it again',
 )
 
-const entriesBefore = await api('GET', '/api/definitions')
-const countBefore = (entriesBefore.body?.definitions ?? entriesBefore.body ?? []).length ?? 0
+// Count watches, not definitions: /api/definitions lists the shipped
+// detectors too, which no reset deletes, so counting everything reads a
+// complete wipe as 18 -> 17 and fails (first dev gate after #819).
+const watchCount = async () => {
+  const listed = await api('GET', '/api/definitions')
+  return (listed.body?.definitions ?? listed.body ?? []).filter((d) => d.intent === 'expectation').length
+}
+const countBefore = await watchCount()
 check(countBefore > 0, `there are watches to wipe before the reset (${countBefore})`)
 
 await resetBtn.click()
@@ -513,8 +519,7 @@ await page.waitForTimeout(300)
 await resetBtn.click()
 await page.waitForTimeout(2500)
 
-const entriesAfter = await api('GET', '/api/definitions')
-const countAfter = (entriesAfter.body?.definitions ?? entriesAfter.body ?? []).length ?? 0
+const countAfter = await watchCount()
 check(countAfter === 0, `the confirmed reset deleted every watchlist entry (${countBefore} → ${countAfter})`)
 
 check(
