@@ -24,7 +24,9 @@
 
 set -u
 
-WORKTREE="${MV_GATE_WORKTREE:-$(git rev-parse --show-toplevel)/.claude/worktrees/gate-dev}"
+# --git-common-dir, not --show-toplevel: started from a worktree, the
+# toplevel is that worktree, and the gate worktree hangs off the main one.
+WORKTREE="${MV_GATE_WORKTREE:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.claude/worktrees/gate-dev}"
 LOGDIR="${MV_GATE_LOGDIR:-$HOME/projects/.gate-logs/mikroview}"
 POLL="${MV_GATE_POLL:-600}"
 
