@@ -312,6 +312,26 @@ rewritten.
 
 ### Changed
 
+- **"Never flag this again" now records how much is normal, and comes
+  back when a host outgrows it** (#640, part A: store and engine). It
+  used to silence a detector on a host outright, forever, whatever the
+  host did next. It now records the size of the firing you judged
+  normal -- the measure that detector compares against its threshold,
+  such as the number of distinct ports for a port scan -- and absorbs
+  later firings up to one and a half times that size. Past that the
+  flag returns, carrying both numbers, so it can say what was expected
+  and what was actually seen rather than repeating a count you already
+  looked at. Saying it is expected again raises the recorded size to
+  the new firing; the size only ever goes up.
+
+  Every shipped detector now states what its size is, or states that it
+  has none. Detectors with no size -- device silence, known bad IP,
+  unexpected mail sender, stale rule, and the two that judge a rate
+  against a moving baseline (global spike, rule spike) -- keep the old
+  meaning exactly: silencing one of those ignores that host on that
+  detector outright. Silences recorded before this release have no size
+  and keep that same meaning; nothing needs migrating.
+
 - **Metrics: the hourline reads every series, and the ledger sits above
   the table's minutes** (#803, design rounds 36-37). The line under the
   scene bar used to answer the minute under the cursor with a ratio that
