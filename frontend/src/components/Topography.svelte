@@ -11,8 +11,10 @@
   // data (frames first, traffic arrives into them), the empty state is
   // honest ("the map draws itself as traffic arrives" -- round 26's
   // first-hour beat), and while the /ip address table has not been
-  // pushed the zones degrade to boundary-derived names with a caption
-  // naming the missing push. The lens row carries Traffic and Policy
+  // pushed the zones degrade to boundary-derived names, with the router
+  // card carrying the one statement that names the missing push and
+  // every address slot saying what it truly holds (#802, round 36 --
+  // nothing floats over the map). The lens row carries Traffic and Policy
   // (#628, layer 2); the remaining lenses are unbuilt surfaces, absent
   // rather than disabled. One fixed picture, tabs repaint it: the
   // Policy lens keeps every island where Traffic put it and swaps the
@@ -35,6 +37,7 @@
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
+  import { wizardState } from '../lib/wizard.svelte'
   import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
   import { FLAG_TYPE_LABELS } from '../lib/metricsSeries'
@@ -1350,17 +1353,25 @@
     if (nodeCard) nodeCard = null
   }
 
-  // Off for round-30 fidelity: round 30 draws no explanatory box anywhere
-  // on the topography (docs/design/concepts/round-30/README.md, "No
-  // apparatus, anywhere") -- this "zones are boundary-derived" note is
-  // exactly that apparatus. Per the project's build-to-the-mockup-first
-  // policy (#700) this stays implemented rather than deleted; it is just
-  // unmounted here so nothing renders. Re-mounting it (or replacing it) is
-  // tracked as a gap on #691. Typed rather than inferred so the block
-  // stays reachable to the type checker -- a bare `false` narrows to
-  // `never` and reports it as unreachable. Same pattern as LiveTable's
-  // RESIZE_HANDLES_ENABLED and MetricsRegister's LEDGER_ENABLED.
-  const DEGRADED_NOTE_ENABLED: boolean = false
+  // The degraded map (#802; round 36, carried into rounds 37-38).
+  // Round 29's floating "zones are boundary-derived" note is gone rather
+  // than re-mounted: round 36 draws no note over the map at all
+  // (round-36/README.md, "#s3 -- the degraded note"). The one statement
+  // lives on the router card where its other pushed-table facts live
+  // (the-whole.html:997-998), and every address slot holds what it truly
+  // holds -- the `#s3.degraded` rules at the-whole.html:118-125.
+  //
+  // Only while the map itself is what is on screen: under a reach the map
+  // is a blurred backdrop whose single affordance is surfacing again, and
+  // a live "Run setup… ▸" behind the blur would be a second one.
+  const degradedStatement = $derived(zonesState.degraded && zones.length > 0 && !reach)
+
+  // The WAN card's own address slot. zonesState.zones deliberately drops
+  // the wan interface from the lanes, so the pushed row for the internet
+  // boundary is read here rather than through a zone.
+  const wanAddress = $derived(
+    zonesState.pushed.find((a) => !!a.interface && a.interface === zonesState.wanInterface)?.address ?? null,
+  )
 </script>
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
@@ -1903,7 +1914,15 @@
           <rect class="isl" x="-100" y="-30" width="200" height="60" rx="12" />
           <text x="-82" y="-3" class="n-name">Internet</text>
           {#if zonesState.wanInterface}
-            <text x="-82" y="14" class="n-cidr">{zonesState.wanInterface}</text>
+            <!-- `ether1 · 203.0.113.7` where the push names the boundary's
+                 address, `ether1 · no address pushed` where it does not
+                 (the-whole.html:977). The slot is never blank and never
+                 stale: it says which of the two it is. -->
+            <text x="-82" y="14" class="n-cidr"
+              >{zonesState.wanInterface}<tspan class:deg-slot={!wanAddress}
+                >{wanAddress ? ` · ${wanAddress}` : ' · no address pushed'}</tspan
+              ></text
+            >
           {:else}
             <text x="-82" y="14" class="n-sub">no public traffic observed yet</text>
           {/if}
@@ -1921,11 +1940,38 @@
            routes through here, and the island must not eat their clicks. -->
       <g transform="translate(700 268)" class="passive">
         <g class="isl-card">
-          <rect class="isl waist" x="-128" y="-34" width="256" height="68" rx="12" />
+          <!-- The card grows to hold the statement rather than the
+               statement overrunning the card (round-36/README.md's own
+               validation note): the-whole.html's `#s3.degraded .rt-isl
+               { height: 100px }`, bound here rather than set in CSS so
+               the geometry is the attribute the renderer reads. -->
+          <rect class="isl waist" x="-128" y="-34" width="256" height={degradedStatement ? 100 : 68} rx="12" />
           <text x="-110" y="-6" class="n-name">{primaryDevice?.name ?? 'your router'}</text>
           <text x="-110" y="12" class="n-sub">
             the waist{epsText ? ` · ${epsText} events/s` : ''}
           </text>
+          {#if degradedStatement}
+            <text x="-110" y="34" class="deg-t">no address table pushed — zones from boundaries</text>
+            <text x="-110" y="50" class="deg-t"
+              ><tspan
+                class="deg-go"
+                role="button"
+                tabindex="0"
+                aria-label="Run setup — it adds the /ip address table"
+                onclick={(e) => {
+                  e.stopPropagation()
+                  wizardState.launch()
+                }}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    wizardState.launch()
+                  }
+                }}>Run setup… ▸</tspan
+              > adds it</text
+            >
+          {/if}
         </g>
         <g class="g-dot">
           <circle r="22" class="station-ring" />
@@ -1961,10 +2007,15 @@
             <rect class="isl" x={-cardHalf} y="0" width={cardW} height="106" rx="12" />
             <circle cx={-cardHalf + cardPad} cy="22" r="3.5" fill={ink} />
             <text x={-cardHalf + cardPad + 11} y="26" class="n-name">{z.name}</text>
+            <!-- Anchored to the card's right inset, not a fixed x: a
+                 narrower card moves it in rather than past the edge. The
+                 slot always holds something true: the pushed CIDR, or
+                 "from boundaries" where the zone's name and extent rest
+                 on the boundary alone (the-whole.html:1026). -->
             {#if z.cidr}
-              <!-- Anchored to the card's right inset, not a fixed x: a
-                   narrower card moves it in rather than past the edge. -->
               <text x={cardHalf - 14} y="26" class="n-cidr" text-anchor="end">{z.cidr}</text>
+            {:else}
+              <text x={cardHalf - 14} y="26" class="n-cidr deg-slot" text-anchor="end">from boundaries</text>
             {/if}
             {#if shown.hosts.length > 0}
               <!-- Each host is the reach's door (#626): clicking the name
@@ -2466,16 +2517,6 @@
         <button class="d-quiet" onclick={() => (declarePanel = null)}>Cancel</button>
       </div>
     </div>
-  {/if}
-
-  {#if DEGRADED_NOTE_ENABLED && zonesState.degraded && zones.length > 0 && !reach}
-    <!-- The sentence is worth saying, but round 29 puts explanatory
-         notes in the scene's own chrome, not floating loose over the
-         drawing (#682): a bounded, backed pill, inset from every edge
-         like the rest of this card's furniture. -->
-    <p class="degraded">
-      zones are boundary-derived — no <span class="mono">/ip address</span> table has been pushed; Run setup… adds it
-    </p>
   {/if}
 
   <!-- The altitude slider (#648, concept T; named ends #682): one quiet
@@ -3350,29 +3391,34 @@
     fill: var(--accent);
   }
 
-  .degraded {
-    position: absolute;
-    /* Stacked above the wlens2 lens row (#682) rather than sharing its
-       bottom-left corner -- both are chrome now, so they take turns
-       rather than colliding. */
-    bottom: 38px;
-    left: 24px;
-    z-index: 2;
-    margin: 0;
-    padding: 5px 11px;
-    width: max-content;
-    max-width: 320px;
-    font-size: 10.5px;
-    font-style: italic;
-    color: var(--fg-dim);
-    background: var(--glass);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+  /* The degraded map (#802). the-whole.html:121-122 draws the statement
+     in the mono face at 10px in the quiet ink; --fg-muted rather than
+     --fg-dim for the reason .n-sub gives above (contrast on this scene's
+     two grounds). */
+  .deg-t {
+    fill: var(--fg-muted);
+    font-size: 10px;
+    font-family: var(--font-mono);
   }
 
-  .degraded .mono {
-    font-family: var(--font-mono);
-    font-style: normal;
+  /* The way in, in the accent -- the one ability the statement carries.
+     The waist card is `.passive` so policy edges beneath it stay
+     clickable; this restores pointer events for the link alone. */
+  .deg-go {
+    fill: var(--accent);
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  .deg-go:hover,
+  .deg-go:focus-visible {
+    text-decoration: underline;
+  }
+
+  /* An address slot with nothing pushed behind it, italic where the CIDR
+     would sit (the-whole.html:125). */
+  .deg-slot {
+    font-style: italic;
   }
 
   /* --- the health dials (#648, rounds 19-20; #699) ---------------------- */
