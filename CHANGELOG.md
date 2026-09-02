@@ -520,6 +520,26 @@ rewritten.
   waiting on a quiet gap that a fast enough burst never has. A sender
   left on the previous default format has no header to split on and
   keeps the old behaviour.
+- **A second `make live-check-remote` run could force-push over the
+  first's branch and delete the tree it was still standing in** (#809).
+  `scripts/gate-remote.sh` used one fixed branch (`gate-run`) and one
+  fixed work tree (`~/gate-work`) on the host, with nothing to stop two
+  runs overlapping -- the second run's push, reclaim and `rm -rf` landed
+  on top of the first mid-run, and the tell was the bare repo's
+  `gate-run` ref pointing at someone else's commit. The script now takes
+  an atomic `mkdir ~/gate-lock` on the host right before it pushes,
+  writing who holds it (host, user, ref, sha, pid, start time) to
+  `~/gate-lock/owner`; a second run that cannot take the lock prints the
+  owner and refuses rather than racing it. A lock older than 15 minutes
+  with no `mv-gate-run` container running is treated as abandoned and
+  taken over, printing what was found. Released in a `trap ... EXIT` so
+  Ctrl-C, a dropped SSH connection or a normal finish all clear it
+  without disturbing the run's real exit status. Separately, the
+  checkout is now verified after cloning -- `git status --porcelain`
+  and `git ls-files --deleted` must both be empty, or the run refuses
+  before building rather than failing confusingly partway through
+  `live-check` -- and a `RECLAIM` chown failure against an existing tree
+  now prints a warning instead of failing silently.
 
 ## [0.4.0] - 2026-08-25
 
