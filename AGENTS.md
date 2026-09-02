@@ -236,7 +236,11 @@ and nothing should be added to let it.
 repo on the host, checks it out, builds the image if it is not cached,
 runs the gate, brings the log back as `gate-run.log`, and removes the
 work tree afterwards. `MV_BROWSER=firefox make live-check-remote` picks
-the engine. `scripts/gate-remote.sh` carries the reasoning.
+the engine. `scripts/gate-remote.sh` carries the reasoning. The host is
+single-tenant -- one branch, one work tree -- so the script takes a lock
+(`~/gate-lock`) before it pushes and refuses if another run already
+holds it (#809); wait for that run, or if it looks dead, follow the
+`ssh ... rm -r ~/gate-lock` hint the refusal prints.
 
 `git push` rather than rsync or a clone, because authentication then
 happens from this side: nothing has to live over there. Only new objects
