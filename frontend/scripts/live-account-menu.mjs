@@ -37,13 +37,54 @@ check(
   `the chip carries the username and the admin marker -- got ${JSON.stringify(chipText)}`,
 )
 
+check(!chipText?.includes('read-only'), `an admin's chip claims no read-only -- got ${JSON.stringify(chipText)}`)
+
 await openAccountMenu(page)
 const rows = await page.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
+// startsWith, not equality: the About row carries the build line after
+// its label since #804 (version · licence · uptime), so its textContent
+// is no longer just the label.
 for (const expected of ['Run setup…', 'Change password', 'Sign out', 'About & licence']) {
-  check(rows.includes(expected), `an admin's menu offers ${expected} -- got ${JSON.stringify(rows)}`)
+  check(
+    rows.some((r) => r.startsWith(expected)),
+    `an admin's menu offers ${expected} -- got ${JSON.stringify(rows)}`,
+  )
 }
 for (const retired of ['Settings', 'Fleet', 'Entities', 'Audit log']) {
   check(!rows.includes(retired), `${retired} left the menu for the deck (#647) -- got ${JSON.stringify(rows)}`)
+}
+
+// --- The foot's build line (#804, round 37) --------------------------------
+// Uptime's home is here, beside the version and the licence. Days and
+// hours only -- "a ticking second is a clock, not a fact" -- so this
+// asserts the shape rather than watching it advance, and cross-checks
+// the two units against the server's own number below.
+const verText = (await page.locator('.account .menu .ver').textContent())?.trim()
+check(/AGPL-3\.0/.test(verText ?? ''), `the foot names the licence -- got ${JSON.stringify(verText)}`)
+const upMatch = /up (\d+) d (\d+) h/.exec(verText ?? '')
+check(upMatch !== null, `the foot carries uptime as days and hours -- got ${JSON.stringify(verText)}`)
+check(
+  !/\d+\s*m\s+\d+\s*s/.test(verText ?? ''),
+  `uptime shows no minutes or seconds -- got ${JSON.stringify(verText)}`,
+)
+
+// The rendered figure and the server's own number must agree -- this is
+// what the old ticking assertion was really proving.
+const healthz = await page.evaluate(async () => {
+  const res = await fetch('/api/healthz')
+  return res.json()
+})
+check(
+  Number.isInteger(healthz.uptimeSeconds) && healthz.uptimeSeconds >= 0,
+  `healthz reports uptimeSeconds (got ${healthz.uptimeSeconds})`,
+)
+if (upMatch) {
+  const shownSeconds = Number(upMatch[1]) * 86400 + Number(upMatch[2]) * 3600
+  const flooredServer = Math.floor(healthz.uptimeSeconds / 3600) * 3600
+  check(
+    shownSeconds === flooredServer,
+    `the foot's uptime is the server's own, floored to the hour (shown ${shownSeconds}s, server ${healthz.uptimeSeconds}s)`,
+  )
 }
 
 // --- Escape closes it ------------------------------------------------------
@@ -61,7 +102,7 @@ check(true, 'clicking away closes the menu')
 
 // --- About & licence opens, and the licence is really in it ----------------
 await openAccountMenu(page)
-await page.click('.account .menu button.row:text-is("About & licence")')
+await page.click('.account .menu button.row:has-text("About & licence")')
 const about = page.locator('[role="dialog"][aria-label="About MikroView"]')
 await about.waitFor({ state: 'visible', timeout: 5000 })
 check(true, 'About & licence opens the about overlay')
@@ -91,13 +132,28 @@ await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
 await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 
+// The read-only viewer, declared once (#804, round 37): the chip is the
+// one place every screen already says who you are, so it is the one
+// place read-only is said -- with a real viewer session rather than a
+// mocked role, which is the whole reason this runs in a browser.
+const viewerChip = (
+  await viewerPage.locator('.card[aria-hidden="false"] .account button.chip').textContent()
+)?.replace(/\s+/g, ' ').trim()
+check(
+  viewerChip === `${VIEWER_USER} (viewer) · read-only`,
+  `a viewer's chip declares the tier and read-only, once -- got ${JSON.stringify(viewerChip)}`,
+)
+
 await openAccountMenu(viewerPage)
 const viewerRows = await viewerPage.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
 for (const absent of ['Settings', 'Fleet', 'Entities', 'Audit log', 'Run setup…']) {
   check(!viewerRows.includes(absent), `${absent} is absent from a viewer's menu -- got ${JSON.stringify(viewerRows)}`)
 }
 check(viewerRows.includes('Sign out'), 'a viewer can still sign out')
-check(viewerRows.includes('About & licence'), 'and still reach the licence')
+check(
+  viewerRows.some((r) => r.startsWith('About & licence')),
+  'and still reach the licence',
+)
 const viewerDisabled = await viewerPage.$$eval('.account .menu button.row', (els) =>
   els.filter((e) => e.disabled).map((e) => e.textContent.trim()),
 )
