@@ -185,12 +185,17 @@ func (d *offHoursDefinition) Evaluate(e store.Event) {
 	}
 	confidence := emaConfidence(z, sampleDays, d.minSampleDays)
 
+	// Size is the event count at this hour -- off_hours_activity's
+	// declared size, the measure its minCount param is compared against.
+	// See ShippedSizeMeasure.
+	size := count
 	d.emit(Emission{
 		Target: e.SrcIP,
 		Detail: fmt.Sprintf(
 			"%d events at %02d:00 vs a baseline of %.1f for this host at this hour (%d days of history, %.1fσ above normal)",
 			count, hour, snap.Value, sampleDays, z),
 		Confidence: &confidence,
+		Size:       &size,
 		Country:    e.SrcCountry,
 		SourceIP:   e.SrcIP,
 		EventTime:  now,

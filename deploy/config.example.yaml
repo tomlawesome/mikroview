@@ -48,6 +48,11 @@ store:
   # traffic rate, which varies enormously depending on which of your
   # router's rules have logging turned on.
   maxMemory: 120MiB
+  # Where a size set from Settings' memory control is kept. Once
+  # somebody moves that slider, the figure stored here is the one that
+  # applies and maxMemory above is ignored -- mikroview says which it
+  # took at startup. Delete the file to go back to the line above.
+  settingsStorePath: /var/lib/mikroview/settings.json
 
 # Watchlist (issue #243) -- an admin-managed set of entries watching
 # specific ports/sources, or a device's egress ("this should only ever
