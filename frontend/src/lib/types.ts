@@ -738,8 +738,10 @@ export interface Evidence {
   ports?: number[]
   hosts?: string[]
   nat?: NATInfo
-  // pairs/pairsTotal/pairsTotalIsFloor (#654): currently only
-  // critical_port. pairs is capped the same way ports/hosts are (see
+  // pairs/pairsTotal/pairsTotalIsFloor (#654): critical_port, and since
+  // #641 outbound_anomaly and internal_recon, whose pairs are what an
+  // expected verdict permits and what a "watch for this" draft is built
+  // from. pairs is capped the same way ports/hosts are (see
   // internal/engine's maxEvidencePairs); pairsTotal is the distinct-pair
   // count before that display cap, present only when the cap actually
   // truncated the list -- absent (undefined) means pairs is already the

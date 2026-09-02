@@ -937,3 +937,117 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     expect(document.querySelector('.returned')).toBeNull()
   })
 })
+
+// #641: "Resolved — undo · watch for this". The offer rides on the undo
+// line a resolved flag already leaves behind, and it is an offer -- the
+// operator can decline, and the flag stays resolved.
+describe("the resolved row's offer of a watcher (#641)", () => {
+  const paired = { pairs: [{ host: '192.168.1.10', port: 445 }], pairsTotal: 1 }
+
+  // A judged row stays in place, dimmed with its stamp and undo, only
+  // for the flag this session judged -- so every case here goes through
+  // the click rather than starting from an already-resolved flag, which
+  // the table filters away.
+  async function resolveIt(evidence: Flag['evidence'] = paired) {
+    flagsState.list = [
+      testFlag({
+        id: 's1',
+        type: 'internal_recon',
+        target: '192.168.1.50',
+        evidence,
+        verdict: 'investigate',
+        verdictBy: 'tom',
+        verdictAt: '2026-09-02T09:00:00Z',
+      }),
+    ]
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({
+        id: 's1',
+        type: 'internal_recon',
+        target: '192.168.1.50',
+        evidence,
+        cleared: true,
+        verdict: 'resolved',
+        verdictBy: 'tom',
+        verdictAt: '2026-09-02T09:01:00Z',
+      }) as never,
+    )
+    render(Flags)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /resolved/ }))
+    await Promise.resolve()
+    flushSync()
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.view = 'flags'
+    topologyNavState.pendingWatchDraft = null
+  })
+
+  it('offers "watch for this" beside undo once a flag is resolved', async () => {
+    await resolveIt()
+
+    const done = document.querySelector('.vdone') as HTMLElement
+    expect(done.textContent?.replace(/\s+/g, ' ').trim()).toBe('resolved undo · watch for this')
+  })
+
+  it('opens the watchlist draft prefilled, and remembers to come back here', async () => {
+    await resolveIt()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'watch for this' }))
+    flushSync()
+
+    expect(topologyNavState.pendingWatchDraft).toEqual({
+      who: '192.168.1.50',
+      toward: '192.168.1.10 · :445',
+      mode: 'expect',
+      provenance: expect.stringContaining('From the last firing window'),
+      returnTo: 'flags',
+    })
+    expect(appState.view).toBe('watchlist')
+  })
+
+  it('offers nothing to watch where the flag recorded no pairs', async () => {
+    await resolveIt({ ports: [22, 23] })
+
+    expect(screen.queryByRole('button', { name: 'watch for this' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'undo' })).toBeTruthy()
+  })
+
+  it('offers it only on resolved, not on the other verdicts that clear', async () => {
+    flagsState.list = [testFlag({ id: 's1', type: 'internal_recon', target: '192.168.1.50', evidence: paired })]
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({
+        id: 's1',
+        type: 'internal_recon',
+        target: '192.168.1.50',
+        evidence: paired,
+        cleared: true,
+        verdict: 'checked',
+        verdictBy: 'tom',
+        verdictAt: '2026-09-02T09:01:00Z',
+      }) as never,
+    )
+    render(Flags)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /checked/ }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(document.querySelector('.stamp.checked')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'watch for this' })).toBeNull()
+  })
+
+  it('a viewer never reaches it -- a viewer cannot judge a flag in the first place', () => {
+    authState.role = 'viewer'
+    flagsState.list = [testFlag({ id: 's1', type: 'internal_recon', target: '192.168.1.50', evidence: paired })]
+    render(Flags)
+    flushSync()
+
+    expect(screen.queryByRole('button', { name: /resolved/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'watch for this' })).toBeNull()
+  })
+})

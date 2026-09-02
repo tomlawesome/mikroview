@@ -527,6 +527,11 @@
   let draftIncludeStructuralNoise = $state(false)
   let draftSaving = $state(false)
   let draftError = $state<string | null>(null)
+  // Where a prefilled draft's values came from, and where the operator
+  // goes when they are done with it (#641). Both belong to the draft
+  // rather than to this page: a draft opened here has neither.
+  let draftProvenance = $state<string | null>(null)
+  let draftReturnTo = $state<PendingWatchDraft['returnTo']>(undefined)
 
   // The row's cells fill in as the form is typed, so the watch is read
   // the way it will be listed before it exists.
@@ -548,11 +553,26 @@
     draftMode = fill?.mode ?? 'expect'
     draftIncludeStructuralNoise = false
     draftError = null
+    draftProvenance = fill?.provenance ?? null
+    draftReturnTo = fill?.returnTo
     draftOpen = true
   }
 
-  function discardDraft() {
+  // closeDraft is the one exit from the draft, taken by both saving and
+  // discarding (#641): a watcher offered by a flag takes the operator to
+  // this page and brings them back to the inbox either way, so declining
+  // costs no more than accepting. A draft opened on this page carries no
+  // returnTo and simply closes, exactly as it did before.
+  function closeDraft() {
     draftOpen = false
+    const back = draftReturnTo
+    draftProvenance = null
+    draftReturnTo = undefined
+    if (back) appState.view = back
+  }
+
+  function discardDraft() {
+    closeDraft()
   }
 
   async function startWatching() {
@@ -574,7 +594,7 @@
       // the same house style every other mutation on this page uses.
       const err = await watchlistState.create(req)
       if (err) draftError = err
-      else draftOpen = false
+      else closeDraft()
     } finally {
       draftSaving = false
     }
@@ -1200,6 +1220,18 @@
                          saved -- offering it would silently lose what the
                          operator set. See startWatching's own comment. -->
                     <div class="wf-row"><span class="lab">window</span><span class="t">always</span></div>
+                    {#if draftProvenance}
+                      <!-- Where these values came from, stated wherever
+                           the pairs are shown (#641): the firing window
+                           they were read off, how many of how many, and
+                           whether the identity is MAC- or IP-bound. A
+                           prefilled draft is mikroview's reading of a
+                           flag, and the operator is about to save it as
+                           a policy -- so what it is a reading *of* is
+                           part of the form, not a detail to go and look
+                           up. -->
+                      <p class="wf-prov">{draftProvenance}</p>
+                    {/if}
                     {#if draftError}<p class="error" role="alert">{draftError}</p>{/if}
                   </div>
                   <div class="side wf-mode">
@@ -2001,6 +2033,16 @@
     font-weight: 600;
     letter-spacing: 0.14em;
     text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  /* Where a prefilled draft's values came from (#641) -- quiet, under
+     the fields it is about, in the same dimmed register as the window
+     row above it rather than as a warning. */
+  .wf-prov {
+    margin: 8px 0 0;
+    font-size: 11px;
+    line-height: 1.5;
     color: var(--fg-dim);
   }
 
