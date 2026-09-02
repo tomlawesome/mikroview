@@ -186,7 +186,7 @@ func TestShippedActivitySpike_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if !fs.Clear(f2.ID, now.Add(28*time.Second)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", now.Add(28*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	reviveAt := now.Add(29 * time.Second)
@@ -799,7 +799,7 @@ func TestShippedActivitySpike_BucketLearnsAcrossNights(t *testing.T) {
 	d.Evaluate(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 80, ConnState: "new",
 		ReceivedAt: night1.Add(10 * time.Second)})
 
-	fs.Clear(asFlagOfType(fs).ID, night1.Add(11*time.Second))
+	fs.SetVerdict(asFlagOfType(fs).ID, flags.VerdictChecked, "operator", night1.Add(11*time.Second))
 
 	// Night two: the identical burst, 24 hours later. The first event of
 	// this burst is also the first hour-22 event since the day rolled

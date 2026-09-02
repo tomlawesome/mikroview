@@ -173,7 +173,7 @@ func TestShippedPortScan_FieldsRefireClearRevive(t *testing.T) {
 
 	// Clear it, then feed a 17th distinct port still inside the same
 	// window: the flag revives.
-	if !fs.Clear(f2.ID, t0.Add(15500*time.Millisecond)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", t0.Add(15500*time.Millisecond)); !ok {
 		t.Fatal("expected Clear to succeed on the active flag")
 	}
 	reviveAt := t0.Add(16 * time.Second)
@@ -389,7 +389,7 @@ func TestShippedCriticalPort_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(6*30*time.Second)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", t0.Add(6*30*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	reviveAt := t0.Add(7 * 30 * time.Second)
@@ -824,7 +824,7 @@ func TestShippedRepeatedDrops_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(11*time.Minute)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", t0.Add(11*time.Minute)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	dd.Evaluate(dropEvt(t0.Add(12 * time.Minute)))
@@ -1194,7 +1194,7 @@ func TestShippedDistributedBruteForce_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(11*10*time.Second)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", t0.Add(11*10*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	dd.Evaluate(psEvt("198.51.100.111", 22, t0.Add(12*10*time.Second)))
