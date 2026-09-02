@@ -3,19 +3,6 @@
 import { clearAllFlags, clearFlag, clearFlagPermanent, deleteFlagVerdict, fetchFlags, setFlagVerdict } from './api'
 import type { Flag, FlagTimeBucket } from './types'
 
-// How long Undo stays offered after a successful Expected/Noise
-// judgement (#638) -- purely a UI affordance now (see judgeAndClear's
-// own doc comment): the verdict has already reached the server by the
-// time this timer starts, so it gates nothing but whether the Undo
-// button is still shown.
-const VERDICT_UNDO_MS = 5000
-
-interface UndoableVerdict {
-  id: string
-  verdict: 'expected' | 'noise'
-  timer: ReturnType<typeof setTimeout>
-}
-
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
 
 function isIpAddress(value: string): boolean {
@@ -185,19 +172,18 @@ class FlagsState {
     return this.optimisticallyClear(id, clearFlagPermanent)
   }
 
-  // Flags with an active, still-undoable verdict (issue #638) -- Undo
-  // stays offered on the card/toast for VERDICT_UNDO_MS after a
-  // successful Expected/Noise judgement, per this list. Purely a UI
-  // affordance: by the time an entry lands here the verdict has already
-  // reached the server (see judgeAndClear below), so this gates nothing
-  // but whether the Undo button is still shown, not whether undoing
-  // still works -- undoVerdict() below sends a real request regardless
-  // of this list, and only consults it to know whether there is
-  // anything left to undo at all.
-  undoableVerdicts = $state<UndoableVerdict[]>([])
-
+  // Whether id currently carries an undoable verdict (issue #638; #780
+  // moved its one consumer onto the flag row itself, offered for as
+  // long as the row stays pinned in place rather than for a fixed
+  // window -- see Flags.svelte's own doc comment on why the row, not a
+  // timer, now owns that lifetime). Read straight off the flag's own
+  // Verdict field rather than a separate client-side list: the server
+  // is the same source of truth undoVerdict() below calls, and
+  // UndoVerdict's own doc comment (store.go) already treats "undo an
+  // unjudged flag" as a no-op, so there is nothing this needs to track
+  // beyond what the flag itself says.
   isUndoable(id: string): boolean {
-    return this.undoableVerdicts.some((u) => u.id === id)
+    return !!this.list.find((f) => f.id === id)?.verdict
   }
 
   // 'real' (issue #638): records the verdict without clearing the flag,
@@ -232,9 +218,9 @@ class FlagsState {
   // 'expected'/'noise' (issue #638): posts the verdict immediately --
   // optimistic clear like clear() above, then the real request, then
   // reconciled against the server's response, same shape as judgeReal
-  // above. Undo (below) is offered for VERDICT_UNDO_MS afterward, but
-  // that is UI only now: the verdict is already recorded server-side by
-  // the time this call returns.
+  // above. Undo (below) is offered for as long as the flag still
+  // carries this verdict -- see isUndoable's own doc comment for why
+  // that is no longer a timed window.
   //
   // This replaced a version that deferred the POST itself behind the
   // undo window and sent it only once the window lapsed, cancelling the
@@ -277,11 +263,6 @@ class FlagsState {
       flag.verdictAt = prev.verdictAt
       throw err
     }
-
-    const timer = setTimeout(() => {
-      this.undoableVerdicts = this.undoableVerdicts.filter((u) => u.id !== id)
-    }, VERDICT_UNDO_MS)
-    this.undoableVerdicts = [...this.undoableVerdicts, { id, verdict, timer }]
   }
 
   // Undoes a still-undoable verdict (issue #638) -- now a real
@@ -289,15 +270,13 @@ class FlagsState {
   // defers the POST for this to cancel before it happens. Optimistic
   // like every other mutation here: the flag reopens and its verdict
   // clears immediately, reverted on failure the same way clear()'s own
-  // revert works.
+  // revert works. A no-op (like the server's own UndoVerdict) if id
+  // carries no verdict to undo -- the row that offers this button is
+  // gone by then anyway, but a stale click racing that is harmless
+  // rather than an error.
   async undoVerdict(id: string) {
-    const pending = this.undoableVerdicts.find((u) => u.id === id)
-    if (!pending) return
-    clearTimeout(pending.timer)
-    this.undoableVerdicts = this.undoableVerdicts.filter((u) => u.id !== id)
-
     const flag = this.list.find((f) => f.id === id)
-    if (!flag) return
+    if (!flag || !flag.verdict) return
 
     const prev = {
       cleared: flag.cleared,
