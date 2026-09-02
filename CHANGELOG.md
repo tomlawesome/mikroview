@@ -18,6 +18,39 @@ rewritten.
 
 ### Added
 
+- **A detector's thresholds and windows can be edited in the app**
+  (#787). Until now the only thing the watchers station could change was
+  a detector's *scope* -- which hosts, ports or rules it watches -- and
+  even that was typed as comma-separated text. A detector whose
+  threshold or window was wrong for a particular network could not be
+  corrected anywhere in the interface. A row on the bench now expands
+  downward in place (one open at a time; no side drawer) into its
+  editing panel: typed tuning fields built from `GET
+  /api/definitions/schema`, so every field's type, bounds, unit and
+  description come from the server's own declaration rather than a
+  second copy of every detector's knobs written in the frontend. A
+  duration is edited as a plain second count and written back as the Go
+  duration string the server validates. Each scope axis is now a set of
+  removable chips with an add box that suggests what the app already
+  knows -- hosts from Entities, rule labels from the router-pushed
+  filter tables -- and the ports box takes a range (`8000-8010`) as well
+  as a single port, refusing anything that is not a port with a reason
+  instead of dropping it. The allow/deny/no-restriction select stays,
+  and source classification stays a select because it holds one value,
+  not a list. **Reset to stock** puts a detector's params back to
+  exactly what it shipped with, leaving its scope alone (the server's
+  reset is a params operation, and a button that also cleared an
+  operator's host exclusions would be doing something nobody pressed it
+  for). A viewer sees every row and every fact and no control at all --
+  hidden, never disabled, the same grammar the run/pause tick already
+  used. New `fetchDefinitionSchema` and `getDefinition` wrappers;
+  `resetDefinition` and `cloneDefinition` have callers for the first
+  time. Known limit, recorded rather than hidden: the clone button
+  reaches the server's own refusal for every detector currently on the
+  bench, because `POST /api/definitions/{id}/clone` copies an
+  expectation and refuses a definition whose logic is compiled into the
+  binary. The refusal is shown in the server's words, which name the
+  operation that does exist instead.
 - **A demo seeder that exercises the whole interface, not just syslog**
   (#687). Every UI review this project has run was hampered by a demo
   that only ever sent syslog: one lane on the fall, no pushed rule/NAT/
