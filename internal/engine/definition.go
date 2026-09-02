@@ -176,24 +176,6 @@ type Provenance struct {
 	ShippedParams Params `json:"shippedParams,omitempty"`
 }
 
-// Suppression is one exclusion scoped to this definition -- a target
-// this definition should never emit for, even though its own match/
-// baseline logic would otherwise fire. Where flags.Exclusion today is
-// global (any detector, permanently, keyed by (Type, Target) at the
-// flags.Store level), a Suppression lives on the definition it excludes
-// for: "exclusions live with the feature they exclude for" (#385) at
-// the data layer, per docs/decisions/evaluation-engine.md section 3.
-//
-// This issue (#401) models the field and its JSON shape only -- the
-// matching semantics (what "Target" means for a given definition/
-// intent, how a suppression actually gates an emission before it
-// reaches Route) port later.
-type Suppression struct {
-	ID     string `json:"id"`
-	Target string `json:"target"`
-	Reason string `json:"reason,omitempty"`
-}
-
 // Definition is the one envelope every evaluated thing carries,
 // whatever its Kind or Intent -- docs/decisions/evaluation-engine.md
 // section 2. This issue (#401) is the envelope's contract: no
@@ -248,9 +230,6 @@ type Definition struct {
 	// definition schema" per the ADR. See params.go.
 	ParamSchema []ParamSchema `json:"paramSchema,omitempty"`
 	Provenance  Provenance    `json:"provenance"`
-	// Suppressions are this definition's own scoped exclusions -- see
-	// Suppression's own doc comment.
-	Suppressions []Suppression `json:"suppressions,omitempty"`
 	// Detection is the structure an operator-authored detector needs and
 	// nothing else does: its conditions and the aggregation around them
 	// (issue #502). Set on exactly the definitions that are all three of
