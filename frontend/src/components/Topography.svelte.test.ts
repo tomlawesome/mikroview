@@ -1240,3 +1240,127 @@ describe('#723: lines are painted before labels in every lens, so a line can nev
     linesComeBeforeEveryPlate(container, '.cedge')
   })
 })
+
+// #726. Crossing is fine and unavoidable on a map like this; running
+// along the same path is not, because neither line can then be
+// followed. The difference is a sustained stretch rather than a touch,
+// so the measurement is how much of one line's run lies within a few
+// units of another's -- two lines that cross dip close once and part
+// again; two that are smeared together never part. Comparing the `d`
+// strings would pass while the map still looks like one thick line.
+function samplePath(d: string, n = 61): { x: number; y: number }[] {
+  const v = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number)
+  const pts: { x: number; y: number }[] = []
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1)
+    const u = 1 - t
+    if (d.includes('C')) {
+      const [x0, y0, x1, y1, x2, y2, x3, y3] = v
+      pts.push({
+        x: u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3,
+        y: u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3,
+      })
+    } else {
+      const [x0, y0, x1, y1, x2, y2] = v
+      pts.push({ x: u * u * x0 + 2 * u * t * x1 + t * t * x2, y: u * u * y0 + 2 * u * t * y1 + t * t * y2 })
+    }
+  }
+  return pts
+}
+
+/** The fraction of one path's run that lies within `gap` map units of
+ * the other -- 0 for lines that never meet, a blip for a crossing, and
+ * most of the run for two lines drawn along each other. */
+function sharedRun(a: string, b: string, gap = 4): number {
+  const pa = samplePath(a)
+  const pb = samplePath(b)
+  let near = 0
+  for (const p of pa) {
+    const closest = Math.min(...pb.map((q) => Math.hypot(p.x - q.x, p.y - q.y)))
+    if (closest < gap) near++
+  }
+  return near / pa.length
+}
+
+const SMEARED = 0.25
+
+function pathsOf(container: HTMLElement, selector: string): string[] {
+  return [...container.querySelectorAll(selector)].map((p) => p.getAttribute('d') ?? '')
+}
+
+describe('#726: distinct edges are not drawn along each other', () => {
+  const twoLanes: RouterIPAddress[] = [
+    { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+    { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+  ]
+
+  const seenOnBothLanes = () => [
+    event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
+    event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
+    event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+  ]
+
+  function policyEdge(from: string, to: string, ports: string[]) {
+    return {
+      key: `${from}|${to}`,
+      from,
+      to,
+      accepted: true,
+      refused: false,
+      acceptPorts: ports,
+      refusePorts: [],
+      comment: '',
+      ruleCount: 1,
+      logged: true,
+    }
+  }
+
+  it('two lanes heading for the internet do not share the waist corridor', () => {
+    zonesState.pushed = twoLanes
+    appState.events = seenOnBothLanes()
+    policyState.anyPushed = true
+    policyState.edges = [policyEdge('bridge1', 'ether1', [':443']), policyEdge('bridge2', 'ether1', [':80'])]
+    const { container } = render(Topography)
+    flushSync()
+    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
+    policyTab!.click()
+    flushSync()
+
+    const [one, two] = pathsOf(container, '.edge')
+    expect(one).toBeTruthy()
+    expect(two).toBeTruthy()
+    expect(sharedRun(one, two)).toBeLessThan(SMEARED)
+  })
+
+  it("a lane's edge to anywhere does not lie along its own edge to the internet", () => {
+    zonesState.pushed = twoLanes
+    appState.events = seenOnBothLanes()
+    policyState.anyPushed = true
+    policyState.edges = [policyEdge('bridge1', 'ether1', [':443']), policyEdge('bridge1', '', [':53'])]
+    const { container } = render(Topography)
+    flushSync()
+    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
+    policyTab!.click()
+    flushSync()
+
+    const [toInternet, toAnywhere] = pathsOf(container, '.edge')
+    expect(toInternet).toBeTruthy()
+    expect(toAnywhere).toBeTruthy()
+    expect(sharedRun(toInternet, toAnywhere)).toBeLessThan(SMEARED)
+  })
+
+  it('a crossing is not counted as a smear: two lanes to opposite sides stay distinct', () => {
+    zonesState.pushed = twoLanes
+    appState.events = seenOnBothLanes()
+    policyState.anyPushed = true
+    policyState.edges = [policyEdge('bridge1', 'bridge2', [':445']), policyEdge('bridge2', 'bridge1', [':22'])]
+    const { container } = render(Topography)
+    flushSync()
+    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
+    policyTab!.click()
+    flushSync()
+
+    const [there, back] = pathsOf(container, '.edge')
+    expect(sharedRun(there, back)).toBeLessThan(SMEARED)
+  })
+})

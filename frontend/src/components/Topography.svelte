@@ -183,6 +183,15 @@
     crosses: boolean
   }
 
+  const SPLIT = 7
+  // An edge to "anywhere" ends on the waist itself, which is the point
+  // every crossing edge is pulled through -- so at the ordinary split it
+  // runs along that same lane's edge to the internet, and neither line
+  // can be followed (#726: measured, 0.30 of the run within 4 units).
+  // It keeps its anchor and takes a wider lane instead, so it still
+  // reads as leaving the same island toward the same waist.
+  const ANY_CLEAR = 13
+
   function lineFor(fromIface: string, toIface: string, crosses: boolean): Line | null {
     const from = anchorOf(fromIface)
     const to = anchorOf(toIface)
@@ -192,8 +201,9 @@
     const dx = to.x - from.x
     const dy = to.y - from.y
     const len = Math.hypot(dx, dy) || 1
+    const spread = from.kind === 'any' || to.kind === 'any' ? SPLIT + ANY_CLEAR : SPLIT
     // A→B and B→A split to either side of the pair's shared line.
-    return { from, to, off: { x: (-dy / len) * 7, y: (dx / len) * 7 }, crosses }
+    return { from, to, off: { x: (-dy / len) * spread, y: (dx / len) * spread }, crosses }
   }
 
   interface DrawnEdge {
