@@ -40,7 +40,7 @@ describe('MetricsRegister flag-type labels', () => {
       [{ time: minute(0), byAction: { accept: 400 } }],
       [{ time: minute(0), byType: { activity_spike: 3 } }],
     )
-    const { container } = render(MetricsRegister, { hour, cursor: -1, reading: null, onselect: () => {} })
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
     const label = container.querySelector('.f-name')
     expect(label).not.toBeNull()
     expect(label?.getAttribute('text-anchor')).toBe('end')
@@ -52,7 +52,7 @@ describe('MetricsRegister flag-type labels', () => {
       [{ time: minute(0), byAction: { accept: 400 } }],
       [{ time: minute(0), byType: { activity_spike: 3 } }],
     )
-    const { container } = render(MetricsRegister, { hour, cursor: -1, reading: null, onselect: () => {} })
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
     const label = container.querySelector('.f-name')
     const axisLine = container.querySelector('.axis')
     const anchorY = Number(label?.getAttribute('y'))
@@ -68,7 +68,7 @@ describe('MetricsRegister flag-type labels', () => {
       [{ time: minute(0), byAction: { accept: 400 } }],
       [{ time: minute(0), byType: { activity_spike: 3, internal_recon: 2 } }],
     )
-    const { container } = render(MetricsRegister, { hour, cursor: -1, reading: null, onselect: () => {} })
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
     const labels = Array.from(container.querySelectorAll('.f-name'))
     expect(labels.length).toBe(2)
     const [x0, x1] = labels.map((l) => Number(l.getAttribute('x')))
@@ -77,7 +77,7 @@ describe('MetricsRegister flag-type labels', () => {
 
   it('draws no rotated label at all when no flag type fired this hour', () => {
     const hour = buildHour([{ time: minute(0), byAction: { accept: 400 } }], [])
-    const { container } = render(MetricsRegister, { hour, cursor: -1, reading: null, onselect: () => {} })
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
     expect(container.querySelector('.f-name')).toBeNull()
   })
 })
