@@ -86,3 +86,37 @@ describe('MetricsTable top port / top talker columns (#644 round 21)', () => {
     expect(cells.at(-1)).toBe('—')
   })
 })
+
+// Rounds 36-37 (#803). Round 36 drew the ledger under the minutes; the
+// owner's verdict was "love the ledger but put them at the top not
+// beneath", and round 37 redrew it as the head of the view. Where it
+// actually lands on screen is geometry, which jsdom does not compute --
+// live-metrics-views.mjs measures the two boxes. What is pinned here is
+// the half jsdom can see: the ledger is mounted in this view, and it
+// comes before the minutes in the document rather than after them.
+describe('MetricsTable ledger placement (#803, rounds 36-37)', () => {
+  it('mounts the ledger above the minutes, not beneath them', () => {
+    const hour = buildHour(traffic, [])
+    const { container } = render(MetricsTable, { hour, cursor: -1, onselect: () => {} })
+
+    const ledger = container.querySelector('.totals .ledger-strip')
+    expect(ledger).not.toBeNull()
+
+    const table = container.querySelector('.figures table')!
+    // DOCUMENT_POSITION_FOLLOWING: the table comes after the ledger.
+    expect(ledger!.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('gives every ledger column its bars without a box around them', () => {
+    const hour = buildHour(traffic, [])
+    const { container } = render(MetricsTable, { hour, cursor: -1, onselect: () => {} })
+
+    const columns = [...container.querySelectorAll('.totals .ledger-strip .column')]
+    // The six ranked answers round 37 draws: top rules, top talkers, by
+    // device, by protocol, the hour by action, episodes by flag type.
+    expect(columns.length).toBe(6)
+    // "Bars, no boxes": no column carries the bordered-card element the
+    // strip used to nest inside each one.
+    expect(container.querySelector('.totals .bar-list')).toBeNull()
+  })
+})
