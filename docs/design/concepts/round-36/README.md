@@ -110,5 +110,9 @@ status strip and uptime badge — are round 37's.
   broken watch reads `WATCH BROKEN` on the same line. Round 37 carries
   it; the built `Fall.svelte` prints the old text and needs the same
   change (follow-up issue).
-- The stream's foot band (#717's *"remove it"*) stays open: the owner
-  asked for more detail before deciding.
+- The stream's foot band (the dark strip of three sentences under the
+  table, since round 5): *"oh that thing, I don't want that at all."*
+  Round 37 removes it. Of its three facts, the repeating pattern is a
+  flag already, the dark boundary is on the fall and the topography;
+  the `▲3.1×` drops trend has no other home and is dropped — if a rise
+  matters it is a watch that flags, not a strip.
