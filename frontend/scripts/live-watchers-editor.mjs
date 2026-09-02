@@ -42,6 +42,34 @@ async function api(method, path_, body) {
   return { status: res.status(), body: parsed, text }
 }
 
+// --- a detector this bench can copy -------------------------------------
+//
+// Clone works on an operator-authored detector, whose structure is stored
+// data (#502/#810), so the scenario authors one before the bench is
+// opened -- the bench reads its list once on mount, and a definition
+// created afterwards would not be on it. Removed again at the end:
+// scenarios share one instance.
+//
+// Deliberately watching a port nothing in this environment talks to, and
+// left running: it must not raise a flag another scenario then has to
+// account for, and the copy's paused state has to be the clone's doing
+// rather than inherited.
+const SEED_NAME = 'live-watchers-editor detector'
+const seed = await api('POST', '/api/definitions', {
+  name: SEED_NAME,
+  intent: 'detection',
+  detection: {
+    conditions: [{ field: 'destinationPort', operator: 'equals', values: ['7871'] }],
+    key: 'perSource',
+    counting: 'total',
+    detailTemplate: '{Count} attempts against port 7871 from {SourceAddress}',
+    threshold: 100,
+    window: '60s',
+  },
+})
+check(seed.status === 201, `a custom detector is authored for the clone check (${seed.status} ${seed.text.slice(0, 200)})`)
+const seedID = seed.body?.id ?? ''
+
 // --- open the bench -----------------------------------------------------
 
 await goTo(page, 'Settings')
@@ -220,66 +248,89 @@ check(
 
 // --- clone -------------------------------------------------------------
 //
-// What the server does, not what the button hopes for. POST
-// /api/definitions/{id}/clone copies an *expectation*; for a shipped
-// detection definition it refuses, because that definition's logic is Go
-// compiled into this binary and keyed by its own id, so a copy would list
-// and look configurable and evaluate nothing. Every row on this bench is
-// a detection definition, so pressing clone here reaches that refusal.
+// Clone is offered where it can succeed and nowhere else (#810). A
+// shipped detector's logic is Go keyed by its own id, so the server
+// refuses to copy it and always will -- that row carries no button. An
+// operator-authored one is stored structure, so it copies, and what this
+// section pins is the interaction #787 decision C describes: the copy
+// appears, paused, expanded, with its name selected to be typed over.
 //
-// The refusal is the contract (internal/api's handleDefinitionsClone has
-// the reasoning), and what this scenario pins is that the panel shows it
-// in the server's own words -- which name the operation that does exist
-// -- and that no phantom copy appears on the bench in the meantime.
-const definitionsBefore = await api('GET', '/api/definitions')
-const countBefore = (definitionsBefore.body?.definitions ?? []).length
-
-await row.locator('.panel button:has-text("Clone")').click()
-await row.locator('.error').waitFor({ state: 'visible', timeout: 15000 })
-const refusal = (await row.locator('.error').textContent()) ?? ''
+// Driven through the bench and then read back from the server, never from
+// the browser's own optimism: a copy the UI shows and the store never
+// stored would pass any assertion made against the DOM alone.
 check(
-  refusal.includes('cannot be cloned'),
-  `the clone refusal is shown in the server's own words (${JSON.stringify(refusal.slice(0, 120))})`,
-)
-check(
-  refusal.includes('/api/definitions/'),
-  'the refusal keeps the sentence naming the operation that does exist instead',
+  (await row.locator('.panel button:has-text("Clone")').count()) === 0,
+  'the shipped row offers no Clone -- the one outcome it could have is a refusal',
 )
 
-const definitionsAfter = await api('GET', '/api/definitions')
+const custom = page.locator(`.bench li.row:has(.id:text-is("${seedID}"))`)
+check((await custom.count()) === 1, 'the authored detector is a row on this bench like any other')
+await custom.locator('.row-knob').click()
+await custom.locator('.panel').waitFor({ state: 'visible' })
 check(
-  (definitionsAfter.body?.definitions ?? []).length === countBefore,
-  `a refused clone created nothing (${(definitionsAfter.body?.definitions ?? []).length}, was ${countBefore})`,
+  (await custom.locator('.panel button:has-text("Clone")').count()) === 1,
+  'the custom row offers Clone',
 )
 
-// The clone path itself -- create the copy, pause it, open it with its
-// name selected -- is exercised against a definition the server can
-// actually copy. It is authored and removed here rather than left behind:
-// scenarios share one instance.
-const seed = await api('POST', '/api/definitions', {
-  name: 'live-watchers-editor seed',
-  intent: 'expectation',
-  kind: 'declarative',
-  expectation: { ports: [7871] },
-})
-check(seed.status === 201, `a clonable definition is authored for the check (${seed.status})`)
-const copy = await api('POST', `/api/definitions/${encodeURIComponent(seed.body?.id)}/clone`, {
-  name: 'live-watchers-editor seed (copy)',
-})
-check(copy.status === 201, `it clones under the "(copy)" name the panel offers (${copy.status})`)
+await custom.locator('.panel button:has-text("Clone")').click()
+const copyRow = page.locator(`.bench li.row:has-text("${SEED_NAME} (copy)")`)
+await copyRow.waitFor({ state: 'visible', timeout: 15000 })
+check(true, 'pressing Clone produces the copy with no prompt in between')
 check(
-  copy.body?.name === 'live-watchers-editor seed (copy)',
-  `the copy carries that name (${JSON.stringify(copy.body?.name)})`,
+  (await copyRow.locator('.panel').count()) === 1,
+  'the copy is already expanded, ready to be edited',
 )
-const paused = await api('PUT', `/api/definitions/${encodeURIComponent(copy.body?.id)}`, {
-  enabled: false,
+check(
+  (await page.locator('.bench .panel').count()) === 1,
+  'and it is the only panel open -- the original closed behind it',
+)
+check(
+  ((await copyRow.locator('.state').textContent()) ?? '').includes('paused'),
+  `the copy is paused, so a half-edited detector never runs (${await copyRow.locator('.state').textContent()})`,
+)
+
+// The name field, focused and selected, is what makes this "start
+// typing" rather than "now go and find the name box".
+const focused = await page.evaluate(() => {
+  const el = document.activeElement
+  return {
+    tag: el?.tagName ?? '',
+    value: el instanceof HTMLInputElement ? el.value : null,
+    selected: el instanceof HTMLInputElement ? el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0) : '',
+  }
 })
 check(
-  paused.status === 200 && paused.body?.enabled === false,
-  `the copy is paused, so a half-edited definition never runs (${paused.status}, enabled ${paused.body?.enabled})`,
+  focused.tag === 'INPUT' && focused.value === `${SEED_NAME} (copy)`,
+  `the copy's name field has focus (${JSON.stringify(focused)})`,
+)
+check(
+  focused.selected === `${SEED_NAME} (copy)`,
+  'its text is selected, so the operator types the real name straight over it',
 )
 
-for (const id of [seed.body?.id, copy.body?.id]) {
+const copyID = ((await copyRow.locator('.id').textContent()) ?? '').trim()
+const stored = await api('GET', `/api/definitions/${encodeURIComponent(copyID)}`)
+check(
+  stored.status === 200 && stored.body?.enabled === false,
+  `the store agrees the copy is paused (${stored.status}, enabled ${stored.body?.enabled})`,
+)
+check(
+  copyID !== seedID && stored.body?.provenance?.origin === 'custom',
+  `the copy is a second custom detector with its own id (${copyID}, original ${seedID})`,
+)
+// The whole point of copying a custom detection rather than refusing it:
+// the copy carries the structure that makes it evaluate anything.
+check(
+  JSON.stringify(stored.body?.detection) === JSON.stringify(seed.body?.detection),
+  `the copy carries the original's conditions and aggregation (${JSON.stringify(stored.body?.detection)})`,
+)
+check(
+  stored.body?.params?.threshold === seed.body?.params?.threshold &&
+    stored.body?.params?.window === seed.body?.params?.window,
+  `and its tuning (${JSON.stringify(stored.body?.params)}, original ${JSON.stringify(seed.body?.params)})`,
+)
+
+for (const id of [seedID, copyID]) {
   if (!id) continue
   await api('DELETE', `/api/definitions/${encodeURIComponent(id)}`)
 }
@@ -301,6 +352,12 @@ check(
   'this scenario left no definitions of its own behind',
 )
 
-check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors.slice(0, 3))}`)
+// Nothing here asks the server for a refusal any more (#810 offers Clone
+// only where it succeeds), so every console error is a defect and none is
+// filtered out.
+check(
+  consoleErrors.length === 0,
+  `no console errors -- got ${JSON.stringify(consoleErrors.slice(0, 3))}`,
+)
 
 done()

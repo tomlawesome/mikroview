@@ -87,6 +87,25 @@ type Emission struct {
 	// the definition's own evaluation code, not by RenderEmission, which
 	// has no confidence computation of its own.
 	Confidence *int
+	// Size is this emission's *size*: the measure this definition
+	// compares against its threshold, and the one number an expectation
+	// for (definition, target) is recorded in and judged against (#640 --
+	// see flags.Exclusion.Absorbs). For a declarative definition it is
+	// always the counting-mode tally that crossed the threshold; a
+	// programmatic one sets whatever its own declaration names.
+	//
+	// nil means this definition declares no size, mirroring Confidence's
+	// "nil means not scored" convention just above: some judgements have
+	// no count to be normal at (device_silence is an absence,
+	// known_bad_ip is list membership), and a made-up number would be a
+	// claim on the ledger nobody measured. Every shipped definition's
+	// declaration -- including the ones that declare none -- is in
+	// shipped_params.go's ShippedSizeMeasure, which shipped_params_test.go
+	// requires to be exhaustive rather than defaulted.
+	//
+	// Populated by the definition's own evaluation code, not by
+	// RenderEmission, same as Target/Confidence above.
+	Size *int
 	// Country/EventTime carry the triggering store.Event's SrcCountry and
 	// ReceivedAt forward -- added by #405, which is this package's first
 	// real producer of an Emission from live traffic (router.go's own doc

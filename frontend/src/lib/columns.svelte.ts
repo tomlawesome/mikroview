@@ -254,6 +254,26 @@ class ColumnState {
     this.persist()
   }
 
+  // The same write, addressed by column key rather than by position.
+  //
+  // `widths` is positional over the full COLUMNS list while everything
+  // on screen -- the grid template, the header cells, the resize
+  // handles -- runs over `visibleColumns`, so the two indices agree
+  // only while every column is on. A caller holding a screen position
+  // and passing it to setWidth therefore resizes a different column as
+  // soon as the reader hides one (#729's chooser), which is a silent
+  // wrong answer rather than an error. Callers that have a key should
+  // use this; the positional form stays for callers that genuinely
+  // mean a COLUMNS index.
+  //
+  // An unknown key is a no-op: there is no sensible column to widen
+  // instead, and guessing one is exactly the failure above.
+  setWidthForKey(key: string, px: number) {
+    const index = COLUMNS.findIndex((c) => c.key === key)
+    if (index === -1) return
+    this.setWidth(index, px)
+  }
+
   reset() {
     this.widths = [...DEFAULT_WIDTHS]
     this.persist()
