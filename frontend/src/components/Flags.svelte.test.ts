@@ -17,9 +17,13 @@ vi.mock('../lib/api', () => ({
   // detectorSettingsState, whose refresh() calls these two.
   fetchDefinitions: vi.fn(async () => ({ definitions: [], coverageEvidence: { complete: true } })),
   updateDefinition: vi.fn(),
+  // The learning shelf's honesty line (#640) reads the expectations
+  // ledger directly on mount -- an empty ledger by default, same
+  // "swallow a failure" grammar as detectorSettingsState.refresh().
+  fetchExpectations: vi.fn(async () => []),
 }))
 
-import { deleteFlagVerdict, fetchDefinitions, fetchFlagEpisode, setFlagVerdict } from '../lib/api'
+import { deleteFlagVerdict, fetchDefinitions, fetchExpectations, fetchFlagEpisode, setFlagVerdict } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
 import { detectorSettingsState } from '../lib/detectorSettings.svelte'
 import { authState } from '../lib/auth.svelte'
@@ -654,6 +658,12 @@ describe('the learning shelf (#642)', () => {
   it('a viewer never gets the warming line -- the signal is user-tier, so it degrades by absence', async () => {
     authState.role = 'viewer'
     vi.mocked(fetchDefinitions).mockResolvedValue(warmingDefinitions as never)
+    // A well-stocked ledger (#640), so the shelf's other reason to
+    // appear -- the early-noise honesty line -- stays out of this
+    // assertion, which is about the warming signal alone.
+    vi.mocked(fetchExpectations).mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, type: 'port_scan', target: `198.51.100.${i}` })) as never,
+    )
     // Even a stale store left over from a more-privileged session must
     // not leak the claim to a viewer.
     detectorSettingsState.list = [
@@ -727,6 +737,61 @@ describe('the learning shelf (#642)', () => {
     expect(within(shelf).queryByRole('button', { name: /checked/ })).toBeNull()
     expect(within(shelf).queryByRole('button', { name: /expected/ })).toBeNull()
     expect(within(shelf).queryByRole('button', { name: /investigate/ })).toBeNull()
+  })
+})
+
+// The learning shelf's early-noise honesty line (#640): while the
+// expectations ledger is thin (fewer than five recorded), the shelf
+// says so in words, rather than leaving a noisy inbox unexplained.
+describe('the learning shelf states the early-noise honesty line (#640)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchDefinitions).mockResolvedValue({ definitions: [], coverageEvidence: { complete: true } } as never)
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    authState.username = 'kai'
+    detectorSettingsState.list = []
+    flagsState.list = []
+  })
+
+  it('with no expectations recorded yet, the shelf shows the early-noise line', async () => {
+    vi.mocked(fetchExpectations).mockResolvedValue([])
+    render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    const shelf = document.querySelector('section[aria-label^="Learning shelf"]') as HTMLElement
+    expect(shelf).toBeTruthy()
+    expect(shelf.textContent).toContain('Flags will be noisy')
+  })
+
+  it('with five or more expectations recorded and nothing provisional or warming, the line is absent', async () => {
+    vi.mocked(fetchExpectations).mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, type: 'port_scan', target: `198.51.100.${i}` })) as never,
+    )
+    render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    expect(document.querySelector('section[aria-label^="Learning shelf"]')).toBeNull()
+  })
+
+  it('a rejected fetch renders no line and does not throw', async () => {
+    vi.mocked(fetchExpectations).mockRejectedValue(new Error('boom'))
+    expect(() => render(Flags)).not.toThrow()
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    expect(document.querySelector('section[aria-label^="Learning shelf"]')).toBeNull()
   })
 })
 
