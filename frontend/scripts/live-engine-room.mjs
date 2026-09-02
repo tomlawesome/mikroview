@@ -234,7 +234,11 @@ check(viewerDisabled === 0, `nothing on the page is rendered disabled for a view
 await viewerPage.click('.olink:has-text("tune")')
 await viewerPage.waitForSelector('.bench .row')
 check((await viewerPage.$$('.bench .cbx')).length === 0, 'the run/pause checkboxes are absent for a viewer')
-check((await viewerPage.$$('.bench .scope-knob')).length === 0, 'the scope knobs are absent for a viewer')
+// .row-knob since #787: the whole row line is the expander now, opening
+// the editing panel the old scope knob's form grew into. The class name
+// is the one that exists today -- checking for the retired `.scope-knob`
+// would be an absence assertion nothing on any page could ever satisfy.
+check((await viewerPage.$$('.bench .row-knob')).length === 0, 'the row expanders are absent for a viewer')
 const states = await viewerPage.$$eval('.bench .state', (els) => els.map((e) => e.textContent.trim()))
 check(
   states.length > 0 && states.every((s) => s === 'running' || s === 'paused'),
