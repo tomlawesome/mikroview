@@ -18,16 +18,23 @@
   uptimeState.start()
 </script>
 
+<!-- The separator belongs to the badge, not to the line it joins: the
+     foot reads "version · AGPL-3.0 · up 12 d 4 h" when the server has
+     reported an uptime and "version · AGPL-3.0" when it has not, with
+     no stranded middot either way. Written as an expression because
+     Svelte trims literal trailing whitespace before a block's close,
+     which is how the space in front of AGPL-3.0 went missing once. -->
 {#if uptimeState.seconds !== null}
   <span class="uptime" title="How long the mikroview server has been running (since its last restart)"
-    >up {formatUptimeDaysHours(uptimeState.seconds)}</span
+    >{' · '}up {formatUptimeDaysHours(uptimeState.seconds)}</span
   >
 {/if}
 
 <style>
   /* Font and colour are the foot's, not this component's: the drawing
      draws one `.ver` line and this is the tail of it, so it inherits
-     rather than restating the type. */
+     rather than restating the type. The foot keeps it off a line break
+     of its own (see AccountMenu's `.ver :global(.uptime)`). */
   .uptime {
     white-space: nowrap;
   }
