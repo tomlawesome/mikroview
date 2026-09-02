@@ -512,6 +512,16 @@ export interface ReplayDecline {
 export interface ReplayResult {
   receipt?: ReplayReceipt
   decline?: ReplayDecline
+  // The same replay run again with the definition's live params -- the
+  // number the candidate above is being compared against, "currently: 41"
+  // beside "would have fired 3 times" (#786). Receipt-or-decline exactly
+  // like the outer result, because it is the same kind of answer; it
+  // never carries a `current` of its own.
+  //
+  // Present only where the request carried a candidate. With an empty
+  // candidate the receipt above already *is* the current number, so the
+  // server omits this rather than repeating it.
+  current?: ReplayResult
 }
 
 export interface Definition {
