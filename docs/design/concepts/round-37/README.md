@@ -78,4 +78,6 @@ and a home for the six surfaces on #691 item 6 that had none. Built by
   all these little descriptor lines on the entities views, I don't want
   them."* Round 38 removes them; where a name comes from is
   documentation. The viewer stays declared on the account chip, once.
-- The rest of the round: no verdict yet.
+- The rest of the round — saved filters, the viewer's entities, the
+  unregistered router, csv, uptime in the account menu, the entity views
+  — accepted as drawn (confirmed 2026-09-02, after round 38).
