@@ -24,7 +24,13 @@ vi.mock('../lib/api', () => ({
   resetSuggestions: vi.fn(),
 }))
 
-import { fetchRecentMatches, fetchSuggestions, fetchWatchlistEntries, setWatchlistEnabled } from '../lib/api'
+import {
+  createWatchlistEntry,
+  fetchRecentMatches,
+  fetchSuggestions,
+  fetchWatchlistEntries,
+  setWatchlistEnabled,
+} from '../lib/api'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { suggestState } from '../lib/suggest.svelte'
 import { matchesState } from '../lib/matches.svelte'
@@ -600,5 +606,100 @@ describe('opening a watch drawer from the topography dial (#724)', () => {
     await renderWatchlist(entries)
 
     expect(watchTable().querySelector('.wt-drawer')).toBeNull()
+  })
+})
+
+// #641: a flag's "watch for this" opens *this* form, prefilled, and the
+// operator lands back in the inbox whichever way they leave it. The
+// issue is explicit that the round trip has to be seamless -- taking a
+// watcher must never cost a manual switch back.
+describe('a watcher offered by a resolved flag (#641)', () => {
+  const fromFlag = {
+    who: '192.168.1.50',
+    toward: '192.168.1.10 · :445',
+    mode: 'expect' as const,
+    provenance: 'From the last firing window, 6 of at least 14 pairs — IP-bound, so it stops matching if this device gets a new address.',
+    returnTo: 'flags' as const,
+  }
+
+  function draftRow(): HTMLElement {
+    return document.querySelector('.wt-drawer.wt-draft') as HTMLElement
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchSuggestions).mockResolvedValue([])
+    vi.mocked(fetchRecentMatches).mockResolvedValue([])
+    vi.mocked(createWatchlistEntry).mockResolvedValue(undefined as never)
+    suggestState.candidates = []
+    matchesState.reset()
+    watchlistState.entries = []
+    topologyNavState.pendingWatchDraft = null
+    appState.view = 'watchlist'
+  })
+
+  it('opens the existing entry form prefilled from the flag, and says where the values came from', async () => {
+    topologyNavState.pendingWatchDraft = { ...fromFlag }
+    await renderWatchlist([])
+
+    const draft = draftRow()
+    expect(draft).toBeTruthy()
+    expect((within(draft).getByLabelText('Who this watch scopes to') as HTMLInputElement).value).toBe('192.168.1.50')
+    expect((within(draft).getByLabelText('Toward') as HTMLInputElement).value).toBe('192.168.1.10 · :445')
+    expect(draft.querySelector('.wf-prov')?.textContent).toContain('6 of at least 14 pairs')
+    expect(topologyNavState.pendingWatchDraft).toBeNull()
+  })
+
+  it('returns to the flags inbox when the watch is saved', async () => {
+    topologyNavState.pendingWatchDraft = { ...fromFlag }
+    await renderWatchlist([])
+
+    await fireEvent.click(within(draftRow()).getByRole('button', { name: /start watching/ }))
+    await settle()
+
+    expect(createWatchlistEntry).toHaveBeenCalled()
+    expect(appState.view).toBe('flags')
+    expect(document.querySelector('.wt-draft')).toBeNull()
+  })
+
+  // Declining is the operator's to make, and it costs them nothing: the
+  // flag stays resolved and they are put back where they were.
+  it('returns to the flags inbox when the watch is discarded', async () => {
+    topologyNavState.pendingWatchDraft = { ...fromFlag }
+    await renderWatchlist([])
+
+    await fireEvent.click(within(draftRow()).getByRole('button', { name: /discard/ }))
+    await settle()
+
+    expect(createWatchlistEntry).not.toHaveBeenCalled()
+    expect(appState.view).toBe('flags')
+    expect(document.querySelector('.wt-draft')).toBeNull()
+  })
+
+  // A failed save keeps the operator on the form with the error, rather
+  // than bouncing them back to the inbox as though it had worked.
+  it('stays put when the server refuses the watch', async () => {
+    vi.mocked(createWatchlistEntry).mockResolvedValue('a non-inverted entry must watch at least one port' as never)
+    topologyNavState.pendingWatchDraft = { ...fromFlag }
+    await renderWatchlist([])
+
+    await fireEvent.click(within(draftRow()).getByRole('button', { name: /start watching/ }))
+    await settle()
+
+    expect(appState.view).toBe('watchlist')
+    expect(draftRow().querySelector('.error')?.textContent).toContain('at least one port')
+  })
+
+  // A draft the operator opened here has no provenance and nowhere to be
+  // sent back to -- it closes where it stands, as it always did.
+  it('leaves a draft opened on this page where it is', async () => {
+    topologyNavState.pendingNewWatch = {}
+    await renderWatchlist([])
+
+    expect(draftRow().querySelector('.wf-prov')).toBeNull()
+    await fireEvent.click(within(draftRow()).getByRole('button', { name: /discard/ }))
+    await settle()
+
+    expect(appState.view).toBe('watchlist')
   })
 })
