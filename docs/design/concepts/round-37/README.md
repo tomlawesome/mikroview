@@ -70,6 +70,12 @@ and a home for the six surfaces on #691 item 6 that had none. Built by
 - No apparatus: the viewer and unregistered states are set by the
   capture script, not by anything on the page.
 
-## Owner verdicts
+## Owner verdicts (2026-09-02)
 
-Pending.
+- Merged on the owner's word before a verdict on the drawing.
+- On the entities screen's hint lines (*a name is yours to give — click
+  one to rename it…* and its rules, ports and viewer variants): *"Remove
+  all these little descriptor lines on the entities views, I don't want
+  them."* Round 38 removes them; where a name comes from is
+  documentation. The viewer stays declared on the account chip, once.
+- The rest of the round: no verdict yet.
