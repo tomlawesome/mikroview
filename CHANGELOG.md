@@ -45,12 +45,16 @@ rewritten.
   hidden, never disabled, the same grammar the run/pause tick already
   used. New `fetchDefinitionSchema` and `getDefinition` wrappers;
   `resetDefinition` and `cloneDefinition` have callers for the first
-  time. Known limit, recorded rather than hidden: the clone button
-  reaches the server's own refusal for every detector currently on the
-  bench, because `POST /api/definitions/{id}/clone` copies an
-  expectation and refuses a definition whose logic is compiled into the
-  binary. The refusal is shown in the server's words, which name the
-  operation that does exist instead.
+  time. **Clone** copies a detector you wrote -- its match conditions,
+  its aggregation and its tuning -- into a second detector that appears
+  paused, already expanded, with its name selected to be typed over, so
+  authoring a variant is one press and a rename (#810). It is offered
+  only on those rows: a shipped detector's logic is Go compiled into
+  this binary and keyed by its own id, so a copy of it would list, look
+  configurable and evaluate nothing -- the server refuses, and the
+  button is not there to press. Overriding a shipped detector's params
+  is the operation that exists for it; starting a custom detector *from*
+  one needs a conditions editor and is filed as #829.
 - **A demo seeder that exercises the whole interface, not just syslog**
   (#687). Every UI review this project has run was hampered by a demo
   that only ever sent syslog: one lane on the fall, no pushed rule/NAT/
