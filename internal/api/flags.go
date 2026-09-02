@@ -76,10 +76,56 @@ func (s *Server) handleFlagsVerdict(w http.ResponseWriter, r *http.Request) {
 
 	id := r.PathValue("id")
 	actor := auditActor(r)
-	f, ok := s.Flags.SetVerdict(id, req.Verdict, actor, time.Now())
+
+	// One verdict at a time past this point: the watchlist half of an
+	// expected verdict is a read-modify-write across two stores (this
+	// flag's expectation, and the device's inverted entry), and two
+	// verdicts on the same device interleaving would let one's promotion
+	// land inside the other's withdrawal. Held for the whole handler, not
+	// per store call, because it is the compound operation that has to be
+	// atomic -- the same reasoning definitionsEnabledScopeMu records for
+	// its own pair of calls.
+	s.verdictWatchlistMu.Lock()
+	defer s.verdictWatchlistMu.Unlock()
+
+	prior, known := s.Flags.Get(id)
+	if !known {
+		http.Error(w, "flag not found", http.StatusNotFound)
+		return
+	}
+	// Changing one's mind away from expected takes back the destinations
+	// that verdict permitted, exactly as undoing it would -- the
+	// watchlist counterpart of the expectation withdrawal SetVerdict
+	// already does. Before the verdict changes, since the record lives on
+	// the expectation the change may delete.
+	if prior.Verdict == flags.VerdictExpected && req.Verdict != flags.VerdictExpected {
+		if !s.withdrawPermittedFor(w, id, actor) {
+			return
+		}
+	}
+
+	now := time.Now()
+	f, ok := s.Flags.SetVerdict(id, req.Verdict, actor, now)
 	if !ok {
 		http.Error(w, "flag not found", http.StatusNotFound)
 		return
+	}
+	if req.Verdict == flags.VerdictExpected {
+		rec, wrote, err := s.permitFlagEvidence(f, actor, now)
+		if err != nil {
+			// The two land together or not at all, the same rule #640
+			// applied to the clear and the expectation that justifies it:
+			// a flag cleared as expected while the destinations it
+			// declared normal never reached the watchlist would be a
+			// judgement half-recorded, with nothing on screen saying
+			// which half.
+			s.Flags.UndoVerdict(id)
+			http.Error(w, "recording this flag's destinations on the watchlist failed, so the verdict was not kept: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if wrote {
+			s.Flags.RecordPermitted(id, rec)
+		}
 	}
 	s.Audit.Record(actor, "flag.verdict", id, string(req.Verdict))
 	writeJSON(w, http.StatusOK, f)
@@ -117,6 +163,27 @@ func (s *Server) handleFlagsVerdictUndo(w http.ResponseWriter, r *http.Request) 
 	}
 	id := r.PathValue("id")
 	actor := auditActor(r)
+
+	// Same lock, same reason, as handleFlagsVerdict above.
+	s.verdictWatchlistMu.Lock()
+	defer s.verdictWatchlistMu.Unlock()
+
+	prior, known := s.Flags.Get(id)
+	if !known {
+		http.Error(w, "flag not found", http.StatusNotFound)
+		return
+	}
+	// Undoing an expected verdict takes back the destinations it
+	// permitted as well as the expectation it recorded (#641). An undo
+	// that reopened the flag while leaving the device permitted would be
+	// the watchlist version of the half-undo UndoVerdict's own doc
+	// comment rules out.
+	if prior.Verdict == flags.VerdictExpected {
+		if !s.withdrawPermittedFor(w, id, actor) {
+			return
+		}
+	}
+
 	f, ok := s.Flags.UndoVerdict(id)
 	if !ok {
 		http.Error(w, "flag not found", http.StatusNotFound)
