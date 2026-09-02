@@ -126,6 +126,8 @@ func (d *deviceSilenceDefinition) Tick(now time.Time) {
 			// No SourceIP, no Country, no Evidence: the subject is a
 			// device, not an address. internal/detect used
 			// AddWithConfidence, which supplies none of the three.
+			// No Size either: this definition declares none -- silence
+			// has no magnitude. See ShippedSizeMeasure.
 			EventTime: now,
 		})
 	}
