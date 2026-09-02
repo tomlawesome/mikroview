@@ -124,6 +124,20 @@ check(
   `the candidate numbers really did fire over this corpus (${JSON.stringify(receiptLine)})`,
 )
 
+// The count the detector makes as it stands, measured by the server over
+// the same corpus in the same request (#786). Either form is a pass: over
+// a corpus this short the live 60s window can honestly decline, and that
+// is the answer rather than a missing one -- what must never happen is
+// silence, which would leave the candidate's number with nothing to be
+// read against.
+const currentLine = tidy(await row.locator('.panel .tried-current').textContent())
+check(
+  /^currently: (at least )?\d+$|^currently: not replayable over the traffic held \(.+\)$/.test(
+    currentLine,
+  ),
+  `the candidate's count is shown against the detector's current one (${JSON.stringify(currentLine)})`,
+)
+
 const hosts = tidy(await row.locator('.panel .tried-hosts').textContent())
 check(
   hosts.includes(SCAN_SOURCE),
