@@ -26,7 +26,7 @@ import (
 // entry were two shapes over the same thing -- a definition the engine
 // evaluates -- and the endpoints below expose that one thing uniformly:
 // list/get, enable/disable, scope, param overrides with schema
-// validation, suppressions, provenance and replayability on every
+// validation, provenance and replayability on every
 // response, plus the operator actions an expectation has of its own
 // (promote, observing).
 //
@@ -50,20 +50,19 @@ import (
 // field added to the engine's own struct cannot silently start appearing
 // in an API response.
 type definitionView struct {
-	ID           string                       `json:"id"`
-	Name         string                       `json:"name"`
-	Description  string                       `json:"description,omitempty"`
-	Intent       engine.Intent                `json:"intent"`
-	Kind         engine.Kind                  `json:"kind"`
-	Enabled      bool                         `json:"enabled"`
-	Scope        engine.Scope                 `json:"scope,omitzero"`
-	Params       engine.Params                `json:"params,omitempty"`
-	ParamSchema  []engine.ParamSchema         `json:"paramSchema,omitempty"`
-	Provenance   engine.Provenance            `json:"provenance"`
-	Suppressions []engine.Suppression         `json:"suppressions,omitempty"`
-	Available    bool                         `json:"available"`
-	Distance     map[string]engine.ParamDelta `json:"distance,omitempty"`
-	Replay       replayabilityView            `json:"replay"`
+	ID          string                       `json:"id"`
+	Name        string                       `json:"name"`
+	Description string                       `json:"description,omitempty"`
+	Intent      engine.Intent                `json:"intent"`
+	Kind        engine.Kind                  `json:"kind"`
+	Enabled     bool                         `json:"enabled"`
+	Scope       engine.Scope                 `json:"scope,omitzero"`
+	Params      engine.Params                `json:"params,omitempty"`
+	ParamSchema []engine.ParamSchema         `json:"paramSchema,omitempty"`
+	Provenance  engine.Provenance            `json:"provenance"`
+	Available   bool                         `json:"available"`
+	Distance    map[string]engine.ParamDelta `json:"distance,omitempty"`
+	Replay      replayabilityView            `json:"replay"`
 	// Coverage is only ever set for an expectation definition -- the
 	// question it answers ("can any pushed firewall rule produce an event
 	// this would match?", #274 item 1) is about an entry's scope, and a
@@ -209,18 +208,17 @@ type replayabilityView struct {
 func (s *Server) definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool, now time.Time) definitionView {
 	d := sd.Definition
 	v := definitionView{
-		ID:           d.ID,
-		Name:         d.Name,
-		Description:  d.Description,
-		Intent:       d.Intent,
-		Kind:         d.Kind,
-		Enabled:      d.Enabled,
-		Scope:        d.Scope,
-		Params:       d.Params,
-		ParamSchema:  d.ParamSchema,
-		Provenance:   d.Provenance,
-		Suppressions: d.Suppressions,
-		Available:    sd.Available,
+		ID:          d.ID,
+		Name:        d.Name,
+		Description: d.Description,
+		Intent:      d.Intent,
+		Kind:        d.Kind,
+		Enabled:     d.Enabled,
+		Scope:       d.Scope,
+		Params:      d.Params,
+		ParamSchema: d.ParamSchema,
+		Provenance:  d.Provenance,
+		Available:   sd.Available,
 	}
 	if !sd.Available {
 		// Nothing below can be answered for a definition this binary
@@ -720,16 +718,15 @@ type updateDefinitionRequest struct {
 	// ships the logic, not of the deployment -- the same reasoning that
 	// keeps kind, intent, schema and provenance untouchable there (see
 	// engine.DefinitionsStore.SetParams).
-	Name         *string               `json:"name"`
-	Enabled      *bool                 `json:"enabled"`
-	Scope        *engine.Scope         `json:"scope"`
-	Params       engine.Params         `json:"params"`
-	Suppressions *[]engine.Suppression `json:"suppressions"`
-	Expectation  *expectationRequest   `json:"expectation"`
+	Name        *string             `json:"name"`
+	Enabled     *bool               `json:"enabled"`
+	Scope       *engine.Scope       `json:"scope"`
+	Params      engine.Params       `json:"params"`
+	Expectation *expectationRequest `json:"expectation"`
 }
 
-// handleDefinitionsUpdate applies whichever of enabled, scope, params,
-// suppressions and expectation data the request actually carries.
+// handleDefinitionsUpdate applies whichever of enabled, scope, params
+// and expectation data the request actually carries.
 //
 // Params are validated against this definition's own declared
 // ParamSchema before anything is stored (engine.DefinitionsStore.
@@ -835,12 +832,6 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if req.Suppressions != nil {
-		if err := s.Definitions.SetSuppressions(id, *req.Suppressions); err != nil {
-			writeDefinitionError(w, err)
-			return
-		}
-	}
 	if req.Name != nil && !isExpectation {
 		if err := s.Definitions.SetName(id, *req.Name); err != nil {
 			writeDefinitionError(w, err)
@@ -896,9 +887,6 @@ func definitionAuditDetail(req updateDefinitionRequest) string {
 	}
 	if req.Params != nil {
 		parts = append(parts, "params")
-	}
-	if req.Suppressions != nil {
-		parts = append(parts, fmt.Sprintf("suppressions=%d", len(*req.Suppressions)))
 	}
 	if req.Name != nil {
 		parts = append(parts, "name")
