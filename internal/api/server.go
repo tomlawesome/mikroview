@@ -327,6 +327,12 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent},
 		{http.MethodGet, "/api/flags/exclusions", s.handleExclusionsList},
 		{http.MethodDelete, "/api/flags/exclusions/{id}", s.handleExclusionRemove},
+		// #640's ledger. Same literal-then-wildcard shape as the two
+		// DELETE routes above it, for the reason the comment above
+		// gives: a wildcard-then-literal fourth segment under
+		// /api/flags/ cannot be registered alongside them.
+		{http.MethodGet, "/api/flags/expectations", s.handleExpectationsList},
+		{http.MethodDelete, "/api/flags/expectations/{id}", s.handleExpectationForget},
 
 		// The one definitions surface (issue #407), replacing
 		// /api/detectors and /api/watchlist/entries wholesale. A shipped
