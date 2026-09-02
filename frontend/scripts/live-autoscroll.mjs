@@ -8,7 +8,19 @@
 // layout/scrolling, and the cross-view case only exists once a real
 // second view is actually mounted against the same running app.
 
+// Rounds 36-38 moved the control this drives. Autoscroll is no longer a
+// button on the scene bar (round 30 retired the toolbar it came from and
+// homed it nowhere, which is #749); it is the `following` pill on the
+// whisper's own line, and it reads `follow` while off. The assertions
+// below are unchanged in substance -- what the freeze must do is what it
+// always had to do -- only the selector and the two tooltip readings
+// follow the control to where it now lives.
 import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+
+// Scoped to the centred card: the deck mounts the neighbouring cards
+// too, and the whisper belongs to the Stream card.
+const CARD = '.card[aria-hidden="false"]'
+const FOLLOW = `${CARD} .whisper .hand-btn.follow`
 
 // Two labelled batches, comfortably past MAX_RENDERED_ROWS (800) between
 // them, so the freeze is exercised where the reported symptom actually
@@ -28,16 +40,23 @@ const { page } = await session({ waitForEvents: 400 })
 feedSyslog(450, 'batch-b')
 await page.waitForFunction(() => document.querySelectorAll('.row').length >= 800, null, { timeout: 30000 })
 
-const tooltipBefore = await page.getAttribute('.scene-bar button:has-text("Autoscroll")', 'title')
-check(/newest events/i.test(tooltipBefore ?? ''), `Autoscroll tooltip describes following new events (${tooltipBefore})`)
+check(
+  (await page.textContent(FOLLOW))?.trim() === 'following',
+  'the pill reads "following" while the stream is following',
+)
+// "newest line", not "newest events": the drawn wording (round 36) is
+// about the line arriving, which is the thing on screen. Same claim.
+const tooltipBefore = await page.getAttribute(FOLLOW, 'title')
+check(/newest line/i.test(tooltipBefore ?? ''), `the pill's tooltip describes following new lines (${tooltipBefore})`)
 
-await page.click('.scene-bar button:has-text("Autoscroll")')
+await page.click(FOLLOW)
 await page.waitForTimeout(200)
 
-const tooltipAfter = await page.getAttribute('.scene-bar button:has-text("Autoscroll")', 'title')
+check((await page.textContent(FOLLOW))?.trim() === 'follow', 'and reads "follow" -- the way back -- once off')
+const tooltipAfter = await page.getAttribute(FOLLOW, 'title')
 check(
   /stays put|hold/i.test(tooltipAfter ?? ''),
-  `Autoscroll-off tooltip says the table stays put, not just "no auto-jump" (${tooltipAfter})`,
+  `the off tooltip says the table stays put, not just "no auto-jump" (${tooltipAfter})`,
 )
 
 const frozenCount = await page.locator('.row').count()
@@ -90,14 +109,14 @@ check(
   'after-freeze still absent once the filter clears -- the frozen pool never grew',
 )
 
-// Autoscroll back on releases the freeze.
-await page.click('.scene-bar button:has-text("Autoscroll")')
+// Following again releases the freeze.
+await page.click(FOLLOW)
 feedSyslog(20, 'resumed')
 await page.waitForFunction(() => document.querySelector('.row[title*="resumed"]') !== null, {
   timeout: 5000,
 }).then(
-  () => check(true, 'turning Autoscroll back on resumes following new events'),
-  () => check(false, 'turning Autoscroll back on resumes following new events'),
+  () => check(true, 'following again resumes following new events'),
+  () => check(false, 'following again resumes following new events'),
 )
 
 done()

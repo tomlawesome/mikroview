@@ -217,19 +217,27 @@ check(
   'the standing subtext says the raw value is what filters, groups and copies use',
 )
 
-// The Autoscroll preference must survive the transient hold the editor
-// takes while it is open: the button states what it will do next time,
-// and flipping it under the operator would make it lie.
-const autoscroll = page.locator('button:has-text("Autoscroll")')
-const autoscrollBefore = await autoscroll.getAttribute('class')
+// The following preference must survive the transient hold the editor
+// takes while it is open: the pill states what it will do next time, and
+// flipping it under the operator would make it lie. (Rounds 36-38 moved
+// this control from the scene bar to the whisper's own line; what it
+// must not do is unchanged.) Both the class and the word are read --
+// the pill says `following` or `follow`, so a silent flip would show up
+// in the label even if the class idiom ever changed.
+const follow = page.locator('.card[aria-hidden="false"] .whisper .hand-btn.follow')
+const followBefore = {
+  cls: await follow.getAttribute('class'),
+  text: ((await follow.textContent()) ?? '').trim(),
+}
 
 await input.fill(NEW_LABEL)
 await editor.locator('button.save').click()
 await editor.waitFor({ state: 'detached', timeout: 5000 })
 
 check(
-  (await autoscroll.getAttribute('class')) === autoscrollBefore,
-  'the Autoscroll toggle is unchanged -- the hold while editing is transient, not a preference change',
+  (await follow.getAttribute('class')) === followBefore.cls &&
+    ((await follow.textContent()) ?? '').trim() === followBefore.text,
+  'the following pill is unchanged -- the hold while editing is transient, not a preference change',
 )
 
 // The requirement that a rename visibly takes. Names are resolved once,

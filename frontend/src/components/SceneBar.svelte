@@ -23,11 +23,17 @@
   // here (#697, round 30's "the top is a flow column": chrome, then the
   // filter, then the bar, then the whisper, then the lines -- each its
   // own row, not folded into this one). They moved to FilterBar.svelte,
-  // which sits below this bar for the stream -- see #700/#691. Everything
-  // else the old toolbar held (eps, buffer%, the max-age selector,
-  // Autoscroll/Pause/Group/Clear) is off the bar entirely -- the
-  // mockup's own `.scenebar` markup for #s5 does not draw them, so they
-  // are gaps, recorded on the issue, not homed here.
+  // which sits below this bar for the stream -- see #700/#691.
+  //
+  // Nor do the old toolbar's stream verbs. Round 30 left
+  // Autoscroll/Pause/Group/Clear homeless here, which turned Autoscroll
+  // into a one-way trapdoor (#749); rounds 36-38 put them on the
+  // whisper's own line instead, as `following · pause · group` and
+  // `wipe`, because the whisper commands the stream and its seek is what
+  // stops the lines following. They are Whisper.svelte's now -- do not
+  // restore them to this bar. Of the rest, eps and buffer% are the
+  // whisper's stat line, and the max-age selector is the span pills on
+  // the filter line (#703).
   //
   // Inside the deck every card carries its own bar, so the scene named
   // here is the card's own, passed as a prop; outside the deck (the
