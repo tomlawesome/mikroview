@@ -915,6 +915,11 @@ deliberate exception to the "log admin actions" rule above:
   it stays within the recorded size, and "who decided this stopped being
   flagged" has to stay answerable. The admin-only "clear and never flag
   this again" this replaced was logged for the same reason.
+- **What that verdict wrote to the watchlist** is logged as though you
+  had done it by hand: `definition.create` for an observing entry it
+  created, `definition.promote` for the destinations it permitted, and
+  `definition.unpermit` (plus `definition.delete`) when the verdict is
+  undone. Each names the flag it came from.
 - **Clear all** (`POST /api/flags/clear-all`) is logged once per call --
   "cleared N flags", not one entry per flag. It records no judgement and
   no expectation, so a cleared flag raises again on the next matching
@@ -1000,6 +1005,12 @@ edit and remove entries there; for an inverted entry, the same page
 shows what's been promoted, what's waiting for review, and a toggle to
 resume or stop observing. An entry with a scoped source can also show
 its own recent matches inline, pulled from the match log below.
+
+Entries also arrive from the flags inbox, without being typed here: an
+`expected` verdict permits what a flag saw on the device's inverted
+entry, creating that entry (observing) if there is none, and a
+`resolved` verdict offers to open this page's own entry form prefilled.
+See [What a verdict writes to the watchlist](#what-a-verdict-writes-to-the-watchlist).
 
 ```yaml
 watchlist:
@@ -1599,7 +1610,45 @@ against a moving baseline). An expected verdict on one of those means
 
 **Undo** is offered beside the stamp for as long as the flag carries the
 verdict. Undoing an expected verdict withdraws the expectation it
-recorded -- removing it, or putting a raised size back where it was.
+recorded -- removing it, or putting a raised size back where it was --
+and takes back the permitted destinations it wrote, below.
+
+### What a verdict writes to the watchlist
+
+An `expected` verdict also records what the device was actually seen
+doing, as **permitted destinations** on its own
+[watchlist](#watchlist-optional) entry: each destination the flag saw, with
+the port it was reached on. If the device has no inverted entry, one is
+created **observing** -- it lists where the device goes and fires
+nothing -- so this automatic step can never start a fence firing on its
+own. Undoing the verdict, or changing it to something else, removes
+exactly what that verdict permitted, and removes an entry that existed
+only to hold it. Anything you permitted yourself is left alone.
+
+Only detectors that record destination *pairs* can do this:
+`critical_port`, `outbound_anomaly` and `internal_recon`. A flag's ports
+and hosts are otherwise two separate lists, and permitting every
+combination of them would allow connections the device never made. A
+flag without pairs permits nothing.
+
+A `resolved` verdict offers rather than acts. Its line reads
+**resolved — undo · watch for this**, and taking the offer opens the
+watchlist's own entry form, prefilled with the host (by MAC where the
+evidence carries one, otherwise by address) and the ports it was seen
+reaching. The form says where those values came from: the last firing
+window, how many of how many pairs, and whether the watch is MAC- or
+IP-bound (an IP-bound watch stops matching if the device's lease
+changes). Saving or discarding takes you back to the flags inbox, so
+declining costs nothing -- and the flag stays resolved either way.
+
+Why offer this at all: after a block, the first packet that gets through
+matters more than the detector's threshold being crossed again. The
+detector brings a resolved flag back only when the host re-crosses its
+threshold; a watch fires on the first line that reappears. Where the
+pairs name several destinations, the draft watches those ports toward
+any destination, because one watch scopes one destination -- broader
+than what the flag saw, never narrower, and stated in the form before
+you save it.
 
 A **Clear all** button above the active list (issue #198) clears every
 active flag in one request (`POST /api/flags/clear-all`) -- a click-again
@@ -3040,8 +3089,8 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/clear-all` | clear every currently-active flag in one request -- records no judgement and no expectation. Audit-logged once per call |
-| `POST /api/flags/{id}/verdict` | judge one flag: `expected`, `checked`, `investigate` or `resolved` (see [Verdicts](#verdicts-how-a-flag-ends)). Everything but `investigate` clears it; `expected` also records the sized expectation. Audit-logged |
-| `DELETE /api/flags/verdict/{id}` | undo a verdict: re-opens the flag if that verdict is what cleared it, and withdraws the expectation an `expected` verdict recorded. Audit-logged |
+| `POST /api/flags/{id}/verdict` | judge one flag: `expected`, `checked`, `investigate` or `resolved` (see [Verdicts](#verdicts-how-a-flag-ends)). Everything but `investigate` clears it; `expected` also records the sized expectation, and permits the flag's own destination pairs on the device's inverted watchlist entry (see [What a verdict writes to the watchlist](#what-a-verdict-writes-to-the-watchlist)). Audit-logged |
+| `DELETE /api/flags/verdict/{id}` | undo a verdict: re-opens the flag if that verdict is what cleared it, withdraws the expectation an `expected` verdict recorded, and takes back the destinations it permitted. Audit-logged |
 | `GET /api/definitions` | open to any signed-in user, not admin-gated (#490 -- the engine room's watchers station reads it, and a non-admin can read the room): every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
 | `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. `intent: "detection"` is refused too, for now: a custom detector's match conditions have nowhere on the envelope to be stored yet, so accepting one would create a definition that lists and evaluates nothing. Only expectation definitions can be created here today; custom detector authoring is tracked in issue #502 |
 | `GET /api/definitions/schema` | admin-only: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
