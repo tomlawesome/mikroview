@@ -19,20 +19,17 @@
   // and fill it, rather than sitting at a flat pixel width regardless of
   // the card's own size. The column width is measured from the box, not
   // assumed, the same way the drum measures its own.
-  import { FLAG_TYPE_SHORT_LABELS, type MetricsHour, type MinuteReading } from '../lib/metricsSeries'
+  import { FLAG_TYPE_SHORT_LABELS, type MetricsHour } from '../lib/metricsSeries'
   import { dprState, snapFill, snapLine } from '../lib/pixelGrid.svelte'
   import { formatHM } from '../lib/format'
-  import MetricsTotals from './MetricsTotals.svelte'
 
   let {
     hour,
     cursor,
-    reading,
     onselect,
   }: {
     hour: MetricsHour
     cursor: number
-    reading: MinuteReading | null
     onselect: (index: number) => void
   } = $props()
 
@@ -99,23 +96,22 @@
   // registered type (docs/design/concepts/round-30/the-whole.html #s4 draws
   // two flag columns, "unplanned" and "ring broken", not all sixteen).
   // hour.flags still carries every registered type (spoke-first, then
-  // silent) so the cross-section and other views keep the full picture;
+  // silent) so the hourline and the other views keep the full picture;
   // the register itself just doesn't draw a column for a silent one.
   const firedFlags = $derived(hour.flags.filter((s) => s.spoke))
 
-  // Off for round-30 fidelity: the ledger strip below is unmounted, not
-  // deleted (#700, #691). Typed rather than inferred so the block stays
-  // reachable to the type checker.
-  const LEDGER_ENABLED: boolean = false
+  // Rounds 36-37 (#803) settle both of the gates that used to stand here.
+  // The ledger is the table view's head, not the register's foot, so this
+  // file no longer mounts MetricsTotals at all -- MetricsTable does, above
+  // its minutes. And the cross-section aside is gone rather than gated:
+  // reading the minute across every series is the hourline's job now
+  // (Metrics.svelte), which is where #s4 draws it, so an aside repeating
+  // the same figures beside the paper had no work left to do. Its empty
+  // state ("Pick a minute on the register to read it across every
+  // series") went with it -- a printed instruction of exactly the kind
+  // round 30 struck everywhere. Removed wholesale per AGENTS.md rather
+  // than left as a flag nothing can turn on.
 
-  // Same treatment for the cross-section panel. Round 30's register draws
-  // no side panel: the minute under the cursor is read from the scene's
-  // own header line, not from an aside, and the panel's empty state
-  // ("Pick a minute on the register to read it across every series") is
-  // the printed instruction the round struck everywhere (README section
-  // "No apparatus, anywhere") -- the same text the owner objected to on
-  // the seismograph. Unmounted, not deleted; tracked on #691.
-  const CROSS_SECTION_ENABLED: boolean = false
   // No flag columns at all -- 0 fired this hour -- means no group gap to
   // reserve either, so the traffic ribbons get the space back instead of
   // leaving a blank strip.
@@ -297,61 +293,17 @@
       </svg>
     {/if}
   </div>
-
-  {#if CROSS_SECTION_ENABLED}
-  <aside class="cross-section" aria-label="The selected minute">
-    {#if reading}
-      <h3>The minute {formatHM(reading.time)}</h3>
-      <dl>
-        {#each reading.traffic as row (row.key)}
-          <div class="xs-row">
-            <dt>{row.label}</dt>
-            <dd class:refused={row.ink === 'refused'}>{row.value}</dd>
-          </div>
-        {/each}
-        <div class="xs-row total">
-          <dt>flag episodes</dt>
-          <dd>{reading.episodeTotal}</dd>
-        </div>
-      </dl>
-      {#if reading.episodes.length > 0}
-        <p class="episodes">{reading.episodes.map((e) => `${e.label}${e.value > 1 ? ` ×${e.value}` : ''}`).join(' · ')}</p>
-      {/if}
-    {:else}
-      <h3>The minute</h3>
-      <p class="hint">Pick a minute on the register to read it across every series.</p>
-    {/if}
-  </aside>
-  {/if}
 </div>
 
-<!-- ROUND 30 FIDELITY: none of the three ratified metrics views (seismograph,
-     register, table -- docs/design/concepts/round-30/the-whole.html #s4)
-     draws a ledger strip. Per the project's build-to-the-mockup-first
-     policy (#700) this stays implemented rather than deleted; it is just
-     unmounted here so nothing renders. Re-mounting it (or replacing it) is
-     tracked as a gap on #691. Guarded by a flag rather than an HTML comment
-     so MetricsTotals and its {hour} usage stay live code and the type check
-     keeps covering them; a plain {#if false} does the same job but narrows
-     to never, which reports the block as unreachable. Same pattern as
-     LiveTable's RESIZE_HANDLES_ENABLED. -->
-{#if LEDGER_ENABLED}
-  <div class="ledger">
-    <h3 class="ledger-head">The ledger <span>· the same hour in totals — magnitude, not time</span></h3>
-    <MetricsTotals {hour} />
-  </div>
-{/if}
-
 <style>
+  /* The paper is the whole view now that the aside beside it is gone
+     (#803) -- #s4's register draws one thing, the hour hanging from the
+     brink, and nothing next to it. */
   .register {
-    display: flex;
-    gap: 14px;
-    align-items: flex-start;
     min-width: 0;
   }
 
   .paper {
-    flex: 1;
     min-width: 0;
     overflow-x: auto;
   }
@@ -369,85 +321,6 @@
     font-size: 13px;
   }
 
-  .cross-section {
-    flex: none;
-    width: 216px;
-    border-left: 1px solid var(--border);
-    padding-left: 14px;
-  }
-
-  .cross-section h3 {
-    margin: 0 0 8px;
-    font-size: 9px;
-    font-weight: 650;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
-  }
-
-  .cross-section dl {
-    margin: 0;
-  }
-
-  .xs-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 2px 0;
-  }
-
-  .xs-row.total {
-    margin-top: 6px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border);
-  }
-
-  .xs-row dt {
-    font-size: 11px;
-    color: var(--fg-muted);
-  }
-
-  .xs-row dd {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--fg);
-  }
-
-  .xs-row dd.refused {
-    color: var(--chart-refused);
-  }
-
-  .episodes {
-    margin: 8px 0 0;
-    font-size: 10.5px;
-    color: var(--fg-dim);
-  }
-
-  .hint {
-    margin: 0;
-    font-size: 11px;
-    color: var(--fg-dim);
-  }
-
-  .ledger {
-    margin-top: 14px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border);
-  }
-
-  .ledger-head {
-    margin: 0 0 10px;
-    font-size: 11px;
-    font-weight: 650;
-    color: var(--fg-muted);
-  }
-
-  .ledger-head span {
-    font-weight: 400;
-    color: var(--fg-dim);
-  }
 
   .group {
     fill: var(--fg-dim);
@@ -592,17 +465,4 @@
     opacity: 0.09;
   }
 
-  @media (max-width: 900px) {
-    .register {
-      flex-direction: column;
-    }
-
-    .cross-section {
-      width: 100%;
-      border-left: none;
-      border-top: 1px solid var(--border);
-      padding-left: 0;
-      padding-top: 10px;
-    }
-  }
 </style>
