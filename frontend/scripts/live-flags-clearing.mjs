@@ -307,11 +307,19 @@ if (firstRaised.every((r) => r.ok)) {
     check((await activeCount(page)) === 0, 'the second click actually clears every active flag, including the extra rule_spike')
 
     // Regular clears only -- Clear all must never create an exclusion.
+    //
+    // Zero, not one. The baseline used to be the single exclusion the
+    // split-button's permanent-clear left behind; that section is pinned as
+    // absence above while #691 has no UI caller for clearPermanent, so nothing
+    // creates an exclusion in this run any more. The claim is unchanged and
+    // still worth making -- Clear all must not permanently exclude anything --
+    // it is only the baseline it counts against that moved. Restore the 1 when
+    // the split button comes back.
     const excludedResp = await page.request.get(`${process.env.MV_URL}/api/flags/exclusions`)
     const excludedBody = await excludedResp.json()
     check(
-      (excludedBody.exclusions ?? []).length === 1,
-      `Clear all created no new exclusions -- still just the one from the split-button test (${(excludedBody.exclusions ?? []).length})`,
+      (excludedBody.exclusions ?? []).length === 0,
+      `Clear all created no exclusions (${(excludedBody.exclusions ?? []).length})`,
     )
 
     // Reload to confirm the clears persisted server-side, not just in the

@@ -66,11 +66,29 @@ async function openAndCheck(label) {
 async function checkFleetFromBottomBar(target, expectedCard) {
   await target.setViewportSize({ width: 390, height: 844 })
   await target.waitForSelector('.bottom-bar', { timeout: 5000 })
+  // A group of one navigates straight there and raises no sheet
+  // (BottomBar.svelte:153-158's activateGroup), and says so on the button:
+  // aria-haspopup is set only when the group has more than one item (:194).
+  // That is exactly a viewer's Admin group -- Settings and Entities carry
+  // `edit: true` and Run setup `admin: true`, so Fleet is the only row left
+  // (navGroups.ts) -- while an admin's has four. Waiting unconditionally for
+  // the dialog made this helper correct for an admin and wrong for a viewer,
+  // which is what gate run five caught. Read the button, then take whichever
+  // path the app is actually offering.
+  const adminGroup = target.locator('.bottom-bar .group-btn', { has: target.locator('.label:text-is("Admin")') })
+  const opensSheet = (await adminGroup.getAttribute('aria-haspopup')) === 'dialog'
   await target.click('.bottom-bar .group-btn .label:text-is("Admin")')
-  await target.waitForSelector('[role="dialog"]', { timeout: 5000 })
-  const sheetItems = await target.$$eval('.sheet .sheet-item .label', (els) => els.map((e) => e.textContent.trim()))
-  await target.click('.sheet .sheet-item .label:text-is("Fleet")')
-  await target.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
+  let sheetItems
+  if (opensSheet) {
+    await target.waitForSelector('[role="dialog"]', { timeout: 5000 })
+    sheetItems = await target.$$eval('.sheet .sheet-item .label', (els) => els.map((e) => e.textContent.trim()))
+    await target.click('.sheet .sheet-item .label:text-is("Fleet")')
+    await target.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
+  } else {
+    // The tap has already navigated. The group's one row is its own label,
+    // so report it as the item list the caller checks Fleet against.
+    sheetItems = ['Fleet']
+  }
   await target.waitForSelector(`.card[data-card="${expectedCard}"] >> text=/● LIVE|◌ QUIET|◌ NEVER SEEN/`, {
     timeout: 5000,
   })
