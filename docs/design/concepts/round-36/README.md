@@ -97,6 +97,18 @@ status strip and uptime badge — are round 37's.
 - No apparatus: the degraded state is set by the capture script, not by
   anything on the page.
 
-## Owner verdicts
+## Owner verdicts (2026-09-02)
 
-Pending.
+- On the round: *"Love the ledger but put them at the top not beneath.
+  Rest is great."* Accepted as drawn, with one change for round 37:
+  the ledger sits above the table view's minutes, not beneath them.
+- On the fall's band header `WATCH HOLDING ✓` (round 30's wording):
+  *"I don't like the term 'watch holding' with the tick. Lose the tick,
+  and suggest a better term"*, then, choosing from the options: *"Yes,
+  watched in green says everything we need, and then watch broken"*.
+  So the healthy state reads `WATCHED` in the accept ink, no tick; a
+  broken watch reads `WATCH BROKEN` on the same line. Round 37 carries
+  it; the built `Fall.svelte` prints the old text and needs the same
+  change (follow-up issue).
+- The stream's foot band (#717's *"remove it"*) stays open: the owner
+  asked for more detail before deciding.
