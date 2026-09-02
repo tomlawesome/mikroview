@@ -149,6 +149,54 @@ describe('replayDefinition (#786)', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ params: { threshold: 9 } })
   })
 
+  // The candidate's count is only worth reading against the count the
+  // definition makes as it stands, so the server answers a candidate with
+  // both (#786). This wrapper must carry the second one through intact:
+  // it is receipt-or-decline like the answer around it.
+  it('carries the live-params count back beside the candidate’s', async () => {
+    stubFetch(200, {
+      ...RECEIPT,
+      current: {
+        receipt: { ...RECEIPT.receipt, emissionCount: 41, sample: [] },
+      },
+    })
+    const result = await replayDefinition('port_scan', { threshold: 9 })
+    expect(typeof result).not.toBe('string')
+    if (typeof result === 'string') return
+    expect(result.receipt?.emissionCount).toBe(3)
+    expect(result.current?.receipt?.emissionCount).toBe(41)
+  })
+
+  it('carries a declining live-params answer back as a value too', async () => {
+    stubFetch(200, {
+      ...RECEIPT,
+      current: {
+        decline: {
+          reason: 'corpus covers 4h12m0s (8421 event(s)), shorter than this definition’s window',
+          corpusSpan: '4h12m0s',
+          definitionWindow: '24h0m0s',
+        },
+      },
+    })
+    const result = await replayDefinition('port_scan', { window: '60s' })
+    expect(typeof result).not.toBe('string')
+    if (typeof result === 'string') return
+    // A candidate short enough to judge over a corpus the live window is
+    // too long for: the receipt stands, and what cannot be said is the
+    // comparison, not the answer.
+    expect(result.receipt?.emissionCount).toBe(3)
+    expect(result.current?.receipt).toBeUndefined()
+    expect(result.current?.decline?.definitionWindow).toBe('24h0m0s')
+  })
+
+  it('leaves current absent when the server sent none', async () => {
+    stubFetch(200, RECEIPT)
+    const result = await replayDefinition('port_scan', {})
+    expect(typeof result).not.toBe('string')
+    if (typeof result === 'string') return
+    expect(result.current).toBeUndefined()
+  })
+
   it('percent-encodes an id that would otherwise change the path', async () => {
     const fetchMock = stubFetch(200, RECEIPT)
     await replayDefinition('custom/one', {})

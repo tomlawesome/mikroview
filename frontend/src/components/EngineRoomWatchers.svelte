@@ -665,6 +665,27 @@
                 Would have fired {receipt.corpusTruncated ? 'at least ' : ''}{receipt.emissionCount}
                 {receipt.emissionCount === 1 ? 'time' : 'times'} in the last
                 {asDuration(receipt.window.duration)}
+                <!-- What the detector counts as it stands, over the same
+                     traffic in the same request (#786) -- the candidate's
+                     number says nothing on its own. Quieter than the
+                     count it sits beside: it is the comparison, not the
+                     answer. Absent entirely when nothing was changed,
+                     because the count is then already the current one. -->
+                {#if replay.current?.receipt}
+                  {@const now = replay.current.receipt}
+                  <span class="tried-current"
+                    >currently: {now.corpusTruncated ? 'at least ' : ''}{now.emissionCount}</span
+                  >
+                {:else if replay.current?.decline}
+                  <!-- Same grey the decline itself uses: the live window
+                       being longer than the traffic held is an honest
+                       limit, not a failure, and it is only the comparison
+                       that is missing -- the receipt above still stands. -->
+                  <span class="tried-current"
+                    >currently: not replayable over the traffic held ({replay.current.decline
+                      .reason})</span
+                  >
+                {/if}
               </p>
               {#if receipt.sample.length > 0}
                 <ul class="tried-hosts">
@@ -1107,6 +1128,13 @@
   }
 
   .declined {
+    color: var(--fg-muted);
+  }
+
+  /* The current count sits inside the count line, in the decline's own
+     quiet ink rather than the count's: it is the thing the candidate is
+     measured against, not a second answer. */
+  .tried-current {
     color: var(--fg-muted);
   }
 

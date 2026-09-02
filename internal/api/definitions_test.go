@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,9 +13,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
@@ -1400,5 +1403,176 @@ func TestDefinitionsListOpenToViewer(t *testing.T) {
 	defer userWriteResp.Body.Close()
 	if userWriteResp.StatusCode != http.StatusCreated {
 		t.Errorf("expected definition creation to succeed for a user (#653 widened this from admin-only), got %d", userWriteResp.StatusCode)
+	}
+}
+
+// --- replay: the candidate's count, and the live one beside it (#786) ---
+//
+// A Try answers "would have fired 3 times", and that number means little
+// without the number it is being compared against. Nothing already
+// counted can supply it -- the flag time series counts new episodes over
+// the last 60 minutes and a flag's own count is re-fires within one
+// episode, neither of which is the measurement a receipt makes (#824,
+// gap 1) -- so the handler runs the same replay a second time with the
+// definition's live params. These pin that it does, that the second
+// number is really computed from the live params rather than echoing the
+// candidate's, and that it is absent when there is no candidate to
+// compare against.
+
+// newReplayableDetection creates a custom declarative detector -- five
+// hits from one source to port 22 inside a minute -- and returns its id.
+// Custom rather than shipped so the test owns both numbers it compares.
+func newReplayableDetection(t *testing.T, ts *httptest.Server) string {
+	t.Helper()
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:   "SSH hammering",
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} attempts against port 22 from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		resp.Body.Close()
+		t.Fatalf("creating the detector to replay: expected 201, got %d", resp.StatusCode)
+	}
+	return mustDecodeDefinition(t, resp).ID
+}
+
+// seedReplayCorpus fills the store with traffic that detector can be
+// replayed over: six hits from one source inside a few seconds, and two
+// unrelated events ten minutes apart around them so the corpus *spans*
+// longer than the definition's own 60s window -- a corpus shorter than
+// the window is declined rather than counted (engine's Replay).
+func seedReplayCorpus(st *store.Store) {
+	now := time.Now()
+	insert := func(at time.Time, src string, port int) {
+		st.Insert(store.Event{
+			Time: at, ReceivedAt: at, DeviceID: "core",
+			Action: store.ActionDrop, Protocol: "TCP",
+			SrcIP: src, DstIP: "192.168.1.10", DstPort: port,
+		})
+	}
+	insert(now.Add(-10*time.Minute), "10.0.0.1", 443)
+	for i := range 6 {
+		insert(now.Add(-5*time.Minute).Add(time.Duration(i)*time.Second), "203.0.113.9", 22)
+	}
+	insert(now, "10.0.0.1", 443)
+}
+
+// postReplay posts one candidate to the replay route and decodes the
+// answer, returning the raw keys too so a test can assert a key is
+// absent rather than merely decoded as nil.
+func postReplay(t *testing.T, ts *httptest.Server, id string, params engine.Params) (replayResponse, map[string]json.RawMessage) {
+	t.Helper()
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+id+"/replay", replayRequest{Params: params})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST replay: expected 200, got %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view replayResponse
+	if err := json.Unmarshal(raw, &view); err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	return view, keys
+}
+
+func TestHandleDefinitionsReplayCountsTheLiveParamsBesideTheCandidate(t *testing.T) {
+	s, st := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	id := newReplayableDetection(t, ts)
+	seedReplayCorpus(st)
+
+	// A candidate threshold of 2 against a stored threshold of 5, over
+	// the same six hits: the two counts have to come out different, or
+	// this would pass just as well against a handler that copied the
+	// candidate's own receipt into current.
+	got, _ := postReplay(t, ts, id, engine.Params{"threshold": 2})
+	if got.Receipt == nil {
+		t.Fatalf("the candidate did not produce a receipt: %+v", got)
+	}
+	if got.Current == nil {
+		t.Fatal("a replay carrying a candidate must also answer with the live params (#786), got no current")
+	}
+	if got.Current.Receipt == nil {
+		t.Fatalf("current came back without a receipt over a corpus long enough to judge: %+v", got.Current)
+	}
+
+	// Six hits from one source inside the 60s window: a threshold of 2
+	// is crossed by the second hit and every one after it, a threshold
+	// of 5 only by the fifth and the sixth.
+	if got.Receipt.EmissionCount != 5 {
+		t.Errorf("candidate emissionCount = %d, want 5", got.Receipt.EmissionCount)
+	}
+	if got.Current.Receipt.EmissionCount != 2 {
+		t.Errorf("current emissionCount = %d, want 2 -- the live threshold of 5, not the candidate's",
+			got.Current.Receipt.EmissionCount)
+	}
+
+	// Like-for-like or it is not a comparison: same corpus, same covered
+	// window, only the params differing.
+	if got.Current.Receipt.Window.Duration != got.Receipt.Window.Duration {
+		t.Errorf("current covered %s, candidate covered %s -- both must be counted over the same window",
+			got.Current.Receipt.Window.Duration, got.Receipt.Window.Duration)
+	}
+
+	// One level deep and no further: current is itself the live-params
+	// answer, so it has no current of its own to carry.
+	nestedRaw, err := json.Marshal(got.Current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nested map[string]json.RawMessage
+	if err := json.Unmarshal(nestedRaw, &nested); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := nested["current"]; ok {
+		t.Errorf("the nested current carries a current of its own: %s", nestedRaw)
+	}
+
+	// Two replays are still not an edit: the detector the engine
+	// evaluates keeps the threshold it was created with.
+	stored, ok := s.Definitions.Get(id)
+	if !ok {
+		t.Fatal("the detector vanished")
+	}
+	if fmt.Sprint(stored.Definition.Params["threshold"]) != "5" {
+		t.Errorf("threshold = %v, want the stored 5 -- a replay writes nothing", stored.Definition.Params["threshold"])
+	}
+}
+
+func TestHandleDefinitionsReplayOmitsCurrentWithoutACandidate(t *testing.T) {
+	s, st := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	id := newReplayableDetection(t, ts)
+	seedReplayCorpus(st)
+
+	got, keys := postReplay(t, ts, id, nil)
+	if got.Receipt == nil {
+		t.Fatalf("the definition's own params did not produce a receipt: %+v", got)
+	}
+	// With no candidate the replay already ran with the live params, so
+	// the receipt above *is* the current number, and a copy of it beside
+	// itself would say nothing.
+	if _, ok := keys["current"]; ok {
+		t.Errorf("an empty candidate must not carry a current: %v", keys)
 	}
 }

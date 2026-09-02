@@ -1121,6 +1121,13 @@ export async function getDefinition(id: string): Promise<Definition> {
 // definition's replay does not accept) is still the string every other
 // definitions writer returns, so one `typeof result === 'string'` check
 // separates "the server would not do it" from "here is the answer".
+//
+// Where params carries a candidate, the answer also carries `current`:
+// the same replay over the same corpus with the definition's live params,
+// so a candidate's count can be read against the one it would replace
+// (#786). It is receipt-or-decline like the answer around it, and the
+// server omits it entirely for an empty candidate -- the receipt is then
+// the current number already.
 export async function replayDefinition(
   id: string,
   params: Record<string, unknown>,
