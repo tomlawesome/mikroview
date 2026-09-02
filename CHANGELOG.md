@@ -312,6 +312,25 @@ rewritten.
 
 ### Changed
 
+- **Metrics: the hourline reads every series, and the ledger sits above
+  the table's minutes** (#803, design rounds 36-37). The line under the
+  scene bar used to answer the minute under the cursor with a ratio that
+  named two series and hid the rest ("9 refused of 61 events"); it now
+  reads the whole minute in one line -- a figure per series, refused in
+  the refused ink, and the flag-episode count followed by the type names
+  behind it. That was already the hourline's job, so the register's
+  cross-section aside is gone rather than duplicating it beside the
+  paper, and the "Pick a minute on the register to read it across every
+  series" instruction it printed when empty went with it.
+
+  On the table view the ledger -- top rules, top talkers, by device, by
+  protocol, the hour by action, episodes by flag type -- moves from a
+  narrow column down the left side to a full-width band across the head
+  of the view, ruled off from the minutes below it, with the table
+  taking the whole width instead of what a 320px sidebar left it. Its
+  six columns are bars without boxes: the bordered cards around each one
+  are gone, since a box inside a ruled band draws the same border twice.
+
 - **The docket's flags tab is the ratified round-29 table, not a card
   grid** (#688). One row per open flag -- flag · where · evidence ·
   count · age -- each wearing its flag type's own family ink as a left
