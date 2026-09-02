@@ -71,20 +71,9 @@ const verdict = await api('POST', `/api/flags/${encodeURIComponent(flag.id)}/ver
 })
 check(verdict.status === 200, `the operator calls it expected (${verdict.status})`)
 
-// Recording the expectation. Calling Expected does not yet reach
-// ClearAndExclude -- joining the verdict to the store is #640's part B,
-// which is not on this branch -- so the entry is recorded here through
-// the endpoint that already calls the same store function part B will.
-// The ledger is then driven against a genuinely recorded expectation
-// carrying a real firing's size, rather than one inserted by hand.
-//
-// Safe to keep either way once part B lands: ClearAndExclude on a pair
-// that already has an expectation only ever raises its size, and the
-// size here is the same firing's, so this becomes a no-op rather than a
-// second entry. Delete it in part B's own change.
-const recorded = await api('POST', `/api/flags/${encodeURIComponent(flag.id)}/clear-permanent`)
-check(recorded.status === 200, `the expectation is recorded against the pair (${recorded.status})`)
-
+// The Expected verdict is what records the expectation (#640 part B),
+// so the ledger below is driven against a genuinely recorded entry
+// carrying a real firing's size, not one inserted by hand.
 const afterRecord = await expectations()
 check(afterRecord.status === 200, `GET /api/flags/expectations answers 200 (${afterRecord.status})`)
 const entry = afterRecord.list.find((e) => e.target === SCAN_IP)

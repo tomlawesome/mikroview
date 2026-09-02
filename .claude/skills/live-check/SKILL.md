@@ -1,6 +1,6 @@
 ---
 name: live-check
-description: Stand up a real mikroview and drive it in a real browser. Use before opening any PR that touches the server, the UI, or the CLI.
+description: Stand up a real mikroview and drive it in a real browser. Runs continuously on dev after merges, and once clean before dev -> preview; on a branch by choice, not by rule.
 ---
 
 # Live check
@@ -10,6 +10,12 @@ it with real syslog listeners and a real admin account, feeds synthetic
 firewall events, and drives it in Chromium via Playwright.
 
 Not the test suite. Run it in addition, not instead.
+
+**It is not a step before a merge.** Since 2026-09-02 a PR merges on green
+CI plus review; the gate runs on `dev` in a loop on the second host, and a
+new failure against the previous run is filed against that merge window and
+fixed forward. It blocks only `dev -> preview`. AGENTS.md, "The gate runs
+on `dev`, after the merge", has the rule and the reasoning.
 
 **It does not have to run here.** `make live-check-remote` runs the same gate
 on the second host, so this machine stays free for the 35-50 minutes it takes.

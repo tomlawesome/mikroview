@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { describe, expect, it } from 'vitest'
-import { buildQuery } from './api'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { buildQuery, replayDefinition } from './api'
 import { emptyFilters } from './types'
 
 // buildQuery's `ip` forwarding is refetchWithFilters()'s only path back to
@@ -80,5 +80,110 @@ describe('buildQuery: ip forwarding for srcQuery/dstQuery (#438)', () => {
 
     const text = buildQuery({ ...emptyFilters(), port: 'https' })
     expect(new URLSearchParams(text).get('port')).toBeNull()
+  })
+})
+
+// The decline is the whole point of these (#786). POST
+// /api/definitions/{id}/replay answers 200 for both a receipt and a
+// decline, because "the corpus is shorter than this definition's window"
+// is an honest answer about the traffic held, not a failed request --
+// so a wrapper that threw on it, or that flattened it into a receipt of
+// zero, would destroy the distinction engine.Result is shaped to keep
+// (see internal/engine/replay.go's Decline doc comment). These pin that
+// both shapes come back as values, and that a genuine refusal is still
+// the error string every other definitions wrapper returns.
+describe('replayDefinition (#786)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubFetch(status: number, body: unknown) {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+      text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  const RECEIPT = {
+    receipt: {
+      window: {
+        start: '2026-09-02T08:00:00Z',
+        end: '2026-09-02T12:12:00Z',
+        duration: '4h12m0s',
+        eventCount: 8421,
+      },
+      emissionCount: 3,
+      sample: [
+        {
+          at: '2026-09-02T09:04:00Z',
+          target: '203.0.113.9',
+          detail: '18 ports in 1m0s',
+          ports: [22, 23, 25],
+          provisional: false,
+        },
+      ],
+      sampleTruncated: false,
+      corpusTruncated: false,
+      anyProvisional: false,
+    },
+  }
+
+  it('returns a receipt as a value, with its window and sample intact', async () => {
+    const fetchMock = stubFetch(200, RECEIPT)
+    const result = await replayDefinition('port_scan', { threshold: 9 })
+
+    expect(typeof result).not.toBe('string')
+    if (typeof result === 'string') return
+    expect(result.decline).toBeUndefined()
+    expect(result.receipt?.emissionCount).toBe(3)
+    expect(result.receipt?.window.duration).toBe('4h12m0s')
+    expect(result.receipt?.sample[0].target).toBe('203.0.113.9')
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/definitions/port_scan/replay')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({ params: { threshold: 9 } })
+  })
+
+  it('percent-encodes an id that would otherwise change the path', async () => {
+    const fetchMock = stubFetch(200, RECEIPT)
+    await replayDefinition('custom/one', {})
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/definitions/custom%2Fone/replay')
+  })
+
+  it('returns a decline as a value, not as a thrown error', async () => {
+    stubFetch(200, {
+      decline: {
+        reason:
+          'corpus covers 4h12m0s (8421 event(s)), shorter than this definition\'s 24h0m0s window -- declining rather than reporting a potentially misleading count',
+        corpusSpan: '4h12m0s',
+        definitionWindow: '24h0m0s',
+      },
+    })
+
+    const result = await replayDefinition('low_slow_scan', {})
+    expect(typeof result).not.toBe('string')
+    if (typeof result === 'string') return
+    // Not a receipt at all, and specifically not a receipt of zero: the
+    // caller has to be able to tell "would not have fired" from "cannot
+    // be asked of this corpus yet".
+    expect(result.receipt).toBeUndefined()
+    expect(result.decline?.corpusSpan).toBe('4h12m0s')
+    expect(result.decline?.definitionWindow).toBe('24h0m0s')
+  })
+
+  it('returns the server refusal as a string when the replay is refused outright', async () => {
+    stubFetch(503, 'no event corpus is available to replay against')
+    const result = await replayDefinition('port_scan', {})
+    expect(result).toBe('no event corpus is available to replay against')
+  })
+
+  it('falls back to a status-bearing message when the refusal carries no body', async () => {
+    stubFetch(403, '')
+    expect(await replayDefinition('port_scan', {})).toBe('replayDefinition: 403')
   })
 })

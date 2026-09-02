@@ -111,8 +111,27 @@ describe('FilterBar, the filter line (#697, ratified round 30)', () => {
     appState.filters = { ...emptyFilters(), action: 'drop', port: '445' }
     render(FilterBar)
     const box = document.querySelector('.fbox')
-    expect(box?.textContent?.replace(/\s+/g, ' ').trim()).toBe('action:drop⌫port:445⌫')
+    // `saved ▾` rides the box's right end from round 37 on ("saved
+    // filters are the box's business") -- part of the box's own content,
+    // hence part of what this reads back.
+    expect(box?.textContent?.replace(/\s+/g, ' ').trim()).toBe('action:drop⌫port:445⌫ saved ▾')
     expect(screen.getByPlaceholderText('type a term, or click a value in a row')).toBeTruthy()
+  })
+
+  it('carries saved filters at the box\'s own right end, not beside it (round 37)', () => {
+    render(FilterBar)
+    const trigger = document.querySelector('.fbox .fsaved')
+    expect(trigger?.textContent?.trim()).toBe('saved ▾')
+  })
+
+  it('opening saved filters does not also unfold the strip the box discloses', async () => {
+    render(FilterBar)
+    await fireEvent.click(document.querySelector('.fbox .fsaved') as HTMLElement)
+    flushSync()
+    expect(document.querySelector('.fpmenu')).toBeTruthy()
+    // The box's own "click inside opens the strip" handler must not have
+    // fired: reaching for a saved filter is not reaching for the fields.
+    expect(document.querySelector('.bar.thin')).toBeNull()
   })
 
   it('actually takes keystrokes -- typing in the box writes the same free-text filter the strip\'s Rule field does, and narrows the stream (#734)', async () => {

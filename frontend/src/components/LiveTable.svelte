@@ -4,12 +4,11 @@
   import { whisperState } from '../lib/whisper.svelte'
   import { authState } from '../lib/auth.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
-  import { COLUMNS, columnState } from '../lib/columns.svelte'
+  import { formatTime } from '../lib/format'
+  import { columnState } from '../lib/columns.svelte'
   import { groupModeState } from '../lib/groupMode.svelte'
   import { flaggedSources, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
   import { flagsState } from '../lib/flags.svelte'
-  import { fallState } from '../lib/fall.svelte'
-  import { footLineFacts } from '../lib/footLine'
   import { viewportState } from '../lib/viewport.svelte'
   import type { ClientEvent, FirewallEvent } from '../lib/types'
   import EventRow from './EventRow.svelte'
@@ -17,7 +16,6 @@
   import EventDetailSheet from './EventDetailSheet.svelte'
   import GhostRows from './GhostRows.svelte'
   import { wizardState } from '../lib/wizard.svelte'
-  import { onMount } from 'svelte'
 
   // Both optional -- default to the live view's own state, so the
   // existing `<LiveTable />` call site (App.svelte's 'live' branch)
@@ -59,19 +57,21 @@
   let selectedEvent: FirewallEvent | null = $state(null)
   let headerEls: (HTMLDivElement | undefined)[] = $state([])
 
-  // Column-resize affordance (handles/tick marks over the header) is
-  // implemented below (measureOffsets, handleOffsets, startResize,
-  // onResizeMove, endResize, and the `.resize-overlay`/`.resizer` styles)
-  // but unmounted for round-30 fidelity: the ratified mockup
-  // (docs/design/concepts/round-30/shots/stream.png and
-  // stream-bar-out.png) draws no resize handle, tick mark, or drag
-  // target anywhere on the stream's header. Round 30 builds to the
-  // mockup first (#700); the gap is tracked on #691 for a future round
-  // to remount. Do not delete this implementation -- flip
-  // RESIZE_HANDLES_ENABLED and restore the template block in the markup
-  // below when #691 is picked up.
-  const RESIZE_HANDLES_ENABLED: boolean = false
+  // Column resize, mounted again by round 36 and drawing nothing at
+  // rest: "the boundary reveals itself under the hand -- a hair on the
+  // header's edge and a col-resize cursor -- and is otherwise
+  // invisible." Round 30 had unmounted it because its own shots showed
+  // no handle; what they showed no handle of was the *resting* header,
+  // and the answer drawn here is a hover state, not an absent feature.
+  // The visible half is entirely CSS (.header-cell::after and
+  // .resizer's own hover/active rules below); the drag itself is
+  // measureOffsets/handleOffsets/startResize/onResizeMove/endResize.
+  // Which boundary is being dragged, twice over: the position (so the
+  // handle under the pointer keeps its own `.active` look) and the
+  // column's key (so the width lands on the right column whatever the
+  // reader has hidden -- see columnState.setWidthForKey).
   let dragIndex = $state<number | null>(null)
+  let dragKey: string | null = null
   let dragStartX = 0
   let dragStartWidth = 0
 
@@ -224,6 +224,18 @@
     // of both so a narrow filter on a healthy, populated buffer never
     // reads as either.
     if (appState.events.length > 0) return { kind: 'text', text: 'No events match the current filters.' }
+    // Empty because the reader emptied it (round 36's `wipe`). Said
+    // before every other empty reading below, all of which would be
+    // wrong here -- ghost rows promise lines that are not coming, and
+    // "waiting for events" blames the estate for a silence the operator
+    // caused. The second half is the half that is not on screen: the
+    // wipe took this browser's copy and nothing else.
+    if (appState.wipedAt !== null) {
+      return {
+        kind: 'text',
+        text: `Nothing since ${formatTime(new Date(appState.wipedAt).toISOString())} — wiped here, by you · the server's ring still holds every line`,
+      }
+    }
     // The buffer is empty and nothing has failed -- either the app's one
     // loadInitial() call (App.svelte's mount effect) hasn't come back
     // yet, or it has and the server genuinely has nothing. Ghost rows,
@@ -260,44 +272,18 @@
   // one lookup per rendered row.
   const flagged = $derived(flaggedSources(flagsState.list))
 
-  // The foot line (#691, round 30's .foot-legend): the three facts of
-  // the day, along the bottom edge of the stream. See lib/footLine.ts
-  // for what each one is and when each one is absent -- an empty array
-  // means the band itself does not render, never an empty strip.
-  //
-  // Owner ruling, 2026-08-31 (#717 review of build 0.4.0+g65bf3b0):
-  // "Bottom bar with the messages, dark, which server, last etc, I hate
-  // it, remove it." This supersedes the earlier #691/#700 ask for round
-  // 30's own three centred facts here -- the band goes entirely, not
-  // just restyled. Unmounted, not deleted, matching RESIZE_HANDLES_ENABLED
-  // above: the facts still compute below in case a future round wants
-  // them somewhere else, but nothing renders them.
-  const FOOT_LEGEND_ENABLED: boolean = false
-
-  // Derived from the whole buffer and the whole flag list, not from
-  // `rendered`: these are facts about the deployment, the same
-  // relationship the whisper strip directly above this table already
-  // has to it. A filter narrows which rows you are looking at; it does
-  // not make a repeating refusal or a dark boundary stop being true.
-  const footFacts = $derived(
-    footLineFacts({
-      flags: flagsState.list,
-      events: appState.events,
-      boundaries: fallState.boundaries,
-      nowMs: appState.now,
-    }),
-  )
-
-  // The dark-boundary fact reads the pushed rule tables through
-  // fallState, which today only the Fall card ever fetches -- and the
-  // deck mounts just the centred card and its neighbours, so the Stream
-  // can be open with fallState still holding nothing. One read on
-  // mount, and only when it is empty: rule tables change on a push, not
-  // per second, and Fall.svelte's own poll keeps them fresh whenever
-  // that card is the one in view.
-  onMount(() => {
-    if (fallState.boundaries.length === 0) void fallState.refresh()
-  })
+  // The stream's foot band is gone (owner, round 36: "oh that thing, I
+  // don't want that at all", closing #717's earlier "I hate it, remove
+  // it"), and gone wholesale rather than gated off: round 37 removed it
+  // from the drawing, so there is no round for it to come back in. Of
+  // its three facts, a repeating refusal is already a flag and a dark
+  // boundary is already on the fall and the topography; the `▲3.1×`
+  // drops trend had no other home and is dropped with it -- if a rise
+  // matters it is a watch that flags, not a strip. lib/footLine.ts and
+  // its tests went with the band, and so did the on-mount read of
+  // fallState's pushed rule tables that only the dark-boundary fact
+  // needed -- this table never asked the server for a boundary for any
+  // other reason.
 
   // Which groups are open. Keyed by the group key rather than by index,
   // so an open drawer stays with its group as new events arrive.
@@ -335,8 +321,9 @@
     return whisperState.dimmed((event as ClientEvent).receivedAt)
   }
 
-  function startResize(index: number, e: PointerEvent) {
+  function startResize(index: number, key: string, e: PointerEvent) {
     dragIndex = index
+    dragKey = key
     dragStartX = e.clientX
     dragStartWidth = headerEls[index]?.getBoundingClientRect().width ?? 120
     window.addEventListener('pointermove', onResizeMove)
@@ -345,12 +332,13 @@
   }
 
   function onResizeMove(e: PointerEvent) {
-    if (dragIndex === null) return
-    columnState.setWidth(dragIndex, dragStartWidth + (e.clientX - dragStartX))
+    if (dragKey === null) return
+    columnState.setWidthForKey(dragKey, dragStartWidth + (e.clientX - dragStartX))
   }
 
   function endResize() {
     dragIndex = null
+    dragKey = null
     window.removeEventListener('pointermove', onResizeMove)
   }
 
@@ -423,24 +411,27 @@
           </div>
         {/each}
 
-        {#if RESIZE_HANDLES_ENABLED}
-          <!-- Unmounted for round-30 fidelity -- see the comment on
-               RESIZE_HANDLES_ENABLED above. Not deleted: tracked on #691. -->
-          <div class="resize-overlay" style="height: {headerHeight}px">
-            {#each COLUMNS.slice(0, -1) as col, i (col.key)}
-              <span
-                class="resizer"
-                class:active={dragIndex === i}
-                style="left: {(handleOffsets[i] ?? 0) - 5}px"
-                onpointerdown={(e) => startResize(i, e)}
-                ondblclick={() => columnState.reset()}
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize {col.label} column"
-              ></span>
-            {/each}
-          </div>
-        {/if}
+        <!-- The drag targets, one per column boundary. Over
+             columnState.visibleColumns, not the fixed COLUMNS list:
+             handleOffsets is measured from the header cells that are
+             actually rendered (#729's chooser can leave any of them
+             off), and startResize/setWidth index by the same position,
+             so anything else silently drags the wrong column's edge.
+             Invisible at rest -- see .resizer's own comment below. -->
+        <div class="resize-overlay" style="height: {headerHeight}px">
+          {#each columnState.visibleColumns.slice(0, -1) as col, i (col.key)}
+            <span
+              class="resizer"
+              class:active={dragIndex === i}
+              style="left: {(handleOffsets[i] ?? 0) - 5}px"
+              onpointerdown={(e) => startResize(i, col.key, e)}
+              ondblclick={() => columnState.reset()}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize {col.label} column"
+            ></span>
+          {/each}
+        </div>
 
         {#if groupModeState.enabled}
           {#each displayGroups as group, gi (group.key)}
@@ -514,26 +505,6 @@
     </div>
   {/if}
 
-  <!-- Absent entirely when there is nothing true to put in it, and one
-       or two facts wide when only one or two of the three have data --
-       the band never holds a placeholder for a fact it does not have.
-       Unmounted outright behind FOOT_LEGEND_ENABLED (#717) -- see that
-       flag's own comment above. -->
-  {#if FOOT_LEGEND_ENABLED && footFacts.length > 0}
-    <div class="foot-legend" aria-label="What the stream is showing">
-      {#each footFacts as fact (fact.key)}
-        <!-- Each fact lays its own three pieces out with a gap rather
-             than relying on literal spaces in the strings: the salient
-             token is an element, and whitespace either side of an
-             expression is not something to leave to markup formatting. -->
-        <span class="fact">
-          {#if fact.lead}<span>{fact.lead}</span>{/if}
-          <span class="k">{fact.salient}</span>
-          {#if fact.tail}<span>{fact.tail}</span>{/if}
-        </span>
-      {/each}
-    </div>
-  {/if}
 </div>
 
 {#if selectedEvent}
@@ -545,39 +516,6 @@
 {/if}
 
 <style>
-  /* The foot line (#691, round 30's .foot-legend): a real band on the
-     stream's own footing, not a caption -- muted body ink with the one
-     salient token per fact in full ink, centred, with the drawing's
-     wide gap between facts. It sits as the last flex child of
-     .table-wrap rather than absolutely positioned as in the mockup: the
-     scrolling body above it already flexes, so the band takes its own
-     height and the rows get the rest, with no overlap to manage. */
-  .foot-legend {
-    flex: none;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 10px 44px;
-    padding: 12px 20px 13px;
-    font-size: 12.5px;
-    line-height: 1.4;
-    color: var(--fg-muted);
-    background: var(--bg-elevated);
-    border-top: 1px solid var(--border);
-  }
-
-  .foot-legend .fact {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0.35em;
-  }
-
-  .foot-legend .k {
-    color: var(--fg);
-    font-weight: 600;
-  }
-
   /* Spans every column: it is about the group, not about a field. */
   .drawer-note {
     grid-column: 1 / -1;
@@ -626,6 +564,8 @@
     position: sticky;
     top: 0;
     z-index: 2;
+    /* For the boundary hairline below, which hangs on this cell's own
+       right edge. */
     /* Opaque so rows scrolling underneath don't show through, but the
        scene's own ground (#733) now that .table-wrap carries no
        separate panel tint for this to stand apart from. */
@@ -644,6 +584,45 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Round 36's column boundary, ported from the drawing's own
+     `table.stream th::after`: nothing at rest, and under the hand a
+     hairline on the header's edge with the cursor saying what it does.
+     Drawn from the header cell rather than only from the drag handle so
+     hovering anywhere in a column shows that column's edge -- the
+     boundary should be findable without first landing on the six pixels
+     it occupies.
+
+     Inset to `right: 0` rather than the drawing's `-3px`: these header
+     cells are opaque (they sit over scrolling rows), so a line
+     overhanging into the next cell would be painted over by it. */
+  .header-cell::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 5px;
+    bottom: 5px;
+    width: 6px;
+    cursor: col-resize;
+    border-right: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+
+  .header-cell:last-child::after {
+    /* No boundary past the last column: there is nothing on the other
+       side of it to resize against. */
+    display: none;
+  }
+
+  .header-cell:hover::after {
+    border-right-color: var(--hair-2);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .header-cell::after {
+      transition: none;
+    }
   }
 
   /* Mirrors EventRow's .time sticky positioning so the header stays
@@ -692,21 +671,28 @@
     align-items: center;
   }
 
-  /* A clearly-visible divider line at rest, so the resize affordance is
-     discoverable without having to hover the exact pixel boundary first
-     -- brightens and widens further on hover/drag. */
+  /* Nothing at rest (round 36). The handle used to draw a permanent
+     tick so it could be found without hovering; the drawn answer to
+     that is the header cell's own hover hairline above, which covers
+     the whole column rather than the six pixels of the edge, so the
+     handle itself now only marks the boundary while the hand is
+     actually on it or dragging it.
+
+     Matching the header's hairline exactly -- same width, same ink, same
+     place -- so moving from the middle of a column onto its edge is one
+     continuous line, not one mark replacing another. */
   .resizer::after {
     content: '';
-    width: 2px;
-    height: 60%;
-    border-radius: 1px;
-    background: var(--fg-dim);
+    width: 1px;
+    height: calc(100% - 10px);
+    background: transparent;
   }
 
-  .resizer:hover::after,
+  .resizer:hover::after {
+    background: var(--hair-2);
+  }
+
   .resizer.active::after {
-    width: 3px;
-    height: 100%;
     background: var(--accent);
   }
 
