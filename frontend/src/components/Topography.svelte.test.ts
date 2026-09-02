@@ -1282,7 +1282,7 @@ function sharedRun(a: string, b: string, gap = 4): number {
   return near / pa.length
 }
 
-const SMEARED = 0.25
+const SMEARED = 0.15
 
 function pathsOf(container: HTMLElement, selector: string): string[] {
   return [...container.querySelectorAll(selector)].map((p) => p.getAttribute('d') ?? '')
@@ -1362,5 +1362,73 @@ describe('#726: distinct edges are not drawn along each other', () => {
 
     const [there, back] = pathsOf(container, '.edge')
     expect(sharedRun(there, back)).toBeLessThan(SMEARED)
+  })
+
+  function refusedEdge(from: string, to: string, ports: string[]) {
+    return {
+      key: `${from}|${to}`,
+      from,
+      to,
+      accepted: false,
+      refused: true,
+      acceptPorts: [],
+      refusePorts: ports,
+      comment: '',
+      ruleCount: 1,
+      logged: true,
+    }
+  }
+
+  it('a five-lane estate bundles the corridor and fans only at the waist', () => {
+    // #726's own spec: five lanes to the internet, two of them answered
+    // back, and one lane's own "reaches anywhere" edge alongside -- every
+    // pairwise sharedRun among the drawn edges stays under SMEARED.
+    zonesState.pushed = Array.from({ length: 5 }, (_, i) => ({
+      address: `10.0.${i + 1}.1/24`,
+      network: `10.0.${i + 1}.0`,
+      interface: `bridge${i + 1}`,
+      comment: `Lane ${i + 1}`,
+    }))
+    appState.events = [
+      ...Array.from({ length: 5 }, (_, i) => event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20` })),
+      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+    ]
+    policyState.anyPushed = true
+    policyState.edges = [
+      ...Array.from({ length: 5 }, (_, i) => policyEdge(`bridge${i + 1}`, 'ether1', [':443'])),
+      policyEdge('ether1', 'bridge1', [':8080']),
+      policyEdge('ether1', 'bridge2', [':8443']),
+      policyEdge('bridge1', '', [':53']),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
+    policyTab!.click()
+    flushSync()
+
+    const edges = pathsOf(container, '.edge')
+    expect(edges.length).toBe(8)
+    for (let a = 0; a < edges.length; a++) {
+      for (let b = a + 1; b < edges.length; b++) {
+        expect(sharedRun(edges[a], edges[b])).toBeLessThan(SMEARED)
+      }
+    }
+  })
+
+  it('two inbound refusals to different lanes stop coinciding at the top of the waist', () => {
+    zonesState.pushed = twoLanes
+    appState.events = seenOnBothLanes()
+    policyState.anyPushed = true
+    policyState.edges = [refusedEdge('ether1', 'bridge1', [':3389']), refusedEdge('ether1', 'bridge2', [':22'])]
+    const { container } = render(Topography)
+    flushSync()
+    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
+    policyTab!.click()
+    flushSync()
+
+    const [toBridge1, toBridge2] = pathsOf(container, '.edge')
+    expect(toBridge1).toBeTruthy()
+    expect(toBridge2).toBeTruthy()
+    expect(sharedRun(toBridge1, toBridge2)).toBeLessThan(SMEARED)
   })
 })
