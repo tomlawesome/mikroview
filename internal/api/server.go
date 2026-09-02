@@ -329,24 +329,19 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
 		{http.MethodPost, "/api/flags/clear-all", s.handleFlagsClearAll},
-		{http.MethodPost, "/api/flags/{id}/clear", s.handleFlagsClear},
 		{http.MethodPost, "/api/flags/{id}/verdict", s.handleFlagsVerdict},
 		// Not "/{id}/verdict" (which would mirror the POST above): that
-		// shape is structurally ambiguous against the exclusions DELETE
-		// two lines down under Go's net/http.ServeMux (both are 4
-		// segments under /api/flags/, one wildcard-then-literal and one
-		// literal-then-wildcard, so a path like
-		// "/api/flags/exclusions/verdict" matches both and neither
-		// pattern is more specific -- ServeMux panics at registration
-		// rather than pick one). "verdict/{id}" instead puts the
-		// wildcard last, the same shape every other DELETE-by-id route
-		// in this table already uses (exclusions/{id}, definitions/{id},
-		// tokens/{id}, users/{id}), so it's actually more consistent
-		// with this table than the mirrored shape would have been.
+		// shape is structurally ambiguous against any literal-then-
+		// wildcard sibling under /api/flags/ in Go's net/http.ServeMux
+		// (both would be 4 segments, one wildcard-then-literal and one
+		// literal-then-wildcard, so a path matching both makes neither
+		// pattern more specific and ServeMux panics at registration
+		// rather than pick one -- as it did against the exclusions
+		// DELETE this table used to carry). "verdict/{id}" instead puts
+		// the wildcard last, the same shape every other DELETE-by-id
+		// route in this table already uses (definitions/{id},
+		// tokens/{id}, users/{id}).
 		{http.MethodDelete, "/api/flags/verdict/{id}", s.handleFlagsVerdictUndo},
-		{http.MethodPost, "/api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent},
-		{http.MethodGet, "/api/flags/exclusions", s.handleExclusionsList},
-		{http.MethodDelete, "/api/flags/exclusions/{id}", s.handleExclusionRemove},
 
 		// The one definitions surface (issue #407), replacing
 		// /api/detectors and /api/watchlist/entries wholesale. A shipped

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it } from 'vitest'
-import { headlineFor, storyFor } from './flagNarrative'
+import { headlineFor, returningNoteFor, storyFor } from './flagNarrative'
+import { formatDayMonth } from './format'
 import type { Flag } from './types'
 
 function baseFlag(overrides: Partial<Flag> = {}): Flag {
@@ -214,5 +215,49 @@ describe('every shipped flag type produces a headline and a story', () => {
     const f = baseFlag({ type })
     expect(headlineFor(f).length).toBeGreaterThan(0)
     expect(storyFor(f).length).toBeGreaterThan(0)
+  })
+})
+
+// #640: what a flag that has been here before says on its own row. The
+// wording is the issue's, so these pin the sentences rather than only
+// the fields they interpolate.
+describe('returningNoteFor', () => {
+  it('says nothing for a flag with no history behind it', () => {
+    expect(returningNoteFor(baseFlag())).toBeNull()
+  })
+
+  it('reads the two real numbers when an expectation was exceeded', () => {
+    expect(returningNoteFor(baseFlag({ size: 120, expectedSize: 30 }))).toBe('expected up to 30, saw 120')
+  })
+
+  it('says when a checked pair was checked, and that it was fine', () => {
+    const note = returningNoteFor(baseFlag({ priorVerdict: 'checked', priorVerdictAt: '2026-09-02T09:00:00Z' }))
+    expect(note).toContain('you checked this on ')
+    expect(note).toContain(' and found it fine')
+    expect(note).toContain(formatDayMonth('2026-09-02T09:00:00Z'))
+  })
+
+  it("says when a resolved pair was resolved, and that it's back", () => {
+    const note = returningNoteFor(baseFlag({ priorVerdict: 'resolved', priorVerdictAt: '2026-09-02T09:00:00Z' }))
+    expect(note).toContain('resolved on ')
+    expect(note).toContain("— it's back")
+  })
+
+  // Both are true at once when a pair that was checked later broke an
+  // expectation. The numbers are why the flag is on screen; the earlier
+  // look is context, and a one-line card that said both would bury the
+  // reason.
+  it('leads with the sizes when a checked pair also broke its expectation', () => {
+    const note = returningNoteFor(
+      baseFlag({ size: 120, expectedSize: 30, priorVerdict: 'checked', priorVerdictAt: '2026-09-02T09:00:00Z' }),
+    )
+    expect(note).toBe('expected up to 30, saw 120')
+  })
+
+  // An expected or investigate verdict leaves no memory to report --
+  // expected records an expectation instead, and investigate never
+  // clears, so neither has a "last time" to describe.
+  it('says nothing for a remembered verdict it has no sentence for', () => {
+    expect(returningNoteFor(baseFlag({ priorVerdict: 'expected', priorVerdictAt: '2026-09-02T09:00:00Z' }))).toBeNull()
   })
 })

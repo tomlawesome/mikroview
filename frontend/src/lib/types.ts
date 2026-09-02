@@ -445,12 +445,6 @@ export interface DefinitionProvenance {
   shippedParams?: Record<string, unknown>
 }
 
-export interface DefinitionSuppression {
-  id: string
-  target: string
-  reason?: string
-}
-
 // A definition either produces a replay receipt or declares why it never
 // can; known is false only when the server could not build it at all.
 // Kept as three fields rather than collapsed into one, because "cannot
@@ -473,7 +467,6 @@ export interface Definition {
   params?: Record<string, unknown>
   paramSchema?: DefinitionParamSchema[]
   provenance: DefinitionProvenance
-  suppressions?: DefinitionSuppression[]
   available: boolean
   // Present only where a param differs from what the definition shipped
   // with -- an empty object and an absent key both mean "stock".
@@ -716,23 +709,21 @@ export interface Evidence {
   srcMac?: string
 }
 
-// Mirrors internal/flags.Exclusion's JSON tags -- one permanently-
-// excluded (Type, Target) pair (see flags.svelte.ts's clearPermanent and
-// exclusions.svelte.ts). id is the same flagID(Type, Target) key a
-// Flag's own id already uses.
-export interface Exclusion {
-  id: string
-  type: FlagType
-  target: string
-}
-
-// An operator's triage judgement on a flag (issue #638) -- set once via
-// POST /api/flags/{id}/verdict and never re-asked afterward. 'expected'
-// (legitimate traffic) and 'noise' (real traffic, wrong threshold) both
-// clear the flag as a side effect of judging it; 'real' (genuine
-// concern) does not, and is the invariant that later auto-tune must
-// never contradict by suggesting a threshold that would have dropped it.
-export type Verdict = 'expected' | 'noise' | 'real'
+// An operator's judgement of a flag (#640), set via
+// POST /api/flags/{id}/verdict. Every flag ends as one of these four --
+// there is no way to dismiss one without a judgement:
+//
+//   - 'expected': normal for this host, at this size. Clears, and
+//     records an expectation that absorbs further firings within 1.5x
+//     the size this one had.
+//   - 'checked': looked at, fine this time. Clears, suppresses nothing,
+//     and is remembered so a re-fire can say when it was checked.
+//   - 'investigate': of concern, being looked at. The one verdict that
+//     leaves the flag open; the row then offers expected or resolved.
+//   - 'resolved': dealt with, normally by a firewall change. Clears, and
+//     deliberately does not suppress -- if it comes back, the fix was
+//     not what was intended.
+export type Verdict = 'expected' | 'checked' | 'investigate' | 'resolved'
 
 export interface Flag {
   id: string
@@ -769,13 +760,30 @@ export interface Flag {
   // not flip to false in place if the same episode's baseline later
   // clears its floor (see internal/flags.Store.add's own doc comment).
   provisional?: boolean
-  // Verdict/verdictBy/verdictAt (#638): all three present together or
-  // all absent -- absent means never judged, not "judged with no
+  // Verdict/verdictBy/verdictAt (#638, #640): all three present together
+  // or all absent -- absent means never judged, not "judged with no
   // opinion." verdictBy is the account that judged it; verdictAt is
   // RFC3339.
   verdict?: Verdict
   verdictBy?: string
   verdictAt?: string
+  // priorVerdict/priorVerdictAt (#640): the checked or resolved
+  // judgement this pair carried the last time it was cleared, kept
+  // across the re-fire that resets `verdict`. Present only on a flag
+  // that has come back after one of those two verdicts -- which is
+  // exactly when the card says "you checked this on 2 Sept and found it
+  // fine" or "resolved on 2 Sept -- it's back".
+  priorVerdict?: Verdict
+  priorVerdictAt?: string
+  // size/expectedSize (#640): this firing's own size (the measure the
+  // detector compares against its threshold -- distinct ports for
+  // port_scan, and so on), and the size an expectation for this pair had
+  // recorded when this firing broke past it. expectedSize is present
+  // only on a firing an expectation refused to absorb, so its presence
+  // is exactly the "expected up to 30, saw 120" case. Both absent for a
+  // detector that declares no size.
+  size?: number
+  expectedSize?: number
 }
 
 // Mirrors internal/flags.FlagTimeBucket's JSON tags -- same shape

@@ -340,7 +340,7 @@ func TestShippedLowSlowScan_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(9*10*time.Minute)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", t0.Add(9*10*time.Minute)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	d.Evaluate(lowSlowEvt(ip, "192.168.50.10", 10009, store.ActionDrop, t0.Add(10*10*time.Minute)))
