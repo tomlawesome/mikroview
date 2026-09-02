@@ -7,14 +7,12 @@ import type {
   AuthSession,
   CoverageEvidence,
   Definition,
-  DefinitionSuppression,
   DetectorScope,
   Device,
   Entity,
   EntityType,
   NameProvenance,
   EventsResult,
-  Exclusion,
   Filters,
   Flag,
   FlagTimeBucket,
@@ -417,18 +415,9 @@ export async function fetchFlags(): Promise<FlagsResponse> {
   return { flags: body.flags ?? [], timeSeries: body.timeSeries ?? [] }
 }
 
-// note (#678's "clear with a note") is the operator's reason for
-// clearing, if they gave one -- recorded server-side as the audit
-// entry's Detail (see internal/api's handleFlagsClear doc comment for
-// why the log, not a new field on the flag itself, is where it lives).
-export async function clearFlag(id: string, note?: string): Promise<void> {
-  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear`, note ? { note } : {})
-  if (!res.ok) throw new ApiError(`clearFlag: ${res.status}`, res.status)
-}
-
-// clearAllFlags is clearFlag applied to every currently-active flag in
-// one request (issue #198's "Clear all") -- regular clears only, same as
-// clearFlag; there is no bulk permanent variant (see
+// clearAllFlags clears every currently-active flag in one request
+// (issue #198's "Clear all"). It records no judgement and no
+// expectation, and there is no bulk variant that does (see
 // internal/flags.Store.ClearAll's doc comment for why). Returns how many
 // were actually cleared, so the caller can refresh() rather than guess.
 export async function clearAllFlags(): Promise<number> {
@@ -438,21 +427,13 @@ export async function clearAllFlags(): Promise<number> {
   return body.cleared ?? 0
 }
 
-// clearFlagPermanent is clearFlag plus a permanent exclusion of that
-// flag's (Type, Target) in the same step -- "Clear and never flag this
-// again" (see internal/flags.Store.ClearAndExclude).
-export async function clearFlagPermanent(id: string): Promise<void> {
-  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear-permanent`)
-  if (!res.ok) throw new ApiError(`clearFlagPermanent: ${res.status}`, res.status)
-}
-
-// setFlagVerdict (#638) records an operator's triage judgement --
-// 'expected'/'noise' clear the flag server-side as part of the same
-// request, 'real' does not (see internal/flags.Flag's Verdict doc
-// comment for the semantics). Returns the updated flag so the caller can
-// reconcile its optimistic guess (verdictBy in particular) against the
-// server's own canonical value, same reasoning as clearFlagPermanent
-// above returning nothing but this one needing the fresh flag back.
+// setFlagVerdict (#640) records an operator's judgement, and is the only
+// way one flag leaves the inbox: expected, checked and resolved clear it
+// server-side as part of the same request, investigate does not, and
+// expected additionally records the expectation that suppresses further
+// firings of the pair (see the Verdict type for the semantics). Returns
+// the updated flag so the caller can reconcile its optimistic guess
+// (verdictBy in particular) against the server's canonical value.
 //
 // Sent at once, not deferred behind Undo's window -- see
 // flagsState.judgeAndClear's own doc comment for why an earlier,
@@ -463,33 +444,19 @@ export async function setFlagVerdict(id: string, verdict: Verdict): Promise<Flag
   return res.json()
 }
 
-// deleteFlagVerdict (#638) is Undo: removes the verdict and un-clears
-// the flag, same access tier as setFlagVerdict above. 404s on an unknown
-// id, same as every other per-flag endpoint in this file.
-// The path is "verdict/{id}", mirroring exclusions/definitions/tokens
-// rather than the POST above: net/http.ServeMux refuses to register
-// DELETE /api/flags/{id}/verdict alongside the existing DELETE
-// /api/flags/exclusions/{id}, because /api/flags/exclusions/verdict
-// matches both patterns and neither is more specific.
+// deleteFlagVerdict (#638) is Undo: removes the verdict, un-clears the
+// flag and -- for an expected verdict -- withdraws the expectation it
+// recorded (#640). Same access tier as setFlagVerdict above; 404s on an
+// unknown id, same as every other per-flag endpoint in this file.
+// The path is "verdict/{id}", mirroring definitions/tokens rather than
+// the POST above: net/http.ServeMux refuses to register
+// DELETE /api/flags/{id}/verdict alongside a literal-then-wildcard
+// sibling under /api/flags/, since a path matching both makes neither
+// pattern more specific.
 export async function deleteFlagVerdict(id: string): Promise<Flag> {
   const res = await deleteJSON(`/api/flags/verdict/${encodeURIComponent(id)}`)
   if (!res.ok) throw new ApiError(`deleteFlagVerdict: ${res.status}`, res.status)
   return res.json()
-}
-
-// fetchExclusions/removeExclusion: admin-only (see internal/api's
-// callerIsAdminOrOpen gate on both endpoints) "undo a mistake" surface
-// for permanent exclusions.
-export async function fetchExclusions(): Promise<Exclusion[]> {
-  const res = await fetch('/api/flags/exclusions')
-  if (!res.ok) throw new ApiError(`fetchExclusions: ${res.status}`, res.status)
-  const body = await res.json()
-  return body.exclusions ?? []
-}
-
-export async function removeExclusion(id: string): Promise<void> {
-  const res = await deleteJSON(`/api/flags/exclusions/${encodeURIComponent(id)}`)
-  if (!res.ok) throw new ApiError(`removeExclusion: ${res.status}`, res.status)
 }
 
 export async function fetchAuthSession(): Promise<AuthSession> {
@@ -601,7 +568,6 @@ export interface DefinitionUpdate {
   enabled?: boolean
   scope?: DetectorScope
   params?: Record<string, unknown>
-  suppressions?: DefinitionSuppression[]
   expectation?: WatchlistEntryRequest
 }
 
