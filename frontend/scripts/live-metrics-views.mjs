@@ -186,8 +186,17 @@ check(
 )
 
 // Two chart inks only: no per-series hue cycling survived the rewrite.
-const inks = await page.$$eval('.drum svg path', (els) =>
-  [...new Set(els.map((e) => getComputedStyle(e).fill))].sort(),
+//
+// The drum draws its data as mirrored strokes, not filled shapes
+// (MetricsSeismograph.svelte:177-178 -- `<line class="stroke outer">` and
+// `.inner`), so the ink to count is their stroke: --chart-traffic and
+// --chart-refused, the two the CSS sets at lines 233-240. The previous
+// query asked for `fill` on `path`, and the component has never rendered
+// a path -- it collected nothing and reported an empty list as a failure.
+// The amber time marks (midline, brink, cursor) are deliberately out of
+// scope: amber is time, not a series ink.
+const inks = await page.$$eval('.drum svg line.stroke', (els) =>
+  [...new Set(els.map((e) => getComputedStyle(e).stroke))].sort(),
 )
 check(inks.length > 0 && inks.length <= 2, `two chart inks only -- got ${JSON.stringify(inks)}`)
 
