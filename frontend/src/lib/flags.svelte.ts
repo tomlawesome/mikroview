@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { clearAllFlags, clearFlag, clearFlagPermanent, deleteFlagVerdict, fetchFlags, setFlagVerdict } from './api'
-import type { Flag, FlagTimeBucket } from './types'
+import { clearAllFlags, deleteFlagVerdict, fetchFlags, setFlagVerdict } from './api'
+import type { Flag, FlagTimeBucket, Verdict } from './types'
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
 
@@ -90,45 +90,6 @@ class FlagsState {
     this.timeSeries = res.timeSeries
   }
 
-  // Updates the flag locally the instant the user clicks Clear, rather
-  // than waiting on a network round-trip before anything visible
-  // happens (the old code awaited clearFlag then a second full refresh()
-  // -- two serial round-trips per click, whose completion queued behind
-  // whatever else the main thread was doing under a live-traffic flood).
-  // App.svelte's existing 5s poll reconciles this against the server
-  // regardless, so there's no correctness gap from skipping the extra
-  // refetch here -- only a failed clearFlag call needs an explicit
-  // revert, since otherwise the flag would sit incorrectly "cleared"
-  // until that poll ran.
-  // note (#678): the operator's reason for clearing, if they gave one --
-  // threaded straight through to clearFlag, which records it server-side
-  // on the same admin-mutation audit entry the clear itself now writes.
-  async clear(id: string, note?: string) {
-    return this.optimisticallyClear(id, (flagId) => clearFlag(flagId, note))
-  }
-
-  // The shared body of clear() and clearPermanent(), which differed only
-  // in which call they awaited. Kept as one so a change to the revert
-  // logic cannot land in one and not the other -- the two had already
-  // been maintained in parallel by hand (#267 finding 25).
-  private async optimisticallyClear(id: string, call: (id: string) => Promise<unknown>) {
-    const flag = this.list.find((f) => f.id === id)
-    if (!flag || flag.cleared) return
-
-    const wasCleared = flag.cleared
-    const previousClearedAt = flag.clearedAt
-    flag.cleared = true
-    flag.clearedAt = new Date().toISOString()
-
-    try {
-      await call(id)
-    } catch (err) {
-      flag.cleared = wasCleared
-      flag.clearedAt = previousClearedAt
-      throw err
-    }
-  }
-
   // "Clear all" (issue #198) -- same optimistic-update reasoning as
   // clear() above, applied to every currently-active flag at once. The
   // server reports how many it actually cleared, which can differ from
@@ -162,16 +123,6 @@ class FlagsState {
     }
   }
 
-  // "Clear and never flag this again" -- same optimistic-update
-  // reasoning as clear() above (instant feedback, revert on failure),
-  // plus the permanent exclusion this adds server-side. There's no
-  // client-visible "excluded" flag state to revert beyond the clear
-  // itself; a caller that also renders an exclusions list (see
-  // exclusions.svelte.ts) is expected to refresh() that separately.
-  async clearPermanent(id: string) {
-    return this.optimisticallyClear(id, clearFlagPermanent)
-  }
-
   // Whether id currently carries an undoable verdict (issue #638; #780
   // moved its one consumer onto the flag row itself, offered for as
   // long as the row stays pinned in place rather than for a fixed
@@ -186,24 +137,25 @@ class FlagsState {
     return !!this.list.find((f) => f.id === id)?.verdict
   }
 
-  // 'real' (issue #638): records the verdict without clearing the flag,
-  // so it stays visible -- optimistic like clear() above, but setting
-  // the verdict fields instead of `cleared`. judgedBy is the calling
-  // account's own username, shown immediately; the server's response
-  // then replaces it (and verdictAt) with its own canonical values in
-  // case the two ever diverge, same reasoning setFlagVerdict's doc
-  // comment gives for returning the updated flag at all.
-  async judgeReal(id: string, judgedBy: string) {
+  // 'investigate' (#640): records the verdict without clearing the flag,
+  // so it stays open while someone works on it -- optimistic like every
+  // other mutation here, but setting the verdict fields instead of
+  // `cleared`. judgedBy is the calling account's own username, shown
+  // immediately; the server's response then replaces it (and verdictAt)
+  // with its own canonical values in case the two ever diverge, same
+  // reasoning setFlagVerdict's doc comment gives for returning the
+  // updated flag at all.
+  async judgeInvestigate(id: string, judgedBy: string) {
     const flag = this.list.find((f) => f.id === id)
     if (!flag || flag.verdict) return
 
     const prev = { verdict: flag.verdict, verdictBy: flag.verdictBy, verdictAt: flag.verdictAt }
-    flag.verdict = 'real'
+    flag.verdict = 'investigate'
     flag.verdictBy = judgedBy
     flag.verdictAt = new Date().toISOString()
 
     try {
-      const updated = await setFlagVerdict(id, 'real')
+      const updated = await setFlagVerdict(id, 'investigate')
       flag.verdict = updated.verdict
       flag.verdictBy = updated.verdictBy
       flag.verdictAt = updated.verdictAt
@@ -215,12 +167,17 @@ class FlagsState {
     }
   }
 
-  // 'expected'/'noise' (issue #638): posts the verdict immediately --
-  // optimistic clear like clear() above, then the real request, then
-  // reconciled against the server's response, same shape as judgeReal
-  // above. Undo (below) is offered for as long as the flag still
-  // carries this verdict -- see isUndoable's own doc comment for why
-  // that is no longer a timed window.
+  // The three verdicts that clear (#640: expected, checked, resolved):
+  // posts the verdict immediately, optimistically marks the flag
+  // cleared, then reconciles against the server's response -- same shape
+  // as judgeInvestigate above. Undo (below) is offered for as long as
+  // the flag still carries this verdict -- see isUndoable's own doc
+  // comment for why that is no longer a timed window.
+  //
+  // For 'expected' the same request also records the expectation
+  // server-side; there is no separate client-visible state for it to
+  // revert beyond the clear, and undoVerdict withdraws it the same way
+  // the server does.
   //
   // This replaced a version that deferred the POST itself behind the
   // undo window and sent it only once the window lapsed, cancelling the
@@ -234,7 +191,7 @@ class FlagsState {
   // masked it). Posting at once has no equivalent gap: there is no
   // window in which the click has happened but the request has not been
   // sent, so there is nothing left for a page teardown to lose.
-  async judgeAndClear(id: string, verdict: 'expected' | 'noise') {
+  async judgeAndClear(id: string, verdict: Extract<Verdict, 'expected' | 'checked' | 'resolved'>) {
     const flag = this.list.find((f) => f.id === id)
     if (!flag || flag.cleared) return
 
@@ -269,8 +226,9 @@ class FlagsState {
   // DELETE /api/flags/verdict/{id}, since judgeAndClear above no longer
   // defers the POST for this to cancel before it happens. Optimistic
   // like every other mutation here: the flag reopens and its verdict
-  // clears immediately, reverted on failure the same way clear()'s own
-  // revert works. A no-op (like the server's own UndoVerdict) if id
+  // clears immediately, reverted on failure the same way every other
+  // optimistic write here reverts. A no-op (like the server's own
+  // UndoVerdict) if id
   // carries no verdict to undo -- the row that offers this button is
   // gone by then anyway, but a stale click racing that is harmless
   // rather than an error.

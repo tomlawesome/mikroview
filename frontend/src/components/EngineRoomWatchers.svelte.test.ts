@@ -71,10 +71,36 @@ vi.mock('../lib/api', () => ({
         distance: { threshold: { shipped: 5, current: 3 } },
         replay: { known: true, capable: true },
       },
+      // An operator-authored detector: structure stored as data (#502),
+      // which is what makes it the one row on this bench the server can
+      // copy (#810). Paused, so the run/pause wording stays unambiguous
+      // for the rows above.
+      {
+        id: 'ssh_hammering',
+        name: 'SSH hammering',
+        intent: 'detection',
+        kind: 'declarative',
+        enabled: false,
+        scope: {},
+        params: { threshold: 5, window: '1m0s' },
+        provenance: { origin: 'custom' },
+        detection: {
+          conditions: [{ field: 'destinationPort', operator: 'equals', values: ['22'] }],
+          key: 'perSource',
+          counting: 'total',
+          detailTemplate: '{Count} attempts against port 22 from {SourceAddress}',
+        },
+        available: true,
+        replay: { known: true, capable: true },
+      },
     ],
     coverageEvidence: { complete: true },
   })),
-  fetchDefinitionSchema: vi.fn(async () => ({ port_scan: PORT_SCAN_SCHEMA })),
+  fetchDefinitionSchema: vi.fn(async () => ({
+    port_scan: PORT_SCAN_SCHEMA,
+    ssh_hammering: PORT_SCAN_SCHEMA,
+    'copy-1': PORT_SCAN_SCHEMA,
+  })),
   updateDefinition: vi.fn(async () => ({ id: 'port_scan' })),
   replayDefinition: vi.fn(async () => ({
     receipt: {
@@ -349,21 +375,87 @@ describe('reset', () => {
   })
 })
 
+// #810. Clone is offered on the rows where it can succeed and nowhere
+// else: a custom detector is stored structure the server copies, a
+// shipped one is Go keyed by its own id and always refuses.
 describe('clone', () => {
-  it('creates the copy with no prompt in between, under the "(copy)" name', async () => {
+  // The copy as the server hands it back on the refresh that follows:
+  // a second custom detector, paused, under the "(copy)" name.
+  const COPY = {
+    id: 'copy-1',
+    name: 'SSH hammering (copy)',
+    intent: 'detection',
+    kind: 'declarative',
+    enabled: false,
+    scope: {},
+    params: { threshold: 5, window: '1m0s' },
+    provenance: { origin: 'custom' },
+    detection: {
+      conditions: [{ field: 'destinationPort', operator: 'equals', values: ['22'] }],
+      key: 'perSource',
+      counting: 'total',
+      detailTemplate: '{Count} attempts against port 22 from {SourceAddress}',
+    },
+    available: true,
+    replay: { known: true, capable: true },
+  }
+
+  // Returns the copy alongside everything already listed, which is what
+  // the bench re-reads after a successful clone.
+  async function withCopyOnRefresh() {
+    const { definitions, coverageEvidence } = await api.fetchDefinitions()
+    vi.mocked(api.fetchDefinitions).mockResolvedValueOnce({
+      definitions: [...definitions, COPY],
+      coverageEvidence,
+    } as never)
+  }
+
+  it('is offered on a custom detector', async () => {
     render(EngineRoomWatchers, { canEdit: true })
-    await open()
-    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
-    await settle()
-    expect(api.cloneDefinition).toHaveBeenCalledWith('port_scan', 'Port scan (copy)')
+    await open('SSH hammering')
+    expect(screen.getByRole('button', { name: 'Clone' })).toBeTruthy()
   })
 
-  it('pauses the copy, so a half-edited detector never runs', async () => {
+  it('is not offered on a shipped one, whose logic no copy could carry', async () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
+    expect(screen.queryByRole('button', { name: 'Clone' })).toBeNull()
+    // The rest of the foot is untouched: this hides one button, not the
+    // panel it sits in.
+    expect(screen.getByRole('button', { name: 'Reset to stock' })).toBeTruthy()
+  })
+
+  it('creates the copy with no prompt in between, under the "(copy)" name', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
     await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
     await settle()
-    expect(api.updateDefinition).toHaveBeenCalledWith('copy-1', { enabled: false })
+    expect(api.cloneDefinition).toHaveBeenCalledWith('ssh_hammering', 'SSH hammering (copy)')
+  })
+
+  it('leaves the pause to the server rather than a second request of its own', async () => {
+    // The server stores the copy disabled, so nothing here has to. A
+    // follow-up PUT could fail on its own and leave a running duplicate
+    // of a detector the operator is halfway through editing.
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+    expect(api.updateDefinition).not.toHaveBeenCalled()
+  })
+
+  it('opens the copy expanded, with its name selected to be typed over', async () => {
+    await withCopyOnRefresh()
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+
+    const copyRow = screen.getByRole('button', { expanded: true, name: /SSH hammering \(copy\)/ })
+    expect(copyRow).toBeTruthy()
+    const name = screen.getByLabelText('Name') as HTMLInputElement
+    expect(name.value).toBe('SSH hammering (copy)')
+    expect(document.activeElement).toBe(name)
   })
 
   it('shows the server’s refusal in its own words when a definition cannot be cloned', async () => {
@@ -371,11 +463,10 @@ describe('clone', () => {
       'a shipped definition cannot be cloned: its logic is compiled into this binary and keyed by its own id, so a copy would evaluate nothing. Override its params instead (PUT /api/definitions/{id}).'
     vi.mocked(api.cloneDefinition).mockResolvedValueOnce(refusal)
     render(EngineRoomWatchers, { canEdit: true })
-    await open()
+    await open('SSH hammering')
     await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
     await settle()
     expect(screen.getByText(refusal)).toBeTruthy()
-    expect(api.updateDefinition).not.toHaveBeenCalled()
   })
 })
 

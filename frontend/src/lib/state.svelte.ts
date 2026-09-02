@@ -169,6 +169,17 @@ class AppState {
   pendingCount = $state(0)
   autoscroll = $state(true)
 
+  // When the hold was taken, and when the lines held here were last
+  // wiped -- both ms, both null when the state they describe is not the
+  // case. Rounds 36-38 draw each as a fact on the whisper's stat line
+  // ("held at 14:02:11 · 212 arrived since, waiting"; "wiped 14:02:11")
+  // and the wipe again in the empty table ("nothing since 14:02:11 --
+  // wiped here, by you"), so the moment has to be recorded rather than
+  // inferred: neither can be recovered from the buffer afterwards, and
+  // a wipe's whole point is that the buffer no longer holds it.
+  pausedAt = $state<number | null>(null)
+  wipedAt = $state<number | null>(null)
+
   // Open row-anchored surfaces. Newest-at-top (#363) pushes rows *down*
   // as events arrive, so a popover anchored to a row it is about would
   // slide away from under itself; the decision taken once for #413,
@@ -433,6 +444,10 @@ class AppState {
     })
     if (fresh.length === 0) return []
     this.events = [...this.events, ...fresh].slice(-MAX_CLIENT_EVENTS)
+    // The wipe notice describes a silence, and the silence has ended --
+    // "nothing since 14:02:11" is false the moment a line lands, and a
+    // stale one would keep saying it for the rest of the session.
+    this.wipedAt = null
     return fresh
   }
 
@@ -444,6 +459,8 @@ class AppState {
     this.events = stamp(events)
       .filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
       .slice(-MAX_CLIENT_EVENTS)
+    // As in appendUnseen: a refilled buffer is not a wiped one.
+    if (this.events.length > 0) this.wipedAt = null
     this.syncRuleMatches()
   }
 
@@ -481,6 +498,7 @@ class AppState {
 
   togglePause() {
     this.paused = !this.paused
+    this.pausedAt = this.paused ? Date.now() : null
     if (!this.paused && this.pendingBuffer.length) {
       // The third insert path, and the easiest to forget: a pause that
       // spans a reconnect can hold events the refreshed buffer already
@@ -555,6 +573,11 @@ class AppState {
     this.pendingBuffer = []
     this.pendingCount = 0
     this.incomingBuffer = []
+    // What the whisper and the empty table then say happened, and when.
+    // Only this screen's copy went: the server's ring is untouched, which
+    // is the half of it the operator cannot see and so the half the
+    // interface has to state (rounds 36-38, `#hwipe`).
+    this.wipedAt = Date.now()
     // Release the #232 freeze snapshot too, or Clear is a no-op on screen
     // whenever autoscroll is off: the buffer empties and the table keeps
     // rendering the frozen pool, with nothing to explain why and no way

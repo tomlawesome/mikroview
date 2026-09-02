@@ -11,14 +11,10 @@ import { flushSync } from 'svelte'
 vi.mock('../lib/api', () => ({
   fetchEventsWindow: vi.fn(async () => []),
   fetchFlags: vi.fn(async () => ({ flags: [], timeSeries: [] })),
-  clearFlag: vi.fn(),
   clearAllFlags: vi.fn(),
-  clearFlagPermanent: vi.fn(),
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),
   fetchFlagEpisode: vi.fn(),
-  fetchExclusions: vi.fn(async () => []),
-  removeExclusion: vi.fn(),
   fetchWatchlistEntries: vi.fn(async () => ({ entries: [], coverage: {} })),
   createWatchlistEntry: vi.fn(),
   updateWatchlistEntry: vi.fn(),
@@ -39,7 +35,6 @@ vi.mock('../lib/api', () => ({
 import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { flagsState } from '../lib/flags.svelte'
-import { exclusionsState } from '../lib/exclusions.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { suggestState } from '../lib/suggest.svelte'
 import { matchesState } from '../lib/matches.svelte'
@@ -111,7 +106,6 @@ describe('Deck scene mounting (#690)', () => {
     authState.username = 'kai'
     appState.view = 'topography'
     flagsState.list = []
-    exclusionsState.list = []
     watchlistState.entries = []
     watchlistState.coverage = {}
     suggestState.candidates = []
