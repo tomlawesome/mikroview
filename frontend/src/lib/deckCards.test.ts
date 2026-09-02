@@ -43,6 +43,35 @@ describe('deckCards', () => {
     expect(entities?.name).toBe('Entities')
   })
 
+  it("the entities card answers for the fleet view too, so the bottom bar's Fleet row lands somewhere (#785)", () => {
+    // navGroups.ts offers a Fleet row to every tier, and BottomBar.svelte
+    // sets that view directly. Without 'fleet' here, Deck.svelte's
+    // activeIndex goes to -1 for an admin or user and the deck draws no
+    // card at all. A viewer is served by the standalone fleet card instead.
+    for (const [isAdmin, canEdit] of [
+      [true, true],
+      [false, true],
+    ] as const) {
+      const answering = deckCards(isAdmin, canEdit).filter((c) => c.views.includes('fleet'))
+      expect(answering.map((c) => c.key)).toEqual(['entities'])
+    }
+    const viewer = deckCards(false, false).filter((c) => c.views.includes('fleet'))
+    expect(viewer.map((c) => c.key)).toEqual(['fleet'])
+  })
+
+  it('every view a tier can select is answered by exactly one of its cards', () => {
+    // The -1 class of bug in general, not just Fleet's instance of it.
+    for (const [isAdmin, canEdit] of [
+      [true, true],
+      [false, true],
+      [false, false],
+    ] as const) {
+      const cards = deckCards(isAdmin, canEdit)
+      const seen = cards.flatMap((c) => c.views)
+      expect(new Set(seen).size).toBe(seen.length)
+    }
+  })
+
   it('names the settings card "Settings"', () => {
     const settings = deckCards(true).find((c) => c.key === 'engineroom')
     expect(settings?.name).toBe('Settings')
