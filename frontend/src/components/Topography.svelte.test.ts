@@ -11,6 +11,8 @@ import { coverageState } from '../lib/coverage.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
+import { wizardState } from '../lib/wizard.svelte'
+import type { RouterIPAddress } from '../lib/api'
 import { emptyFilters, type ClientEvent, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
 import Topography from './Topography.svelte'
 // Vite's own `?raw` import (typed by vite/client, already in this
@@ -61,6 +63,18 @@ function flag(type: FlagType, target: string, overrides: Partial<Flag> = {}): Fl
   }
 }
 
+function address(overrides: Partial<RouterIPAddress> = {}): RouterIPAddress {
+  return { address: '10.0.0.1/24', network: '10.0.0.0', interface: 'bridge1', comment: '', ...overrides }
+}
+
+// The internet island's own `.n-cidr` text node -- found by the card
+// whose name is "Internet" rather than by document order -- holding
+// the sibling `.cidr-v` / `.cidr-deg` tspans (the-whole.html:977).
+function internetCardCidr(container: HTMLElement): Element | null {
+  const name = [...container.querySelectorAll('.n-name')].find((n) => n.textContent?.trim() === 'Internet')
+  return name?.parentElement?.querySelector('.n-cidr') ?? null
+}
+
 function watchEntry(overrides: Partial<WatchlistEntry> = {}): WatchlistEntry {
   const id = `w${nextEntryId++}`
   return {
@@ -86,6 +100,7 @@ beforeEach(() => {
   watchlistState.coverage = {}
   topologyNavState.pendingFlagId = null
   topologyNavState.pendingWatchId = null
+  wizardState.open = false
   nextEventId = 1
   nextFlagId = 1
   nextEntryId = 1
@@ -558,23 +573,109 @@ describe('the zone card coverage badge (#682, ratified round-29)', () => {
   })
 })
 
-describe('degrading honestly without a pushed address table (#682, data gap #687)', () => {
-  it('never invents a subnet or a coverage verdict, and draws no explanatory note (round 30 draws none anywhere -- unmounted behind DEGRADED_NOTE_ENABLED, gap tracked on #691)', () => {
+describe('degrading honestly without a pushed address table (#682, data gap #687; round 36 #802)', () => {
+  it('never invents a subnet or a coverage verdict, and floats no note over the map', () => {
     zonesState.pushed = [] // no /ip address table pushed -- #687's data gap, not a rendering bug
     appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50' })]
     policyState.anyPushed = false
     const { container } = render(Topography)
     flushSync()
 
-    // The boundary-derived note was chrome under round 29; round 30 draws
-    // no explanatory apparatus anywhere on the topography, so it stays
-    // unmounted (see the DEGRADED_NOTE_ENABLED comment in Topography.svelte).
+    // Round 36 draws no note over the drawing at all: the statement
+    // belongs on the router card, so round 29's floating pill is gone.
     expect(container.querySelector('.degraded')).toBeNull()
 
-    // The zone card itself: a boundary name only -- no fabricated
-    // subnet, no fabricated coverage badge.
-    expect(container.querySelector('.n-cidr')).toBeNull()
+    // No fabricated subnet and no fabricated coverage badge.
+    expect([...container.querySelectorAll('.n-cidr')].map((n) => n.textContent)).not.toContain('192.168.1.0/24')
     expect(container.querySelector('.n-cov')).toBeNull()
+  })
+
+  it('carries one statement on the router card, naming the missing push and the way to add it', () => {
+    zonesState.pushed = []
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const lines = [...container.querySelectorAll('.deg-t')].map((n) => n.textContent?.trim())
+    expect(lines).toEqual(['no address table pushed — zones from boundaries', 'Run setup… ▸ adds it'])
+
+    // The statement sits on the router card, not loose on the stage: it
+    // is inside the waist island's own group.
+    const waistCard = container.querySelector('.isl.waist')?.parentElement
+    expect(waistCard?.querySelectorAll('.deg-t').length).toBe(2)
+
+    // And the card grew to hold it rather than the text overrunning it
+    // (round-36/README.md's own validation note).
+    expect(container.querySelector('.isl.waist')?.getAttribute('height')).toBe('100')
+  })
+
+  it('opens the setup wizard from the statement rather than only naming it', () => {
+    zonesState.pushed = []
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50' })]
+    wizardState.open = false
+    const { container } = render(Topography)
+    flushSync()
+
+    const go = container.querySelector<SVGTSpanElement>('.deg-go')
+    expect(go?.textContent).toBe('Run setup… ▸')
+    go!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(wizardState.open).toBe(true)
+    wizardState.open = false
+  })
+
+  it('reads "from boundaries" in every zone address slot, never a blank one', () => {
+    zonesState.pushed = []
+    appState.events = [
+      event({ inInterface: 'bridge1', srcIp: '192.168.1.50' }),
+      event({ inInterface: 'bridge2', srcIp: '192.168.2.50' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    // Both sibling tspans are drawn (the-whole.html:1026); `.stage.map-degraded`
+    // is what picks which one shows, so the CSS toggle is asserted through
+    // the root class rather than through textContent, which jsdom never
+    // hides for a `display: none` descendant (vitest.config.ts leaves
+    // `test.css` at its default `false`, same reason LiveTable.svelte.test.ts
+    // gives for not asserting getComputedStyle here).
+    expect(container.querySelector('.stage')?.classList.contains('map-degraded')).toBe(true)
+    const degSlots = [...container.querySelectorAll('.zone .cidr-deg')].map((n) => n.textContent)
+    expect(degSlots).toEqual(['from boundaries', 'from boundaries'])
+    const vSlots = [...container.querySelectorAll('.zone .cidr-v')].map((n) => n.textContent)
+    expect(vSlots).toEqual(['', ''])
+  })
+
+  it('says "no address pushed" in the wan card\'s slot, and the address once one is pushed', () => {
+    // A public source makes ether1 the wan interface -- an observation,
+    // not a probe (zones.svelte.ts).
+    appState.events = [event({ inInterface: 'ether1', srcIp: '203.0.113.9' })]
+    zonesState.pushed = []
+    const degraded = render(Topography)
+    flushSync()
+    expect(degraded.container.querySelector('.stage')?.classList.contains('map-degraded')).toBe(true)
+    const degradedCidr = internetCardCidr(degraded.container)
+    expect(degradedCidr?.querySelector('.cidr-deg')?.textContent).toBe(' · no address pushed')
+    expect(degradedCidr?.querySelector('.cidr-v')?.textContent).toBe(' · ')
+    degraded.unmount()
+
+    zonesState.pushed = [address({ interface: 'ether1', address: '203.0.113.7' })]
+    const pushed = render(Topography)
+    flushSync()
+    expect(pushed.container.querySelector('.stage')?.classList.contains('map-degraded')).toBe(false)
+    expect(internetCardCidr(pushed.container)?.querySelector('.cidr-v')?.textContent).toBe(' · 203.0.113.7')
+  })
+
+  it('drops the statement once an address table arrives, leaving no leftover note', () => {
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50' })]
+    zonesState.pushed = [address({ interface: 'bridge1', address: '192.168.1.0/24', comment: 'LAN' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.deg-t')).toBeNull()
+    expect(container.querySelector('.stage')?.classList.contains('map-degraded')).toBe(false)
+    expect(container.querySelector('.isl.waist')?.getAttribute('height')).toBe('68')
+    expect([...container.querySelectorAll('.n-cidr .cidr-v')].map((n) => n.textContent)).toContain('192.168.1.0/24')
   })
 })
 
