@@ -12,6 +12,7 @@ import type {
   Device,
   Entity,
   EntityType,
+  Exclusion,
   NameProvenance,
   EventsResult,
   Filters,
@@ -460,6 +461,29 @@ export async function deleteFlagVerdict(id: string): Promise<Flag> {
   const res = await deleteJSON(`/api/flags/verdict/${encodeURIComponent(id)}`)
   if (!res.ok) throw new ApiError(`deleteFlagVerdict: ${res.status}`, res.status)
   return res.json()
+}
+
+// fetchExpectations/forgetExpectation (#640) back the expectations
+// ledger on the watchers station -- every expectation this deployment
+// has recorded, with its size, absorbed count and age. Viewer-readable
+// and user-writable, because the operator who can say Expected can take
+// it back.
+export async function fetchExpectations(): Promise<Exclusion[]> {
+  const res = await fetch('/api/flags/expectations')
+  if (!res.ok) throw new ApiError(`fetchExpectations: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.expectations ?? []
+}
+
+// Returns null on success and the server's own refusal text otherwise,
+// the same convention updateDefinition/resetDefinition use, so the row
+// can show what the server said rather than a status code. 404 is a
+// real answer here (the entry was already forgotten elsewhere), not a
+// silent success -- see internal/api's handleExpectationForget.
+export async function forgetExpectation(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/flags/expectations/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `forgetExpectation: ${res.status}`
 }
 
 export async function fetchAuthSession(): Promise<AuthSession> {

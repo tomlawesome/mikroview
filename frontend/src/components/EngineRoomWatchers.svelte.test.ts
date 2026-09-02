@@ -133,6 +133,13 @@ vi.mock('../lib/api', () => ({
     available: true,
     rules: [{ logPrefix: 'r13' }, { logPrefix: 'wan-in' }, { logPrefix: '' }],
   })),
+  // The station mounts #640's expectations ledger under the bench, and
+  // this factory replaces the whole api module -- so these two have to
+  // exist here or the ledger's own fetch throws inside every test in
+  // this file. The ledger's behaviour is covered next door in
+  // ExpectationsLedger.svelte.test.ts; empty is all this suite needs.
+  fetchExpectations: vi.fn(async () => []),
+  forgetExpectation: vi.fn(async () => null),
 }))
 
 import EngineRoomWatchers from './EngineRoomWatchers.svelte'
