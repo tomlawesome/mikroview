@@ -1716,6 +1716,26 @@ that suppresses anything.
 > recorded size, how many firings it has absorbed and since when, and
 > lets you prune them, is the remaining part of issue #640.
 
+### The expectations ledger
+
+Every expectation mikroview has been given -- "this much of this, from
+this host, is normal here" -- is listed on the watchers station, under
+the detector bench (**Settings ▸ detection ▸ tune…**), headed *What it
+has been told to expect*. Each row names the detector and the host, the
+size recorded when the expectation was made ("up to 30", or "any size"
+for a detector that declares no size), how many firings it has absorbed
+since, and when it was made. **Forget** on a row removes it, and that
+(detector, host) pair raises again from its next firing.
+
+The absorbed count is the point of the list: an expectation that has
+absorbed nothing for months is visibly not earning its place.
+
+Backed by `GET /api/flags/expectations` (any signed-in user -- an
+expectation is the reason a flag you would otherwise see is absent) and
+`DELETE /api/flags/expectations/{id}` (user tier, and recorded in the
+audit log as `flag.expectation_forget`: the operator who can call a flag
+expected can take it back). See [API reference](#api-reference).
+
 ## New-device detection (optional, on by default)
 
 Raises a `new_device` flag the first time mikroview ever sees a given
@@ -3141,6 +3161,8 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/clear-all` | clear every currently-active flag in one request -- records no judgement and no expectation. Audit-logged once per call |
+| `GET /api/flags/expectations` | open to any signed-in user: every expectation recorded on this instance -- (detector, target) plus the recorded size, how many firings it has absorbed and when it was made (see [The expectations ledger](#the-expectations-ledger)) |
+| `DELETE /api/flags/expectations/{id}` | user tier: forget one expectation, so that pair raises again from its next firing. 204 on success, 404 if no expectation has that id. Audit-logged |
 | `POST /api/flags/{id}/verdict` | judge one flag: `expected`, `checked`, `investigate` or `resolved` (see [Verdicts](#verdicts-how-a-flag-ends)). Everything but `investigate` clears it; `expected` also records the sized expectation, and permits the flag's own destination pairs on the device's inverted watchlist entry (see [What a verdict writes to the watchlist](#what-a-verdict-writes-to-the-watchlist)). Audit-logged |
 | `DELETE /api/flags/verdict/{id}` | undo a verdict: re-opens the flag if that verdict is what cleared it, withdraws the expectation an `expected` verdict recorded, and takes back the destinations it permitted. Audit-logged |
 | `GET /api/definitions` | open to any signed-in user, not admin-gated (#490 -- the engine room's watchers station reads it, and a non-admin can read the room): every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
