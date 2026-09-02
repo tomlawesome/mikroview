@@ -25,6 +25,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/settings"
 	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
@@ -223,6 +224,19 @@ type Server struct {
 	// that package's design.
 	RouterState *routerstate.Store
 
+	// Settings holds the small set of configuration an admin may change
+	// from inside the running app rather than in config.yaml -- today,
+	// the event buffer's size (#796). Backs PUT /api/settings/store; see
+	// settings.go. Nil is a valid state (a Server built without one, as
+	// most tests are): the PUT then refuses rather than pretending to
+	// store anything.
+	Settings *settings.Store
+	// memory is the event-buffer figure in effect and the range it may
+	// move within -- see settings.go. Populated by InitMemory at boot;
+	// unexported because it carries a mutex and an atomic, which a
+	// struct literal cannot safely fill in.
+	memory memoryState
+
 	// Setup holds what has been observed of each router's setup, for the
 	// guided wizard (#320). Nil in tests that do not exercise it, which
 	// handleSetupStatus tolerates.
@@ -266,6 +280,16 @@ type Server struct {
 	// window for the one production caller of SetEnabledAndScope (this
 	// handler); zero value is ready to use, same as ingestAuditMu above.
 	definitionsEnabledScopeMu sync.Mutex
+
+	// verdictWatchlistMu serializes the verdict handlers' compound work
+	// (issue #641): an expected verdict writes an expectation into the
+	// flags store *and* permitted destinations onto the device's inverted
+	// watchlist entry, and undoing or re-judging it takes both back. Two
+	// verdicts about the same device interleaving could let one's
+	// promotion land inside the other's withdrawal, leaving the device
+	// permitted somewhere no record still claims. Zero value is ready to
+	// use, same as the two above.
+	verdictWatchlistMu sync.Mutex
 }
 
 // route is one registered endpoint. Routes are declared as data rather
@@ -305,28 +329,35 @@ func (s *Server) routes() []route {
 		// handleStatsTops' own doc comment for why this is a separate
 		// route rather than a field on /api/stats above.
 		{http.MethodGet, "/api/stats/tops", s.handleStatsTops},
+		// The one setting an admin may change from inside the app (#796).
+		// No matching GET: the memory group's whole state rides on
+		// /api/stats' "memory" object, which every open tab is already
+		// polling for the count and capacity beside it -- see
+		// handleStats for why one payload rather than two.
+		{http.MethodPut, "/api/settings/store", s.handleStoreSettingsUpdate},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
 		{http.MethodPost, "/api/flags/clear-all", s.handleFlagsClearAll},
-		{http.MethodPost, "/api/flags/{id}/clear", s.handleFlagsClear},
 		{http.MethodPost, "/api/flags/{id}/verdict", s.handleFlagsVerdict},
 		// Not "/{id}/verdict" (which would mirror the POST above): that
-		// shape is structurally ambiguous against the exclusions DELETE
-		// two lines down under Go's net/http.ServeMux (both are 4
-		// segments under /api/flags/, one wildcard-then-literal and one
-		// literal-then-wildcard, so a path like
-		// "/api/flags/exclusions/verdict" matches both and neither
-		// pattern is more specific -- ServeMux panics at registration
-		// rather than pick one). "verdict/{id}" instead puts the
-		// wildcard last, the same shape every other DELETE-by-id route
-		// in this table already uses (exclusions/{id}, definitions/{id},
-		// tokens/{id}, users/{id}), so it's actually more consistent
-		// with this table than the mirrored shape would have been.
+		// shape is structurally ambiguous against any literal-then-
+		// wildcard sibling under /api/flags/ in Go's net/http.ServeMux
+		// (both would be 4 segments, one wildcard-then-literal and one
+		// literal-then-wildcard, so a path matching both makes neither
+		// pattern more specific and ServeMux panics at registration
+		// rather than pick one -- as it did against the exclusions
+		// DELETE this table used to carry). "verdict/{id}" instead puts
+		// the wildcard last, the same shape every other DELETE-by-id
+		// route in this table already uses (definitions/{id},
+		// tokens/{id}, users/{id}).
 		{http.MethodDelete, "/api/flags/verdict/{id}", s.handleFlagsVerdictUndo},
-		{http.MethodPost, "/api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent},
-		{http.MethodGet, "/api/flags/exclusions", s.handleExclusionsList},
-		{http.MethodDelete, "/api/flags/exclusions/{id}", s.handleExclusionRemove},
+		// #640's ledger. Same literal-then-wildcard shape as the DELETE
+		// route above it, for the reason the comment above gives: a
+		// wildcard-then-literal fourth segment under /api/flags/ cannot
+		// be registered alongside it.
+		{http.MethodGet, "/api/flags/expectations", s.handleExpectationsList},
+		{http.MethodDelete, "/api/flags/expectations/{id}", s.handleExpectationForget},
 
 		// The one definitions surface (issue #407), replacing
 		// /api/detectors and /api/watchlist/entries wholesale. A shipped
