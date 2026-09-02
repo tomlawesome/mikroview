@@ -135,6 +135,13 @@ func routeToFlag(em Emission) *flags.Flag {
 		Evidence:    ev,
 		Country:     em.Country,
 		Provisional: em.Provisional,
+		// Size carries the definition's declared size through to the
+		// store, which is what consults the expectation for this
+		// (Type, Target) -- see flags.Store.add. ExpectedSize is left
+		// zero here for the same reason ID/FirstSeen/Count are: it is
+		// filled in by the store's raise lifecycle, from the expectation
+		// it just failed to absorb, not by translating one emission.
+		Size: copyIntPtr(em.Size),
 	}
 }
 
