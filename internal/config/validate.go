@@ -233,7 +233,7 @@ func (c *Config) validateStore(fatal problemFunc, warn warnFunc) {
 		// No Applied -- nothing is substituted, this only surfaces the
 		// cost. See highMaxMemoryWarnThreshold's doc comment for why a
 		// warning rather than a clamp.
-		resident := ByteSize(float64(c.Store.MaxMemory) * 1.47) // measured ring-to-resident overhead, see #244
+		resident := ByteSize(float64(c.Store.MaxMemory) * ResidentPerRingByte) // measured ring-to-resident overhead, see #244
 		warn("CFG-0012", "store.maxMemory",
 			fmt.Sprintf("%s reserves up to %d events at startup (~%s resident once the Go runtime and process overhead are counted, not just the ring itself) -- confirm this machine has it to spare",
 				c.Store.MaxMemory, c.Store.Capacity(), resident),
