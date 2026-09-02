@@ -1646,9 +1646,15 @@
   <!-- While descended, the map stays beneath as the reach's backdrop —
        blurred, at the level you left (round 24); clicking it surfaces
        exactly there. -->
+  <!-- `map-degraded` is the drawing's `#s3.degraded` (the-whole.html:118-125),
+       named apart from a bare `degraded` because that class already names
+       something else here: round 29's removed floating note, whose absence
+       the "floats no note over the map" test still guards by that literal
+       class name. -->
   <div
     class="stage"
     class:backdrop={reach !== null}
+    class:map-degraded={zonesState.degraded}
     onclick={reach ? surface : undefined}
     role={reach ? 'button' : undefined}
     aria-label={reach ? 'Surface — back to the map as you left it' : undefined}
@@ -1916,11 +1922,13 @@
           {#if zonesState.wanInterface}
             <!-- `ether1 · 203.0.113.7` where the push names the boundary's
                  address, `ether1 · no address pushed` where it does not
-                 (the-whole.html:977). The slot is never blank and never
-                 stale: it says which of the two it is. -->
+                 (the-whole.html:977). Both tspans are drawn, sibling to
+                 each other, and the `.stage.map-degraded` toggle (the-whole
+                 .html:118-125's `#s3.degraded`) picks which one shows --
+                 the slot is never blank and never stale either way. -->
             <text x="-82" y="14" class="n-cidr"
-              >{zonesState.wanInterface}<tspan class:deg-slot={!wanAddress}
-                >{wanAddress ? ` · ${wanAddress}` : ' · no address pushed'}</tspan
+              >{zonesState.wanInterface}<tspan class="cidr-v">{` · ${wanAddress ?? ''}`}</tspan><tspan class="cidr-deg"
+                >{' · no address pushed'}</tspan
               ></text
             >
           {:else}
@@ -2011,12 +2019,12 @@
                  narrower card moves it in rather than past the edge. The
                  slot always holds something true: the pushed CIDR, or
                  "from boundaries" where the zone's name and extent rest
-                 on the boundary alone (the-whole.html:1026). -->
-            {#if z.cidr}
-              <text x={cardHalf - 14} y="26" class="n-cidr" text-anchor="end">{z.cidr}</text>
-            {:else}
-              <text x={cardHalf - 14} y="26" class="n-cidr deg-slot" text-anchor="end">from boundaries</text>
-            {/if}
+                 on the boundary alone -- both tspans drawn sibling to
+                 each other (the-whole.html:1026), the `.stage.map-degraded`
+                 toggle picking which one shows. -->
+            <text x={cardHalf - 14} y="26" class="n-cidr" text-anchor="end"
+              ><tspan class="cidr-v">{z.cidr ?? ''}</tspan><tspan class="cidr-deg">from boundaries</tspan></text
+            >
             {#if shown.hosts.length > 0}
               <!-- Each host is the reach's door (#626): clicking the name
                    recentres on that node rather than opening the zone. The
@@ -3415,9 +3423,19 @@
     text-decoration: underline;
   }
 
-  /* An address slot with nothing pushed behind it, italic where the CIDR
-     would sit (the-whole.html:125). */
-  .deg-slot {
+  /* Two sibling tspans, drawn once per address slot (the-whole.html:977,
+     :1026): the pushed CIDR/address, and the never-pushed fallback.
+     `.stage.map-degraded` (the-whole.html:118-125's `#s3.degraded`) toggles
+     which one shows; italic marks the fallback apart from a real
+     address (the-whole.html:125). */
+  .cidr-deg {
+    display: none;
+  }
+  .stage.map-degraded .cidr-v {
+    display: none;
+  }
+  .stage.map-degraded .cidr-deg {
+    display: initial;
     font-style: italic;
   }
 
