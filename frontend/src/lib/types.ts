@@ -401,6 +401,17 @@ export interface DetectorSettings {
   // rather than the threshold it fires at).
   params?: Record<string, unknown>
   paramSchema?: DefinitionParamSchema[]
+  // Carried through from Definition.provenance.origin (#787). The
+  // editing panel needs it because two of its actions are only offered
+  // where the server can perform them: a shipped definition's name
+  // belongs to the binary that ships the logic and cannot be renamed,
+  // and reset only means something for one that has stock params to go
+  // back to.
+  origin?: DefinitionOrigin
+  // Whether any param currently differs from what the definition shipped
+  // with -- Definition.distance flattened to the one bit the bench shows
+  // (#787), so a row can say it has been tuned without the panel open.
+  overridden?: boolean
 }
 
 // Mirrors internal/api's definitionView (issue #407) -- one definition

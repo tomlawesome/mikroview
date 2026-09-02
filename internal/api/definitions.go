@@ -30,14 +30,19 @@ import (
 // response, plus the operator actions an expectation has of its own
 // (promote, observing).
 //
-// Access is admin-only for every route here, exactly matching what the
-// two removed surfaces enforced. #385 records the owner decision that
-// non-admins should eventually see settings surfaces read-only, but that
-// belongs to phase 2's RBAC work: shipping a read-open route now that
-// phase 2 might have to narrow is worse than shipping it closed and
-// widening it deliberately. Every row is recorded in
-// authz_matrix_test.go, which is what forces the question to be answered
-// rather than inherited.
+// Access is user-tier for every route here bar one: each checks
+// callerIsUser, so an admin or a user reaches it and a viewer does not.
+// The exception is handleDefinitionsList, which is open to any signed-in
+// session including viewer -- see its own doc comment.
+//
+// This surface shipped admin-only, matching what the two removed
+// surfaces enforced, and #653 widened it: running the detector bench --
+// enabling a detector, editing its scope, tuning its thresholds -- is a
+// normal operational action rather than an owner-level one, so it
+// belongs to the middle tier that issue introduced. A viewer therefore
+// still reads the whole list, and changes nothing in it. Every row is
+// recorded in authz_matrix_test.go, which is what forces the question to
+// be answered rather than inherited.
 
 // definitionView is one definition as this API serves it: the whole
 // envelope, plus the four things a caller cannot derive from it --
@@ -975,15 +980,19 @@ type cloneRequest struct {
 // its own identity -- a fresh id, never the original's (see
 // engine.Definition.ID's own doc comment on why a clone needs one).
 //
-// Supported for an expectation definition, which is data all the way
-// down: cloning one produces a second entry the operator can then edit.
-// Refused, with its reason, for a shipped detection definition -- its
-// logic is Go keyed by its own id, so a "clone" of it could only be an
-// envelope with no logic behind it: a definition that lists, looks
-// configurable, and evaluates nothing. Overriding the original's params
-// (PUT) is the operation that actually exists for those, and the refusal
-// says so rather than leaving an operator to discover the clone never
-// fires.
+// Supported for the two definitions that are data all the way down: an
+// expectation, and a custom declarative detection, whose conditions and
+// aggregation are a stored DetectionSpec (#502) rather than Go. Cloning
+// either produces a second definition the operator can then edit.
+//
+// Refused, with its reason, for a shipped definition -- its logic is Go
+// keyed by its own id, so a "clone" of it could only be an envelope with
+// no logic behind it: a definition that lists, looks configurable, and
+// evaluates nothing. Overriding the original's params (PUT) is the
+// operation that actually exists for those, and the refusal says so
+// rather than leaving an operator to discover the clone never fires.
+// Starting a custom detector *from* a shipped one is a different
+// operation, and needs a conditions editor nothing has yet (#829).
 //
 // User-tier (#653), same as the rest of the definitions surface -- see
 // handleDefinitionsList's doc comment.
@@ -998,15 +1007,9 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 		writeDefinitionError(w, err)
 		return
 	}
-	if !ok {
-		if _, exists := s.Definitions.Get(id); !exists {
-			http.Error(w, "no such definition", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "a shipped definition cannot be cloned: its logic is compiled into this binary and keyed by its own id, so a copy would evaluate nothing. Override its params instead (PUT /api/definitions/{id}).", http.StatusBadRequest)
-		return
-	}
 
+	// Decoded before the branch below, since both clone paths honour an
+	// operator-supplied name.
 	var req cloneRequest
 	if r.ContentLength > 0 {
 		if err := decodeJSONBody(w, r, &req); err != nil {
@@ -1014,6 +1017,28 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	if !ok {
+		sd, exists := s.Definitions.Get(id)
+		if !exists {
+			http.Error(w, "no such definition", http.StatusNotFound)
+			return
+		}
+		if sd.Definition.Detection != nil {
+			// A Detection block is carried by exactly the definitions
+			// that can be copied structure and all: custom, declarative,
+			// intent=detection (engine.Definition.validateDetectionBlock
+			// enforces all three), so it is the whole test. An
+			// unavailable one -- a spec from a newer build -- is not
+			// short-circuited here: Upsert validates the copy and the
+			// refusal then names the field this binary did not
+			// understand, which is more use than "unavailable".
+			s.cloneCustomDetection(w, r, sd.Definition, req.Name)
+			return
+		}
+		http.Error(w, "a shipped definition cannot be cloned: its logic is compiled into this binary and keyed by its own id, so a copy would evaluate nothing. Override its params instead (PUT /api/definitions/{id}).", http.StatusBadRequest)
+		return
+	}
+
 	clone := entry
 	clone.ID = newDefinitionEntryID()
 	clone.CreatedAt = time.Now()
@@ -1034,6 +1059,37 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.Audit.Record(auditActor(r), "definition.clone", clone.ID, "from "+id)
+	s.writeDefinition(w, http.StatusCreated, clone.ID)
+}
+
+// cloneCustomDetection copies an operator-authored detector: its
+// DetectionSpec, its params and its scope under a fresh id (issue #810).
+// Nothing here is compiled logic -- the structure is the stored spec and
+// the sensitivity is ordinary Params -- so the copy evaluates exactly
+// what the original does, which is the thing a shipped detector's clone
+// could never do.
+//
+// The copy starts paused (#787 decision C: "paused so a half-edited
+// detector never runs"). An operator clones a detector in order to change
+// it, and a copy that started firing on creation would duplicate the
+// original's flags for as long as that editing took. Suppressions are
+// carried over with it: they are exclusions the operator wrote for this
+// detector's own matching, so a copy of the matching without them would
+// fire on traffic they had already ruled out.
+func (s *Server) cloneCustomDetection(w http.ResponseWriter, r *http.Request, src engine.Definition, name string) {
+	clone := src
+	clone.ID = newDefinitionEntryID()
+	clone.Enabled = false
+	if name != "" {
+		clone.Name = name
+	} else if clone.Name != "" {
+		clone.Name = clone.Name + " (copy)"
+	}
+	if err := s.Definitions.Upsert(clone); err != nil {
+		writeDefinitionError(w, err)
+		return
+	}
+	s.Audit.Record(auditActor(r), "definition.clone", clone.ID, "from "+src.ID)
 	s.writeDefinition(w, http.StatusCreated, clone.ID)
 }
 
