@@ -121,6 +121,8 @@ func (d *mailSenderDefinition) Evaluate(e store.Event) {
 		// No Confidence: internal/detect used flags.Store.Add, which
 		// leaves it nil. There is no statistical judgement here to score.
 		// No Evidence, no Country -- see this type's own doc comment.
+		// No Size: deterministic, so there is no measure against a
+		// threshold. See ShippedSizeMeasure.
 		SourceIP:  e.SrcIP,
 		EventTime: e.ReceivedAt,
 	})
