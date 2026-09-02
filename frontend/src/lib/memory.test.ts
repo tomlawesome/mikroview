@@ -12,6 +12,7 @@ import {
   formatHours,
   formatSize,
   midLabel,
+  pageStepBytes,
   proposalKind,
   stepBytes,
   trackX,
@@ -69,6 +70,18 @@ describe('round 39 draws these exact figures', () => {
     expect(formatHours(9)).toBe('9 h')
     expect(formatHours(36)).toBe('36 h')
     expect(formatHours(4.8)).toBe('4.8 h')
+  })
+
+  // Below an hour it changes unit rather than rounding to "0 h". Round
+  // 39 never draws a span this short, but a 32 MiB buffer on a busy
+  // instance is one, and "holds ~0 h at today's rate" is a different
+  // claim from "holds half an hour", not a rounding of it. Found on the
+  // first live run of live-memory-slider.mjs.
+  it('does not round half an hour down to nothing', () => {
+    expect(formatHours(0.5)).toBe('30 min')
+    expect(formatHours(0.9)).toBe('54 min')
+    expect(formatHours(0.01)).toBe('36 s')
+    expect(formatHours(1)).toBe('1 h')
   })
 
   it('builds the row the drawing prints', () => {
@@ -135,20 +148,36 @@ describe('dragging', () => {
     expect(a % (8 * MIB)).toBe(0)
   })
 
-  it('moves on every keyboard press rather than rounding back to itself', () => {
-    let v = MIN
-    for (let i = 0; i < 6; i++) {
-      const next = stepBytes(v, 1, MIN, MAX)
-      expect(next).toBeGreaterThan(v)
-      v = next
-    }
-    for (let i = 0; i < 6; i++) {
-      const next = stepBytes(v, -1, MIN, MAX)
-      expect(next).toBeLessThan(v)
-      v = next
-    }
+  it('moves one snap step per arrow key, in both directions', () => {
+    expect(stepBytes(120 * MIB, 1, MIN, MAX)).toBe(128 * MIB)
+    expect(stepBytes(120 * MIB, -1, MIN, MAX)).toBe(112 * MIB)
     expect(stepBytes(MIN, -1, MIN, MAX)).toBe(MIN)
     expect(stepBytes(MAX, 1, MIN, MAX)).toBe(MAX)
+  })
+
+  // The trap this replaced: an arrow key that moved by a fraction of a
+  // doubling stepped from 120 MiB straight over 480 to 504, so a
+  // keyboard user could not reach a figure the mouse could -- two
+  // different sets of legal values for one control.
+  it('can reach every figure a drag can reach, including 480 MiB', () => {
+    let v = 120 * MIB
+    const seen = new Set<number>()
+    for (let i = 0; i < 200 && v < 480 * MIB; i++) {
+      v = stepBytes(v, 1, MIN, MAX)
+      seen.add(v)
+    }
+    expect(seen.has(480 * MIB)).toBe(true)
+  })
+
+  it('crosses the range in a handful of page steps', () => {
+    expect(pageStepBytes(120 * MIB, 1, MIN, MAX)).toBe(240 * MIB)
+    expect(pageStepBytes(240 * MIB, 1, MIN, MAX)).toBe(480 * MIB)
+    // Halving 120 gives 60, which is not on the 8 MiB grid a drag can
+    // land on, so it snaps to 64 -- a page step still lands somewhere a
+    // drag could have.
+    expect(pageStepBytes(120 * MIB, -1, MIN, MAX)).toBe(64 * MIB)
+    expect(pageStepBytes(MIN, -1, MIN, MAX)).toBe(MIN)
+    expect(pageStepBytes(MAX, 1, MIN, MAX)).toBe(MAX)
   })
 })
 
