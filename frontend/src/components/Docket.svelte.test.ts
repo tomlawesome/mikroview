@@ -18,6 +18,10 @@ vi.mock('../lib/api', () => ({
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),
   fetchFlagEpisode: vi.fn(),
+  // Flags.svelte's learning shelf (#640) fetches the expectations
+  // ledger unconditionally on mount -- Docket embeds Flags, so this
+  // mock needs it too even though these tests never look at the shelf.
+  fetchExpectations: vi.fn(async () => []),
   fetchWatchlistEntries: vi.fn(async () => ({ entries: [], coverage: {} })),
   createWatchlistEntry: vi.fn(),
   updateWatchlistEntry: vi.fn(),
