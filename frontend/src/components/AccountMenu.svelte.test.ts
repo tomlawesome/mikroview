@@ -127,4 +127,20 @@ describe("the menu's foot carries the build line (#804)", () => {
     expect(ver).not.toBeNull()
     expect(ver?.textContent).toContain('AGPL-3.0')
   })
+
+  // The exact line, spaced. The first build of this lost the space in
+  // front of AGPL-3.0 -- Svelte trims literal trailing whitespace before
+  // a block's close -- and a "contains AGPL-3.0" assertion passed right
+  // over it, in the unit suite and in the live gate both.
+  it('reads "<version> · AGPL-3.0 · up N d N h", middots spaced', async () => {
+    authState.role = 'admin'
+    const { container } = render(AccountMenu)
+    await openMenu()
+    // versionState and uptimeState both resolve off the mocked healthz.
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    expect(container.querySelector('.ver')?.textContent?.trim()).toBe('0.9 · AGPL-3.0 · up 12 d 4 h')
+  })
 })

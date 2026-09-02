@@ -61,6 +61,14 @@ for (const retired of ['Settings', 'Fleet', 'Entities', 'Audit log']) {
 // the two units against the server's own number below.
 const verText = (await page.locator('.account .menu .ver').textContent())?.trim()
 check(/AGPL-3\.0/.test(verText ?? ''), `the foot names the licence -- got ${JSON.stringify(verText)}`)
+// The whole line, spaced as drawn: "<version> · AGPL-3.0 · up N d N h".
+// Asserted as a shape because the first build of it lost the space in
+// front of AGPL-3.0 -- Svelte trims literal trailing whitespace before
+// a block's close, and every looser assertion here passed anyway.
+check(
+  /^\S+ · AGPL-3\.0 · up \d+ d \d+ h$/.test(verText ?? ''),
+  `the foot reads "<version> · AGPL-3.0 · up N d N h", middots spaced -- got ${JSON.stringify(verText)}`,
+)
 const upMatch = /up (\d+) d (\d+) h/.exec(verText ?? '')
 check(upMatch !== null, `the foot carries uptime as days and hours -- got ${JSON.stringify(verText)}`)
 check(
@@ -94,9 +102,16 @@ check(true, 'Escape closes the menu')
 
 // --- Click-away closes it too ----------------------------------------------
 await openAccountMenu(page)
-// The scene title is inert -- clicking it can only exercise the menu's
-// own click-away listener, not open something else underneath.
-await page.click('.card[aria-hidden="false"] .scene-bar h1')
+// The wordmark is inert -- clicking it can only exercise the menu's own
+// click-away listener, not open something else underneath.
+//
+// It used to be `.scene-bar h1`, the scene title. Round 30 replaced that
+// title with the wordmark (SceneBar.svelte's `.wm`), so this step had
+// been timing out for 30s and killing the scenario before its own last
+// third ever ran -- including every assertion about a viewer's session.
+// The RESULT line it never printed is why the run recorded a silent
+// death rather than a failed check.
+await page.click('.card[aria-hidden="false"] .scene-bar .wm')
 await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
 check(true, 'clicking away closes the menu')
 

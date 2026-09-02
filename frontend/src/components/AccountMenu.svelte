@@ -109,7 +109,7 @@
       <button class="row" role="menuitem" onclick={signOut}>Sign out</button>
       <button class="row foot" role="menuitem" onclick={() => ((showAbout = true), (open = false))}>
         About &amp; licence<span class="ver"
-          >{#if versionState.version}{versionState.version} · {/if}AGPL-3.0 · <UptimeBadge /></span
+          >{#if versionState.version}{versionState.version}{' · '}{/if}AGPL-3.0<UptimeBadge /></span
         >
       </button>
       {#if logoutError}<p class="err" role="alert">{logoutError}</p>{/if}
@@ -195,6 +195,13 @@
   .row.foot {
     justify-content: space-between;
     align-items: baseline;
+    /* The drawing's version is "0.9"; a real build stamps a full
+       "0.4.0+g<sha>.<timestamp>", which is deliberate -- a demo has to
+       say which build it is -- and far too long to sit on one line
+       beside the label. So the line wraps under it rather than
+       stretching the menu to fit. With a short version it stays on one
+       line, exactly as drawn. */
+    flex-wrap: wrap;
   }
 
   .ver {
@@ -202,6 +209,12 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     color: var(--fg-dim);
+    /* Wraps between its middot-joined parts if it has to, but never
+       inside "up 12 d 4 h", which reads as one figure. */
+    overflow-wrap: anywhere;
+  }
+
+  .ver :global(.uptime) {
     white-space: nowrap;
   }
 
