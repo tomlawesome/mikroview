@@ -18,6 +18,35 @@ rewritten.
 
 ### Added
 
+- **A detector's candidate numbers can be tried before they are saved**
+  (#786). Changing a threshold was a guess with no shown workings: the
+  new value went live, and whether it was right showed up later as flags
+  that did or did not arrive. A **Try** button now sits at the foot of an
+  expanded detector row, beside Save. Pressing it replays the numbers as
+  typed over the traffic mikroview still holds -- the detector's own
+  logic, with the candidate window and threshold substituted for its
+  stored ones -- and puts the answer in one slot under the fields. Either
+  a receipt: *"Would have fired 3 times in the last 4h 12m"*, with the
+  hosts that would have been flagged listed beneath it. Or a decline:
+  *"Can't replay: needs a 6h window, only 4h 12m held"*, in the same
+  slot, in grey rather than red, because a corpus shorter than the
+  detector's own window is an honest limit of the traffic held rather
+  than an error, and reporting "it would have fired zero times" instead
+  would be a claim nothing established. Where the server says its read
+  was cut short, the count reads "at least"; where the listed sample is
+  bounded, the hosts read "at least these". Try writes nothing -- the
+  detector the engine is evaluating is untouched, whether the receipt is
+  encouraging or not -- and it never blocks Save. New `replayDefinition`
+  wrapper over `POST /api/definitions/{id}/replay`, which existed
+  server-side but had no caller anywhere in the client. Two known limits,
+  recorded rather than hidden: the receipt is shown without the
+  live-firing comparison beside it, because nothing in the app or the API
+  can produce that number for a window hours long (the flag time series
+  counts newly-raised episodes rather than firings, covers only the last
+  sixty minutes, and starts empty after a restart); and a candidate
+  carries only the window and the threshold, which is the closed set the
+  engine's replay accepts -- a detector's other tuning fields are saved
+  as normal but are not part of what Try asks.
 - **A live memory control for the event buffer, not just a config-file
   setting** (#796). Settings' memory group now carries a slider under
   the hours bar: dragging it only proposes a figure, and nothing changes
