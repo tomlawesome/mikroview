@@ -7,6 +7,7 @@ import type {
   AuthSession,
   CoverageEvidence,
   Definition,
+  DefinitionParamSchema,
   DefinitionSuppression,
   DetectorScope,
   Device,
@@ -1042,4 +1043,42 @@ export async function deleteCoverageDeclaration(key: string): Promise<string | n
   const res = await deleteJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`)
   if (res.ok) return null
   return (await res.text()) || `deleteCoverageDeclaration: ${res.status}`
+}
+
+// ===========================================================================
+// Definitions editor (issue #787)
+//
+// The two reads the watchers station's in-place editing panel needs
+// beyond the list it already fetches. The writes it drives
+// (updateDefinition, resetDefinition, cloneDefinition) are defined
+// further up beside fetchDefinitions and are not duplicated here.
+// ===========================================================================
+
+// fetchDefinitionSchema reads every param schema this deployment's
+// definitions declare, keyed by definition id (GET
+// /api/definitions/schema, internal/api's handleDefinitionsSchema).
+//
+// This is the one source the editor renders its typed threshold/window
+// fields from -- deliberately not the paramSchema copy that also rides on
+// each definition in the list response. Both carry the same server value
+// today, and reading the dedicated endpoint is what keeps that true: a
+// control built from whichever copy happened to be in hand is how two
+// answers to "what does this param accept" start to drift, which is the
+// duplication docs/decisions/evaluation-engine.md section 4 exists to
+// remove.
+export async function fetchDefinitionSchema(): Promise<Record<string, DefinitionParamSchema[]>> {
+  const res = await fetch('/api/definitions/schema')
+  if (!res.ok) throw new ApiError(`fetchDefinitionSchema: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.schemas ?? {}
+}
+
+// getDefinition reads one definition by id, with its provenance and its
+// distance from stock (GET /api/definitions/{id}). Used to re-read a
+// single row after an edit rather than re-listing every definition and
+// recomputing coverage evidence to see one changed threshold.
+export async function getDefinition(id: string): Promise<Definition> {
+  const res = await fetch(`/api/definitions/${encodeURIComponent(id)}`)
+  if (!res.ok) throw new ApiError(`getDefinition: ${res.status}`, res.status)
+  return await res.json()
 }
