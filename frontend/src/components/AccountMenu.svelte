@@ -13,8 +13,10 @@
   import { appState, type View } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
+  import { versionState } from '../lib/version.svelte'
   import ThemeMenu from './ThemeMenu.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
+  import UptimeBadge from './UptimeBadge.svelte'
 
   let open = $state(false)
   let showAbout = $state(false)
@@ -22,6 +24,26 @@
   let menuEl: HTMLElement | undefined
 
   const isAdmin = $derived(authState.role === 'admin')
+
+  // The read-only viewer, declared once (round 37, accepted 2026-09-02):
+  // the chip reads "anna (viewer) · read-only". This is the one place
+  // every screen already says who you are, so it is the one place the
+  // fact belongs -- not a READ-ONLY chip repeated in each page header
+  // (#548's original home, which round 30 drew away and #700 unmounted),
+  // and not lock icons on every control. Pages stay undisabled and say
+  // nothing further; the sentence is here.
+  //
+  // Only the viewer tier gets it: "user" can edit, so read-only would be
+  // a lie, and the drawing gives that tier no variant of its own.
+  const isViewer = $derived(authState.role === 'viewer')
+
+  function toggle() {
+    open = !open
+    // The foot's version is fetched when the menu opens rather than at
+    // load: nothing shows it until then, and /api/healthz answers
+    // unauthed so this works for every tier.
+    if (open) versionState.ensureLoaded().catch(() => {})
+  }
 
   type Row = { label: string; view?: View; action?: 'run-setup'; admin?: boolean }
   const operate: Row[] = [{ label: 'Run setup…', action: 'run-setup', admin: true }]
@@ -54,12 +76,12 @@
   <button
     class="chip"
     class:open
-    onclick={() => (open = !open)}
+    onclick={toggle}
     aria-haspopup="menu"
     aria-expanded={open}
     title="Account and operate pages"
   >
-    {authState.username}{#if isAdmin}&nbsp;(admin){/if}
+    {authState.username}{#if isAdmin}&nbsp;(admin){:else if isViewer}&nbsp;(viewer) · read-only{/if}
   </button>
 
   {#if open}
@@ -85,8 +107,10 @@
         </button>
       {/if}
       <button class="row" role="menuitem" onclick={signOut}>Sign out</button>
-      <button class="row" role="menuitem" onclick={() => ((showAbout = true), (open = false))}>
-        About &amp; licence
+      <button class="row foot" role="menuitem" onclick={() => ((showAbout = true), (open = false))}>
+        About &amp; licence<span class="ver"
+          >{#if versionState.version}{versionState.version}{' · '}{/if}AGPL-3.0<UptimeBadge /></span
+        >
       </button>
       {#if logoutError}<p class="err" role="alert">{logoutError}</p>{/if}
     </div>
@@ -162,6 +186,36 @@
   .theme-row {
     cursor: default;
     justify-content: space-between;
+  }
+
+  /* The menu's foot, from round 37's `.whomenu .mg.foot`: the label on
+     the left and the build's own line on the right -- version, licence
+     and uptime, spaced apart so the two do not read as one sentence.
+     Baseline-aligned because the two sit at different sizes. */
+  .row.foot {
+    justify-content: space-between;
+    align-items: baseline;
+    /* The drawing's version is "0.9"; a real build stamps a full
+       "0.4.0+g<sha>.<timestamp>", which is deliberate -- a demo has to
+       say which build it is -- and far too long to sit on one line
+       beside the label. So the line wraps under it rather than
+       stretching the menu to fit. With a short version it stays on one
+       line, exactly as drawn. */
+    flex-wrap: wrap;
+  }
+
+  .ver {
+    margin-left: 18px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    /* Wraps between its middot-joined parts if it has to, but never
+       inside "up 12 d 4 h", which reads as one figure. */
+    overflow-wrap: anywhere;
+  }
+
+  .ver :global(.uptime) {
+    white-space: nowrap;
   }
 
   .rule {

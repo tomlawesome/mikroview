@@ -24,7 +24,17 @@ vi.mock('../lib/api', () => ({
   resetSuggestions: vi.fn(),
 }))
 
-import { fetchRecentMatches, fetchSuggestions, fetchWatchlistEntries, setWatchlistEnabled } from '../lib/api'
+import {
+  acceptSuggestion,
+  fetchRecentMatches,
+  fetchSuggestions,
+  fetchWatchlistEntries,
+  fetchWatchlistMatches,
+  hideSuggestion,
+  resetSuggestions,
+  setWatchlistEnabled,
+  unhideSuggestion,
+} from '../lib/api'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { suggestState } from '../lib/suggest.svelte'
 import { matchesState } from '../lib/matches.svelte'
@@ -33,40 +43,16 @@ import { topologyNavState } from '../lib/topologyNav.svelte'
 import type { Suggestion, WatchNight, WatchlistCoverage, WatchlistEntry, WatchlistMatch } from '../lib/types'
 import Watchlist from './Watchlist.svelte'
 
-// #547 gave Suggestions a tab on the house tablist; round 30 (#700,
-// #691) draws no sub-tab row at all on the docket's WATCHLIST screen --
-// one flat watch table, nothing else (docs/design/concepts/round-30/
-// shots/docket-watchlist.png, the-whole.html #s7's `#p-watch`). The tab
-// row and the Suggestions panel it switched to are real, shipped
-// capability, unmounted rather than deleted -- see the
-// WATCHLIST_SUBTABS_ENABLED comment in Watchlist.svelte. Restoring it is
-// tracked on #691; the switching behaviour this block used to cover
-// (which candidates render, accept/hide/reset) lives in Suggestions.svelte
-// itself and is untouched by this round.
-describe('Watchlist Suggestions tab (#547)', () => {
-  beforeEach(() => {
-    vi.resetAllMocks()
-    vi.mocked(fetchSuggestions).mockResolvedValue([])
-    watchlistState.entries = []
-    watchlistState.coverage = {}
-    suggestState.candidates = []
-  })
-
-  it('draws no tablist and no Suggestions panel -- round 30 fidelity, unmounted behind WATCHLIST_SUBTABS_ENABLED (#691)', () => {
-    render(Watchlist)
-    expect(screen.queryByRole('tablist', { name: 'Watchlist views' })).toBeNull()
-    expect(screen.queryByRole('tab', { name: 'Suggestions' })).toBeNull()
-    expect(document.getElementById('panel-suggestions')).toBeNull()
-    // The flat watch table renders in its place, unconditionally.
-    expect(document.querySelector('.watch-table-section')).toBeTruthy()
-  })
-})
-
-// #584: Matches folded into Watchlist as a third tab -- one merged,
-// reverse-chronological list of every entry's matches, not an entry
-// picker and not grouped. Same admin argument as Suggestions above: no
-// gating logic lives in the component, because Watchlist only ever
-// mounts for an admin.
+// #547/#584 gave Suggestions and Matches tabs of their own on the house
+// tablist. Round 33 (#771) goes further than round 30's "no sub-tab row"
+// fidelity check ever did: Suggestions.svelte and MatchesTab.svelte are
+// deleted outright (AGENTS.md's "removals are wholesale"), and what they
+// carried is redrawn as two things directly inside this table -- a match
+// list in each watch's own drawer, and a suggestion body underneath the
+// watches. #712 records the tab-era coverage (empty states, load-older
+// paging, entry-name linking) as lost when the old components' tests went
+// with them; the two describes below restore it against the surface it
+// actually lives in now.
 function entry(id: string, name: string, overrides: Partial<WatchlistEntry> = {}): WatchlistEntry {
   return { id, name, enabled: true, createdAt: '2026-08-24T09:00:00Z', ...overrides }
 }
@@ -93,6 +79,26 @@ function recordFor(id: string, entryId: string, overrides: Partial<WatchlistMatc
   }
 }
 
+// A suggestion candidate fixture, in round 33's "off" default -- see
+// Suggestion's own doc comment (lib/types.ts) for what each field means.
+function suggestion(
+  id: string,
+  kind: 'device' | 'port' | 'addressList',
+  overrides: Partial<Suggestion> = {},
+): Suggestion {
+  return {
+    id,
+    kind,
+    status: 'off',
+    name: id,
+    justification: `${id} justification`,
+    routerDevice: 'rb5009',
+    firstSeen: '2026-08-24T09:00:00Z',
+    updatedAt: '2026-08-24T09:00:00Z',
+    ...overrides,
+  }
+}
+
 // The entries come back through the mocked API rather than being
 // assigned onto watchlistState: Watchlist refreshes on mount, so
 // anything written directly onto the store is overwritten by the fetch
@@ -105,24 +111,24 @@ async function renderWatchlist(entries: WatchlistEntry[], coverage: Record<strin
 }
 
 // Several rounds of microtasks, then a flush. More than looks necessary
-// on purpose: opening Matches chains two fetches (entries, then the
-// matches that are named from them), so the rendered result is a few
-// hops further down the queue than a single await would reach.
+// on purpose: opening a drawer or accepting/resetting a suggestion chains
+// two or more fetches (entries, suggestions, and whatever the mutation
+// itself refreshes), so the rendered result is a few hops further down
+// the queue than a single await would reach.
 async function settle() {
   for (let i = 0; i < 8; i++) await Promise.resolve()
   flushSync()
 }
 
-// #584 gave Matches a tab of its own. Round 30 (#700, #691) draws no
-// sub-tab row at all -- see the WATCHLIST_SUBTABS_ENABLED comment on
-// Watchlist.svelte -- so the tab, its panel, and the "open in Matches"
-// path from a watch's drawer are all unreachable through this component
-// while the flag is off. The row-by-row rendering, the three empty-state
-// sentences, the entry-name-removed guard and "load older" this block
-// used to exercise all live in MatchesTab.svelte, untouched by this
-// round; they are not re-tested here because there is no way to reach
-// that component from Watchlist.svelte with the tab row gone.
-describe('Watchlist Matches tab (#584)', () => {
+// Round 33's suggestion body: a second tbody (#sugg) hung directly off
+// the watch table, under the watches, in the same row grammar -- "a
+// suggestion is a watch that has not been said yes to" (the component's
+// own section comment). No sub-tab reaches it; it is just there.
+describe('The suggestion body under the watches (#771)', () => {
+  function watchTable(): HTMLElement {
+    return document.querySelector('.watch-table-section') as HTMLElement
+  }
+
   beforeEach(() => {
     vi.resetAllMocks()
     vi.mocked(fetchSuggestions).mockResolvedValue([])
@@ -131,12 +137,330 @@ describe('Watchlist Matches tab (#584)', () => {
     watchlistState.coverage = {}
     suggestState.candidates = []
     matchesState.reset()
+    appState.now = new Date('2026-08-24T10:05:00Z').getTime()
   })
 
-  it('draws no Matches tab and no matches panel -- round 30 fidelity, unmounted behind WATCHLIST_SUBTABS_ENABLED (#691)', async () => {
+  // Round 30's fidelity check (no tab strip at all) still holds under
+  // round 33 -- worth locking in on its own, since #712's other gaps are
+  // about the body this describe otherwise exercises.
+  it('draws no tablist and no Suggestions panel', async () => {
+    await renderWatchlist([])
+    expect(screen.queryByRole('tablist', { name: 'Watchlist views' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'Suggestions' })).toBeNull()
+    expect(document.getElementById('panel-suggestions')).toBeNull()
+  })
+
+  it('counts only the open candidates in its heading, and names the routers that pushed any of them', async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([
+      suggestion('s1', 'device', { status: 'off', routerDevice: 'rb5009' }),
+      suggestion('s2', 'port', { status: 'off', routerDevice: 'hap-ax2' }),
+      // Set aside, not open -- and the router it named still counts
+      // toward "from what X and Y pushed" even though it does not count
+      // toward the open number.
+      suggestion('s3', 'device', { status: 'hide', routerDevice: 'rb5009' }),
+    ])
+    await renderWatchlist([])
+
+    const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
+    expect(heading.textContent).toContain('mikroview suggests · from what rb5009 and hap-ax2 pushed')
+    expect(heading.querySelector('b')?.textContent).toBe('2')
+  })
+
+  it('keeps set-aside suggestions out of the list until "show them" is clicked, and the pill then reads "hide them"', async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([
+      suggestion('s1', 'device', { status: 'off' }),
+      suggestion('s2', 'port', { status: 'hide' }),
+    ])
+    await renderWatchlist([])
+
+    expect(document.getElementById('suggestion-s1')).toBeTruthy()
+    expect(document.getElementById('suggestion-s2')).toBeNull()
+
+    const toggle = within(watchTable()).getByRole('button', { name: /set aside/ })
+    expect(toggle.textContent).toContain('show them')
+
+    await fireEvent.click(toggle)
+    flushSync()
+
+    expect(document.getElementById('suggestion-s2')).toBeTruthy()
+    expect(toggle.textContent).toContain('hide them')
+  })
+
+  it("a device suggestion's drawer offers to watch it and learn first", async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([suggestion('s1', 'device', { status: 'off' })])
+    await renderWatchlist([])
+
+    await fireEvent.click(document.getElementById('suggestion-s1') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('#sugg .wt-drawer') as HTMLElement
+    expect(within(drawer).getByRole('button', { name: 'watch it — it learns first' })).toBeTruthy()
+  })
+
+  it("a port suggestion's drawer offers to watch it as every attempt being a match", async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([suggestion('s1', 'port', { status: 'off', ports: [23] })])
+    await renderWatchlist([])
+
+    await fireEvent.click(document.getElementById('suggestion-s1') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('#sugg .wt-drawer') as HTMLElement
+    expect(within(drawer).getByRole('button', { name: 'watch it — every attempt is a match' })).toBeTruthy()
+  })
+
+  it('a stale suggestion leads with "let it go", keeping the accept verb quiet beside it', async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([suggestion('s1', 'device', { status: 'off', stale: true })])
+    await renderWatchlist([])
+
+    await fireEvent.click(document.getElementById('suggestion-s1') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('#sugg .wt-drawer') as HTMLElement
+    expect(within(drawer).getByRole('button', { name: 'let it go' })).toBeTruthy()
+    expect(within(drawer).getByRole('button', { name: 'watch it anyway' })).toBeTruthy()
+  })
+
+  it("a set-aside suggestion's drawer offers to bring it back, and calls unhideSuggestion", async () => {
+    const s1 = suggestion('s1', 'device', { status: 'hide' })
+    vi.mocked(fetchSuggestions).mockResolvedValue([s1])
+    vi.mocked(unhideSuggestion).mockResolvedValue({ ...s1, status: 'off' })
+    await renderWatchlist([])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /set aside/ }))
+    flushSync()
+    await fireEvent.click(document.getElementById('suggestion-s1') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('#sugg .wt-drawer') as HTMLElement
+
+    await fireEvent.click(within(drawer).getByRole('button', { name: 'bring it back' }))
+    await settle()
+    expect(unhideSuggestion).toHaveBeenCalledWith('s1')
+  })
+
+  it('"not this" hides an open suggestion by calling hideSuggestion', async () => {
+    const s1 = suggestion('s1', 'port', { status: 'off' })
+    vi.mocked(fetchSuggestions).mockResolvedValue([s1])
+    vi.mocked(hideSuggestion).mockResolvedValue({ ...s1, status: 'hide' })
+    await renderWatchlist([])
+
+    await fireEvent.click(document.getElementById('suggestion-s1') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('#sugg .wt-drawer') as HTMLElement
+
+    await fireEvent.click(within(drawer).getByRole('button', { name: 'not this' }))
+    await settle()
+    expect(hideSuggestion).toHaveBeenCalledWith('s1')
+  })
+
+  it('accepting a suggestion calls acceptSuggestion and refreshes the watch list so the new entry shows up', async () => {
+    const s1 = suggestion('s1', 'port', { status: 'off' })
+    const newEntry = entry('e-new', 'new watch')
+    vi.mocked(fetchSuggestions).mockResolvedValue([s1])
+    vi.mocked(acceptSuggestion).mockResolvedValue({ candidate: { ...s1, status: 'on', entryId: 'e-new' }, entry: newEntry })
+    await renderWatchlist([])
+    // Accept really does create a server-side entry -- suggestState only
+    // reloads the candidate pool, so watchlistState has to be refetched
+    // separately for the accepted row to appear among the watches at all
+    // (acceptOne's own comment on Watchlist.svelte).
+    vi.mocked(fetchWatchlistEntries).mockResolvedValue({ entries: [newEntry], coverage: {} })
+
+    await fireEvent.click(document.getElementById('suggestion-s1') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('#sugg .wt-drawer') as HTMLElement
+    await fireEvent.click(within(drawer).getByRole('button', { name: 'watch it — every attempt is a match' }))
+    await settle()
+
+    expect(acceptSuggestion).toHaveBeenCalledWith('s1')
+    expect(vi.mocked(fetchWatchlistEntries)).toHaveBeenCalledTimes(2)
+  })
+
+  it('start over is arm-then-confirm: the first click only arms it, and "Started over." appears once the second click succeeds', async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([suggestion('s1', 'device', { status: 'off' })])
+    vi.mocked(resetSuggestions).mockResolvedValue([])
+    await renderWatchlist([entry('e1', 'SSH watch')])
+
+    const btn = within(watchTable()).getByRole('button', { name: /wipe every watch/ })
+    await fireEvent.click(btn)
+    flushSync()
+    expect(btn.textContent).toContain('confirm — every watch goes, and it suggests afresh')
+    expect(resetSuggestions).not.toHaveBeenCalled()
+
+    // The entries really are gone server-side once reset succeeds, so the
+    // refetch that follows has to answer empty for "Started over." to
+    // show in place of the ordinary empty row (see Watchlist.svelte's own
+    // comment on startedOverAt).
+    vi.mocked(fetchWatchlistEntries).mockResolvedValue({ entries: [], coverage: {} })
+    await fireEvent.click(btn)
+    await settle()
+
+    expect(resetSuggestions).toHaveBeenCalledTimes(1)
+    expect(watchTable().textContent).toContain('Started over.')
+  })
+
+  it("suggestions are not affected by the watch table's own sort and filter boxes", async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([suggestion('s1', 'device', { status: 'off', name: 'iot lease' })])
+    await renderWatchlist([entry('e1', 'SSH watch')])
+
+    await fireEvent.input(within(watchTable()).getByLabelText('Filter watches by watch name'), {
+      target: { value: 'nothing matches this' },
+    })
+    flushSync()
+
+    expect(watchTable().textContent).toContain('No watches match these filters.')
+    expect(document.getElementById('suggestion-s1')).toBeTruthy()
+  })
+})
+
+// Round 33's match list: what a watch's own drawer shows in place of the
+// verbatim raw log line round 30 drew there. Fed by matchesState's bulk
+// feed for the newest matches, and `older ▸` for anything further back --
+// see loadOlderMatches's own comment on Watchlist.svelte for why the
+// per-entry filtering has to happen client-side.
+describe('The match list in a watch drawer (#771)', () => {
+  function watchTable(): HTMLElement {
+    return document.querySelector('.watch-table-section') as HTMLElement
+  }
+
+  // Same shape as recordFor, but lets each record carry its own count and
+  // rule label without having to restate every other event field inline
+  // at every call site.
+  function matchRecord(id: string, entryId: string, lastSeen: string, count: number, ruleLabel: string): WatchlistMatch {
+    return recordFor(id, entryId, {
+      lastSeen,
+      count,
+      event: {
+        id: 1,
+        time: lastSeen,
+        deviceId: 'router-1',
+        sourceIp: '192.168.1.1',
+        action: 'drop',
+        ruleLabel,
+        chain: 'forward',
+        raw: 'raw line',
+      },
+    })
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchSuggestions).mockResolvedValue([])
+    vi.mocked(fetchRecentMatches).mockResolvedValue([])
+    watchlistState.entries = []
+    watchlistState.coverage = {}
+    suggestState.candidates = []
+    matchesState.reset()
+    appState.now = new Date('2026-08-24T10:05:00Z').getTime()
+  })
+
+  // Round 30's fidelity check, still true: no Matches tab, no matches
+  // panel. #712's own named gaps (empty states, load-older paging,
+  // entry-name linking) are what the rest of this describe restores.
+  it('draws no Matches tab and no matches panel', async () => {
     await renderWatchlist([entry('e1', 'SSH watch')])
     expect(screen.queryAllByRole('tab').length).toBe(0)
     expect(document.getElementById('panel-matches')).toBeNull()
+  })
+
+  it('shows the honest empty state, and offers no older ▸ even though the entry is scoped', async () => {
+    await renderWatchlist([entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } })])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /Open the drawer/ }))
+    flushSync()
+    const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.textContent).toContain('Nothing in the recent log yet.')
+    expect(within(drawer).queryByRole('button', { name: /older/ })).toBeNull()
+  })
+
+  it('renders at most three match lines, newest first, each with its own count and rule label, and the caption reads "last 3 of N"', async () => {
+    vi.mocked(fetchRecentMatches).mockResolvedValue([
+      matchRecord('m1', 'e1', '2026-08-24T10:00:00Z', 1, 'r1'),
+      matchRecord('m2', 'e1', '2026-08-24T10:01:00Z', 2, 'r2'),
+      matchRecord('m3', 'e1', '2026-08-24T10:02:00Z', 3, 'r3'),
+      matchRecord('m4', 'e1', '2026-08-24T10:03:00Z', 4, 'r4'),
+    ])
+    await renderWatchlist([entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } })])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /Open the drawer/ }))
+    flushSync()
+    const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.querySelector('.matches .lab')?.textContent).toContain('last 3 of 4')
+
+    const items = Array.from(drawer.querySelectorAll('ul.mlist li'))
+    expect(items.length).toBe(3)
+    expect(items[0].textContent).toContain('4×')
+    expect(items[0].textContent).toContain('r4')
+    expect(items[1].textContent).toContain('3×')
+    expect(items[2].textContent).toContain('2×')
+    // The oldest of the four is the one that doesn't fit -- proof this is
+    // "newest three", not just "first three, whatever order they arrived
+    // in".
+    expect(drawer.textContent).not.toContain('r1')
+  })
+
+  it("older ▸ asks for this entry's own mac with limit 20, and keeps only the records that are actually this entry's", async () => {
+    vi.mocked(fetchRecentMatches).mockResolvedValue([matchRecord('m1', 'e1', '2026-08-24T10:00:00Z', 1, 'r1')])
+    vi.mocked(fetchWatchlistMatches).mockResolvedValue([
+      matchRecord('m2', 'e1', '2026-08-24T09:00:00Z', 1, 'r2'),
+      // The backend has no per-entry filter (loadOlderMatches's own
+      // comment on Watchlist.svelte, tracked against #691) -- it answers
+      // by mac/ip, which can carry another entry's record along for the
+      // ride. Filtering that out is this component's job, not the
+      // server's, so a foreign record in the same page must never render.
+      matchRecord('m3', 'other-entry', '2026-08-24T08:00:00Z', 1, 'r3'),
+    ])
+    await renderWatchlist([entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } })])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /Open the drawer/ }))
+    flushSync()
+    let drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    await fireEvent.click(within(drawer).getByRole('button', { name: 'older ▸' }))
+    await settle()
+
+    expect(fetchWatchlistMatches).toHaveBeenCalledWith(
+      expect.objectContaining({ mac: 'aa:bb:cc:dd:ee:ff', limit: 20 }),
+    )
+    drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.querySelectorAll('ul.mlist li').length).toBe(2)
+    expect(drawer.textContent).toContain('r2')
+    expect(drawer.textContent).not.toContain('r3')
+  })
+
+  it('a full page carrying none of this entry\'s records does not mark it exhausted -- the pager keeps walking back for one that does (#819)', async () => {
+    vi.mocked(fetchRecentMatches).mockResolvedValue([matchRecord('m1', 'e1', '2026-08-24T10:00:00Z', 1, 'r1')])
+    // A full OLDER_PAGE page that happens to be entirely another watch
+    // sharing this mac, then a full page that is all this entry's own --
+    // the exact shape loadOlderMatches's own comment on Watchlist.svelte
+    // says a shared identity can produce.
+    const otherPage = Array.from({ length: 20 }, (_, i) =>
+      matchRecord(`other-${i}`, 'other-entry', `2026-08-24T09:${String(40 - i).padStart(2, '0')}:00Z`, 1, 'ro'),
+    )
+    const minePage = Array.from({ length: 20 }, (_, i) =>
+      matchRecord(`mine-${i}`, 'e1', `2026-08-24T08:${String(40 - i).padStart(2, '0')}:00Z`, 1, 'rm'),
+    )
+    vi.mocked(fetchWatchlistMatches).mockResolvedValueOnce(otherPage).mockResolvedValueOnce(minePage)
+    await renderWatchlist([entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } })])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /Open the drawer/ }))
+    flushSync()
+    let drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    await fireEvent.click(within(drawer).getByRole('button', { name: 'older ▸' }))
+    await settle()
+
+    // One click did not stop at the first, entirely-foreign page -- it
+    // asked again and found this entry's own records further back.
+    expect(fetchWatchlistMatches).toHaveBeenCalledTimes(2)
+    drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.querySelector('.matches .lab')?.textContent).toContain('last 3 of 21')
+    // A full page that happened to carry none of this entry's records
+    // must never read as "nothing older": the control stays offered.
+    expect(within(drawer).getByRole('button', { name: 'older ▸' })).toBeTruthy()
+  })
+
+  it('offers no older ▸ for an entry with neither a mac nor an ip -- there is nothing to query the match log by', async () => {
+    vi.mocked(fetchRecentMatches).mockResolvedValue([matchRecord('m1', 'e1', '2026-08-24T10:00:00Z', 1, 'r1')])
+    await renderWatchlist([entry('e1', 'unscoped watch', {})])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /Open the drawer/ }))
+    flushSync()
+    const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(within(drawer).queryByRole('button', { name: /older/ })).toBeNull()
   })
 })
 
@@ -259,10 +583,11 @@ describe('The ratified watch table (#676)', () => {
     expect(watchTable().textContent).toContain('—')
   })
 
-  it("opening a row's drawer shows the story headline, the verbatim last matching line and the pathway detail", async () => {
+  it("opening a row's drawer shows the story headline, the pathway detail, and its newest match line", async () => {
     vi.mocked(fetchRecentMatches).mockResolvedValue([
       recordFor('m1', 'e1', {
         lastSeen: '2026-08-24T10:00:00Z',
+        count: 3,
         tuple: { source: { mac: 'aa:bb:cc:dd:ee:ff' }, destIp: '10.0.0.9', port: 22 },
         event: {
           id: 1,
@@ -286,8 +611,15 @@ describe('The ratified watch table (#676)', () => {
     const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
     expect(drawer.textContent).toContain('Watching.')
     expect(drawer.textContent).toContain('aa:bb:cc:dd:ee:ff')
-    expect(drawer.textContent).toContain('10:00:00 firewall,info A|ssh-watch| forward: 10.0.0.5->10.0.0.9:22')
     expect(drawer.textContent).toContain('ports 22')
+    // Round 33 replaced the verbatim raw log line with a short match
+    // list -- the identity shown is the matching event's own
+    // (tuple.source.mac here), never the entry's possibly-unscoped
+    // Source (see matchSource's own comment on Watchlist.svelte).
+    const mlist = drawer.querySelector('ul.mlist') as HTMLElement
+    expect(mlist.textContent).toContain('aa:bb:cc:dd:ee:ff → 10.0.0.9')
+    expect(mlist.textContent).toContain(':22')
+    expect(mlist.textContent).toContain('3× · ssh-watch')
   })
 
   it('a broken ring explains itself honestly, without inventing a window-silence reason', async () => {

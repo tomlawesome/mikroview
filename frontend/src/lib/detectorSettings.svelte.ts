@@ -153,6 +153,11 @@ class DetectorSettingsState {
     const result = await cloneDefinition(name, cloneAs)
     if (typeof result === 'string') return result
     await this.refresh()
+    // The schema map is keyed by definition id, and the copy has an id
+    // nothing has ever asked about (#810). Without this, the panel that
+    // opens on the copy a moment later would render no tuning fields for
+    // a detector that does declare threshold and window.
+    await this.refreshSchema()
     return { id: result.id }
   }
 }

@@ -401,25 +401,6 @@ func (s *DefinitionsStore) SetParams(id string, params Params) error {
 	})
 }
 
-// SetSuppressions replaces a definition's own scoped exclusions -- see
-// Suppression. Every suppression must name a target; an entry without one
-// would silently exclude nothing while reading, in the UI, as though
-// something were excluded.
-func (s *DefinitionsStore) SetSuppressions(id string, suppressions []Suppression) error {
-	return s.mutate(id, func(d *Definition) error {
-		for i, sup := range suppressions {
-			if sup.Target == "" {
-				return fmt.Errorf("engine: suppression %d has no target", i)
-			}
-			if suppressions[i].ID == "" {
-				suppressions[i].ID = newDefinitionID()
-			}
-		}
-		d.Suppressions = suppressions
-		return nil
-	})
-}
-
 // ErrNoShippedDefaults is returned by ResetParams for a definition with
 // nothing to reset to -- a custom definition, which has no stock to diff
 // against (see Definition.Distance's own doc comment).

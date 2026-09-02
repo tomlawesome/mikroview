@@ -3,13 +3,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Flag, FlagType, Verdict } from './types'
 
-// flagsState only ever reaches the network through fetchFlags/clearFlag
+// flagsState only ever reaches the network through fetchFlags/setFlagVerdict
 // (see api.ts) -- groupedBySource and extractSourceIp are pure logic
 // over whatever's already sitting in .list, so no network mocking is
 // needed here, unlike auth.svelte.test.ts. The judge*/undoVerdict tests
 // below (#638) are the exception: they exercise setFlagVerdict/
 // deleteFlagVerdict directly, so those two functions are mocked rather
-// than the whole module, keeping fetchFlags/clearFlag etc. as the real
+// than the whole module, keeping fetchFlags/setFlagVerdict etc. as the real
 // implementations for every other describe block in this file.
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>()
@@ -163,7 +163,7 @@ describe('FlagsState.groupedBySource', () => {
 // toast it existed for: the row-level stamp now offers Undo for as
 // long as the flag still carries the verdict, per isUndoable's own doc
 // comment, so there is nothing timed left to test here.
-describe('FlagsState verdicts (#638)', () => {
+describe('FlagsState verdicts (#638, #640)', () => {
   it('judgeAndClear posts the verdict immediately and clears the flag from the response', async () => {
     flagsState.list = [flag('port_scan', '203.0.113.9')]
     const id = flagsState.list[0].id
@@ -185,7 +185,7 @@ describe('FlagsState verdicts (#638)', () => {
     flagsState.list = [flag('port_scan', '203.0.113.9')]
     const id = flagsState.list[0].id
 
-    await expect(flagsState.judgeAndClear(id, 'noise')).rejects.toThrow('boom')
+    await expect(flagsState.judgeAndClear(id, 'checked')).rejects.toThrow('boom')
 
     expect(flagsState.list[0].cleared).toBe(false)
     expect(flagsState.list[0].verdict).toBeUndefined()
@@ -215,9 +215,9 @@ describe('FlagsState verdicts (#638)', () => {
     flagsState.list = [flag('port_scan', '203.0.113.9')]
     const id = flagsState.list[0].id
     vi.mocked(setFlagVerdict).mockResolvedValue(
-      flag('port_scan', '203.0.113.9', { id, cleared: true, verdict: 'noise', verdictBy: 'alice', verdictAt: 't' }),
+      flag('port_scan', '203.0.113.9', { id, cleared: true, verdict: 'checked', verdictBy: 'alice', verdictAt: 't' }),
     )
-    await flagsState.judgeAndClear(id, 'noise')
+    await flagsState.judgeAndClear(id, 'checked')
 
     vi.mocked(deleteFlagVerdict).mockResolvedValue(flag('port_scan', '203.0.113.9', { id, cleared: false }))
     await flagsState.undoVerdict(id)
@@ -238,13 +238,13 @@ describe('FlagsState verdicts (#638)', () => {
     expect(flagsState.list[0].cleared).toBe(false)
   })
 
-  it('undoVerdict sends a real DELETE for a standing real verdict, with no window at all (#780 item 3)', async () => {
+  it('undoVerdict sends a real DELETE for a standing investigate verdict, with no window at all (#780 item 3)', async () => {
     flagsState.list = [flag('critical_port', '203.0.113.9')]
     const id = flagsState.list[0].id
     vi.mocked(setFlagVerdict).mockResolvedValue(
-      flag('critical_port', '203.0.113.9', { id, verdict: 'real', verdictBy: 'alice', verdictAt: 't' }),
+      flag('critical_port', '203.0.113.9', { id, verdict: 'investigate', verdictBy: 'alice', verdictAt: 't' }),
     )
-    await flagsState.judgeReal(id, 'alice')
+    await flagsState.judgeInvestigate(id, 'alice')
     expect(flagsState.isUndoable(id)).toBe(true)
 
     vi.mocked(deleteFlagVerdict).mockResolvedValue(flag('critical_port', '203.0.113.9', { id, cleared: false }))
@@ -259,45 +259,45 @@ describe('FlagsState verdicts (#638)', () => {
     flagsState.list = [flag('port_scan', '203.0.113.9')]
     const id = flagsState.list[0].id
     vi.mocked(setFlagVerdict).mockResolvedValue(
-      flag('port_scan', '203.0.113.9', { id, cleared: true, verdict: 'noise', verdictBy: 'alice', verdictAt: 't' }),
+      flag('port_scan', '203.0.113.9', { id, cleared: true, verdict: 'checked', verdictBy: 'alice', verdictAt: 't' }),
     )
-    await flagsState.judgeAndClear(id, 'noise')
+    await flagsState.judgeAndClear(id, 'checked')
 
     vi.mocked(deleteFlagVerdict).mockRejectedValue(new Error('boom'))
     await expect(flagsState.undoVerdict(id)).rejects.toThrow('boom')
 
     expect(flagsState.list[0].cleared).toBe(true)
-    expect(flagsState.list[0].verdict).toBe('noise')
+    expect(flagsState.list[0].verdict).toBe('checked')
   })
 
-  it('judgeReal records the verdict without clearing the flag', async () => {
+  it('judgeInvestigate records the verdict without clearing the flag', async () => {
     flagsState.list = [flag('critical_port', '203.0.113.9')]
     const id = flagsState.list[0].id
     vi.mocked(setFlagVerdict).mockResolvedValue(
-      flag('critical_port', '203.0.113.9', { id, verdict: 'real', verdictBy: 'alice', verdictAt: 't' }),
+      flag('critical_port', '203.0.113.9', { id, verdict: 'investigate', verdictBy: 'alice', verdictAt: 't' }),
     )
 
-    await flagsState.judgeReal(id, 'alice')
+    await flagsState.judgeInvestigate(id, 'alice')
 
-    expect(setFlagVerdict).toHaveBeenCalledWith(id, 'real')
+    expect(setFlagVerdict).toHaveBeenCalledWith(id, 'investigate')
     expect(flagsState.list[0].cleared).toBe(false)
-    expect(flagsState.list[0].verdict).toBe('real')
+    expect(flagsState.list[0].verdict).toBe('investigate')
     expect(flagsState.list[0].verdictBy).toBe('alice')
   })
 
-  it('judgeReal reverts the optimistic verdict on failure and rethrows', async () => {
+  it('judgeInvestigate reverts the optimistic verdict on failure and rethrows', async () => {
     vi.mocked(setFlagVerdict).mockRejectedValue(new Error('boom'))
     flagsState.list = [flag('critical_port', '203.0.113.9')]
 
-    await expect(flagsState.judgeReal('f1', 'alice')).rejects.toThrow('boom')
+    await expect(flagsState.judgeInvestigate('f1', 'alice')).rejects.toThrow('boom')
     expect(flagsState.list[0].verdict).toBeUndefined()
   })
 
   it('never re-asks a flag that already carries a verdict', async () => {
-    const already: Verdict = 'real'
+    const already: Verdict = 'investigate'
     flagsState.list = [flag('critical_port', '203.0.113.9', { verdict: already, verdictBy: 'alice', verdictAt: 't' })]
 
-    await flagsState.judgeReal('f1', 'bob')
+    await flagsState.judgeInvestigate('f1', 'bob')
 
     expect(flagsState.list[0].verdictBy).toBe('alice')
     expect(setFlagVerdict).not.toHaveBeenCalled()
