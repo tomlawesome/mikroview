@@ -438,7 +438,7 @@ describe('The settings shelf (#633)', () => {
   // #653's three tiers: running the detector bench (enable/pause, edit
   // scope) is a normal operational action, open to user and admin --
   // unlike the tokens/users doors above, which stay admin-only.
-  it('a viewer opening the watchers station sees no run checkbox or scope knob', async () => {
+  it('a viewer opening the watchers station sees no run checkbox and no row expander', async () => {
     authState.state = 'authenticated'
     authState.role = 'viewer'
     render(EngineRoom)
@@ -449,10 +449,10 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.queryByRole('checkbox', { name: 'Port scan runs' })).toBeNull()
-    expect(document.querySelector('.scope-knob')).toBeNull()
+    expect(document.querySelector('.row-knob')).toBeNull()
   })
 
-  it('a user opening the watchers station sees the run checkbox and scope knob', async () => {
+  it('a user opening the watchers station sees the run checkbox and the row expander', async () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(EngineRoom)
@@ -462,7 +462,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.getByRole('checkbox', { name: 'Port scan runs' })).toBeTruthy()
-    expect(document.querySelector('.scope-knob')).toBeTruthy()
+    expect(document.querySelector('.row-knob')).toBeTruthy()
   })
 
   it('a reveal already in state (e.g. a remount mid-session) still renders, not just a freshly-minted one', async () => {

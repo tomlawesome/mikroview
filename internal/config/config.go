@@ -166,9 +166,21 @@ type Store struct {
 	// is the thing an operator actually controls (it is what they set on
 	// a container) and mikroview can derive the rest.
 	MaxMemory ByteSize `yaml:"maxMemory"`
+	// SettingsStorePath is where internal/settings keeps the figure an
+	// admin set from the app's own memory control (#796). It is not a
+	// second copy of MaxMemory: it is empty until somebody moves that
+	// slider, and from then on it is the value that applies, because a
+	// figure chosen with the live consequence on screen is a more recent
+	// and more deliberate statement than the one the file was built
+	// with. mikroview says at startup which of the two it took.
+	//
+	// Optional persistence, same contract as Flags.StorePath: left
+	// empty, the control still works and still resizes the running
+	// buffer, the choice just does not survive a restart.
+	SettingsStorePath string `yaml:"settingsStorePath"`
 }
 
-// assumedBytesPerEvent is what a typical retained event costs: the fixed
+// AssumedBytesPerEvent is what a typical retained event costs: the fixed
 // struct (464 bytes, internal/store.Event) plus one heap allocation for
 // its raw syslog line, rounded to the allocator's size class. Measured in
 // internal/store/memory_test.go's TestRetainedBytesPerEvent against a
@@ -189,7 +201,7 @@ type Store struct {
 // warning compounding it rather than catching it. The worst case is now
 // roughly 2 KiB + the struct, about 3.5x this constant rather than 107x.
 // See #285 finding 5.
-const assumedBytesPerEvent = 624
+const AssumedBytesPerEvent = 624
 
 // Capacity derives the event ring's element count from the configured
 // memory budget. Always at least 1 -- store.New already treats a
@@ -197,7 +209,7 @@ const assumedBytesPerEvent = 624
 // event's assumed cost should fail the same way rather than silently
 // holding zero.
 func (s Store) Capacity() int {
-	n := int64(s.MaxMemory) / assumedBytesPerEvent
+	n := int64(s.MaxMemory) / AssumedBytesPerEvent
 	if n < 1 {
 		n = 1
 	}
@@ -872,11 +884,12 @@ func defaults() Config {
 		},
 		Store: Store{
 			Retention: 24 * time.Hour,
-			// 120MiB / 624 bytes/event (assumedBytesPerEvent) derives to
+			// 120MiB / 624 bytes/event (AssumedBytesPerEvent) derives to
 			// ~201,649 events -- close to the old flat 200,000 default,
 			// so a fresh install's memory footprint does not jump on
 			// upgrade even though the unit did.
-			MaxMemory: 120 * 1024 * 1024,
+			MaxMemory:         120 * 1024 * 1024,
+			SettingsStorePath: DefaultDataDir + "/settings.json",
 		},
 		Log: Log{
 			Level: "info",

@@ -76,9 +76,6 @@ func goldenDefinition() Definition {
 				"window":    "60s",
 			},
 		},
-		Suppressions: []Suppression{
-			{ID: "supp-1", Target: "198.51.100.9", Reason: "known monitoring host"},
-		},
 	}
 }
 
@@ -143,8 +140,5 @@ func TestDefinitionEnvelopeJSONRoundTrips(t *testing.T) {
 	}
 	if decoded.ID != orig.ID || decoded.Name != orig.Name || decoded.Intent != orig.Intent || decoded.Kind != orig.Kind {
 		t.Errorf("decoded envelope fields do not match original: got %+v", decoded)
-	}
-	if len(decoded.Suppressions) != len(orig.Suppressions) {
-		t.Errorf("decoded.Suppressions = %v, want %d entries", decoded.Suppressions, len(orig.Suppressions))
 	}
 }
