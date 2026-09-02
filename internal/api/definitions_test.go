@@ -1126,6 +1126,80 @@ func TestHandleDefinitionsCloneRefusesShipped(t *testing.T) {
 	}
 }
 
+// mustCreateCustomDetection creates an operator-authored detector and
+// returns it as the API serves it.
+func mustCreateCustomDetection(t *testing.T, ts *httptest.Server, name string) definitionView {
+	t.Helper()
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:   name,
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} attempts against port 22 from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	})
+	return mustDecodeDefinition(t, resp)
+}
+
+// TestHandleDefinitionsCloneCustomDetection is the other half of #810: a
+// custom detection is data all the way down (#502), so cloning one copies
+// its structure and its tuning into a second detector the operator can
+// edit without touching the original. The copy starts paused -- #787
+// decision C, so a half-edited detector never runs.
+func TestHandleDefinitionsCloneCustomDetection(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	src := mustCreateCustomDetection(t, ts, "SSH hammering")
+	if !src.Enabled {
+		t.Fatalf("expected the original to be enabled, so the clone's paused state is its own")
+	}
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+src.ID+"/clone", cloneRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	clone := mustDecodeDefinition(t, resp)
+	if clone.ID == src.ID || clone.ID == "" {
+		t.Errorf("expected a fresh id, got %q (original %q)", clone.ID, src.ID)
+	}
+	if clone.Name != src.Name+" (copy)" {
+		t.Errorf("expected the default copy suffix, got %q", clone.Name)
+	}
+	if clone.Enabled {
+		t.Error("expected the copy to start paused")
+	}
+	if clone.Provenance.Origin != engine.ProvenanceCustom || clone.Intent != engine.IntentDetection {
+		t.Errorf("provenance/intent = %q/%q, want custom/detection", clone.Provenance.Origin, clone.Intent)
+	}
+	if clone.Detection == nil {
+		t.Fatal("the copy came back without the structure that makes it evaluate anything")
+	}
+	if !reflect.DeepEqual(clone.Detection, src.Detection) {
+		t.Errorf("detection block = %+v, want the original's %+v", clone.Detection, src.Detection)
+	}
+	if clone.Params["threshold"] != src.Params["threshold"] || clone.Params["window"] != src.Params["window"] {
+		t.Errorf("params = %v, want the original's %v", clone.Params, src.Params)
+	}
+
+	// The copy is a second detector, not a rename of the first.
+	original, ok := s.Definitions.Get(src.ID)
+	if !ok {
+		t.Fatal("the original must still exist after cloning it")
+	}
+	if !original.Definition.Enabled {
+		t.Error("cloning must not pause the original")
+	}
+}
+
 // --- Schema ---------------------------------------------------------------
 
 // TestHandleDefinitionsSchema covers GET /api/definitions/schema: every
