@@ -226,7 +226,7 @@ func TestShippedDeviceSilence_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if !fs.Clear(f2.ID, now.Add(31*time.Minute)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", now.Add(31*time.Minute)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	d.Tick(now.Add(32 * time.Minute))

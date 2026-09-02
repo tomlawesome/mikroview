@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -198,63 +199,33 @@ func TestTokenCreateAndRevokeRecordAuditEntries(t *testing.T) {
 	}
 }
 
-// TestPlainFlagClearDoesNotRecordAuditEntry documents the deliberate
-// decision (issue #112): handleFlagsClear is not admin-gated, so it's
-// excluded from this admin-action audit log. handleFlagsClearPermanent
-// is excluded for the same reason -- see that handler's own doc comment.
-func TestPlainFlagClearDoesNotRecordAuditEntry(t *testing.T) {
+// TestClearAllDoesNotRecordAPerFlagAuditEntry documents what the audit
+// log carries for flags after #640: the per-flag judgement writes one
+// flag.verdict entry (see TestHandleFlagsVerdictIsAuditLogged), and the
+// bulk clear writes one flag.clear_all entry for the whole call -- never
+// one per flag.
+func TestClearAllDoesNotRecordAPerFlagAuditEntry(t *testing.T) {
 	s := newAuthTestServer(t)
+	s.Flags.Add("port_scan", "1.2.3.4", "d1", time.Now())
+	s.Flags.Add("port_scan", "1.2.3.5", "d2", time.Now())
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 	admin := registerAdmin(t, ts)
 
-	postFlagsAction(t, admin, ts.URL+"/api/flags/port_scan:1.2.3.4/clear")
-	postFlagsAction(t, admin, ts.URL+"/api/flags/port_scan:1.2.3.4/clear-permanent")
+	postFlagsAction(t, admin, ts.URL+"/api/flags/clear-all")
 
 	res := fetchAudit(t, admin, ts)
+	var clearAlls int
 	for _, e := range res.Entries {
-		if e.Action == "flag.clear" || e.Action == "flag.clear_permanent" {
-			t.Errorf("expected no audit entry for a non-admin-gated flag clear, got %+v", e)
+		if e.Action == "flag.clear_all" {
+			clearAlls++
+		}
+		if e.Target == "port_scan:1.2.3.4" {
+			t.Errorf("expected no per-flag audit entry from a bulk clear, got %+v", e)
 		}
 	}
-}
-
-// TestExclusionRemoveRecordsAuditEntry proves the one flags.go mutation
-// that IS actually admin-gated (handleExclusionRemove, via
-// callerIsAdminOrOpen) is logged, unlike handleFlagsClearPermanent above.
-func TestExclusionRemoveRecordsAuditEntry(t *testing.T) {
-	s := newAuthTestServer(t)
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-	admin := registerAdmin(t, ts)
-
-	// Raise then permanently exclude a flag directly through the store
-	// (cheaper than driving a real detector through the HTTP layer just
-	// to get one to clear-permanent).
-	s.Flags.Exclude("port_scan", "1.2.3.4")
-	exclusions := s.Flags.ListExclusions()
-	if len(exclusions) != 1 {
-		t.Fatalf("expected 1 exclusion to exist, got %d", len(exclusions))
-	}
-	id := exclusions[0].ID
-
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/exclusions/"+id, nil)
-	req.Header.Set(csrfHeaderName, csrfHeaderValue)
-	resp, err := admin.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-
-	res := fetchAudit(t, admin, ts)
-	var found bool
-	for _, e := range res.Entries {
-		if e.Action == "flag.exclusion_remove" && e.Target == id {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected a flag.exclusion_remove audit entry, got %+v", res.Entries)
+	if clearAlls != 1 {
+		t.Errorf("expected exactly 1 flag.clear_all entry, got %d", clearAlls)
 	}
 }
 
