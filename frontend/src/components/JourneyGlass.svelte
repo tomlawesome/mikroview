@@ -7,16 +7,31 @@
   // is one component rather than two: the panel's position and frame
   // never move, only its content does. The deck underneath (mounted by
   // App.svelte) stays fully visible and interactive -- there is no veil.
-  import { journeyState, CONNECTING_MS } from '../lib/journey.svelte'
+  import { journeyState, tourLengthSentence } from '../lib/journey.svelte'
+  import { appState } from '../lib/state.svelte'
+  import { wizardState } from '../lib/wizard.svelte'
+  import { syslogCommands } from '../lib/setupsteps'
 
-  // Not a wait for real evidence -- see CONNECTING_MS's own comment.
-  // "Skip ahead" exists for anyone who does not want to sit through a
-  // beat with nothing to click; the timer is the default pace.
+  // Beat 3 opens on evidence, never on a clock (#750 B1, owner ruling
+  // 2026-09-02): the moment the first line lands, the glass moves. See
+  // journeyState.arrived for why this is a one-way move.
   $effect(() => {
     if (journeyState.phase !== 'connecting') return
-    const timer = setTimeout(() => journeyState.fromConnecting(), CONNECTING_MS)
-    return () => clearTimeout(timer)
+    if (journeyState.arrived) journeyState.fromConnecting()
   })
+
+  // The waiting beat shows the two lines again, so the operator can
+  // paste them without walking back. Same source as JourneyAttach's --
+  // syslogCommands() is what step 2 of the full wizard emits, never
+  // invented copy -- and it asks for the status itself rather than
+  // assuming the attach beat's own fetch has landed.
+  $effect(() => {
+    if (!wizardState.status) wizardState.refresh()
+  })
+
+  const commands = $derived(
+    wizardState.status ? syslogCommands(wizardState.address, wizardState.status.instance.syslogPort) : '',
+  )
 
   const cardCount = $derived(journeyState.cards.length)
 </script>
@@ -25,14 +40,21 @@
   <div class="glass">
     {#if journeyState.phase === 'connecting'}
       <div class="pulse" aria-hidden="true"><i></i><i></i><i></i></div>
-      <p class="big">The pipe is coming alive.</p>
-      <p class="story">Building your instance from what has just arrived…</p>
-      <button type="button" class="skip" onclick={() => journeyState.fromConnecting()}>Skip ahead</button>
+      <p class="big">Nothing has arrived yet.</p>
+      {#if commands}
+        <pre class="code">{commands}</pre>
+      {/if}
+      <!-- No "skip ahead" here: the next beat says mikroview is
+           flowing, and nothing may move on to that claim before it is
+           true. The way out of a router that never speaks is the same
+           one the glass itself offers -- the wizard, which walks the
+           fuller checklist on evidence. -->
+      <button type="button" class="skip-link" onclick={() => journeyState.skipToWizard()}>
+        skip straight to the wizard ▸
+      </button>
     {:else}
       <p class="big">MikroView is flowing.</p>
-      <p class="story">
-        {cardCount} {cardCount === 1 ? 'card' : 'cards'}. About two minutes. It ends at the wizard either way.
-      </p>
+      <p class="story">{tourLengthSentence(cardCount)}</p>
       <button type="button" class="begin" onclick={() => journeyState.beginTour()}>begin the tour</button>
       <button type="button" class="skip-link" onclick={() => journeyState.skipToWizard()}>
         skip straight to the wizard ▸
@@ -127,15 +149,24 @@
     background: var(--accent-bg-hover, var(--bg-hover));
   }
 
-  .skip {
-    align-self: flex-start;
-    font-size: 11px;
-    color: var(--fg-dim);
-    background: transparent;
+  /* The same block as the attach beat's, sunk rather than raised: the
+     glass is already the elevated surface, so the lines take var(--bg)
+     to stay legible on it. */
+  .code {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 10px 12px;
+    background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 4px 12px;
-    cursor: pointer;
+    border-radius: 8px;
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.6;
+    text-align: left;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .skip-link {

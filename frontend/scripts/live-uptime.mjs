@@ -1,44 +1,49 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The scene bar's uptime readout: present, plausible, and actually
-// counting. The counting assertion matters more than presence -- a badge
-// that renders once and never ticks would pass any static check while
-// being exactly the stale readout the feature exists to avoid.
+// Uptime, in the account menu's foot (#804, round 37).
+//
+// This scenario used to drive a scene-bar badge and assert that it
+// counted -- two reads 2.5s apart had to differ. Both halves are now
+// wrong, and neither was weakened to make this pass:
+//
+// - The badge had no home. Round 30 drew no scene-bar readout, so
+//   UptimeBadge.svelte was left mounted nowhere; this scenario has been
+//   failing on dev ever since, waiting on a selector nothing rendered.
+//   Round 37 gives it one, beside the version in the menu's foot.
+// - The tick was the point, and now it is the defect. Days and hours
+//   only: "a ticking second is a clock, not a fact" (round-37 README,
+//   accepted 2026-09-02). So the assertion inverts -- the readout must
+//   hold still -- and the "it is real, not a frozen render" half moves
+//   to agreeing with the server's own number, which is what the tick
+//   was standing in for.
+//
+// live-account-menu.mjs checks the foot's shape and its agreement with
+// healthz. What only this file can show is the holding still, which
+// needs real elapsed time in a real browser.
 
-import { session, check, done } from './live-browser.mjs'
+import { session, check, openAccountMenu, done } from './live-browser.mjs'
 
 const { page, consoleErrors } = await session()
 
-// The active card's own badge: the deck (#616) mounts the neighbouring
-// cards too, each scene bar with an uptime readout of its own, so a
-// bare .uptime resolves to three elements and trips strict mode.
-const badge = page.locator('.card[aria-hidden="false"] .uptime')
-await badge.waitFor({ timeout: 10000 })
-const first = await badge.textContent()
-// [Nd Nh Nm NNs] -- all four units always shown, seconds zero-padded to
-// two digits so the badge's width never twitches (#444, formatUptimeFull
-// in lib/format.ts). Was `up Nx`, one unit; #444 changed the format and
-// missed that this scenario asserted the old shape, so it failed on
-// every run against dev once #444 landed.
-check(/^\[\d+d \d+h \d+m \d{2}s\]$/.test(first.trim()), `uptime badge renders a duration (got "${first.trim()}")`)
+await openAccountMenu(page)
+const ver = page.locator('.account .menu .ver')
+await ver.waitFor({ timeout: 10000 })
 
-// The server-side number and the badge must agree. healthz is unauthed,
-// so read it through the page's own fetch.
-const healthz = await page.evaluate(async () => {
-  const res = await fetch('/api/healthz')
-  return res.json()
-})
-check(
-  Number.isInteger(healthz.uptimeSeconds) && healthz.uptimeSeconds >= 0,
-  `healthz reports uptimeSeconds (got ${healthz.uptimeSeconds})`,
-)
+const first = (await ver.textContent())?.trim()
+check(/ · up \d+ d \d+ h$/.test(first ?? ''), `the foot ends in days-and-hours uptime, spaced (got ${JSON.stringify(first)})`)
 
-// A young server's badge shows seconds, so two reads 2.5s apart must
-// differ -- this is the tick. (The live harness always starts a fresh
-// instance, so uptime here is well under a minute.)
-await page.waitForTimeout(2500)
-const second = await badge.textContent()
-check(second !== first, `the readout counts (was "${first.trim()}", now "${second.trim()}")`)
+// The old shape must not come back: no minutes, no seconds, no brackets.
+check(!/\[/.test(first ?? ''), `no brackets around the readout (got ${JSON.stringify(first)})`)
+check(!/\d+m \d+s/.test(first ?? ''), `no minutes or seconds (got ${JSON.stringify(first)})`)
+
+// The counter underneath advances every second (uptime.svelte.ts ticks
+// at 1s and resyncs at 60s). Held open across several of those ticks,
+// the rendered string must not move -- that is the whole difference
+// between a fact and a clock. The live harness always starts a fresh
+// instance, so this window is nowhere near the next hour boundary.
+await page.waitForTimeout(3500)
+const second = (await ver.textContent())?.trim()
+check(second === first, `the readout holds still across the counter's ticks (was ${JSON.stringify(first)}, now ${JSON.stringify(second)})`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.slice(0, 2).join(' | ') || 'none'})`)
 

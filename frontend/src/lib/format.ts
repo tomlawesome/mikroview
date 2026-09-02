@@ -97,19 +97,21 @@ export function formatDurationShort(totalSeconds: number): string {
   return `${d}d ${h % 24}h`
 }
 
-// formatUptimeFull renders a duration in seconds as all four units --
-// "3d 4h 12m 05s" -- for the toolbar's server-uptime readout, which sits
-// right beside the connection indicator and wants a fixed-width,
-// always-fully-qualified string rather than formatDurationShort's
-// "drop to the two units that matter" summary. Seconds are zero-padded
-// so the string doesn't twitch in width every ten ticks.
-export function formatUptimeFull(totalSeconds: number): string {
+// formatUptimeDaysHours renders a duration in seconds as days and hours
+// only -- "12 d 4 h" -- for the account menu's foot, where uptime sits
+// beside the version: "0.9 · AGPL-3.0 · up 12 d 4 h".
+//
+// Two units, and no smaller one, is the ratified design rather than a
+// simplification (round 37, accepted by the owner 2026-09-02): "a
+// ticking second is a clock, not a fact". The counter underneath still
+// advances every second; reading only these two units off it means the
+// rendered string changes once an hour, so a menu left open does not
+// twitch. Both units always appear, so the string keeps one shape.
+export function formatUptimeDaysHours(totalSeconds: number): string {
   const s = Math.max(0, Math.round(totalSeconds))
   const days = Math.floor(s / 86_400)
   const hours = Math.floor((s % 86_400) / 3600)
-  const minutes = Math.floor((s % 3600) / 60)
-  const seconds = s % 60
-  return `${days}d ${hours}h ${minutes}m ${String(seconds).padStart(2, '0')}s`
+  return `${days} d ${hours} h`
 }
 
 // parseGoDurationSeconds reads a Go time.Duration.String() value (the
