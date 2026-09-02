@@ -82,8 +82,15 @@ const mainTopConnected = await page.$eval('#main-content', (el) => el.getBoundin
 // --- Connection lost -------------------------------------------------------
 await dropConnection()
 
-await page.waitForSelector('.banner-closed', { timeout: 15000 })
+const bannerHandle = await page.waitForSelector('.banner-closed', { timeout: 15000 })
 check(true, 'the banner appears once the connection is actually lost')
+
+// Measure from the handle waitForSelector just returned, and take the
+// content top right alongside it -- both in the same step as the wait, so
+// a reconnect landing later in the scenario can't unmount the banner out
+// from under a separate, later $eval('.banner-closed', ...).
+const bannerBox = await bannerHandle.evaluate((el) => el.getBoundingClientRect())
+const mainTopDisconnected = await page.$eval('#main-content', (el) => el.getBoundingClientRect().top)
 
 await page.waitForSelector(`${CONN}.conn-closed`, { timeout: 15000 })
 check(
@@ -94,8 +101,6 @@ check(
 // "Tops the content column and pushes content -- never overlays." An
 // overlay would leave #main-content's top exactly where it was; pushing
 // moves it down by roughly the banner's own height.
-const bannerBox = await page.$eval('.banner-closed', (el) => el.getBoundingClientRect())
-const mainTopDisconnected = await page.$eval('#main-content', (el) => el.getBoundingClientRect().top)
 check(
   mainTopDisconnected > mainTopConnected + 10,
   `content is pushed down, not overlaid -- top went from ${mainTopConnected} to ${mainTopDisconnected}`,
