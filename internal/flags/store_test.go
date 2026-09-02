@@ -77,6 +77,28 @@ func flushForTest(t *testing.T, s *Store) {
 	}
 }
 
+// closeForTest stops s's write-behind persister via t.Cleanup, flushing
+// whatever is still dirty first -- see Store.Close. Any test that opens
+// two stores against the same path (a reopen-and-verify round trip) must
+// register this for both, not just the first: with persistMinInterval
+// forced to 0 for the debounce-timing tests, a store's writer goroutine
+// can still be attempting a save on the shared path when t.TempDir()
+// tries to remove it, which fails cleanup with "directory not empty"
+// (issue #836) and can also make one store's persister observe the
+// other's write as a concurrent modification. flushForTest alone only
+// proves a write has landed; it does not stop the goroutine that could
+// start another one.
+func closeForTest(t *testing.T, s *Store) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := s.Close(ctx); err != nil {
+			t.Errorf("closeForTest: %v", err)
+		}
+	})
+}
+
 func TestOpenEmptyPathIsUsable(t *testing.T) {
 	s, err := Open("")
 	if err != nil {
@@ -349,6 +371,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	s1.Add(TypeCriticalPort, "5.6.7.8", "6 attempts on port 22 in 5m", now)
 	s1.AddWithConfidence(TypeActivitySpike, "9.9.9.9", "5x baseline", 82, now)
@@ -364,6 +387,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-opening the persisted store failed: %v", err)
 	}
+	closeForTest(t, s2)
 	list := s2.List()
 	if len(list) != 2 {
 		t.Fatalf("expected 2 persisted flags after reopening, got %d: %+v", len(list), list)
@@ -788,6 +812,7 @@ func TestAddProvisionalPersistsAndSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	s1.AddProvisional(TypeActivitySpike, "9.9.9.9", "warming up", 40, Evidence{}, "", true, now)
 	// #400: write-behind -- flush before reopening, see flushForTest.
@@ -797,6 +822,7 @@ func TestAddProvisionalPersistsAndSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-opening the persisted store failed: %v", err)
 	}
+	closeForTest(t, s2)
 	list := s2.List()
 	if len(list) != 1 {
 		t.Fatalf("expected 1 persisted flag after reopening, got %d: %+v", len(list), list)
@@ -1152,6 +1178,7 @@ func TestExclusionPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	s1.Exclude(TypePortScan, "203.0.113.9")
 	s1.Exclude(TypeCriticalPort, "198.51.100.4")
 	// Also persist an ordinary active flag alongside the exclusions, to
@@ -1164,6 +1191,11 @@ func TestExclusionPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-opening the persisted store failed: %v", err)
 	}
+	// #836: s2 is mutated below (Add, to prove the reloaded exclusion
+	// still suppresses raises), so its own write-behind persister must
+	// also be stopped before the test returns -- otherwise it can still
+	// be writing this path when t.TempDir() cleans it up.
+	closeForTest(t, s2)
 
 	if !s2.Excluded(TypePortScan, "203.0.113.9") {
 		t.Error("expected the first exclusion to survive reopening")
@@ -1320,6 +1352,7 @@ func TestClearedCountSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		target := fmt.Sprintf("203.0.113.%d", i)
@@ -1334,6 +1367,7 @@ func TestClearedCountSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s2)
 	if got := s2.clearedCount; got != 5 {
 		t.Errorf("clearedCount after reload = %d, want 5 -- a stale zero disables cleared-flag eviction entirely", got)
 	}
@@ -1558,6 +1592,7 @@ func TestSetVerdictPersistsAndSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	s1.Add(TypeGlobalSpike, "global", "d", now)
 	id := s1.List()[0].ID
@@ -1570,6 +1605,7 @@ func TestSetVerdictPersistsAndSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-opening the persisted store failed: %v", err)
 	}
+	closeForTest(t, s2)
 	list := s2.List()
 	if len(list) != 1 {
 		t.Fatalf("expected 1 persisted flag after reopening, got %d: %+v", len(list), list)

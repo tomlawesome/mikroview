@@ -18,6 +18,97 @@ rewritten.
 
 ### Added
 
+- **A detector's candidate numbers can be tried before they are saved**
+  (#786). Changing a threshold was a guess with no shown workings: the
+  new value went live, and whether it was right showed up later as flags
+  that did or did not arrive. A **Try** button now sits at the foot of an
+  expanded detector row, beside Save. Pressing it replays the numbers as
+  typed over the traffic mikroview still holds -- the detector's own
+  logic, with the candidate window and threshold substituted for its
+  stored ones -- and puts the answer in one slot under the fields. Either
+  a receipt: *"Would have fired 3 times in the last 4h 12m"*, with the
+  hosts that would have been flagged listed beneath it. Or a decline:
+  *"Can't replay: needs a 6h window, only 4h 12m held"*, in the same
+  slot, in grey rather than red, because a corpus shorter than the
+  detector's own window is an honest limit of the traffic held rather
+  than an error, and reporting "it would have fired zero times" instead
+  would be a claim nothing established. Where the server says its read
+  was cut short, the count reads "at least"; where the listed sample is
+  bounded, the hosts read "at least these". Try writes nothing -- the
+  detector the engine is evaluating is untouched, whether the receipt is
+  encouraging or not -- and it never blocks Save. New `replayDefinition`
+  wrapper over `POST /api/definitions/{id}/replay`, which existed
+  server-side but had no caller anywhere in the client. Two known limits,
+  recorded rather than hidden: the receipt is shown without the
+  live-firing comparison beside it, because nothing in the app or the API
+  can produce that number for a window hours long (the flag time series
+  counts newly-raised episodes rather than firings, covers only the last
+  sixty minutes, and starts empty after a restart); and a candidate
+  carries only the window and the threshold, which is the closed set the
+  engine's replay accepts -- a detector's other tuning fields are saved
+  as normal but are not part of what Try asks.
+- **A live memory control for the event buffer, not just a config-file
+  setting** (#796). Settings' memory group now carries a slider under
+  the hours bar: dragging it only proposes a figure, and nothing changes
+  until you press apply. Applying it -- from the UI, or directly via the
+  new `PUT /api/settings/store` (admin-only, audit-logged as
+  `settings.store_max_memory`) -- stores the figure and resizes the
+  running ring immediately: growing it keeps everything already held,
+  shrinking it drops the oldest events first. An out-of-range figure is
+  refused with a 400 rather than clamped. Once set, the stored figure
+  wins over `store.maxMemory` in `config.yaml` on every future restart
+  too -- mikroview says so in the startup log, and deleting the new
+  `store.settingsStorePath` document (`/var/lib/mikroview/settings.json`
+  by default) is how you go back to the file's figure. The allowed range
+  is worked out per host at startup: 32MiB at the low end, and at the
+  high end whatever's left of the smaller of the cgroup memory limit or
+  the machine's RAM once a quarter of it (or 256MiB, whichever's larger)
+  is reserved as headroom and the same 1.47x ring-to-resident overhead
+  CFG-0012 already quotes is priced in -- so the slider never offers a
+  figure the host would be OOM-killed for taking, and never reports a
+  deliberately large `config.yaml` budget as out of range. `GET
+  /api/stats` gains a `memory` object (`maxMemory`, `min`, `max`,
+  `hostTotal`, `bytesPerEvent`, `resident`, `stored`) so any reader sees
+  the same numbers the UI does, and the setting is now included in
+  `-backup`/`-restore` alongside every other store. A viewer sees the
+  bar and the figure; only an admin is offered the drag.
+- **A detector's thresholds and windows can be edited in the app**
+  (#787). Until now the only thing the watchers station could change was
+  a detector's *scope* -- which hosts, ports or rules it watches -- and
+  even that was typed as comma-separated text. A detector whose
+  threshold or window was wrong for a particular network could not be
+  corrected anywhere in the interface. A row on the bench now expands
+  downward in place (one open at a time; no side drawer) into its
+  editing panel: typed tuning fields built from `GET
+  /api/definitions/schema`, so every field's type, bounds, unit and
+  description come from the server's own declaration rather than a
+  second copy of every detector's knobs written in the frontend. A
+  duration is edited as a plain second count and written back as the Go
+  duration string the server validates. Each scope axis is now a set of
+  removable chips with an add box that suggests what the app already
+  knows -- hosts from Entities, rule labels from the router-pushed
+  filter tables -- and the ports box takes a range (`8000-8010`) as well
+  as a single port, refusing anything that is not a port with a reason
+  instead of dropping it. The allow/deny/no-restriction select stays,
+  and source classification stays a select because it holds one value,
+  not a list. **Reset to stock** puts a detector's params back to
+  exactly what it shipped with, leaving its scope alone (the server's
+  reset is a params operation, and a button that also cleared an
+  operator's host exclusions would be doing something nobody pressed it
+  for). A viewer sees every row and every fact and no control at all --
+  hidden, never disabled, the same grammar the run/pause tick already
+  used. New `fetchDefinitionSchema` and `getDefinition` wrappers;
+  `resetDefinition` and `cloneDefinition` have callers for the first
+  time. **Clone** copies a detector you wrote -- its match conditions,
+  its aggregation and its tuning -- into a second detector that appears
+  paused, already expanded, with its name selected to be typed over, so
+  authoring a variant is one press and a rename (#810). It is offered
+  only on those rows: a shipped detector's logic is Go compiled into
+  this binary and keyed by its own id, so a copy of it would list, look
+  configurable and evaluate nothing -- the server refuses, and the
+  button is not there to press. Overriding a shipped detector's params
+  is the operation that exists for it; starting a custom detector *from*
+  one needs a conditions editor and is filed as #829.
 - **A demo seeder that exercises the whole interface, not just syslog**
   (#687). Every UI review this project has run was hampered by a demo
   that only ever sent syslog: one lane on the fall, no pushed rule/NAT/
@@ -406,6 +497,24 @@ rewritten.
   against a port list -- that would allow combinations the device never
   made -- so a flag from a detector that records no pairs permits
   nothing, and offers no watcher.
+- **Metrics: the hourline reads every series, and the ledger sits above
+  the table's minutes** (#803, design rounds 36-37). The line under the
+  scene bar used to answer the minute under the cursor with a ratio that
+  named two series and hid the rest ("9 refused of 61 events"); it now
+  reads the whole minute in one line -- a figure per series, refused in
+  the refused ink, and the flag-episode count followed by the type names
+  behind it. That was already the hourline's job, so the register's
+  cross-section aside is gone rather than duplicating it beside the
+  paper, and the "Pick a minute on the register to read it across every
+  series" instruction it printed when empty went with it.
+
+  On the table view the ledger -- top rules, top talkers, by device, by
+  protocol, the hour by action, episodes by flag type -- moves from a
+  narrow column down the left side to a full-width band across the head
+  of the view, ruled off from the minutes below it, with the table
+  taking the whole width instead of what a 320px sidebar left it. Its
+  six columns are bars without boxes: the bordered cards around each one
+  are gone, since a box inside a ruled band draws the same border twice.
 
 - **The docket's flags tab is the ratified round-29 table, not a card
   grid** (#688). One row per open flag -- flag · where · evidence ·
@@ -617,6 +726,26 @@ rewritten.
   waiting on a quiet gap that a fast enough burst never has. A sender
   left on the previous default format has no header to split on and
   keeps the old behaviour.
+- **A second `make live-check-remote` run could force-push over the
+  first's branch and delete the tree it was still standing in** (#809).
+  `scripts/gate-remote.sh` used one fixed branch (`gate-run`) and one
+  fixed work tree (`~/gate-work`) on the host, with nothing to stop two
+  runs overlapping -- the second run's push, reclaim and `rm -rf` landed
+  on top of the first mid-run, and the tell was the bare repo's
+  `gate-run` ref pointing at someone else's commit. The script now takes
+  an atomic `mkdir ~/gate-lock` on the host right before it pushes,
+  writing who holds it (host, user, ref, sha, pid, start time) to
+  `~/gate-lock/owner`; a second run that cannot take the lock prints the
+  owner and refuses rather than racing it. A lock older than 15 minutes
+  with no `mv-gate-run` container running is treated as abandoned and
+  taken over, printing what was found. Released in a `trap ... EXIT` so
+  Ctrl-C, a dropped SSH connection or a normal finish all clear it
+  without disturbing the run's real exit status. Separately, the
+  checkout is now verified after cloning -- `git status --porcelain`
+  and `git ls-files --deleted` must both be empty, or the run refuses
+  before building rather than failing confusingly partway through
+  `live-check` -- and a `RECLAIM` chown failure against an existing tree
+  now prints a warning instead of failing silently.
 
 ## [0.4.0] - 2026-08-25
 
