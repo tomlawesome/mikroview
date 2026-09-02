@@ -239,7 +239,7 @@ export function caStep(status: SetupStatus, address: string): StepStatus {
   return { state: 'waiting', detail: 'Waiting for a router to download /ca.crt.' }
 }
 
-export function syslogStep(status: SetupStatus): StepStatus {
+export function syslogStep(status: SetupStatus, devices: Device[] = []): StepStatus {
   if (!status.instance.syslogEnabled) {
     return {
       state: 'blocked',
@@ -247,6 +247,14 @@ export function syslogStep(status: SetupStatus): StepStatus {
         'Syslog is switched off (listen.syslogTls is empty in config.yaml), so no router-side ' +
         'configuration can work until it is set.',
     }
+  }
+  // The source-address split (#442) reads as partial, in the voice step
+  // 3 uses when events arrive without an action: evidence has arrived,
+  // but composed wrongly. Not blocked -- everything on mikroview's side
+  // works, which is the whole problem.
+  const splits = sourceSplits(devices)
+  if (splits.length > 0) {
+    return { state: 'partial', detail: sourceSplitObservation(splits) }
   }
   if (status.sources.some((s) => s.syslogFirstSeenAt)) {
     return { state: 'done', detail: 'A router has an open syslog connection.' }
@@ -307,6 +315,78 @@ export function pushStep(status: SetupStatus): StepStatus {
 // a name of the operator's choosing.
 export function undeclaredDevices(devices: Device[]): Device[] {
   return devices.filter((d) => !d.configured)
+}
+
+// --- The source-address split (#442) -----------------------------------
+//
+// A router holds an address on every network it routes, and its logs
+// arrive stamped with whichever one faces this instance -- frequently
+// not the one declared as sourceIp. The declared device then sits
+// silent while the real stream auto-discovers under another address,
+// and a token minted for the declared identity enriches nothing.
+//
+// The server pairs the two (Registry.MultihomedCandidates, #499) and
+// this module only words it. The wording states both facts and hands
+// the operator the one fact only they hold -- whether the two addresses
+// are one box. Nothing here claims they are.
+
+export interface SourceSplit {
+  // The declared identity, as config.yaml names it: sourceIp, or the id
+  // when a declaration carries no address.
+  declared: string
+  // Every undeclared address logs arrive from, in id order. All of them,
+  // never a pick: the server returns candidates, not a diagnosis.
+  arriving: string[]
+}
+
+// sourceSplits is one entry per declared device the server has paired
+// with arriving undeclared addresses.
+export function sourceSplits(devices: Device[]): SourceSplit[] {
+  return devices
+    .filter((d) => d.configured && (d.multihomedCandidates?.length ?? 0) > 0)
+    .map((d) => ({ declared: d.sourceIp || d.id, arriving: d.multihomedCandidates ?? [] }))
+}
+
+// srcAddressCommand is the recommended remedy: the router keeps the
+// address it was declared under, so the token step 4 mints and the
+// tables it pushes need no reissuing. Assumes the logging action is
+// named mikroview -- step 2's own `add` created it under that name, the
+// same assumption every wizard command already makes.
+export function srcAddressCommand(declared: string): string {
+  return `/system logging action set mikroview src-address=${declared}`
+}
+
+// arrivingAddresses is every undeclared address across the splits, in
+// first-seen order and without repeats. The server pairs each silent
+// declared device with the same discovered set, so with two declared
+// devices silent this is the set once, not twice.
+export function arrivingAddresses(splits: SourceSplit[]): string[] {
+  const seen = new Set<string>()
+  for (const s of splits) for (const a of s.arriving) seen.add(a)
+  return [...seen]
+}
+
+// prose joins addresses the way a sentence does: "a", "a and b",
+// "a, b and c". Exported for the wizard body, which words the same
+// addresses in the same voice.
+export function prose(items: string[], joiner: 'and' | 'or' = 'and'): string {
+  if (items.length <= 1) return items.join('')
+  return `${items.slice(0, -1).join(', ')} ${joiner} ${items[items.length - 1]}`
+}
+
+// sourceSplitObservation is step 2's observation line when the split is
+// on: what you told mikroview, what the router shows, no diagnosis.
+export function sourceSplitObservation(splits: SourceSplit[]): string {
+  const arriving = arrivingAddresses(splits)
+  const declared = splits.map((s) => s.declared)
+  const from = `${prose(arriving)}, ${arriving.length === 1 ? 'an address' : 'addresses'} you haven't declared`
+  const silent = `${prose(declared)}, which you declared in config.yaml, ${declared.length === 1 ? 'has' : 'have'} sent nothing`
+  return `Connected — but from ${from}, while ${silent}.`
+}
+
+// sourceSplitReceipt is the step list's sub-line for the same reading.
+export function sourceSplitReceipt(splits: SourceSplit[]): string {
+  return `syslog from ${arrivingAddresses(splits).join(', ')} · declared ${splits.map((s) => s.declared).join(', ')} silent`
 }
 
 // --- The claim ledger ---------------------------------------------------
@@ -406,7 +486,9 @@ export function caReceipt(status: SetupStatus): string {
   return `ca.crt fetched by ${first.source} · ${when(first.caFetchedAt ?? '')}${more}`
 }
 
-export function syslogReceipt(status: SetupStatus): string {
+export function syslogReceipt(status: SetupStatus, devices: Device[] = []): string {
+  const splits = sourceSplits(devices)
+  if (splits.length > 0) return sourceSplitReceipt(splits)
   const seen = status.sources.filter((s) => s.syslogFirstSeenAt)
   if (seen.length === 0) return ''
   const first = seen[0]
@@ -504,14 +586,14 @@ function flavourFor(step: number, state: StepState): Flavour {
 export function buildLedger(status: SetupStatus, devices: Device[], address: string): LedgerStep[] {
   const checks: StepStatus[] = [
     caStep(status, address),
-    syslogStep(status),
+    syslogStep(status, devices),
     rulesStep(status),
     pushStep(status),
     nameStep(devices),
   ]
   const receipts = [
     caReceipt(status),
-    syslogReceipt(status),
+    syslogReceipt(status, devices),
     rulesReceipt(status),
     pushReceipt(status),
     '',
