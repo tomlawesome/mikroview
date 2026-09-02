@@ -224,13 +224,46 @@ export function reachHours(capacity: number, eventsPerSecond: number): number | 
   return capacity / eventsPerSecond / 3600
 }
 
-/** The row under the bar: "120 MiB · ~201 000 events · ~9 h at today's rate". */
-export function bufferRow(bytes: number, bytesPerEvent: number, eventsPerSecond: number): string {
+/**
+ * The row under the bar: "120 MiB · ~201 000 events · ~9 h at today's
+ * rate", or, when `held` is given, "120 MiB · 8 412 of ~201 000 events ·
+ * ~9 h at today's rate" (#842).
+ *
+ * The ceiling and the reach are reckonings -- the client's own arithmetic
+ * on a configured budget and a measured rate. held is different: it is
+ * what the server publishes right now as the ring's actual occupancy, the
+ * one live number in the row, and it is what the live-check (#842) pins
+ * to prove events are still arriving rather than the row having frozen.
+ * It renders exact, not to three figures like the capacity beside it --
+ * coarsening 8,412 to "8 410" would make a real count print a number
+ * nobody could reconcile with the server's own figure.
+ */
+export function bufferRow(
+  bytes: number,
+  bytesPerEvent: number,
+  eventsPerSecond: number,
+  held?: number,
+): string {
   const capacity = capacityFor(bytes, bytesPerEvent)
   const hours = reachHours(capacity, eventsPerSecond)
-  const parts = [formatSize(bytes), `~${formatEvents(capacity)} events`]
+  const eventsPart =
+    held === undefined
+      ? `~${formatEvents(capacity)} events`
+      : `${formatExactCount(held)} of ~${formatEvents(capacity)} events`
+  const parts = [formatSize(bytes), eventsPart]
   parts.push(hours === null ? 'no rate to reckon from yet' : `~${formatHours(hours)} at today's rate`)
   return parts.join(' · ')
+}
+
+/**
+ * formatExactCount groups a live count the same way formatEvents groups
+ * its coarsened one -- space-separated thousands -- but without the
+ * three-significant-figure rounding, so a small or exact figure like 3
+ * or 8,412 prints as itself rather than as "0" or "8 410".
+ */
+function formatExactCount(count: number): string {
+  if (!Number.isFinite(count) || count < 0) return '0'
+  return String(Math.round(count)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
 }
 
 /** What a proposal is: bigger, smaller, or the figure already in effect. */
