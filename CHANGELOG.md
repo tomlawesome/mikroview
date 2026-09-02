@@ -312,6 +312,45 @@ rewritten.
 
 ### Changed
 
+- **"Never flag this again" now records how much is normal, and comes
+  back when a host outgrows it** (#640, part A: store and engine). It
+  used to silence a detector on a host outright, forever, whatever the
+  host did next. It now records the size of the firing you judged
+  normal -- the measure that detector compares against its threshold,
+  such as the number of distinct ports for a port scan -- and absorbs
+  later firings up to one and a half times that size. Past that the
+  flag returns, carrying both numbers, so it can say what was expected
+  and what was actually seen rather than repeating a count you already
+  looked at. Saying it is expected again raises the recorded size to
+  the new firing; the size only ever goes up.
+
+  Every shipped detector now states what its size is, or states that it
+  has none. Detectors with no size -- device silence, known bad IP,
+  unexpected mail sender, stale rule, and the two that judge a rate
+  against a moving baseline (global spike, rule spike) -- keep the old
+  meaning exactly: silencing one of those ignores that host on that
+  detector outright. Silences recorded before this release have no size
+  and keep that same meaning; nothing needs migrating.
+
+- **Metrics: the hourline reads every series, and the ledger sits above
+  the table's minutes** (#803, design rounds 36-37). The line under the
+  scene bar used to answer the minute under the cursor with a ratio that
+  named two series and hid the rest ("9 refused of 61 events"); it now
+  reads the whole minute in one line -- a figure per series, refused in
+  the refused ink, and the flag-episode count followed by the type names
+  behind it. That was already the hourline's job, so the register's
+  cross-section aside is gone rather than duplicating it beside the
+  paper, and the "Pick a minute on the register to read it across every
+  series" instruction it printed when empty went with it.
+
+  On the table view the ledger -- top rules, top talkers, by device, by
+  protocol, the hour by action, episodes by flag type -- moves from a
+  narrow column down the left side to a full-width band across the head
+  of the view, ruled off from the minutes below it, with the table
+  taking the whole width instead of what a 320px sidebar left it. Its
+  six columns are bars without boxes: the bordered cards around each one
+  are gone, since a box inside a ruled band draws the same border twice.
+
 - **The docket's flags tab is the ratified round-29 table, not a card
   grid** (#688). One row per open flag -- flag · where · evidence ·
   count · age -- each wearing its flag type's own family ink as a left
@@ -481,6 +520,26 @@ rewritten.
   waiting on a quiet gap that a fast enough burst never has. A sender
   left on the previous default format has no header to split on and
   keeps the old behaviour.
+- **A second `make live-check-remote` run could force-push over the
+  first's branch and delete the tree it was still standing in** (#809).
+  `scripts/gate-remote.sh` used one fixed branch (`gate-run`) and one
+  fixed work tree (`~/gate-work`) on the host, with nothing to stop two
+  runs overlapping -- the second run's push, reclaim and `rm -rf` landed
+  on top of the first mid-run, and the tell was the bare repo's
+  `gate-run` ref pointing at someone else's commit. The script now takes
+  an atomic `mkdir ~/gate-lock` on the host right before it pushes,
+  writing who holds it (host, user, ref, sha, pid, start time) to
+  `~/gate-lock/owner`; a second run that cannot take the lock prints the
+  owner and refuses rather than racing it. A lock older than 15 minutes
+  with no `mv-gate-run` container running is treated as abandoned and
+  taken over, printing what was found. Released in a `trap ... EXIT` so
+  Ctrl-C, a dropped SSH connection or a normal finish all clear it
+  without disturbing the run's real exit status. Separately, the
+  checkout is now verified after cloning -- `git status --porcelain`
+  and `git ls-files --deleted` must both be empty, or the run refuses
+  before building rather than failing confusingly partway through
+  `live-check` -- and a `RECLAIM` chown failure against an existing tree
+  now prints a warning instead of failing silently.
 
 ## [0.4.0] - 2026-08-25
 
