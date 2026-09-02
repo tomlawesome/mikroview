@@ -47,7 +47,13 @@ func raiseDetectionFlag(fs *flags.Store, r RoutedEmission) (isNew bool) {
 		return false
 	}
 	f := r.Detection
-	return fs.AddEmission(f.Type, f.Target, f.Detail, f.Confidence, f.Evidence, f.Country, f.Provisional, r.EventTime)
+	// f.Size is the definition's declared size for this firing (#640).
+	// The store, not this sink, decides what to do with it: an
+	// expectation for (Type, Target) either absorbs the firing or
+	// refuses it, and only add() can do that and bump the absorbed count
+	// under one lock -- see flags.Store.add's own doc comment for why
+	// the check lives there rather than here.
+	return fs.AddEmission(f.Type, f.Target, f.Detail, f.Confidence, f.Evidence, f.Country, f.Provisional, f.Size, r.EventTime)
 }
 
 // FlagsConfidenceFloorRaiser adapts a *flags.Store to

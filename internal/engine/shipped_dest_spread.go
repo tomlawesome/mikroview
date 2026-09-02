@@ -186,11 +186,17 @@ func (d *destSpreadDefinition) Evaluate(e store.Event) {
 		overshootConfidence(count, d.threshold),
 		d.vpnInterfaces, d.vpnMultiplier, e.InInterface)
 
+	// Size is the distinct-destination count in the window -- the
+	// declared size for both definitions this type serves
+	// (outbound_anomaly and internal_recon), and the measure each one's
+	// threshold param is compared against. See ShippedSizeMeasure.
+	size := count
 	d.emit(Emission{
 		Target: e.SrcIP,
 		Detail: fmt.Sprintf("%d distinct %s destinations in %s", count, d.noun(), d.window) +
 			vpnDetailSuffix(d.vpnInterfaces, e.InInterface),
 		Confidence: &confidence,
+		Size:       &size,
 		Hosts:      sortedHostsCapped(hosts),
 		// No Country: internal/detect passed "" for both directions. The
 		// emission is about a LAN source, whose country badge would be
