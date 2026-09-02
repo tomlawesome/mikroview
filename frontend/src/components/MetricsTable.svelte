@@ -111,8 +111,12 @@
 </script>
 
 <div class="table-view">
-  <section class="totals">
-    <h3>The hour in totals <span>· magnitude, not time — where the old cards' answers live</span></h3>
+  <!-- No printed heading: round 37's band runs straight from the hourline
+       into its six columns, each of which names its own question. The
+       drawing supplies the name this section still owes a screen reader
+       itself, as `.ledger`'s own aria-label, so dropping the visible h3
+       does not leave the band anonymous. -->
+  <section class="totals" aria-label="The ledger: the same hour in totals — magnitude, not time">
     <MetricsTotals {hour} />
   </section>
 
@@ -189,45 +193,38 @@
 </div>
 
 <style>
-  /* #732: the totals column moves down the left side, the table taking
-     the remaining width, so reading the scene stays one vertical
-     motion (the fall, the stream and the docket all scroll the same
-     way). The column is a plain grid item, not `position: sticky` --
-     it scrolls with the page, which is the owner's own reason for
-     asking. Below the breakpoint it falls back to stacking above the
-     table, same as before this issue. */
+  /* Rounds 36-37 (#803) supersede #732's left-hand column. Round 36 drew
+     the ledger under the minutes; the owner's verdict was "love the
+     ledger but put them at the top not beneath", and round 37's #s4 draws
+     it as a full-width band across the head of the view with a rule
+     closing it off from the table below. So the view is a plain vertical
+     stack -- ledger, then the minutes, then the saved breakdowns -- and
+     the table gets the whole width instead of what a 320px sidebar left
+     it. Nothing is sticky: it all scrolls with the page, which was #732's
+     own reason for moving the totals out of a scroller. */
   .table-view {
-    display: grid;
-    grid-template-columns: minmax(280px, 320px) 1fr;
-    align-items: start;
-    gap: 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 26px;
     min-width: 0;
   }
 
+  /* Matching the drawn `.ledger`: 92% wide against the same max as the
+     table below it, so the two share one measure, and the rule is the
+     boundary between magnitude and time rather than a box around either. */
   .totals {
-    grid-column: 1;
+    width: 92%;
+    max-width: 1480px;
     min-width: 0;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--hair-2);
   }
 
-  .figures {
-    grid-column: 2;
-    min-width: 0;
-  }
-
+  .figures,
   .saved {
-    grid-column: 1 / -1;
-  }
-
-  @media (max-width: 860px) {
-    .table-view {
-      grid-template-columns: 1fr;
-    }
-
-    .totals,
-    .figures,
-    .saved {
-      grid-column: 1;
-    }
+    width: 100%;
+    min-width: 0;
   }
 
   h3 {

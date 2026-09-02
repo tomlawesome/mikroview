@@ -14,8 +14,8 @@
   //
   // It replaced the old dashboard wholesale: the overlay charts
   // (EventsChart/FlagsChart) and the ranked-count cards are gone, their
-  // magnitude answers rehoused in MetricsTotals.svelte -- the Register's
-  // ledger strip and the Table's opening section.
+  // magnitude answers rehoused in MetricsTotals.svelte -- the ledger,
+  // which rounds 36-37 put above the Table's minutes and nowhere else.
   import { appState } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { metricsPref, METRICS_VIEWS } from '../lib/metrics.svelte'
@@ -68,10 +68,15 @@
   // landed, or one that failed, is not a measurement of zero. Topography.svelte
   // already models it this way; this line had drifted from it (#750).
   const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
-  const refusedAtCursor = $derived(
-    reading ? reading.traffic.filter((r) => r.ink === 'refused').reduce((a, r) => a + r.value, 0) : 0,
+
+  // Rounds 36-37 (#803): reading the minute under the cursor across every
+  // series is the hourline's job, so the register's aside panel has no
+  // work left and is gone. The episode count carries the type names that
+  // panel used to print, so nothing it said is lost -- "2 flag episodes —
+  // unplanned · ring broken", exactly as #s4 draws it.
+  const episodeNames = $derived(
+    reading ? reading.episodes.map((e) => `${e.label}${e.value > 1 ? ` ×${e.value}` : ''}`).join(' · ') : '',
   )
-  const eventsAtCursor = $derived(reading ? reading.traffic.reduce((a, r) => a + r.value, 0) : 0)
 
   function select(index: number) {
     if (index < 0 || index >= hour.axis.length) return
@@ -146,10 +151,20 @@
   <div class="hourline">
     {#if reading}
       <span class="big">{formatHM(reading.time)}<span class="unit">the minute under the cursor</span></span>
+      <!-- One fact per series, in the hour's own order, refused in the
+           refused ink: the whole minute read in one line rather than a
+           ratio ("9 refused of 61 events") that named two series and hid
+           the rest. -->
+      {#each reading.traffic as row (row.key)}
+        <span class="sep">·</span>
+        <span class="fact" class:ref={row.ink === 'refused'}><b>{row.value}</b> {row.label}</span>
+      {/each}
       <span class="sep">·</span>
-      <span class="fact"><b>{refusedAtCursor}</b> refused of <b>{eventsAtCursor}</b> events</span>
-      <span class="sep">·</span>
-      <span class="fact"><b>{reading.episodeTotal}</b> flag episodes</span>
+      <span class="fact"
+        ><b>{reading.episodeTotal}</b> flag episode{reading.episodeTotal === 1 ? '' : 's'}{episodeNames
+          ? ` — ${episodeNames}`
+          : ''}</span
+      >
     {/if}
     <span class="rate">
       {#if epsText}
@@ -185,7 +200,7 @@
     {#if metricsPref.view === 'seismograph'}
       <MetricsSeismograph {hour} {cursor} onselect={select} />
     {:else if metricsPref.view === 'register'}
-      <MetricsRegister {hour} {cursor} {reading} onselect={select} />
+      <MetricsRegister {hour} {cursor} onselect={select} />
     {:else}
       <MetricsTable {hour} {cursor} onselect={select} />
     {/if}
@@ -249,6 +264,14 @@
     color: var(--fg);
     font-family: var(--font-mono);
     font-weight: 600;
+  }
+
+  /* Round 37's `.hourline .fact.ref b`: refused wears the refused ink
+     here too, so the one series that means "turned away" is legible
+     without reading its name -- the same token the table's own refused
+     column and the drum's inner stroke already use. */
+  .fact.ref b {
+    color: var(--chart-refused);
   }
 
   /* The right-hand rate group (round 30's `.hourline .gap { flex: 1 }`
