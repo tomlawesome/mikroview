@@ -294,6 +294,38 @@ check(
     : `the table's top port/talker cells disagree with GET /api/stats/tops -- ${tableTops.detail}`,
 )
 
+// --- The ledger sits above the minutes, as a band (#803, rounds 36-37) ---
+//
+// Owner verdict on round 36: "Love the ledger but put them at the top not
+// beneath." Round 37 redraws it as the head of the table view, its rule
+// closing it off from the table below. This is geometry, so only a real
+// browser can prove it -- jsdom computes no layout, and the DOM order was
+// already ledger-first under #732's two-column grid, where the ledger
+// rendered *beside* the table rather than above it. Both halves matter:
+// above (not beneath, not beside) and a full-width band (not a sidebar).
+await page.locator('.table-view .totals .ledger-strip').waitFor({ state: 'visible', timeout: 10000 })
+const ledgerBox = await page.locator('.table-view .totals').boundingBox()
+const tableBox = await page.locator(TABLE).boundingBox()
+check(
+  ledgerBox.y + ledgerBox.height <= tableBox.y + 1,
+  `the ledger sits above the minutes -- ledger ends at ${Math.round(ledgerBox.y + ledgerBox.height)}, table starts at ${Math.round(tableBox.y)}`,
+)
+check(
+  ledgerBox.width >= tableBox.width * 0.9,
+  `the ledger is a band across the view, not a sidebar column -- ledger ${Math.round(ledgerBox.width)}px against a ${Math.round(tableBox.width)}px table`,
+)
+
+// Six ranked answers, and "bars, no boxes" -- #716's bordered card is gone.
+const ledgerColumns = await page.locator('.table-view .totals .ledger-strip .column').count()
+check(ledgerColumns === 6, `the ledger draws its six columns -- got ${ledgerColumns}`)
+const columnBorders = await page.$$eval('.table-view .totals .ledger-strip .column', (els) =>
+  els.map((e) => getComputedStyle(e).borderTopWidth),
+)
+check(
+  columnBorders.every((w) => parseFloat(w) === 0),
+  `bars, no boxes: no ledger column draws a border -- got ${JSON.stringify(columnBorders)}`,
+)
+
 const minuteButtons = page.locator('.table-view tbody th button.minute')
 await minuteButtons.first().waitFor({ state: 'visible', timeout: 10000 })
 const chosenMinute = (await minuteButtons.nth(1).textContent()).trim()
@@ -323,25 +355,31 @@ check(
 // Amber is time. A cursor drawn in a series ink would be the record's
 // one colour rule broken on the most prominent mark on the page.
 check(registerCursor?.timeColour === true, `the cursor wears the time colour -- got ${registerCursor?.stroke}`)
-// The cross-section panel is unmounted for round 30
-// (MetricsRegister.svelte:118, `CROSS_SECTION_ENABLED = false`): the
-// minute under the cursor is read from the scene's own header line rather
-// than an aside, and the panel's empty-state instruction was part of the
-// printed apparatus the round struck everywhere. Unmounted, not deleted;
-// tracked on #691.
-//
-// Pinned as the present truth rather than the stale claim -- the same
-// treatment live-engine-room.mjs gives the missing READ-ONLY declaration.
-// Waiting on the panel instead throws, and the throw costs this scenario
-// every check below it: the persisted preference, the reload, and the
-// whole keyboard contract. When #691 remounts the panel, restore the two
-// assertions this replaced:
-//
-//   .cross-section h3          -> `The minute ${chosenMinute}`
-//   .cross-section .xs-row dt  -> 8 rows, the last of them "flag episodes"
+// Rounds 36-37 (#803) moved these two claims off the register's aside and
+// onto the hourline, which is where #s4 draws the reading -- the aside is
+// gone, not hidden. The claims themselves are unchanged: the page reads the
+// same minute the register's cursor is on, and it reads *every* series at
+// once rather than one of them.
+const hourlineMinute = (await page.locator('.metrics .hourline .big', { hasText: /^\d\d:\d\d/ }).textContent()).trim()
+check(
+  hourlineMinute.startsWith(chosenMinute),
+  `the register reads the same minute across the page -- got "${hourlineMinute}" for "${chosenMinute}"`,
+)
+
 check(
   (await page.locator('.cross-section').count()) === 0,
-  "no cross-section panel renders (#691 gap, not this scenario's to fix)",
+  'no cross-section panel is drawn beside the register',
+)
+
+// The cursor reads the whole minute, not one series. The cursor's facts are
+// `.hourline`'s own direct `.fact` children; the hour's rate facts sit inside
+// `.rate`, so `> .fact` is what separates the two groups.
+const cursorFacts = await page.$$eval('.metrics .hourline > .fact', (els) =>
+  els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()),
+)
+check(
+  cursorFacts.length === 8 && /^\d+ flag episodes?\b/.test(cursorFacts[cursorFacts.length - 1]),
+  `the cursor reads every series at once -- got ${JSON.stringify(cursorFacts)}`,
 )
 
 // --- The preference is persisted, and applied before first paint ---------
