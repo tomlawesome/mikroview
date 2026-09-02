@@ -9,7 +9,6 @@ import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { groupModeState } from '../lib/groupMode.svelte'
 import { flagsState } from '../lib/flags.svelte'
-import { fallState } from '../lib/fall.svelte'
 import { MAX_RENDERED_ROWS } from '../lib/constants'
 import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 // Vite's `?raw` import, the same device Topography.svelte.test.ts uses
@@ -89,6 +88,13 @@ beforeEach(() => {
   // apply to every other empty-buffer case in this file instead.
   appState.initialLoadDone = true
   appState.devices = []
+  // Same hygiene, and it bit: one test calls appState.clearBuffer(),
+  // which stamps the wipe, and the wiped empty state outranks every
+  // other empty reading -- so without this the "ghost rows", "run
+  // setup…", "ask an administrator" and "waiting for events" tests
+  // further down all read back the wipe notice from a test they have
+  // nothing to do with.
+  appState.wipedAt = null
   authState.role = ''
   // Reset centrally, not at the end of whichever test set it. A test body
   // that fails never reaches its own cleanup line, and the next test then
@@ -98,22 +104,9 @@ beforeEach(() => {
   // flagsState is a module-level singleton -- would otherwise leak a
   // flag from one test's fixture into the next's unflagged-row assertion.
   flagsState.list = []
-  // Same for fallState, which the foot line's dark-boundary fact reads
-  // (#691). Seeded with one boundary so LiveTable's own mount-time
-  // "fetch the rule tables if nobody has" never fires in jsdom -- the
-  // reactive read is what these tests are about, not the fetch.
-  fallState.boundaries = [
-    {
-      key: 'forward|lan|wan',
-      chain: 'forward',
-      inInterface: 'lan',
-      outInterface: 'wan',
-      srcAddressList: 'lan',
-      label: 'lan → wan',
-      coverage: 'observed',
-      epithet: '',
-    },
-  ]
+  // fallState is no longer seeded here: it was seeded only to keep the
+  // foot band's mount-time rule-table fetch from firing in jsdom, and
+  // both the band and that fetch are gone.
   // columnState is a module-level singleton, shared with
   // columns.svelte.test.ts and FilterBar.svelte.test.ts -- reset to the
   // shipped default (#729: all fifteen visible) so a toggle from one test
@@ -1001,26 +994,14 @@ describe('Flagged pathway row wash and mark (#685, #691)', () => {
   })
 })
 
-// The foot line (#691, round 30's .foot-legend): three computed facts
-// on the stream's own footing. Unmounted outright behind
-// FOOT_LEGEND_ENABLED per the owner's 2026-08-31 #717 ruling ("I hate
-// it, remove it") -- these pin that it never draws, even with facts to
-// show, matching RESIZE_HANDLES_ENABLED's own pattern. The fact
-// computation itself (footLineFacts) keeps its own coverage in
-// footLine.test.ts; what matters here is only that this component does
-// not render it.
-describe('the foot line', () => {
-  const darkBoundary = {
-    key: 'forward|guest|wan',
-    chain: 'forward',
-    inInterface: 'guest',
-    outInterface: 'wan',
-    srcAddressList: 'guest',
-    label: 'guest → wan',
-    coverage: 'dark' as const,
-    epithet: '',
-  }
-
+// The stream's foot band -- the dark strip of three sentences that had
+// stood under the table since round 5 -- is gone (owner, round 36: "oh
+// that thing, I don't want that at all", #717). Round 37 removed it from
+// the drawing, so this went wholesale rather than behind a flag: the
+// markup, the CSS, lib/footLine.ts and its tests all went with it, and
+// so did the on-mount fallState read that only its dark-boundary fact
+// needed. These pin that nothing draws it and nothing fetches for it.
+describe('the foot band is gone (round 36/37)', () => {
   function repeatedDrops(): Flag {
     return {
       id: 'rd1',
@@ -1035,15 +1016,7 @@ describe('the foot line', () => {
     }
   }
 
-  it('does not render at all when none of the three facts has data', () => {
-    const { container } = render(LiveTable, { props: { events: [makeEvent('row')] } })
-    flushSync()
-
-    expect(container.querySelector('.foot-legend')).toBeNull()
-  })
-
-  it('stays unmounted even when all three facts have data (#717)', () => {
-    fallState.boundaries = [darkBoundary]
+  it('renders no band, even with every fact it used to draw available', () => {
     flagsState.list = [repeatedDrops()]
     appState.events = [
       makeEvent('drop-row', {
@@ -1062,14 +1035,21 @@ describe('the foot line', () => {
     expect(container.querySelector('.foot-legend')).toBeNull()
   })
 
-  it('stays unmounted with a cleared flag too', () => {
-    flagsState.list = [{ ...repeatedDrops(), cleared: true }]
-    appState.events = [makeEvent('drop-row', { srcIp: '10.0.20.11', dstPort: 445, action: 'drop' })]
+  // Matched against code, not prose: the comments above these controls
+  // name what was removed, and asserting on the bare words would fail on
+  // the explanation of the removal rather than on the removal.
+  it('carries no foot-band markup, styling or fact computation to restore it from', () => {
+    expect(componentSource).not.toMatch(/class="foot-legend"/)
+    expect(componentSource).not.toMatch(/\.foot-legend\s*\{/)
+    expect(componentSource).not.toMatch(/from '\.\.\/lib\/footLine'/)
+  })
 
-    const { container } = render(LiveTable, { props: { events: appState.events } })
-    flushSync()
-
-    expect(container.querySelector('.foot-legend')).toBeNull()
+  it('no longer reaches for the pushed rule tables its dark-boundary fact needed', () => {
+    // The band was this table's only reader of the fall's boundaries.
+    // Leaving the mount-time refresh behind would be a request nothing
+    // on screen uses -- and one that fires on every visit to the stream.
+    expect(componentSource).not.toMatch(/from '\.\.\/lib\/fall\.svelte'/)
+    expect(componentSource).not.toMatch(/onMount/)
   })
 })
 

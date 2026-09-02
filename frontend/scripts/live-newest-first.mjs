@@ -32,6 +32,9 @@ feedSyslog(450, 'order-batch-b')
 await page.waitForFunction(() => document.querySelectorAll('.row').length >= 800, null, { timeout: 30000 })
 
 const bodySel = '.body.scrollbar'
+// The `following` pill on the whisper's own line (rounds 36-38) -- what
+// used to be the scene bar's Autoscroll button.
+const FOLLOW = '.card[aria-hidden="false"] .whisper .hand-btn.follow'
 
 // --- Not vacuous: there really is more content than fits on screen -------
 const overflow = await page.evaluate((sel) => {
@@ -63,7 +66,9 @@ check(
 )
 
 // --- The hard part: a scrolled-back reader's rows don't move ------------
-await page.click('.scene-bar button:has-text("Autoscroll")')
+// Rounds 36-38: the control is the `following` pill on the whisper's own
+// line now, not a scene-bar button. Same freeze, same assertions.
+await page.click(FOLLOW)
 await page.waitForTimeout(200)
 
 // Scroll down and away from the top -- the reader is now looking at
@@ -110,11 +115,11 @@ check(
 )
 
 // --- Releasing the freeze resumes newest-at-top --------------------------
-await page.click('.scene-bar button:has-text("Autoscroll")')
+await page.click(FOLLOW)
 await page.waitForTimeout(300)
 
 const scrollReleased = await page.$eval(bodySel, (el) => el.scrollTop)
-check(scrollReleased === 0, `turning Autoscroll back on returns to the top (scrollTop=${scrollReleased})`)
+check(scrollReleased === 0, `following again returns to the top (scrollTop=${scrollReleased})`)
 
 const firstRowAfterResume = await page.getAttribute('.grid .row', 'title')
 check(
