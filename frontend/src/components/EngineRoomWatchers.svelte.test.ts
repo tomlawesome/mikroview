@@ -76,6 +76,27 @@ vi.mock('../lib/api', () => ({
   })),
   fetchDefinitionSchema: vi.fn(async () => ({ port_scan: PORT_SCAN_SCHEMA })),
   updateDefinition: vi.fn(async () => ({ id: 'port_scan' })),
+  replayDefinition: vi.fn(async () => ({
+    receipt: {
+      window: {
+        start: '2026-09-02T08:00:00Z',
+        end: '2026-09-02T12:12:00Z',
+        duration: '4h12m0s',
+        eventCount: 8421,
+      },
+      emissionCount: 3,
+      sample: [
+        { at: '2026-09-02T09:04:00Z', target: '203.0.113.9', detail: '', provisional: false },
+        { at: '2026-09-02T10:20:00Z', target: '198.51.100.4', detail: '', provisional: false },
+        // The same host twice: the sample is one entry per emission, the
+        // slot names hosts.
+        { at: '2026-09-02T11:31:00Z', target: '203.0.113.9', detail: '', provisional: false },
+      ],
+      sampleTruncated: false,
+      corpusTruncated: false,
+      anyProvisional: false,
+    },
+  })),
   resetDefinition: vi.fn(async () => ({ id: 'port_scan' })),
   cloneDefinition: vi.fn(async () => ({ id: 'copy-1' })),
   fetchEntities: vi.fn(async () => [
@@ -355,6 +376,147 @@ describe('clone', () => {
     await settle()
     expect(screen.getByText(refusal)).toBeTruthy()
     expect(api.updateDefinition).not.toHaveBeenCalled()
+  })
+})
+
+// #786. What is worth pinning about the slot, rather than about the
+// wrapper next door (lib/api.test.ts, which pins the two shapes coming
+// back as values):
+//
+//   - the receipt and the decline land in the *same* slot, and the
+//     decline is not dressed as an error -- it is an honest limit of the
+//     traffic held, so it carries the panel's quiet ink, not .error's.
+//   - a truncation flag reads as "at least", and the two flags are not
+//     interchangeable: a cut-short corpus makes the *count* a floor, a
+//     bounded sample makes only the *list* partial.
+//   - Try never blocks Save, before or after either answer.
+describe('try', () => {
+  async function press(name = 'Try') {
+    await fireEvent.click(screen.getByRole('button', { name }))
+    await settle()
+  }
+
+  it('replays the candidate numbers as typed, without saving them', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await fireEvent.input(screen.getByRole('spinbutton', { name: /Threshold/ }), {
+      target: { value: '9' },
+    })
+    await press()
+    // window and threshold only: the engine's replay candidate is that
+    // closed set (replayParamSchema), and a third param name is refused
+    // outright rather than ignored.
+    expect(api.replayDefinition).toHaveBeenCalledWith('port_scan', {
+      threshold: 9,
+      window: '60s',
+    })
+    // A trial is not an edit. Nothing about the definition the engine is
+    // evaluating may change because someone asked a question about it.
+    expect(api.updateDefinition).not.toHaveBeenCalled()
+  })
+
+  it('says what would have fired, over the window it was counted across', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('Would have fired 3 times in the last 4h 12m')).toBeTruthy()
+  })
+
+  it('lists the hosts that would have been flagged, each once', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('203.0.113.9')).toBeTruthy()
+    expect(screen.getByText('198.51.100.4')).toBeTruthy()
+    // The third sample entry is the first host again; the slot names
+    // hosts, not sample rows.
+    expect(screen.getAllByText('203.0.113.9')).toHaveLength(1)
+  })
+
+  it('reads a cut-short corpus as "at least", because the count is then a floor', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce({
+      receipt: {
+        window: { start: '', end: '', duration: '4h12m0s', eventCount: 1_000_000 },
+        emissionCount: 3,
+        sample: [],
+        sampleTruncated: false,
+        corpusTruncated: true,
+        anyProvisional: false,
+      },
+    })
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('Would have fired at least 3 times in the last 4h 12m')).toBeTruthy()
+  })
+
+  it('says "at least these" of a bounded sample, and leaves the count exact', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce({
+      receipt: {
+        window: { start: '', end: '', duration: '4h12m0s', eventCount: 8421 },
+        emissionCount: 40,
+        sample: [{ at: '', target: '203.0.113.9', detail: '', provisional: false }],
+        sampleTruncated: true,
+        corpusTruncated: false,
+        anyProvisional: false,
+      },
+    })
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('at least these')).toBeTruthy()
+    // The sample being bounded says nothing about the total, so the
+    // count line stays exact.
+    expect(screen.getByText('Would have fired 40 times in the last 4h 12m')).toBeTruthy()
+  })
+
+  it('shows a decline in the same slot, in grey rather than in the error ink', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce({
+      decline: {
+        reason: 'corpus covers 4h12m0s (8421 event(s)), shorter than this definition’s window',
+        corpusSpan: '4h12m0s',
+        definitionWindow: '24h0m0s',
+      },
+    })
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    // "1d 0h", not "24h": formatDurationShort drops to days at 24 hours,
+    // and the decline uses the same helper every other duration on this
+    // panel does rather than a second way of saying a length.
+    const said = screen.getByText("Can't replay: needs a 1d 0h window, only 4h 12m held")
+    expect(said.classList.contains('error')).toBe(false)
+    expect(said.classList.contains('declined')).toBe(true)
+  })
+
+  it('never blocks Save -- before, during or after either answer', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    await press()
+    expect(save.disabled).toBe(false)
+  })
+
+  it('shows a refusal in the server’s own words, without a slot answer', async () => {
+    vi.mocked(api.replayDefinition).mockResolvedValueOnce(
+      'no event corpus is available to replay against',
+    )
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText('no event corpus is available to replay against')).toBeTruthy()
+    expect(screen.queryByText(/Would have fired/)).toBeNull()
+  })
+
+  it('clears the slot when the panel is reopened, so no receipt outlives its numbers', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await press()
+    expect(screen.getByText(/Would have fired/)).toBeTruthy()
+    await fireEvent.click(screen.getByRole('button', { expanded: true }))
+    await open()
+    expect(screen.queryByText(/Would have fired/)).toBeNull()
   })
 })
 
