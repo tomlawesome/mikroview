@@ -81,10 +81,6 @@ class WhisperState {
     appState.autoscroll = false
   }
 
-  get following(): boolean {
-    return appState.autoscroll
-  }
-
   // Whether a row's receipt time falls outside the active fence --
   // always false with no fence set, so callers can use this
   // unconditionally rather than guarding on fenceRange themselves.
