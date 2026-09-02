@@ -26,6 +26,7 @@ import type {
   ReputationResult,
   RuleUsage,
   Stats,
+  StoreMemory,
   SetupMark,
   SetupStatus,
   Suggestion,
@@ -1043,6 +1044,33 @@ export async function deleteCoverageDeclaration(key: string): Promise<string | n
   const res = await deleteJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`)
   if (res.ok) return null
   return (await res.text()) || `deleteCoverageDeclaration: ${res.status}`
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Settings (#796)
+//
+// Appended as its own delimited block at the end of the file, rather
+// than slotted in beside a related function, so this file's other
+// in-flight changes and this one do not land on the same lines.
+// ─────────────────────────────────────────────────────────────────────
+
+// setStoreMaxMemory sets the event buffer's size on the running server:
+// it stores the figure and resizes the ring, oldest events first when
+// the new size is smaller. There is no matching read -- the current
+// figure and its bounds ride GET /api/stats, so the memory group's
+// slider and the count beside it are always one snapshot.
+//
+// Admin-only server-side (internal/api's handleStoreSettingsUpdate); a
+// viewer or user is never offered the drag in the first place, so a 403
+// here means a stale page rather than a normal path.
+//
+// Returns the server's new state on success, or its own words on
+// failure -- the same shape putCoverageDeclaration above uses, so the
+// caller can show the reason it was refused rather than a status code.
+export async function setStoreMaxMemory(bytes: number): Promise<StoreMemory | string> {
+  const res = await putJSON('/api/settings/store', { maxMemory: bytes })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setStoreMaxMemory: ${res.status}`
 }
 
 // ===========================================================================

@@ -18,6 +18,31 @@ rewritten.
 
 ### Added
 
+- **A live memory control for the event buffer, not just a config-file
+  setting** (#796). Settings' memory group now carries a slider under
+  the hours bar: dragging it only proposes a figure, and nothing changes
+  until you press apply. Applying it -- from the UI, or directly via the
+  new `PUT /api/settings/store` (admin-only, audit-logged as
+  `settings.store_max_memory`) -- stores the figure and resizes the
+  running ring immediately: growing it keeps everything already held,
+  shrinking it drops the oldest events first. An out-of-range figure is
+  refused with a 400 rather than clamped. Once set, the stored figure
+  wins over `store.maxMemory` in `config.yaml` on every future restart
+  too -- mikroview says so in the startup log, and deleting the new
+  `store.settingsStorePath` document (`/var/lib/mikroview/settings.json`
+  by default) is how you go back to the file's figure. The allowed range
+  is worked out per host at startup: 32MiB at the low end, and at the
+  high end whatever's left of the smaller of the cgroup memory limit or
+  the machine's RAM once a quarter of it (or 256MiB, whichever's larger)
+  is reserved as headroom and the same 1.47x ring-to-resident overhead
+  CFG-0012 already quotes is priced in -- so the slider never offers a
+  figure the host would be OOM-killed for taking, and never reports a
+  deliberately large `config.yaml` budget as out of range. `GET
+  /api/stats` gains a `memory` object (`maxMemory`, `min`, `max`,
+  `hostTotal`, `bytesPerEvent`, `resident`, `stored`) so any reader sees
+  the same numbers the UI does, and the setting is now included in
+  `-backup`/`-restore` alongside every other store. A viewer sees the
+  bar and the figure; only an admin is offered the drag.
 - **A detector's thresholds and windows can be edited in the app**
   (#787). Until now the only thing the watchers station could change was
   a detector's *scope* -- which hosts, ports or rules it watches -- and
