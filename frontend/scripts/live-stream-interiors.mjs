@@ -59,13 +59,17 @@ feedSyslog(120, 'stream-interiors')
 // checks below asserting against a box already unfolded (#667).
 const { page, consoleErrors } = await session({ waitForEvents: 60, unfoldFilter: false })
 
-const autoscrollBtn = page.locator(`${CARD} .scene-bar button:text-is("Autoscroll")`)
-const isAutoscrollOn = () => autoscrollBtn.evaluate((el) => el.classList.contains('active'))
+// Rounds 36-38: following is the `following` pill on the whisper's own
+// line, not a button on the scene bar -- the whisper commands the stream
+// and its seek is what stops the lines following, so the verb sits with
+// its cause. Same state, same assertions, new home.
+const followBtn = page.locator(`${CARD} .whisper .hand-btn.follow`)
+const isFollowing = () => followBtn.evaluate((el) => el.classList.contains('on'))
 
 // Defensive: an earlier scenario should have left this on, but a
 // scenario that starts from an assumed answer instead of a checked fact
 // is exactly the trap this file's own header warns about.
-if (!(await isAutoscrollOn())) await autoscrollBtn.click()
+if (!(await isFollowing())) await followBtn.click()
 
 // ============================================================
 // The whisper
@@ -95,16 +99,20 @@ check(tickCount > 0, `the whisper draws a tick per minute of its window -- got $
 
 // --- Clicking the curve seeks -----------------------------------------------
 await ticks.nth(tickCount - 1).click()
-check(!(await isAutoscrollOn()), 'seeking the whisper turns Autoscroll off (the scene bar is the one source of truth for it)')
+check(!(await isFollowing()), 'seeking the whisper stops the stream following (the pill on its own line is the one source of truth for it)')
+check(
+  (await followBtn.textContent())?.trim() === 'follow',
+  'and the pill reads "follow" -- the way back, which #749 had none of',
+)
 const seekStat = (await wstat.textContent()).trim()
 check(seekStat !== rollingStat, `the stat line changes once seeked -- got "${seekStat}"`)
 check(!/now\b/.test(seekStat), `the stat line no longer reads "now" once seeked -- got "${seekStat}"`)
 
 // Restored before the fence test below touches the table too -- a fenced
-// view under Autoscroll-off would compound two holds into one failure if
-// either half of this scenario went wrong.
-await autoscrollBtn.click()
-check(await isAutoscrollOn(), 'Autoscroll turns back on')
+// view with following already off would compound two holds into one
+// failure if either half of this scenario went wrong.
+await followBtn.click()
+check(await isFollowing(), 'following turns back on')
 
 // --- The fence toggle plus two clicks dims, and clearing restores ---------
 //
