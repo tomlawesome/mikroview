@@ -39,7 +39,6 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"recovery_keys", cfg.Auth.RecoveryKeysPath},
 		{"flags", cfg.Flags.StorePath},
 		{"rule_usage", cfg.Flags.RuleUsageStorePath},
-		{"detector_settings", cfg.Flags.DetectorSettingsStorePath},
 		{"entities", cfg.Entities.StorePath},
 		{"coverage", cfg.Coverage.StorePath},
 		{"mac_registry", cfg.DeviceMAC.StorePath},
@@ -48,7 +47,6 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"audit", cfg.Audit.StorePath},
 		{"setup", cfg.Setup.StorePath},
 		{"settings", cfg.Store.SettingsStorePath},
-		{"watchlist", cfg.Watchlist.StorePath},
 		{"suggestions", cfg.Watchlist.SuggestionsStorePath},
 		{"match_log", cfg.Watchlist.MatchLogPath},
 	}

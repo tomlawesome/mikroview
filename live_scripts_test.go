@@ -43,23 +43,21 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 	// and exactly what an earlier version of it missed.
 	type loc struct{ section, key string }
 	want := map[string]loc{
-		"auth":              {"auth", "storePath"},
-		"tokens":            {"auth", "tokensStorePath"},
-		"recovery_keys":     {"auth", "recoveryKeysPath"},
-		"flags":             {"flags", "storePath"},
-		"rule_usage":        {"flags", "ruleUsageStorePath"},
-		"detector_settings": {"flags", "detectorSettingsStorePath"},
-		"entities":          {"entities", "storePath"},
-		"coverage":          {"coverage", "storePath"},
-		"mac_registry":      {"deviceMac", "storePath"},
-		"engine_state":      {"engine", "storePath"},
-		"definitions":       {"engine", "definitionsStorePath"},
-		"audit":             {"audit", "storePath"},
-		"setup":             {"setup", "storePath"},
-		"settings":          {"store", "settingsStorePath"},
-		"watchlist":         {"watchlist", "storePath"},
-		"suggestions":       {"watchlist", "suggestionsStorePath"},
-		"match_log":         {"watchlist", "matchLogPath"},
+		"auth":          {"auth", "storePath"},
+		"tokens":        {"auth", "tokensStorePath"},
+		"recovery_keys": {"auth", "recoveryKeysPath"},
+		"flags":         {"flags", "storePath"},
+		"rule_usage":    {"flags", "ruleUsageStorePath"},
+		"entities":      {"entities", "storePath"},
+		"coverage":      {"coverage", "storePath"},
+		"mac_registry":  {"deviceMac", "storePath"},
+		"engine_state":  {"engine", "storePath"},
+		"definitions":   {"engine", "definitionsStorePath"},
+		"audit":         {"audit", "storePath"},
+		"setup":         {"setup", "storePath"},
+		"settings":      {"store", "settingsStorePath"},
+		"suggestions":   {"watchlist", "suggestionsStorePath"},
+		"match_log":     {"watchlist", "matchLogPath"},
 	}
 
 	sections := parseStoreBlock(text)
