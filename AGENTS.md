@@ -112,11 +112,18 @@ assuming the checkout had done the right thing.
 > Everything below describes the **target state of a cutover that has not
 > been activated**, written in the present tense before it happened. The
 > project exists and `dev` is pushed there, but **no pipeline on
-> `ai/mikroview` has ever passed** — all eight, 2026-08-08 to
-> 2026-09-03, failed (#908). An earlier version of this file claimed the
-> lane ran green through the `security` stage; that was almost certainly
-> observed on `ai/mikroview-mirror`, the other project. `dev` has **not**
-> moved, and the lane is not a gate on anything yet.
+> `ai/mikroview` has ever passed** — 9 runs, 2026-08-08 to 2026-09-03,
+> 8 failed and 1 in flight (#908). `lint` and `test` pass; the
+> `security` stage fails at `gitleaks`, `gosec` and `semgrep`, with
+> `trivy-fs` and `govulncheck` passing; `sync` has never run. `dev` has
+> **not** moved, and the lane is not a gate on anything yet.
+>
+> An earlier version of this file claimed the lane ran green through the
+> `security` stage. It never has, and the guess that this was observed on
+> `ai/mikroview-mirror` does not hold either: that project's recent
+> pipelines fail too (checked 2026-09-03). Treat a GitLab red as the
+> normal state until the lane has been green once, rather than as a
+> regression your branch caused.
 >
 > **Until it goes live, work through GitHub as normal**: push feature
 > branches to `origin`, open GitHub pull requests, merge into `dev`
