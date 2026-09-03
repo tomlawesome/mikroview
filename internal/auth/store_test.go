@@ -388,13 +388,13 @@ func TestOpenReadsNewObjectFormat(t *testing.T) {
 	}
 }
 
-// TestOpenMigratesEmptyRoleToUser pins #653's decision 1: an account
-// persisted before roles existed at all -- no "role" key in the file,
-// which is exactly what a deployment predating this feature has --
-// reads back as RoleUser, not the zero-value Role rank() would
-// otherwise deny everything to. Upgrading must not cost an existing
-// account any ability.
-func TestOpenMigratesEmptyRoleToUser(t *testing.T) {
+// TestOpenLeavesAnEmptyRoleFailingClosed pins what replaced #653's
+// pre-roles default: an accounts file whose account carries no "role"
+// key can now only have been hand-edited, so the empty Role is loaded
+// as-is and rank() denies it every gate -- not even viewer. Silently
+// promoting an unassigned role to RoleUser is the wrong direction for a
+// value nobody legitimately wrote.
+func TestOpenLeavesAnEmptyRoleFailingClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	data := `{"users":[{"id":"u1","username":"someone","passwordHash":"$argon2id$fake","createdAt":"2026-01-01T00:00:00Z"}]}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
@@ -407,18 +407,24 @@ func TestOpenMigratesEmptyRoleToUser(t *testing.T) {
 	}
 	u, ok := s.ByUsername("someone")
 	if !ok {
-		t.Fatal("expected the pre-roles account to load")
+		t.Fatal("expected the roleless account to load")
 	}
-	if u.Role != RoleUser {
-		t.Errorf("expected an empty on-disk role to migrate to RoleUser, got %q", u.Role)
+	if u.Role != "" {
+		t.Errorf("expected the empty on-disk role to be preserved, got %q", u.Role)
+	}
+	for _, min := range []Role{RoleViewer, RoleUser, RoleAdmin} {
+		if u.Role.AtLeast(min) {
+			t.Errorf("expected a roleless account to be denied %q, but AtLeast granted it", min)
+		}
 	}
 }
 
-// TestReloadIfStaleMigratesEmptyRoleToUser is the same migration reached
-// through the other code path that parses a storeFile -- reloadIfStale,
-// which a live server calls on every read once a separate process has
-// touched the file. Mirrors TestReloadIfStaleSkipsNilArrayElements above.
-func TestReloadIfStaleMigratesEmptyRoleToUser(t *testing.T) {
+// TestReloadIfStaleLeavesAnEmptyRoleFailingClosed is the same behaviour
+// reached through the other code path that parses a storeFile --
+// reloadIfStale, which a live server calls on every read once a separate
+// process has touched the file. Mirrors TestReloadIfStaleSkipsNilArrayElements
+// above.
+func TestReloadIfStaleLeavesAnEmptyRoleFailingClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 
 	s, err := Open(path)
@@ -436,8 +442,13 @@ func TestReloadIfStaleMigratesEmptyRoleToUser(t *testing.T) {
 	if !ok {
 		t.Fatal("expected the externally-written account to be picked up")
 	}
-	if u.Role != RoleUser {
-		t.Errorf("expected an empty on-disk role to migrate to RoleUser, got %q", u.Role)
+	if u.Role != "" {
+		t.Errorf("expected the empty on-disk role to be preserved, got %q", u.Role)
+	}
+	for _, min := range []Role{RoleViewer, RoleUser, RoleAdmin} {
+		if u.Role.AtLeast(min) {
+			t.Errorf("expected a roleless account to be denied %q, but AtLeast granted it", min)
+		}
 	}
 }
 
