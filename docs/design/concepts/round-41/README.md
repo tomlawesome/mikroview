@@ -24,6 +24,14 @@ live, 60 minutes after boot, and both surfaces use the same clock.
 Screenshots: `shots/metrics-restored.png`, `metrics-cold.png`,
 `metrics-restored-relative.png`, `docket-restored.png`.
 
-## Verdicts
+## Verdicts (owner, 2026-09-03)
 
-(pending)
+1. Metrics, restored -- "yeah great". **Ratified.**
+2. Metrics, cold start -- "great". **Ratified.**
+3. Relative wording -- "as you say, go with 1". **Dropped**; absolute times.
+4. Docket chip -- "great". **Ratified.**
+
+Build: the hourline's last fact and the docket's clear-row chip say
+`restored to HH:MM · live since HH:MM` after a warm restart and
+`counting since HH:MM — nothing before` after a cold one, and clear 60
+minutes after boot on both surfaces.
