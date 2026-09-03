@@ -38,6 +38,14 @@ const (
 	KindWireguardInterface Kind = "wireguard-interface"
 	KindWireguardPeer      Kind = "wireguard-peer"
 	KindIPAddress          Kind = "ip-address"
+	// KindPPPActive is issue #874's second table: /ppp/active print
+	// as-value, one row per currently connected PPP session -- L2TP,
+	// PPTP, SSTP and OVPN alike, since RouterOS surfaces all four
+	// through the same /ppp/active menu. Unlike the WireGuard tables,
+	// there is no separate "configured tunnels" table backing this one:
+	// a session exists here only while it is up, which is exactly the
+	// presence-means-up reading #874 settled on.
+	KindPPPActive Kind = "ppp-active"
 )
 
 // AddressListEntry mirrors /ip/firewall/address-list. Dynamic separates
@@ -238,11 +246,66 @@ type WireguardInterface struct {
 // type string"). Every CIDR is kept rather than the first, because
 // naming traffic by peer is the whole point of the field and a peer's
 // second subnet is not less named than its first.
+//
+// LastHandshake, CurrentEndpointAddress, RX, TX and Disabled were added
+// for issue #874, City 9's ingest side: today's push says which peers
+// are configured but nothing about whether a tunnel is carrying
+// traffic. All five are optional, like every field added to this
+// schema after its first release -- a push script that predates #874
+// decodes fine and leaves them at their zero value, which this
+// package's callers must read as "not reported," never as "peer is
+// down" or "zero bytes."
+//
+//   - LastHandshake mirrors RouterOS's own last-handshake property
+//     verbatim: a time-*since* string ("1m23s", "2h13m5s"), relative to
+//     the router's own clock at push time, so no clock agreement
+//     between mikroview and the router is needed to use it. Empty when
+//     the peer has never handshaken -- RouterOS omits the property
+//     entirely in that case rather than sending an empty string, and a
+//     plain string field already reads an absent key as "", so no
+//     special-case decoding is needed. Kept as an opaque string here
+//     deliberately: turning it into a duration is interpretation, and
+//     issue #874 puts that step "on the API side," not in this
+//     decode-only package.
+//
+//   - CurrentEndpointAddress mirrors current-endpoint-address, the
+//     address the last packet actually arrived from -- distinct from
+//     EndpointAddress, which is the peer's *configured* endpoint and
+//     may be a DNS name or simply unset for a road-warrior peer that
+//     connects from wherever it currently is.
+//
+//   - RX and TX are RouterOSInt64, not RouterOSInt: a byte counter on a
+//     long-lived or fast tunnel outgrows int32 (2^31 bytes is 2GiB)
+//     long before it outgrows anything realistic, and :serialize
+//     to=json emits these as floats the same way it does every other
+//     RouterOS integer -- the same landmine RouterOSInt exists for, at
+//     a width that actually fits a byte counter.
+//
+//   - Disabled follows FilterRule.Log's convention: RouterOS omits the
+//     property rather than sending "disabled":false, so a plain bool
+//     already reads "absent" as false, which is the correct reading
+//     for a property that defaults to enabled.
+//
+// Interface was added afterward, once #874's own API layer found it had
+// no way to attribute a peer to a specific WireGuard interface: RouterOS
+// carries that as the peer's own "interface" property, mirrored here
+// verbatim. Optional like the five above -- a push script that predates
+// it (or #874 itself) leaves every peer's Interface empty, which
+// internal/api reads as "attribution unavailable" and falls back to
+// treating every peer as belonging to every interface, rather than as
+// "this peer belongs to no interface."
 type WireguardPeer struct {
 	PublicKey       string       `json:"publicKey"`
 	AllowedAddress  RouterOSList `json:"allowedAddress"`
 	EndpointAddress string       `json:"endpointAddress"`
 	Comment         string       `json:"comment"`
+
+	LastHandshake          string        `json:"lastHandshake,omitempty"`
+	CurrentEndpointAddress string        `json:"currentEndpointAddress,omitempty"`
+	RX                     RouterOSInt64 `json:"rx,omitempty"`
+	TX                     RouterOSInt64 `json:"tx,omitempty"`
+	Disabled               bool          `json:"disabled,omitempty"`
+	Interface              string        `json:"interface,omitempty"`
 }
 
 // IPAddressEntry mirrors one /ip/address entry -- issue #627: an
@@ -257,6 +320,27 @@ type IPAddressEntry struct {
 	Network   string `json:"network"`
 	Interface string `json:"interface"`
 	Comment   string `json:"comment"`
+}
+
+// PPPActiveSession mirrors one /ppp/active row -- issue #874's second
+// table, the state source for L2TP, PPTP, SSTP and OVPN tunnels alike
+// (RouterOS surfaces all four through this same menu). CallerID mirrors
+// caller-id (the remote address or identifier RouterOS recorded for
+// this session, protocol-dependent), and Uptime is a RouterOS
+// time-*elapsed* string ("1m23s", "4w2d5h24m35s") the same shape and
+// for the same reason WireguardPeer.LastHandshake is -- kept opaque
+// here, interpreted where issue #874 puts that step.
+//
+// There is no companion "configured PPP tunnels" table: a row exists
+// here only while RouterOS considers the session active, so presence
+// in a page is itself the up signal, and absence is the down one --
+// this package has nothing further to validate about that meaning.
+type PPPActiveSession struct {
+	Name     string `json:"name"`
+	Service  string `json:"service"`
+	Address  string `json:"address"`
+	CallerID string `json:"callerId"`
+	Uptime   string `json:"uptime"`
 }
 
 // RouterOSInt decodes an integer that RouterOS's :serialize to=json may
@@ -283,6 +367,32 @@ func (n *RouterOSInt) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("ingest: number %v out of range", f)
 	}
 	*n = RouterOSInt(f)
+	return nil
+}
+
+// RouterOSInt64 is RouterOSInt for a field whose legitimate range
+// outgrows int32 -- issue #874's WireguardPeer.RX/TX, a byte counter
+// that a long-lived or fast tunnel pushes past 2GiB (int32's ceiling)
+// without doing anything unusual. :serialize to=json still emits it as
+// a JSON float the same way it does every RouterOSInt field, so the
+// decoding is identical; only the accepted range changes. float64
+// represents every integer up to 2^53 exactly, several orders of
+// magnitude past any byte counter this schema will ever see, so the
+// same whole-number check RouterOSInt uses is still exact here.
+type RouterOSInt64 int64
+
+func (n *RouterOSInt64) UnmarshalJSON(data []byte) error {
+	var f float64
+	if err := json.Unmarshal(data, &f); err != nil {
+		return err
+	}
+	if f != math.Trunc(f) {
+		return fmt.Errorf("ingest: expected a whole number, got %v", f)
+	}
+	if f < -(1<<53) || f > (1<<53) {
+		return fmt.Errorf("ingest: number %v out of range", f)
+	}
+	*n = RouterOSInt64(f)
 	return nil
 }
 

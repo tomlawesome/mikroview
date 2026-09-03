@@ -538,6 +538,65 @@ func (s *Store) IPAddresses(device string) (entries []ingest.IPAddressEntry, upd
 	return entries, ks.updatedAt, true
 }
 
+// WireguardInterfaces returns device's pushed /interface/wireguard
+// table, sorted by name. ok is false when the wireguard-interface kind
+// has never been pushed for this device -- the same "no data yet"
+// convention every other accessor here uses. Issue #874's city-9 ingest
+// side: this and WireguardPeers/PPPActive are what the API layer
+// derives per-tunnel up/down/unknown state from; this package only
+// holds the pushed rows.
+func (s *Store) WireguardInterfaces(device string) (interfaces []ingest.WireguardInterface, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindWireguardInterface)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		interfaces = append(interfaces, p.WireguardInterfaces...)
+	}
+	sort.SliceStable(interfaces, func(i, j int) bool { return interfaces[i].Name < interfaces[j].Name })
+	return interfaces, ks.updatedAt, true
+}
+
+// WireguardPeers returns device's pushed /interface/wireguard/peers
+// table, sorted by public key. ok is false when the wireguard-peer kind
+// has never been pushed for this device.
+func (s *Store) WireguardPeers(device string) (peers []ingest.WireguardPeer, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindWireguardPeer)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		peers = append(peers, p.WireguardPeers...)
+	}
+	sort.SliceStable(peers, func(i, j int) bool { return peers[i].PublicKey < peers[j].PublicKey })
+	return peers, ks.updatedAt, true
+}
+
+// PPPActive returns device's pushed /ppp/active table (issue #874),
+// sorted by name. ok is false when the ppp-active kind has never been
+// pushed for this device -- distinct from "pushed, currently empty",
+// which is every session on the device being down right now.
+func (s *Store) PPPActive(device string) (sessions []ingest.PPPActiveSession, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindPPPActive)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		sessions = append(sessions, p.PPPActive...)
+	}
+	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].Name < sessions[j].Name })
+	return sessions, ks.updatedAt, true
+}
+
 // Devices returns every device with at least one pushed page, sorted by
 // name -- the enumeration FilterRules/DHCPLeases/etc need a caller to
 // already have a device name, this is how a caller (e.g. the suggestions

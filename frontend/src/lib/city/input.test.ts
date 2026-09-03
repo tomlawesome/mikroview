@@ -36,8 +36,22 @@ describe('city input', () => {
       ['bridge1', 'rb'],
       ['wlan-wsh', 'hap'],
     ])
-    expect(input.tunnels).toEqual(['wg0'])
+    expect(input.tunnels.map((t) => t.iface)).toEqual(['wg0'])
+    // No pushed tunnel table named it: seen only in events, so it reads
+    // exactly like the API's own "unknown" -- never a guessed state.
+    expect(input.tunnels[0].apiState).toBeNull()
     expect(input.wan).toBe('ether1')
+  })
+
+  it('lamps the WAN bridge only when a logging rule covers that boundary', () => {
+    const devices = [device('rb', '10.0.0.1')]
+    const zones = [zone('bridge1', null)]
+    const lamped = cityInputFrom(devices, zones, [], [], [policy('bridge1', 'ether1', true)], true, 'rb', 'ether1')
+    expect(lamped.wanLogged).toBe(true)
+    const unlit = cityInputFrom(devices, zones, [], [], [policy('bridge1', 'ether1', false)], true, 'rb', 'ether1')
+    expect(unlit.wanLogged).toBe(false)
+    const none = cityInputFrom(devices, zones, [], [], [], false, 'rb', null)
+    expect(none.wanLogged).toBe(false)
   })
 
   it('dims a zone nothing logs on once a rule table is pushed', () => {
@@ -53,6 +67,14 @@ describe('city input', () => {
     const input = cityInputFrom([], [], [], [], [], false, null, null)
     expect(input.routers).toHaveLength(1)
     expect(input.routers[0].primary).toBe(true)
+  })
+
+  it('carries a pushed tunnel table state through even with no events', () => {
+    const devices = [device('rb', '10.0.0.1')]
+    const input = cityInputFrom(devices, [], [], [], [], false, 'rb', null, [
+      { iface: 'wg0', routerId: 'rb', apiState: 'down', peers: [{ id: 'wg0/wg/1', name: 'phone', address: '10.9.0.2', kind: 'wg' }] },
+    ])
+    expect(input.tunnels).toEqual([{ iface: 'wg0', routerId: 'rb', apiState: 'down', events: 0, peers: [{ id: 'wg0/wg/1', name: 'phone', address: '10.9.0.2', kind: 'wg' }] }])
   })
 
   it('finds the zone whose CIDR holds an address', () => {
