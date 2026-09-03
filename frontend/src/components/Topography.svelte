@@ -33,7 +33,7 @@
   import type { ReachStrand } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
   import { reachFor } from '../lib/reach'
-  import { formatEps, isPublicIp, formatHM, formatRelative } from '../lib/format'
+  import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
@@ -44,7 +44,10 @@
   import { nightlySummary } from '../lib/watchWindow'
   import type { Flag, WatchlistEntry } from '../lib/types'
 
-  const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--marked)']
+  // Five fixed lane inks. The fifth was --marked until #715 item 11 --
+  // the ink this same screen uses for watchers, so one colour carried
+  // two meanings. It has its own token now; see app.css for why olive.
+  const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--lane-5)']
 
   // The pushed /ip address table names the zones, the pushed rule
   // table draws the policy edges; both refreshed whenever the device
@@ -68,7 +71,6 @@
 
   const zones = $derived(zonesState.zones)
   const eps = $derived(appState.stats?.eventsPerSecond ?? 0)
-  const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
 
   const primaryDevice = $derived.by(() => {
     const list = appState.devices
@@ -76,6 +78,29 @@
     const configured = list.filter((d) => d.configured)
     const pool = configured.length > 0 ? configured : list
     return [...pool].sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())[0]
+  })
+
+  // The waist card's sub-line: round 30 draws
+  // "RouterOS <version> · the waist · <N> rules"
+  // (the-whole.html:978). Each end is dropped when it cannot be
+  // answered, leaving "the waist" alone rather than a placeholder --
+  // and "the waist" is always true, so the line never empties.
+  //
+  // The count is enabled pushed filter rules for this device only
+  // (owner, 2026-09-03, #701 fact 2). Never pushed is null, not zero:
+  // "0 rules" about a router with a full rule set would be a fact about
+  // our own silence dressed as a fact about the network.
+  //
+  // The live events/s figure this line used to carry is gone. Round 30
+  // draws no rate on this node, and #715 item 7 is that divergence; the
+  // rate is still on the scene bar and in Metrics, so nothing is lost.
+  const waistRuleCount = $derived(policyState.enabledRuleCount(primaryDevice?.id))
+  const waistSub = $derived.by(() => {
+    const parts: string[] = []
+    if (primaryDevice?.routerosVersion) parts.push(`RouterOS ${primaryDevice.routerosVersion}`)
+    parts.push('the waist')
+    if (waistRuleCount !== null) parts.push(`${waistRuleCount.toLocaleString()} ${waistRuleCount === 1 ? 'rule' : 'rules'}`)
+    return parts.join(' · ')
   })
 
   // Lane geometry (#699). The old spread pinned the first and last lane
@@ -120,7 +145,6 @@
   // whatever the estimate gets wrong the clip catches, so a name can
   // never reach the neighbouring lane again.
   const HOST_CH = 5.5
-  const HOST_DOT_W = 9
 
   function hostsShown(z: ZoneInfo): { hosts: { label: string; ip: string }[]; more: number } {
     const budget = cardW - 2 * cardPad
@@ -128,7 +152,7 @@
     let used = 0
     for (const h of z.hosts) {
       if (shown.length >= 3) break
-      const w = HOST_DOT_W + h.label.length * HOST_CH + (shown.length > 0 ? 3 * HOST_CH : 0)
+      const w = h.label.length * HOST_CH + (shown.length > 0 ? 3 * HOST_CH : 0)
       const rest = z.hostCount - (shown.length + 1)
       const tail = rest > 0 ? (4 + String(rest).length) * HOST_CH : 0
       // The first name always draws: a card that names none of its
@@ -140,9 +164,16 @@
     return { hosts: shown, more: z.hostCount - shown.length }
   }
 
+  // Shared by ribPath and the internet-edge limbs (#726: "bundle the
+  // corridor, fan at the waist") so a rib and its edge cannot drift
+  // apart -- both draw the same slot for the same lane.
+  function slotSpread(i: number, n: number): number {
+    return n === 1 ? 0 : -55 + (110 / (n - 1)) * i
+  }
+
   function ribPath(i: number, n: number): string {
     const x = laneX(i, n)
-    const spread = n === 1 ? 0 : -55 + (110 / (n - 1)) * i
+    const spread = slotSpread(i, n)
     return `M ${700 + spread} 302 C ${700 + spread * 2.2} 380, ${x + (700 - x) * 0.25} 420, ${x} 480`
   }
 
@@ -161,14 +192,17 @@
   const WAIST = { x: 700, y: 312 }
   const EDGE_CAP = 12
 
-  type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'any' }
+  // `idx` is only set for 'zone' anchors -- an internet edge's own slot
+  // is its zone end's lane index (#726), so it rides along with the
+  // anchor rather than being re-derived from the edge's position.
+  type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'any'; idx?: number }
 
   function anchorOf(iface: string): EdgeAnchor | null {
     if (iface === '') return { ...WAIST, kind: 'any' }
     if (iface === zonesState.wanInterface) return { x: 700, y: 104, kind: 'internet' }
     const i = zones.findIndex((z) => z.id === iface)
     if (i === -1) return null
-    return { x: laneX(i, zones.length), y: 484, kind: 'zone' }
+    return { x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }
   }
 
   // A line between two anchors, shared by both lenses: the Policy lens
@@ -183,6 +217,23 @@
     crosses: boolean
   }
 
+  const SPLIT = 7
+  // An edge to "anywhere" ends on the waist itself, which is the point
+  // every crossing edge is pulled through -- so at the ordinary split it
+  // runs along that same lane's edge to the internet, and neither line
+  // can be followed (#726: measured, 0.30 of the run within 4 units).
+  // It keeps its anchor and takes a wider lane instead, so it still
+  // reads as leaving the same island toward the same waist.
+  //
+  // 26, not the 13 this started at: once internet edges landed on their
+  // own slots (#726's bundle decision) the lane holding the middle slot
+  // ends its limb 10 units from the waist, which is where an "anywhere"
+  // edge dies -- so the old clearance smeared those two together again
+  // for that one lane. The gate caught it on the real map. Measured, the
+  // fault clears at 15 and holds from 22 up; 26 keeps a margin without
+  // reading as a line detached from its own island.
+  const ANY_CLEAR = 26
+
   function lineFor(fromIface: string, toIface: string, crosses: boolean): Line | null {
     const from = anchorOf(fromIface)
     const to = anchorOf(toIface)
@@ -192,8 +243,9 @@
     const dx = to.x - from.x
     const dy = to.y - from.y
     const len = Math.hypot(dx, dy) || 1
+    const spread = from.kind === 'any' || to.kind === 'any' ? SPLIT + ANY_CLEAR : SPLIT
     // A→B and B→A split to either side of the pair's shared line.
-    return { from, to, off: { x: (-dy / len) * 7, y: (dx / len) * 7 }, crosses }
+    return { from, to, off: { x: (-dy / len) * spread, y: (dx / len) * spread }, crosses }
   }
 
   interface DrawnEdge {
@@ -216,16 +268,51 @@
     return { drawn, undrawn }
   })
 
-  // A refusal dies on the waist's near side, so its bar is never behind
-  // the island: arriving from the internet it dies at the top edge,
-  // from a lane at the bottom.
-  function deathPoint(l: Line): { x: number; y: number } {
-    return { x: WAIST.x + l.off.x, y: (l.from.y < 268 ? 226 : WAIST.y) + l.off.y }
+  // #726 ("bundle the corridor, fan at the waist"): an edge whose far
+  // end is the internet no longer runs through the single WAIST point --
+  // it draws only the limb between its lane's own slot and the router
+  // card, and the corridor above carries one shared trunk instead. An
+  // edge to "anywhere" (kind 'any') is unaffected -- it still crosses at
+  // WAIST, per ANY_CLEAR above.
+  function isInternetEdge(l: Line): boolean {
+    return (l.from.kind === 'internet' && l.to.kind === 'zone') || (l.from.kind === 'zone' && l.to.kind === 'internet')
   }
 
-  // The visible line: a cubic pulled through the waist, or dying there.
+  // The lane end's own slot -- shared by the limb, its death point and
+  // its badge, so all three agree on where a given lane's internet edge
+  // rides. Keyed off the lane's index in `zones`, never the edge's
+  // position in the edge list.
+  function internetSlotSpread(l: Line): number {
+    const laneAnchor = l.from.kind === 'zone' ? l.from : l.to
+    return slotSpread(laneAnchor.idx ?? 0, zones.length)
+  }
+
+  // A refusal dies on the waist's near side, so its bar is never behind
+  // the island: arriving from the internet it dies at the top edge,
+  // from a lane at the bottom. An internet edge's death point takes its
+  // own lane's slot on the x axis rather than the shared waist x, so two
+  // refusals to different lanes no longer coincide (#726).
+  function deathPoint(l: Line): { x: number; y: number } {
+    const x = isInternetEdge(l) ? 700 + internetSlotSpread(l) : WAIST.x
+    return { x: x + l.off.x, y: (l.from.y < 268 ? 226 : WAIST.y) + l.off.y }
+  }
+
+  // The visible line: a cubic pulled through the waist, dying there, or
+  // (for an internet edge) the limb alone -- ribPath's own cubic,
+  // reversed, landing on the lane's slot rather than the waist (#726).
   function edgePath(l: Line): string {
     const { from, to, off } = l
+    if (isInternetEdge(l) && l.crosses) {
+      const spread = internetSlotSpread(l)
+      const laneAnchor = from.kind === 'zone' ? from : to
+      const waistPt = { x: 700 + spread, y: 302 }
+      const laneCtrl = { x: laneAnchor.x + (700 - laneAnchor.x) * 0.25, y: 420 }
+      const waistCtrl = { x: 700 + spread * 2.2, y: 380 }
+      const pt = (p: { x: number; y: number }) => `${p.x + off.x} ${p.y + off.y}`
+      return from.kind === 'zone'
+        ? `M ${pt(laneAnchor)} C ${pt(laneCtrl)}, ${pt(waistCtrl)}, ${pt(waistPt)}`
+        : `M ${pt(waistPt)} C ${pt(waistCtrl)}, ${pt(laneCtrl)}, ${pt(laneAnchor)}`
+    }
     const w = { x: WAIST.x + off.x, y: WAIST.y + off.y }
     if (l.crosses) {
       return `M ${from.x + off.x} ${from.y + off.y} C ${w.x} ${w.y}, ${w.x} ${w.y}, ${to.x + off.x} ${to.y + off.y}`
@@ -287,6 +374,22 @@
       return {
         x: dp.x + (dx / len) * back + off.x * 4.2 + p.x * BADGE_CLEAR * side,
         y: dp.y + (dy / len) * back + off.y * 4.2 + p.y * BADGE_CLEAR * side,
+      }
+    }
+    if (isInternetEdge(l)) {
+      // On the limb itself, measured from the waist end -- the corridor
+      // stagger above has nothing left to separate now that each lane
+      // has its own slot (#726).
+      const spread = internetSlotSpread(l)
+      const waistPt = { x: 700 + spread, y: 302 }
+      const laneAnchor = from.kind === 'zone' ? from : to
+      const dx = laneAnchor.x - waistPt.x
+      const dy = laneAnchor.y - waistPt.y
+      const f = 0.35 + (i % 4) * 0.13
+      const p = perp(dx, dy)
+      return {
+        x: waistPt.x + dx * f + off.x * 4.2 + p.x * BADGE_CLEAR * side,
+        y: waistPt.y + dy * f + off.y * 4.2 + p.y * BADGE_CLEAR * side,
       }
     }
     // Past the waist, toward the destination, on its own side -- and
@@ -1676,9 +1779,12 @@
            real map, never a fabricated layer. "Zones" (index 2) is
            unchanged from today's card. -->
       <g class="camera" class:cam-clients={altitude === 0} class:cam-services={altitude === 1} class:cam-survey={altitude === 3}>
+      <!-- The trunk: router to internet, one line, every lens, never
+           per-edge (#726 -- "bundle the corridor, fan at the waist").
+           Individual edges fan at the waist card instead; see
+           edgePath's internet-edge branch. -->
+      <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
       {#if lens === 'traffic'}
-        <!-- The one-way spine: internet into the waist. -->
-        <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
         {#if eps > 0}
           <circle class="mote" r="2.5" fill="var(--accent)" />
         {/if}
@@ -1955,9 +2061,7 @@
                the geometry is the attribute the renderer reads. -->
           <rect class="isl waist" x="-128" y="-34" width="256" height={degradedStatement ? 100 : 68} rx="12" />
           <text x="-110" y="-6" class="n-name">{primaryDevice?.name ?? 'your router'}</text>
-          <text x="-110" y="12" class="n-sub">
-            the waist{epsText ? ` · ${epsText} events/s` : ''}
-          </text>
+          <text x="-110" y="12" class="n-sub">{waistSub}</text>
           {#if degradedStatement}
             <text x="-110" y="34" class="deg-t">no address table pushed — zones from boundaries</text>
             <text x="-110" y="50" class="deg-t"
@@ -2027,34 +2131,21 @@
             >
             {#if shown.hosts.length > 0}
               <!-- Each host is the reach's door (#626): clicking the name
-                   recentres on that node rather than opening the zone. The
-                   dot beside it (#648, round 23: "node symbols bigger")
-                   does the exact same thing -- the dot opens what the name
-                   opens, never a second, different affordance. How many
-                   names are drawn is the card's own width budget (#699);
-                   the clip is the backstop, so an unusually long name
-                   cannot reach the neighbouring lane whatever the
-                   estimate said. -->
+                   recentres on that node rather than opening the zone.
+                   The name is the whole target. Rounds 23 and 30 both
+                   draw this list as plain names (round-23:871,
+                   round-30's own `n-sub` line); #648's "node symbols
+                   bigger" was about the map's circles -- the zone dots
+                   and station rings -- and a per-name text dot was read
+                   into it that no round ever drew (Fable 5, #715 item
+                   10). How many names are drawn is the card's own width
+                   budget (#699); the clip is the backstop, so an
+                   unusually long name cannot reach the neighbouring lane
+                   whatever the estimate said. -->
               <text x={-cardHalf + cardPad} y="52" class="n-hosts" clip-path="url(#{uid}-hosts)">
                 {#each shown.hosts as h, hi (h.ip)}
                   {#if hi > 0}<tspan> · </tspan>{/if}
                   <tspan
-                    class="host-dot"
-                    role="button"
-                    tabindex="0"
-                    aria-hidden="true"
-                    onclick={(e) => {
-                      e.stopPropagation()
-                      descend(z.id, h.label, h.ip)
-                    }}
-                    onkeydown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        descend(z.id, h.label, h.ip)
-                      }
-                    }}>●</tspan
-                  ><tspan
                     class="host-link"
                     role="button"
                     tabindex="0"
@@ -2085,7 +2176,12 @@
                 <text x={-cardHalf + cardPad} y="88" class="n-sub">{detail}</text>
               {/if}
             {/if}
-            <text x={-cardHalf + cardPad} y="100" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
+            <!-- Round 30's zone card carries name, subnet, hosts and the
+                 coverage badge, and stops there (the-whole.html:1002-1008).
+                 A fifth "N events this window" line was drawn here and the
+                 mockup draws it nowhere, so it is off (#715 item 9). The
+                 count itself stays: `zones.svelte.ts:161` sorts the lane row
+                 by it, so it is load-bearing data, not dead code. -->
             {#if agg}
               <!-- Flush with the card and 16 tall (#699; round 30's
                    `translate(-108 110)` at 216x16, the-whole.html:
@@ -3983,18 +4079,6 @@
      own clicks (#699: the internet island gained one). */
   .passive .hbar-g {
     pointer-events: auto;
-  }
-
-  /* --- node symbols (#648, round 23: "node symbols bigger") -------------- */
-  .host-dot {
-    fill: var(--fg-dim);
-    font-size: 13px;
-    cursor: pointer;
-  }
-
-  .host-dot:hover,
-  .host-dot:focus-visible {
-    fill: var(--accent);
   }
 
   /* --- node info cards (#648, rounds 22-23) ------------------------------ */

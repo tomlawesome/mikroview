@@ -342,6 +342,11 @@ export interface RouterFilterRule {
   protocol?: string
   srcAddress?: string
   dstAddress?: string
+  // Optional for the same reason as the fields above: a push made before
+  // #701 asked for it sends nothing, and absent must not read as
+  // "disabled". Counting enabled rules therefore tests `=== true`
+  // rather than falsiness.
+  disabled?: boolean
 }
 
 // The NAT record's full rule anatomy (#408) plus the operator-set
