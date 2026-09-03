@@ -76,12 +76,10 @@ func ExpectationSourceIdentityCondition(id matchlog.Identity) Condition {
 var expectationWindow = time.Minute
 
 // ExpectationDefinitionFor converts one watchlist entry into the
-// Definition envelope it is evaluated as -- the same conversion
-// MigrateDefinitions performs when seeding the definitions document
-// (definitions_migrate.go), called here so the definition a live entry
-// evaluates as and the definition it migrates into are the same value,
-// produced by the same code, rather than two conversions that could
-// drift.
+// Definition envelope it is evaluated as -- convertWatchlistEntry
+// (definitions_convert.go), so the definition a live entry evaluates as
+// and the definition stored for it are the same value, produced by the
+// same code, rather than two conversions that could drift.
 func ExpectationDefinitionFor(entry watchlist.Entry) (Definition, error) {
 	return convertWatchlistEntry(&entry)
 }
@@ -195,7 +193,7 @@ func BuildExpectationDefinition(def Definition, members AddressListMembership) (
 // paramOptionalString reads a ParamTypeStringList param that carries at
 // most one value -- the shape watchlistNonInvertedParamSchema uses for
 // every optional single field, because there is no single-optional-string
-// ParamType (see optionalStringList, definitions_migrate.go). Absent, or
+// ParamType (see optionalStringList, definitions_convert.go). Absent, or
 // present and empty, both mean "not scoped".
 func paramOptionalString(params Params, name string) (string, error) {
 	vs, err := paramStringList(params, name)
