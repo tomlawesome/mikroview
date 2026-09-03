@@ -108,6 +108,10 @@ type blockSpec struct {
 // field renaming is the one place a typo silently breaks a feature
 // without RouterOS complaining, so it lives in exactly one place.
 var blockSpecs = map[string]blockSpec{
+	// packets/bytes were added for #435: RouterOS keeps a per-rule hit
+	// counter whether or not the rule logs, so the tune-logging helper
+	// can show a rule's real cost -- "fired 41,000 times in the last
+	// day" -- beside its tick-box before any logging is switched on.
 	"filter-rule": {
 		varName: "rule",
 		source:  "/ip/firewall/filter",
@@ -115,7 +119,7 @@ var blockSpecs = map[string]blockSpec{
 			`"srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); ` +
 			`"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); ` +
 			`"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); ` +
-			`"disabled"=($v->"disabled")}`,
+			`"disabled"=($v->"disabled"); "packets"=($v->"packets"); "bytes"=($v->"bytes")}`,
 	},
 	"address-list": {
 		varName: "al",
@@ -187,4 +191,22 @@ func ScheduleCommands(dialect string) string {
 		`/system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"`,
 		`/system script run mv-push`,
 	}, "\n")
+}
+
+// LogPrefixForAction is the log-prefix convention RuleTaggingCommands'
+// bulk `[find action=...]` commands give a rule, applied to a single
+// action rather than to every rule of that action at once: D|drop|,
+// R|reject|, A|accept|, and <INITIAL>|<action>| for everything else,
+// INITIAL being the action's own first letter, upper-cased. #435's
+// per-rule tune-logging render step (POST /api/tune-logging/render)
+// calls this so a rule tagged individually gets the identical prefix
+// bulk-tagging would have given it, rather than a second convention
+// that could drift from the first. dialect is accepted for the same
+// reason every other function in this file takes one -- the seam a
+// second dialect would use, not a currently-live switch.
+func LogPrefixForAction(action, dialect string) string {
+	if action == "" {
+		return ""
+	}
+	return strings.ToUpper(action[:1]) + "|" + action + "|"
 }

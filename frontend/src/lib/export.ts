@@ -110,3 +110,19 @@ export function downloadEventsCsv(events: FirewallEvent[]): void {
   a.remove()
   URL.revokeObjectURL(url)
 }
+
+// downloadText (#435) is the same blob-a-link-click idiom above, pulled
+// out generic: Tune logging's annotated export is plain text, not a
+// table of events, and is the second caller of the pattern rather than
+// a reason to bend eventsToCsv/downloadEventsCsv around a second shape.
+export function downloadText(filename: string, text: string): void {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
