@@ -1992,6 +1992,39 @@ describe('#715 item 3: the flags and watch overlays', () => {
 
     expect(traffic.classList.contains('on')).toBe(true)
   })
+
+  // #897 item 1. The gate read the toggle as not latching. It does --
+  // this is the assertion the scenario meant to make, on a base lens
+  // the reader chose rather than the default, and on the attribute a
+  // screen reader announces rather than the class the styling uses.
+  it('latches off on a click and back on with the next, whichever base lens is showing', () => {
+    const { container } = render(Topography)
+    flushSync()
+
+    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Map lenses"] button')].find(
+      (b) => b.textContent?.trim() === 'policy',
+    )
+    policyTab!.click()
+    flushSync()
+    expect(policyTab!.classList.contains('on')).toBe(true)
+
+    expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('true')
+
+    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('false')
+    expect(overlays(container)[0].classList.contains('on')).toBe(false)
+
+    // A latch, not a one-way switch.
+    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('true')
+
+    // The other toggle and the base lens are untouched throughout.
+    expect(overlays(container)[1].getAttribute('aria-pressed')).toBe('true')
+    const lensOn = [...container.querySelectorAll('[aria-label="Map lenses"] button')].find((b) => b.classList.contains('on'))
+    expect(lensOn?.textContent?.trim()).toBe('policy')
+  })
 })
 
 describe('the tunnel node (#877)', () => {
