@@ -2157,26 +2157,35 @@
              plate is a real, sizeable target and deserves to be one) --
              see this file's own report on what that costs the tab order. -->
         {#each drawnReality.drawn as d, di (d.r.key)}
-          {@const badge = trafficBadges[di]}
-          <g
-            class="detail"
-            role="button"
-            tabindex="0"
-            aria-label="Open the stream filtered to this pair: {realityLabel(d.r)}"
-            onclick={() => openPair(d.r.from, d.r.to, d.r.topPorts)}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                openPair(d.r.from, d.r.to, d.r.topPorts)
-              }
-            }}
-          >
-            <title>{realityLabel(d.r)}</title>
-            <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-            <text class="edge-badge" class:alarm-t={d.r.verdict === 'unplanned'} x={badge.x} y={badge.y} text-anchor="middle">
-              {realityBadge(d.r)}
-            </text>
-          </g>
+          <!-- The escalated pair keeps its slot in trafficBadges so
+               every later index still lines up, but the slot carries no
+               text and so is sized for none: its pill would be a label
+               at full width over a plate 12 wide, saying a second time
+               what the card below already says (#897 item 2). The
+               coverage and policy lenses skip their empty labels the
+               same way. -->
+          {#if d !== worstUnplanned}
+            {@const badge = trafficBadges[di]}
+            <g
+              class="detail"
+              role="button"
+              tabindex="0"
+              aria-label="Open the stream filtered to this pair: {realityLabel(d.r)}"
+              onclick={() => openPair(d.r.from, d.r.to, d.r.topPorts)}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  openPair(d.r.from, d.r.to, d.r.topPorts)
+                }
+              }}
+            >
+              <title>{realityLabel(d.r)}</title>
+              <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
+              <text class="edge-badge" class:alarm-t={d.r.verdict === 'unplanned'} x={badge.x} y={badge.y} text-anchor="middle">
+                {realityBadge(d.r)}
+              </text>
+            </g>
+          {/if}
         {/each}
 
         <!-- The worst unplanned flow, escalated out of the row of
