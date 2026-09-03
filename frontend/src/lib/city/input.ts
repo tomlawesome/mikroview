@@ -6,8 +6,10 @@
 import { addressInCidr, parseCidr } from '../addressMatch'
 import type { PolicyEdge } from '../policy.svelte'
 import type { RealityEdge } from '../reality'
+import type { TunnelInterface } from '../tunnels.svelte'
 import type { Device, FirewallEvent } from '../types'
 import type { ZoneInfo } from '../zones.svelte'
+import type { CityPeer } from './types'
 
 export interface CityRouter {
   id: string
@@ -39,14 +41,41 @@ export interface CityEdge {
   verdict: RealityEdge['verdict']
 }
 
+/**
+ * A tunnel interface, as the city's footbridge sees it: this build's own
+ * event window plus whatever issue #874's ingest has pushed about it
+ * (tunnelsState -- fetched from the same per-device RouterOS endpoints
+ * the WAN and address tables already come from). apiState is null when
+ * no pushed table names this interface at all -- this build only knows
+ * it exists because events crossed it -- which tunnelState.ts's
+ * bridgeStateFor reads exactly like the API's own 'unknown': a footbridge
+ * with no state, never a guessed down.
+ */
+export interface CityTunnel {
+  iface: string
+  /** Which router's own endpoint this tunnel's state came from, or the
+   * event-attributed router when it has none (see routerOf below). */
+  routerId: string
+  apiState: 'up' | 'down' | 'unknown' | null
+  /** Events on this interface in the window, for the frontend's own
+   * quiet reading (bridgeStateFor). */
+  events: number
+  peers: CityPeer[]
+}
+
 export interface CityInput {
   routers: CityRouter[]
   zones: CityZone[]
   edges: CityEdge[]
   /** The WAN boundary interface, or null while degraded. */
   wan: string | null
-  /** Tunnel interfaces seen on events: each gets a footbridge. */
-  tunnels: string[]
+  /** Whether a logging rule covers the WAN boundary: the road bridge is
+   * lamped when true, unlit otherwise -- never up/down/quiet, per the
+   * ratified record. */
+  wanLogged: boolean
+  /** Every tunnel interface this build knows about, from events and/or
+   * the pushed tunnel tables: each gets a footbridge. */
+  tunnels: CityTunnel[]
 }
 
 /** Interface names that are tunnels, not zones: the far side is another
@@ -71,18 +100,28 @@ export function cityInputFrom(
   anyPushed: boolean,
   primaryId: string | null,
   wan: string | null,
+  /** Issue #874's per-device tunnel tables (tunnelsState.list). Defaults
+   * to none, so every existing caller and test that predates #866 still
+   * reads as "nothing pushed yet" rather than needing an update just to
+   * keep compiling. */
+  tunnelInterfaces: TunnelInterface[] = [],
 ): CityInput {
   const primary = primaryId ?? devices[0]?.id ?? ''
   const routers: CityRouter[] = devices.map((d) => ({ id: d.id, name: d.name, primary: d.id === primary, sourceIp: d.sourceIp }))
   if (routers.length === 0) routers.push({ id: 'router', name: 'router', primary: true, sourceIp: '' })
 
-  // Who logs on which interface.
+  // Who logs on which interface, and how many events crossed a tunnel
+  // in the window (the frontend's own half of a footbridge's state).
   const byIface = new Map<string, Map<string, number>>()
-  const tunnels = new Set<string>()
+  const tunnelNames = new Set<string>()
+  const tunnelEvents = new Map<string, number>()
   for (const e of events) {
     for (const iface of [e.inInterface, e.outInterface]) {
       if (!iface) continue
-      if (isTunnel(iface)) tunnels.add(iface)
+      if (isTunnel(iface)) {
+        tunnelNames.add(iface)
+        tunnelEvents.set(iface, (tunnelEvents.get(iface) ?? 0) + 1)
+      }
       let m = byIface.get(iface)
       if (!m) byIface.set(iface, (m = new Map()))
       m.set(e.deviceId, (m.get(e.deviceId) ?? 0) + 1)
@@ -99,6 +138,27 @@ export function cityInputFrom(
 
   const logged = new Set<string>()
   for (const p of policyEdges) if (p.logged) (logged.add(p.from), logged.add(p.to))
+  const wanLogged = wan !== null && logged.has(wan)
+
+  // A tunnel this build knows about either from its own events or from
+  // a device's pushed tunnel table -- the first API entry to name it
+  // wins when two devices happen to share an interface name, the same
+  // single-boundary simplification zonesState.wanInterface already
+  // documents for the WAN (splitting per device is #852's territory,
+  // not this build's).
+  const apiByIface = new Map<string, TunnelInterface>()
+  for (const t of tunnelInterfaces) if (!apiByIface.has(t.iface)) apiByIface.set(t.iface, t)
+  const allTunnelIfaces = new Set<string>([...tunnelNames, ...apiByIface.keys()])
+  const cityTunnels: CityTunnel[] = [...allTunnelIfaces].sort().map((iface) => {
+    const api = apiByIface.get(iface) ?? null
+    return {
+      iface,
+      routerId: api?.routerId ?? routerOf(iface),
+      apiState: api?.apiState ?? null,
+      events: tunnelEvents.get(iface) ?? 0,
+      peers: api?.peers ?? [],
+    }
+  })
 
   const cityZones: CityZone[] = zones
     .filter((z) => !isTunnel(z.id))
@@ -118,7 +178,8 @@ export function cityInputFrom(
     zones: cityZones,
     edges: edges.map((e) => ({ key: e.key, from: e.from, to: e.to, events: e.events, verdict: e.verdict })),
     wan,
-    tunnels: [...tunnels].sort(),
+    wanLogged,
+    tunnels: cityTunnels,
   }
 }
 

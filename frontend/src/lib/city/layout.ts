@@ -12,7 +12,8 @@ import type { Pt } from './project'
 import { bezAt, bulge, gateToward, routeRound, segsOf } from './roads'
 import type { CityEdge, CityInput, CityZone } from './input'
 import { zoneHolding } from './input'
-import type { Borough, Bridge, Building, District, Ground, River, Road, RoadKind } from './types'
+import { bridgeStateFor } from './tunnelState'
+import type { Borough, Bridge, Building, CityPeer, District, Ground, River, Road, RoadKind } from './types'
 
 /** The mockup's primary router. */
 const ROUTER: Pt = [-10, 10]
@@ -227,12 +228,16 @@ export function layoutGround(input: CityInput): Ground {
   const sampledF = sampleBank(bankF)
 
   // Bridges: the WAN west of the router, tunnels east of it. Each deck
-  // runs on the d1 diagonal: solve tv - d = farBank(at - d).
+  // runs on the d1 diagonal: solve tv - d = farBank(at - d). The road
+  // bridge's state is never up/down/quiet -- 'up' means lamped (a
+  // logging rule covers the boundary), 'unknown' means unlit; a
+  // footbridge's state is tunnelState.ts's bridgeStateFor, never guessed.
   const bridges: Bridge[] = []
-  const crossings: { id: string; iface: string; at: number; w: number; kind: Bridge['kind']; postR: number }[] = []
-  if (input.wan) crossings.push({ id: 'wan', iface: input.wan, at: ROUTER[0] - 46, w: 3.4, kind: 'road', postR: POST_R })
-  input.tunnels.forEach((t, i) => crossings.push({ id: t, iface: t, at: ROUTER[0] + 18 + i * 28, w: 1.5, kind: 'foot', postR: FOOT_POST_R }))
-  const edgesTouching = (iface: string) => input.edges.filter((e) => e.from === iface || e.to === iface)
+  const crossings: { id: string; iface: string; at: number; w: number; kind: Bridge['kind']; postR: number; state: Bridge['state']; peers: CityPeer[] }[] = []
+  if (input.wan) crossings.push({ id: 'wan', iface: input.wan, at: ROUTER[0] - 46, w: 3.4, kind: 'road', postR: POST_R, state: input.wanLogged ? 'up' : 'unknown', peers: [] })
+  input.tunnels.forEach((t, i) =>
+    crossings.push({ id: t.iface, iface: t.iface, at: ROUTER[0] + 18 + i * 28, w: 1.5, kind: 'foot', postR: FOOT_POST_R, state: bridgeStateFor(t.apiState, t.events), peers: t.peers }),
+  )
   for (const c of crossings) {
     const tv = bankV(sampledN, c.at)
     let lo = 4
@@ -259,9 +264,7 @@ export function layoutGround(input: CityInput): Ground {
       index: 0,
     }
     nodes.push(post)
-    const seen = edgesTouching(c.iface)
-    const state: Bridge['state'] = seen.length === 0 ? 'quiet' : 'up'
-    bridges.push({ id: c.id, iface: c.iface, kind: c.kind, t, f, mid: [(t[0] + f[0]) / 2, (t[1] + f[1]) / 2], half: d / 2, w: c.w, post: post.id, state })
+    bridges.push({ id: c.id, iface: c.iface, kind: c.kind, t, f, mid: [(t[0] + f[0]) / 2, (t[1] + f[1]) / 2], half: d / 2, w: c.w, post: post.id, state: c.state, peers: c.peers })
   }
 
   // Roads. A gate is where a road toward its far end crosses a plate's
@@ -350,7 +353,7 @@ export function layoutGround(input: CityInput): Ground {
     const post = nodes.find((n) => n.id === b.post)
     if (!post) continue
     const w = b.kind === 'road' ? 2.8 : 0.8
-    const k: RoadKind = b.state === 'quiet' ? 'q' : 'a'
+    const k: RoadKind = b.state === 'up' ? 'a' : 'q'
     connect('rb-' + b.id, { kind: 'node', n: primaryNode }, { kind: 'node', n: post }, w, k, primary.name + ' to ' + b.iface)
     const off = (du: number, dv: number): Pt => [b.f[0] + du, b.f[1] + dv]
     roads.push({
