@@ -628,6 +628,22 @@ rewritten.
 
 ### Removed
 
+- **`watchlist.storePath` and `flags.detectorSettingsStorePath` are
+  gone, with the boot-time migration that read them** (config keys,
+  `MIKROVIEW_WATCHLIST_STORE_PATH` and
+  `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH`). Both documents were
+  migration sources only: the stores that owned them
+  (`internal/watchlist.Store`, `internal/detect.SettingsStore`) were
+  deleted in #405/#407, and nothing has written either since. Watchlist
+  entries and detector toggles both live in the definitions store
+  (`engine.definitionsStorePath`), which is what `-backup` carries. The
+  server no longer opens the two documents at boot, so a read failure on
+  either can no longer stop it starting. Remove the keys from
+  `config.yaml`; unknown keys are ignored, and the files themselves can
+  be deleted once a deployment has upgraded past #407. Upgrading
+  straight from a pre-#407 release skips the one-time entry adoption:
+  upgrade through a release that still had it, or re-create the entries.
+
 - **The Noise verdict, the plain Clear control, "never flag this again"
   and the exclusions API are gone** (#640), wholesale, with no aliases
   and no stub endpoints. Each is replaced by a verdict, above:

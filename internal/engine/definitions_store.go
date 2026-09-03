@@ -112,11 +112,9 @@ func OpenDefinitionsStore(path string) (*DefinitionsStore, error) {
 
 // OpenDefinitionsStoreWithBackend is OpenDefinitionsStore against any
 // persist.Backend -- a JSON file by default, or Postgres when
-// configured. Deliberately does not migrate anything: seeding this store
-// from internal/detect's or internal/watchlist's documents is
-// MigrateDefinitions's job (definitions_migrate.go), run once, before
-// this store is ever opened for the first time -- see that function's
-// own doc comment for why the two are kept separate.
+// configured. Deliberately seeds nothing: filling an empty store with
+// this binary's shipped catalogue is SeedShippedDefinitions' job
+// (definitions_migrate.go), run on every boot once this store is open.
 func OpenDefinitionsStoreWithBackend(b persist.Backend) (*DefinitionsStore, error) {
 	s := &DefinitionsStore{raw: make(map[string]json.RawMessage), watchingSince: time.Now()}
 
@@ -203,9 +201,8 @@ type StoredDefinition struct {
 // by Get, List and the availability checks Upsert/Delete perform. A
 // decode failure here should not happen in practice: the only paths that
 // ever populate s.raw are OpenDefinitionsStoreWithBackend's own decode
-// closure (which already round-tripped this exact JSON once), Upsert
-// (which marshals a value this package produced), and MigrateDefinitions
-// (whose own contract guarantees well-formed JSON) -- but a defensive
+// closure (which already round-tripped this exact JSON once) and Upsert
+// (which marshals a value this package produced) -- but a defensive
 // fallback still classifies as unavailable rather than panicking, should
 // disk-level corruption ever slip past those layers.
 func decodeStored(id string, entry json.RawMessage) StoredDefinition {

@@ -231,10 +231,8 @@ func setNightParams(d *Definition, e watchlist.Entry) error {
 	// for a watchlist entry created before silentJSON existed (or, for
 	// that matter, before #680's nightsJSON/ringJSON) still carries the
 	// on-disk ParamSchema from whenever it was last written -- and
-	// MigrateDefinitions only ever runs once, on the very first boot with
-	// no definitions document at all (its own doc comment: "already
-	// migrated ... idempotent no-op"), so nothing else upgrades a stored
-	// definition's schema afterwards. Writing silentJSON into Params
+	// nothing else upgrades a stored definition's schema. Writing
+	// silentJSON into Params
 	// without this would mean the very next decode of this same
 	// definition fails ValidateParams on a param its own persisted schema
 	// does not declare, and this entry silently stops tracking nights at

@@ -3,11 +3,7 @@
 package engine
 
 import (
-	"context"
-	"encoding/json"
 	"time"
-
-	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // This file is where internal/detect.Config landed when that package's
@@ -285,48 +281,18 @@ func DefaultDetectorDefaults() DetectorDefaults {
 	}
 }
 
-// DetectorSettings is one shipped detector's enabled + scope pair as the
-// pre-#405 detector-settings document stored it -- internal/detect.Settings,
-// moved here with the same JSON tags so the document round-trips
-// byte-identically.
+// DetectorSettings is one shipped detector's enabled + scope pair --
+// internal/detect.Settings, moved here when that package was deleted.
 //
 // It is deliberately NOT the shape anything evaluates. A definition's
 // enabled/scope live on the Definition itself (definition.go); this type
-// exists for exactly two callers: MigrateDefinitions, which reads a
-// pre-existing detector-settings document once to seed the definitions
-// store, and SeedShippedDefinitions, which layers config.yaml's own
-// per-detector toggles over the shipped defaults on every boot. Both are
-// seeding paths, which is why an "operator settings" type survives the
-// deletion of the store that used to own it.
+// exists for one caller, SeedShippedDefinitions, which layers
+// config.yaml's own per-detector toggles over the shipped defaults on
+// every boot. That is a seeding path, which is why an "operator
+// settings" type survives the deletion of the store that used to own it.
 type DetectorSettings struct {
 	Enabled bool  `json:"enabled"`
 	Scope   Scope `json:"scope"`
-}
-
-// detectorSettingsDocument is the whole pre-#405 detector-settings
-// document: a flat map of detector name to settings. Kept as this
-// package's own small copy of a shape internal/detect used to own,
-// exactly the precedent migrateWatchlistFile (definitions_migrate.go)
-// already sets for reading another package's persisted document without
-// depending on that package.
-type detectorSettingsDocument map[string]DetectorSettings
-
-// ReadDetectorSettingsDocument loads the pre-#405 detector-settings
-// document from b, or nil if b is not configured or holds no document.
-//
-// Fail-closed, like every other store's read: an unreadable or
-// unparseable document refuses to start rather than being treated as
-// empty (#378), because "no toggles found" and "your toggles could not
-// be read" must never look the same to an operator who switched a
-// detector off deliberately.
-func ReadDetectorSettingsDocument(ctx context.Context, b persist.Backend) (map[string]DetectorSettings, error) {
-	var doc detectorSettingsDocument
-	if _, _, err := persist.Open(ctx, b, "the detector settings store", func(data []byte) error {
-		return json.Unmarshal(data, &doc)
-	}); err != nil {
-		return nil, err
-	}
-	return doc, nil
 }
 
 // DefaultDetectorSettings returns every shipped definition enabled and
