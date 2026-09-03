@@ -76,6 +76,17 @@ describe('city layout: the ground plan', () => {
     expect(ground.bridges[0].kind).toBe('road')
     expect(ground.bridges[1].kind).toBe('foot')
   })
+
+  it('derives each bridge state from the fixture tunnel, never a guess', () => {
+    const wan = ground.bridges.find((b) => b.iface === 'ether1')
+    expect(wan?.state).toBe('up') // wanLogged: true
+    const l2tp = ground.bridges.find((b) => b.iface === 'l2tp-out1')
+    expect(l2tp?.state).toBe('up') // apiState up, events > 0
+    expect(l2tp?.peers.map((p) => p.name)).toEqual(['branch-office'])
+    const wg0 = ground.bridges.find((b) => b.iface === 'wg0')
+    expect(wg0?.state).toBe('down') // apiState down
+    expect(wg0?.peers).toEqual([])
+  })
 })
 
 describe('city layout: roads', () => {
