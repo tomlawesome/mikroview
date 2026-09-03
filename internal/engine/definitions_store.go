@@ -22,24 +22,27 @@ var definitionsLog = logging.New("definitions")
 // version -- the "document version bump" docs/decisions/evaluation-
 // engine.md's Migration section calls for: this is a brand new document
 // (nothing before it shared this shape), versioned from its first byte
-// so a future *structural* change has somewhere to record itself, the
-// same "versioned, forward-growable" contract engine.stateDocument
-// already follows (see state.go's own doc comment).
+// so a future *structural* change has somewhere to record itself.
 const definitionsDocumentVersion = 1
 
 // definitionsDocument is DefinitionsStore's on-disk shape: every
 // definition keyed by its ID, carried as raw JSON rather than decoded
 // into Definition at this layer.
 //
-// That choice is the whole mechanism behind the unavailable-definition
-// guarantee (see StoredDefinition.Available's doc comment, and the
-// decision recorded on issue #404, 2026-08-16): a definition this binary
-// cannot make sense of -- an unrecognized Kind/Intent from a newer
-// version, hit on a downgrade, or a shipped definition this binary has
-// retired -- still round-trips through Load/Save exactly, because this
-// layer never asks json.RawMessage to understand it. Only an entry a
-// caller actually rewrites (DefinitionsStore.Upsert) ever has its bytes
-// replaced; every other entry is carried forward unexamined.
+// That choice backs the unavailable-definition guarantee (see
+// StoredDefinition.Available's doc comment, and the decision recorded on
+// issue #404, 2026-08-16) for a definition whose envelope this binary
+// can parse but cannot otherwise make full sense of: still round-trips
+// through Load/Save exactly, because this layer never asks
+// json.RawMessage to understand it. Only an entry a caller actually
+// rewrites (DefinitionsStore.Upsert) ever has its bytes replaced; every
+// other entry is carried forward unexamined.
+//
+// An unrecognized Kind or Intent is not part of that guarantee: downgrade
+// is not a supported operation pre-1.0 (#873), so
+// OpenDefinitionsStoreWithBackend refuses to load a document containing
+// one at all, naming the offending definition and its unrecognized kind
+// rather than preserving it unevaluated.
 type definitionsDocument struct {
 	Version     int                        `json:"version"`
 	Definitions map[string]json.RawMessage `json:"definitions"`
@@ -136,6 +139,20 @@ func OpenDefinitionsStoreWithBackend(b persist.Backend) (*DefinitionsStore, erro
 			if id == "" || len(entry) == 0 {
 				continue
 			}
+			// An entry that decodes into a Definition is checked for a
+			// Kind/Intent this binary recognizes -- see
+			// definitionsDocument's own doc comment for why this is a
+			// hard load failure rather than the preserved-unavailable
+			// treatment the rest of this package gives a definition it
+			// can parse but not otherwise service. An entry that doesn't
+			// even decode this far is left to decodeStored's own
+			// defensive handling at read time, unchanged from before.
+			var d Definition
+			if err := json.Unmarshal(entry, &d); err == nil {
+				if err := refuseUnrecognizedKindIntent(id, d); err != nil {
+					return err
+				}
+			}
 			s.raw[id] = entry
 		}
 		return nil
@@ -170,41 +187,76 @@ func (s *DefinitionsStore) Close(ctx context.Context) error {
 // API: the decoded envelope, plus whether this binary can make sense of
 // it.
 //
-// Available is false when Kind or Intent is not one this binary's
-// engine package recognizes -- the "a stored definition whose id/kind
-// this binary cannot service" case decided on issue #404 (2026-08-16):
-// a downgrade from a version that shipped a Kind this binary predates,
-// or a shipped definition this binary has since retired. Deliberately a
-// *weaker* check than Definition.Validate (which also enforces
-// ParamSchema/Params agreement and the custom-implies-declarative
-// invariant): those are API-boundary concerns for whoever accepts a
-// live edit (#407), not this store's own "can I identify what kind of
-// thing this is" question -- a definition can be fully Available here
-// and still fail Validate if, say, its ParamSchema has drifted from a
-// value it no longer describes, which is a different problem from not
-// knowing what it is at all.
+// Available is false when this binary recognizes what kind of thing the
+// definition is (Kind and Intent both check out -- an unrecognized
+// combination is refused outright at load, see
+// OpenDefinitionsStoreWithBackend and refuseUnrecognizedKindIntent) but
+// still cannot service it: today that means a custom detection whose
+// Detection block names a condition field, an operator or a key mode
+// from a newer build (issue #404, 2026-08-16). Deliberately a *weaker*
+// check than Definition.Validate (which also enforces ParamSchema/Params
+// agreement and the custom-implies-declarative invariant): those are
+// API-boundary concerns for whoever accepts a live edit (#407), not this
+// store's own "can I identify what kind of thing this is" question -- a
+// definition can be fully Available here and still fail Validate if,
+// say, its ParamSchema has drifted from a value it no longer describes,
+// which is a different problem from not knowing what it is at all.
 //
 // An unavailable definition is never evaluated (nothing in this package
-// dispatches on an unrecognized Kind), but it is never dropped either:
-// Get and List still return it, and DefinitionsStore never rewrites or
-// removes its stored bytes except in response to an explicit, targeted
-// mutation of that same ID -- which Upsert/Delete both refuse for an
-// unavailable entry, conservatively, since this binary cannot confirm
-// what replacing or discarding it would actually do. See
-// TestDefinitionsStorePreservesUnknownDefinitionByteForByte.
+// dispatches on a Detection block it could not validate), but it is
+// never dropped either: Get and List still return it, and
+// DefinitionsStore never rewrites or removes its stored bytes except in
+// response to an explicit, targeted mutation of that same ID -- which
+// Upsert/Delete both refuse for an unavailable entry, conservatively,
+// since this binary cannot confirm what replacing or discarding it would
+// actually do.
 type StoredDefinition struct {
 	Definition Definition
 	Available  bool
 }
 
+// refuseUnrecognizedKindIntent reports an error naming id and its
+// unrecognized Kind or Intent when d is not one this binary's engine
+// package can identify at all.
+//
+// Called only from OpenDefinitionsStoreWithBackend's load path (#873):
+// downgrade -- running an older binary against a document a newer one
+// wrote, or one a since-retired build produced -- is not a supported
+// operation pre-1.0, so a definition this binary cannot identify is a
+// hard error at load naming the offending definition and its
+// unrecognized kind, not something preserved unevaluated. That puts the
+// fix in the operator's hands with the data still on disk: delete the
+// one named definition, or restore the binary that understands it.
+func refuseUnrecognizedKindIntent(id string, d Definition) error {
+	switch d.Kind {
+	case KindDeclarative, KindProgrammatic:
+	default:
+		return fmt.Errorf("engine: definition %q: unrecognized kind %q -- downgrade is not supported; delete this definition (its data stays on disk until you do) or restore the binary that wrote it", id, d.Kind)
+	}
+	switch d.Intent {
+	case IntentDetection, IntentExpectation:
+	default:
+		return fmt.Errorf("engine: definition %q: unrecognized intent %q -- downgrade is not supported; delete this definition (its data stays on disk until you do) or restore the binary that wrote it", id, d.Intent)
+	}
+	return nil
+}
+
 // decodeStored decodes one entry's raw bytes and classifies it -- shared
-// by Get, List and the availability checks Upsert/Delete perform. A
-// decode failure here should not happen in practice: the only paths that
-// ever populate s.raw are OpenDefinitionsStoreWithBackend's own decode
-// closure (which already round-tripped this exact JSON once) and Upsert
-// (which marshals a value this package produced) -- but a defensive
-// fallback still classifies as unavailable rather than panicking, should
-// disk-level corruption ever slip past those layers.
+// by Get, List and the availability checks Upsert/Delete perform.
+//
+// Kind and Intent are not re-checked here: OpenDefinitionsStoreWithBackend
+// already refuses to load a document containing an entry with either
+// unrecognized (see refuseUnrecognizedKindIntent), and Upsert only ever
+// writes a value that has passed Definition.Validate, which enforces the
+// same two fields -- so every entry decodeStored is ever handed already
+// carries a recognized Kind and Intent.
+//
+// A decode failure here should not happen in practice: the only paths
+// that ever populate s.raw are that same load closure (which already
+// round-tripped this exact JSON once) and Upsert (which marshals a value
+// this package produced) -- but a defensive fallback still classifies as
+// unavailable rather than panicking, should disk-level corruption ever
+// slip past those layers.
 func decodeStored(id string, entry json.RawMessage) StoredDefinition {
 	var d Definition
 	if err := json.Unmarshal(entry, &d); err != nil {
@@ -212,26 +264,16 @@ func decodeStored(id string, entry json.RawMessage) StoredDefinition {
 		return StoredDefinition{Definition: Definition{ID: id}, Available: false}
 	}
 	available := true
-	switch d.Kind {
-	case KindDeclarative, KindProgrammatic:
-	default:
-		available = false
-	}
-	switch d.Intent {
-	case IntentDetection, IntentExpectation:
-	default:
-		available = false
-	}
 	// A custom detection carries its own logic in its Detection block
 	// (issue #502), so "can this binary make sense of it" extends to
 	// that block: a condition field, an operator or a key mode from a
-	// newer build is exactly the downgrade case Available already
-	// exists for. Marking it unavailable shelves the one definition --
-	// preserved byte-for-byte, listed, never evaluated, and refused for
-	// edit or delete -- where leaving it available would instead have it
-	// fail to build on every single sync. Not logged: this runs on every
-	// Get and List.
-	if available && d.Provenance.Origin == ProvenanceCustom && d.Intent == IntentDetection {
+	// newer build is exactly the kind of thing this binary cannot
+	// service even though it recognizes the envelope around it. Marking
+	// it unavailable shelves the one definition -- preserved byte-for-
+	// byte, listed, never evaluated, and refused for edit or delete --
+	// where leaving it available would instead have it fail to build on
+	// every single sync. Not logged: this runs on every Get and List.
+	if d.Provenance.Origin == ProvenanceCustom && d.Intent == IntentDetection {
 		if err := d.Detection.Validate(); err != nil {
 			available = false
 		}
