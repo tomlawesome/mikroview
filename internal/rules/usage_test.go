@@ -294,6 +294,143 @@ func TestStaleReturnsOnlyEntriesOlderThanMaxAge(t *testing.T) {
 	}
 }
 
+// TestRecordingSinceStampedOnFreshStore covers issue #701's honesty
+// bound: a store with no prior document (Open("") or a missing file)
+// must still report a RecordingSince, so a caller building "distinct
+// rules fired in the last N days" always has a window to bound its
+// claim by. Bounded to "close to now" rather than an exact value since
+// the stamp is taken from the wall clock during Open.
+func TestRecordingSinceStampedOnFreshStore(t *testing.T) {
+	before := time.Now()
+	s, err := Open("")
+	if err != nil {
+		t.Fatalf("Open(\"\") returned an error: %v", err)
+	}
+	after := time.Now()
+
+	got := s.RecordingSince()
+	if got.Before(before) || got.After(after) {
+		t.Errorf("expected RecordingSince to be stamped with the load time, got %v, want between %v and %v", got, before, after)
+	}
+}
+
+// TestRecordingSinceStampedOnMissingFile is TestRecordingSinceStampedOnFreshStore
+// against a configured-but-not-yet-written path, the other documented
+// "fresh store" case.
+func TestRecordingSinceStampedOnMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rule-usage.json")
+	before := time.Now()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() on a missing file returned an error: %v", err)
+	}
+	after := time.Now()
+
+	got := s.RecordingSince()
+	if got.Before(before) || got.After(after) {
+		t.Errorf("expected RecordingSince to be stamped with the load time, got %v, want between %v and %v", got, before, after)
+	}
+}
+
+// TestRecordingSinceSurvivesRoundTripAndDoesNotMoveOnReopen pins the two
+// load-bearing invariants from issue #701: the stamp set on first use
+// persists across a save/load round trip, and reopening the same store
+// later -- with the wall clock having moved on -- must not advance it.
+// A stamp that crept forward on every restart would silently claim a
+// wider "seen firing" window than the store actually covered, which is
+// exactly the dishonesty the owner's decision rules out.
+func TestRecordingSinceSurvivesRoundTripAndDoesNotMoveOnReopen(t *testing.T) {
+	old := persistMinInterval
+	persistMinInterval = 0
+	defer func() { persistMinInterval = old }()
+
+	path := filepath.Join(t.TempDir(), "rule-usage.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := s.RecordingSince()
+	if first.IsZero() {
+		t.Fatal("expected a fresh store to already have a non-zero RecordingSince")
+	}
+
+	s.Touch("r1", time.Now())
+	flushForTest(t, s)
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopening persisted store: %v", err)
+	}
+	got := reopened.RecordingSince()
+	if !got.Equal(first) {
+		t.Errorf("expected RecordingSince to survive the round trip unchanged, got %v want %v", got, first)
+	}
+
+	// Touch again and reopen a second time, well after "first" -- the
+	// stamp must still not have moved.
+	reopened.Touch("r2", time.Now())
+	flushForTest(t, reopened)
+	reopenedAgain, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopening persisted store a second time: %v", err)
+	}
+	if got := reopenedAgain.RecordingSince(); !got.Equal(first) {
+		t.Errorf("expected RecordingSince to stay pinned across a second reopen, got %v want %v", got, first)
+	}
+}
+
+// TestRecordingSinceInferredFromEarliestFirstSeenOnLegacyFile covers
+// loading a document written before RecordingSince existed: the bare
+// `[...]` array this package wrote pre-#701, with no stamp to read.
+// Since the earliest FirstSeen across its records is the earliest
+// moment this store can actually prove it was recording, that is what
+// RecordingSince must report -- not the (later) moment this Open call
+// happens to run.
+func TestRecordingSinceInferredFromEarliestFirstSeenOnLegacyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rule-usage.json")
+	earliest := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	data := `[
+		{"rule":"r1","firstSeen":"2026-01-02T00:00:00Z","lastSeen":"2026-01-02T00:00:00Z","count":1},
+		{"rule":"r2","firstSeen":"2026-01-01T00:00:00Z","lastSeen":"2026-01-01T00:00:00Z","count":1}
+	]`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() on a legacy bare-array file returned an error: %v", err)
+	}
+	if got := s.RecordingSince(); !got.Equal(earliest) {
+		t.Errorf("expected RecordingSince to be inferred as the earliest FirstSeen (%v), got %v", earliest, got)
+	}
+}
+
+// TestRecordingSinceInferredAsLoadTimeOnLegacyFileWithNoRecords is
+// TestRecordingSinceInferredFromEarliestFirstSeenOnLegacyFile's
+// companion for the edge case the spec calls out explicitly: a
+// pre-#701 document with no records at all (every element null) has no
+// FirstSeen to infer from, so RecordingSince falls back to the load
+// time.
+func TestRecordingSinceInferredAsLoadTimeOnLegacyFileWithNoRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rule-usage.json")
+	if err := os.WriteFile(path, []byte(`[null, null]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	before := time.Now()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() on a legacy empty-array file returned an error: %v", err)
+	}
+	after := time.Now()
+
+	got := s.RecordingSince()
+	if got.Before(before) || got.After(after) {
+		t.Errorf("expected RecordingSince to fall back to the load time, got %v, want between %v and %v", got, before, after)
+	}
+}
+
 func TestStaleEmptyWhenNothingOldEnough(t *testing.T) {
 	s, _ := Open("")
 	now := time.Now()
