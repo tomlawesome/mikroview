@@ -1,0 +1,33 @@
+# Findings gitleaks reports in git history that are not secrets.
+#
+# One entry per finding, pinned to commit:path:rule:line -- never a rule,
+# a path or a directory. A broad entry silences future real findings in
+# the same place, which is how a scanner quietly stops scanning (#758).
+#
+# Adding to this file is not a way past a red build. A finding is
+# investigated first, and an entry is written only once it is established
+# that nothing needs rotating.
+
+# Two recovery-key-shaped constants in the terminal-echo test, added in
+# 6a358d7 on 2026-08-07 ("Keep recovery keys off every stream that
+# persists them"). Established synthetic on 2026-09-03, per #758:
+#
+#   - They live only in test files, as `const key` here and as `testKeys`
+#     in recovery_output_test.go, and appear nowhere else in the tree or
+#     its history.
+#   - Neither is ever verified against a recovery store. This test types
+#     one into a pty and asserts the terminal did not echo it; the other
+#     file formats three into expected CLI output. Nothing authenticates.
+#   - A recovery key is only usable against a deployment that holds its
+#     HMAC digest *and* that host's own pepper, which OpenRecovery
+#     generates per host and deliberately keeps out of the digest store
+#     (internal/auth/recovery.go). No digest and no pepper exists in this
+#     repository, so these strings authenticate against nothing here.
+#
+# The working tree no longer carries them: both were replaced with
+# obviously-fake placeholders in the same change, per AGENTS.md's rule
+# that tracked examples never resemble working credentials. These two
+# entries exist because history cannot be rewritten to remove what was
+# already published, and the scan is deliberately over full history.
+6a358d734c31f50cbe539048a33ca7a5546976d7:recovery_prompt_test.go:generic-api-key:69
+6a358d734c31f50cbe539048a33ca7a5546976d7:recovery_prompt_test.go:generic-api-key:150
