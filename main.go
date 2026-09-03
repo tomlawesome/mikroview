@@ -1438,7 +1438,21 @@ func main() {
 				// Recorded so the wizard can confirm the router reached
 				// mikroview and took the CA -- the first step whose
 				// success is otherwise invisible from this side (#320).
-				setupStore.NoteCAFetch(srv.ClientIP(r), time.Now())
+				clientIP := srv.ClientIP(r)
+				setupStore.NoteCAFetch(clientIP, time.Now())
+				// #436 step 3: the router's push script already fetches
+				// this URL with `?ros=$[/system/resource get version]`
+				// appended, so mikroview can learn the version at the
+				// wizard's very first step rather than waiting for the
+				// first authenticated push. Untrusted, unauthenticated
+				// text -- /ca.crt is deliberately public -- so it is
+				// validated before being kept anywhere, and used for
+				// nothing but a fallback hint keyed on the request's
+				// source address (routerState.VersionHint); a real push
+				// always overrides it.
+				if hint, ok := validRouterOSHint(r.URL.Query().Get("ros")); ok {
+					routerState.NoteVersionHint(clientIP, hint, time.Now())
+				}
 				w.Header().Set("Content-Type", "application/x-pem-file")
 				w.Write(caCertPEM)
 			})
@@ -2447,6 +2461,29 @@ func readRecoveryKey() (string, error) {
 		return "", fmt.Errorf("no recovery key supplied")
 	}
 	return string(raw), nil
+}
+
+// validRouterOSHint reports whether v is safe to remember as a
+// RouterOS-version hint from the public, unauthenticated /ca.crt?ros=
+// query parameter (#436 step 3): capped at 32 bytes and printable ASCII
+// only, the same shape internal/ingest.validateFieldText holds a pushed
+// routerosVersion to, tightened for a value that should only ever be a
+// handful of characters like "7.23.3".
+//
+// A value outside that shape is dropped silently rather than truncated
+// or sanitised -- there is nothing worth keeping in a malformed hint,
+// and this handler has nothing to report failure to anyway (the router
+// is fetching a certificate, not submitting a form).
+func validRouterOSHint(v string) (string, bool) {
+	if v == "" || len(v) > 32 {
+		return "", false
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < 0x20 || v[i] > 0x7e {
+			return "", false
+		}
+	}
+	return v, true
 }
 
 // watchForCertificateReload swaps in a renewed certificate on SIGHUP,

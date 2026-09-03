@@ -64,11 +64,32 @@ var maxDevices = 256
 // number.
 var maxRecordsPerKind = 5000
 
+// maxVersionHints bounds versionHints the same way internal/setup's
+// maxSources bounds its own source-keyed maps: the key is the requester's
+// source IP, chosen by whoever connects, since /ca.crt is deliberately
+// public (#436 step 3). Evict the least-recently-hinted rather than
+// refuse outright, so a flood cannot permanently blot out the hint for
+// the router an operator is actually setting up.
+var maxVersionHints = 256
+
 // Store is safe for concurrent use: Apply takes the write lock, every
 // read takes the read lock. Construct with New.
 type Store struct {
 	mu      sync.RWMutex
 	devices map[string]*deviceState
+	// versionHints holds what an unauthenticated /ca.crt?ros= fetch
+	// claimed as its RouterOS version, keyed by the request's source IP
+	// rather than by device -- there is no device identity at all at
+	// that point in the wizard, only an address (#436 step 3). See
+	// NoteVersionHint and VersionHint.
+	versionHints map[string]versionHint
+}
+
+// versionHint is one source address's unauthenticated claim about its
+// own RouterOS version, and when it was last made.
+type versionHint struct {
+	version string
+	at      time.Time
 }
 
 type deviceState struct {
@@ -122,7 +143,10 @@ type kindState struct {
 }
 
 func New() *Store {
-	return &Store{devices: make(map[string]*deviceState)}
+	return &Store{
+		devices:      make(map[string]*deviceState),
+		versionHints: make(map[string]versionHint),
+	}
 }
 
 // Apply stores one validated page of pushed state for device. The
@@ -629,6 +653,70 @@ func (s *Store) RouterOSVersion(device string) (version string, updatedAt time.T
 		return "", time.Time{}, false
 	}
 	return ds.routerosVersion, ds.routerosVersionAt, true
+}
+
+// NoteVersionHint records what a source address's /ca.crt?ros= fetch
+// claimed as its RouterOS version (#436 step 3) -- the wizard's first
+// step, so mikroview can pick the right command dialect before that
+// router has pushed anything at all.
+//
+// This is untrusted, unauthenticated text: /ca.crt is deliberately
+// public, so anyone can hint anything for any address. It is stored
+// anyway, because the one thing it is used for -- VersionHint, read only
+// as a fallback when no push has reported a version -- costs nothing
+// worse than showing the wrong (but never harmful) set of RouterOS
+// commands to whoever is looking at the wizard from that address. main.go's
+// handler validates the value before calling this (length and character
+// class), but this method does not re-check that -- it only refuses an
+// empty source or version, same as every other Note* method here.
+func (s *Store) NoteVersionHint(sourceIP, version string, now time.Time) {
+	if sourceIP == "" || version == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.versionHints[sourceIP]; !exists {
+		evictOldestVersionHint(s.versionHints, maxVersionHints)
+	}
+	s.versionHints[sourceIP] = versionHint{version: version, at: now}
+}
+
+// VersionHint returns the version last hinted for sourceIP by an
+// unauthenticated /ca.crt?ros= fetch, and when. ok is false when nothing
+// has hinted for that address.
+//
+// Callers must prefer RouterOSVersion (an actual push) over this, and
+// only fall back to it when RouterOSVersion reports ok=false -- a pushed
+// version is real evidence from an authenticated router; this is a
+// guess offered before that evidence exists, and must never override it.
+func (s *Store) VersionHint(sourceIP string) (version string, at time.Time, ok bool) {
+	if sourceIP == "" {
+		return "", time.Time{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	h, ok := s.versionHints[sourceIP]
+	if !ok {
+		return "", time.Time{}, false
+	}
+	return h.version, h.at, true
+}
+
+// evictOldestVersionHint drops the least-recently-hinted entry when m is
+// at cap, mirroring internal/setup's evictOldest -- one at a time, since
+// this runs at most once per new source address.
+func evictOldestVersionHint(m map[string]versionHint, cap int) {
+	if len(m) < cap {
+		return
+	}
+	var oldestKey string
+	var oldest time.Time
+	for k, v := range m {
+		if oldestKey == "" || v.at.Before(oldest) {
+			oldestKey, oldest = k, v.at
+		}
+	}
+	delete(m, oldestKey)
 }
 
 // PushedKinds reports, for one device, every table it has pushed and

@@ -15,6 +15,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
 )
@@ -72,6 +73,15 @@ type deviceView struct {
 	// already tracks it (main.go wires the same push into both), and
 	// duplicating it into a second store risks the two disagreeing.
 	RouterOSVersion string `json:"routerosVersion,omitempty"`
+	// RouterOSStanding is where RouterOSVersion sits against
+	// internal/routeros' dialect table (#436) -- "below-minimum",
+	// "reviewed" or "ahead-of-review", the same enum
+	// POST /api/setup/commands renders. Omitted rather than "unknown":
+	// there is nothing to say about a standing when there is no version
+	// to judge, or when what arrived does not parse as one, and the
+	// client must not read a missing field as any of the three real
+	// answers.
+	RouterOSStanding string `json:"routerosStanding,omitempty"`
 	// MultihomedCandidates is set only on a configured device that has
 	// received nothing while undeclared devices are streaming: the
 	// source addresses of those undeclared devices, in id order, from
@@ -110,14 +120,34 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			Status:               deviceStatus(info, s.DeviceStaleAfter, now),
 			MultihomedCandidates: multihomed[info.ID],
 		}
-		if s.RouterState != nil {
-			if version, _, ok := s.RouterState.RouterOSVersion(info.ID); ok {
-				v.RouterOSVersion = version
+		if version, ok := s.effectiveRouterOSVersion(info); ok {
+			v.RouterOSVersion = version
+			if standing := routeros.VersionStanding(version); standing != routeros.StandingUnknown {
+				v.RouterOSStanding = standing.String()
 			}
 		}
 		views = append(views, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
+}
+
+// effectiveRouterOSVersion is the version to show for a device: an
+// actual push always wins, and the /ca.crt?ros= hint for its source
+// address (#436 step 3, internal/routerstate.Store.VersionHint) fills in
+// only when nothing has pushed yet. Shared by handleDevices and
+// handleSetupCommands so the two surfaces cannot disagree about which
+// router is on which version.
+func (s *Server) effectiveRouterOSVersion(info device.Info) (version string, ok bool) {
+	if s.RouterState == nil {
+		return "", false
+	}
+	if v, _, ok := s.RouterState.RouterOSVersion(info.ID); ok {
+		return v, true
+	}
+	if v, _, ok := s.RouterState.VersionHint(info.SourceIP); ok {
+		return v, true
+	}
+	return "", false
 }
 
 // handleDeviceMACs serves the persisted MAC-registry history (issue
