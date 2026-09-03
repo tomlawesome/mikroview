@@ -91,6 +91,14 @@ export interface Device {
   // arrives, same absence-is-not-evidence convention as everything else
   // routerstate-derived.
   routerosVersion?: string
+  // multihomedCandidates (#442) is present only on a configured device
+  // that has received nothing while undeclared devices stream: the
+  // source addresses those undeclared devices arrive from, in id order,
+  // from the server's Registry.MultihomedCandidates. Candidates, never
+  // a diagnosis -- the server cannot know which arriving address (if
+  // any) is the same router on another of its interfaces, and neither
+  // can this client. The wizard's step 2 and the fleet cards read it.
+  multihomedCandidates?: string[]
 }
 
 // Mirrors internal/device.MACEntry's JSON shape (GET /api/devices/macs,
