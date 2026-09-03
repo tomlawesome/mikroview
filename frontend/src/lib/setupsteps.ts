@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// The RouterOS commands the setup wizard generates (#320), and the
-// rules for deciding whether each step has landed.
+// The rules for deciding whether each of the setup wizard's steps has
+// landed (#320), plus the small address-handling helpers the wizard and
+// a few other surfaces still need on the client.
 //
-// Kept out of the component so both are testable without a browser:
-// getting a command subtly wrong is the failure this whole feature
+// The RouterOS commands themselves moved server-side with #436 (see
+// internal/routeros): the wizard now renders what POST
+// /api/setup/commands sends back, selected by the row that covers the
+// router's version, rather than generating RouterOS syntax here. Kept
+// out of the component so the step-status rules stay testable without a
+// browser: getting a claim wrong is the failure this whole feature
 // exists to prevent, and "the wizard said step 3 was done when it
 // wasn't" would be worse than no wizard at all.
 
@@ -67,149 +72,11 @@ export function certificateCovers(status: SetupStatus, address: string): boolean
   return effective.includes(host)
 }
 
-// --- The commands -------------------------------------------------------
-//
-// Every one is emitted with the operator's real values already in it.
-// The wizard never renders a placeholder: a saved script still
-// containing <mikroview-host> was one of the failures that prompted
-// this feature, and it fails much later, somewhere else.
-
-export function caTrustCommands(address: string): string {
-  return [
-    `/tool fetch url="https://${address}/ca.crt" check-certificate=no dst-path=mikroview-ca.crt`,
-    `/certificate import file-name=mikroview-ca.crt passphrase=""`,
-  ].join('\n')
-}
-
-export function syslogCommands(address: string, syslogPort: string): string {
-  const host = hostname(address)
-  const port = portOf(syslogPort)
-  return [
-    `/system logging action add name=mikroview target=remote remote=${host} remote-port=${port} remote-protocol=tls check-certificate=yes`,
-    `/system logging add topics=firewall,info action=mikroview`,
-  ].join('\n')
-}
-
 // portOf takes the port out of a listen address like ":6514" or
 // "0.0.0.0:6514" -- the router needs the port, not the bind address.
 export function portOf(listenAddr: string): string {
   const colon = listenAddr.lastIndexOf(':')
   return colon === -1 ? listenAddr : listenAddr.slice(colon + 1)
-}
-
-// ruleTaggingCommands bulk-tags existing rules by action, which is the
-// only way one command can set the right letter: MikroView decodes
-// accept/drop/reject from the prefix, so a single generic prefix would
-// label every row the same.
-//
-// Filter rules only, deliberately. The prefix convention also covers
-// mangle (M) and NAT (N) rules -- see docs/routeros-setup.md -- but
-// bulk-enabling log=yes across every mangle rule can turn a router's
-// whole packet throughput into log lines, since mark-packet matches per
-// packet rather than per connection. That is the established/related
-// trap below, one order of magnitude worse, and it is not something to
-// do to someone from a "run this" box. The doc walks it per rule.
-export function ruleTaggingCommands(): string {
-  return [
-    `/ip firewall filter set [find !dynamic action=drop] log=yes log-prefix="D|drop|"`,
-    `/ip firewall filter set [find !dynamic action=reject] log=yes log-prefix="R|reject|"`,
-    `/ip firewall filter set [find !dynamic action=accept] log=yes log-prefix="A|accept|"`,
-    ``,
-    `# The established/related accept rule logs every packet, not every`,
-    `# connection -- that is your whole traffic volume. Turn it back off:`,
-    `/ip firewall filter set [find connection-state=established,related] log=no log-prefix=""`,
-  ].join('\n')
-}
-
-// pushScript builds the whole state-push script with the token and
-// address already embedded. One block per table, each an independent
-// fetch, so one failing does not stop the others.
-export function pushScript(address: string, token: string, kinds: string[]): string {
-  const blocks: string[] = []
-  for (const kind of kinds) {
-    const b = pushBlock(address, token, kind)
-    if (b) blocks.push(b)
-  }
-  return blocks.join('\n\n')
-}
-
-interface BlockSpec {
-  varName: string
-  source: string
-  record: string
-}
-
-// blockSpecs mirrors docs/routeros-setup.md's table, which is itself
-// verified against a real RouterOS 7.23.3 router -- recorded in code as
-// routeros.ReviewedVersion (internal/routeros/versions.go), which is
-// what the scheduled freshness check compares against so a release
-// nobody has read cannot pass unnoticed (#436). Changing the commands
-// here without moving that marker leaves the two disagreeing. The field renaming is
-// the one place a typo silently breaks a feature without RouterOS
-// complaining, so it lives in exactly one place.
-const blockSpecs: Record<string, BlockSpec> = {
-  'filter-rule': {
-    varName: 'rule',
-    source: '/ip/firewall/filter',
-    record:
-      '{"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); ' +
-      '"srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); ' +
-      '"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); ' +
-      '"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); ' +
-      '"disabled"=($v->"disabled")}',
-  },
-  'address-list': {
-    varName: 'al',
-    source: '/ip/firewall/address-list',
-    record:
-      '{"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=($v->"dynamic")}',
-  },
-  'dhcp-lease': {
-    varName: 'lease',
-    source: '/ip/dhcp-server/lease',
-    record: '{"hostname"=($v->"host-name"); "mac"=($v->"mac-address"); "address"=($v->"address")}',
-  },
-  arp: {
-    varName: 'arp',
-    source: '/ip/arp',
-    record: '{"address"=($v->"address"); "mac"=($v->"mac-address")}',
-  },
-  'ip-address': {
-    varName: 'addr',
-    source: '/ip/address',
-    record:
-      '{"address"=($v->"address"); "network"=($v->"network"); "interface"=($v->"interface"); "comment"=($v->"comment")}',
-  },
-}
-
-export function pushBlock(address: string, token: string, kind: string): string {
-  const spec = blockSpecs[kind]
-  if (!spec) return ''
-  const recs = `${spec.varName}Recs`
-  const payload = `${spec.varName}Payload`
-  return [
-    `:local ${recs} [:toarray ""]`,
-    `:foreach i,v in=[${spec.source} print as-value] do={`,
-    `  :local rec ${spec.record}`,
-    `  :set ${recs} ($${recs}, {$rec})`,
-    `}`,
-    // routerosVersion rides the payload rather than a record: it
-    // describes the router, not a row of any table (#408 carrying
-    // #436's derived version source). Optional server-side, and the
-    // same line in every block.
-    `:local ${payload} [:serialize to=json value={"kind"="${kind}"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$${recs}}]`,
-    `/tool fetch url="https://${address}/api/ingest/routeros" http-method=post http-data=$${payload} ` +
-      `http-header-field=("Content-Type: application/json,Authorization: Bearer ${token}") ` +
-      `check-certificate=yes output=none`,
-  ].join('\n')
-}
-
-export function scheduleCommands(): string {
-  return [
-    `/system script add name=mv-push policy=read,test source="<paste the script above>"`,
-    `/system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"`,
-    `/system script run mv-push`,
-  ].join('\n')
 }
 
 // deviceStanza is what an operator pastes into config.yaml to give a
