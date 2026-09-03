@@ -69,7 +69,7 @@ await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
 
 const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
-await slider.fill('4') // the city stop
+await slider.fill('3') // the city stop; the seven-stop axis is clients 0 .. street 6 (#869)
 await new Promise((r) => setTimeout(r, 900))
 
 const river = await page.evaluate(() => {
@@ -95,7 +95,7 @@ check(
 // the minimap -- the same "look there" the operator would use.
 await page.screenshot({ path: `${OUT}/city.png` })
 
-await slider.fill('7') // the street stop
+await slider.fill('6') // the street stop, the right-hand end of the seven-stop axis (#869)
 await new Promise((r) => setTimeout(r, 900))
 // Shift+arrow pans the camera at any stop (live-city-stops.mjs uses the
 // same keys); north is toward the river, so walking it there is the
