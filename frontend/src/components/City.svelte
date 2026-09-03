@@ -53,16 +53,20 @@
   import { bridgeStateLabel } from '../lib/city/tunnelState'
   import { deviceKindFor } from '../lib/city/deviceKind'
   import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
+  import { faceOf, wallPiece, wallSegments, type WallBreak } from '../lib/city/walls'
   import { entitiesState } from '../lib/entities.svelte'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
-  import type { Building, CityPeer, District, Ground, RoadKind } from '../lib/city/types'
+  import type { Building, CityLens, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
 
-  let { stop, ground: groundProp }: { stop: Stop; ground?: Ground } = $props()
+  let { stop, ground: groundProp, lens = 'traffic' }: { stop: Stop; ground?: Ground; lens?: CityLens } = $props()
 
   const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--lane-5)']
   const VERDICT: Record<RoadKind, string> = { a: 'var(--accept)', d: 'var(--drop)', x: 'var(--alarm)', q: 'var(--fg-dim)' }
   const VOID = '#080d18'
   const MOVE_MS = 620
+  /** The policy lens fades roads and lights every gate with its rule
+   * number; the traffic lens is the reverse (#865's own lens table). */
+  const policyLens = $derived(lens === 'policy')
 
   /* ---------------- the model ---------------- */
 
@@ -87,6 +91,7 @@
           primaryDevice?.id ?? null,
           zonesState.wanInterface,
           tunnelsState.list,
+          policyState.pushed,
         ),
       ),
   )
@@ -424,17 +429,78 @@
       ink: inkOf(d),
       outer: diamond(c, d.u, d.v, d.r, 0),
       inner: diamond(c, d.u, d.v, d.r - 1.8, 0),
-      aria: d.name + ' district' + (d.cidr ? ' ' + d.cidr : '') + ', ' + (d.buildings.length + d.more) + ' hosts' + (d.dark ? ', nothing logs here' : ''),
+      aria:
+        d.name +
+        ' district' +
+        (d.cidr ? ' ' + d.cidr : '') +
+        ', ' +
+        (d.buildings.length + d.more) +
+        ' hosts' +
+        (!d.rulesPushed
+          ? ', no rule table has been pushed yet -- walls show no gates'
+          : d.dark
+            ? ', nothing logs here'
+            : ''),
     }))
 
+    // Walls and gates (#865): every plate's own low prism, in its VLAN
+    // tint, broken open only where a pushed accept rule actually crosses
+    // that boundary. A gate that resolves to a point on one of the two
+    // back edges the camera cannot see draws nothing -- the same
+    // silence a hidden building face keeps -- but still keeps its lamp
+    // and rule count for the plaque and the policy lens.
+    const gateBadges: { x: number; y: number; n: number }[] = []
+    for (const d of g.districts) {
+      const dim = d.dark
+      const wallInk = dim ? 'var(--fg-dim)' : inkOf(d)
+      const visible: { g: DistrictGate; f: WallBreak }[] = []
+      for (const gate of d.gates) {
+        const f = faceOf(d, gate.p)
+        if (f) visible.push({ g: gate, f })
+      }
+      const segs = wallSegments(d, visible.map((v) => v.f))
+      for (const seg of segs) {
+        const mid = (seg.t0 + seg.t1) / 2
+        const midV = seg.side === 'l' ? d.v + d.r * mid : d.v + d.r * (1 - mid)
+        const path = wallPiece(c, d, seg)
+        solids.push({
+          kind: 'other',
+          v: midV,
+          paints: [
+            { d: path, fill: VOID, fo: dim ? 0.75 : 0.92 },
+            { d: path, fill: wallInk, fo: dim ? 0.14 : 0.3, stroke: wallInk, so: dim ? 0.35 : 0.6, sw: 0.5 },
+          ],
+          lamps: [],
+        })
+      }
+      for (const { g: gate, f } of visible) {
+        const gx = X(c, gate.p[0])
+        const gy = Y(c, gate.p[1])
+        const lampH = Math.max(6, c.S * 1.1)
+        solids.push({
+          kind: 'other',
+          v: f.side === 'l' ? d.v + d.r * f.t : d.v + d.r * (1 - f.t),
+          paints: [],
+          lamps: gate.lamp ? [{ x: R2(gx), y: R2(gy), h: lampH, r: R2(Math.max(1.6, c.S * 0.3)), rr: R2(Math.max(4, c.S * 0.7)) }] : [],
+        })
+        // The policy lens lights every gate with its own rule number,
+        // whether or not it happens to log -- the traffic lens leaves
+        // the wall quiet and says nothing here at all.
+        if (policyLens) gateBadges.push({ x: R2(gx), y: R2(gy - lampH - 6), n: gate.ruleCount })
+      }
+    }
+
     // Roads, cut into pieces that carry their own depth.
+    const dropLabels: { x: number; y: number; text: string; alarm: boolean }[] = []
     const ents = new Map<string, Entity>()
     for (const b of allBuildings) ents.set(b.id, { u: b.u, v: b.v, R: b.R })
     for (const r of g.roads) {
       if (r.lane && !showLanes) continue
       const col = VERDICT[r.k]
       const w = Math.max(1.2, r.w * c.S * 0.3)
-      const op = r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : 0.52
+      // The policy lens fades every road so the walls and their gates
+      // read as the rules; the traffic lens is the reverse (#865).
+      const op = (r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : 0.52) * (policyLens ? 0.22 : 1)
       const flow = showLanes && (r.w > 1.4 || r.k === 'x') && !r.lane
       let cum = 0
       const pieces = roadPieces(r, ents)
@@ -473,6 +539,10 @@
           ],
           lamps: [],
         })
+        // The refusing rule's own name, beside the mark -- the event's
+        // rule label, exactly as the 2D reach does; said plainly when
+        // no event on this pair carried one, never guessed (#865).
+        dropLabels.push({ x: mx, y: my - 14 * k, text: r.refusedBy ? 'caught by ' + r.refusedBy : 'caught, no rule named', alarm: r.k === 'x' })
       }
     }
 
@@ -570,7 +640,7 @@
     for (const d of g.districts) {
       const x = R2(X(c, d.u))
       const y = R2(Y(c, d.v + d.r) + 5)
-      const w = compact ? d.name.length * 7.2 + (d.dark ? 62 : 26) : 200
+      const w = compact ? d.name.length * 7.2 + (!d.rulesPushed ? 78 : d.dark ? 62 : 26) : 200
       if (!claim(x, y, w, compact ? 20 : 38)) continue
       plaques.push({ d, x, y, w: R2(w), ink: inkOf(d), tally: d.buildings.length + d.more + (d.buildings.length + d.more === 1 ? ' host' : ' hosts') })
     }
@@ -589,7 +659,7 @@
       bridgeChips.push({ x, y, w: R2(w), t, stroke })
     }
 
-    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, claim }
+    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, gateBadges, dropLabels, claim }
   })
 
   /** Names float over buildings at the street stop, for what the
@@ -765,13 +835,19 @@
               <rect x={R2(-p.w / 2)} y="0" width={p.w} height="20" rx="10" fill="#0a0f1c" fill-opacity="0.9" stroke={p.d.dark ? 'rgba(255,84,112,0.4)' : 'var(--border)'} />
               <circle cx={R2(-p.w / 2 + 11)} cy="10" r="3.2" fill={p.ink} fill-opacity={p.d.dark ? 0.5 : 1} />
               <text x={R2(-p.w / 2 + 19)} y="14" class="p-name small">{p.d.name}</text>
-              {#if p.d.dark}<text x={R2(p.w / 2 - 10)} y="13.5" text-anchor="end" class="cov cov-d">DARK</text>{/if}
+              {#if !p.d.rulesPushed}
+                <text x={R2(p.w / 2 - 10)} y="13.5" text-anchor="end" class="cov cov-q">NO RULES</text>
+              {:else if p.d.dark}
+                <text x={R2(p.w / 2 - 10)} y="13.5" text-anchor="end" class="cov cov-d">DARK</text>
+              {/if}
             {:else}
               <rect x={R2(-p.w / 2)} y="0" width={p.w} height="38" rx="8" fill="#0a0f1c" fill-opacity="0.93" stroke={p.d.dark ? 'rgba(255,84,112,0.32)' : 'var(--border)'} />
               <circle cx={R2(-p.w / 2 + 13)} cy="14" r="3.4" fill={p.ink} fill-opacity={p.d.dark ? 0.5 : 1} />
               <text x={R2(-p.w / 2 + 22)} y="18" class="p-name">{p.d.name}</text>
               <text x={R2(p.w / 2 - 11)} y="17.5" text-anchor="end" class="p-cidr">{p.d.cidr ?? 'no address pushed'}</text>
-              <text x={R2(-p.w / 2 + 13)} y="31" class="cov {p.d.dark ? 'cov-d' : 'cov-q'}">{p.d.dark ? 'DARK' : 'LOGGED'}</text>
+              <text x={R2(-p.w / 2 + 13)} y="31" class="cov {p.d.dark ? 'cov-d' : 'cov-q'}"
+                >{p.d.rulesPushed ? (p.d.dark ? 'DARK' : 'LOGGED') : 'NO RULES PUSHED'}</text
+              >
               <text x={R2(p.w / 2 - 11)} y="31.5" text-anchor="end" class="wp">{p.tally}</text>
             {/if}
           </g>
@@ -790,6 +866,15 @@
             <rect x={R2(-ch.w / 2)} y="-9" width={ch.w} height="18" rx="9" fill="#080c16" fill-opacity="0.9" stroke={ch.stroke} />
             <text x="0" y="3.5" text-anchor="middle" class="chip-t">{ch.t}</text>
           </g>
+        {/each}
+        {#each scene.gateBadges as gb, i (i)}
+          <g transform="translate({gb.x} {gb.y})">
+            <circle r="8" fill="#0a0f1c" fill-opacity="0.92" stroke="var(--accent)" stroke-opacity="0.7" />
+            <text x="0" y="3.5" text-anchor="middle" class="gate-n">{gb.n}</text>
+          </g>
+        {/each}
+        {#each scene.dropLabels as dl, i (i)}
+          <text x={dl.x} y={dl.y} text-anchor="middle" class="drop-t" class:alarm-t={dl.alarm}>{dl.text}</text>
         {/each}
       </g>
     </g>
@@ -894,6 +979,20 @@
   .chip-t {
     font: 10.5px var(--font-mono);
     fill: var(--fg-muted);
+  }
+
+  .gate-n {
+    font: 700 9px var(--font-mono);
+    fill: var(--accent);
+  }
+
+  .drop-t {
+    font: 600 9.5px var(--font-mono);
+    fill: var(--drop);
+  }
+
+  .drop-t.alarm-t {
+    fill: var(--alarm);
   }
 
   .st-name {
