@@ -47,7 +47,7 @@
     type Pt,
     type Stop,
   } from '../lib/city/project'
-  import { lerpP, roadPieces, segsOf, type Entity } from '../lib/city/roads'
+  import { lerpP, roadPieces, type Entity } from '../lib/city/roads'
   import { riverScene } from '../lib/city/river'
   import { P, type Paint } from '../lib/city/paint'
   import { bridgeStateLabel } from '../lib/city/tunnelState'
@@ -241,7 +241,6 @@
 
   /* ---------------- focus: the keyboard walk ---------------- */
 
-  const cid = (f: Focus) => (f ? f.id : null)
 
   async function focusItem(f: Focus, recentre = true) {
     focus = f

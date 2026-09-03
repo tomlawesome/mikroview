@@ -291,14 +291,97 @@ func TestDefinitionsStoreRefusesToOverwriteAShippedDefinition(t *testing.T) {
 	}
 }
 
-// TestDefinitionsStorePreservesUnknownDefinitionByteForByte is issue
-// #404's central guarantee, tested directly against the store -- and now
-// the only place it is tested, since the migration-scoped version went
-// with the migration itself (2026-09-03): a
-// definition this binary cannot identify -- an unrecognized Kind, the
-// "downgrade" case StoredDefinition.Available documents -- survives a
-// boot, an unrelated write, and a reopen with its stored value
-// completely unchanged.
+// TestOpenDefinitionsStoreRefusesAnUnrecognizedKind pins #873's
+// replacement for issue #404's downgrade case: pre-1.0, with no user
+// base, downgrade is not a supported operation, so a document containing
+// a definition whose Kind this binary does not recognize is a hard
+// startup failure -- naming the offending definition and its
+// unrecognized kind, so an operator can act on the message ("delete this
+// one file") rather than hunt for it -- instead of being loaded and
+// preserved unevaluated.
+func TestOpenDefinitionsStoreRefusesAnUnrecognizedKind(t *testing.T) {
+	eachBackend(t, "unrecognized-kind", func(t *testing.T, newBackend func() persist.Backend) {
+		b := newBackend()
+
+		unknownValue := `{"id":"future-def","name":"From a newer mikroview","intent":"detection","kind":"quantum_anomaly","enabled":true,"params":{"threshold":9000},"provenance":{"origin":"shipped"}}`
+		seed := definitionsDocument{
+			Definitions: map[string]json.RawMessage{
+				"future-def": json.RawMessage(unknownValue),
+			},
+		}
+		seedBytes, err := json.MarshalIndent(seed, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.Save(context.Background(), seedBytes, 0); err != nil {
+			t.Fatalf("seeding: %v", err)
+		}
+
+		s, err := OpenDefinitionsStoreWithBackend(b)
+		if err == nil {
+			t.Fatal("expected Open to refuse a document containing an unrecognized kind")
+		}
+		if s != nil {
+			t.Error("expected a nil store on a load failure")
+		}
+		if !strings.Contains(err.Error(), "future-def") {
+			t.Errorf("error = %q, want it to name the offending definition (future-def)", err)
+		}
+		if !strings.Contains(err.Error(), "quantum_anomaly") {
+			t.Errorf("error = %q, want it to name the unrecognized kind (quantum_anomaly)", err)
+		}
+	})
+}
+
+// TestOpenDefinitionsStoreRefusesAnUnrecognizedIntent is the same
+// refusal for the other half of decodeStored's identification check --
+// see TestOpenDefinitionsStoreRefusesAnUnrecognizedKind.
+func TestOpenDefinitionsStoreRefusesAnUnrecognizedIntent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "definitions.json")
+	unknownValue := `{"id":"future-def","name":"From a newer mikroview","intent":"quantum_forecast","kind":"declarative","provenance":{"origin":"shipped"}}`
+	seed := definitionsDocument{
+		Definitions: map[string]json.RawMessage{"future-def": json.RawMessage(unknownValue)},
+	}
+	seedBytes, err := json.MarshalIndent(seed, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, seedBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := OpenDefinitionsStore(path)
+	if err == nil {
+		t.Fatal("expected Open to refuse a document containing an unrecognized intent")
+	}
+	if s != nil {
+		t.Error("expected a nil store on a load failure")
+	}
+	if !strings.Contains(err.Error(), "future-def") {
+		t.Errorf("error = %q, want it to name the offending definition (future-def)", err)
+	}
+	if !strings.Contains(err.Error(), "quantum_forecast") {
+		t.Errorf("error = %q, want it to name the unrecognized intent (quantum_forecast)", err)
+	}
+}
+
+// unbuildableDetectionValue is a definition whose envelope this binary
+// fully recognizes (kind=declarative, intent=detection) but whose
+// Detection block does not validate -- an empty conditions list, the
+// same shape a custom detection from a newer build with a condition
+// language this binary predates would round-trip as. Unlike an
+// unrecognized Kind/Intent (refused outright at load, see
+// TestOpenDefinitionsStoreRefusesAnUnrecognizedKind), this is still the
+// preserved-but-unavailable case StoredDefinition.Available documents:
+// this binary knows what kind of thing it is, just not enough to build
+// or evaluate it.
+const unbuildableDetectionValue = `{"id":"mystery","name":"mystery","intent":"detection","kind":"declarative","provenance":{"origin":"custom"},"detection":{"conditions":[],"key":"perSource","counting":"total","detailTemplate":"{Count} events"}}`
+
+// TestDefinitionsStorePreservesAnUnbuildableDetectionByteForByte is issue
+// #404's central guarantee, tested directly against the store: a
+// definition this binary recognizes but cannot build survives a boot, an
+// unrelated write, and a reopen with its stored value completely
+// unchanged.
 //
 // The seed document is produced the same way a real definitions store
 // would produce it -- json.MarshalIndent, exactly what persistLocked
@@ -313,15 +396,13 @@ func TestDefinitionsStoreRefusesToOverwriteAShippedDefinition(t *testing.T) {
 // out identical, which is the meaningful claim: this store never
 // mutates, drops, or reformats-as-if-touched an entry it never actually
 // touched.
-func TestDefinitionsStorePreservesUnknownDefinitionByteForByte(t *testing.T) {
-	eachBackend(t, "unknown-def", func(t *testing.T, newBackend func() persist.Backend) {
+func TestDefinitionsStorePreservesAnUnbuildableDetectionByteForByte(t *testing.T) {
+	eachBackend(t, "unbuildable-detection", func(t *testing.T, newBackend func() persist.Backend) {
 		b := newBackend()
 
-		unknownValue := `{"id":"future-def","name":"From a newer mikroview","intent":"detection","kind":"quantum_anomaly","enabled":true,"params":{"threshold":9000},"provenance":{"origin":"shipped"}}`
 		seed := definitionsDocument{
-			Version: definitionsDocumentVersion,
 			Definitions: map[string]json.RawMessage{
-				"future-def": json.RawMessage(unknownValue),
+				"mystery": json.RawMessage(unbuildableDetectionValue),
 			},
 		}
 		seedBytes, err := json.MarshalIndent(seed, "", "  ")
@@ -340,19 +421,19 @@ func TestDefinitionsStorePreservesUnknownDefinitionByteForByte(t *testing.T) {
 		if err := json.Unmarshal(seedBytes, &seedDoc); err != nil {
 			t.Fatal(err)
 		}
-		unknown := string(seedDoc.Definitions["future-def"])
+		unknown := string(seedDoc.Definitions["mystery"])
 
 		s, err := OpenDefinitionsStoreWithBackend(b)
 		if err != nil {
 			t.Fatalf("boot: %v", err)
 		}
 
-		got, ok := s.Get("future-def")
+		got, ok := s.Get("mystery")
 		if !ok {
-			t.Fatal("the unknown definition did not survive boot at all")
+			t.Fatal("the unbuildable definition did not survive boot at all")
 		}
 		if got.Available {
-			t.Fatal("expected the unknown-kind definition to be marked unavailable")
+			t.Fatal("expected the unbuildable detection to be marked unavailable")
 		}
 
 		// Write something else -- this is what exercises persistLocked's
@@ -371,12 +452,12 @@ func TestDefinitionsStorePreservesUnknownDefinitionByteForByte(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reopen: %v", err)
 		}
-		again, ok := s2.Get("future-def")
+		again, ok := s2.Get("mystery")
 		if !ok {
-			t.Fatal("the unknown definition did not survive the write+reopen round trip")
+			t.Fatal("the unbuildable definition did not survive the write+reopen round trip")
 		}
 		if again.Available {
-			t.Fatal("expected the unknown-kind definition to still be marked unavailable")
+			t.Fatal("expected the unbuildable detection to still be marked unavailable")
 		}
 
 		// Byte-for-byte: reach past the store's own decode (which would
@@ -390,20 +471,20 @@ func TestDefinitionsStorePreservesUnknownDefinitionByteForByte(t *testing.T) {
 		if err := json.Unmarshal(snap.Payload, &doc); err != nil {
 			t.Fatal(err)
 		}
-		gotRaw, ok := doc.Definitions["future-def"]
+		gotRaw, ok := doc.Definitions["mystery"]
 		if !ok {
-			t.Fatal("future-def is missing from the reloaded document entirely")
+			t.Fatal("mystery is missing from the reloaded document entirely")
 		}
 		if string(gotRaw) != unknown {
-			t.Errorf("unknown definition did not survive byte-for-byte:\n got:  %s\n want: %s", gotRaw, unknown)
+			t.Errorf("unbuildable definition did not survive byte-for-byte:\n got:  %s\n want: %s", gotRaw, unknown)
 		}
 
 		// And Delete/Upsert against it are refused, for the same reason.
-		if err := s2.Delete("future-def"); err == nil {
+		if err := s2.Delete("mystery"); err == nil {
 			t.Error("expected Delete to refuse an unavailable definition")
 		}
-		if _, ok := s2.Get("future-def"); !ok {
-			t.Error("future-def was removed despite Delete erroring")
+		if _, ok := s2.Get("mystery"); !ok {
+			t.Error("mystery was removed despite Delete erroring")
 		}
 	})
 }
@@ -414,10 +495,11 @@ func TestDefinitionsStoreListIncludesUnavailableDefinitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Upsert can't create an unavailable entry directly (it validates),
-	// so seed one the same way convertDetectSettings' unrecognized-
-	// detector path does: an empty Kind.
+	// so seed one the same way a definitions.json written by a newer
+	// mikroview, downgraded to this binary, would carry a custom
+	// detection whose block this binary can parse but not build.
 	s.mu.Lock()
-	s.raw["unavailable-1"] = json.RawMessage(`{"id":"unavailable-1","name":"x","intent":"detection","kind":"","provenance":{"origin":"shipped"}}`)
+	s.raw["mystery"] = json.RawMessage(unbuildableDetectionValue)
 	s.mu.Unlock()
 
 	list := s.List()
@@ -427,7 +509,7 @@ func TestDefinitionsStoreListIncludesUnavailableDefinitions(t *testing.T) {
 	if list[0].Available {
 		t.Error("expected the seeded entry to be unavailable")
 	}
-	if list[0].Definition.ID != "unavailable-1" {
+	if list[0].Definition.ID != "mystery" {
 		t.Errorf("List() lost the ID of an unavailable entry: %+v", list[0])
 	}
 }
@@ -510,7 +592,7 @@ func TestSetEnabledAndScopeRefusesAnUnavailableDefinition(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.mu.Lock()
-	s.raw["mystery"] = json.RawMessage(`{"id":"mystery","kind":"who-knows"}`)
+	s.raw["mystery"] = json.RawMessage(unbuildableDetectionValue)
 	s.mu.Unlock()
 
 	if err := s.SetEnabledAndScope("mystery", false, Scope{}); !errors.Is(err, ErrDefinitionImmutable) {
