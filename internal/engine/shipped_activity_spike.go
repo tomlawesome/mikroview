@@ -548,6 +548,10 @@ func (d *activitySpikeDefinition) emitFallbackFiring(srcIP, country, iface strin
 		count, d.window, applicable.Value, samples, applicable.ZScore,
 	) + vpnDetailSuffix(d.vpnInterfaces, iface)
 
+	// Size is the event count in the window -- activity_spike's declared
+	// size, the measure its own threshold param is compared against.
+	// See ShippedSizeMeasure and #640.
+	size := count
 	d.emit(Emission{
 		Target:     srcIP,
 		Detail:     detail,
@@ -555,6 +559,7 @@ func (d *activitySpikeDefinition) emitFallbackFiring(srcIP, country, iface strin
 		Country:    country,
 		SourceIP:   srcIP,
 		EventTime:  now,
+		Size:       &size,
 	})
 }
 
@@ -580,6 +585,10 @@ func (d *activitySpikeDefinition) emitBucketFiring(srcIP, country, iface string,
 		count, d.window, applicable.Value, hour, days, applicable.ZScore,
 	) + vpnDetailSuffix(d.vpnInterfaces, iface)
 
+	// Size is the event count in the window, exactly as on the fallback
+	// path above -- which baseline judged the firing changes the
+	// confidence, not what the size means.
+	size := count
 	d.emit(Emission{
 		Target:     srcIP,
 		Detail:     detail,
@@ -587,6 +596,7 @@ func (d *activitySpikeDefinition) emitBucketFiring(srcIP, country, iface string,
 		Country:    country,
 		SourceIP:   srcIP,
 		EventTime:  now,
+		Size:       &size,
 	})
 }
 

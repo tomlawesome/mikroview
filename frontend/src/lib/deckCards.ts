@@ -43,7 +43,16 @@ export function deckCards(isAdmin: boolean, canEdit: boolean = isAdmin): DeckCar
     { key: 'docket', name: 'The docket', views: docketViews },
   ]
   if (canEdit) {
-    cards.push({ key: 'entities', name: 'Entities', views: ['entities'] })
+    // Entities answers for the `fleet` view too. #647 folded Fleet's
+    // routers table into Entities' leading section, but the phone-width
+    // bottom bar still offers a Fleet row to every tier (navGroups.ts's
+    // row carries no `edit` gate), and that row sets view 'fleet'
+    // directly (BottomBar.svelte:174). Without this, an admin or user
+    // tapping it leaves activeIndex at -1 and the deck draws no card at
+    // all -- see #785. A viewer is unaffected: they get the standalone
+    // `fleet` card below instead. views[0] stays 'entities', so the
+    // LANDING_BY_CARD contract is unchanged.
+    cards.push({ key: 'entities', name: 'Entities', views: ['entities', 'fleet'] })
     cards.push({ key: 'engineroom', name: 'Settings', views: ['engineroom'] })
   } else {
     cards.push({ key: 'fleet', name: 'Fleet', views: ['fleet'] })

@@ -506,11 +506,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	storeCapacity := cfg.Store.Capacity()
-	logging.New("store").Info(fmt.Sprintf(
-		"event buffer: %s reserved for up to %d events (store.maxMemory) -- once traffic arrives, GET /api/stats reports how full it is and how far back it actually reaches",
-		cfg.Store.MaxMemory, storeCapacity))
-	st := store.New(storeCapacity, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
 	// Tell the syslog listener which sources are the operator's declared
 	// routers, so a flood of undeclared ones cannot take every
@@ -547,6 +542,17 @@ func main() {
 		os.Exit(1)
 	}
 	defer persistence.Close()
+
+	// The event buffer is built here rather than before openStorage
+	// because its size is not the config file's to decide on its own
+	// (#796): if an admin has set a figure from inside the app, that one
+	// applies, and reading it needs the storage backend. Allocating the
+	// file's ring first and resizing afterwards would defeat the point
+	// -- an operator whose file asks for more memory than the host has,
+	// and who lowered it in the UI precisely because of that, would find
+	// the instance still failing to start on the figure they replaced.
+	storeMaxMemory, storeCapacity, settingsStore := openStoreSettings(bootCtx, persistence, cfg)
+	st := store.New(storeCapacity, cfg.Store.Retention)
 
 	flagsBackend, err := persistence.backendFor(bootCtx, "flags", cfg.Flags.StorePath)
 	if err != nil {
@@ -673,21 +679,6 @@ func main() {
 	auditStore, err := audit.OpenWithBackend(auditBackend)
 	mustOpenStore(auditLog, err)
 
-	// The watchlist document (#243). A migration *source* only since
-	// issue #407: the store that owned it (internal/watchlist.Store) is
-	// deleted, and an operator's entries live in the definitions document
-	// with every other definition. Its bytes are still read on every boot
-	// -- by MigrateDefinitions on a deployment that predates the
-	// definitions document, and by AdoptWatchlistEntries on one that
-	// created entries after that document already existed -- so an
-	// upgrade across this change keeps every entry, every observation and
-	// every promoted destination.
-	watchlistLog := logging.New("watchlist")
-	watchlistBackend, err := persistence.backendFor(bootCtx, "watchlist", cfg.Watchlist.StorePath)
-	if err != nil {
-		watchlistLog.Warn(err.Error())
-	}
-
 	// The suggestion candidate pool (#243 slice 5): watchlist entries
 	// suggested from data RouterOS has already pushed. Persistence
 	// itself is optional -- losing this on restart just means every
@@ -777,48 +768,12 @@ func main() {
 
 	// definitions (#404) is the one document holding every definition --
 	// shipped detectors, watchlist expectations, and eventually
-	// builder-authored custom ones. On a not-yet-existing document, it is
-	// seeded once from the pre-#405 detector-settings document and
-	// internal/watchlist's entries store (engine.MigrateDefinitions),
-	// fail-closed and non-destructive: neither source document is
-	// touched.
-	//
-	// The detector-settings document is now a *source only*. The store
-	// that owned it (internal/detect.SettingsStore) is deleted (issue
-	// #405), and nothing writes to it any more: an operator's detector
-	// toggle lands on the definition itself. Its bytes are still read on
-	// every boot, both here and as a seed layer below, so a deployment
-	// upgrading across this change keeps whatever it had switched off.
-	// persistence.backendFor is safe to call more than once for the same
-	// store name (its one-time Postgres adoption step is itself
-	// idempotent -- see storage.backendFor's own doc comment).
+	// builder-authored custom ones. Anything it does not already hold is
+	// seeded below, from this binary's own shipped catalogue.
 	definitionsLog := logging.New("definitions")
 	definitionsBackend, err := persistence.backendFor(bootCtx, "definitions", cfg.Engine.DefinitionsStorePath)
 	if err != nil {
 		definitionsLog.Warn(err.Error())
-	}
-	migrationDetectorBackend, err := persistence.backendFor(bootCtx, "detector_settings", cfg.Flags.DetectorSettingsStorePath)
-	if err != nil {
-		definitionsLog.Warn(err.Error())
-	}
-	if _, err := engine.MigrateDefinitions(bootCtx, definitionsBackend, migrationDetectorBackend, watchlistBackend); err != nil {
-		if errors.Is(err, engine.ErrMigrationWriteFailed) {
-			// Nothing was lost -- see ErrMigrationWriteFailed's own doc
-			// comment: neither source was touched, and the definitions
-			// document still does not exist either way, so this is
-			// retried automatically on the next restart once whatever
-			// blocked the write (a missing/unwritable data directory, a
-			// momentarily unreachable Postgres) is fixed. Same
-			// log-and-continue severity every other store here gives an
-			// ordinary "can't currently reach my backend" failure.
-			definitionsLog.Warn(err.Error() + " -- continuing without a migrated definitions store; this is retried automatically on the next restart")
-		} else {
-			// An unreadable/corrupt source, or a conversion that could
-			// not be trusted to be complete -- issue #404's fail-closed
-			// contract: refuse to start rather than risk ever writing a
-			// partial or wrong definitions document.
-			mustOpenStore(definitionsLog, err)
-		}
 	}
 	definitions, err := engine.OpenDefinitionsStoreWithBackend(definitionsBackend)
 	mustOpenStore(definitionsLog, err)
@@ -875,16 +830,12 @@ func main() {
 	// detectorSeed is the enabled/scope a shipped definition is seeded
 	// with when it does not yet exist in the definitions store: the
 	// catalogue's own defaults (everything on, unscoped), then
-	// config.yaml's flags.detectors entries, then whatever the pre-#405
-	// detector-settings document holds -- the same three-layer order
-	// internal/detect's settings store applied before it was deleted, so
-	// a detector switched off in either place stays off.
+	// config.yaml's flags.detectors entries over the top.
 	//
-	// The old document is read as a seed source only. Nothing writes to
-	// it any more: an operator's toggle now lands on the definition
-	// itself (see internal/api's detector handlers), which is what
-	// removes the two-sources-of-truth problem rather than merely moving
-	// it.
+	// Only a definition the store does not already hold reads this. An
+	// operator's toggle lands on the definition itself (see internal/api's
+	// detector handlers), which is what keeps config.yaml from being a
+	// second source of truth for something the UI also writes.
 	detectorsLog := logging.New("detectors")
 	detectorSeed := engine.DefaultDetectorSettings()
 	for name, ds := range cfg.Flags.Detectors {
@@ -901,19 +852,11 @@ func main() {
 			},
 		}
 	}
-	persisted, err := engine.ReadDetectorSettingsDocument(bootCtx, migrationDetectorBackend)
-	mustOpenStore(detectorsLog, err)
-	for name, ds := range persisted {
-		detectorSeed[name] = ds
-	}
-
 	// Every shipped definition this binary evaluates has to actually
 	// exist, whatever the persistence situation -- see
-	// engine.SeedShippedDefinitions' own doc comment for why this runs
-	// every boot and is not the same thing as MigrateDefinitions running
-	// once. Anything already in the store (a migration's output, an
-	// operator's edits) is left untouched; only genuinely missing
-	// definitions are added.
+	// engine.SeedShippedDefinitions' own doc comment for why this runs on
+	// every boot. Anything already in the store (an operator's edits) is
+	// left untouched; only genuinely missing definitions are added.
 	shippedDefaults := engine.ShippedDefaults{
 		DetectorDefaults:       detectorDefaults,
 		StaleRuleMaxAge:        time.Duration(cfg.Flags.StaleRuleDays) * 24 * time.Hour,
@@ -921,20 +864,6 @@ func main() {
 	}
 	if err := engine.SeedShippedDefinitions(definitions, detectorSeed, shippedDefaults); err != nil {
 		definitionsLog.Warn(err.Error())
-	}
-	// Every watchlist entry the definitions document does not already
-	// hold (issue #407). Runs on every boot, for the reason
-	// AdoptWatchlistEntries' own doc comment gives: a deployment that
-	// upgraded during #404-#406 has a definitions document *and* went on
-	// creating entries in internal/watchlist's own store afterwards,
-	// because that store was still the operator-facing entry set until
-	// this issue deleted it. A failure to read the source document is
-	// fatal (#378's fail-closed contract): starting with a silently
-	// smaller entry set is the outcome that refusal exists to prevent.
-	adopted, err := engine.AdoptWatchlistEntries(bootCtx, definitions, watchlistBackend)
-	mustOpenStore(watchlistLog, err)
-	if adopted > 0 {
-		watchlistLog.Info(fmt.Sprintf("adopted %d watchlist entr(ies) into the definitions store -- the watchlist document is a migration source only now (issue #407)", adopted))
 	}
 	// bl (issue #113 Part B): always constructed, even with zero enabled
 	// sources (cfg.Blocklist.Sources == []) -- Match/Refresh are both
@@ -986,9 +915,8 @@ func main() {
 	// other definition's half-full window; see engine.Registry's own doc
 	// comment.
 	//
-	// An empty/not-yet-migrated definitions store is a valid, common
-	// state -- see MigrateDefinitions's own doc comment -- and simply
-	// means the sets start out evaluating nothing.
+	// An empty definitions store is a valid state and simply means the
+	// sets start out evaluating nothing.
 	//
 	// Each shipped definition's sink raises into fs and, for a
 	// newly-raised episode, kicks off the same best-effort async
@@ -1349,6 +1277,7 @@ func main() {
 		Devices:           devices,
 		MACRegistry:       macRegistry,
 		Setup:             setupStore,
+		Settings:          settingsStore,
 		Hub:               h,
 		Reputation:        rep,
 		NetClass:          nc,
@@ -1387,6 +1316,18 @@ func main() {
 		ConfigProblems:    configProblems,
 		Persistence:       persistenceInfo,
 	}
+
+	// The range the memory control may move within, read from this
+	// host's cgroup or RAM once, here, and never again while the process
+	// runs -- see config.MaxMemoryCeiling for the headroom rule. The
+	// figure in effect is passed alongside it so a deployment already
+	// running a deliberately large budget (#244) is never told its own
+	// current value is out of range.
+	memoryBounds := config.MaxMemoryCeiling(storeMaxMemory)
+	logging.New("store").Info(fmt.Sprintf(
+		"event buffer: adjustable from %s to %s from Settings (%s)",
+		memoryBounds.Min, memoryBounds.Max, memoryBoundsBasis(memoryBounds)))
+	srv.InitMemory(storeMaxMemory, memoryBounds)
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())

@@ -119,12 +119,18 @@ const (
 	// definition. #654: declared only where both a destination address
 	// and a destination port are independently meaningful for this
 	// definition -- port_scan (ports without a meaningful destination
-	// set) and dest_spread (destinations without ports) never declare
-	// this, and neither does any definition whose KeyMode already fixes
+	// set) never declares this, and neither does any definition whose
+	// KeyMode already fixes
 	// the destination port for the whole window (repeated_drops,
 	// distributed_brute_force), since a pair there would just repeat the
 	// key's own port against each host, adding nothing Hosts and the
 	// Target don't already say together.
+	//
+	// dest_spread was in that first list and is not any more: #641 turned
+	// pairs on for outbound_anomaly and internal_recon, which record the
+	// port alongside each destination. They are programmatic, so they do
+	// it in their own Evaluate rather than by declaring this field --
+	// see destSpreadDefinition.pairsFor.
 	EvidencePairs EvidenceField = "pairs"
 	// EvidenceMAC records the matching event's source MAC address,
 	// last-writer-wins (see EvidenceSet.SetSrcMAC) and only when the
@@ -621,6 +627,16 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 	// Emission, so it is what fills it in.
 	conf := overshootConfidence(count, d.threshold)
 	em.Confidence = &conf
+	// Size: a declarative definition's size is always the counting-mode
+	// tally that crossed the threshold -- distinct destination ports for
+	// port_scan, attempts for critical_port, and so on -- because
+	// "threshold-over-window" is the whole of what this kind evaluates
+	// (docs/decisions/evaluation-engine.md section 2). So it is set here,
+	// once, rather than per shipped builder: there is no declarative
+	// definition, shipped or operator-authored, whose size is anything
+	// else. See Emission.Size and #640.
+	size := count
+	em.Size = &size
 	// Country/EventTime: see Emission's own doc comment on why these are
 	// set here, from the triggering event, rather than by RenderEmission.
 	// Country only where the definition declared it honest -- see

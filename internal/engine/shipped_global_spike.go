@@ -168,6 +168,8 @@ func (d *globalSpikeDefinition) Tick(now time.Time) {
 		samples = d.warmupSamples
 	}
 	confidence := emaConfidence(before.ZScore, samples, d.warmupSamples)
+	// No Size: global_spike declares none -- see ShippedSizeMeasure for
+	// why a rate against a moving baseline has no size to record.
 	d.emit(Emission{
 		Target: "global",
 		Detail: fmt.Sprintf("%.1f events/s vs a baseline of %.1f (based on %d samples, %.1fσ above normal)",
@@ -268,13 +270,11 @@ func (d *globalSpikeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 			return
 		}
 		emissionCount++
-		if len(sample) < replaySampleBound {
-			sample = append(sample, ReplaySample{
-				At:     now,
-				Target: "global",
-				Detail: fmt.Sprintf("%.1f events/s vs a baseline of %.1f (%.1fσ above normal)", current, before.Value, before.ZScore),
-			})
-		}
+		sample = appendReplaySample(sample, ReplaySample{
+			At:     now,
+			Target: "global",
+			Detail: fmt.Sprintf("%.1f events/s vs a baseline of %.1f (%.1fσ above normal)", current, before.Value, before.ZScore),
+		})
 	}
 
 	corpusWindow := corpus.Replay(func(e store.Event) {

@@ -9,6 +9,7 @@
 // that could drift apart. The deck-facing surface says "Entities", never
 // "fleet" (round 23's verdict) -- this module is the "internal
 // code/state" the record allows to keep the name.
+import { prose } from './setupsteps'
 import type { ClientEvent, Device } from './types'
 
 export const RECENT_WINDOW_MS = 5 * 60 * 1000
@@ -71,4 +72,22 @@ export function deviceState(d: Device, nowMs: number): DeviceStateMark {
 // deviceState above, for the same no-drift reason.
 export function ratePerSecond(events: readonly ClientEvent[], deviceId: string, nowMs: number): string {
   return (recentCount(events, deviceId, nowMs) / (RECENT_WINDOW_MS / 1000)).toFixed(1)
+}
+
+// multihomedEcho (#442) is the one sentence a configured-silent card
+// carries when the server has paired it with undeclared addresses that
+// are streaming -- the fleet already shows the pair, so this only points
+// an operator who never reopens the wizard back at step 2, where the
+// router console is open and the command is printed with their values.
+// Null for every other card: the notice clears itself once the declared
+// device sends its first log, and nothing else here diagnoses another
+// device's silence.
+export function multihomedEcho(d: Device): string | null {
+  const arriving = d.multihomedCandidates ?? []
+  if (!d.configured || arriving.length === 0) return null
+  const declared = d.sourceIp || d.id
+  return (
+    `Declared as ${declared}, nothing arrived. If ${prose(arriving, 'or')} below is the same router ` +
+    `on another of its addresses, Run setup… step 2 shows the one-line fix.`
+  )
 }

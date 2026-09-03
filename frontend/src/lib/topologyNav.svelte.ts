@@ -82,6 +82,18 @@ export interface PendingWatchDraft {
   who: string
   toward?: string
   mode: 'expect' | 'fence'
+  // provenance (#641) is where a prefilled draft's values came from,
+  // stated in the form beside them: "from the last firing window, 6 of
+  // at least 14 pairs", and whether the identity is MAC- or IP-bound.
+  // Absent for a draft the operator opened themselves, which has no
+  // provenance to state. See lib/watchDraft.ts for the wording.
+  provenance?: string
+  // returnTo (#641) is the view the operator came from, which they are
+  // taken back to when the draft is saved or discarded -- taking a
+  // watcher offered by a flag must never cost a manual switch back to
+  // the inbox. Absent means stay where you are, which is right for
+  // every caller already on the watchlist.
+  returnTo?: 'flags'
 }
 
 export const topologyNavState = new TopologyNavState()
