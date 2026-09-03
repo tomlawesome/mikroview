@@ -23,8 +23,8 @@
 //
 // Both addresses are in 203.0.113.0/24 (RFC 5737 TEST-NET-3) and neither
 // collides with another scenario's claim: live-token-copy.mjs owns .221
-// and .44, live-router-lookup.mjs owns .2. Deliberately NOT
-// 192.0.2.0/24 or 198.51.100.0/24 -- live-router-lookup.mjs pushes a
+// and .44, live-before-router-lookup.mjs owns .2. Deliberately NOT
+// 192.0.2.0/24 or 198.51.100.0/24 -- live-before-router-lookup.mjs pushes a
 // wireguard-peer covering both, named "branch office", which would
 // shadow this scenario's own labels exactly as it once shadowed
 // live-token-copy.mjs's (see that file's HOST_IP comment).
