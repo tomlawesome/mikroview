@@ -14,11 +14,15 @@
   // pushed the zones degrade to boundary-derived names, with the router
   // card carrying the one statement that names the missing push and
   // every address slot saying what it truly holds (#802, round 36 --
-  // nothing floats over the map). The lens row carries Traffic and Policy
-  // (#628, layer 2); the remaining lenses are unbuilt surfaces, absent
-  // rather than disabled. One fixed picture, tabs repaint it: the
-  // Policy lens keeps every island where Traffic put it and swaps the
-  // observed ribs for what the pushed rule table intends.
+  // nothing floats over the map). The lens row carries round 30's and
+  // round 39's five: three base lenses that repaint the pair lines, and
+  // two overlays -- flags and watch -- that place ledger objects on top
+  // of whichever base is showing (#715 item 3). The two families split
+  // by data source, which is why one is exclusive and the other is not:
+  // a base lens is a different reading of the same edges, an overlay is
+  // a different kind of thing marked on them. One fixed picture, tabs
+  // repaint it: the Policy lens keeps every island where Traffic put it
+  // and swaps the observed ribs for what the pushed rule table intends.
   //
   // Deviation from #627's letter, declared on the issue: "the Map page
   // in the Live group's reserved slot" predates the deck -- topography
@@ -68,6 +72,16 @@
   // Which lens repaints the fixed picture. Reach layers on top of
   // any of them (#626: a mode, not a place).
   let lens = $state<'traffic' | 'policy' | 'coverage'>('traffic')
+  // The two overlays (#715 item 3). Independent of `lens` and of each
+  // other, both on by default, and session state like `lens` -- nothing
+  // here is persisted.
+  let flagsOn = $state(true)
+  let watchOn = $state(true)
+  // Estate-wide, deliberately: this is the same number the dial and the
+  // scene bar show, and a second map-scoped flag count on one screen
+  // would fight them. Drawn only above zero -- no round draws "flags 0",
+  // and a zero is not a thing to report.
+  const flagCountAll = $derived(flagsState.activeCount)
 
   const zones = $derived(zonesState.zones)
   const eps = $derived(appState.stats?.eventsPerSecond ?? 0)
@@ -1842,20 +1856,56 @@
   <!-- The lens selector (#682, ported from the scene's `.wlens2`): the
        bottom-left bar, not a top-right tab strip -- round 29 has no
        such strip beside the dials. -->
-  <div class="wlens2" role="tablist" aria-label="Map lenses">
-    {#if reach}
-      <span class="on" role="tab" aria-selected="true">reach</span>
-      <span role="tab" aria-selected="false">{lens === 'policy' ? 'policy' : 'traffic'}</span>
-    {:else}
-      <button class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
-        traffic
-      </button>
-      <button class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
-        policy
-      </button>
-      <button class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
-        coverage
-      </button>
+  <div class="wlens2">
+    <div class="wl-tabs" role="tablist" aria-label="Map lenses">
+      {#if reach}
+        <span class="on" role="tab" aria-selected="true">reach</span>
+        <span role="tab" aria-selected="false">{lens === 'policy' ? 'policy' : 'traffic'}</span>
+      {:else}
+        <button class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
+          traffic
+        </button>
+        <button class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
+          policy
+        </button>
+        <button class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
+          coverage
+        </button>
+      {/if}
+    </div>
+    {#if !reach}
+      <!-- The overlays sit outside the tablist, behind a hairline
+           (round-39:943). Two reasons, and they agree: a toggle inside
+           a tablist breaks its semantics, and the divider is what tells
+           a reader that these two latch while the three to their left
+           move a highlight. Both default on -- rounds 30 and 39 draw
+           the scene wearing them, and an overlay with nothing to show
+           paints nothing, so the calm default survives (Fable 5). -->
+      <span class="wl-div" aria-hidden="true"></span>
+      <div class="wl-overlays" role="group" aria-label="Map overlays">
+        <button
+          type="button"
+          class="wl-ov"
+          class:on={flagsOn}
+          aria-pressed={flagsOn}
+          aria-label={flagCountAll > 0
+            ? `Flags overlay — ${flagCountAll} open: mark flagged places on the map`
+            : 'Flags overlay — mark flagged places on the map'}
+          onclick={() => (flagsOn = !flagsOn)}
+        >
+          flags{#if flagCountAll > 0}&nbsp;<span class="ov-n">{flagCountAll}</span>{/if}
+        </button>
+        <button
+          type="button"
+          class="wl-ov"
+          class:on={watchOn}
+          aria-pressed={watchOn}
+          aria-label="Watch overlay — mark watched places on the map"
+          onclick={() => (watchOn = !watchOn)}
+        >
+          watch
+        </button>
+      </div>
     {/if}
   </div>
 
@@ -2350,7 +2400,12 @@
                the same unreadable cards. -->
           <g class="g-dot">
             <circle r="8" class="zone-dot" stroke={ink} />
-            {#if agg && agg.watchBroken > 0}
+            <!-- One halo per dot even when both overlays have something
+                 to say about it: flags take the ring, since an alarm
+                 outranks a broken watch on the same place. -->
+            {#if flagsOn && agg && agg.flagCount > 0}
+              <circle r="13" class="dot-halo" />
+            {:else if watchOn && agg && agg.watchBroken > 0}
               <circle r="13" class="dot-halo" />
             {/if}
             {#if capt?.startsWith('DARK')}
@@ -2938,6 +2993,33 @@
 
   .wlens2 .on {
     color: var(--fg);
+  }
+
+  /* The three tabs and the two overlays, split by a hairline
+     (round-39:943). The row is one flex line; the two groups are their
+     own so the divider sits between them rather than between any two
+     controls. */
+  .wl-tabs,
+  .wl-overlays {
+    display: flex;
+    gap: 14px;
+  }
+
+  .wl-div {
+    width: 1px;
+    align-self: stretch;
+    background: var(--hair-2);
+  }
+
+  /* An overlay's count wears the alarm ink, as round 39 draws it, but
+     only the digits -- the word stays the row's own colour so an
+     overlay that is merely available does not read as an alarm. */
+  .wl-ov.on {
+    color: var(--fg);
+  }
+
+  .wl-ov.on .ov-n {
+    color: var(--alarm);
   }
 
   .stage {
