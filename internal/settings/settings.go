@@ -15,10 +15,15 @@
 //
 // Deliberately narrow. This is not a second configuration system: only
 // settings whose whole point is being adjusted against live evidence
-// belong here, and today that is store.maxMemory alone (#796). Anything
-// that changes what mikroview *is* -- listen addresses, TLS, storage
-// backends, credentials -- stays in the file, where it is reviewable,
-// version-controllable and outside the blast radius of a session.
+// belong here -- store.maxMemory (#796), and the on-disk event
+// history's switch and two caps (#910), which sit beside it on the same
+// screen and answer the same "how much is this worth to me" question.
+// Anything that changes what mikroview *is* -- listen addresses, TLS,
+// storage backends, credentials -- stays in the file, where it is
+// reviewable, version-controllable and outside the blast radius of a
+// session. history.keyFile and history.dir stay in the file for exactly
+// that reason: one names a mounted secret, the other a filesystem path,
+// and neither has any business being editable from a browser.
 package settings
 
 import (
@@ -42,11 +47,37 @@ var persistLog = logging.New("settings")
 // means "nothing stored" -- the config file's figure then applies, which
 // is the state every instance starts in.
 type storeFile struct {
-	Store storeSection `json:"store"`
+	Store   storeSection   `json:"store"`
+	History historySection `json:"history"`
 }
 
 type storeSection struct {
 	MaxMemoryBytes int64 `json:"maxMemoryBytes"`
+}
+
+// historySection is the on-disk event history's three adjustable
+// settings (#910). The other two -- keyFile and dir -- are deliberately
+// absent: see the package comment.
+//
+// Days is the "is anything stored" marker, the same job
+// MaxMemoryBytes's own positivity does above. It cannot be Enabled,
+// because a stored false has to beat a config-file true (that is the
+// whole point of the stored value winning) and false is also the zero
+// value; Days can never legitimately be stored below 1, so zero or
+// absent means nothing was ever set here and config.yaml's figures
+// apply.
+type historySection struct {
+	Enabled  bool  `json:"enabled"`
+	Days     int   `json:"days"`
+	MaxBytes int64 `json:"maxBytes"`
+}
+
+// History is the on-disk event history's runtime state: the switch and
+// the two caps, exactly as an admin last left them.
+type History struct {
+	Enabled  bool
+	Days     int
+	MaxBytes int64
 }
 
 // Store holds the admin-adjustable settings. The zero value is not
@@ -58,6 +89,7 @@ type Store struct {
 	// load or save -- see persist.SaveWithRetry.
 	version        int64
 	maxMemoryBytes int64
+	history        History
 }
 
 // Open loads path if it exists (a missing file is the expected first-run
@@ -95,6 +127,21 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			return fmt.Errorf("store.maxMemoryBytes is %d, which is not a size", file.Store.MaxMemoryBytes)
 		}
 		s.maxMemoryBytes = file.Store.MaxMemoryBytes
+		// Same refusal for the same reason: a negative day count or
+		// byte cap is a corrupt document, not a smaller history, and
+		// quietly falling back to the config file's figures would hide
+		// that at the one moment somebody is watching.
+		if file.History.Days < 0 {
+			return fmt.Errorf("history.days is %d, which is not a number of days", file.History.Days)
+		}
+		if file.History.MaxBytes < 0 {
+			return fmt.Errorf("history.maxBytes is %d, which is not a size", file.History.MaxBytes)
+		}
+		s.history = History{
+			Enabled:  file.History.Enabled,
+			Days:     file.History.Days,
+			MaxBytes: file.History.MaxBytes,
+		}
 		return nil
 	})
 	if err != nil {
@@ -140,12 +187,54 @@ func (s *Store) SetMaxMemory(bytes int64) error {
 	return s.persistLocked()
 }
 
+// History returns the stored on-disk-history settings, and whether any
+// are stored at all. False means the config file's history.enabled,
+// history.days and history.maxBytes apply -- the state every instance
+// starts in.
+func (s *Store) History() (History, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.history, s.history.Days > 0 && s.history.MaxBytes > 0
+}
+
+// SetHistory records the switch and the two caps.
+//
+// Bounds are the caller's business for the same reason SetMaxMemory
+// says so: internal/config owns what an acceptable history.days and
+// history.maxBytes are (see Config.validateHistory and
+// MinRetentionBytes), and a second opinion here is how two answers to
+// one question come to disagree. What is refused here is only what this
+// store cannot represent: a day count or cap below 1 is
+// indistinguishable from "nothing stored" once written, so accepting
+// one would silently hand the config file's figures back at the next
+// restart.
+func (s *Store) SetHistory(h History) error {
+	if h.Days < 1 {
+		return fmt.Errorf("%d is not a number of days to keep", h.Days)
+	}
+	if h.MaxBytes < 1 {
+		return fmt.Errorf("%d is not a usable cap on the retained history", h.MaxBytes)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.history = h
+	return s.persistLocked()
+}
+
 // persistLocked writes the document if persistence is configured.
 func (s *Store) persistLocked() error {
 	if s.backend == nil {
 		return nil
 	}
-	data, err := json.MarshalIndent(storeFile{Store: storeSection{MaxMemoryBytes: s.maxMemoryBytes}}, "", "  ")
+	data, err := json.MarshalIndent(storeFile{
+		Store: storeSection{MaxMemoryBytes: s.maxMemoryBytes},
+		History: historySection{
+			Enabled:  s.history.Enabled,
+			Days:     s.history.Days,
+			MaxBytes: s.history.MaxBytes,
+		},
+	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding the settings document: %w", err)
 	}

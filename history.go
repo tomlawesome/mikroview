@@ -6,12 +6,9 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/tomlawesome/mikroview/internal/config"
-	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/retention"
-	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // historyDirectory is where this deployment's retained event files live.
@@ -31,6 +28,12 @@ func historyDirectory(cfg config.Config) string {
 
 // openHistory prepares on-disk event retention, or reports why it is
 // off.
+//
+// The three settings it reads -- Enabled, Days, MaxBytes -- are the
+// *effective* ones, not necessarily config.yaml's: since #910 an admin
+// can change them from inside the app and the stored figures win. The
+// caller resolves that and hands the result in (newHistoryRuntime,
+// which is the only caller); keyFile and dir stay config-only.
 //
 // Off is the default and a first-class outcome, not a degraded one:
 // nil, nil means memory-only and nothing is wrong. What must never
@@ -108,34 +111,4 @@ func purgeHistoryIfAny(log *slog.Logger, dir string) {
 	if err := retention.PurgeDir(dir); err != nil {
 		log.Warn("could not delete the previously retained event history", "dir", dir, "err", err)
 	}
-}
-
-// retainedDays adapts *retention.Store to engine.RetainedDays.
-//
-// The adapter lives here for the same reason engineSnapshotPart does:
-// internal/engine deliberately knows nothing about keys or files, and
-// internal/retention deliberately knows nothing about corpora. Four
-// lines here keep both boundaries where their own doc comments say they
-// are.
-type retainedDays struct{ st *retention.Store }
-
-// historyForReplay is what the API server is given.
-//
-// It returns a nil interface rather than an interface holding a nil
-// pointer when there is no history, because the server's own
-// nil-means-disabled convention tests the interface. Wrapping nil would
-// make every replay take the retained path and ask a nil store for its
-// days -- the classic Go typed-nil trap, and worth the three lines to
-// keep out of a request path.
-func historyForReplay(st *retention.Store) engine.RetainedDays {
-	if st == nil {
-		return nil
-	}
-	return retainedDays{st: st}
-}
-
-func (r retainedDays) Days() ([]string, error) { return r.st.Days() }
-
-func (r retainedDays) ReplayDay(day string, cutoff time.Time, visit func(store.Event)) (int, error) {
-	return r.st.ReplayDay(day, cutoff, visit)
 }
