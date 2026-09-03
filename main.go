@@ -2039,7 +2039,7 @@ func runHealthcheck() int {
 		// Checking itself, from inside the same container -- there's no
 		// trust boundary being crossed by skipping verification of its
 		// own (possibly self-signed) certificate here.
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}
 	}
 	resp, err := client.Get(scheme + "://" + addr + "/api/healthz")
 	if err != nil {
