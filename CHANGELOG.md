@@ -18,6 +18,30 @@ rewritten.
 
 ### Added
 
+- **Events can be kept on disk, encrypted, so a replay reaches further
+  back than memory does** (#856,
+  `docs/decisions/event-retention.md`). Off unless you mount a key and
+  turn it on: memory-only stays the default and a first-class choice,
+  not a setup step you forgot. With a key, one compressed file per day
+  is written under the data directory, sealed with AES-256-GCM using a
+  key derived per file and bound to its day -- so copying the data
+  directory, or restoring a backup of it, yields nothing readable, and
+  a file renamed to another day stops opening. There is no unencrypted
+  mode: without a key nothing is written at all.
+
+  Two caps, applied together: `history.days` (30) and
+  `history.maxBytes` (1 GiB), oldest day dropped first when either is
+  hit. Turning it off deletes what was retained -- off means the events
+  are gone. `-migrate-data` carries the history to the new directory;
+  the key stays where you mounted it, and neither the key nor the
+  history goes into a `-backup`.
+
+  Replays now read disk then memory, and the receipt states the window
+  actually held rather than the setting. Settings are in
+  `docs/configuration.md`; the key file lives outside the data
+  directory. Turning it on from inside the app is #910, still to come --
+  today it is a config-file setting.
+
 - **A weekly job exercises new RouterOS releases against a real CHR,
   and opens a merge request when they still parse** (#894, follow-on
   from #436). `scripts/routeroscommands` prints the setup wizard's

@@ -297,10 +297,20 @@ up() {
   # ..." -- because up() never got far enough to export MV_URL. #487's
   # setup store landed exactly that way. When up() times out, read
   # $MV_DIR/server.log first: the refusal names the store and the path.
+  # The on-disk event history (#856) is on here, and its key sits beside
+  # the data directory rather than inside it -- which is the rule the
+  # feature exists to keep, so the harness has to model it rather than
+  # take the shortcut. Retention is off by default everywhere else; the
+  # gate turns it on so the write path is exercised on every run rather
+  # than only by unit tests. live-history.mjs reads $MV_DIR to check it.
+  head -c 32 /dev/urandom | base64 > "$MV_DIR/history.key"
+  chmod 600 "$MV_DIR/history.key"
+
   cat > "$MV_DIR/cfg.yaml" <<EOF
 listen: {syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
 $TLS_BLOCK
 $(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
+history: {enabled: true, keyFile: "$MV_DIR/history.key", dir: "$MV_DIR/data/history"}
 $DEVICES_BLOCK
 EOF
   MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
