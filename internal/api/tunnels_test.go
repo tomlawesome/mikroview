@@ -193,6 +193,122 @@ func TestHandleRouterOSWireguardNoDataAtAll(t *testing.T) {
 	}
 }
 
+// wireguardTestBody decodes a wireguard tunnels response body just far
+// enough for the attribution tests below: which peer public keys landed
+// under which named interface, and that interface's own derived state.
+type wireguardTestBody struct {
+	Interfaces []struct {
+		Name  string `json:"name"`
+		State string `json:"state"`
+		Peers []struct {
+			PublicKey string `json:"publicKey"`
+		} `json:"peers"`
+	} `json:"interfaces"`
+}
+
+func peerKeys(t *testing.T, peers []struct {
+	PublicKey string `json:"publicKey"`
+}) []string {
+	t.Helper()
+	out := make([]string, len(peers))
+	for i, p := range peers {
+		out[i] = p.PublicKey
+	}
+	return out
+}
+
+// TestHandleRouterOSWireguardAttributesPeersByInterfaceField is the
+// follow-up fixing the gap the original #874 cut flagged: once a peer
+// names its interface, a two-interface device must not show one
+// interface's peers under the other, and each interface's own State
+// must depend only on the peers actually attributed to it.
+func TestHandleRouterOSWireguardAttributesPeersByInterfaceField(t *testing.T) {
+	s, _ := newTestServer(t)
+	applyIngest(t, s, "core", `{"kind":"wireguard-interface","page":1,"pages":1,"records":[
+	  {"name":"wg0","comment":"","publicKey":"","listenPort":51820},
+	  {"name":"wg1","comment":"","publicKey":"","listenPort":51821}
+	]}`)
+	applyIngest(t, s, "core", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[
+	  {"publicKey":"wg0-up","allowedAddress":"10.0.0.0/24","endpointAddress":"","comment":"","interface":"wg0","lastHandshake":"1m0s"},
+	  {"publicKey":"wg1-down","allowedAddress":"10.0.1.0/24","endpointAddress":"","comment":"","interface":"wg1","lastHandshake":"10m0s"}
+	]}`)
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/routeros/core/wireguard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body wireguardTestBody
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Interfaces) != 2 {
+		t.Fatalf("len(Interfaces) = %d, want 2", len(body.Interfaces))
+	}
+	byName := map[string]struct {
+		state string
+		keys  []string
+	}{}
+	for _, iface := range body.Interfaces {
+		byName[iface.Name] = struct {
+			state string
+			keys  []string
+		}{iface.State, peerKeys(t, iface.Peers)}
+	}
+
+	if got := byName["wg0"]; got.state != "up" || len(got.keys) != 1 || got.keys[0] != "wg0-up" {
+		t.Errorf("wg0 = %+v, want state up with only wg0-up attached", got)
+	}
+	if got := byName["wg1"]; got.state != "down" || len(got.keys) != 1 || got.keys[0] != "wg1-down" {
+		t.Errorf("wg1 = %+v, want state down with only wg1-down attached", got)
+	}
+}
+
+// TestHandleRouterOSWireguardFallsBackWithoutInterfaceField pins the
+// pre-follow-up behaviour for a push script that has never sent the
+// interface field on any peer: every peer still attaches to every
+// interface, rather than to none.
+func TestHandleRouterOSWireguardFallsBackWithoutInterfaceField(t *testing.T) {
+	s, _ := newTestServer(t)
+	applyIngest(t, s, "core", `{"kind":"wireguard-interface","page":1,"pages":1,"records":[
+	  {"name":"wg0","comment":"","publicKey":"","listenPort":51820},
+	  {"name":"wg1","comment":"","publicKey":"","listenPort":51821}
+	]}`)
+	applyIngest(t, s, "core", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[
+	  {"publicKey":"p1","allowedAddress":"10.0.0.0/24","endpointAddress":"","comment":"","lastHandshake":"1m0s"},
+	  {"publicKey":"p2","allowedAddress":"10.0.1.0/24","endpointAddress":"","comment":""}
+	]}`)
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/routeros/core/wireguard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body wireguardTestBody
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Interfaces) != 2 {
+		t.Fatalf("len(Interfaces) = %d, want 2", len(body.Interfaces))
+	}
+	for _, iface := range body.Interfaces {
+		if len(iface.Peers) != 2 {
+			t.Errorf("interface %s has %d peers, want 2 (attribution unavailable, every peer attaches to every interface)", iface.Name, len(iface.Peers))
+		}
+		if iface.State != "up" {
+			t.Errorf("interface %s State = %q, want %q", iface.Name, iface.State, "up")
+		}
+	}
+}
+
 // TestHandleRouterOSPPPActive covers issue #874's second table: a
 // session present in the push is state "up", with Since estimated from
 // the reported uptime.
