@@ -93,12 +93,35 @@ func TestPushBlockRenamesFilterRuleFields(t *testing.T) {
 		`"connectionState"=($v->"connection-state")`,
 		`"inInterface"=($v->"in-interface")`,
 		`"outInterface"=($v->"out-interface")`,
+		// #435's rule counters -- the cost the tune-logging helper shows
+		// beside a tick-box before any logging is switched on.
+		`"packets"=($v->"packets")`,
+		`"bytes"=($v->"bytes")`,
 		// The wrapping that makes it a list of records rather than one
 		// merged map -- silently wrong without it.
 		`{$rec}`,
 	} {
 		if !strings.Contains(block, want) {
 			t.Errorf("pushBlock(filter-rule) missing %q:\n%s", want, block)
+		}
+	}
+}
+
+// TestLogPrefixForAction pins the convention RuleTaggingCommands' bulk
+// commands hard-code (D|drop|, R|reject|, A|accept|) plus the general
+// <INITIAL>|<action>| form #435's per-rule render step needs for every
+// other action RouterOS accepts.
+func TestLogPrefixForAction(t *testing.T) {
+	for _, tc := range []struct{ action, want string }{
+		{"drop", "D|drop|"},
+		{"reject", "R|reject|"},
+		{"accept", "A|accept|"},
+		{"tarpit", "T|tarpit|"},
+		{"jump", "J|jump|"},
+		{"", ""},
+	} {
+		if got := LogPrefixForAction(tc.action, "a"); got != tc.want {
+			t.Errorf("LogPrefixForAction(%q) = %q, want %q", tc.action, got, tc.want)
 		}
 	}
 }
