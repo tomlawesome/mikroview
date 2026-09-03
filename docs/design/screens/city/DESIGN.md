@@ -138,9 +138,9 @@ map, Enter stands on a building, Esc surfaces.
 ## What the 2D map keeps
 
 Its own drawing and its own open work: #726 (edge overlap), #715
-(fidelity against round 30), #701 (facts no data answers), #852 (zone
-identity per device on the 2D map — the city's boroughs answer it only
-for the city).
+(fidelity against round 30), #701 (facts no data answers). #852 (zone
+identity per device) closed into the one-ground-plan ruling above: the
+2D map draws the city's boroughs flat (#869).
 
 ## Build
 
