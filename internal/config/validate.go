@@ -40,6 +40,7 @@ func (c *Config) Validate() Result {
 	c.validateListen(fatal)
 	c.validateStore(fatal, warn)
 	c.validateWatchlist(warn)
+	c.validateSnapshot(warn)
 	c.validateAuth(fatal)
 	c.validateDevices(fatal)
 	c.validateNotify(warn)
@@ -159,6 +160,10 @@ auth:
 	"CFG-0062": `oidc:
   # a self-hosted provider, not a multi-tenant one
   issuerUrl: "https://id.example.com"`,
+	"CFG-0070": `snapshot:
+  interval: 5m   # 30s or longer`,
+	"CFG-0071": `snapshot:
+  keep: 6`,
 }
 
 func (c *Config) validateListen(fatal problemFunc) {
@@ -276,6 +281,35 @@ func (c *Config) validateWatchlist(warn warnFunc) {
 			fmt.Sprintf("%s is not a usable retention window -- on Postgres, nothing would be kept", was),
 			c.Watchlist.MatchLogRetention.String(),
 			"set a positive duration such as 168h (7 days)")
+	}
+}
+
+// validateSnapshot clamps the warm-restart cadence and retention rather
+// than refusing them. A bad value here costs a warm restart, not
+// monitoring, so refusing to start over it would trade a small loss for
+// a total one -- the same reasoning validateStore gives for clamping
+// retention.
+//
+// snapshot.dir is not checked here: whether a directory can be created
+// and written is a filesystem question, and Validate is deliberately
+// pure (see its doc comment). main answers it at startup instead, with
+// one log line and no snapshots if the answer is no.
+func (c *Config) validateSnapshot(warn warnFunc) {
+	if c.Snapshot.Interval < MinSnapshotInterval {
+		was := c.Snapshot.Interval
+		c.Snapshot.Interval = defaultSnapshotInterval
+		warn("CFG-0070", "snapshot.interval",
+			fmt.Sprintf("%s is shorter than the %s minimum -- snapshotting that often costs more evaluation than the counters it saves are worth", was, MinSnapshotInterval),
+			c.Snapshot.Interval.String(),
+			fmt.Sprintf("set a duration of %s or longer, such as 5m", MinSnapshotInterval))
+	}
+	if c.Snapshot.Keep < 1 {
+		was := c.Snapshot.Keep
+		c.Snapshot.Keep = defaultSnapshotKeep
+		warn("CFG-0071", "snapshot.keep",
+			fmt.Sprintf("%d generations is not a usable retention -- keeping none would delete the snapshot just written, silently turning warm restart off", was),
+			fmt.Sprintf("%d", c.Snapshot.Keep),
+			"set a positive number of generations to keep, e.g. 6")
 	}
 }
 
