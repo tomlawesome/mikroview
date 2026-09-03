@@ -22,6 +22,7 @@
   import { buildHour, minuteIndexOf, readMinute } from '../lib/metricsSeries'
   import { fetchStatsTops } from '../lib/api'
   import { formatEps, formatHM } from '../lib/format'
+  import { startStatement } from '../lib/provenance'
   import MetricsSeismograph from './MetricsSeismograph.svelte'
   import MetricsRegister from './MetricsRegister.svelte'
   import MetricsTable from './MetricsTable.svelte'
@@ -68,6 +69,19 @@
   // landed, or one that failed, is not a measurement of zero. Topography.svelte
   // already models it this way; this line had drifted from it (#750).
   const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
+
+  // What this hour is an account of (#795, round 41 #s4): restored from
+  // a snapshot, or counted from a cold start, for the first hour after
+  // boot. Built in lib/provenance.ts, which the docket's own chip reads
+  // too -- one derivation, so the two surfaces cannot disagree about the
+  // wording or about when it clears.
+  //
+  // The clock is read here rather than ticked: appState.stats is
+  // replaced by App.svelte's own poll every STATS_REFRESH_MS, and that
+  // replacement is what re-runs this. So the statement clears within one
+  // poll of the hour, on both surfaces, off the same store update --
+  // which is cheaper and less drifty than either surface owning a timer.
+  const provenance = $derived(startStatement(appState.stats, new Date()))
 
   // Rounds 36-37 (#803): reading the minute under the cursor across every
   // series is the hourline's job, so the register's aside panel has no
@@ -178,6 +192,16 @@
         <span class="sep">·</span>
         <span class="brinkmark">the brink · {formatHM(hour.brink)}</span>
       {/if}
+      <!-- The last fact on the line (#795, round 41 #s4): what the hour
+           is an account of, after a restart. A fact, not a control --
+           there is nowhere for it to lead, so it is a `.fact` among the
+           facts, dimmed one step, exactly as the drawing writes it. Its
+           separator sits inside the `{#if}` so an absent statement takes
+           its `·` with it, the same way the events/s reading does. -->
+      {#if provenance}
+        <span class="sep">·</span>
+        <span class="fact stmt">{provenance}</span>
+      {/if}
     </span>
   </div>
 
@@ -272,6 +296,14 @@
      column and the drum's inner stroke already use. */
   .fact.ref b {
     color: var(--chart-refused);
+  }
+
+  /* Round 41's `.hourline .stmt { color: var(--ink-3) }` (#795): the
+     restart statement is a fact about the other facts, so it is set one
+     step dimmer than they are -- --fg-dim against their --fg-muted,
+     which is the same step the separators and the `.big` captions take. */
+  .fact.stmt {
+    color: var(--fg-dim);
   }
 
   /* The right-hand rate group (round 30's `.hourline .gap { flex: 1 }`
