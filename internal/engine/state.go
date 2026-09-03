@@ -31,20 +31,16 @@ type BaselineState struct {
 }
 
 // stateDocument is StateStore's on-disk shape: per-definition, per-key
-// baseline state, plus a version so the document can grow forward
-// without a migration for every additive change (a new BaselineState
-// field decodes as its zero value against an older document; Version
-// exists for the day a *structural* change -- a new nesting level, a
-// renamed key -- actually needs one, the same "versioned, forward-
-// growable" contract every other document in this codebase follows, per
-// #372/#378's own precedent).
+// baseline state. A new BaselineState field decodes as its zero value
+// against an older document, which is all the forward-growth this
+// document has ever needed -- see #873 for why the speculative Version
+// field this type once carried is gone: nothing read it, and Go's
+// decoder already ignores an unrecognized "version" key in an older
+// document, so removing the field breaks nothing (see
+// TestOpenStateStoreLoadsADocumentCarryingAVersionKey).
 type stateDocument struct {
-	Version     int                                 `json:"version"`
 	Definitions map[string]map[string]BaselineState `json:"definitions"`
 }
-
-// stateDocumentVersion is stateDocument's current shape version.
-const stateDocumentVersion = 1
 
 // engineStateFlushInterval is the write-behind writer's MinInterval for
 // StateStore -- deliberately coarse, per #400's requirement that
@@ -225,7 +221,7 @@ func (s *StateStore) persistLocked() {
 	if s.wb == nil {
 		return
 	}
-	doc := stateDocument{Version: stateDocumentVersion, Definitions: s.definitions}
+	doc := stateDocument{Definitions: s.definitions}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		stateLog.Error(fmt.Sprintf("encoding engine state for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
