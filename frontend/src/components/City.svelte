@@ -51,6 +51,7 @@
   } from '../lib/city/project'
   import { gateToward, lerpP, roadPieces, type Entity } from '../lib/city/roads'
   import { portsLine, reachFor, type ReachStrand } from '../lib/reach'
+  import { composeCommand, reachComposeInput } from '../lib/compose'
   import { riverScene } from '../lib/city/river'
   import { P, type Paint } from '../lib/city/paint'
   import { bridgeStateLabel } from '../lib/city/tunnelState'
@@ -241,6 +242,30 @@
   // reachFor is #626/#485's own strand model, unchanged: the city draws
   // exactly what it derives, never a second reading of the same events.
   const standReach = $derived(standBuilding ? reachFor(standBuilding.ip, zonesState.wanInterface, appState.events) : null)
+
+  /**
+   * The composer (#868, DESIGN.md "The reach"): a card pinned to the
+   * wall where the busiest blocked strand's road stopped, printing the
+   * RouterOS line for a new gate -- reachComposeInput/composeCommand
+   * (lib/compose.ts) unadorned by any picker, so it is byte-identical
+   * to what the 2D composer prints for the same strand before its own
+   * allow/block toggle or port chips are touched (a vitest proves it).
+   * Drafted, never run: the app never connects to or probes any host.
+   */
+  const standComposeCommand = $derived.by((): string | null => {
+    const b = standBuilding
+    const s = standReach?.topBlocked
+    if (!b || !s) return null
+    const input = reachComposeInput(s, {
+      hostIp: b.ip,
+      hostName: b.name,
+      zoneId: b.districtId ?? b.id,
+      wanInterface: zonesState.wanInterface,
+      zones: ground.districts.map((d) => ({ id: d.id, cidr: d.cidr, name: d.name })),
+      edges: policyState.edges,
+    })
+    return input ? composeCommand(input) : null
+  })
 
   function standOn(districtId: string | null, id: string) {
     const b = districtId ? districtOf(districtId)?.buildings.find((x) => x.id === id) : ground.nodes.find((n) => n.id === id)
@@ -547,6 +572,13 @@
      * guessed -- #865's own rule, the same source: the event's own
      * ruleLabel). */
     dropMarks: { p: Pt; refusedBy?: string }[]
+    /** Where the busiest blocked strand's own road crosses the wall --
+     * the composer's own pin point -- computed regardless of whether a
+     * fresh bollard mark was drawn there or an existing one already
+     * stood (#868's "pinned to the wall where the refused road
+     * stopped"), so the composer never loses its anchor merely because
+     * the mark it is pinned beside was #865's own. */
+    composerAnchor: Pt | null
   }
 
   /**
@@ -577,6 +609,27 @@
     if (lane && summary.busiest) {
       ownRoadIds.add(lane.id)
       if (flowReversed(lane.pts, summary.busiest.direction, b.u, b.v)) reverseIds.add(lane.id)
+    }
+
+    // Where a road toward `counterpartToken` would cross this
+    // district's own wall -- a district or bridge head this build has
+    // ground for, or the district's own router when nothing resolves
+    // it to a place (gates.ts's own fallback for the same case).
+    function wallCrossingFor(counterpartToken: string): Pt {
+      const d = districtOf(counterpartToken)
+      if (d) return gateToward(myDistrict!, [d.u, d.v]).p
+      const n = ground.nodes.find((x) => x.id === counterpartToken)
+      if (n) return gateToward(myDistrict!, [n.u, n.v]).p
+      const bridge = ground.bridges.find((br) => br.iface === counterpartToken)
+      if (bridge) return gateToward(myDistrict!, bridge.f).p
+      const rn = ground.nodes.find((x) => x.id === myDistrict!.routerId)
+      return gateToward(myDistrict!, rn ? [rn.u, rn.v] : [myDistrict!.u, myDistrict!.v]).p
+    }
+
+    let composerAnchor: Pt | null = null
+    if (myDistrict && summary.topBlocked) {
+      const counterpartToken = summary.topBlocked.counterpart === 'internet' ? (wan ?? '') : summary.topBlocked.counterpart
+      composerAnchor = wallCrossingFor(counterpartToken || myToken)
     }
 
     for (const s of summary.strands) {
@@ -612,26 +665,11 @@
         // mark is only new ground when that road stayed standing.
         const pairId = counterpartToken ? [myToken, counterpartToken].sort().join('|') : null
         const already = pairId ? ground.roads.some((r) => !r.lane && r.id === pairId && r.stop === 'drop') : false
-        if (!already) {
-          const targetCentre: Pt = (() => {
-            const d = counterpartToken ? districtOf(counterpartToken) : null
-            if (d) return [d.u, d.v]
-            const n = counterpartToken ? ground.nodes.find((x) => x.id === counterpartToken) : undefined
-            if (n) return [n.u, n.v]
-            const bridge = counterpartToken ? ground.bridges.find((br) => br.iface === counterpartToken) : undefined
-            if (bridge) return bridge.f
-            // Nothing this build has a place for: aim at the district's
-            // own router, gates.ts's own fallback for the same case.
-            const rn = ground.nodes.find((x) => x.id === myDistrict!.routerId)
-            return rn ? [rn.u, rn.v] : [myDistrict!.u, myDistrict!.v]
-          })()
-          const gate = gateToward(myDistrict, targetCentre)
-          dropMarks.push({ p: gate.p, refusedBy: s.refusedBy })
-        }
+        if (!already) dropMarks.push({ p: wallCrossingFor(counterpartToken || myToken), refusedBy: s.refusedBy })
       }
     }
 
-    return { ownRoadIds, reverseIds, litBuildingIds, portChips, dropMarks }
+    return { ownRoadIds, reverseIds, litBuildingIds, portChips, dropMarks, composerAnchor }
   })
 
   /** Everything on the ground, in the geometry camera. */
@@ -1223,6 +1261,33 @@
     </div>
   {/if}
 
+  {#if standBuilding && standReach?.topBlocked}
+    {@const s = standReach.topBlocked}
+    {@const peerName = s.peers[0] ?? (s.counterpart === 'internet' ? 'the internet' : s.counterpart)}
+    {@const top = s.portHits[0]}
+    <!-- The composer (#868, DESIGN.md "The reach"): a card pinned to
+         the wall where the busiest blocked strand's road stopped.
+         Drafted, never run -- the same invariant, and the same
+         reachComposeInput/composeCommand, as the 2D composer
+         (Topography.svelte); a vitest proves the printed line is
+         byte-identical for the same strand. -->
+    <div class="composer" role="note" aria-label="The rule that would let this through, drafted, never run">
+      <div class="cm-h">
+        <span class="dot"></span>
+        {s.direction === 'out' ? `${standBuilding.name} → ${peerName}` : `${peerName} → ${standBuilding.name}`} · refused at this wall
+      </div>
+      <div class="cm-b">
+        it's been asking{top ? ` · ${top.proto}/${top.port}` : ''} · {s.count}×{s.refusedBy ? ` · caught by ${s.refusedBy}` : ' · caught, no rule named'}
+      </div>
+      {#if standComposeCommand}
+        <pre class="cm-code">{standComposeCommand}</pre>
+      {:else}
+        <p class="cm-b">nothing to draft from yet -- no destination port observed on this strand.</p>
+      {/if}
+      <div class="cm-f"><span>drafted · never run</span></div>
+    </div>
+  {/if}
+
   {#if stop === 'city'}
     <!-- Height = importance (#867): which reading sets a building's
          plinth height, at the one stop that shows the whole skyline.
@@ -1513,6 +1578,64 @@
 
   .crumb .esc {
     color: var(--accent);
+  }
+
+  /* The composer (#868), round-40's own card: a wall-side note rather
+   * than the 2D map's picker, so it is pinned near where the refused
+   * road stopped without needing a second, pixel-tracked overlay
+   * geometry -- the composer's own text already says which wall. */
+  .composer {
+    position: absolute;
+    z-index: 9;
+    left: 20px;
+    bottom: 32px;
+    width: 300px;
+    padding: 10px 13px 9px;
+    background: rgba(23, 10, 18, 0.95);
+    border: 1px solid rgba(255, 84, 112, 0.6);
+    border-radius: 11px;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+  }
+
+  .composer .cm-h {
+    font: 600 11.5px var(--font-sans);
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .composer .cm-h .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--alarm);
+    flex: none;
+  }
+
+  .composer .cm-b {
+    font: 10.5px var(--font-mono);
+    color: var(--fg-muted);
+    margin: 4px 0 7px;
+  }
+
+  .composer .cm-code {
+    font: 10px/1.55 var(--font-mono);
+    color: var(--accept);
+    background: #080c16;
+    border: 1px solid var(--hair);
+    border-radius: 7px;
+    padding: 7px 9px;
+    white-space: pre;
+    overflow-x: auto;
+    margin: 0;
+  }
+
+  .composer .cm-f {
+    font: 9.5px var(--font-mono);
+    color: var(--fg-dim);
+    margin-top: 7px;
+    letter-spacing: 0.06em;
   }
 
   .importance {
