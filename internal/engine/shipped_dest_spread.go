@@ -322,13 +322,11 @@ func (d *destSpreadDefinition) Replay(corpus Corpus, candidate Params) (Result, 
 			return
 		}
 		emissionCount++
-		if len(sample) < replaySampleBound {
-			sample = append(sample, ReplaySample{
-				At:     now,
-				Target: e.SrcIP,
-				Detail: fmt.Sprintf("%d distinct %s destinations in %s", count, d.noun(), d.window),
-			})
-		}
+		sample = appendReplaySample(sample, ReplaySample{
+			At:     now,
+			Target: e.SrcIP,
+			Detail: fmt.Sprintf("%d distinct %s destinations in %s", count, d.noun(), d.window),
+		})
 	})
 
 	span := corpusWindow.End.Sub(corpusWindow.Start)
