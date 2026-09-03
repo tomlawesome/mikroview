@@ -214,6 +214,19 @@ store:
 #   storePath: /var/lib/mikroview/engine-state.json
 #   definitionsStorePath: /var/lib/mikroview/definitions.json
 
+# Warm restart (issue #795): every few minutes mikroview writes a small
+# JSON file holding the counters, rolling windows and device first/last
+# seen it has built up, and puts them back on the next boot -- so a
+# restart resumes from a few minutes ago instead of resetting the
+# hourline and every device's first-seen date to now. Never the events
+# themselves; see docs/configuration.md's "Warm restart" section and
+# SECURITY.md for exactly what a snapshot holds. On by default, with
+# these values -- only uncomment this block to change them.
+# snapshot:
+#   interval: 5m                       # how often one is written; 30s minimum
+#   keep: 6                            # generations kept, oldest deleted first
+#   dir: /var/lib/mikroview/snapshots   # default: beside the data directory
+
 # Local IP/CIDR blocklist matching (issue #113 Part B): raises a
 # known_bad_ip flag directly when a source IP falls inside a CIDR range
 # from one of the vetted feeds below -- independent of any behavioral
