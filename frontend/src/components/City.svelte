@@ -1206,6 +1206,23 @@
     </g>
   </svg>
 
+  {#if standBuilding && standReach}
+    <!-- The crumb (#868, DESIGN.md "The reach"): name · address ·
+         reaches N · reached by N · Esc surfaces -- the 2D map's own
+         "reaches <b>N</b> · reached by <b>N</b>" wording (Topography.svelte's
+         reach crumb), the round-40 mockup's layout and its own literal
+         "Esc surfaces" for the rest. -->
+    <div class="crumb" aria-label="Standing on {standBuilding.name}">
+      <b>{standBuilding.name}</b>
+      <span>{standBuilding.ip}</span>
+      <i></i>
+      <span>reaches <b>{standReach.reaches}</b></span>
+      <span>reached by <b>{standReach.reachedBy}</b></span>
+      <i></i>
+      <span class="esc">Esc surfaces</span>
+    </div>
+  {/if}
+
   {#if stop === 'city'}
     <!-- Height = importance (#867): which reading sets a building's
          plinth height, at the one stop that shows the whole skyline.
@@ -1456,6 +1473,46 @@
     margin-top: 5px;
     display: flex;
     justify-content: space-between;
+  }
+
+  /* The crumb (#868), round-40's own layout: a pill centred at the top. */
+  .crumb {
+    position: absolute;
+    z-index: 9;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 11px;
+    align-items: center;
+    padding: 6px 14px;
+    background: var(--glass);
+    border: 1px solid var(--hair-2);
+    border-radius: 999px;
+    backdrop-filter: blur(7px);
+    font: 10.5px var(--font-mono);
+    color: var(--fg-dim);
+    white-space: nowrap;
+  }
+
+  .crumb > b {
+    font: 650 12.5px var(--font-sans);
+    color: var(--fg);
+  }
+
+  .crumb b {
+    color: var(--fg-muted);
+    font-weight: 600;
+  }
+
+  .crumb i {
+    width: 1px;
+    height: 12px;
+    background: var(--hair-2);
+  }
+
+  .crumb .esc {
+    color: var(--accent);
   }
 
   .importance {
