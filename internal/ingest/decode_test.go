@@ -637,7 +637,7 @@ func TestDecodeRealFilterRulePush(t *testing.T) {
 // past int32's ~2.1 billion ceiling).
 func TestWireguardPeerHandshakeFieldsRoundTrip(t *testing.T) {
 	const body = `{"kind":"wireguard-peer","page":1,"pages":1,"records":[
-	  {"allowedAddress":"10.10.0.0/24","comment":"branch office","currentEndpointAddress":"203.0.113.9","disabled":false,"endpointAddress":"203.0.113.5:51820","lastHandshake":"1m23s","publicKey":"k1","rx":5000000000,"tx":123456.000000}
+	  {"allowedAddress":"10.10.0.0/24","comment":"branch office","currentEndpointAddress":"203.0.113.9","disabled":false,"endpointAddress":"203.0.113.5:51820","interface":"wg0","lastHandshake":"1m23s","publicKey":"k1","rx":5000000000,"tx":123456.000000}
 	]}`
 	p := decodeOK(t, body)
 	if len(p.WireguardPeers) != 1 {
@@ -658,6 +658,9 @@ func TestWireguardPeerHandshakeFieldsRoundTrip(t *testing.T) {
 	}
 	if got.Disabled {
 		t.Errorf("Disabled = true, want false")
+	}
+	if got.Interface != "wg0" {
+		t.Errorf("Interface = %q, want %q", got.Interface, "wg0")
 	}
 }
 
@@ -680,6 +683,9 @@ func TestWireguardPeerHandshakeFieldsAreOptional(t *testing.T) {
 	}
 	if got.Disabled {
 		t.Errorf("Disabled = true, want false (absent means enabled)")
+	}
+	if got.Interface != "" {
+		t.Errorf("Interface = %q, want empty (attribution unavailable)", got.Interface)
 	}
 }
 

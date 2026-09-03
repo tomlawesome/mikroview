@@ -104,17 +104,18 @@ type wireguardPeerView struct {
 // wireguardInterfaceView is one pushed wireguard-interface record plus
 // its derived state and the device's peers.
 //
-// Peers are not attributed to a specific interface here: neither
-// ingest.WireguardPeer nor ingest.WireguardInterface carries a field
-// linking one to the other. RouterOS's own peer record does carry an
-// "interface" property, but issue #874 asked for exactly five new peer
-// fields (lastHandshake, currentEndpointAddress, rx, tx, disabled) and
-// that was not one of them -- adding an unrequested field is a
-// redesign, not this issue's implementation. Every peer pushed for the
-// device is therefore attached to every interface, and an interface's
-// State is "up" if any of the device's peers is: correct for the
-// common single-WireGuard-interface deployment, and an over-broad (never
-// an under-broad) reading for one running more than one interface.
+// Peers are attributed to a specific interface by ingest.WireguardPeer's
+// Interface field when it is present -- a follow-up to #874's original
+// cut, which shipped without it because RouterOS's peer record carries
+// it as its own "interface" property, and only listing every peer under
+// every interface once that field is populated does. A push script old
+// enough to predate it (or a #874-shaped push that itself predates this
+// follow-up) leaves every peer's Interface empty; when that is true of
+// every peer for the device, this falls back to the original
+// every-peer-under-every-interface reading rather than attributing zero
+// peers to every interface, which would be strictly less honest than
+// the old behaviour. An interface's State is "up" if any peer attached
+// to it is.
 type wireguardInterfaceView struct {
 	ingest.WireguardInterface
 	// State is "unknown" when the wireguard-peer kind has never been
@@ -155,27 +156,58 @@ func (s *Server) handleRouterOSWireguard(w http.ResponseWriter, r *http.Request)
 	peers, peersUpdatedAt, peersOK := s.RouterState.WireguardPeers(device)
 
 	peerViews := make([]wireguardPeerView, 0, len(peers))
-	anyPeerUp := false
+	// attributed is true the moment any peer names its interface --
+	// which this build treats as "the whole device's peers carry
+	// attribution", since a push script either reports the property for
+	// every peer or (predating it) for none. See wireguardInterfaceView's
+	// doc comment for what happens when it is false.
+	attributed := false
 	for _, p := range peers {
 		v := wireguardPeerView{WireguardPeer: p, State: "down"}
 		if p.LastHandshake != "" {
 			if d, err := parseRouterOSDuration(p.LastHandshake); err == nil {
 				if d < wireguardHandshakeWindow {
 					v.State = "up"
-					anyPeerUp = true
 				}
 				since := peersUpdatedAt.Add(-d)
 				v.Since = &since
 			}
+		}
+		if p.Interface != "" {
+			attributed = true
 		}
 		peerViews = append(peerViews, v)
 	}
 
 	ifaceViews := make([]wireguardInterfaceView, 0, len(interfaces))
 	for _, iface := range interfaces {
+		var attached []wireguardPeerView
+		if attributed {
+			attached = make([]wireguardPeerView, 0, len(peerViews))
+			for _, v := range peerViews {
+				if v.Interface == iface.Name {
+					attached = append(attached, v)
+				}
+			}
+		} else {
+			// No peer named its interface (or there are no peers at
+			// all) -- attribution is unavailable, so every peer is
+			// attached to every interface rather than none, the
+			// pre-attribution reading #874 originally shipped.
+			attached = peerViews
+		}
+
+		anyUp := false
+		for _, v := range attached {
+			if v.State == "up" {
+				anyUp = true
+				break
+			}
+		}
+
 		state := "unknown"
 		if peersOK {
-			if anyPeerUp {
+			if anyUp {
 				state = "up"
 			} else {
 				state = "down"
@@ -184,7 +216,7 @@ func (s *Server) handleRouterOSWireguard(w http.ResponseWriter, r *http.Request)
 		ifaceViews = append(ifaceViews, wireguardInterfaceView{
 			WireguardInterface: iface,
 			State:              state,
-			Peers:              peerViews,
+			Peers:              attached,
 		})
 	}
 
