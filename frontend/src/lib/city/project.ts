@@ -104,6 +104,12 @@ export function minimapCam(bounds: GroundRect, W: number, H: number, pad = 6): C
   }
 }
 
+/** Whether the reader has asked for reduced motion -- the one place the
+ * city decides that, so a camera move (moveCamera) and a plinth height
+ * change (importance.ts's tweenHeights, wired up in City.svelte) read
+ * the same answer rather than each asking matchMedia itself. */
+export const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+
 /** The mockup's easing for a camera move, sampled: 0..1 in, 0..1 out. */
 export function ease(t: number): number {
   // cubic-bezier(0.45, 0.02, 0.2, 1), close enough by a smoothstep on
@@ -116,6 +122,25 @@ export function ease(t: number): number {
 export function lerpCam(a: Cam, b: Cam, t: number): Cam {
   return { S: a.S + (b.S - a.S) * t, ox: a.ox + (b.ox - a.ox) * t, oy: a.oy + (b.oy - a.oy) * t }
 }
+
+/**
+ * flatFit and FX/FY (#869): the zones stop draws the same ground plan
+ * flat -- no isometric skew, u and v scaled evenly -- so it needs its
+ * own fit rather than cam()'s IK/VK-weighted one. Reuses the `Cam`
+ * shape (S, ox, oy) purely as a convenient bag of three numbers; the
+ * isometric X()/Y() above must never be called with a flat-fit camera.
+ */
+export function flatFit(bounds: GroundRect, W: number, H: number, pad = 40): Cam {
+  const s = Math.min((W - 2 * pad) / (bounds.u1 - bounds.u0 || 1), (H - 2 * pad) / (bounds.v1 - bounds.v0 || 1))
+  return {
+    S: s,
+    ox: W / 2 - ((bounds.u0 + bounds.u1) / 2) * s,
+    oy: H / 2 - ((bounds.v0 + bounds.v1) / 2) * s,
+  }
+}
+
+export const FX = (c: Cam, u: number): number => c.ox + u * c.S
+export const FY = (c: Cam, v: number): number => c.oy + v * c.S
 
 /* ---- the diamond and box geometry every solid is built from ---- */
 

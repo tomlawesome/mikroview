@@ -58,7 +58,7 @@ check(
 // --- The per-cell ⓘ investigate triggers are gone ------------------------
 // RouterRuleButton (the rule cell's pushed-table lookup, #186/#445) keeps
 // its own "i" glyph -- that trigger was never one of the ⓘ buttons this
-// issue retires, and live-router-lookup.mjs/live-nat-popup.mjs cover it
+// issue retires, and live-before-router-lookup.mjs/live-nat-popup.mjs cover it
 // staying put. What must be gone is IpInvestigateButton/
 // PortInvestigateButton, both labelled "Investigate ..." -- distinct
 // from RouterRuleButton's "Look up ..." labels, so this can tell them

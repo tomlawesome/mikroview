@@ -56,7 +56,7 @@ const LOGGED_TRIGGER = `button[aria-label="Look up the NAT rule logged as ${LOGG
 const { page, consoleErrors } = await session()
 
 // Which device the events arrive from is discovered, never assumed --
-// see live-router-lookup.mjs for the incident that lesson came from.
+// see live-before-router-lookup.mjs for the incident that lesson came from.
 feedSyslog(2, 'mv445-device-probe')
 let DEVICE
 for (let i = 0; i < 40 && !DEVICE; i++) {
