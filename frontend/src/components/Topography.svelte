@@ -48,6 +48,7 @@
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
+  import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
@@ -863,6 +864,18 @@
     const ok = await coverageState.undeclare(declarePanel.key)
     declareBusy = false
     if (ok) declarePanel = null
+  }
+
+  // Tune logging's other way in (#435 decision 2): a dark connection in
+  // this same panel is the thing prompting it. primaryDevice stands in
+  // for "which router" -- the map has no per-edge device attribution
+  // (policyState aggregates every device's pushed table), the same
+  // approximation waistSub above already makes for the rule count.
+  function openTuneLoggingFromDark() {
+    if (!declarePanel || !primaryDevice) return
+    tuneLoggingNavState.request(primaryDevice.id, declarePanel.key)
+    appState.view = 'tune-logging'
+    declarePanel = null
   }
 
   // The zone card's coverage caption, kept on every lens (the shaped
@@ -2997,6 +3010,13 @@
         <p class="d-meta">declared quiet by <b>{existing.declaredBy}</b> · {new Date(existing.declaredAt).toLocaleDateString()}</p>
       {:else}
         <p class="d-meta">dark — nothing on this boundary-direction logs. If that is a choice, say why once and it stays said.</p>
+        <!-- Tune logging (#435): the other remedy for a dark pair --
+             switch logging on for what actually crosses it, rather than
+             declaring the silence a choice. Admin-only door, same tier
+             this whole panel is already gated to. -->
+        <button type="button" class="d-tune" disabled={!primaryDevice} onclick={openTuneLoggingFromDark}>
+          Tune logging for this connection →
+        </button>
       {/if}
       <textarea rows="2" placeholder="why this gap is intentional…" bind:value={declareReason}></textarea>
       {#if coverageState.error}
@@ -3507,6 +3527,25 @@
     margin: 0;
     font-size: 11.5px;
     color: var(--reject);
+  }
+
+  /* Tune logging's door out of this panel (#435) -- reads as a link
+     inline with the dark explanation above it, not a third boxed action
+     competing with declare/remove/cancel in .d-row below. */
+  .d-tune {
+    align-self: flex-start;
+    border: none;
+    padding: 0;
+    background: none;
+    color: var(--accent);
+    text-decoration: underline;
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+
+  .d-tune:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .d-row {
