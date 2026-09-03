@@ -54,7 +54,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
-	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -1085,7 +1084,11 @@ func main() {
 	// deliberately excludes -- which is why it is encrypted, why it needs
 	// a key the operator mounts, and why it is off unless they ask for
 	// it. See docs/decisions/event-retention.md.
-	hist := openHistory(logging.New("history"), cfg)
+	// The runtime owner rather than the store itself (#910): the switch
+	// and its two caps are settings an admin moves from inside the app,
+	// so something has to own opening, purging and re-capping while the
+	// process runs. See history_runtime.go.
+	hist := newHistoryRuntime(logging.New("history"), cfg, settingsStore, st)
 
 	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist)
 	go eng.Run(ctx)
@@ -1316,7 +1319,8 @@ func main() {
 
 	srv := &api.Server{
 		Store:             st,
-		History:           historyForReplay(hist),
+		History:           hist,
+		HistoryControl:    hist,
 		Devices:           devices,
 		MACRegistry:       macRegistry,
 		Setup:             setupStore,
@@ -2270,7 +2274,7 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *retention.Store) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
@@ -2288,7 +2292,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *retention.Store) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)

@@ -59,7 +59,18 @@ type Server struct {
 	// It is read for replays and nowhere else; ingest writes to it
 	// through main, not through here.
 	History engine.RetainedDays
-	Flags   *flags.Store
+	// HistoryControl is that same history's switch and caps, as
+	// /api/settings/history reads and writes them (#910). Nil in tests
+	// that do not exercise it and on any instance built without one, in
+	// which case both endpoints refuse rather than pretend -- same
+	// nil-means-unavailable convention as Settings above.
+	//
+	// Separate from History rather than folded into it because they are
+	// different questions asked by different callers: History is read
+	// on the replay path and must stay the narrow "give me days" shape
+	// internal/engine defines, while this one is a settings surface.
+	HistoryControl HistoryControl
+	Flags          *flags.Store
 	// Definitions is the one document holding every definition the engine
 	// evaluates -- shipped detectors, the operator's expectations, and
 	// anything a builder UI authors from scratch (issue #404). It backs
@@ -348,6 +359,14 @@ func (s *Server) routes() []route {
 		// polling for the count and capacity beside it -- see
 		// handleStats for why one payload rather than two.
 		{http.MethodPut, "/api/settings/store", s.handleStoreSettingsUpdate},
+		// The on-disk history's switch and caps (#910), which sit one
+		// storey under the memory group on the same screen. This pair
+		// does have its own GET, unlike the memory group above: what it
+		// reports -- the days actually held, the oldest and newest of
+		// them, the bytes -- is read off the retention directory, which
+		// is far too much work to hang off /api/stats' few-second poll.
+		{http.MethodGet, "/api/settings/history", s.handleHistorySettings},
+		{http.MethodPut, "/api/settings/history", s.handleHistorySettingsUpdate},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
