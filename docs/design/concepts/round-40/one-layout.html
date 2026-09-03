@@ -1,0 +1,1309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 40 · One layout, two vocabularies</title>
+<style>
+  /* ============================================================
+     ROUND 40 — ONE LAYOUT, TWO VOCABULARIES.
+
+     The ratified ruling: the 2D topography map and the isometric city
+     are the SAME ground plan. Every zone, router, tunnel, river and
+     road keeps its (u, v). Only the drawing vocabulary changes:
+
+        plan   x = ox + u·k      y = oy + v·k          (flat)
+        city   x = ox + u·IK·S   y = oy + v·VK·S − z·ZK·S
+
+     Both are affine in (u, v), so the two panels below are the same
+     camera centre and the same ground extent — and #overlay proves it
+     by taking the CITY's screen geometry, inverting the isometric back
+     to ground, and re-projecting it flat onto the 2D map.
+
+     Data, ids and coordinates are isometric.html's, verbatim.
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --glass: rgba(15, 20, 34, 0.66);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e; --drop: #f5a623; --nat: #2dd4bf;
+    --wsh: #34837c; --cam2: #4576bc;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+    padding: 30px 0 60px;
+  }
+  .wrap { width: 2024px; margin: 0 auto; }
+  h1.title {
+    font: 600 15px var(--sans); color: var(--ink); letter-spacing: 0.01em;
+    margin: 0 0 4px 2px;
+  }
+  h1.title em { font-style: normal; color: var(--ink-3); font-weight: 400; }
+  .sub { font: 11px var(--mono); color: var(--ink-3); letter-spacing: 0.03em; margin: 0 0 16px 2px; }
+
+  .pair { display: flex; gap: 24px; }
+  .panel {
+    width: 1000px; height: 760px; position: relative; overflow: hidden;
+    border: 1px solid var(--hair-2); border-radius: 3px;
+    background: radial-gradient(760px 460px at 50% 34%, rgba(60, 92, 170, 0.055), transparent 70%), var(--void);
+  }
+  .panel svg { width: 100%; height: 100%; display: block; }
+  .plabel {
+    position: absolute; top: 15px; left: 20px; z-index: 4;
+    font: 600 10px var(--mono); letter-spacing: 0.18em; color: var(--ink);
+  }
+  .plabel i { font-style: normal; color: var(--accent); }
+  .plabel b { display: block; font: 400 9.5px var(--mono); letter-spacing: 0.06em; color: var(--ink-3); margin-top: 3px; }
+  .wordmark { position: absolute; top: 15px; right: 20px; z-index: 4; font-weight: 800; font-size: 12px; letter-spacing: 0.05em; color: var(--ink-3); }
+  .wordmark em { font-style: normal; color: var(--accent); opacity: 0.7; }
+
+  /* one shared altitude slider, as in isometric.html */
+  .alt {
+    margin: 22px auto 0; display: flex; flex-direction: column; gap: 6px; align-items: center;
+    font: 500 9px var(--mono); letter-spacing: 0.11em; color: var(--ink-3);
+  }
+  .alt .stops { display: flex; gap: 9px; align-items: center; }
+  .alt .lab { opacity: 0.8; }
+  .alt .lab.on { color: var(--ink); opacity: 1; }
+  .alt .lab.mid { color: var(--accent); opacity: 1; }
+  .altwrap { position: relative; display: inline-flex; align-items: center; }
+  .alt input { width: 232px; height: 2px; -webkit-appearance: none; appearance: none; background: var(--hair-2); border-radius: 1px; accent-color: var(--accent); }
+  .alt input::-webkit-slider-thumb { -webkit-appearance: none; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+  .altwrap .tick { position: absolute; top: 50%; width: 2px; height: 2px; margin-top: -1px; margin-left: -1px; background: var(--hair-2); border-radius: 1px; pointer-events: none; }
+  .altwrap .tick.on { background: var(--accent); opacity: 0.85; width: 4px; height: 4px; margin-top: -2px; margin-left: -2px; }
+  .altwrap .tick.city { width: 5px; height: 5px; margin-top: -2.5px; margin-left: -2.5px; border-radius: 1px; background: var(--accent); opacity: 0.9; transform: rotate(45deg); }
+  .cap {
+    margin: 12px auto 0; text-align: center;
+    font: 11px var(--mono); color: var(--ink-3); letter-spacing: 0.03em;
+  }
+  .cap b { color: var(--ink-2); font-weight: 500; }
+
+  .strip { margin: 34px auto 0; width: 1000px; }
+  .strip .head { font: 600 10px var(--mono); letter-spacing: 0.16em; color: var(--ink-2); margin: 0 0 8px 2px; }
+  .strip .head span { font-weight: 400; letter-spacing: 0.04em; color: var(--ink-3); margin-left: 12px; }
+
+  /* ---- SVG text vocabulary, round 39/40's ---- */
+  .p-name { font: 600 12.5px var(--sans); fill: var(--ink); }
+  .p-cidr { font: 10px var(--mono); fill: var(--ink-3); }
+  .cov { font: 700 8.5px var(--mono); letter-spacing: 0.1em; }
+  .cov-l { fill: var(--ok); } .cov-q { fill: var(--ink-3); } .cov-d { fill: var(--alarm); }
+  .wp { fill: #a78bfa; font: 9.5px var(--mono); }
+  .fchip { fill: var(--alarm); font: 9.5px var(--mono); }
+  .chip-t { font: 10.5px var(--mono); fill: var(--ink-2); }
+  .alarm-t { font: 700 10.5px var(--mono); fill: var(--alarm); }
+  .roof-t { font: 600 10.5px var(--sans); fill: var(--ink); }
+  .roof-s { font: 9px var(--mono); fill: var(--ink-2); }
+  .st-name { font: 600 13px var(--sans); fill: var(--ink); }
+  .st-ip { font: 10.5px var(--mono); fill: var(--ink-2); }
+  .rule-n { font: 700 9.5px var(--mono); fill: var(--accent); }
+  .port-t { font: 10px var(--mono); fill: var(--ink-2); letter-spacing: 0.04em; }
+  .boro-t { font: 600 10px var(--mono); fill: var(--ink-3); letter-spacing: 0.16em; }
+  .bank-t { font: 600 9.5px var(--mono); fill: var(--ink-3); letter-spacing: 0.14em; }
+  .host-t { font: 8.5px var(--mono); fill: var(--ink-2); }
+  .host-x { font: 8.5px var(--mono); fill: var(--alarm); }
+  .more-t { font: 8.5px var(--mono); fill: var(--ink-3); }
+  .ov-t { font: 9px var(--mono); fill: var(--accent); letter-spacing: 0.06em; }
+  .ov-d { font: 8.5px var(--mono); fill: var(--ink-3); }
+  .flat text { paint-order: stroke; stroke: #06080e; stroke-width: 3.4px; stroke-linejoin: round; }
+  .flat .nostroke text, text.nostroke { stroke-width: 0; }
+  .cards text { paint-order: stroke; stroke: #0a0f1c; stroke-width: 2.6px; stroke-linejoin: round; }
+
+  .road-alarm { filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.5)); }
+  .flow { stroke-dasharray: 7 11; animation: flow 1.5s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -18; } }
+  .current { stroke-dasharray: 30 46; animation: current 7s linear infinite; }
+  @keyframes current { to { stroke-dashoffset: -76; } }
+  .halo { animation: halo 2.2s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes halo { from { opacity: 0.8; transform: scale(1); } to { opacity: 0; transform: scale(2.3); } }
+  .lamp { animation: lamp 3.4s ease-in-out infinite; }
+  @keyframes lamp { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .flow, .halo, .lamp, .current { animation: none; }
+    .flow, .current { stroke-dasharray: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1 class="title">One layout, two vocabularies — <em>the 2D map and the city share the same ground plan</em></h1>
+  <p class="sub">same (u, v) for every zone, router, tunnel, river and road · only the projection and the drawing vocabulary change</p>
+
+  <div class="pair">
+    <section class="panel" id="plan" aria-label="ZONES (2D): the ground plan drawn flat — zone cards, router cards, bridges over the river, roads as coloured strokes">
+      <div class="plabel">ZONES (2D)<b>x = ox + u·k · y = oy + v·k · no height</b></div>
+      <span class="wordmark">MIKRO<em>VIEW</em></span>
+      <svg id="svg-plan" viewBox="0 0 1000 760" role="img" aria-label="The estate as the 2D topography map: six zone cards at their ground positions, two router cards, the Internet as a river with three bridges, and the roads between them"></svg>
+    </section>
+    <section class="panel" id="city" aria-label="CITY: the same ground plan through the isometric camera — plates, walls, plinths and devices">
+      <div class="plabel"><i>◆</i> CITY<b>x = ox + u·IK·S · y = oy + v·VK·S − z·ZK·S</b></div>
+      <span class="wordmark">MIKRO<em>VIEW</em></span>
+      <svg id="svg-city" viewBox="0 0 1000 760" role="img" aria-label="The same estate as an isometric city: the river with its three bridges, six walled district plates, devices on plinths, and the same roads"></svg>
+    </section>
+  </div>
+
+  <div class="alt" role="group" aria-label="Altitude: clients, services, zones, city, borough, district, street">
+    <div class="stops" id="alt-stops"></div>
+    <span class="altwrap">
+      <input type="range" min="0" max="6" value="3" aria-label="Altitude slider — zones and city are the two stops shown above">
+      <span id="alt-ticks"></span>
+    </span>
+  </div>
+  <p class="cap">Same u,v for every zone, router, bridge and road. <b>Left of centre draws it flat; right of centre raises it.</b></p>
+
+  <div class="strip">
+    <p class="head">REGISTRATION<span>the city's plate footprints, un-projected out of the isometric and re-drawn flat, land on the 2D zone cards</span></p>
+    <section class="panel" id="overlay" style="width:1000px" aria-label="Registration proof: the city panel's ground footprints inverted out of the isometric camera and re-projected into plan space, landing exactly on the 2D zone cards">
+      <div class="plabel">OVERLAY<b>city geometry → un-project → plan · Δ measured in px</b></div>
+      <svg id="svg-overlay" viewBox="0 0 1000 760" role="img" aria-label="The 2D zone cards with the city's plate diamonds re-flattened over them, and crosshairs from both projections coinciding at every district centre"></svg>
+    </section>
+  </div>
+
+</div>
+
+<script>
+/* ================================================================
+   PROJECTION. One ground space (u, v); two cameras.
+   A camera is { kx, ky, kz, ox, oy, S }: the city sets kz > 0 and the
+   2:1 isometric kx/ky; the plan sets kx = ky = k and kz = 0. Every
+   drawing routine below is written against X()/Y() and therefore works
+   in both without knowing which it is in.
+   ================================================================ */
+const IK = 1.02, VK = 0.5, ZK = 0.72, SREF = 10;
+const PW = 1000, PH = 760;                 /* both panels */
+const CU = -8, CV = 22;                    /* the shared camera centre, in ground units */
+
+const X = (c, u) => c.ox + u * c.kx;
+const Y = (c, v, z) => c.oy + v * c.ky - (z || 0) * c.kz;
+const R2 = (n) => Math.round(n * 10) / 10;
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+function isoCam(cu, cv, S) {
+  return { S: S, kx: IK * S, ky: VK * S, kz: ZK * S, iso: 1,
+    ox: PW / 2 - cu * IK * S, oy: PH / 2 - cv * VK * S };
+}
+function planCam(cu, cv, k) {
+  return { S: k * 1.62, kx: k, ky: k, kz: 0, flat: 1,
+    ox: PW / 2 - cu * k, oy: PH / 2 - cv * k };
+}
+/* the inverse of a camera on the ground plane (z = 0) — this is what
+   makes the overlay a proof rather than a redraw */
+const UNPROJ = (c, x, y) => [(x - c.ox) / c.kx, (y - c.oy) / c.ky];
+
+const CITY = isoCam(CU, CV, 4.9);
+const PLAN = planCam(CU, CV, 3.2);
+
+/* ---- isometric solids (verbatim from isometric.html) ---- */
+function diamond(c, u, v, R, z) {
+  return 'M' + R2(X(c, u)) + ' ' + R2(Y(c, v - R, z)) +
+         'L' + R2(X(c, u + R)) + ' ' + R2(Y(c, v, z)) +
+         'L' + R2(X(c, u)) + ' ' + R2(Y(c, v + R, z)) +
+         'L' + R2(X(c, u - R)) + ' ' + R2(Y(c, v, z)) + 'Z';
+}
+function wallFace(c, u, v, R, h, side, z0) {
+  const a = side === 'l' ? [u - R, v] : [u, v + R];
+  const b = side === 'l' ? [u, v + R] : [u + R, v];
+  const ax = R2(X(c, a[0])), bx = R2(X(c, b[0]));
+  const ay = Y(c, a[1], z0 || 0), by = Y(c, b[1], z0 || 0);
+  const rise = h * c.kz;
+  return 'M' + ax + ' ' + R2(ay) + 'L' + bx + ' ' + R2(by) + 'L' + bx + ' ' + R2(by - rise) +
+         'L' + ax + ' ' + R2(ay - rise) + 'Z';
+}
+function boxPts(u, v, A, B) {
+  return { L: [u - A - B, v - A + B], F: [u + A - B, v + A + B],
+           R: [u + A + B, v + A - B], K: [u - A + B, v - A - B] };
+}
+function gbox(c, u, v, A, B, z0, h) {
+  const p = boxPts(u, v, A, B), zt = (z0 || 0) + h;
+  const P = (k, z) => R2(X(c, p[k][0])) + ' ' + R2(Y(c, p[k][1], z));
+  return {
+    top: 'M' + P('K', zt) + 'L' + P('R', zt) + 'L' + P('F', zt) + 'L' + P('L', zt) + 'Z',
+    right: 'M' + P('F', zt) + 'L' + P('R', zt) + 'L' + P('R', z0 || 0) + 'L' + P('F', z0 || 0) + 'Z',
+    left: 'M' + P('L', zt) + 'L' + P('F', zt) + 'L' + P('F', z0 || 0) + 'L' + P('L', z0 || 0) + 'Z',
+    p: p
+  };
+}
+function gfaces(b, ink, o, extra) {
+  o = o || {};
+  return (o.bg ? '<path d="' + b.left + '" fill="#080d18"/><path d="' + b.right + '" fill="#080d18"/>' +
+           '<path d="' + b.top + '" fill="#080d18"/>' : '') +
+         '<path d="' + b.left + '" fill="' + ink + '" fill-opacity="' + (o.l || 0.4) + '"/>' +
+         '<path d="' + b.right + '" fill="' + ink + '" fill-opacity="' + (o.r || 0.7) + '"/>' +
+         '<path d="' + b.top + '" fill="' + ink + '" fill-opacity="' + (o.t || 0.92) +
+         '" stroke="' + ink + '" stroke-opacity="' + (o.s === undefined ? 0.8 : o.s) +
+         '" stroke-width="' + (o.sw || 0.6) + '"/>' + (extra || '');
+}
+
+/* ================================================================
+   THE DEVICE LIBRARY — one symbol per type, drawn once in local px at
+   S = SREF and stamped with <use>. Verbatim from isometric.html.
+   ================================================================ */
+const LU = IK * SREF, LV = VK * SREF, LZ = ZK * SREF;
+const lp = (u, v, z) => R2(u * LU) + ' ' + R2(v * LV - (z || 0) * LZ);
+function lbox(A, B, z0, h, ou, ov) {
+  const p = boxPts(ou || 0, ov || 0, A, B), zt = z0 + h;
+  const P = (k, z) => lp(p[k][0], p[k][1], z);
+  return {
+    top: 'M' + P('K', zt) + 'L' + P('R', zt) + 'L' + P('F', zt) + 'L' + P('L', zt) + 'Z',
+    right: 'M' + P('F', zt) + 'L' + P('R', zt) + 'L' + P('R', z0) + 'L' + P('F', z0) + 'Z',
+    left: 'M' + P('L', zt) + 'L' + P('F', zt) + 'L' + P('F', z0) + 'L' + P('L', z0) + 'Z',
+    p: p, z0: z0, zt: zt
+  };
+}
+function lfaces(b, o) {
+  o = o || {};
+  return '<path d="' + b.left + '" fill="#080d18"/><path d="' + b.right + '" fill="#080d18"/>' +
+         '<path d="' + b.top + '" fill="#080d18"/>' +
+         '<path d="' + b.left + '" fill="currentColor" fill-opacity="' + (o.l || 0.38) +
+         '" stroke="currentColor" stroke-opacity="0.55" stroke-width="0.35"/>' +
+         '<path d="' + b.right + '" fill="currentColor" fill-opacity="' + (o.r || 0.72) +
+         '" stroke="currentColor" stroke-opacity="0.55" stroke-width="0.35"/>' +
+         '<path d="' + b.top + '" fill="currentColor" fill-opacity="' + (o.t || 0.95) +
+         '" stroke="currentColor" stroke-opacity="0.9" stroke-width="0.45"/>';
+}
+function lLights(b, n, zf, rad, a, z) {
+  let s = '';
+  for (let i = 0; i < n; i++) {
+    const f = a + (z - a) * (n === 1 ? 0.5 : i / (n - 1));
+    const u = b.p.F[0] + (b.p.R[0] - b.p.F[0]) * f;
+    const v = b.p.F[1] + (b.p.R[1] - b.p.F[1]) * f;
+    s += '<circle cx="' + R2(u * LU) + '" cy="' + R2(v * LV - (b.z0 + (b.zt - b.z0) * zf) * LZ) +
+         '" r="' + rad + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.9"/>';
+  }
+  return s;
+}
+function lSlits(b, n, rad) {
+  let s = '';
+  for (let i = 0; i < n; i++) {
+    const zf = 0.2 + 0.6 * (i / (n - 1));
+    const z = b.z0 + (b.zt - b.z0) * zf;
+    const pt = (f) => lp(b.p.F[0] + (b.p.R[0] - b.p.F[0]) * f, b.p.F[1] + (b.p.R[1] - b.p.F[1]) * f, z);
+    s += '<path d="M' + pt(0.16) + 'L' + pt(0.84) + '" stroke="#06080e" stroke-opacity="0.55" stroke-width="' + rad + '"/>';
+  }
+  return s;
+}
+function ldisc(rad, z0, h, o) {
+  const rx = R2(rad * LU), ry = R2(rad * LV);
+  const yT = R2(-(z0 + h) * LZ), yB = R2(-z0 * LZ);
+  const half = (y) => 'C' + (-rx) + ' ' + R2(y + ry * 1.34) + ' ' + rx + ' ' + R2(y + ry * 1.34) + ' ' + rx + ' ' + y;
+  const side = 'M' + (-rx) + ' ' + yT + half(yT) + 'L' + rx + ' ' + yB + 'C' + rx + ' ' + R2(yB + ry * 1.34) +
+    ' ' + (-rx) + ' ' + R2(yB + ry * 1.34) + ' ' + (-rx) + ' ' + yB + 'Z';
+  return '<path d="' + side + '" fill="#080d18"/>' +
+         '<path d="' + side + '" fill="currentColor" fill-opacity="' + ((o && o.r) || 0.6) + '"/>' +
+         '<ellipse cx="0" cy="' + yT + '" rx="' + rx + '" ry="' + ry + '" fill="#080d18"/>' +
+         '<ellipse cx="0" cy="' + yT + '" rx="' + rx + '" ry="' + ry + '" fill="currentColor" fill-opacity="0.93" stroke="currentColor" stroke-opacity="0.9" stroke-width="0.45"/>';
+}
+const DEVLIB = {};
+function dev(id, top, markup) { DEVLIB[id] = { top: top, m: markup }; }
+(function buildLibrary() {
+  const chassis = lbox(0.5, 0.86, 0, 0.34);
+  const routerBody = lfaces(chassis, { t: 0.95, r: 0.74, l: 0.4 }) + lLights(chassis, 6, 0.45, 1.5, 0.16, 0.84) +
+    '<path d="M' + lp(-0.5 - 0.86, -0.5 + 0.86, 0.34) + 'L' + lp(-0.5 + 0.86, -0.5 - 0.86, 0.34) +
+    '" stroke="currentColor" stroke-opacity="0.55" stroke-width="0.8"/>';
+  dev('router', 0.34 * LZ + 4, routerBody);
+  const ant = (ou, ov) => '<path d="M' + lp(ou, ov, 0.34) + 'L' + lp(ou, ov, 0.95) +
+    '" stroke="currentColor" stroke-opacity="0.8" stroke-width="1.5" stroke-linecap="round"/>' +
+    '<circle cx="' + R2(ou * LU) + '" cy="' + R2(ov * LV - 0.99 * LZ) + '" r="1.5" fill="currentColor" fill-opacity="0.85"/>';
+  dev('router-ant', 1.0 * LZ + 4, routerBody + ant(-0.86, -0.16) + ant(0.16, -0.86));
+  const sb = lbox(0.45, 0.5, 0, 1.05);
+  dev('server', 1.05 * LZ + 5, lfaces(sb) + lSlits(sb, 4, 1.5) +
+    '<circle cx="' + R2((sb.p.F[0] + (sb.p.R[0] - sb.p.F[0]) * 0.82) * LU) + '" cy="' +
+    R2((sb.p.F[1] + (sb.p.R[1] - sb.p.F[1]) * 0.82) * LV - 0.95 * LZ) + '" r="1.7" fill="var(--sig, #37b364)"/>');
+  const tower = lbox(0.26, 0.22, 0, 0.78, -0.32, -0.32);
+  const stand = lbox(0.08, 0.13, 0, 0.14, 0.26, 0.26);
+  const mon = lbox(0.07, 0.5, 0.14, 0.46, 0.26, 0.26);
+  dev('workstation', 0.82 * LZ + 6, lfaces(tower) + lLights(tower, 2, 0.75, 1.2, 0.3, 0.7) +
+    lfaces(stand, { t: 0.6, r: 0.5, l: 0.3 }) + lfaces(mon, { t: 0.8, r: 0.34, l: 0.22 }) +
+    '<path d="' + mon.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.5"/>');
+  const base = lbox(0.38, 0.5, 0, 0.07);
+  const hL = base.p.L, hK = base.p.K, tilt = 0.17, lidz = 0.57;
+  const lid = 'M' + lp(hL[0], hL[1], 0.09) + 'L' + lp(hK[0], hK[1], 0.09) +
+    'L' + lp(hK[0] - tilt, hK[1] - tilt, lidz) + 'L' + lp(hL[0] - tilt, hL[1] - tilt, lidz) + 'Z';
+  dev('laptop', lidz * LZ + 5, lfaces(base, { t: 0.9, r: 0.6, l: 0.34 }) +
+    '<path d="' + lid + '" fill="#0a1120"/>' +
+    '<path d="' + lid + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.4" stroke="currentColor" stroke-opacity="0.85" stroke-width="0.5"/>');
+  const ph = lbox(0.1, 0.34, 0.02, 0.62);
+  dev('phone', 0.64 * LZ + 5, lfaces(ph, { t: 0.85, r: 0.4, l: 0.26 }) +
+    '<path d="' + ph.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.5"/>');
+  const tvs = lbox(0.1, 0.17, 0, 0.12), tv = lbox(0.06, 0.68, 0.12, 0.5);
+  dev('tv', 0.62 * LZ + 5, lfaces(tvs, { t: 0.6, r: 0.5, l: 0.3 }) + lfaces(tv, { t: 0.8, r: 0.34, l: 0.22 }) +
+    '<path d="' + tv.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.46"/>');
+  const post = lbox(0.09, 0.09, 0, 0.86, -0.24, -0.24);
+  const body = lbox(0.44, 0.19, 0.72, 0.3, 0.16, 0.16);
+  const arm = lbox(0.2, 0.05, 0.8, 0.06, -0.06, -0.06);
+  const lensU = body.p.F[0] + (body.p.R[0] - body.p.F[0]) * 0.5 + 0.12;
+  const lensV = body.p.F[1] + (body.p.R[1] - body.p.F[1]) * 0.5 + 0.12;
+  dev('camera', 1.02 * LZ + 5, lfaces(post, { t: 0.6, r: 0.5, l: 0.34 }) +
+    lfaces(arm, { t: 0.5, r: 0.45, l: 0.3 }) + lfaces(body) +
+    '<ellipse cx="' + R2(lensU * LU) + '" cy="' + R2(lensV * LV - 0.86 * LZ) + '" rx="4.2" ry="3.4" fill="#06080e" stroke="currentColor" stroke-opacity="0.9" stroke-width="1"/>' +
+    '<ellipse cx="' + R2(lensU * LU) + '" cy="' + R2(lensV * LV - 0.86 * LZ) + '" rx="2.1" ry="1.7" fill="var(--sig, #cfe0ff)" fill-opacity="0.85"/>');
+  dev('puck', 0.2 * LZ + 4, ldisc(0.62, 0, 0.2) +
+    '<circle cx="0" cy="' + R2(-0.2 * LZ) + '" r="1.5" fill="var(--sig, #cfe0ff)" fill-opacity="0.95"/>');
+  const bol = lbox(0.28, 0.28, 0, 1.0), cap = lbox(0.36, 0.36, 1.0, 0.1);
+  dev('post', 1.35 * LZ + 6, lfaces(bol, { t: 0.8, r: 0.62, l: 0.4 }) + lfaces(cap, { t: 0.85, r: 0.6, l: 0.38 }) +
+    '<circle cx="0" cy="' + R2(-1.28 * LZ) + '" r="4" fill="var(--sig, #9db8e8)" fill-opacity="0.95"/>' +
+    '<circle cx="0" cy="' + R2(-1.28 * LZ) + '" r="7.5" fill="none" stroke="var(--sig, #9db8e8)" stroke-opacity="0.3" stroke-width="1"/>');
+})();
+function defsFor(sid) {
+  let s = '<defs>';
+  for (const k in DEVLIB) s += '<g id="' + sid + '-' + k + '">' + DEVLIB[k].m + '</g>';
+  return s + '</defs>';
+}
+
+/* ================================================================
+   THE MODEL — copied verbatim from isometric.html. Same ids, same
+   coordinates: this is the whole point of the page.
+   ================================================================ */
+const DISTRICTS = [
+  { id: 'lan', name: 'LAN', cidr: '10.0.10.0/24', u: -76, v: 36, r: 21, ink: 'var(--lan)',
+    cov: 'LOGGED BOTH WAYS', covk: 'l', tally: '◉2 ✱2', lw: 202, boro: 'rb',
+    gates: [
+      { id: 'wan', dir: [66, -26], n: 8, lamp: 1, rule: 'lan → wan · established · accept' },
+      { id: 'srv', dir: [58, 36], n: 12, lamp: 1, rule: 'lan → servers · :53 :123 :445 :5001 · accept' },
+      { id: 'hap', dir: [-6, 20], n: 19, lamp: 1, rule: 'lan → hap-ax3 · :80 :8291 · accept' }
+    ],
+    hosts: [
+      { id: 'tom-desktop', name: 'tom-desktop', ip: '10.0.10.21', t: 'workstation', du: 10, dv: -2, R: 5.0, h: [4.0, 2.6], watch: 1 },
+      { id: 'laptop-anna', name: 'laptop-anna', ip: '10.0.10.34', t: 'laptop', du: -1, dv: -11, R: 4.6, h: [2.6, 2.4], flags: 1 },
+      { id: 'phone-tom', name: 'phone-tom', ip: '10.0.10.52', t: 'phone', du: -11, dv: 1, R: 3.8, h: [1.8, 0.7] },
+      { id: 'tv-lounge', name: 'tv-lounge', ip: '10.0.10.60', t: 'tv', du: 1, dv: 11, R: 4.6, h: [1.5, 0.6], flags: 1, down: 1 }
+    ] },
+  { id: 'srv', name: 'Servers', cidr: '10.0.20.0/24', u: -18, v: 72, r: 19, ink: 'var(--srv)',
+    cov: 'LOGGED BOTH WAYS', covk: 'l', tally: '◉2', lw: 202, boro: 'rb',
+    gates: [
+      { id: 'lan', dir: [-58, -36], n: 13, lamp: 1, rule: 'servers → lan · established · accept' },
+      { id: 'wan', dir: [8, -68], n: 14, lamp: 1, rule: 'servers → wan · :123 :443 · accept' },
+      { id: 'iot', dir: [64, -42], n: 27, lamp: 1, rule: 'servers → iot · established · accept' },
+      { id: 'hap', dir: [6, 20], n: 22, lamp: 1, rule: 'servers → workshop · :445 · accept' }
+    ],
+    hosts: [
+      { id: 'pihole', name: 'pihole', ip: '10.0.20.5', t: 'server', du: 0, dv: -9, R: 5.0, h: [6.6, 1.0] },
+      { id: 'nas', name: 'nas', ip: '10.0.20.10', t: 'server', du: -9, dv: 2, R: 5.4, h: [6.2, 4.4], watch: 1, down: 1 },
+      { id: 'unifi', name: 'unifi', ip: '10.0.20.12', t: 'server', du: 9, dv: 2, R: 5.0, h: [4.2, 0.7], down: 1 }
+    ] },
+  { id: 'iot', name: 'IoT', cidr: '10.0.30.0/24 · +4', u: 46, v: 30, r: 20, ink: 'var(--iot)',
+    cov: 'DARK TOWARD WAN', covk: 'd', tally: '◉1 ✱3', lw: 208, boro: 'rb',
+    gates: [
+      { id: 'wan', dir: [-56, -20], n: 24, lamp: 0, rule: 'iot → wan · accept · NO log rule' },
+      { id: 'srv', dir: [-64, 42], n: 26, lamp: 1, rule: 'iot → servers · :53 · accept' }
+    ],
+    hosts: [
+      { id: 'cam-porch', name: 'cam-porch', ip: '10.0.30.14', t: 'camera', du: -10, dv: -2, R: 4.4, h: [1.3, 7.2], flags: 2, watch: 1 },
+      { id: 'hue-bridge', name: 'hue-bridge', ip: '10.0.30.21', t: 'puck', du: -2, dv: -10, R: 4.0, h: [1.6, 0.6] },
+      { id: 'thermostat', name: 'thermostat', ip: '10.0.30.30', t: 'puck', du: 4, dv: -4, R: 3.8, h: [1.1, 0.6] },
+      { id: 'doorbell', name: 'doorbell', ip: '10.0.30.41', t: 'puck', du: -4, dv: 4, R: 3.8, h: [1.2, 3.0], flags: 1 },
+      { id: 'esp-weather', name: 'esp-weather', ip: '10.0.30.52', t: 'puck', du: 10, dv: 2, R: 3.8, h: [0.9, 0.5] },
+      { id: 'plug-kettle', name: 'plug-kettle', ip: '10.0.30.58', t: 'puck', du: 2, dv: 10, R: 3.8, h: [0.9, 0.5] }
+    ] },
+  { id: 'guest', name: 'Guest', cidr: '10.0.40.0/24 · +2', u: 66, v: -14, r: 13, ink: 'var(--guest)',
+    cov: 'DARK — no log rule on this boundary', covk: 'd', dark: 1, lw: 248, boro: 'rb',
+    gates: [ { id: 'wan', dir: [-88, 10], n: 31, lamp: 0, rule: 'guest → wan only · accept · NO log rule' } ],
+    hosts: [
+      { id: 'guest-e8b2', name: 'guest-e8b2', ip: '10.0.40.19', t: 'phone', du: 0, dv: -1, R: 4.0, h: [1.0, 0.6] }
+    ] },
+  { id: 'wsh', name: 'Workshop', cidr: '10.0.50.0/24', u: -30, v: 116, r: 15, ink: 'var(--wsh)',
+    cov: 'LOGGED BOTH WAYS', covk: 'l', lw: 196, boro: 'hap',
+    gates: [ { id: 'hap', dir: [44, -12], n: 4, lamp: 1, rule: 'workshop → lan · :445 · accept' } ],
+    hosts: [
+      { id: 'cnc', name: 'cnc', ip: '10.0.50.4', t: 'puck', du: 0, dv: -7, R: 4.2, h: [1.9, 0.6] },
+      { id: 'printer-3d', name: 'printer-3d', ip: '10.0.50.7', t: 'puck', du: 7, dv: 1, R: 4.2, h: [1.5, 0.5] },
+      { id: 'pc-bench', name: 'pc-bench', ip: '10.0.50.9', t: 'workstation', du: -6, dv: 3, R: 4.6, h: [2.2, 0.6], down: 1 }
+    ] },
+  { id: 'cams', name: 'Cams', cidr: '10.0.60.0/24', u: 58, v: 116, r: 13, ink: 'var(--cam2)',
+    cov: 'DARK', covk: 'd', dark: 1, tally: '✱1', lw: 150, boro: 'hap',
+    gates: [ { id: 'hap', dir: [-44, -12], n: 7, lamp: 0, rule: 'cams → nas · :554 · accept · NO log rule' } ],
+    hosts: [
+      { id: 'cam-yard', name: 'cam-yard', ip: '10.0.60.3', t: 'camera', du: -1, dv: -6, R: 4.2, h: [1.1, 0.6] },
+      { id: 'cam-gate', name: 'cam-gate', ip: '10.0.60.4', t: 'camera', du: 1, dv: 6, R: 4.2, h: [1.2, 3.0], flags: 1, down: 1 }
+    ] }
+];
+
+const NODES = [
+  { id: 'rb5009', name: 'rb5009', t: 'router', u: -10, v: 10, R: 7.5, h: [9.0, 3.2], ink: 'var(--accent)',
+    roof: 'rb5009', roofsub: 'RouterOS 7.20.1 · 41 rules · LIVE 34/s',
+    card: ['rb5009', 'RouterOS 7.20.1 · 41 rules', '41 gates and walls you can walk'] },
+  { id: 'hapax3', name: 'hap-ax3', t: 'router-ant', u: 14, v: 96, R: 6.2, h: [5.0, 1.5], ink: 'var(--accent)', down: 1,
+    roof: 'hap-ax3', roofsub: '12 rules · a second router',
+    card: ['hap-ax3', 'RouterOS 7.20.1 · 12 rules', 'ether1 10.0.10.9 — inside LAN'] },
+  { id: 'ether1', name: 'ether1', t: 'post', u: 0, v: 0, R: 3.4, h: [4.0, 1.2], ink: 'var(--accent)',
+    roof: 'ether1', roofsub: 'wan bridge · LOGGED' },
+  { id: 'wg0', name: 'wg0', t: 'post', u: 0, v: 0, R: 3.0, h: [2.0, 4.2], ink: 'var(--accent)', watch: 1,
+    roof: 'wg0', roofsub: '10.99.0.0/24 · QUIET ◉1' },
+  { id: 'l2tp', name: 'l2tp', t: 'post', u: 0, v: 0, R: 3.0, h: [2.2, 1.0], ink: 'var(--accent)',
+    roof: 'l2tp', roofsub: '1 peer · UP · 0.3/s' }
+];
+
+const PEERS = [
+  { id: 'phone-tom-away', name: 'phone-tom-away', ip: 'wg0 peer · QUIET', t: 'phone', u: -23, v: -70, R: 4.0, h: [1.0, 1.6], ink: 'var(--ink-3)' },
+  { id: 'anna-remote', name: 'anna-remote', ip: 'l2tp peer · UP', t: 'laptop', u: 13, v: -74, R: 4.6, h: [1.4, 0.8], ink: 'var(--ink-3)' }
+];
+
+const BANK_N = [[-170, 12], [-120, -8], [-80, -26], [-30, -42], [20, -52], [70, -58], [140, -68]];
+const RIVER_W = 24;
+const BANK_F = BANK_N.map((p) => [p[0], p[1] - RIVER_W]);
+const BANKS = {};
+function sampleBank(pts) {
+  const out = [];
+  segsOf({ pts: pts }).forEach((s) => { for (let i = 0; i <= 24; i++) out.push(bezAt(s, i / 24)); });
+  return out;
+}
+function bankV(side, u) {
+  const a = BANKS[side];
+  for (let i = 1; i < a.length; i++) {
+    if (a[i][0] >= u) {
+      const t = (u - a[i - 1][0]) / (a[i][0] - a[i - 1][0] || 1);
+      return a[i - 1][1] + (a[i][1] - a[i - 1][1]) * t;
+    }
+  }
+  return a[a.length - 1][1];
+}
+const BRIDGES = [
+  { id: 'wan', at: -56, w: 3.4, node: 'ether1', state: 'up', lamps: 2,
+    label: 'ether1 · 203.0.113.7 · LOGGED' },
+  { id: 'wg0', at: 8, w: 1.5, node: 'wg0', state: 'quiet', lamps: 0,
+    label: 'wg0 · QUIET' },
+  { id: 'l2tp', at: 36, w: 1.5, node: 'l2tp', state: 'up', lamps: 0, ldy: 24,
+    label: 'l2tp · 1 peer · UP' }
+];
+
+const ROADS = [
+  { id: 'rb-wan', via: ['@rb5009', [-28, 2], [-46, -14], '@ether1'], w: 2.8, k: 'a',
+    ports: 'any → wan · 9/s', lats: [0.5] },
+  { id: 'rb-lan', via: ['@rb5009', [-36, 18], 'lan:wan'], w: 2.2, k: 'a',
+    ports: ':53 :123 → wan', lats: [0.5, 0.34, 0.66] },
+  { id: 'rb-srv', via: ['@rb5009', [-14, 34], 'srv:wan'], w: 2.0, k: 'a' },
+  { id: 'rb-iot', via: ['@rb5009', [14, 16], 'iot:wan'], w: 1.3, k: 'a' },
+  { id: 'rb-guest', via: ['@rb5009', [22, 12], [44, 0], 'guest:wan'], w: 1.0, k: 'a',
+    ports: 'wan only · dark', lats: [0.45, 0.6, 0.32, 0.72] },
+  { id: 'rb-wg', via: ['@rb5009', [-8, -8], '@wg0'], w: 0.7, k: 'q' },
+  { id: 'rb-l2tp', via: ['@rb5009', [10, -6], [28, -22], '@l2tp'], w: 0.9, k: 'a' },
+  { id: 'lan-srv', via: ['lan:srv', [-50, 56], 'srv:lan'], w: 2.6, k: 'a',
+    ports: '445 5001 53', lats: [0.5, 0.34, 0.66] },
+  { id: 'iot-srv', via: ['iot:srv', [16, 54], 'srv:iot'], w: 1.2, k: 'a',
+    ports: ':53 :123 egress', lats: [0.5, 0.36, 0.66] },
+  { id: 'lan-hap', via: ['lan:hap', [-86, 78], [-74, 98], [-46, 108], '@hapax3'], w: 1.6, k: 'a' },
+  { id: 'srv-hap', via: ['srv:hap', [-32, 98], [-52, 102]], w: 1.0, k: 'a' },
+  { id: 'hap-wsh', via: ['@hapax3', [-2, 106], 'wsh:hap'], w: 1.2, k: 'a' },
+  { id: 'hap-cams', via: ['@hapax3', [32, 106], 'cams:hap'], w: 1.0, k: 'a' },
+  { id: 'unplanned', via: ['@cam-porch', [26, 26], [2, 22], [-26, 20], [-46, 28], [-57, 34]], w: 1.6, k: 'x',
+    stop: 'drop', ports: 'cam-porch ✱ tcp/445', lats: [0.55, 0.9] },
+  { id: 'guest-drop', via: ['@guest-e8b2', [64.5, -8], [61.7, -5.3]], w: 0.9, k: 'd', stop: 'drop' }
+];
+const VERDICT = { a: 'var(--accept)', d: 'var(--drop)', x: 'var(--alarm)', q: 'var(--ink-3)' };
+
+/* ---------------- curves ---------------- */
+function segsOf(r) {
+  const p = r.pts, n = p.length, out = [];
+  const g = (i) => p[Math.max(0, Math.min(n - 1, i))];
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = g(i - 1), p1 = g(i), p2 = g(i + 1), p3 = g(i + 2), T = 1 / 6;
+    out.push([p1,
+      [p1[0] + (p2[0] - p0[0]) * T, p1[1] + (p2[1] - p0[1]) * T],
+      [p2[0] - (p3[0] - p1[0]) * T, p2[1] - (p3[1] - p1[1]) * T],
+      p2]);
+  }
+  return out;
+}
+function bezAt(s, t) {
+  const m = 1 - t;
+  return [m * m * m * s[0][0] + 3 * m * m * t * s[1][0] + 3 * m * t * t * s[2][0] + t * t * t * s[3][0],
+          m * m * m * s[0][1] + 3 * m * m * t * s[1][1] + 3 * m * t * t * s[2][1] + t * t * t * s[3][1]];
+}
+const lerpP = (p, q, t) => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+function bezRange(s, a, b) {
+  let x01 = lerpP(s[0], s[1], b), x12 = lerpP(s[1], s[2], b), x23 = lerpP(s[2], s[3], b);
+  let y0 = lerpP(x01, x12, b), y1 = lerpP(x12, x23, b);
+  const left = [s[0], x01, y0, lerpP(y0, y1, b)];
+  const t2 = b > 0 ? a / b : 0;
+  x01 = lerpP(left[0], left[1], t2); x12 = lerpP(left[1], left[2], t2); x23 = lerpP(left[2], left[3], t2);
+  y0 = lerpP(x01, x12, t2); y1 = lerpP(x12, x23, t2);
+  return [lerpP(y0, y1, t2), y1, x23, left[3]];
+}
+const dm = (p, q) => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]);
+
+/* ---------------- resolving the model ---------------- */
+const ENT = {}, GATE = {};
+function initModel() {
+  BANKS.n = sampleBank(BANK_N);
+  BANKS.f = sampleBank(BANK_F);
+  BRIDGES.forEach((b) => {
+    const tv = bankV('n', b.at);
+    let lo = 4, hi = 90, d;
+    for (let i = 0; i < 44; i++) {
+      const mid = (lo + hi) / 2;
+      if (tv - mid < bankV('f', b.at - mid)) hi = mid; else lo = mid;
+    }
+    d = (lo + hi) / 2;
+    b.t = [b.at, tv];
+    b.f = [b.at - d, tv - d];
+    b.mid = [(b.t[0] + b.f[0]) / 2, (b.t[1] + b.f[1]) / 2];
+    b.half = d / 2;
+    const nd = NODES.find((n) => n.id === b.node);
+    nd.u = b.t[0] + 3.4; nd.v = b.t[1] + 3.4;
+    b.post = [nd.u, nd.v];
+  });
+  DISTRICTS.forEach((dd) => {
+    dd.gates.forEach((g) => {
+      const s = Math.abs(g.dir[0]) + Math.abs(g.dir[1]), t = dd.r / s;
+      g.p = [dd.u + g.dir[0] * t, dd.v + g.dir[1] * t];
+      g.n1 = [g.dir[0] / s, g.dir[1] / s];
+      g.d = dd;
+      GATE[dd.id + ':' + g.id] = g;
+    });
+    dd.hosts.forEach((b) => { ENT[b.id] = { u: dd.u + b.du, v: dd.v + b.dv, R: b.R, d: dd, b: b }; });
+  });
+  NODES.concat(PEERS).forEach((n) => { ENT[n.id] = { u: n.u, v: n.v, R: n.R, b: n }; });
+
+  ROADS.push({ id: 'hwy', via: [BRIDGES[0].t, BRIDGES[0].f, [-96, -64], [-128, -72], [-168, -80]],
+    w: 2.6, k: 'a', fade: 1, bridge: 'wan' });
+  ROADS.push({ id: 'wg-span', via: [BRIDGES[1].t, BRIDGES[1].f, [-23, -70]], w: 0.7, k: 'q',
+    bridge: 'wg0', to: 'phone-tom-away' });
+  ROADS.push({ id: 'l2tp-span', via: [BRIDGES[2].t, BRIDGES[2].f, [13, -74]], w: 0.9, k: 'a',
+    bridge: 'l2tp', to: 'anna-remote' });
+
+  ROADS.forEach((r) => {
+    const pts = [];
+    r.via.forEach((v, i) => {
+      if (typeof v === 'string' && v.charAt(0) === '@') {
+        const e = ENT[v.slice(1)];
+        pts.push([e.u, e.v]);
+        if (i === 0) r.from = v.slice(1); else r.to = v.slice(1);
+      } else if (typeof v === 'string') {
+        const g = GATE[v];
+        const out = [g.p[0] + g.n1[0] * 5.5, g.p[1] + g.n1[1] * 5.5];
+        if (i === 0) { pts.push(g.p, out); } else { pts.push(out, g.p); }
+        (r.gates || (r.gates = [])).push(v);
+      } else pts.push(v);
+    });
+    r.pts = pts;
+  });
+}
+initModel();
+
+/* ---------------- roads, in whichever camera ---------------- */
+function roadPieces(c, r, opt) {
+  opt = opt || {};
+  let segs = segsOf(r);
+  const trim = (idx, end, id) => {
+    const e = ENT[id]; if (!e) return;
+    const s = segs[idx]; let t = -1;
+    for (let i = 0; i <= 40; i++) {
+      const k = end === 's' ? i / 40 : 1 - i / 40;
+      if (dm(bezAt(s, k), [e.u, e.v]) > e.R + 0.6) { t = k; break; }
+    }
+    if (t < 0) return;
+    segs[idx] = end === 's' ? bezRange(s, t, 1) : bezRange(s, 0, t);
+  };
+  if (r.from) trim(0, 's', r.from);
+  if (r.to) trim(segs.length - 1, 'e', r.to);
+
+  /* in the 2D map a road stops at the zone CARD, the way it does on the
+     topography — the card is what the wall is drawn as */
+  if (opt.rects) {
+    const inCard = (p) => {
+      const x = X(c, p[0]), y = Y(c, p[1]);
+      return opt.rects.some((q) => x > q[0] && x < q[2] && y > q[1] && y < q[3]);
+    };
+    let s = segs[0], t = -1;
+    for (let i = 0; i <= 48; i++) { if (!inCard(bezAt(s, i / 48))) { t = i / 48; break; } }
+    if (t > 0) segs[0] = bezRange(s, t, 1);
+    s = segs[segs.length - 1]; let t2 = -1;
+    for (let i = 0; i <= 48; i++) { const k = 1 - i / 48; if (!inCard(bezAt(s, k))) { t2 = k; break; } }
+    if (t2 >= 0 && t2 < 1) segs[segs.length - 1] = bezRange(s, 0, t2);
+  }
+  r._end = segs[segs.length - 1][3];
+
+  const col = VERDICT[r.k];
+  const lit = opt.alarm && r.k === 'x';
+  const w = Math.max(1.2, r.w * c.S * 0.30);
+  let op = r.k === 'x' ? (lit ? 0.95 : 0.4) : (r.k === 'q' ? 0.42 : 0.52);
+  if (opt.dim) op *= opt.dim;
+  const out = [];
+  let cum = 0;
+  const total = segs.length;
+  segs.forEach((s, si) => {
+    const len = dm(s[0], s[3]) + dm(s[1], s[2]);
+    const n = Math.max(2, Math.min(9, Math.ceil(len / 5)));
+    for (let k = 0; k < n; k++) {
+      const q = bezRange(s, k / n, (k + 1) / n);
+      const P = (p) => R2(X(c, p[0])) + ' ' + R2(Y(c, p[1]));
+      const d = 'M' + P(q[0]) + 'C' + P(q[1]) + ' ' + P(q[2]) + ' ' + P(q[3]);
+      const gt = (si + (k + 0.5) / n) / total;
+      const fade = r.fade ? Math.max(0, 1 - Math.max(0, gt - 0.35) * 1.75) : 1;
+      let sk = '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="' + R2(w + 4) +
+        '" stroke-opacity="' + R2(0.07 * fade) + '"/>';
+      sk += '<path' + (r.k === 'x' ? ' class="road-alarm"' : '') + ' d="' + d + '" fill="none" stroke="' + col +
+        '" stroke-width="' + R2(w) + '" stroke-opacity="' + R2(op * fade) + '"/>';
+      if (lit || opt.flow) {
+        sk += '<path class="flow" d="' + d + '" fill="none" stroke="' + col + '" stroke-width="' +
+          R2(Math.max(1.1, w * 0.42)) + '" stroke-opacity="' + R2(0.9 * fade) + '" stroke-dashoffset="' + R2(-cum) +
+          '" style="animation-delay:' + R2(-(cum % 18) / 18 * 1.5) + 's"/>';
+      }
+      cum += Math.hypot(X(c, q[3][0]) - X(c, q[0][0]), Y(c, q[3][1]) - Y(c, q[0][1]));
+      out.push({ v: (q[0][1] + q[3][1]) / 2, s: sk });
+    }
+  });
+  if (r.stop === 'drop') {
+    const e = r._end, col2 = r.k === 'x' ? 'var(--alarm)' : 'var(--drop)';
+    const px = R2(X(c, e[0])), py = R2(Y(c, e[1]));
+    const rx = R2(0.5 * c.S * (c.kx / c.S)), ry = R2(Math.max(1.4, 1.5 * (c.kz || c.ky * 0.5) * 0.4));
+    const bo = (dx) => '<ellipse cx="' + R2(px + dx) + '" cy="' + R2(py - 2) + '" rx="' + Math.max(1.4, rx) +
+      '" ry="' + ry + '" fill="' + col2 + '" fill-opacity="0.5"/>';
+    out.push({ v: e[1] + 8, s: bo(-1.6 * c.kx) + bo(1.6 * c.kx) +
+      '<g transform="translate(' + px + ' ' + R2(py - (c.kz ? 1.8 * c.kz : 6)) + ') scale(' + R2(Math.max(0.9, c.S / 8)) + ')">' +
+      '<path d="M-6 -6 L6 6 M-6 6 L6 -6" stroke="' + col2 + '" stroke-width="2.1" stroke-linecap="round"/>' +
+      '<circle cx="0" cy="0" r="9.5" fill="none" stroke="' + col2 + '" stroke-opacity="0.45" stroke-width="1"/></g>' });
+  }
+  return out;
+}
+function roadPoint(r, t) {
+  const segs = segsOf(r), x = Math.min(0.999, Math.max(0, t)) * segs.length;
+  return bezAt(segs[Math.floor(x)], x - Math.floor(x));
+}
+
+/* ---------------- the river ---------------- */
+function riverPath(c, a) {
+  let d = '';
+  segsOf({ pts: a }).forEach((s, i) => {
+    const P = (p) => R2(X(c, p[0])) + ' ' + R2(Y(c, p[1]));
+    d += (i ? '' : 'M' + P(s[0])) + 'C' + P(s[1]) + ' ' + P(s[2]) + ' ' + P(s[3]);
+  });
+  return d;
+}
+function river(c, beyond) {
+  const nline = riverPath(c, BANK_N), fline = riverPath(c, BANK_F);
+  const mid = BANK_N.map((p) => [p[0] - RIVER_W * 0.5, p[1] - RIVER_W * 0.5]);
+  const midW = BANK_N.map((p) => [p[0] - RIVER_W * 0.28, p[1] - RIVER_W * 0.72]);
+  const between = (a, b) => {
+    const rev = b.slice().reverse();
+    return riverPath(c, a) + 'L' + R2(X(c, rev[0][0])) + ' ' + R2(Y(c, rev[0][1])) +
+      riverPath(c, rev).replace(/^M[^C]*/, '') + 'Z';
+  };
+  const area = between(BANK_N, BANK_F);
+  let s = '<g role="img" aria-label="The Internet as a river along the north edge of town">';
+  s += '<path d="' + between(BANK_F, BANK_F.map((p) => [p[0], p[1] - (beyond || 58)])) + '" fill="#080d18"/>';
+  s += '<path d="' + area + '" fill="#0a1526" fill-opacity="0.94"/>';
+  s += '<path d="' + area + '" fill="var(--accent)" fill-opacity="0.05"/>';
+  s += '<path class="current" d="' + riverPath(c, mid) + '" fill="none" stroke="var(--accent)" stroke-opacity="0.2" stroke-width="' + R2(Math.max(1, c.S * 0.22)) + '"/>';
+  s += '<path class="current" d="' + riverPath(c, midW) + '" fill="none" stroke="var(--accent)" stroke-opacity="0.13" stroke-width="' + R2(Math.max(1, c.S * 0.14)) + '" style="animation-duration:11s"/>';
+  s += '<path d="' + nline + '" fill="none" stroke="var(--accent)" stroke-opacity="0.4" stroke-width="1.2"/>';
+  s += '<path d="' + fline + '" fill="none" stroke="var(--ink-3)" stroke-opacity="0.5" stroke-width="1"/>';
+  s += '</g>';
+  return s;
+}
+
+/* ---------------- the city's bridges, plates, walls ---------------- */
+function bridge(c, b) {
+  const ink = 'var(--accent)';
+  const out = [];
+  [0.3, 0.7].forEach((t) => {
+    const p = lerpP(b.f, b.t, t);
+    const pr = gbox(c, p[0], p[1], b.w * 0.5, b.w * 0.5, -0.9, 1.5);
+    out.push({ v: p[1] + 1, s: gfaces(pr, 'var(--ink-3)', { t: 0.5, r: 0.42, l: 0.26, s: 0.4 }) });
+  });
+  const deck = gbox(c, b.mid[0], b.mid[1], b.half, b.w, 0.55, 0.3);
+  let s = gfaces(deck, ink, { t: 0.3, r: 0.5, l: 0.3, s: 0.55, bg: 1 });
+  const rail = (sgn) => {
+    const a = [b.f[0] + sgn * b.w, b.f[1] - sgn * b.w], z = [b.t[0] + sgn * b.w, b.t[1] - sgn * b.w];
+    return 'M' + R2(X(c, a[0])) + ' ' + R2(Y(c, a[1], 0.85)) + 'L' + R2(X(c, z[0])) + ' ' + R2(Y(c, z[1], 0.85));
+  };
+  s += '<path d="' + rail(1) + '" stroke="' + ink + '" stroke-opacity="0.75" stroke-width="1"/>';
+  s += '<path d="' + rail(-1) + '" stroke="' + ink + '" stroke-opacity="0.55" stroke-width="1"/>';
+  for (let i = 0; i < b.lamps; i++) {
+    const p = lerpP(b.f, b.t, 0.24 + 0.52 * i);
+    const px = R2(X(c, p[0] + b.w)), py = R2(Y(c, p[1] - b.w, 0.85));
+    const hh = Math.max(7, c.S * 1.5);
+    s += '<path d="M' + px + ' ' + py + 'V' + R2(py - hh) + '" stroke="var(--accent)" stroke-opacity="0.6" stroke-width="1"/>' +
+      '<circle class="lamp" cx="' + px + '" cy="' + R2(py - hh) + '" r="' + R2(Math.max(2, c.S * 0.36)) + '" fill="var(--now)"/>' +
+      '<circle class="lamp" cx="' + px + '" cy="' + R2(py - hh) + '" r="' + R2(Math.max(5, c.S * 0.9)) + '" fill="var(--now)" fill-opacity="0.13"/>';
+  }
+  out.push({ v: b.mid[1] + b.w, s: s });
+  return out;
+}
+function plate(c, d) {
+  const dim = d.dark;
+  let s = '<g role="img" aria-label="' + esc(d.name + ' district ' + d.cidr + ' — coverage ' + d.cov) + '">';
+  s += '<path d="' + diamond(c, d.u, d.v, d.r, 0) + '" fill="' + d.ink + '" fill-opacity="' + (dim ? 0.045 : 0.1) + '"/>';
+  s += '<path d="' + diamond(c, d.u, d.v, d.r - 1.8, 0) + '" fill="none" stroke="' + (dim ? 'var(--ink-3)' : d.ink) +
+       '" stroke-opacity="' + (dim ? 0.13 : 0.17) + '" stroke-width="0.7"/>';
+  return s + '</g>';
+}
+const EDGES = [
+  { k: 'ne', ax: 1, du: 0.5, dv: -0.5 }, { k: 'se', ax: 2, du: 0.5, dv: 0.5 },
+  { k: 'sw', ax: 1, du: -0.5, dv: 0.5 }, { k: 'nw', ax: 2, du: -0.5, dv: -0.5 }
+];
+function edgeOf(dir) {
+  const a = dir[0] >= 0, b = dir[1] >= 0;
+  return a ? (b ? 'se' : 'ne') : (b ? 'sw' : 'nw');
+}
+function districtWall(c, d) {
+  const out = [];
+  const WH = 2.1, TH = 0.55, GW = 2.4;
+  const dim = d.dark, ink = dim ? 'var(--ink-3)' : d.ink;
+  const wop = { t: 0.32, r: 0.27, l: 0.16, s: 0.42 };
+  EDGES.forEach((e) => {
+    const mid = [d.u + d.r * e.du, d.v + d.r * e.dv], half = d.r / 2;
+    const at = (s) => e.ax === 1 ? [mid[0] + s, mid[1] + s] : [mid[0] + s, mid[1] - s];
+    const cuts = [];
+    d.gates.forEach((g) => { if (edgeOf(g.dir) === e.k) cuts.push({ s: g.p[0] - mid[0], g: g }); });
+    cuts.sort((a, b) => a.s - b.s);
+    let from = -half;
+    const piece = (a, b) => {
+      if (b - a < 0.35) return;
+      const m = at((a + b) / 2), hl = (b - a) / 2;
+      const bx = e.ax === 1 ? gbox(c, m[0], m[1], hl, TH, 0, WH) : gbox(c, m[0], m[1], TH, hl, 0, WH);
+      out.push({ v: m[1] + TH, s: gfaces(bx, ink, wop) });
+    };
+    cuts.forEach((cu) => { piece(from, cu.s - GW); from = cu.s + GW; });
+    piece(from, half);
+    cuts.forEach((cu) => {
+      const g = cu.g;
+      [-1, 1].forEach((sgn) => {
+        const m = at(cu.s + sgn * GW);
+        const bx = gbox(c, m[0], m[1], TH * 1.5, TH * 1.5, 0, WH * 1.5);
+        let s = gfaces(bx, dim ? 'var(--ink-3)' : 'var(--accent)', { t: 0.6, r: 0.5, l: 0.32, s: 0.7, bg: 1 });
+        if (g.lamp && sgn === 1) {
+          const px = R2(X(c, m[0])), py = R2(Y(c, m[1], WH * 1.5));
+          s += '<circle class="lamp" cx="' + px + '" cy="' + R2(py - 2) + '" r="' + R2(Math.max(1.9, c.S * 0.3)) + '" fill="var(--now)"/>' +
+               '<circle class="lamp" cx="' + px + '" cy="' + R2(py - 2) + '" r="' + R2(Math.max(4.5, c.S * 0.8)) + '" fill="var(--now)" fill-opacity="0.16"/>';
+        }
+        out.push({ v: m[1] + 0.8, s: s });
+      });
+    });
+  });
+  return out;
+}
+function device(c, u, v, b, opt) {
+  const R = b.R, h = b.h[0];
+  const unlit = opt.unlit, lit = opt.lit;
+  const ink = unlit ? 'var(--ink-3)' : (b.ink || opt.ink || 'var(--ink-2)');
+  const k = R2(R * 0.74 * c.S / SREF);
+  const pin = (hh) => diamond(c, u, v, R, hh);
+  const aria = b.name + (b.ip ? ' at ' + b.ip : '') + ' — ' + b.t.replace('-ant', ' with antennas') +
+    (b.flags ? ' · ' + b.flags + ' flags' : '') + (b.watch ? ' · watched' : '');
+  const pink = lit ? 'var(--alarm)' : ink;
+  let s = '<g role="img" aria-label="' + esc(aria) + '"><title>' + esc(aria) + '</title>';
+  s += '<path d="' + pin(0) + '" fill="#000" fill-opacity="' + (unlit ? 0.22 : 0.4) + '"/>';
+  const pf = (d1, dark, tint) =>
+    '<path d="' + d1 + '" fill="#0a0f1c" fill-opacity="' + (unlit ? 0.7 : 0.94) + '"/>' +
+    '<path d="' + d1 + '" fill="' + pink + '" fill-opacity="' + tint + '"' + (dark || '') + '/>';
+  s += pf(wallFace(c, u, v, R, h, 'l'), '', unlit ? 0.1 : 0.2);
+  s += pf(wallFace(c, u, v, R, h, 'r'), '', unlit ? 0.16 : 0.34);
+  s += pf(pin(h), ' stroke="' + pink + '" stroke-opacity="' + (unlit ? 0.55 : 0.95) +
+    '" stroke-width="1"' + (unlit ? ' stroke-dasharray="3 3"' : ''), unlit ? 0.12 : 0.26);
+  const sig = lit || b.flags ? 'var(--alarm)' : (unlit ? 'var(--ink-3)' : (b.watch ? '#a78bfa' : 'var(--ok)'));
+  s += '<g style="transform:translate(' + R2(X(c, u)) + 'px,' + R2(Y(c, v, h)) + 'px)">' +
+       '<g transform="scale(' + k + ')" style="color:' + ink + ';--sig:' + sig + '"' +
+       (unlit ? ' opacity="0.62"' : '') + '><use href="#' + opt.sid + '-' + b.t + '"/></g>';
+  if (lit) {
+    const top = R2(-DEVLIB[b.t].top * k - 2);
+    s += '<circle cx="0" cy="' + top + '" r="' + R2(Math.max(4, 5 * k)) + '" class="halo" fill="none" stroke="var(--alarm)" stroke-width="1.4"/>';
+  }
+  return s + '</g></g>';
+}
+function topper(c, u, v, b, lines, box) {
+  const h = b.h[0];
+  const k = b.R * 0.74 * c.S / SREF, x = R2(X(c, u)), down = !!b.down;
+  const y = down ? R2(Y(c, v) + b.R * c.ky + 15) : R2(Y(c, v, h) - DEVLIB[b.t].top * k - (box ? 17 : 10));
+  if (x < 50 || x > PW - 50 || y < 26 || y > PH - 40) return '';
+  const cw = Math.max.apply(null, lines.map((l) => l.t.length)) * 6.6 + 22;
+  if (!claim(x, down ? y - 11 : y - (lines.length - 1) * 13 - 15, cw, lines.length * 13 + 11)) return '';
+  let inner = '';
+  if (box) {
+    const w = Math.max.apply(null, lines.map((l) => l.t.length)) * 6.0 + 26;
+    inner += '<rect x="' + R2(-w / 2) + '" y="' + (down ? -14 : -(lines.length - 1) * 13 - 15) + '" width="' + R2(w) +
+      '" height="' + (lines.length * 13 + 12) + '" rx="9" fill="rgba(10,15,28,0.94)" stroke="' +
+      (box === 'x' ? 'var(--alarm)' : 'rgba(157,184,232,0.4)') + '"/>';
+  }
+  lines.forEach((l, i) => {
+    inner += '<text x="0" y="' + (down ? i * 13 : -(lines.length - 1 - i) * 13) + '" text-anchor="middle" class="' + l.c + '">' + esc(l.t) + '</text>';
+  });
+  return '<g style="transform:translate(' + x + 'px,' + y + 'px)">' + inner + '</g>';
+}
+function plaque(c, d) {
+  const x0 = X(c, d.u);
+  let y0 = Y(c, d.v + d.r) + 5;
+  if (y0 > PH - 30) y0 = Y(c, d.v - d.r) - 30;
+  if (y0 < 6 || y0 > PH - 24) return '';
+  const t = d.name, w = t.length * 7.2 + (d.dark ? 62 : 26);
+  const x = Math.max(8 + w / 2, Math.min(PW - 8 - w / 2, x0)), y = y0;
+  if (!claim(x, y, w, 20)) return '';
+  return '<g transform="translate(' + R2(x) + ' ' + R2(y) + ')">' +
+    '<rect x="' + R2(-w / 2) + '" y="0" width="' + R2(w) + '" height="20" rx="10" fill="#0a0f1c" fill-opacity="0.9" stroke="' +
+    (d.dark ? 'rgba(255,84,112,0.4)' : 'var(--hair)') + '"/>' +
+    '<circle cx="' + R2(-w / 2 + 11) + '" cy="10" r="3.2" fill="' + d.ink + '" fill-opacity="' + (d.dark ? 0.5 : 1) + '"/>' +
+    '<text x="' + R2(-w / 2 + 19) + '" y="14" class="p-name" style="font-size:11.5px">' + esc(t) + '</text>' +
+    (d.dark ? '<text x="' + R2(w / 2 - 10) + '" y="13.5" text-anchor="end" class="cov cov-d">DARK</text>' : '') + '</g>';
+}
+
+/* ---- labels claim their rectangle ---- */
+let PLACED = [];
+function claim(x, y, w, h) {
+  const r = [x - w / 2, y, x + w / 2, y + h];
+  for (const p of PLACED) if (r[0] < p[2] - 4 && r[2] > p[0] + 4 && r[1] < p[3] - 4 && r[3] > p[1] + 4) return false;
+  PLACED.push(r);
+  return true;
+}
+function chipAt(x, y, t, kls, k2) {
+  if (x < 24 || x > PW - 24 || y < 18 || y > PH - 14) return '';
+  const w = t.length * 5.9 + 18;
+  if (!claim(x, y - 9, w, 18)) return '';
+  return '<g transform="translate(' + R2(x) + ' ' + R2(y) + ')">' +
+    '<rect x="' + R2(-w / 2) + '" y="-9" width="' + R2(w) + '" height="18" rx="9" fill="#080c16" fill-opacity="0.9" stroke="' +
+    (k2 || 'var(--hair)') + '"/>' +
+    '<text x="0" y="3.5" text-anchor="middle" class="' + (kls || 'chip-t') + '">' + esc(t) + '</text></g>';
+}
+const chip = (c, u, v, t, kls, k2) => chipAt(X(c, u), Y(c, v), t, kls, k2);
+/* a chip that will try a few berths before it gives up */
+function chipTry(x, y, offs, t, kls, k2) {
+  for (const o of offs) { const s = chipAt(x + o[0], y + o[1], t, kls, k2); if (s) return s; }
+  return '';
+}
+
+/* a dashed outline round everything one router owns */
+function boroughRing(c, ids, label) {
+  const pts = [];
+  DISTRICTS.filter((d) => ids.indexOf(d.id) >= 0).forEach((d) => {
+    [[0, -d.r], [d.r, 0], [0, d.r], [-d.r, 0]].forEach((o) => pts.push([X(c, d.u + o[0]), Y(c, d.v + o[1])]));
+  });
+  NODES.filter((n) => ids.indexOf(n.id) >= 0).forEach((n) => {
+    [[0, -n.R], [n.R, 0], [0, n.R], [-n.R, 0]].forEach((o) => pts.push([X(c, n.u + o[0]), Y(c, n.v + o[1])]));
+  });
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower = [], upper = [];
+  for (const p of pts) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
+  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
+  let hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+  const cx = hull.reduce((s, p) => s + p[0], 0) / hull.length, cy = hull.reduce((s, p) => s + p[1], 0) / hull.length;
+  hull = hull.map((p) => { const dx = p[0] - cx, dy = p[1] - cy, m = Math.hypot(dx, dy) || 1; return [p[0] + dx / m * 30, p[1] + dy / m * 24]; });
+  const d = hull.map((p, i) => (i ? 'L' : 'M') + R2(p[0]) + ' ' + R2(p[1])).join('') + 'Z';
+  const lx = Math.max(...hull.map((p) => p[0])), ly = Math.min(...hull.map((p) => p[1]));
+  return { ring: '<path d="' + d + '" fill="none" stroke="var(--accent)" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="2 6" stroke-linejoin="round"/>',
+    lx: Math.min(PW - 110, Math.max(110, lx - 50)), ly: Math.max(30, Math.min(PH - 20, ly + 10)), t: label };
+}
+
+/* ================================================================
+   PANEL 1 — ZONES (2D). The topography vocabulary over the SAME
+   ground model: zone cards sized from r and centred on (u, v), routers
+   as cards, bridges as bars over the river, roads as curved strokes.
+   ================================================================ */
+/* a few cards are nudged a handful of px so two never touch; the nudge
+   never moves a card off its own ground position */
+const CARDNUDGE = { lan: [-6, 0], srv: [0, 0], iot: [0, 0], guest: [0, 0], wsh: [0, 0], cams: [14, 12] };
+const NODECARD = {
+  rb5009: { w: 168, h: 38, dx: 0, dy: -34, sub: 'RouterOS 7.20.1 · 41 rules' },
+  hapax3: { w: 140, h: 34, dx: 30, dy: 22, sub: '12 rules · 10.0.10.9' }
+};
+const K = PLAN.kx;
+function cardRect(d) {
+  const n = CARDNUDGE[d.id] || [0, 0];
+  const w = Math.max(2 * d.r * K * 1.42, 140), h = Math.max(2 * d.r * K, 92);
+  const cx = X(PLAN, d.u) + n[0], cy = Y(PLAN, d.v) + n[1];
+  return [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, w, h, cx, cy];
+}
+function nodeRect(n) {
+  const cf = NODECARD[n.id];
+  const cx = X(PLAN, n.u) + cf.dx, cy = Y(PLAN, n.v) + cf.dy;
+  return [cx - cf.w / 2, cy - cf.h / 2, cx + cf.w / 2, cy + cf.h / 2, cf.w, cf.h, cx, cy];
+}
+/* shrink a line of mono text until it fits the card */
+const fitMono = (t, maxW, base) => Math.max(6.6, Math.min(base, maxW / (t.length * 0.605)));
+
+function renderPlan() {
+  const c = PLAN;
+  PLACED = [];
+  let ground = '', cards = '', flat = '';
+
+  ground += river(c, 18);
+  const b1 = boroughRing(c, ['lan', 'srv', 'iot', 'guest', 'rb5009'], 'RB5009 BOROUGH');
+  const b2 = boroughRing(c, ['wsh', 'cams', 'hapax3'], 'HAP-AX3 BOROUGH');
+  ground += b1.ring + b2.ring;
+
+  const rects = DISTRICTS.map(cardRect).concat(NODES.filter((n) => NODECARD[n.id]).map(nodeRect));
+
+  /* the bridges: short bars across the river on the same diagonal */
+  BRIDGES.forEach((b) => {
+    const fx = R2(X(c, b.f[0])), fy = R2(Y(c, b.f[1])), tx = R2(X(c, b.t[0])), ty = R2(Y(c, b.t[1]));
+    const w = Math.max(3.5, b.w * K * 0.8);
+    const ink = b.state === 'quiet' ? 'var(--ink-3)' : 'var(--accent)';
+    ground += '<g role="img" aria-label="' + esc(b.label) + '">' +
+      '<path d="M' + fx + ' ' + fy + 'L' + tx + ' ' + ty + '" stroke="#080d18" stroke-width="' + R2(w + 5) + '" stroke-linecap="round"/>' +
+      '<path d="M' + fx + ' ' + fy + 'L' + tx + ' ' + ty + '" stroke="' + ink + '" stroke-opacity="' +
+      (b.state === 'quiet' ? 0.35 : 0.62) + '" stroke-width="' + R2(w) + '" stroke-linecap="round"/>' +
+      '<circle cx="' + tx + '" cy="' + ty + '" r="3.2" fill="' + ink + '" fill-opacity="0.9"/>' +
+      '<circle cx="' + fx + '" cy="' + fy + '" r="2.4" fill="' + ink + '" fill-opacity="0.5"/></g>';
+  });
+
+  /* the far bank's peers, as dots */
+  PEERS.forEach((p) => {
+    const px = R2(X(c, p.u)), py = R2(Y(c, p.v));
+    ground += '<circle cx="' + px + '" cy="' + py + '" r="4" fill="#0a0f1c" stroke="var(--ink-3)" stroke-width="1.2"/>' +
+      '<circle cx="' + px + '" cy="' + py + '" r="1.6" fill="var(--ink-3)"/>';
+  });
+
+  /* roads under the cards, the alarm road over them */
+  const under = [], over = [];
+  ROADS.forEach((r) => {
+    const pieces = roadPieces(c, r, { rects: rects, alarm: r.k === 'x',
+      flow: r.k === 'x' || r.w > 2.0 });
+    (r.k === 'x' ? over : under).push.apply(r.k === 'x' ? over : under, pieces);
+  });
+  under.sort((a, b) => a.v - b.v);
+  over.sort((a, b) => a.v - b.v);
+  ground += under.map((p) => p.s).join('');
+
+  /* ---- the zone cards ---- */
+  DISTRICTS.forEach((d) => {
+    const q = cardRect(d), w = q[4], h = q[5], cx = q[6], cy = q[7];
+    const dim = d.dark;
+    let s = '<g role="img" aria-label="' + esc(d.name + ' zone ' + d.cidr + ' — coverage ' + d.cov) + '">';
+    s += '<rect x="' + R2(q[0]) + '" y="' + R2(q[1]) + '" width="' + R2(w) + '" height="' + R2(h) +
+      '" rx="10" fill="#0a0f1c" fill-opacity="0.95" stroke="' + (dim ? 'rgba(255,84,112,0.3)' : 'var(--hair)') + '"/>';
+    /* the ground footprint the city raises into a plate, kept visible */
+    s += '<path d="' + diamond(c, d.u, d.v, d.r, 0) + '" fill="' + d.ink + '" fill-opacity="' + (dim ? 0.05 : 0.09) +
+      '" stroke="' + (dim ? 'var(--ink-3)' : d.ink) + '" stroke-opacity="0.16" stroke-width="0.8"/>';
+    /* header */
+    const nameW = d.name.length * 7.4 + 26;
+    const cidrFs = fitMono(d.cidr, w - nameW - 20, 9.5);
+    s += '<circle cx="' + R2(q[0] + 13) + '" cy="' + R2(q[1] + 15) + '" r="3.4" fill="' + d.ink + '" fill-opacity="' + (dim ? 0.5 : 1) + '"/>';
+    s += '<text x="' + R2(q[0] + 22) + '" y="' + R2(q[1] + 19) + '" class="p-name" style="font-size:12px">' + esc(d.name) + '</text>';
+    s += '<text x="' + R2(q[2] - 11) + '" y="' + R2(q[1] + 18.5) + '" text-anchor="end" class="p-cidr" style="font-size:' +
+      R2(cidrFs) + 'px">' + esc(d.cidr) + '</text>';
+    /* coverage line, wrapped at the em dash the way the topography does */
+    const cov = d.cov.split(' — ');
+    const covFs0 = fitMono(cov[0], w - 24, 8.5);
+    s += '<text x="' + R2(q[0] + 13) + '" y="' + R2(q[3] - (cov[1] ? 20 : 9)) + '" class="cov cov-' + d.covk +
+      '" style="font-size:' + R2(covFs0) + 'px">' + esc(cov[0]) + '</text>';
+    if (cov[1]) s += '<text x="' + R2(q[0] + 13) + '" y="' + R2(q[3] - 8) + '" class="cov cov-' + d.covk +
+      '" style="font-size:' + R2(fitMono(cov[1], w - 24, 8)) + 'px;letter-spacing:0">' + esc(cov[1]) + '</text>';
+    s += '</g>';
+    cards += s;
+
+    /* the tally strip under the card */
+    if (d.tally) {
+      const parts = d.tally.split(' ');
+      const sw = w, sx = q[0], sy = q[3] + 3, sh = 14;
+      const each = sw / parts.length;
+      parts.forEach((p, i) => {
+        const alarm = p.charAt(0) === '✱';
+        cards += '<rect x="' + R2(sx + i * each) + '" y="' + R2(sy) + '" width="' + R2(each) + '" height="' + sh +
+          '" rx="3" fill="' + (alarm ? 'rgba(255,84,112,0.13)' : 'rgba(167,139,250,0.11)') + '" stroke="' +
+          (alarm ? 'rgba(255,84,112,0.4)' : 'rgba(167,139,250,0.3)') + '" stroke-width="0.8"/>' +
+          '<text x="' + R2(sx + (i + 0.5) * each) + '" y="' + R2(sy + 10) + '" text-anchor="middle" class="' +
+          (alarm ? 'fchip' : 'wp') + '" style="font-size:9px">' + esc(p) + '</text>';
+      });
+      PLACED.push([sx, sy, sx + sw, sy + sh]);
+    }
+  });
+
+  /* ---- host dots inside the cards, at their du/dv offsets ---- */
+  DISTRICTS.forEach((d) => {
+    const q = cardRect(d);
+    const n = CARDNUDGE[d.id] || [0, 0];
+    let dropped = 0;
+    d.hosts.forEach((b) => {
+      const hx = R2(X(c, d.u + b.du) + n[0]), hy = R2(Y(c, d.v + b.dv) + n[1]);
+      const alarm = !!b.flags;
+      const col = d.dark ? 'var(--ink-3)' : d.ink;
+      cards += '<circle cx="' + hx + '" cy="' + hy + '" r="4.2" fill="#0a0f1c"/>' +
+        '<circle cx="' + hx + '" cy="' + hy + '" r="' + (b.down ? 3.4 : 4) + '" fill="' + (b.down ? 'none' : col) +
+        '" fill-opacity="0.92" stroke="' + col + '" stroke-opacity="' + (b.down ? 0.75 : 0) + '" stroke-width="1.2"/>' +
+        (alarm ? '<circle cx="' + hx + '" cy="' + hy + '" r="6.4" fill="none" stroke="var(--alarm)" stroke-opacity="0.85" stroke-width="1.2"/>' : '') +
+        (b.watch ? '<circle cx="' + hx + '" cy="' + hy + '" r="8.6" fill="none" stroke="#a78bfa" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="2 3"/>' : '');
+      const t = b.name + (alarm ? ' ✱' + b.flags : '');
+      const lw = t.length * 5.2 + 6;
+      let placed = false;
+      for (const dy of [11, -9, 20, -18]) {
+        if (claim(hx, hy + dy - 8, lw, 11)) {
+          cards += '<text x="' + hx + '" y="' + R2(hy + dy) + '" text-anchor="middle" class="' +
+            (alarm ? 'host-x' : 'host-t') + '">' + esc(t) + '</text>';
+          placed = true; break;
+        }
+      }
+      if (!placed) dropped++;
+    });
+    if (dropped) cards += '<text x="' + R2(q[6]) + '" y="' + R2(q[3] - (d.cov.indexOf(' — ') > 0 ? 30 : 20)) +
+      '" text-anchor="middle" class="more-t">+' + dropped + ' more</text>';
+  });
+
+  /* ---- the routers, as cards ---- */
+  NODES.filter((n) => NODECARD[n.id]).forEach((n) => {
+    const cf = NODECARD[n.id], q = nodeRect(n);
+    const px = R2(X(c, n.u)), py = R2(Y(c, n.v));
+    /* the marker stays on the router's exact ground position */
+    if (py < q[1] || py > q[3] || px < q[0] || px > q[2]) {
+      cards += '<path d="M' + px + ' ' + py + 'L' + R2(q[6]) + ' ' + R2(q[7]) + '" stroke="var(--hair-2)" stroke-width="1"/>';
+    }
+    cards += '<rect x="' + R2(q[0]) + '" y="' + R2(q[1]) + '" width="' + cf.w + '" height="' + cf.h +
+      '" rx="9" fill="#0f1422" fill-opacity="0.97" stroke="var(--hair-2)"/>' +
+      '<text x="' + R2(q[0] + 13) + '" y="' + R2(q[1] + 17) + '" class="p-name" style="font-size:12.5px">' + esc(n.name) + '</text>' +
+      '<text x="' + R2(q[0] + 13) + '" y="' + R2(q[1] + 30) + '" class="roof-s" style="font-size:8.6px">' + esc(cf.sub) + '</text>';
+    cards += '<path d="M' + px + ' ' + R2(py - 4.5) + 'L' + R2(px + 4.5) + ' ' + py + 'L' + px + ' ' + R2(py + 4.5) +
+      'L' + R2(px - 4.5) + ' ' + py + 'Z" fill="none" stroke="var(--accent)" stroke-opacity="0.8" stroke-width="1.1"/>' +
+      '<circle cx="' + px + '" cy="' + py + '" r="1.2" fill="var(--accent)"/>';
+    PLACED.push([q[0], q[1], q[2], q[3]]);
+  });
+
+  /* the alarm road last, so its mark lands on the LAN card it died at */
+  cards += over.map((p) => p.s).join('');
+
+  /* every card now claims its footprint, so nothing floating lands on one */
+  rects.forEach((q) => PLACED.push([q[0], q[1], q[2], q[3]]));
+
+  /* ---- what floats over the top ---- */
+  const un = ROADS.find((r) => r.id === 'unplanned');
+  const mx = X(c, un._end[0]), my = Y(c, un._end[1]);
+  const bx = Math.max(14, mx - 330), by = my + 118;
+  flat += '<path d="M' + R2(mx) + ' ' + R2(my) + 'L' + R2(bx + 268) + ' ' + R2(by) + '" stroke="var(--alarm)" stroke-opacity="0.6" stroke-width="1"/>' +
+    '<g transform="translate(' + R2(bx) + ' ' + R2(by) + ')">' +
+    '<rect x="0" y="0" width="268" height="46" rx="10" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.85"/>' +
+    '<circle cx="15" cy="17" r="3.4" fill="var(--alarm)"/>' +
+    '<text x="26" y="20" class="alarm-t">UNPLANNED · iot → lan · tcp/445</text>' +
+    '<text x="26" y="35" class="chip-t">caught by default drop · 14× · open ▸</text></g>';
+  PLACED.push([bx, by, bx + 268, by + 46]);
+
+  /* the bridge labels */
+  BRIDGES.forEach((b) => {
+    flat += chipTry(X(c, b.mid[0]), Y(c, b.mid[1]) + (b.ldy || 0),
+      [[-92, -8], [92, 12], [-92, 24], [0, -34], [0, 38], [110, -22]], b.label, 'chip-t',
+      b.state === 'quiet' ? 'var(--hair-2)' : 'rgba(232,176,90,0.45)');
+  });
+  PEERS.forEach((p) => {
+    flat += chipTry(X(c, p.u), Y(c, p.v), [[0, -17], [0, 20], [-100, -4], [100, -4], [0, -36]],
+      p.name + ' · ' + p.ip, 'chip-t');
+  });
+  flat += chipTry(X(c, -112), Y(c, -50), [[0, 0], [0, 26], [0, -26]], 'FAR BANK · TUNNEL PEERS', 'bank-t');
+
+  /* the road callouts, the topography's chips */
+  ROADS.forEach((r) => {
+    if (!r.ports || !r.lats || r.k === 'x') return;
+    for (const t of r.lats) {
+      const p = roadPoint(r, t);
+      const px = X(c, p[0]), py = Y(c, p[1]);
+      if (px < 60 || px > PW - 60 || py < 30 || py > PH - 30) continue;
+      const s = chipTry(px, py, [[0, 0], [0, -22], [0, 22]], r.ports, 'port-t');
+      if (s) { flat += s; break; }
+    }
+  });
+
+  flat += chipTry(b1.lx, b1.ly, [[0, 0], [0, -24], [0, 24], [-70, 0]], b1.t, 'boro-t');
+  flat += chipTry(b2.lx, b2.ly, [[0, 0], [0, -24], [0, 24], [-70, 0]], b2.t, 'boro-t');
+
+  document.getElementById('svg-plan').innerHTML =
+    '<g class="ground">' + ground + '</g><g class="cards">' + cards + '</g><g class="flat">' + flat + '</g>';
+}
+
+/* ================================================================
+   PANEL 2 — ◆ CITY. The same model, the same camera centre, through
+   the isometric projection at the city stop.
+   ================================================================ */
+function renderCity() {
+  const c = CITY, id = 'city';
+  PLACED = [];
+  let ground = '', flat = '';
+  const solids = [];
+  const push = (a) => a.forEach((x) => solids.push(x));
+
+  ground += river(c);
+  BRIDGES.forEach((b) => push(bridge(c, b)));
+  const b1 = boroughRing(c, ['lan', 'srv', 'iot', 'guest', 'rb5009'], 'RB5009 BOROUGH');
+  const b2 = boroughRing(c, ['wsh', 'cams', 'hapax3'], 'HAP-AX3 BOROUGH');
+  ground += b1.ring + b2.ring;
+
+  DISTRICTS.forEach((d) => { ground += plate(c, d); push(districtWall(c, d)); });
+  ROADS.forEach((r) => push(roadPieces(c, r, { alarm: r.k === 'x', flow: r.k === 'x' || r.w > 2.0 })));
+
+  DISTRICTS.forEach((d) => {
+    d.hosts.forEach((b) => {
+      const u = d.u + b.du, v = d.v + b.dv;
+      const lit = b.id === 'cam-porch';
+      const o = { ink: d.ink, unlit: d.dark, lit: lit, sid: id };
+      solids.push({ v: v + b.R, s: device(c, u, v, b, o) });
+      if (lit) flat += topper(c, u, v, b, [{ t: 'cam-porch ✱✱ ◉', c: 'alarm-t' }], 'x');
+    });
+  });
+  NODES.concat(PEERS).forEach((n) => {
+    const o = { ink: n.ink, sid: id };
+    solids.push({ v: n.v + n.R, s: device(c, n.u, n.v, n, o) });
+    const isHead = BRIDGES.some((b) => b.node === n.id);
+    if (n.card && !isHead) {
+      flat += topper(c, n.u, n.v, n, n.card.map((t, i) => ({ t: t, c: i ? 'roof-s' : 'roof-t' })), true);
+    }
+  });
+  solids.sort((a, b) => a.v - b.v);
+
+  DISTRICTS.forEach((d) => { flat += plaque(c, d); });
+
+  /* the alarm callout, beside the mark on LAN's wall */
+  const un = ROADS.find((r) => r.id === 'unplanned');
+  const mx = X(c, un._end[0]), my = Y(c, un._end[1]);
+  flat += '<path d="M' + R2(mx) + ' ' + R2(my) + 'L' + R2(mx - 26) + ' ' + R2(my + 96) + '" stroke="var(--alarm)" stroke-opacity="0.6" stroke-width="1"/>' +
+    '<g transform="translate(' + R2(mx - 160) + ' ' + R2(my + 96) + ')">' +
+    '<rect x="0" y="0" width="268" height="46" rx="10" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.85"/>' +
+    '<circle cx="15" cy="17" r="3.4" fill="var(--alarm)"/>' +
+    '<text x="26" y="20" class="alarm-t">UNPLANNED · iot → lan · tcp/445</text>' +
+    '<text x="26" y="35" class="chip-t">caught by default drop · 14× · open ▸</text></g>';
+  PLACED.push([mx - 160, my + 96, mx + 108, my + 142]);
+
+  BRIDGES.forEach((b) => {
+    flat += chipTry(X(c, b.mid[0]) + c.S * 2.2, Y(c, b.mid[1], 0) + Math.max(20, c.S * 3.2) + (b.ldy || 0),
+      [[0, 0], [0, 22], [-100, 12], [110, 12], [0, -30]],
+      b.label, 'chip-t', b.state === 'quiet' ? 'var(--hair-2)' : 'rgba(232,176,90,0.45)');
+  });
+  PEERS.forEach((p) => {
+    flat += chipTry(X(c, p.u), Y(c, p.v) - Math.max(24, c.S * 4.6), [[0, 0], [0, -22], [0, -44], [-110, -10], [120, -10]],
+      p.name + ' · ' + p.ip, 'chip-t');
+  });
+  flat += chipTry(X(c, 60), Y(c, -88), [[0, 0], [0, -22], [0, 24]], 'FAR BANK · TUNNEL PEERS', 'bank-t');
+  flat += chip(c, -38, -4, 'any → wan · 9/s');
+  flat += chipTry(b1.lx, b1.ly, [[0, 0], [0, -24], [0, 24], [-70, 0]], b1.t, 'boro-t');
+  flat += chipTry(b2.lx, b2.ly, [[0, 0], [0, -24], [0, 24], [-70, 0]], b2.t, 'boro-t');
+
+  document.getElementById('svg-' + id).innerHTML = defsFor(id) +
+    '<g class="ground">' + ground + '</g>' +
+    '<g class="solids">' + solids.map((s) => s.s).join('') + '</g>' +
+    '<g class="flat">' + flat + '</g>';
+}
+
+/* ================================================================
+   PANEL 3 — OVERLAY. The proof.
+
+   Nothing here is drawn from the model twice. Everything dashed is
+   taken from the CITY panel's screen geometry, run back through the
+   inverse of the isometric camera to recover (u, v), and re-projected
+   with the PLAN camera. If the two layouts were not the same ground
+   plan, the dashed footprints would not land on the cards.
+   ================================================================ */
+function reflatten(pt) {
+  const g = UNPROJ(CITY, pt[0], pt[1]);
+  return [X(PLAN, g[0]), Y(PLAN, g[1])];
+}
+function renderOverlay() {
+  const c = PLAN;
+  PLACED = [];
+  let s = '', worst = 0, n = 0;
+  const check = (u, v) => {
+    const direct = [X(c, u), Y(c, v)];
+    const round = reflatten([X(CITY, u), Y(CITY, v)]);
+    worst = Math.max(worst, Math.hypot(direct[0] - round[0], direct[1] - round[1]));
+    n++;
+    return round;
+  };
+
+  /* the flat map, held right back */
+  s += '<g opacity="0.5">' + '<path d="' + riverPath(c, BANK_N) + '" fill="none" stroke="var(--accent)" stroke-opacity="0.3" stroke-width="1"/>' +
+    '<path d="' + riverPath(c, BANK_F) + '" fill="none" stroke="var(--ink-3)" stroke-opacity="0.4" stroke-width="1"/></g>';
+
+  /* the 2D zone cards, as outlines */
+  DISTRICTS.forEach((d) => {
+    const q = cardRect(d);
+    s += '<rect x="' + R2(q[0]) + '" y="' + R2(q[1]) + '" width="' + R2(q[4]) + '" height="' + R2(q[5]) +
+      '" rx="10" fill="' + d.ink + '" fill-opacity="0.035" stroke="' + d.ink + '" stroke-opacity="0.45" stroke-width="1"/>';
+  });
+  NODES.filter((x) => NODECARD[x.id]).forEach((x) => {
+    const q = nodeRect(x);
+    s += '<rect x="' + R2(q[0]) + '" y="' + R2(q[1]) + '" width="' + R2(q[4]) + '" height="' + R2(q[5]) +
+      '" rx="9" fill="none" stroke="var(--hair-2)" stroke-width="1"/>';
+  });
+
+  /* the CITY roads, un-projected and re-drawn flat, over the plan's own */
+  ROADS.forEach((r) => {
+    let dp = '';
+    segsOf(r).forEach((seg, i) => {
+      const P = (p) => R2(X(c, p[0])) + ' ' + R2(Y(c, p[1]));
+      dp += (i ? '' : 'M' + P(seg[0])) + 'C' + P(seg[1]) + ' ' + P(seg[2]) + ' ' + P(seg[3]);
+    });
+    s += '<path d="' + dp + '" fill="none" stroke="' + VERDICT[r.k] + '" stroke-opacity="' +
+      (r.k === 'x' ? 0.5 : 0.22) + '" stroke-width="' + (r.k === 'x' ? 5 : 4) + '"/>';
+  });
+  ROADS.forEach((r) => {
+    let d = '';
+    segsOf(r).forEach((seg, i) => {
+      const P = (p) => { const q = reflatten([X(CITY, p[0]), Y(CITY, p[1])]); return R2(q[0]) + ' ' + R2(q[1]); };
+      d += (i ? '' : 'M' + P(seg[0])) + 'C' + P(seg[1]) + ' ' + P(seg[2]) + ' ' + P(seg[3]);
+      check(seg[3][0], seg[3][1]);
+    });
+    s += '<path d="' + d + '" fill="none" stroke="' + VERDICT[r.k] + '" stroke-opacity="' +
+      (r.k === 'x' ? 0.75 : 0.3) + '" stroke-width="' + (r.k === 'x' ? 2 : 1.4) + '" stroke-dasharray="4 4"/>';
+  });
+
+  /* the CITY plate diamonds, un-projected: a diamond on the ground is a
+     square turned 45° once the height is taken back out */
+  DISTRICTS.forEach((d) => {
+    const corners = [[d.u, d.v - d.r], [d.u + d.r, d.v], [d.u, d.v + d.r], [d.u - d.r, d.v]];
+    const pl = corners.map((p) => check(p[0], p[1]));
+    /* the same footprint straight from (u, v), solid, underneath */
+    s += '<path d="' + diamond(c, d.u, d.v, d.r, 0) + '" fill="' + d.ink + '" fill-opacity="0.07" stroke="' +
+      d.ink + '" stroke-opacity="0.8" stroke-width="2.6"/>';
+    s += '<path d="' + pl.map((p, i) => (i ? 'L' : 'M') + R2(p[0]) + ' ' + R2(p[1])).join('') + 'Z" fill="none" ' +
+      'stroke="var(--accent)" stroke-opacity="0.95" stroke-width="1.2" stroke-dasharray="5 5"/>';
+    /* the two crosshairs at the centre: flat map and re-flattened city */
+    const a = [X(c, d.u), Y(c, d.v)], b = check(d.u, d.v);
+    s += '<path d="M' + R2(a[0] - 9) + ' ' + R2(a[1]) + 'h18 M' + R2(a[0]) + ' ' + R2(a[1] - 9) + 'v18" ' +
+      'stroke="' + d.ink + '" stroke-opacity="0.9" stroke-width="1.2"/>';
+    s += '<circle cx="' + R2(b[0]) + '" cy="' + R2(b[1]) + '" r="6" fill="none" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="3 3"/>';
+    s += '<text x="' + R2(a[0]) + '" y="' + R2(a[1] - 13) + '" text-anchor="middle" class="ov-t">' + esc(d.name) + '</text>';
+  });
+
+  /* the routers, the bridge heads and the peers, same treatment */
+  NODES.concat(PEERS).forEach((x) => {
+    const b = check(x.u, x.v), a = [X(c, x.u), Y(c, x.v)];
+    s += '<path d="M' + R2(a[0] - 7) + ' ' + R2(a[1]) + 'h14 M' + R2(a[0]) + ' ' + R2(a[1] - 7) + 'v14" ' +
+      'stroke="var(--ink-2)" stroke-opacity="0.8" stroke-width="1"/>' +
+      '<circle cx="' + R2(b[0]) + '" cy="' + R2(b[1]) + '" r="4.6" fill="none" stroke="var(--accent)" stroke-width="1" stroke-dasharray="2.5 2.5"/>';
+  });
+  BRIDGES.forEach((b) => {
+    const f = check(b.f[0], b.f[1]), t = check(b.t[0], b.t[1]);
+    s += '<path d="M' + R2(X(c, b.f[0])) + ' ' + R2(Y(c, b.f[1])) + 'L' + R2(X(c, b.t[0])) + ' ' + R2(Y(c, b.t[1])) +
+      '" stroke="var(--accent)" stroke-opacity="0.35" stroke-width="5"/>';
+    s += '<path d="M' + R2(f[0]) + ' ' + R2(f[1]) + 'L' + R2(t[0]) + ' ' + R2(t[1]) +
+      '" stroke="var(--accent)" stroke-opacity="0.9" stroke-width="1.6" stroke-dasharray="5 4"/>';
+    s += '<text x="' + R2((f[0] + t[0]) / 2 + 10) + '" y="' + R2((f[1] + t[1]) / 2 - 6) + '" class="ov-d">' + esc(b.id) + '</text>';
+  });
+
+  /* the reading */
+  const key = '<g transform="translate(24 108)">' +
+    '<rect x="0" y="0" width="470" height="52" rx="9" fill="#080c16" fill-opacity="0.94" stroke="var(--hair-2)"/>' +
+    '<path d="M16 18h18 M25 9v18" stroke="var(--ink-2)" stroke-width="1.2"/>' +
+    '<text x="42" y="21" class="chip-t" style="font-size:9.5px">2D plan · drawn straight from (u, v)</text>' +
+    '<circle cx="25" cy="37" r="6" fill="none" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="3 3"/>' +
+    '<text x="42" y="40" class="chip-t" style="font-size:9.5px">city · un-projected out of the isometric, re-drawn flat</text></g>';
+  const read = '<g transform="translate(' + (PW - 366) + ' 108)">' +
+    '<rect x="0" y="0" width="342" height="52" rx="9" fill="#080c16" fill-opacity="0.92" stroke="rgba(62,207,126,0.4)"/>' +
+    '<text x="16" y="21" class="cov cov-l" style="font-size:10px">REGISTERED · MAX Δ ' + worst.toFixed(3) + ' px</text>' +
+    '<text x="16" y="39" class="chip-t" style="font-size:9.5px">over ' + n + ' checked points · 6 zones · 5 nodes · 2 peers</text></g>';
+
+  document.getElementById('svg-overlay').innerHTML = '<g class="flat">' + s + key + read + '</g>';
+}
+
+/* ================================================================
+   THE ONE ALTITUDE SLIDER — the same axis both panels sit on.
+   ================================================================ */
+const ALTS = ['CLIENTS', 'SERVICES', 'ZONES', 'CITY', 'BOROUGH', 'DISTRICT', 'STREET'];
+document.getElementById('alt-stops').innerHTML = ALTS.map((t, i) =>
+  '<span class="lab' + (i === 2 || i === 3 ? ' on' : '') + (i === 3 ? ' mid' : '') + '">' +
+  (i === 3 ? '◆ ' : '') + t + '</span>').join('');
+document.getElementById('alt-ticks').innerHTML = ALTS.map((t, i) =>
+  '<i class="tick' + (i === 3 ? ' city' : (i === 2 ? ' on' : '')) + '" style="left:' + R2(3 + i * 15.667) + '%"></i>').join('');
+
+renderPlan();
+renderCity();
+renderOverlay();
+</script>
+</body>
+</html>
