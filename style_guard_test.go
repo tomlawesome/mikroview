@@ -94,3 +94,57 @@ func TestNoStaticStyleAttributesInSvelte(t *testing.T) {
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
+
+// TestLaneInksAreDefinedTokens guards the topography's lane palette
+// (#715 item 11): every ink the lane row wears must be a token app.css
+// actually defines, and none of them may be --marked.
+//
+// The two halves catch different mistakes. An undefined token fails
+// silently in the browser -- the fill simply does not paint, and no
+// unit test that asserts on the attribute string can see it, because
+// the attribute is exactly right. --marked is the specific collision
+// Fable ruled on: it is the watch chips' fill and the watch half of
+// every aggregate bar on this same screen, so a lane wearing it made
+// one colour carry two meanings on one map.
+//
+// Written as a Go test because it has to read two files in different
+// languages. Vite's ?raw import returns an empty string for a .css
+// file, so the frontend suite cannot check the stylesheet's own text.
+func TestLaneInksAreDefinedTokens(t *testing.T) {
+	comp, err := os.ReadFile("frontend/src/components/Topography.svelte")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css, err := os.ReadFile("frontend/src/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inks := regexp.MustCompile(`const LANE_INKS = \[([^\]]*)\]`).FindStringSubmatch(string(comp))
+	if inks == nil {
+		t.Fatal("Topography.svelte no longer declares LANE_INKS -- if the lane palette moved, move this guard with it")
+	}
+
+	tokens := regexp.MustCompile(`var\((--[a-zA-Z0-9-]+)\)`).FindAllStringSubmatch(inks[1], -1)
+	if len(tokens) == 0 {
+		t.Fatalf("LANE_INKS names no CSS tokens: %s", inks[1])
+	}
+
+	for _, m := range tokens {
+		token := m[1]
+		if token == "--marked" {
+			t.Errorf("LANE_INKS wears %s, which means watchers on this same screen (#715 item 11)", token)
+			continue
+		}
+		if !regexp.MustCompile(regexp.QuoteMeta(token) + `:\s*[^;]+;`).Match(css) {
+			t.Errorf("LANE_INKS wears %s, which app.css does not define -- the lane would paint nothing", token)
+		}
+	}
+
+	// The fifth lane's own value, not just its name: the ruling rests on
+	// this colour clearing the other four for a red-green colour-blind
+	// reader, so a later retint is a new decision, not a tweak.
+	if !regexp.MustCompile(`--lane-5:\s*#7b6a0b;`).Match(css) {
+		t.Error("--lane-5 is no longer the validated #7b6a0b (Fable 5, #715 item 11) -- rerun the palette validation before changing it")
+	}
+}
