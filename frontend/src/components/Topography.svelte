@@ -44,7 +44,10 @@
   import { nightlySummary } from '../lib/watchWindow'
   import type { Flag, WatchlistEntry } from '../lib/types'
 
-  const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--marked)']
+  // Five fixed lane inks. The fifth was --marked until #715 item 11 --
+  // the ink this same screen uses for watchers, so one colour carried
+  // two meanings. It has its own token now; see app.css for why olive.
+  const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--lane-5)']
 
   // The pushed /ip address table names the zones, the pushed rule
   // table draws the policy edges; both refreshed whenever the device
@@ -142,7 +145,6 @@
   // whatever the estimate gets wrong the clip catches, so a name can
   // never reach the neighbouring lane again.
   const HOST_CH = 5.5
-  const HOST_DOT_W = 9
 
   function hostsShown(z: ZoneInfo): { hosts: { label: string; ip: string }[]; more: number } {
     const budget = cardW - 2 * cardPad
@@ -150,7 +152,7 @@
     let used = 0
     for (const h of z.hosts) {
       if (shown.length >= 3) break
-      const w = HOST_DOT_W + h.label.length * HOST_CH + (shown.length > 0 ? 3 * HOST_CH : 0)
+      const w = h.label.length * HOST_CH + (shown.length > 0 ? 3 * HOST_CH : 0)
       const rest = z.hostCount - (shown.length + 1)
       const tail = rest > 0 ? (4 + String(rest).length) * HOST_CH : 0
       // The first name always draws: a card that names none of its
@@ -2129,34 +2131,21 @@
             >
             {#if shown.hosts.length > 0}
               <!-- Each host is the reach's door (#626): clicking the name
-                   recentres on that node rather than opening the zone. The
-                   dot beside it (#648, round 23: "node symbols bigger")
-                   does the exact same thing -- the dot opens what the name
-                   opens, never a second, different affordance. How many
-                   names are drawn is the card's own width budget (#699);
-                   the clip is the backstop, so an unusually long name
-                   cannot reach the neighbouring lane whatever the
-                   estimate said. -->
+                   recentres on that node rather than opening the zone.
+                   The name is the whole target. Rounds 23 and 30 both
+                   draw this list as plain names (round-23:871,
+                   round-30's own `n-sub` line); #648's "node symbols
+                   bigger" was about the map's circles -- the zone dots
+                   and station rings -- and a per-name text dot was read
+                   into it that no round ever drew (Fable 5, #715 item
+                   10). How many names are drawn is the card's own width
+                   budget (#699); the clip is the backstop, so an
+                   unusually long name cannot reach the neighbouring lane
+                   whatever the estimate said. -->
               <text x={-cardHalf + cardPad} y="52" class="n-hosts" clip-path="url(#{uid}-hosts)">
                 {#each shown.hosts as h, hi (h.ip)}
                   {#if hi > 0}<tspan> · </tspan>{/if}
                   <tspan
-                    class="host-dot"
-                    role="button"
-                    tabindex="0"
-                    aria-hidden="true"
-                    onclick={(e) => {
-                      e.stopPropagation()
-                      descend(z.id, h.label, h.ip)
-                    }}
-                    onkeydown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        descend(z.id, h.label, h.ip)
-                      }
-                    }}>●</tspan
-                  ><tspan
                     class="host-link"
                     role="button"
                     tabindex="0"
@@ -4090,18 +4079,6 @@
      own clicks (#699: the internet island gained one). */
   .passive .hbar-g {
     pointer-events: auto;
-  }
-
-  /* --- node symbols (#648, round 23: "node symbols bigger") -------------- */
-  .host-dot {
-    fill: var(--fg-dim);
-    font-size: 13px;
-    cursor: pointer;
-  }
-
-  .host-dot:hover,
-  .host-dot:focus-visible {
-    fill: var(--accent);
   }
 
   /* --- node info cards (#648, rounds 22-23) ------------------------------ */

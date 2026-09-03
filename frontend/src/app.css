@@ -75,6 +75,22 @@
   --lane-srv: #199e70;
   --lane-iot: #c98500;
   --lane-guest: #d76a9e;
+  /* The fifth lane's own ink (Fable 5, #715 item 11). The #634 palette
+     ratified four, and the fifth slot had been wearing --marked, which
+     means watchers on this same screen -- one colour, two meanings.
+     Minted rather than overloaded, the way --fall-nat was. Olive
+     because no hue at the other four's lightness clears the normal-
+     vision floor against all of them: the only passing regions are dark
+     olive and dark plum, and plum is violet-family, which would half
+     recreate the collision this replaces. Validated categorical, all
+     pairs, on both shipped grounds (--bg #0b0e14, --bg-elevated
+     #0f1422): worst new pair dE 15.8 normal, min(protan, deutan) >= 11.6
+     against all four lanes, dE 32 against --marked. Its 3.6:1 on --bg is
+     fine because a lane ink only ever paints small fills and 2.4-2.5px
+     strokes, never text. The lane row is ordered busiest-first and
+     capped at five, so this is always the quietest lane -- the lower
+     brightness reads honestly. */
+  --lane-5: #7b6a0b;
 
   /* The metrics record's two chart inks (#488, docs/design/screens/
      metrics/DESIGN.md): "Identity is the label, colour is meaning. Two
