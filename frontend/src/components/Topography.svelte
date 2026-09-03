@@ -33,7 +33,7 @@
   import type { ReachStrand } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
   import { reachFor } from '../lib/reach'
-  import { formatEps, isPublicIp, formatHM, formatRelative } from '../lib/format'
+  import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
@@ -68,7 +68,6 @@
 
   const zones = $derived(zonesState.zones)
   const eps = $derived(appState.stats?.eventsPerSecond ?? 0)
-  const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
 
   const primaryDevice = $derived.by(() => {
     const list = appState.devices
@@ -76,6 +75,29 @@
     const configured = list.filter((d) => d.configured)
     const pool = configured.length > 0 ? configured : list
     return [...pool].sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())[0]
+  })
+
+  // The waist card's sub-line: round 30 draws
+  // "RouterOS <version> · the waist · <N> rules"
+  // (the-whole.html:978). Each end is dropped when it cannot be
+  // answered, leaving "the waist" alone rather than a placeholder --
+  // and "the waist" is always true, so the line never empties.
+  //
+  // The count is enabled pushed filter rules for this device only
+  // (owner, 2026-09-03, #701 fact 2). Never pushed is null, not zero:
+  // "0 rules" about a router with a full rule set would be a fact about
+  // our own silence dressed as a fact about the network.
+  //
+  // The live events/s figure this line used to carry is gone. Round 30
+  // draws no rate on this node, and #715 item 7 is that divergence; the
+  // rate is still on the scene bar and in Metrics, so nothing is lost.
+  const waistRuleCount = $derived(policyState.enabledRuleCount(primaryDevice?.id))
+  const waistSub = $derived.by(() => {
+    const parts: string[] = []
+    if (primaryDevice?.routerosVersion) parts.push(`RouterOS ${primaryDevice.routerosVersion}`)
+    parts.push('the waist')
+    if (waistRuleCount !== null) parts.push(`${waistRuleCount.toLocaleString()} ${waistRuleCount === 1 ? 'rule' : 'rules'}`)
+    return parts.join(' · ')
   })
 
   // Lane geometry (#699). The old spread pinned the first and last lane
@@ -2037,9 +2059,7 @@
                the geometry is the attribute the renderer reads. -->
           <rect class="isl waist" x="-128" y="-34" width="256" height={degradedStatement ? 100 : 68} rx="12" />
           <text x="-110" y="-6" class="n-name">{primaryDevice?.name ?? 'your router'}</text>
-          <text x="-110" y="12" class="n-sub">
-            the waist{epsText ? ` · ${epsText} events/s` : ''}
-          </text>
+          <text x="-110" y="12" class="n-sub">{waistSub}</text>
           {#if degradedStatement}
             <text x="-110" y="34" class="deg-t">no address table pushed — zones from boundaries</text>
             <text x="-110" y="50" class="deg-t"

@@ -486,7 +486,7 @@ to cover more than filter rules and DHCP/ARP:
 | `kind` | Source command | Fields |
 |---|---|---|
 | `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, `dynamic` |
-| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface` |
+| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `disabled` |
 | `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `logPrefix` ← `log-prefix`, `toAddresses` ← `to-addresses`, `toPorts` ← `to-ports`, `dstPort` ← `dst-port`, `protocol`, `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `srcAddress` ← `src-address`, `dstAddress` ← `dst-address`, `disabled`, `dynamic` |
 | `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
 | `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname` ← `host-name`, `mac` ← `mac-address`, `address` |

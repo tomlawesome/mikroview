@@ -12,8 +12,8 @@ import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
 import { wizardState } from '../lib/wizard.svelte'
-import type { RouterIPAddress } from '../lib/api'
-import { emptyFilters, type ClientEvent, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
+import type { RouterFilterRule, RouterIPAddress } from '../lib/api'
+import { emptyFilters, type ClientEvent, type Device, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
 import Topography from './Topography.svelte'
 // Vite's own `?raw` import (typed by vite/client, already in this
 // project's tsconfig) -- not a Node fs read -- so the handful of
@@ -94,6 +94,7 @@ beforeEach(() => {
   authState.role = 'admin'
   zonesState.pushed = []
   policyState.edges = []
+  policyState.byDevice = {}
   coverageState.declarations = []
   flagsState.list = []
   watchlistState.entries = []
@@ -1486,5 +1487,115 @@ describe('#715 item 9: the zone card stops where round 30 stops', () => {
     expect(container.querySelector('.zone')).not.toBeNull()
     const cardText = [...container.querySelectorAll('.zone .isl-card text')].map((t) => t.textContent ?? '').join(' | ')
     expect(cardText).not.toMatch(/events this window/)
+  })
+})
+
+describe('#715 item 7 / #701 fact 2: the waist card says what round 30 says', () => {
+  function router(over: Partial<Device> = {}): Device {
+    return {
+      id: 'router1',
+      name: 'lab-crs',
+      sourceIp: '10.0.0.1',
+      configured: true,
+      firstSeen: '2026-01-01T00:00:00Z',
+      lastSeen: '2026-09-03T00:00:00Z',
+      eventCount: 10,
+      status: 'live',
+      ...over,
+    }
+  }
+
+  function rule(over: Partial<RouterFilterRule> = {}): RouterFilterRule {
+    return {
+      ordinal: 0,
+      comment: '',
+      chain: 'forward',
+      action: 'drop',
+      srcAddressList: '',
+      logPrefix: '',
+      log: true,
+      ...over,
+    }
+  }
+
+  function waistText(container: HTMLElement): string {
+    const card = container.querySelector('.isl.waist')?.parentElement
+    return card?.querySelector('.n-sub')?.textContent?.trim() ?? ''
+  }
+
+  it('draws version, the waist and the enabled rule count, in round 30\'s order', () => {
+    appState.devices = [router({ routerosVersion: '7.20.1' })]
+    policyState.byDevice = { router1: [rule({ ordinal: 0 }), rule({ ordinal: 1 }), rule({ ordinal: 2 })] }
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(waistText(container)).toBe('RouterOS 7.20.1 · the waist · 3 rules')
+  })
+
+  it('leaves the version out rather than inventing one, when the router has not reported it', () => {
+    appState.devices = [router()]
+    policyState.byDevice = { router1: [rule()] }
+    const { container } = render(Topography)
+    flushSync()
+
+    // Singular, and no leading "RouterOS" fragment at all -- not
+    // "RouterOS unknown", which would read as a version the router gave us.
+    expect(waistText(container)).toBe('the waist · 1 rule')
+  })
+
+  it('says nothing about rules until the table has actually been pushed', () => {
+    // The regression that matters: "0 rules" about a router with a full
+    // rule set is our own silence reported as a fact about the network.
+    appState.devices = [router({ routerosVersion: '7.20.1' })]
+    policyState.byDevice = {}
+    const { container } = render(Topography)
+    flushSync()
+
+    const text = waistText(container)
+    expect(text).toBe('RouterOS 7.20.1 · the waist')
+    expect(text).not.toMatch(/rule/)
+  })
+
+  it('counts a pushed but empty table as zero, because that is a real answer', () => {
+    appState.devices = [router()]
+    policyState.byDevice = { router1: [] }
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(waistText(container)).toBe('the waist · 0 rules')
+  })
+
+  it('leaves disabled rules out of the count, and counts a rule that never mentioned it', () => {
+    appState.devices = [router()]
+    policyState.byDevice = {
+      router1: [rule({ ordinal: 0, disabled: false }), rule({ ordinal: 1, disabled: true }), rule({ ordinal: 2 })],
+    }
+    const { container } = render(Topography)
+    flushSync()
+
+    // Two: the explicitly enabled one and the one from a push made
+    // before the field existed. Absent must not read as disabled.
+    expect(waistText(container)).toBe('the waist · 2 rules')
+  })
+
+  it('counts only the primary device\'s rules, not the estate\'s', () => {
+    appState.devices = [router(), router({ id: 'router2', name: 'edge', lastSeen: '2026-01-02T00:00:00Z' })]
+    policyState.byDevice = { router1: [rule()], router2: [rule(), rule(), rule(), rule()] }
+    const { container } = render(Topography)
+    flushSync()
+
+    // router1 is the primary: both are configured, and it has the later
+    // lastSeen.
+    expect(waistText(container)).toBe('the waist · 1 rule')
+  })
+
+  it('no longer draws the live events/s figure round 30 draws nowhere on this node', () => {
+    appState.devices = [router({ routerosVersion: '7.20.1' })]
+    appState.stats = { eventsPerSecond: 34 } as never
+    policyState.byDevice = { router1: [rule()] }
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(waistText(container)).not.toMatch(/events\/s/)
   })
 })
