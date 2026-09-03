@@ -122,6 +122,58 @@ func TestDHCPLeasesARPAddressListsSortedAndAccessible(t *testing.T) {
 	}
 }
 
+// TestWireguardAndPPPActiveSortedAndAccessible is issue #874's
+// reproducer for the two new accessors: WireguardInterfaces,
+// WireguardPeers and PPPActive were already accepted and stored
+// generically by Apply, but had no exported getter before this issue
+// needed one -- the same gap #243 slice 5 found for DHCP/ARP/address
+// lists.
+func TestWireguardAndPPPActiveSortedAndAccessible(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"wireguard-interface","page":1,"pages":1,"records":[{"name":"wg1","comment":"","publicKey":"","listenPort":51821},{"name":"wg0","comment":"","publicKey":"","listenPort":51820}]}`)
+	apply(t, s, "router-1", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"zzz","allowedAddress":"10.0.1.0/24","endpointAddress":"","comment":"z"},{"publicKey":"aaa","allowedAddress":"10.0.0.0/24","endpointAddress":"","comment":"a"}]}`)
+	apply(t, s, "router-1", `{"kind":"ppp-active","page":1,"pages":1,"records":[{"name":"zeta","service":"l2tp"},{"name":"alpha","service":"sstp"}]}`)
+
+	ifaces, updatedAt, ok := s.WireguardInterfaces("router-1")
+	if !ok || updatedAt.IsZero() {
+		t.Fatal("WireguardInterfaces reported no data after an applied page")
+	}
+	if len(ifaces) != 2 || ifaces[0].Name != "wg0" || ifaces[1].Name != "wg1" {
+		t.Errorf("WireguardInterfaces = %+v, want sorted by name", ifaces)
+	}
+
+	peers, _, ok := s.WireguardPeers("router-1")
+	if !ok {
+		t.Fatal("WireguardPeers reported no data after an applied page")
+	}
+	if len(peers) != 2 || peers[0].PublicKey != "aaa" || peers[1].PublicKey != "zzz" {
+		t.Errorf("WireguardPeers = %+v, want sorted by public key", peers)
+	}
+
+	sessions, _, ok := s.PPPActive("router-1")
+	if !ok {
+		t.Fatal("PPPActive reported no data after an applied page")
+	}
+	if len(sessions) != 2 || sessions[0].Name != "alpha" || sessions[1].Name != "zeta" {
+		t.Errorf("PPPActive = %+v, want sorted by name", sessions)
+	}
+}
+
+// TestWireguardAndPPPActiveAreDistinctNoData extends
+// TestNoDataIsDistinctFromEmpty to the three new accessors.
+func TestWireguardAndPPPActiveAreDistinctNoData(t *testing.T) {
+	s := New()
+	if _, _, ok := s.WireguardInterfaces("router-1"); ok {
+		t.Error("WireguardInterfaces reported ok for a device that never pushed")
+	}
+	if _, _, ok := s.WireguardPeers("router-1"); ok {
+		t.Error("WireguardPeers reported ok for a device that never pushed")
+	}
+	if _, _, ok := s.PPPActive("router-1"); ok {
+		t.Error("PPPActive reported ok for a device that never pushed")
+	}
+}
+
 func TestDevicesListsEveryPushingDeviceSorted(t *testing.T) {
 	s := New()
 	if devs := s.Devices(); len(devs) != 0 {
