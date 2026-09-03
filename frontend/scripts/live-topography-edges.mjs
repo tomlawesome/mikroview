@@ -119,6 +119,24 @@ const rules = [
     dstPort: 53,
     protocol: 'udp',
   },
+  // A disabled rule, for the waist card's count further down (#701 fact
+  // 2). Deliberately on a pair the table already carries, so it folds
+  // into that edge rather than adding one -- this scenario's real job is
+  // measuring the edges apart, and a seventh edge would change the
+  // geometry it measures.
+  {
+    ordinal: 13,
+    comment: 'bridge1 out to the web, turned off',
+    chain: 'forward',
+    action: 'accept',
+    srcAddressList: '',
+    logPrefix: '',
+    inInterface: 'bridge1',
+    outInterface: 'ether1',
+    dstPort: 8443,
+    protocol: 'tcp',
+    disabled: true,
+  },
 ]
 
 check(
@@ -181,6 +199,45 @@ for (const lens of ['Policy', 'Traffic', 'Coverage']) {
     [...document.querySelectorAll('[data-card="topography"] path.rib')].filter((p) => (p.getAttribute('d') ?? '').replace(/\s+/g, ' ').trim() === 'M700 104 V 232').length,
   )
   check(trunks === 1, `the ${lens} lens draws exactly one waist-to-internet trunk (${trunks})`)
+}
+
+// The waist card, against a real push (#715 item 7, #701 fact 2). Round
+// 30 draws "RouterOS <version> · the waist · <N> rules", and the count
+// is enabled rules only.
+//
+// The card draws whichever device the map calls primary, and the gate's
+// instance is shared -- an earlier scenario's router can hold that slot.
+// So the shape is asserted unconditionally, and the exact count only
+// when the card is actually showing the router this scenario pushed to.
+// Asserting the string outright would fail on a neighbour's device and
+// report a defect that is not there.
+await openLens('Policy')
+const waist = await page.evaluate(() => {
+  const card = document.querySelector('[data-card="topography"] .isl.waist')?.parentElement
+  return {
+    name: card?.querySelector('.n-name')?.textContent?.trim() ?? '',
+    sub: card?.querySelector('.n-sub')?.textContent?.trim() ?? '',
+  }
+})
+
+check(
+  /^(RouterOS .+ · )?the waist( · \d+ rules?)?$/.test(waist.sub),
+  `the waist card reads round 30's fields and nothing else ("${waist.sub}")`,
+)
+check(!/events\/s/.test(waist.sub), 'the waist card no longer carries a rate round 30 draws nowhere on it')
+
+const ours = await (await page.request.get(`${URL_BASE}/api/devices`)).json()
+const mine = ours.devices?.find((d) => d.id === DEVICE)
+if (mine && waist.name === mine.name) {
+  // Seven rules went up, one disabled, so the honest answer is six. A
+  // card reading seven would be counting rules that do nothing, which is
+  // the distinction the owner's ruling turns on.
+  check(
+    waist.sub === 'RouterOS 7.23.3 (stable) · the waist · 6 rules',
+    `the waist card counts enabled rules only ("${waist.sub}")`,
+  )
+} else {
+  console.log(`  - waist count skipped: the map's primary device is "${waist.name}", not this scenario's "${mine?.name}"`)
 }
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
