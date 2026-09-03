@@ -82,6 +82,13 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // Fall.svelte. It retires #544's interim ("Stream as landing") wholesale:
 // the default view below is 'fall', not 'live', and Stream keeps its own
 // Live-group row rather than being the entry point.
+// 'tune-logging' (#435) is the config-annotation helper -- its own
+// surface, not a wizard step (the issue's decision 2), reached from the
+// wizard's finish screen and from the topography's coverage lens on a
+// dark pair. Deliberately outside the deck (see App.svelte's DECK_VIEWS
+// and its own comment): a workflow you step into and leave, not a
+// dashboard you'd swipe to, the same shape Fleet historically had before
+// #647/#785 folded it in.
 export type View =
   | 'fall'
   | 'topography'
@@ -93,6 +100,7 @@ export type View =
   | 'fleet'
   | 'audit'
   | 'engineroom'
+  | 'tune-logging'
 
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
