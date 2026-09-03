@@ -403,6 +403,69 @@ export async function fetchRouterAddresses(device: string): Promise<RouterTable<
   return res.json()
 }
 
+// Per-tunnel state derived server-side from the pushed WireGuard tables
+// (issue #874, City 9's ingest side): a peer is "up" when its last
+// handshake was under three minutes old at push time, an interface is
+// "up" if any of its peers is, and "unknown" means the wireguard-peer
+// kind has never been pushed for this device at all -- never a guessed
+// down. Peers are not attributed to a specific interface (see the
+// server-side doc comment on wireguardInterfaceView); every peer on the
+// device appears under every interface. #866 (the city's WireGuard
+// footbridges) and #701's fact 3 are the intended readers; nothing in
+// this codebase fetches this type yet.
+export interface RouterWireguardPeer {
+  publicKey: string
+  allowedAddress: string[]
+  endpointAddress: string
+  comment: string
+  lastHandshake?: string
+  currentEndpointAddress?: string
+  rx?: number
+  tx?: number
+  disabled?: boolean
+  state: 'up' | 'down'
+  since?: string
+}
+
+export interface RouterWireguardInterface {
+  name: string
+  comment: string
+  publicKey: string
+  listenPort: number
+  state: 'up' | 'down' | 'unknown'
+  peers: RouterWireguardPeer[]
+}
+
+export interface RouterWireguardTunnels {
+  available: boolean
+  updatedAt?: string
+  peersAvailable: boolean
+  peersUpdatedAt?: string
+  interfaces: RouterWireguardInterface[]
+}
+
+// One currently active /ppp/active session (issue #874) -- covers
+// L2TP, PPTP, SSTP and OVPN alike, all surfaced through the same
+// RouterOS menu. A row exists here only while RouterOS considers the
+// session active, so presence in this list is itself the up signal; a
+// tunnel name a caller already knows about from elsewhere that is not
+// present here reads as down.
+export interface RouterPPPSession {
+  name: string
+  service: string
+  address: string
+  callerId: string
+  uptime: string
+  state: 'up'
+  since?: string
+}
+
+export interface RouterPPPActive {
+  available: boolean
+  updatedAt?: string
+  sessions: RouterPPPSession[]
+}
+
 // Mirrors internal/api/flags.go's handleFlagsList response: the flag
 // list plus the last hour of newly-raised-episode counts by type (see
 // FlagTimeBucket) for the metrics page -- one endpoint, same convention
