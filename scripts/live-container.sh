@@ -154,7 +154,6 @@ entities: {storePath: /var/lib/mikroview/entities.json}
 audit: {storePath: /var/lib/mikroview/audit.json}
 setup: {storePath: /var/lib/mikroview/setup.json}
 watchlist:
-  storePath: /var/lib/mikroview/watchlist.json
   matchLogPath: /var/lib/mikroview/matchlog.jsonl
 EOF
 

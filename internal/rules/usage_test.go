@@ -89,7 +89,7 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 
 func TestOpenSkipsNilArrayElements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rule-usage.json")
-	data := `[null, {"rule":"r1","firstSeen":"2026-01-01T00:00:00Z","lastSeen":"2026-01-01T00:00:00Z","count":1}, null]`
+	data := `{"recordingSince":"2026-01-01T00:00:00Z","rules":[null, {"rule":"r1","firstSeen":"2026-01-01T00:00:00Z","lastSeen":"2026-01-01T00:00:00Z","count":1}, null]}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -291,6 +291,112 @@ func TestStaleReturnsOnlyEntriesOlderThanMaxAge(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("expected %v, got %v", want, got)
 		}
+	}
+}
+
+// TestRecordingSinceStampedOnFreshStore covers issue #701's honesty
+// bound: a store with no prior document (Open("") or a missing file)
+// must still report a RecordingSince, so a caller building "distinct
+// rules fired in the last N days" always has a window to bound its
+// claim by. Bounded to "close to now" rather than an exact value since
+// the stamp is taken from the wall clock during Open.
+func TestRecordingSinceStampedOnFreshStore(t *testing.T) {
+	before := time.Now()
+	s, err := Open("")
+	if err != nil {
+		t.Fatalf("Open(\"\") returned an error: %v", err)
+	}
+	after := time.Now()
+
+	got := s.RecordingSince()
+	if got.Before(before) || got.After(after) {
+		t.Errorf("expected RecordingSince to be stamped with the load time, got %v, want between %v and %v", got, before, after)
+	}
+}
+
+// TestRecordingSinceStampedOnMissingFile is TestRecordingSinceStampedOnFreshStore
+// against a configured-but-not-yet-written path, the other documented
+// "fresh store" case.
+func TestRecordingSinceStampedOnMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rule-usage.json")
+	before := time.Now()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() on a missing file returned an error: %v", err)
+	}
+	after := time.Now()
+
+	got := s.RecordingSince()
+	if got.Before(before) || got.After(after) {
+		t.Errorf("expected RecordingSince to be stamped with the load time, got %v, want between %v and %v", got, before, after)
+	}
+}
+
+// TestRecordingSinceSurvivesRoundTripAndDoesNotMoveOnReopen pins the two
+// load-bearing invariants from issue #701: the stamp set on first use
+// persists across a save/load round trip, and reopening the same store
+// later -- with the wall clock having moved on -- must not advance it.
+// A stamp that crept forward on every restart would silently claim a
+// wider "seen firing" window than the store actually covered, which is
+// exactly the dishonesty the owner's decision rules out.
+func TestRecordingSinceSurvivesRoundTripAndDoesNotMoveOnReopen(t *testing.T) {
+	old := persistMinInterval
+	persistMinInterval = 0
+	defer func() { persistMinInterval = old }()
+
+	path := filepath.Join(t.TempDir(), "rule-usage.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := s.RecordingSince()
+	if first.IsZero() {
+		t.Fatal("expected a fresh store to already have a non-zero RecordingSince")
+	}
+
+	s.Touch("r1", time.Now())
+	flushForTest(t, s)
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopening persisted store: %v", err)
+	}
+	got := reopened.RecordingSince()
+	if !got.Equal(first) {
+		t.Errorf("expected RecordingSince to survive the round trip unchanged, got %v want %v", got, first)
+	}
+
+	// Touch again and reopen a second time, well after "first" -- the
+	// stamp must still not have moved.
+	reopened.Touch("r2", time.Now())
+	flushForTest(t, reopened)
+	reopenedAgain, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopening persisted store a second time: %v", err)
+	}
+	if got := reopenedAgain.RecordingSince(); !got.Equal(first) {
+		t.Errorf("expected RecordingSince to stay pinned across a second reopen, got %v want %v", got, first)
+	}
+}
+
+// TestOpenBareArrayFileFailsClosed pins the consequence of dropping the
+// dual-shape decode: the bare `[...]` array this package wrote before
+// recordingSince existed is now just an unparseable document, so it is
+// refused outright under issue #378's policy. An instance still holding
+// one refuses to start until its stale rule-usage.json is deleted.
+func TestOpenBareArrayFileFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rule-usage.json")
+	data := `[{"rule":"r1","firstSeen":"2026-01-01T00:00:00Z","lastSeen":"2026-01-01T00:00:00Z","count":1}]`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err == nil {
+		t.Fatal("expected a non-nil error for a bare-array document, want fail-closed")
+	}
+	if s != nil {
+		t.Error("expected a nil store on a load failure -- a non-nil store here would still carry a live backend")
 	}
 }
 

@@ -26,18 +26,23 @@ import (
 // entry were two shapes over the same thing -- a definition the engine
 // evaluates -- and the endpoints below expose that one thing uniformly:
 // list/get, enable/disable, scope, param overrides with schema
-// validation, suppressions, provenance and replayability on every
+// validation, provenance and replayability on every
 // response, plus the operator actions an expectation has of its own
 // (promote, observing).
 //
-// Access is admin-only for every route here, exactly matching what the
-// two removed surfaces enforced. #385 records the owner decision that
-// non-admins should eventually see settings surfaces read-only, but that
-// belongs to phase 2's RBAC work: shipping a read-open route now that
-// phase 2 might have to narrow is worse than shipping it closed and
-// widening it deliberately. Every row is recorded in
-// authz_matrix_test.go, which is what forces the question to be answered
-// rather than inherited.
+// Access is user-tier for every route here bar one: each checks
+// callerIsUser, so an admin or a user reaches it and a viewer does not.
+// The exception is handleDefinitionsList, which is open to any signed-in
+// session including viewer -- see its own doc comment.
+//
+// This surface shipped admin-only, matching what the two removed
+// surfaces enforced, and #653 widened it: running the detector bench --
+// enabling a detector, editing its scope, tuning its thresholds -- is a
+// normal operational action rather than an owner-level one, so it
+// belongs to the middle tier that issue introduced. A viewer therefore
+// still reads the whole list, and changes nothing in it. Every row is
+// recorded in authz_matrix_test.go, which is what forces the question to
+// be answered rather than inherited.
 
 // definitionView is one definition as this API serves it: the whole
 // envelope, plus the four things a caller cannot derive from it --
@@ -50,20 +55,19 @@ import (
 // field added to the engine's own struct cannot silently start appearing
 // in an API response.
 type definitionView struct {
-	ID           string                       `json:"id"`
-	Name         string                       `json:"name"`
-	Description  string                       `json:"description,omitempty"`
-	Intent       engine.Intent                `json:"intent"`
-	Kind         engine.Kind                  `json:"kind"`
-	Enabled      bool                         `json:"enabled"`
-	Scope        engine.Scope                 `json:"scope,omitzero"`
-	Params       engine.Params                `json:"params,omitempty"`
-	ParamSchema  []engine.ParamSchema         `json:"paramSchema,omitempty"`
-	Provenance   engine.Provenance            `json:"provenance"`
-	Suppressions []engine.Suppression         `json:"suppressions,omitempty"`
-	Available    bool                         `json:"available"`
-	Distance     map[string]engine.ParamDelta `json:"distance,omitempty"`
-	Replay       replayabilityView            `json:"replay"`
+	ID          string                       `json:"id"`
+	Name        string                       `json:"name"`
+	Description string                       `json:"description,omitempty"`
+	Intent      engine.Intent                `json:"intent"`
+	Kind        engine.Kind                  `json:"kind"`
+	Enabled     bool                         `json:"enabled"`
+	Scope       engine.Scope                 `json:"scope,omitzero"`
+	Params      engine.Params                `json:"params,omitempty"`
+	ParamSchema []engine.ParamSchema         `json:"paramSchema,omitempty"`
+	Provenance  engine.Provenance            `json:"provenance"`
+	Available   bool                         `json:"available"`
+	Distance    map[string]engine.ParamDelta `json:"distance,omitempty"`
+	Replay      replayabilityView            `json:"replay"`
 	// Coverage is only ever set for an expectation definition -- the
 	// question it answers ("can any pushed firewall rule produce an event
 	// this would match?", #274 item 1) is about an entry's scope, and a
@@ -209,18 +213,17 @@ type replayabilityView struct {
 func (s *Server) definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool, now time.Time) definitionView {
 	d := sd.Definition
 	v := definitionView{
-		ID:           d.ID,
-		Name:         d.Name,
-		Description:  d.Description,
-		Intent:       d.Intent,
-		Kind:         d.Kind,
-		Enabled:      d.Enabled,
-		Scope:        d.Scope,
-		Params:       d.Params,
-		ParamSchema:  d.ParamSchema,
-		Provenance:   d.Provenance,
-		Suppressions: d.Suppressions,
-		Available:    sd.Available,
+		ID:          d.ID,
+		Name:        d.Name,
+		Description: d.Description,
+		Intent:      d.Intent,
+		Kind:        d.Kind,
+		Enabled:     d.Enabled,
+		Scope:       d.Scope,
+		Params:      d.Params,
+		ParamSchema: d.ParamSchema,
+		Provenance:  d.Provenance,
+		Available:   sd.Available,
 	}
 	if !sd.Available {
 		// Nothing below can be answered for a definition this binary
@@ -720,16 +723,15 @@ type updateDefinitionRequest struct {
 	// ships the logic, not of the deployment -- the same reasoning that
 	// keeps kind, intent, schema and provenance untouchable there (see
 	// engine.DefinitionsStore.SetParams).
-	Name         *string               `json:"name"`
-	Enabled      *bool                 `json:"enabled"`
-	Scope        *engine.Scope         `json:"scope"`
-	Params       engine.Params         `json:"params"`
-	Suppressions *[]engine.Suppression `json:"suppressions"`
-	Expectation  *expectationRequest   `json:"expectation"`
+	Name        *string             `json:"name"`
+	Enabled     *bool               `json:"enabled"`
+	Scope       *engine.Scope       `json:"scope"`
+	Params      engine.Params       `json:"params"`
+	Expectation *expectationRequest `json:"expectation"`
 }
 
-// handleDefinitionsUpdate applies whichever of enabled, scope, params,
-// suppressions and expectation data the request actually carries.
+// handleDefinitionsUpdate applies whichever of enabled, scope, params
+// and expectation data the request actually carries.
 //
 // Params are validated against this definition's own declared
 // ParamSchema before anything is stored (engine.DefinitionsStore.
@@ -835,12 +837,6 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if req.Suppressions != nil {
-		if err := s.Definitions.SetSuppressions(id, *req.Suppressions); err != nil {
-			writeDefinitionError(w, err)
-			return
-		}
-	}
 	if req.Name != nil && !isExpectation {
 		if err := s.Definitions.SetName(id, *req.Name); err != nil {
 			writeDefinitionError(w, err)
@@ -896,9 +892,6 @@ func definitionAuditDetail(req updateDefinitionRequest) string {
 	}
 	if req.Params != nil {
 		parts = append(parts, "params")
-	}
-	if req.Suppressions != nil {
-		parts = append(parts, fmt.Sprintf("suppressions=%d", len(*req.Suppressions)))
 	}
 	if req.Name != nil {
 		parts = append(parts, "name")
@@ -975,15 +968,19 @@ type cloneRequest struct {
 // its own identity -- a fresh id, never the original's (see
 // engine.Definition.ID's own doc comment on why a clone needs one).
 //
-// Supported for an expectation definition, which is data all the way
-// down: cloning one produces a second entry the operator can then edit.
-// Refused, with its reason, for a shipped detection definition -- its
-// logic is Go keyed by its own id, so a "clone" of it could only be an
-// envelope with no logic behind it: a definition that lists, looks
-// configurable, and evaluates nothing. Overriding the original's params
-// (PUT) is the operation that actually exists for those, and the refusal
-// says so rather than leaving an operator to discover the clone never
-// fires.
+// Supported for the two definitions that are data all the way down: an
+// expectation, and a custom declarative detection, whose conditions and
+// aggregation are a stored DetectionSpec (#502) rather than Go. Cloning
+// either produces a second definition the operator can then edit.
+//
+// Refused, with its reason, for a shipped definition -- its logic is Go
+// keyed by its own id, so a "clone" of it could only be an envelope with
+// no logic behind it: a definition that lists, looks configurable, and
+// evaluates nothing. Overriding the original's params (PUT) is the
+// operation that actually exists for those, and the refusal says so
+// rather than leaving an operator to discover the clone never fires.
+// Starting a custom detector *from* a shipped one is a different
+// operation, and needs a conditions editor nothing has yet (#829).
 //
 // User-tier (#653), same as the rest of the definitions surface -- see
 // handleDefinitionsList's doc comment.
@@ -998,15 +995,9 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 		writeDefinitionError(w, err)
 		return
 	}
-	if !ok {
-		if _, exists := s.Definitions.Get(id); !exists {
-			http.Error(w, "no such definition", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "a shipped definition cannot be cloned: its logic is compiled into this binary and keyed by its own id, so a copy would evaluate nothing. Override its params instead (PUT /api/definitions/{id}).", http.StatusBadRequest)
-		return
-	}
 
+	// Decoded before the branch below, since both clone paths honour an
+	// operator-supplied name.
 	var req cloneRequest
 	if r.ContentLength > 0 {
 		if err := decodeJSONBody(w, r, &req); err != nil {
@@ -1014,6 +1005,28 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	if !ok {
+		sd, exists := s.Definitions.Get(id)
+		if !exists {
+			http.Error(w, "no such definition", http.StatusNotFound)
+			return
+		}
+		if sd.Definition.Detection != nil {
+			// A Detection block is carried by exactly the definitions
+			// that can be copied structure and all: custom, declarative,
+			// intent=detection (engine.Definition.validateDetectionBlock
+			// enforces all three), so it is the whole test. An
+			// unavailable one -- a spec from a newer build -- is not
+			// short-circuited here: Upsert validates the copy and the
+			// refusal then names the field this binary did not
+			// understand, which is more use than "unavailable".
+			s.cloneCustomDetection(w, r, sd.Definition, req.Name)
+			return
+		}
+		http.Error(w, "a shipped definition cannot be cloned: its logic is compiled into this binary and keyed by its own id, so a copy would evaluate nothing. Override its params instead (PUT /api/definitions/{id}).", http.StatusBadRequest)
+		return
+	}
+
 	clone := entry
 	clone.ID = newDefinitionEntryID()
 	clone.CreatedAt = time.Now()
@@ -1034,6 +1047,37 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.Audit.Record(auditActor(r), "definition.clone", clone.ID, "from "+id)
+	s.writeDefinition(w, http.StatusCreated, clone.ID)
+}
+
+// cloneCustomDetection copies an operator-authored detector: its
+// DetectionSpec, its params and its scope under a fresh id (issue #810).
+// Nothing here is compiled logic -- the structure is the stored spec and
+// the sensitivity is ordinary Params -- so the copy evaluates exactly
+// what the original does, which is the thing a shipped detector's clone
+// could never do.
+//
+// The copy starts paused (#787 decision C: "paused so a half-edited
+// detector never runs"). An operator clones a detector in order to change
+// it, and a copy that started firing on creation would duplicate the
+// original's flags for as long as that editing took. Suppressions are
+// carried over with it: they are exclusions the operator wrote for this
+// detector's own matching, so a copy of the matching without them would
+// fire on traffic they had already ruled out.
+func (s *Server) cloneCustomDetection(w http.ResponseWriter, r *http.Request, src engine.Definition, name string) {
+	clone := src
+	clone.ID = newDefinitionEntryID()
+	clone.Enabled = false
+	if name != "" {
+		clone.Name = name
+	} else if clone.Name != "" {
+		clone.Name = clone.Name + " (copy)"
+	}
+	if err := s.Definitions.Upsert(clone); err != nil {
+		writeDefinitionError(w, err)
+		return
+	}
+	s.Audit.Record(auditActor(r), "definition.clone", clone.ID, "from "+src.ID)
 	s.writeDefinition(w, http.StatusCreated, clone.ID)
 }
 
@@ -1074,6 +1118,26 @@ type replayRequest struct {
 type replayResponse struct {
 	Receipt *receiptView `json:"receipt,omitempty"`
 	Decline *declineView `json:"decline,omitempty"`
+	// Current is the same replay run again with the definition's live
+	// params -- the number the candidate's receipt is being compared
+	// against ("would have fired 3 times ... currently: 41", #786).
+	//
+	// It has to be measured here, in this request, rather than read off
+	// anything already counted: the flag time series counts new episodes
+	// over the last 60 minutes and Flag.count is re-fires within one
+	// episode, so neither is the same measurement as a receipt, and
+	// putting either beside one would compare two different questions
+	// (#824, gap 1). Running the identical replay over the identical
+	// corpus with only the params changed is the only like-for-like
+	// answer available, and it costs one more pass over traffic already
+	// in memory.
+	//
+	// Omitted when the candidate is empty: the replay then already ran
+	// with the live params, so the receipt above *is* the current
+	// number, and a copy of it beside itself would say nothing. The
+	// nested value never carries a Current of its own for the same
+	// reason.
+	Current *replayResponse `json:"current,omitempty"`
 }
 
 // receiptView is engine.Receipt on the wire. The covered window is
@@ -1123,6 +1187,11 @@ type declineView struct {
 // are different answers, and collapsing them is the overclaim #403's
 // contract exists to rule out.
 //
+// A request carrying a candidate is answered twice: once with the
+// candidate, once with the definition's live params, the second under
+// `current` (#786). See replayResponse.Current for why the comparison
+// has to be measured here rather than read off an existing counter.
+//
 // User-tier (#653), same as the rest of the definitions surface -- see
 // handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsReplay(w http.ResponseWriter, r *http.Request) {
@@ -1152,12 +1221,29 @@ func (s *Server) handleDefinitionsReplay(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	result, err := engine.ReplayDefinition(sd.Definition, engine.NewMemoryCorpus(s.Store), req.Params)
+	corpus := engine.NewMemoryCorpus(s.Store)
+	result, err := engine.ReplayDefinition(sd.Definition, corpus, req.Params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusOK, replayViewFor(result))
+	view := replayViewFor(result)
+	if len(req.Params) > 0 {
+		// The same replay again with the definition's live params (nil
+		// candidate) over the same corpus, so the two numbers differ in
+		// the params and in nothing else -- see replayResponse.Current.
+		if live, err := engine.ReplayDefinition(sd.Definition, corpus, nil); err == nil {
+			current := replayViewFor(live)
+			view.Current = &current
+		}
+		// A failure here is deliberately not the request's failure: the
+		// candidate's receipt is a complete, honest answer to what was
+		// asked, and losing it because the comparison alongside it could
+		// not be computed would trade the answer for the footnote.
+		// Current stays nil, and the caller shows the receipt without a
+		// "currently" beside it.
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func replayViewFor(result engine.Result) replayResponse {

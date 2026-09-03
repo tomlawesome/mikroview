@@ -9,30 +9,21 @@ import { flushSync } from 'svelte'
 // initialises under jsdom.
 vi.mock('../lib/api', () => ({
   fetchFlags: vi.fn(async () => ({ flags: [], timeSeries: [] })),
-  clearFlag: vi.fn(),
   clearAllFlags: vi.fn(),
-  clearFlagPermanent: vi.fn(),
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),
-  fetchExclusions: vi.fn(async () => []),
-  removeExclusion: vi.fn(),
   fetchFlagEpisode: vi.fn(async () => ({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })),
   // The learning shelf (#642) reads baseline warm-up through
   // detectorSettingsState, whose refresh() calls these two.
   fetchDefinitions: vi.fn(async () => ({ definitions: [], coverageEvidence: { complete: true } })),
   updateDefinition: vi.fn(),
+  // The learning shelf's honesty line (#640) reads the expectations
+  // ledger directly on mount -- an empty ledger by default, same
+  // "swallow a failure" grammar as detectorSettingsState.refresh().
+  fetchExpectations: vi.fn(async () => []),
 }))
 
-import {
-  clearFlag,
-  clearFlagPermanent,
-  deleteFlagVerdict,
-  fetchDefinitions,
-  fetchExclusions,
-  fetchFlagEpisode,
-  removeExclusion,
-  setFlagVerdict,
-} from '../lib/api'
+import { deleteFlagVerdict, fetchDefinitions, fetchExpectations, fetchFlagEpisode, setFlagVerdict } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
 import { detectorSettingsState } from '../lib/detectorSettings.svelte'
 import { authState } from '../lib/auth.svelte'
@@ -298,30 +289,33 @@ describe('Flags tiers (#653)', () => {
     authState.username = 'kai'
   })
 
-  it('a viewer gets no clear action in the drawer', async () => {
+  it('a viewer gets no way to judge a flag -- absent, not disabled', async () => {
     authState.state = 'authenticated'
     authState.role = 'viewer'
     render(Flags)
     flushSync()
 
+    expect(screen.queryByRole('button', { name: /expected/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /checked/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /investigate/ })).toBeNull()
+
+    // The drawer is still reachable -- a viewer may read the evidence,
+    // just not act on it.
     await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
     await Promise.resolve()
     flushSync()
-
-    expect(screen.queryByRole('button', { name: 'clear with a note' })).toBeNull()
+    expect(document.querySelector('tr.drawer')).toBeTruthy()
   })
 
-  it('a user gets the clear action in the drawer', async () => {
+  it('a user gets all three verdicts on a fresh flag', () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(Flags)
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
-    await Promise.resolve()
-    flushSync()
-
-    expect(screen.getByRole('button', { name: 'clear with a note' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /expected/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /checked/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /investigate/ })).toBeTruthy()
   })
 })
 
@@ -455,79 +449,6 @@ describe('"where" links into the topography, not the stream (#678)', () => {
     flushSync()
 
     expect(document.querySelector('tr.drawer')).toBeNull()
-  })
-})
-
-// #678/#679: the note is the reason the clear happened, and rides along
-// on the same clearFlag call the audit log now records it from (see
-// internal/api's handleFlagsClear). The action wears the record's own
-// wording, "clear with a note", rather than the bare "Clear" the card
-// carried.
-describe('clear with a note (#678)', () => {
-  beforeEach(() => {
-    vi.resetAllMocks()
-    vi.mocked(fetchFlagEpisode).mockResolvedValue({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })
-    authState.state = 'authenticated'
-    authState.role = 'user'
-    flagsState.list = [testFlag()]
-  })
-
-  async function openDrawer() {
-    render(Flags)
-    flushSync()
-    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
-    await Promise.resolve()
-    flushSync()
-  }
-
-  it('clicking "clear with a note" opens a note field instead of clearing immediately', async () => {
-    await openDrawer()
-
-    await fireEvent.click(screen.getByRole('button', { name: 'clear with a note' }))
-    flushSync()
-
-    expect(screen.getByLabelText('Note for clearing this flag')).toBeTruthy()
-    expect(clearFlag).not.toHaveBeenCalled()
-  })
-
-  it('typing a note and confirming clears with that note', async () => {
-    await openDrawer()
-
-    await fireEvent.click(screen.getByRole('button', { name: 'clear with a note' }))
-    flushSync()
-    await fireEvent.input(screen.getByLabelText('Note for clearing this flag'), {
-      target: { value: 'expected, speed test' },
-    })
-    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
-    await Promise.resolve()
-    flushSync()
-
-    expect(clearFlag).toHaveBeenCalledWith('f1', 'expected, speed test')
-  })
-
-  it('confirming with an empty note still clears, with no note recorded', async () => {
-    await openDrawer()
-
-    await fireEvent.click(screen.getByRole('button', { name: 'clear with a note' }))
-    flushSync()
-    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
-    await Promise.resolve()
-    flushSync()
-
-    expect(clearFlag).toHaveBeenCalledWith('f1', undefined)
-  })
-
-  it('Cancel discards the note and leaves the flag open, uncleared', async () => {
-    await openDrawer()
-
-    await fireEvent.click(screen.getByRole('button', { name: 'clear with a note' }))
-    flushSync()
-    await fireEvent.input(screen.getByLabelText('Note for clearing this flag'), { target: { value: 'nope' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    flushSync()
-
-    expect(clearFlag).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: 'clear with a note' })).toBeTruthy()
   })
 })
 
@@ -737,6 +658,12 @@ describe('the learning shelf (#642)', () => {
   it('a viewer never gets the warming line -- the signal is user-tier, so it degrades by absence', async () => {
     authState.role = 'viewer'
     vi.mocked(fetchDefinitions).mockResolvedValue(warmingDefinitions as never)
+    // A well-stocked ledger (#640), so the shelf's other reason to
+    // appear -- the early-noise honesty line -- stays out of this
+    // assertion, which is about the warming signal alone.
+    vi.mocked(fetchExpectations).mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, type: 'port_scan', target: `198.51.100.${i}` })) as never,
+    )
     // Even a stale store left over from a more-privileged session must
     // not leak the claim to a viewer.
     detectorSettingsState.list = [
@@ -771,13 +698,13 @@ describe('the learning shelf (#642)', () => {
   // #780 moved the trio out of the drawer and onto the row itself (a
   // row's verb, not a drawer's), so a shelf row's chips are reached
   // directly -- no need to open the drawer first any more.
-  it("a shelf row's trio calls noise, stamps it in place, and offers undo -- no drawer involved", async () => {
+  it("a shelf row's chips call checked, stamp it in place, and offer undo -- no drawer involved", async () => {
     const judged = testFlag({
       id: 'p1',
       provisional: true,
       cleared: true,
       clearedAt: '2026-01-01T00:01:00Z',
-      verdict: 'noise' as const,
+      verdict: 'checked' as const,
       verdictBy: 'kai',
       verdictAt: '2026-01-01T00:01:00Z',
     })
@@ -787,12 +714,12 @@ describe('the learning shelf (#642)', () => {
     flushSync()
 
     const shelf = document.querySelector('section[aria-label^="Learning shelf"]') as HTMLElement
-    await fireEvent.click(within(shelf).getByRole('button', { name: /noise/ }))
+    await fireEvent.click(within(shelf).getByRole('button', { name: /checked/ }))
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('p1', 'noise')
-    expect(within(shelf).getByText('noise', { selector: '.stamp' })).toBeTruthy()
+    expect(setFlagVerdict).toHaveBeenCalledWith('p1', 'checked')
+    expect(within(shelf).getByText('checked', { selector: '.stamp' })).toBeTruthy()
     expect(within(shelf).getByRole('button', { name: 'undo' })).toBeTruthy()
     // The row stays -- pinned in place, dimmed -- rather than vanishing
     // the instant the server marks it cleared (the recently-cleared
@@ -807,18 +734,72 @@ describe('the learning shelf (#642)', () => {
     flushSync()
 
     const shelf = document.querySelector('section[aria-label^="Learning shelf"]') as HTMLElement
-    expect(within(shelf).queryByRole('button', { name: /noise/ })).toBeNull()
+    expect(within(shelf).queryByRole('button', { name: /checked/ })).toBeNull()
     expect(within(shelf).queryByRole('button', { name: /expected/ })).toBeNull()
-    expect(within(shelf).queryByRole('button', { name: /real/ })).toBeNull()
+    expect(within(shelf).queryByRole('button', { name: /investigate/ })).toBeNull()
   })
 })
 
-// #780 (rounds 34-35): the verdict trio moves from the drawer -- gated
-// on `provisional` -- onto every open row's own CALL IT column, gated
-// on canEdit alone, since the backend takes a verdict on any flag
-// (store.go:915). This closes #688's own recorded gap for the settled
-// table.
-describe('CALL IT: verdicts as a row\'s verb, not a drawer\'s (#780)', () => {
+// The learning shelf's early-noise honesty line (#640): while the
+// expectations ledger is thin (fewer than five recorded), the shelf
+// says so in words, rather than leaving a noisy inbox unexplained.
+describe('the learning shelf states the early-noise honesty line (#640)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchDefinitions).mockResolvedValue({ definitions: [], coverageEvidence: { complete: true } } as never)
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    authState.username = 'kai'
+    detectorSettingsState.list = []
+    flagsState.list = []
+  })
+
+  it('with no expectations recorded yet, the shelf shows the early-noise line', async () => {
+    vi.mocked(fetchExpectations).mockResolvedValue([])
+    render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    const shelf = document.querySelector('section[aria-label^="Learning shelf"]') as HTMLElement
+    expect(shelf).toBeTruthy()
+    expect(shelf.textContent).toContain('Flags will be noisy')
+  })
+
+  it('with five or more expectations recorded and nothing provisional or warming, the line is absent', async () => {
+    vi.mocked(fetchExpectations).mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, type: 'port_scan', target: `198.51.100.${i}` })) as never,
+    )
+    render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    expect(document.querySelector('section[aria-label^="Learning shelf"]')).toBeNull()
+  })
+
+  it('a rejected fetch renders no line and does not throw', async () => {
+    vi.mocked(fetchExpectations).mockRejectedValue(new Error('boom'))
+    expect(() => render(Flags)).not.toThrow()
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    expect(document.querySelector('section[aria-label^="Learning shelf"]')).toBeNull()
+  })
+})
+
+// #780 (rounds 34-35) put the verdicts on every open row's own CALL IT
+// column, gated on canEdit alone. #640 replaced what they say: a fresh
+// flag offers expected · checked · investigate, an investigated one
+// expected · resolved.
+describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     vi.mocked(fetchFlagEpisode).mockResolvedValue({
@@ -827,13 +808,12 @@ describe('CALL IT: verdicts as a row\'s verb, not a drawer\'s (#780)', () => {
       windowStart: '2026-01-01T00:00:00Z',
       serverTime: '2026-01-01T00:00:00Z',
     })
-    vi.mocked(fetchExclusions).mockResolvedValue([])
     authState.state = 'authenticated'
     authState.role = 'admin'
     authState.username = 'tom'
   })
 
-  it('the settled table carries the trio for canEdit, with no drawer open', () => {
+  it('a fresh flag offers expected · checked · investigate, with no drawer open', () => {
     flagsState.list = [testFlag({ id: 's1' })]
     render(Flags)
     flushSync()
@@ -841,8 +821,51 @@ describe('CALL IT: verdicts as a row\'s verb, not a drawer\'s (#780)', () => {
     const settled = document.querySelector('section[aria-label^="Active flags"]') as HTMLElement
     expect(document.querySelector('tr.drawer')).toBeNull()
     expect(within(settled).getByRole('button', { name: /expected/ })).toBeTruthy()
-    expect(within(settled).getByRole('button', { name: /noise/ })).toBeTruthy()
-    expect(within(settled).getByRole('button', { name: /real/ })).toBeTruthy()
+    expect(within(settled).getByRole('button', { name: /checked/ })).toBeTruthy()
+    expect(within(settled).getByRole('button', { name: /investigate/ })).toBeTruthy()
+    // The verdicts #640 removed, gone from the row rather than renamed.
+    expect(within(settled).queryByRole('button', { name: /noise/ })).toBeNull()
+    expect(within(settled).queryByRole('button', { name: /clear with a note/ })).toBeNull()
+    expect(within(settled).queryByRole('button', { name: /never again/ })).toBeNull()
+  })
+
+  it('an investigated flag offers expected · resolved instead, and stays open', () => {
+    flagsState.list = [
+      testFlag({ id: 's1', verdict: 'investigate', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z' }),
+    ]
+    render(Flags)
+    flushSync()
+
+    const settled = document.querySelector('section[aria-label^="Active flags"]') as HTMLElement
+    expect(within(settled).getByRole('button', { name: /expected/ })).toBeTruthy()
+    expect(within(settled).getByRole('button', { name: /resolved/ })).toBeTruthy()
+    expect(within(settled).queryByRole('button', { name: /checked/ })).toBeNull()
+    expect(within(settled).queryByRole('button', { name: /investigate$/ })).toBeNull()
+
+    const row = document.querySelector('tr.frow') as HTMLElement
+    expect(row.classList.contains('investigating')).toBe(true)
+    expect(row.classList.contains('fdone')).toBe(false)
+    expect(row.querySelector('.openc')).toBeTruthy()
+  })
+
+  it('calling resolved from an investigated row clears it', async () => {
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ id: 's1', cleared: true, verdict: 'resolved', verdictBy: 'tom', verdictAt: '2026-01-01T00:02:00Z' }) as never,
+    )
+    flagsState.list = [
+      testFlag({ id: 's1', verdict: 'investigate', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z' }),
+    ]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /resolved/ }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'resolved')
+    const row = document.querySelector('tr.frow') as HTMLElement
+    expect(row.querySelector('.stamp.resolved')?.textContent).toBe('resolved')
+    expect(row.classList.contains('fdone')).toBe(true)
   })
 
   it('a viewer gets no chips, only the caret, in the settled table', () => {
@@ -857,36 +880,36 @@ describe('CALL IT: verdicts as a row\'s verb, not a drawer\'s (#780)', () => {
   })
 
   it('a chip click never toggles the drawer on its way past the row', async () => {
-    vi.mocked(setFlagVerdict).mockResolvedValue(testFlag({ id: 's1', cleared: true, verdict: 'noise' }) as never)
+    vi.mocked(setFlagVerdict).mockResolvedValue(testFlag({ id: 's1', cleared: true, verdict: 'checked' }) as never)
     flagsState.list = [testFlag({ id: 's1' })]
     render(Flags)
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: /noise/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /checked/ }))
     await Promise.resolve()
     flushSync()
 
     expect(document.querySelector('tr.drawer')).toBeNull()
   })
 
-  it('calling noise stamps the row, flashes/dims it, and offers undo, which restores the trio', async () => {
+  it('calling checked stamps the row, flashes/dims it, and offers undo, which restores the chips', async () => {
     vi.mocked(setFlagVerdict).mockResolvedValue(
-      testFlag({ id: 's1', cleared: true, verdict: 'noise', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z' }) as never,
+      testFlag({ id: 's1', cleared: true, verdict: 'checked', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z' }) as never,
     )
     flagsState.list = [testFlag({ id: 's1' })]
     render(Flags)
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: /noise/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /checked/ }))
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'noise')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'checked')
     const row = document.querySelector('tr.frow') as HTMLElement
     expect(row.classList.contains('struck')).toBe(true)
     expect(row.classList.contains('fdone')).toBe(true)
-    expect(row.querySelector('.stamp.noise')?.textContent).toBe('noise')
-    // The caret is gone from a resolved, non-real row (round 35's
+    expect(row.querySelector('.stamp.checked')?.textContent).toBe('checked')
+    // The caret is gone from a judged-and-cleared row (round 35's
     // close(r)) -- only the stamp and its undo remain.
     expect(row.querySelector('.openc')).toBeNull()
 
@@ -897,107 +920,199 @@ describe('CALL IT: verdicts as a row\'s verb, not a drawer\'s (#780)', () => {
 
     expect(deleteFlagVerdict).toHaveBeenCalledWith('s1')
     expect(document.querySelector('.stamp')).toBeNull()
-    expect(screen.getByRole('button', { name: /noise/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /checked/ })).toBeTruthy()
   })
 
-  it('calling real stamps REAL in the CALL IT column and keeps the row open, with the caret still there', async () => {
+  it('calling expected records the expectation through the same verdict call, and clears the flag', async () => {
     vi.mocked(setFlagVerdict).mockResolvedValue(
-      testFlag({ id: 's1', verdict: 'real', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z' }) as never,
+      testFlag({ id: 's1', cleared: true, verdict: 'expected', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z' }) as never,
+    )
+    flagsState.list = [testFlag({ id: 's1', size: 30 })]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /expected/ }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'expected')
+    const row = document.querySelector('tr.frow') as HTMLElement
+    expect(row.querySelector('.stamp.expected')?.textContent).toBe('expected')
+    expect(row.classList.contains('fdone')).toBe(true)
+  })
+
+  it('calling investigate keeps the row open, switches its chips, and leads the story with it', async () => {
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ id: 's1', verdict: 'investigate', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z' }) as never,
     )
     flagsState.list = [testFlag({ id: 's1' })]
     render(Flags)
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: /real/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /investigate/ }))
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'real')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'investigate')
     const row = document.querySelector('tr.frow') as HTMLElement
-    expect(row.classList.contains('isreal')).toBe(true)
-    // Real never sets `cleared`, so the row is not dimmed away.
+    expect(row.classList.contains('investigating')).toBe(true)
+    // Investigate never sets `cleared`, so the row is not dimmed away.
     expect(row.classList.contains('fdone')).toBe(false)
-    expect(row.querySelector('.stamp.real')?.textContent).toBe('real')
     expect(row.querySelector('.openc')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'undo' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /resolved/ })).toBeTruthy()
 
-    // The story leads with the "called real" line.
     await fireEvent.click(row)
     flushSync()
-    expect(document.querySelector('.story .called')?.textContent).toContain('Called real at')
+    expect(document.querySelector('.story .called')?.textContent).toContain('Being investigated since')
   })
 
-  it('never again arms on the first click, then calls clearPermanent and lists the pair in the exclusions body', async () => {
-    vi.mocked(clearFlagPermanent).mockResolvedValue(undefined as never)
-    vi.mocked(fetchExclusions)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: 'x1', type: 'port_scan', target: '198.51.100.1' }])
-    flagsState.list = [testFlag({ id: 's1', target: '198.51.100.1' })]
+  it('a returning flag says what was expected and what it saw (#640)', () => {
+    flagsState.list = [testFlag({ id: 's1', size: 120, expectedSize: 30 })]
     render(Flags)
     flushSync()
-    await Promise.resolve()
-    flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
-    await Promise.resolve()
-    flushSync()
-
-    const never = screen.getByRole('button', { name: 'never again' })
-    await fireEvent.click(never)
-    flushSync()
-    expect(screen.getByRole('button', { name: /confirm — Port scan never fires again for 198.51.100.1/ })).toBeTruthy()
-    expect(clearFlagPermanent).not.toHaveBeenCalled()
-
-    await fireEvent.click(screen.getByRole('button', { name: /confirm —/ }))
-    await Promise.resolve()
-    flushSync()
-
-    expect(clearFlagPermanent).toHaveBeenCalledWith('s1')
-    const row = document.querySelector('tr.frow') as HTMLElement
-    expect(row.querySelector('.stamp')?.textContent).toBe('never again')
-    expect(row.querySelector('.olink')).toBeNull() // no undo on a never-again row
-
-    expect(document.querySelector('.excl-label')?.textContent).toContain('never again ·')
-    await fireEvent.click(screen.getByRole('button', { name: 'show them' }))
-    flushSync()
-    expect(document.querySelector('tr.frow.fx .wl-plain')?.textContent).toBe('198.51.100.1')
+    expect(screen.getByText('expected up to 30, saw 120')).toBeTruthy()
   })
 
-  it('the exclusions body renders only for an admin', async () => {
-    authState.role = 'user'
-    vi.mocked(fetchExclusions).mockResolvedValue([{ id: 'x1', type: 'port_scan', target: '198.51.100.1' }])
+  it('a re-fire on a checked pair says when it was checked and that it was fine', () => {
+    flagsState.list = [testFlag({ id: 's1', priorVerdict: 'checked', priorVerdictAt: '2026-09-02T09:00:00Z' })]
+    render(Flags)
+    flushSync()
+
+    const note = document.querySelector('.returned')?.textContent ?? ''
+    expect(note).toContain('you checked this on')
+    expect(note).toContain('and found it fine')
+  })
+
+  it("a re-fire on a resolved pair says it's back", () => {
+    flagsState.list = [testFlag({ id: 's1', priorVerdict: 'resolved', priorVerdictAt: '2026-09-02T09:00:00Z' })]
+    render(Flags)
+    flushSync()
+
+    const note = document.querySelector('.returned')?.textContent ?? ''
+    expect(note).toContain('resolved on')
+    expect(note).toContain("it's back")
+  })
+
+  it('a flag with no history behind it says nothing extra', () => {
     flagsState.list = [testFlag({ id: 's1' })]
     render(Flags)
     flushSync()
-    await Promise.resolve()
-    flushSync()
 
-    expect(fetchExclusions).not.toHaveBeenCalled()
-    expect(document.querySelector('.excl-label')).toBeNull()
-    // Nor the never-again verb itself, in the drawer.
-    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
-    flushSync()
-    expect(screen.queryByRole('button', { name: 'never again' })).toBeNull()
+    expect(document.querySelector('.returned')).toBeNull()
   })
+})
 
-  it('letting an exclusion fire again removes it from the body', async () => {
-    vi.mocked(fetchExclusions).mockResolvedValue([{ id: 'x1', type: 'port_scan', target: '198.51.100.1' }])
-    vi.mocked(removeExclusion).mockResolvedValue(undefined as never)
-    flagsState.list = []
+// #641: "Resolved — undo · watch for this". The offer rides on the undo
+// line a resolved flag already leaves behind, and it is an offer -- the
+// operator can decline, and the flag stays resolved.
+describe("the resolved row's offer of a watcher (#641)", () => {
+  const paired = { pairs: [{ host: '192.168.1.10', port: 445 }], pairsTotal: 1 }
+
+  // A judged row stays in place, dimmed with its stamp and undo, only
+  // for the flag this session judged -- so every case here goes through
+  // the click rather than starting from an already-resolved flag, which
+  // the table filters away.
+  async function resolveIt(evidence: Flag['evidence'] = paired) {
+    flagsState.list = [
+      testFlag({
+        id: 's1',
+        type: 'internal_recon',
+        target: '192.168.1.50',
+        evidence,
+        verdict: 'investigate',
+        verdictBy: 'tom',
+        verdictAt: '2026-09-02T09:00:00Z',
+      }),
+    ]
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({
+        id: 's1',
+        type: 'internal_recon',
+        target: '192.168.1.50',
+        evidence,
+        cleared: true,
+        verdict: 'resolved',
+        verdictBy: 'tom',
+        verdictAt: '2026-09-02T09:01:00Z',
+      }) as never,
+    )
     render(Flags)
     flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /resolved/ }))
+    await Promise.resolve()
+    flushSync()
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.view = 'flags'
+    topologyNavState.pendingWatchDraft = null
+  })
+
+  it('offers "watch for this" beside undo once a flag is resolved', async () => {
+    await resolveIt()
+
+    const done = document.querySelector('.vdone') as HTMLElement
+    expect(done.textContent?.replace(/\s+/g, ' ').trim()).toBe('resolved undo · watch for this')
+  })
+
+  it('opens the watchlist draft prefilled, and remembers to come back here', async () => {
+    await resolveIt()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'watch for this' }))
+    flushSync()
+
+    expect(topologyNavState.pendingWatchDraft).toEqual({
+      who: '192.168.1.50',
+      toward: '192.168.1.10 · :445',
+      mode: 'expect',
+      provenance: expect.stringContaining('From the last firing window'),
+      returnTo: 'flags',
+    })
+    expect(appState.view).toBe('watchlist')
+  })
+
+  it('offers nothing to watch where the flag recorded no pairs', async () => {
+    await resolveIt({ ports: [22, 23] })
+
+    expect(screen.queryByRole('button', { name: 'watch for this' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'undo' })).toBeTruthy()
+  })
+
+  it('offers it only on resolved, not on the other verdicts that clear', async () => {
+    flagsState.list = [testFlag({ id: 's1', type: 'internal_recon', target: '192.168.1.50', evidence: paired })]
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({
+        id: 's1',
+        type: 'internal_recon',
+        target: '192.168.1.50',
+        evidence: paired,
+        cleared: true,
+        verdict: 'checked',
+        verdictBy: 'tom',
+        verdictAt: '2026-09-02T09:01:00Z',
+      }) as never,
+    )
+    render(Flags)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /checked/ }))
     await Promise.resolve()
     flushSync()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'show them' }))
-    flushSync()
-    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this exclusion/ }))
-    flushSync()
-    await fireEvent.click(screen.getByRole('button', { name: 'let it fire again' }))
-    await Promise.resolve()
+    expect(document.querySelector('.stamp.checked')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'watch for this' })).toBeNull()
+  })
+
+  it('a viewer never reaches it -- a viewer cannot judge a flag in the first place', () => {
+    authState.role = 'viewer'
+    flagsState.list = [testFlag({ id: 's1', type: 'internal_recon', target: '192.168.1.50', evidence: paired })]
+    render(Flags)
     flushSync()
 
-    expect(removeExclusion).toHaveBeenCalledWith('x1')
-    expect(screen.queryByText('198.51.100.1')).toBeNull()
+    expect(screen.queryByRole('button', { name: /resolved/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'watch for this' })).toBeNull()
   })
 })

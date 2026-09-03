@@ -166,9 +166,21 @@ type Store struct {
 	// is the thing an operator actually controls (it is what they set on
 	// a container) and mikroview can derive the rest.
 	MaxMemory ByteSize `yaml:"maxMemory"`
+	// SettingsStorePath is where internal/settings keeps the figure an
+	// admin set from the app's own memory control (#796). It is not a
+	// second copy of MaxMemory: it is empty until somebody moves that
+	// slider, and from then on it is the value that applies, because a
+	// figure chosen with the live consequence on screen is a more recent
+	// and more deliberate statement than the one the file was built
+	// with. mikroview says at startup which of the two it took.
+	//
+	// Optional persistence, same contract as Flags.StorePath: left
+	// empty, the control still works and still resizes the running
+	// buffer, the choice just does not survive a restart.
+	SettingsStorePath string `yaml:"settingsStorePath"`
 }
 
-// assumedBytesPerEvent is what a typical retained event costs: the fixed
+// AssumedBytesPerEvent is what a typical retained event costs: the fixed
 // struct (464 bytes, internal/store.Event) plus one heap allocation for
 // its raw syslog line, rounded to the allocator's size class. Measured in
 // internal/store/memory_test.go's TestRetainedBytesPerEvent against a
@@ -189,7 +201,7 @@ type Store struct {
 // warning compounding it rather than catching it. The worst case is now
 // roughly 2 KiB + the struct, about 3.5x this constant rather than 107x.
 // See #285 finding 5.
-const assumedBytesPerEvent = 624
+const AssumedBytesPerEvent = 624
 
 // Capacity derives the event ring's element count from the configured
 // memory budget. Always at least 1 -- store.New already treats a
@@ -197,7 +209,7 @@ const assumedBytesPerEvent = 624
 // event's assumed cost should fail the same way rather than silently
 // holding zero.
 func (s Store) Capacity() int {
-	n := int64(s.MaxMemory) / assumedBytesPerEvent
+	n := int64(s.MaxMemory) / AssumedBytesPerEvent
 	if n < 1 {
 		n = 1
 	}
@@ -408,23 +420,20 @@ type Setup struct {
 	StorePath string `yaml:"storePath"`
 }
 
-// Watchlist configures internal/watchlist's entry store and its
-// internal/matchlog match log (#243) -- the persisted replacement for
-// Control Ports' single flat criticalPorts port list. StorePath (the
-// entries themselves) follows the same optional-persistence contract as
-// every other small store here: left empty, entries still work, just
-// don't survive a restart.
+// Watchlist configures the match log (#243) behind the watchlist -- the
+// persisted replacement for Control Ports' single flat criticalPorts
+// port list. The entries themselves are definitions and live in the
+// definitions store (engine.definitionsStorePath).
 //
-// MatchLogPath does not share that contract -- it has no in-memory-only
-// mode, unlike every other store in this file. Durability is the entire
-// reason this store exists (#243 section 3's "a match must survive a
-// restart" requirement); an in-memory match log would be a second
-// volatile event ring with extra steps, not a lesser version of this
-// feature. So MatchLogPath must be non-empty (see CFG-0040) and
-// MatchLogCapacity must be positive (CFG-0041) -- both a good default
-// out of the box, not settings an operator has to supply.
+// MatchLogPath has no in-memory-only mode, unlike every other store in
+// this file. Durability is the entire reason this store exists (#243
+// section 3's "a match must survive a restart" requirement); an
+// in-memory match log would be a second volatile event ring with extra
+// steps, not a lesser version of this feature. So MatchLogPath must be
+// non-empty (see CFG-0040) and MatchLogCapacity must be positive
+// (CFG-0041) -- both a good default out of the box, not settings an
+// operator has to supply.
 type Watchlist struct {
-	StorePath string `yaml:"storePath"`
 	// MatchLogPath is where internal/matchlog's append-only JSON-lines
 	// file lives.
 	MatchLogPath string `yaml:"matchLogPath"`
@@ -446,8 +455,8 @@ type Watchlist struct {
 	MatchLogRetention time.Duration `yaml:"matchLogRetention"`
 	// SuggestionsStorePath is where internal/suggest's candidate pool
 	// (#243 slice 5 -- watchlist entries suggested from data RouterOS has
-	// already pushed) persists. Same optional-persistence contract as
-	// StorePath above: left empty, suggestions still work, they just
+	// already pushed) persists. Optional persistence, same contract as
+	// Flags.StorePath: left empty, suggestions still work, they just
 	// regenerate from scratch (at Off, nothing lost that matters -- see
 	// internal/suggest's package doc comment) on every restart instead of
 	// remembering what was already accepted or hidden.
@@ -582,9 +591,9 @@ type DetectorScope struct {
 // DetectorSettings is one detector's config.yaml-configurable starting
 // point -- enabled by default, unscoped. A live admin-only UI toggle
 // (see docs/configuration.md's "Per-detector toggles" section) can
-// override this at runtime without a restart, persisted separately to
-// DetectorSettingsStorePath; these YAML values are only ever the seed
-// for the first run, not re-read afterward.
+// override this at runtime without a restart, persisted onto the
+// definition itself in the definitions store; these YAML values are only
+// ever the seed for a definition that store does not already hold.
 type DetectorSettings struct {
 	Enabled bool          `yaml:"enabled"`
 	Scope   DetectorScope `yaml:"scope"`
@@ -675,15 +684,11 @@ type Flags struct {
 	StaleRuleDays          int           `yaml:"staleRuleDays"`
 	StaleRuleCheckInterval time.Duration `yaml:"staleRuleCheckInterval"`
 
-	// DetectorSettingsStorePath persists live UI on/off+scope toggles
-	// (see internal/detect.SettingsStore) so they survive a restart --
-	// same optional-persistence contract as StorePath above. Detectors
-	// map is YAML-only (no env var), same rationale as RuleNames/
+	// Detectors is YAML-only (no env var), same rationale as RuleNames/
 	// HostNames/Devices below: a structured per-detector record doesn't
 	// map cleanly onto env vars. Keyed by detector name (e.g.
-	// "port_scan", "rule_spike" -- see internal/detect.DetectorName).
-	DetectorSettingsStorePath string                      `yaml:"detectorSettingsStorePath"`
-	Detectors                 map[string]DetectorSettings `yaml:"detectors"`
+	// "port_scan", "rule_spike" -- see engine.ShippedDefinitionIDs).
+	Detectors map[string]DetectorSettings `yaml:"detectors"`
 
 	// VPNInterfaces/VPNConfidenceMultiplier (issue #105): see
 	// internal/detect.Config's matching fields for what each one means
@@ -721,13 +726,10 @@ type DeviceMAC struct {
 // definitions store stays in-memory only.
 type Engine struct {
 	StorePath string `yaml:"storePath"`
-	// DefinitionsStorePath persists the definitions store (#404). On
-	// first boot against an empty document, it is seeded from
-	// internal/detect's settings store and internal/watchlist's entries
-	// store (see engine.MigrateDefinitions) -- non-destructively: both
-	// old stores keep reading and writing their own documents until
-	// #405/#406 port their evaluation logic onto this chassis and retire
-	// them.
+	// DefinitionsStorePath persists the definitions store (#404): every
+	// shipped detector and every watchlist expectation, in one document.
+	// Anything it does not already hold is seeded on boot from this
+	// binary's shipped catalogue (see engine.SeedShippedDefinitions).
 	DefinitionsStorePath string `yaml:"definitionsStorePath"`
 }
 
@@ -872,11 +874,12 @@ func defaults() Config {
 		},
 		Store: Store{
 			Retention: 24 * time.Hour,
-			// 120MiB / 624 bytes/event (assumedBytesPerEvent) derives to
+			// 120MiB / 624 bytes/event (AssumedBytesPerEvent) derives to
 			// ~201,649 events -- close to the old flat 200,000 default,
 			// so a fresh install's memory footprint does not jump on
 			// upgrade even though the unit did.
-			MaxMemory: 120 * 1024 * 1024,
+			MaxMemory:         120 * 1024 * 1024,
+			SettingsStorePath: DefaultDataDir + "/settings.json",
 		},
 		Log: Log{
 			Level: "info",
@@ -939,8 +942,7 @@ func defaults() Config {
 			StaleRuleDays:          30,
 			StaleRuleCheckInterval: time.Hour,
 
-			StorePath:                 DefaultDataDir + "/flags.json",
-			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
+			StorePath: DefaultDataDir + "/flags.json",
 
 			// VPNInterfaces is empty by default -- see its doc comment
 			// for why that's the deliberate, backward-compatible no-op
@@ -971,7 +973,6 @@ func defaults() Config {
 			StorePath: DefaultDataDir + "/setup.json",
 		},
 		Watchlist: Watchlist{
-			StorePath:            DefaultDataDir + "/watchlist.json",
 			MatchLogPath:         DefaultDataDir + "/matchlog.jsonl",
 			MatchLogCapacity:     200_000,
 			MatchLogRetention:    7 * 24 * time.Hour,
@@ -1316,9 +1317,6 @@ func applyEnv(cfg *Config) {
 			cfg.Flags.StaleRuleCheckInterval = d
 		}
 	}
-	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {
-		cfg.Flags.DetectorSettingsStorePath = v
-	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_VPN_INTERFACES"); v != "" {
 		cfg.Flags.VPNInterfaces = parseStringList(v)
 	}
@@ -1356,9 +1354,6 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_SETUP_STORE_PATH"); v != "" {
 		cfg.Setup.StorePath = v
-	}
-	if v := os.Getenv("MIKROVIEW_WATCHLIST_STORE_PATH"); v != "" {
-		cfg.Watchlist.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH"); v != "" {
 		cfg.Watchlist.MatchLogPath = v

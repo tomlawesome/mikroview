@@ -23,7 +23,7 @@
 //     list. GET /api/auth/users is admin-only (#657), so a viewer
 //     issuing it would be a page that loads and immediately 403s.
 
-import { session, feedSyslog, check, done, goTo, launchBrowser } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -57,10 +57,14 @@ check(
 // The shelf holds the whole deck, whatever order an earlier scenario
 // left it in, and exactly one card wears the sign-in mark.
 const shelfNames = await page.$$eval('.stshelf .stcard .nm', (els) => els.map((e) => e.textContent.trim()))
+// Seven, not five: #647 (#634 round 23) put Entities and Settings on the
+// deck as its last two cards, and #653 widened both to the user tier
+// (deckCards.ts:34-52 -- `canEdit` carries them, so an admin sees seven).
+// This scenario drives the shelf as an admin, so seven is the whole deck.
+const DECK_CARDS = ['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']
 check(
-  shelfNames.length === 5 &&
-    ['The fall', 'Topography', 'Metrics', 'Stream', 'The docket'].every((n) => shelfNames.includes(n)),
-  `the shelf holds all five deck cards -- got ${JSON.stringify(shelfNames)}`,
+  shelfNames.length === DECK_CARDS.length && DECK_CARDS.every((n) => shelfNames.includes(n)),
+  `the shelf holds all ${DECK_CARDS.length} deck cards -- got ${JSON.stringify(shelfNames)}`,
 )
 check(
   (await page.$$('.stshelf .stcard.first .lands')).length === 1,
@@ -71,13 +75,18 @@ check(
 // The memory group's buffer count is the honest one to pin: it is a
 // whole number the server publishes, so a placeholder or a stale render
 // is visible as a number that does not move when more events land.
+//
+// The row's first figure is the MiB ceiling (#796, since #823) -- a
+// configured budget, not traffic, so it never moves on its own. The held
+// count (#842) is the live one, and it sits right before " of " ("8 412
+// of ~201 000 events"), so that is what this scenario reads and waits on.
 
 const BUFFER_ROW = '.stsection:has(h3:text-is("memory")) .orow:has-text("event buffer") .ov'
 
 const bufferCount = () =>
   page.$eval(BUFFER_ROW, (el) => {
-    const m = el.textContent.replace(/,/g, '').match(/(\d+)/)
-    return m ? Number(m[1]) : null
+    const m = el.textContent.match(/([\d,\s ]+)\s+of\s/)
+    return m ? Number(m[1].replace(/\D/g, '')) : null
   })
 
 const before = await bufferCount()
@@ -92,15 +101,17 @@ const climbed = await page
       // exist. And deliberately no fallback to "the first number on the
       // page": the ingest group's events/s moves on its own, so a
       // fallback would let this check pass without ever reading the
-      // buffer.
+      // buffer. Reads the held count before " of ", not the row's first
+      // figure, which has been the MiB ceiling -- a static budget -- since
+      // #823 (#842).
       const og = [...document.querySelectorAll('.stsection')].find(
         (g) => g.querySelector('h3')?.textContent.trim() === 'memory',
       )
       const row = og && [...og.querySelectorAll('.orow')].find((r) => r.textContent.includes('event buffer'))
       const el = row?.querySelector('.ov')
       if (!el) return false
-      const m = el.textContent.replace(/,/g, '').match(/(\d+)/)
-      return m ? Number(m[1]) > was : false
+      const m = el.textContent.match(/([\d,\s ]+)\s+of\s/)
+      return m ? Number(m[1].replace(/\D/g, '')) > was : false
     },
     before,
     { timeout: 20000 },
@@ -181,71 +192,32 @@ check(
   'the people group marks the new account as read-only',
 )
 
-const browser = await launchBrowser()
-const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
-const viewerPage = await viewerCtx.newPage()
-
-// Attached before the first navigation, so it sees every request the
-// viewer's session makes from sign-in onwards -- not only the ones after
-// Settings opens.
-const viewerRequests = []
-viewerPage.on('request', (r) => viewerRequests.push(r.url()))
-
-await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
-await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
-await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
-await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
-
-// goTo's own wait proves arrival -- .page-header h2 is gone with #700, same as the admin half of this scenario
-// above.
-await goTo(viewerPage, 'Settings')
-check(true, 'a viewer can open Settings -- the operational groups stay readable')
-
-// The READ-ONLY declaration itself has nowhere to render today -- #700
-// struck the page heading it lived in, and round 30 drew no replacement
-// (a gap tracked on #691, not a decision that viewers stop being told).
-// Pinned here as the present truth rather than the stale claim that it
-// still renders once, in the header.
-check(
-  (await viewerPage.$$('text=READ-ONLY')).length === 0,
-  'no READ-ONLY declaration renders anywhere (#691 gap, not this scenario\'s to fix)',
-)
-
-check(
-  (await viewerPage.$$(`${MACHINES} h3`)).length === 0,
-  'the keys group is absent for a viewer, not read-only and not empty',
-)
-check(
-  (await viewerPage.$$(`${PEOPLE} h3`)).length === 0,
-  'the people group is absent for a viewer, not read-only and not empty',
-)
-
-check(
-  !viewerRequests.some((u) => u.includes('/api/auth/users') || u.includes('/api/tokens')),
-  'a viewer never even asks for the account or token list -- the requests that would 403 are not issued at all',
-)
-
-const viewerDisabled = await viewerPage.$$eval('.page button, .page input', (els) =>
-  els.filter((e) => e.disabled).length,
-)
-check(viewerDisabled === 0, `nothing on the page is rendered disabled for a viewer -- got ${viewerDisabled}`)
-
-await viewerPage.click('.olink:has-text("tune")')
-await viewerPage.waitForSelector('.bench .row')
-check((await viewerPage.$$('.bench .cbx')).length === 0, 'the run/pause checkboxes are absent for a viewer')
-check((await viewerPage.$$('.bench .scope-knob')).length === 0, 'the scope knobs are absent for a viewer')
-const states = await viewerPage.$$eval('.bench .state', (els) => els.map((e) => e.textContent.trim()))
-check(
-  states.length > 0 && states.every((s) => s === 'running' || s === 'paused'),
-  `every detector's state survives as a word for a viewer -- got ${JSON.stringify(states.slice(0, 4))}`,
-)
-const scopeFacts = await viewerPage.$$eval('.bench .scope-fact', (els) => els.length)
-check(scopeFacts > 0, 'a scope reads as a sentence for a viewer rather than vanishing with its knob')
-
-const viewerConsole = []
-viewerPage.on('console', (m) => m.type() === 'error' && viewerConsole.push(m.text()))
-await browser.close()
+// --- The viewer half of this scenario moved to live-viewer-surfaces.mjs --
+//
+// It used to sign a viewer in here and walk Settings, proving #490's
+// grammar -- rows absent for a tier that cannot use them, never disabled.
+// #657 then ruled Settings out of a viewer's navigation entirely, and a
+// viewer has no other route in: navigation is `appState.view` mutation
+// from the UI only (BottomBar.svelte:174, the roll rail), there are no URL
+// routes, and a viewer's deck carries no `engineroom` card
+// (deckCards.ts:45-50). Asking for it leaves Deck.svelte:48's activeIndex
+// at -1 and nothing mounts, so `goTo(viewerPage, 'Settings')` waits 30s for
+// a rail button that cannot exist and throws, taking the rest of this
+// scenario with it.
+//
+// The coverage was not lost: live-viewer-surfaces.mjs already carries it,
+// against the *user* tier -- who can still open the page, so who the
+// grammar now has to hold for. Its own comment records the move
+// ("live-engine-room.mjs used to assert this against a viewer, whose route
+// into the room #657 removed"), claims 1-3 there. This block was the
+// leftover, live-checking an unreachable state; #706 migrated the
+// assertions and left it standing.
+//
+// What is deliberately *not* migrated: "a viewer never even asks for
+// /api/auth/users or /api/tokens". On a page a viewer cannot open, that is
+// true for free and proves nothing. The server-side gate it was standing in
+// for is pinned directly -- live-viewer-surfaces.mjs claim 4 and
+// internal/api/tokens_test.go.
 
 // --- Clean up: this account should not outlive the scenario -------------
 // Arm-then-confirm (round 28's gesture, retained rather than a confirm()

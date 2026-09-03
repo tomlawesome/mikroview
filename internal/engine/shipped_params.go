@@ -2,7 +2,11 @@
 
 package engine
 
-import "time"
+import (
+	"time"
+
+	"github.com/tomlawesome/mikroview/internal/flags"
+)
 
 // This file is the field-by-field walk issue #401 asks for: one
 // []ParamSchema per one of internal/detect's twelve shipped detectors
@@ -110,7 +114,7 @@ var GlobalSpikeParamSchema = []ParamSchema{
 // docs/decisions/evaluation-engine.md means by per-definition params --
 // and is not a behaviour change on migration, since both are seeded from
 // the same DefaultConfig().CriticalPorts (see shippedDetectors,
-// definitions_migrate.go). An operator who wants them to keep agreeing
+// definitions_convert.go). An operator who wants them to keep agreeing
 // simply leaves both alone.
 var DistributedBruteForceParamSchema = []ParamSchema{
 	{Name: "ports", Type: ParamTypePortList, Required: true,
@@ -314,4 +318,103 @@ var ReputationParamSchema = []ParamSchema{
 		Description: "How many of a group episode's distinct addresses are checked. Kept at or below lookupConcurrency, so a group check starting from an idle pool can reach its own cap."},
 	{Name: "groupMinSignificantSamples", Type: ParamTypeInt, Min: floatBound(countParamMin), Required: true,
 		Description: "How many sampled addresses must return a real score before a group aggregate is trusted at all. Below this, no floor is applied either way."},
+}
+
+// SizeMeasure is one shipped definition's declaration of what its
+// *size* is (#640): the measure it compares against its threshold, and
+// therefore the number an operator's "this is normal here" expectation
+// is recorded in and later judged against (flags.Exclusion.Absorbs).
+//
+// The zero value is the explicit "this definition has no size"
+// declaration -- see SizeNone. That is a real answer, not a gap: a
+// definition judging an absence (device_silence), list membership
+// (known_bad_ip) or a rate against a moving baseline (global_spike,
+// rule_spike) has no whole count that "within 1.5x normal" means
+// anything about, and an expectation on one of those keeps the older,
+// blunter meaning -- ignore this host on this detector outright.
+type SizeMeasure struct {
+	// Unit is the operator-facing noun for the measure, matching the
+	// Unit already on the ParamSchema entry the size is compared against
+	// where there is one ("distinct ports", "events"). Empty exactly
+	// when this definition declares no size, which is what Declared
+	// tests.
+	Unit string
+	// Description says, in one sentence, what is counted and over what
+	// -- and for a size-less declaration, why there is nothing to count.
+	// Always present, including on SizeNone entries: the ledger and the
+	// next reader both need the reason, not a blank.
+	Description string
+}
+
+// SizeNone builds the explicit no-size declaration -- a named
+// constructor rather than a bare SizeMeasure{} at each site so a reader
+// can tell a deliberate "none" from a forgotten entry, and so it is
+// impossible to declare none without saying why.
+func SizeNone(description string) SizeMeasure {
+	return SizeMeasure{Description: description}
+}
+
+// Declared reports whether this definition has a size at all.
+func (m SizeMeasure) Declared() bool { return m.Unit != "" }
+
+// shippedSizeMeasures is the size declaration for every shipped
+// definition, one entry per shippedDetectors entry
+// (definitions_convert.go) -- exhaustively, including the ones with no
+// size, which TestShippedSizeMeasureCoversEveryShippedDefinition
+// enforces. A missing entry fails that test rather than defaulting to
+// "none": #640 asks for an explicit declaration per detector, and a
+// default would make "nobody decided" indistinguishable from "decided
+// none".
+//
+// Where a definition declares a size, the value it actually emits is set
+// on Emission.Size by that definition's own evaluation code -- this is
+// what the number means, that is what it was. Every declarative
+// definition's size is its counting-mode tally, set once in
+// DeclarativeDefinition.Evaluate rather than per builder, because that
+// is the whole of what the kind evaluates.
+var shippedSizeMeasures = map[string]SizeMeasure{
+	string(flags.TypePortScan): {Unit: "distinct ports",
+		Description: "Distinct destination ports this source reached in the window -- the count compared against threshold."},
+	string(flags.TypeActivitySpike): {Unit: "events",
+		Description: "Events from this source in the window -- the count compared against threshold, whichever baseline judged it."},
+	string(flags.TypeCriticalPort): {Unit: "attempts",
+		Description: "Attempts this source made against critical ports in the window -- the count compared against threshold."},
+	string(flags.TypeGlobalSpike): SizeNone(
+		"No size: this judges a network-wide events/sec rate against a moving baseline, not a count against a fixed threshold, and its target is the whole network rather than a host. There is no whole number an expectation could record."),
+	string(flags.TypeDistributedBruteForce): {Unit: "distinct sources",
+		Description: "Distinct source addresses hitting the same critical port in the window -- the count compared against threshold."},
+	string(flags.TypeOutboundAnomaly): {Unit: "distinct destinations",
+		Description: "Distinct external destinations this source reached in the window -- the count compared against threshold."},
+	string(flags.TypeInternalRecon): {Unit: "distinct destinations",
+		Description: "Distinct internal destinations this source reached in the window -- the count compared against threshold."},
+	string(flags.TypeRuleSpike): SizeNone(
+		"No size: this judges a rule's hits/sec against that rule's own moving baseline, not a count against a fixed threshold, so there is no whole number an expectation could record."),
+	string(flags.TypeRepeatedDrops): {Unit: "drops",
+		Description: "Drops recorded for this source and port in the window -- the count compared against threshold."},
+	string(flags.TypeLowSlowScan): {Unit: "distinct ports",
+		Description: "Distinct destination ports this source reached across the long window. This definition clears two count thresholds (ports and hosts); the port breadth is the size -- see the reasoning at its emit site."},
+	string(flags.TypeOffHoursActivity): {Unit: "events",
+		Description: "Events from this source during the flagged hour -- the count compared against minCount."},
+	string(flags.TypeDeviceSilence): SizeNone(
+		"No size: this fires on the absence of events past a staleness deadline. Silence has no magnitude to be normal at."),
+	string(flags.TypeUnexpectedMailSender): SizeNone(
+		"No size: deterministic. An untagged LAN host originating outbound SMTP at all is the signal -- there is no threshold, so no measure against one."),
+	string(flags.TypeStaleRule): SizeNone(
+		"No size: deterministic. A rule that fired once and has not fired since is judged on elapsed time, not on a count."),
+	string(flags.TypeKnownBadIP): SizeNone(
+		"No size: deterministic. Membership of a curated threat-intel list is itself the signal, independent of volume or pattern."),
+	"netclass": SizeNone(
+		"No size: this raises no flag of its own. It reinforces the confidence of flags other definitions already raised."),
+	"reputation": SizeNone(
+		"No size: this raises no flag of its own. It enriches flags other definitions already raised."),
+}
+
+// ShippedSizeMeasure returns the size declaration for a shipped
+// definition id, and whether that id is one this binary ships at all.
+// ok=false means "not a shipped definition"; a shipped one always has a
+// declaration, and SizeMeasure.Declared is what distinguishes a real
+// size from an explicit none.
+func ShippedSizeMeasure(id string) (SizeMeasure, bool) {
+	m, ok := shippedSizeMeasures[id]
+	return m, ok
 }

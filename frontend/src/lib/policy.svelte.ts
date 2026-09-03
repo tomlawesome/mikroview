@@ -127,9 +127,16 @@ class PolicyState {
   /** False until any device has pushed a rule table: the lens's honest
    * empty state ("waiting for the push", never "broken") reads this. */
   anyPushed = $state(false)
+  /** The same tables kept per device, because a card about one router
+   * must not count another's rules (#701 fact 2). A device is a key
+   * here only if it actually pushed the table -- pushing an empty one
+   * is a real answer and keeps the key with an empty array, which is
+   * why absence is tested by key and not by length. */
+  byDevice = $state<Record<string, RouterFilterRule[]>>({})
 
   async refresh() {
     const all: RouterFilterRule[] = []
+    const byDevice: Record<string, RouterFilterRule[]> = {}
     let any = false
     for (const d of appState.devices) {
       try {
@@ -137,13 +144,29 @@ class PolicyState {
         if (res.available) {
           any = true
           all.push(...res.rules)
+          byDevice[d.id] = res.rules
         }
       } catch {
         // Absence is the empty state, already honest on the lens.
       }
     }
     this.pushed = all
+    this.byDevice = byDevice
     this.anyPushed = any
+  }
+
+  /** How many of a device's pushed filter rules are doing anything.
+   *
+   * Null means the table has never been pushed, which is not zero: the
+   * caller draws nothing rather than claiming a router has no rules
+   * (owner ruling, 2026-09-03, #701 fact 2). `disabled` is tested
+   * against true rather than for falsiness because a push predating the
+   * field omits it, and an absent field must read as enabled. */
+  enabledRuleCount(deviceId: string | undefined): number | null {
+    if (!deviceId) return null
+    const rules = this.byDevice[deviceId]
+    if (!rules) return null
+    return rules.filter((r) => r.disabled !== true).length
   }
 
   edges = $derived.by(() => policyEdgesFromRules(this.pushed))

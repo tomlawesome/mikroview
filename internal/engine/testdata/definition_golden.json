@@ -48,12 +48,5 @@
       "threshold": 15,
       "window": "60s"
     }
-  },
-  "suppressions": [
-    {
-      "id": "supp-1",
-      "target": "198.51.100.9",
-      "reason": "known monitoring host"
-    }
-  ]
+  }
 }

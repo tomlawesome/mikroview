@@ -30,15 +30,20 @@
     finishHeadline,
     forcedPastRecord,
     notObserved,
+    prose,
     pushScript,
     ruleTaggingCommands,
     scheduleCommands,
+    sourceSplits,
+    arrivingAddresses,
+    srcAddressCommand,
     syslogCommands,
     undeclaredDevices,
     SKIP_CONSEQUENCES,
     STEP_COUNT,
     type LedgerStep,
   } from '../lib/setupsteps'
+  import MemoryControl from './MemoryControl.svelte'
 
   // Steps land seconds to minutes apart (the documented push scheduler
   // runs every 20 minutes), so this polls rather than streaming -- and
@@ -86,6 +91,14 @@
   )
   const onFinish = $derived(wizardState.pane === FINISH_PANE)
   const undeclared = $derived(undeclaredDevices(wizardState.devices))
+
+  // The source-address split (#442): each declared device the server has
+  // paired with undeclared addresses that are streaming, and those
+  // addresses once. Step 2's body below the observation line states
+  // both facts and prints the remedy; it never claims the two are one
+  // router, because only the operator knows.
+  const splits = $derived(sourceSplits(wizardState.devices))
+  const arriving = $derived(arrivingAddresses(splits))
 
   // The heavy warning takes the step body in place, rather than stacking
   // a second dialog on the first. Cleared on every pane change: a
@@ -443,6 +456,61 @@
                 {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
                 {step.status.detail}
               </p>
+              {#if step.n === 2 && step.status.state === 'partial' && splits.length > 0}
+                <!-- The source-address split (#442), under the
+                     observation line. The mismatch sentence's shape:
+                     what you told mikroview, what the router shows, no
+                     diagnosis; "MikroView can't tell X. You can."; then
+                     the printed command. #436 reads the same way. -->
+                <div class="split">
+                  <p class="note">
+                    MikroView can't tell whether these are the same router — a router holds an address
+                    on every network it routes, and its logs arrive stamped with whichever one faces
+                    this instance. You can tell.
+                  </p>
+                  <p class="note">
+                    <strong>If they are the same router</strong>, pick the address it should be known
+                    by here:
+                  </p>
+                  {#each splits as split (split.declared)}
+                    <p class="note">
+                      <strong>Keep {split.declared}</strong> (recommended). Run this on the router — it
+                      makes the logs arrive from the address you declared:
+                    </p>
+                    <pre>{srcAddressCommand(split.declared)}</pre>
+                    <button
+                      type="button"
+                      class="copy"
+                      onclick={() => copy(srcAddressCommand(split.declared), `src-${split.declared}`)}
+                    >
+                      {copied === `src-${split.declared}` ? 'Copied' : 'Copy'}
+                    </button>
+                    <p class="note">
+                      Recommended because everything else — the token step 4 mints, the tables it
+                      pushes — follows the declared identity, so nothing has to be reissued.
+                    </p>
+                    <p class="note">
+                      {#if arriving.length === 1}
+                        <strong>Or keep {arriving[0]}</strong>: change <code>sourceIp</code> to
+                        {arriving[0]} in config.yaml and restart.
+                      {:else}
+                        <strong>Or keep the arriving address</strong>: change <code>sourceIp</code> to
+                        whichever of {prose(arriving)} this router is, in config.yaml, and restart.
+                      {/if}
+                      MikroView then matches what actually arrives. If a token was already minted for
+                      {split.declared}, reissue it afterwards — a token keeps the identity it was minted
+                      for.
+                    </p>
+                  {/each}
+                  <p class="note">
+                    <strong>If they are two different routers, nothing is wrong.</strong>
+                    {prose(arriving)} just {arriving.length === 1 ? "hasn't" : "haven't"} been named yet
+                    — step 5 covers that — and this notice clears itself when
+                    {prose(splits.map((s) => s.declared))}
+                    {splits.length === 1 ? 'sends its first log' : 'send their first logs'}.
+                  </p>
+                </div>
+              {/if}
               {#if step.outcome === 'skipped'}
                 <p class="decision skipped">
                   Skipped — {SKIP_CONSEQUENCES[step.n - 1]}. {step.receipt}
@@ -462,6 +530,30 @@
                   </li>
                 {/each}
               </ol>
+              <!-- The one place the wizard offers the buffer's size
+                   (#796): the same track and the same sentence as
+                   Settings' memory group, once, on the pane where the
+                   operator has finished pointing a router at mikroview
+                   and is about to go and look at what arrives. It is
+                   asked here rather than as a step of its own because
+                   nothing about it can be checked or waited for -- it is
+                   a choice, not an observation, and the wizard's steps
+                   are all observations. -->
+              {#if appState.stats?.memory}
+                <div class="memory">
+                  <h3>How much to hold</h3>
+                  <p class="note">
+                    Every event lives in memory and nothing else. This is how much of this machine's
+                    memory to spend on it; the oldest events fall away as new ones arrive.
+                  </p>
+                  <MemoryControl
+                    mem={appState.stats.memory}
+                    stats={appState.stats}
+                    canEdit={isAdmin}
+                    onapplied={() => appState.refreshDevicesAndStats().catch(() => {})}
+                  />
+                </div>
+              {/if}
               <p class="note">Run setup… reopens this any time, from the Admin group.</p>
             {/if}
           </div>
@@ -721,6 +813,21 @@
     font-size: 15px;
   }
 
+  /* The buffer-size control on the finish pane (#796) -- separated from
+     the read-back above it the way the wizard already separates its own
+     blocks, and left to MemoryControl for everything inside. */
+  .memory {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  .memory h3 {
+    margin: 0 0 4px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
   pre {
     margin: 0;
     align-self: stretch;
@@ -827,6 +934,21 @@
     50% {
       opacity: 1;
     }
+  }
+
+  /* The source-address split's body (#442): the wizard's own note and
+     pre blocks, grouped so they read as one explanation under the
+     observation line rather than as loose notes. */
+  .split {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .split strong {
+    color: var(--fg);
   }
 
   .decision {

@@ -25,6 +25,7 @@ listen:
 store:
   retention: 24h
   maxMemory: 120MiB
+  settingsStorePath: /var/lib/mikroview/settings.json
 
 devices:
   - id: core-router
@@ -40,6 +41,15 @@ devices:
   Go duration-string-style size such as `120MiB` or `500MB` rather than
   an event count. Same section as above explains why a count would not
   mean anything portable between deployments.
+- `store.settingsStorePath` — where a size set from Settings' own memory
+  control is kept. Once somebody moves that slider and applies it, the
+  stored figure is the one that applies and `store.maxMemory` above is
+  ignored — mikroview says which one it took at startup. Delete the file
+  to go back to the config file's figure; there's no separate reset
+  control, since moving the slider back is the same act. Optional
+  persistence, same contract as `flags.storePath`: left empty, the
+  control still works and still resizes the running buffer, the choice
+  just doesn't survive a restart.
 - `devices` — maps a syslog source IP to a friendly name. Routers
   sending logs from an IP *not* listed here still appear in the UI and
   `/api/devices`, labelled by their raw IP with `configured: false`, so
@@ -95,6 +105,47 @@ over hours, which is why mikroview warns above 1GiB (see
 budget on a machine that genuinely has the memory is a legitimate choice,
 and the warning only makes sure you're making it with the real cost in
 front of you.
+
+**Settings' memory control can override the config file.** Admin ▸
+Settings' memory group carries a slider under the hours bar; dragging it
+only proposes a figure, and nothing changes until you press apply. Once
+you do, mikroview stores that figure and resizes the running buffer
+immediately — growing it keeps every event already held, shrinking it
+drops the oldest first. From then on, the stored figure is what applies
+on every future restart too, and `store.maxMemory` in the config file is
+ignored — mikroview names which one it took in the startup log. To go
+back to the file's figure, delete the settings document
+(`store.settingsStorePath`, `/var/lib/mikroview/settings.json` by
+default); there's no separate reset control, since moving the slider
+back is the same act. A viewer sees the bar and the figure but isn't
+offered the drag.
+
+The same change is available over the API: `PUT /api/settings/store`
+(admin-only, audit-logged as `settings.store_max_memory`) takes
+`{"maxMemory": <bytes>}` and does exactly what applying the slider does
+-- stores the figure and resizes the ring to match. A figure outside the
+allowed range is refused with a 400 rather than being clamped to the
+nearest end.
+
+**The allowed range.** The low end is a fixed 32MiB. The high end is
+worked out once at startup, per host: mikroview takes the smallest of
+the cgroup v2 `memory.max`, the cgroup v1 `memory.limit_in_bytes`, and
+`/proc/meminfo`'s `MemTotal` (whichever actually bounds this process),
+reserves headroom of whichever is larger — 256MiB or a quarter of that
+total — and divides what's left by the same 1.47x resident overhead
+quoted above, rounding down to a whole MiB. If none of those figures can
+be read, the ceiling falls back to 1GiB. Whatever that works out to, the
+ceiling is never computed below the figure your instance is already
+running on, so a deliberately large budget set in `config.yaml` is never
+reported as out of range.
+
+`GET /api/stats` also reports all of this as a `memory` object --
+`maxMemory`, `min`, `max`, `hostTotal` and `bytesPerEvent` (the range and
+what it's a share of), `resident` (what the process is actually costing
+the host right now) and `stored` (whether the figure came from Settings
+rather than the config file). All of those are byte counts except
+`stored`. Same access tier as the rest of `/api/stats` -- see
+[API reference](#api-reference).
 
 ### Running behind a reverse proxy
 
@@ -905,20 +956,25 @@ audit:
   storePath: "/var/lib/mikroview/audit.json"
 ```
 
-Two deliberate scoping decisions, both from issue #112's own explicit
-open question about which flag actions belong here:
+Flag actions are logged even though they are not admin-only, which is a
+deliberate exception to the "log admin actions" rule above:
 
-- **A plain flag clear** (`POST /api/flags/{id}/clear`) is **not**
-  logged -- that endpoint isn't admin-gated at all (any signed-in user
-  can clear a flag), and this is an audit log of *admin* actions.
-- **A permanent flag exclusion** (`POST /api/flags/{id}/clear-permanent`)
-  **is** logged, and is admin-only. It was previously open to any
-  signed-in user and unlogged; that was tightened because an exclusion
-  permanently suppresses detection for that (detector, target) until
-  someone notices and undoes it, which is not something a non-admin --
-  or a single compromised low-privilege credential -- should be able to
-  do silently. Removing an exclusion
-  (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
+- **A verdict** (`POST /api/flags/{id}/verdict`) is logged, carrying the
+  verdict itself as the entry's detail, and **undoing one**
+  (`DELETE /api/flags/verdict/{id}`) is logged too. An `expected`
+  verdict suppresses detection for that (detector, target) pair while
+  it stays within the recorded size, and "who decided this stopped being
+  flagged" has to stay answerable. The admin-only "clear and never flag
+  this again" this replaced was logged for the same reason.
+- **What that verdict wrote to the watchlist** is logged as though you
+  had done it by hand: `definition.create` for an observing entry it
+  created, `definition.promote` for the destinations it permitted, and
+  `definition.unpermit` (plus `definition.delete`) when the verdict is
+  undone. Each names the flag it came from.
+- **Clear all** (`POST /api/flags/clear-all`) is logged once per call --
+  "cleared N flags", not one entry per flag. It records no judgement and
+  no expectation, so a cleared flag raises again on the next matching
+  event.
 
 Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
@@ -1001,17 +1057,21 @@ shows what's been promoted, what's waiting for review, and a toggle to
 resume or stop observing. An entry with a scoped source can also show
 its own recent matches inline, pulled from the match log below.
 
+Entries also arrive from the flags inbox, without being typed here: an
+`expected` verdict permits what a flag saw on the device's inverted
+entry, creating that entry (observing) if there is none, and a
+`resolved` verdict offers to open this page's own entry form prefilled.
+See [What a verdict writes to the watchlist](#what-a-verdict-writes-to-the-watchlist).
+
+Entries themselves are definitions and live in the definitions store
+(`engine.definitionsStorePath`), alongside every detector.
+
 ```yaml
 watchlist:
-  # Where watchlist entries themselves are persisted, as a small JSON
-  # file. Same optional-persistence contract as entities.storePath: left
-  # unset, entries still work, they just don't survive a restart.
-  storePath: "/var/lib/mikroview/watchlist.json"
-
-  # Where matches are recorded, append-only. Unlike storePath above,
-  # this has NO in-memory-only mode: durability is the entire reason
-  # this store exists (a match must survive a restart), so an empty
-  # value is treated as unusable rather than as an opt-out (CFG-0040).
+  # Where matches are recorded, append-only. This has NO in-memory-only
+  # mode: durability is the entire reason this store exists (a match
+  # must survive a restart), so an empty value is treated as unusable
+  # rather than as an opt-out (CFG-0040).
   matchLogPath: "/var/lib/mikroview/matchlog.jsonl"
 
   # The match log's hard ceiling on distinct records -- once reached, a
@@ -1568,47 +1628,111 @@ alongside ISP/country whenever present.
 
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
-clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
-already-active-again source re-raises it as a fresh entry rather than
-silently resurrecting the old one.
+judges it. Judging an already-active-again source re-raises it as a
+fresh entry rather than silently resurrecting the old one.
+
+### Verdicts: how a flag ends
+
+Every flag ends one of two ways: either the firewall is improved so the
+traffic you do not want stops arriving, or mikroview is told this
+traffic is acceptable, at these characteristics. There is no third bin
+-- nothing is dismissed without a judgement. The row offers **expected ·
+checked · investigate**, and once something is being investigated,
+**expected · resolved**. All four are available to any signed-in user
+(not a viewer), through `POST /api/flags/{id}/verdict`.
+
+| Verdict | What it means | What it does |
+|---|---|---|
+| `expected` | Normal for this host, at this size | Clears the flag and records an expectation: further firings of that detector on that host are absorbed silently while their size stays within **1.5x** the size of the firing you judged. Above that the flag returns, reading "expected up to 30, saw 120"; saying expected again raises the recorded size |
+| `checked` | Looked suspicious, checked, fine this time | Clears the flag. Suppresses nothing, but is remembered: a later firing of the same pair says "you checked this on 2 Sept and found it fine" |
+| `investigate` | Of concern, being looked at | Leaves the flag open, and switches its row to expected · resolved |
+| `resolved` | Dealt with, normally by a firewall change | Clears the flag, and deliberately does **not** suppress. A line only reaches mikroview if the firewall let it get that far, so a correct fix makes the lines stop; if the same circumstances recur the flag returns, reading "resolved on 2 Sept -- it's back". If what you want is to keep logging those drops, that is an expected verdict at that rate, not a resolved one |
+
+Each detector declares what its "size" is -- usually the measure it
+compares against its threshold (distinct ports for `port_scan`, events
+in the window for `activity_spike`). Six declare none, because they have
+no count to be normal at: `device_silence` (an absence has no
+magnitude), `known_bad_ip`, `unexpected_mail_sender` and `stale_rule`
+(deterministic, no threshold), and `global_spike`/`rule_spike` (a rate
+against a moving baseline). An expected verdict on one of those means
+"ignore this host on this detector" outright.
+
+**Undo** is offered beside the stamp for as long as the flag carries the
+verdict. Undoing an expected verdict withdraws the expectation it
+recorded -- removing it, or putting a raised size back where it was --
+and takes back the permitted destinations it wrote, below.
+
+### What a verdict writes to the watchlist
+
+An `expected` verdict also records what the device was actually seen
+doing, as **permitted destinations** on its own
+[watchlist](#watchlist-optional) entry: each destination the flag saw, with
+the port it was reached on. If the device has no inverted entry, one is
+created **observing** -- it lists where the device goes and fires
+nothing -- so this automatic step can never start a fence firing on its
+own. Undoing the verdict, or changing it to something else, removes
+exactly what that verdict permitted, and removes an entry that existed
+only to hold it. Anything you permitted yourself is left alone.
+
+Only detectors that record destination *pairs* can do this:
+`critical_port`, `outbound_anomaly` and `internal_recon`. A flag's ports
+and hosts are otherwise two separate lists, and permitting every
+combination of them would allow connections the device never made. A
+flag without pairs permits nothing.
+
+A `resolved` verdict offers rather than acts. Its line reads
+**resolved — undo · watch for this**, and taking the offer opens the
+watchlist's own entry form, prefilled with the host (by MAC where the
+evidence carries one, otherwise by address) and the ports it was seen
+reaching. The form says where those values came from: the last firing
+window, how many of how many pairs, and whether the watch is MAC- or
+IP-bound (an IP-bound watch stops matching if the device's lease
+changes). Saving or discarding takes you back to the flags inbox, so
+declining costs nothing -- and the flag stays resolved either way.
+
+Why offer this at all: after a block, the first packet that gets through
+matters more than the detector's threshold being crossed again. The
+detector brings a resolved flag back only when the host re-crosses its
+threshold; a watch fires on the first line that reappears. Where the
+pairs name several destinations, the draft watches those ports toward
+any destination, because one watch scopes one destination -- broader
+than what the flag saw, never narrower, and stated in the form before
+you save it.
 
 A **Clear all** button above the active list (issue #198) clears every
 active flag in one request (`POST /api/flags/clear-all`) -- a click-again
 red "Confirm" is the safeguard against an accidental single click, not a
-modal. It performs regular clears only and never creates a permanent
-exclusion; there is no bulk variant of the action below.
+modal. It records no judgement and no expectation, so everything it
+clears raises again on the next matching event; there is no bulk variant
+that suppresses anything.
 
-Each flag's Clear button is a split control: the main segment is the
-plain Clear above, and its arrow segment opens "Permanently clear"
-(`POST /api/flags/{id}/clear-permanent`, **admin-only** once an account
-exists, and recorded in the audit log) -- for a non-admin the arrow
-segment is hidden entirely, leaving a plain Clear button rather than a
-disabled one that would just advertise an action they can't take.
-"Permanently clear" clears the flag *and* permanently
-excludes that exact (detector, target) pair -- from then on it never
-raises again, silently, until the exclusion is removed. This is
-deliberately permanent rather than a timed snooze: a time-limited mute
-either re-fires once it expires (nothing was solved) or it doesn't
-(permanent exclusion was what was wanted all along), so there's no
-in-between "snooze" option. Because "permanent" shouldn't mean
-"unrecoverable by mistake," every current exclusion is listed (and can
-be removed, re-enabling that pair) on its own **Exclusions** tab
-(**Detect ▸ Flags ▸ Exclusions**) -- admin-only, same as every other
-admin-gated endpoint (see [Authentication](#authentication)). It was
-split out of the bottom of the Flags page (issue #207) because
-reviewing exclusions underneath a list of hundreds of active flags was
-a pain.
+> **Not on screen yet.** The expectations an `expected` verdict records
+> are not listed anywhere in the UI at the moment, so one made by
+> mistake cannot be reviewed or removed from the interface -- only
+> withdrawn by undoing the verdict that made it, while the row is still
+> in front of you. The ledger that lists every expectation with its
+> recorded size, how many firings it has absorbed and since when, and
+> lets you prune them, is the remaining part of issue #640.
 
-> **Not on screen at the moment.** The flags tab was rebuilt to its
-> ratified round-29 design in #688, which draws a five-column table with
-> drawers and gives no place to the split Clear control or the
-> Exclusions tab. Both were taken off the tab rather than squeezed into
-> it, and are on #688's gap list to be placed properly. Nothing about
-> the endpoints, the audit-log entries or the exclusion behaviour
-> described above has changed -- `POST /api/flags/{id}/clear-permanent`
-> and the exclusion list API work exactly as written; only the buttons
-> that reached them are absent. The drawer's **clear with a note**
-> action is the plain clear, and it still records the note.
+### The expectations ledger
+
+Every expectation mikroview has been given -- "this much of this, from
+this host, is normal here" -- is listed on the watchers station, under
+the detector bench (**Settings ▸ detection ▸ tune…**), headed *What it
+has been told to expect*. Each row names the detector and the host, the
+size recorded when the expectation was made ("up to 30", or "any size"
+for a detector that declares no size), how many firings it has absorbed
+since, and when it was made. **Forget** on a row removes it, and that
+(detector, host) pair raises again from its next firing.
+
+The absorbed count is the point of the list: an expectation that has
+absorbed nothing for months is visibly not earning its place.
+
+Backed by `GET /api/flags/expectations` (any signed-in user -- an
+expectation is the reason a flag you would otherwise see is absent) and
+`DELETE /api/flags/expectations/{id}` (user tier, and recorded in the
+audit log as `flag.expectation_forget`: the operator who can call a flag
+expected can take it back). See [API reference](#api-reference).
 
 ## New-device detection (optional, on by default)
 
@@ -1754,14 +1878,8 @@ together:
   whatever it had already accumulated (a half-full counting window is not
   reset by an unrelated edit).
 
-  `detectorSettingsStorePath` is no longer written to. It is still
-  *read*, once, to carry an existing deployment's toggles into the
-  definitions store on first boot after upgrading, and is then inert --
-  leave it configured through one upgrade, and it can be removed after.
-
 ```yaml
 flags:
-  detectorSettingsStorePath: "/var/lib/mikroview/detector-settings.json"
   detectors:
     critical_port:
       enabled: true
@@ -1884,8 +2002,9 @@ mikroview -restore /secure/place/mikroview-backup.json.gz
 
 One gzipped file holding every store: accounts, API tokens, recovery-key
 digests, flags, rule usage, detector settings, entities, the MAC
-registry, the audit log, the watchlist, watchlist suggestions, and the
-watchlist match log.
+registry, the audit log, the event-buffer size an admin set from
+Settings (`store.settingsStorePath`), the watchlist, watchlist
+suggestions, and the watchlist match log.
 
 Three things are deliberately left out, and always have been:
 
@@ -2750,7 +2869,6 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL` | `flags.staleRuleCheckInterval` |
 | `MIKROVIEW_FLAGS_VPN_INTERFACES` | `flags.vpnInterfaces` (comma-separated, e.g. `wireguard1,wireguard2`) |
 | `MIKROVIEW_FLAGS_VPN_CONFIDENCE_MULTIPLIER` | `flags.vpnConfidenceMultiplier` |
-| `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
@@ -2758,7 +2876,6 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_COVERAGE_STORE_PATH` | `coverage.storePath` (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
-| `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION` | `watchlist.matchLogRetention` |
@@ -3028,57 +3145,67 @@ exits, rather than starting the server. See
 | `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- present whenever mikroview generated its own CA, which it does if `tls.enabled` is true **or** `listen.syslogTls` is non-empty, and never for an operator-supplied cert. With `tls.enabled: false` it is served over plain HTTP, which is the case the reverse-proxy deployment needs; see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
-| `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated |
-| `GET /api/stats` | totals, per-action counts, rolling events/sec |
+| `GET /api/devices/macs` | the persisted MAC-registry history (issue #675): every MAC mikroview has seen, its first/last-seen times, and the IP it was last paired with -- backs the Entities panel's named-host join, same tier as `GET /api/devices` |
+| `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated. Also carries `recordingSince`: when this store started recording, so a client computing "rules seen firing in the last 7 days" can bound that window by what mikroview actually covered instead of claiming a fixed seven days it may not have seen (issue #701) |
+| `GET /api/stats` | totals, per-action counts, rolling events/sec, and a `memory` object naming the event buffer's current budget, the range it may be moved within, and what it's actually costing the host (see [How events are stored](#how-events-are-stored)) |
+| `GET /api/stats/tops` | per-minute top-port/top-talker breakdown of the last hour, same tier as `GET /api/stats` -- feeds the Metrics page |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
+| `GET /api/routeros/{device}/rules` | the pushed firewall filter table for one router, in RouterOS's own display order (#186) -- read from mikroview's own stored state, never a live call to the router |
+| `GET /api/routeros/{device}/nat` | the pushed NAT table for one router, same shape and tier as the rules table above |
+| `GET /api/routeros/{device}/addresses` | the pushed `/ip/address` table for one router (#627) -- an interface's own configured address, distinct from the ARP/DHCP tables' observed-elsewhere addresses |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
-| `POST /api/flags/{id}/clear` | mark one flag as cleared |
-| `POST /api/flags/clear-all` | clear every currently-active flag in one request -- regular clears only, never creates an exclusion. Audit-logged once per call |
-| `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
-| `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
-| `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
+| `POST /api/flags/clear-all` | user tier: clear every currently-active flag in one request -- records no judgement and no expectation. Audit-logged once per call. Tightened from viewer tier by #653 |
+| `GET /api/flags/expectations` | open to any signed-in user: every expectation recorded on this instance -- (detector, target) plus the recorded size, how many firings it has absorbed and when it was made (see [The expectations ledger](#the-expectations-ledger)) |
+| `DELETE /api/flags/expectations/{id}` | user tier: forget one expectation, so that pair raises again from its next firing. 204 on success, 404 if no expectation has that id. Audit-logged |
+| `POST /api/flags/{id}/verdict` | user tier: judge one flag: `expected`, `checked`, `investigate` or `resolved` (see [Verdicts](#verdicts-how-a-flag-ends)). Everything but `investigate` clears it; `expected` also records the sized expectation, and permits the flag's own destination pairs on the device's inverted watchlist entry (see [What a verdict writes to the watchlist](#what-a-verdict-writes-to-the-watchlist)). Audit-logged. Tightened from viewer tier by #653 |
+| `DELETE /api/flags/verdict/{id}` | user tier: undo a verdict: re-opens the flag if that verdict is what cleared it, withdraws the expectation an `expected` verdict recorded, and takes back the destinations it permitted. Audit-logged. Tightened from viewer tier by #653, same reasoning as judging in the first place |
 | `GET /api/definitions` | open to any signed-in user, not admin-gated (#490 -- the engine room's watchers station reads it, and a non-admin can read the room): every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
-| `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. `intent: "detection"` is refused too, for now: a custom detector's match conditions have nowhere on the envelope to be stored yet, so accepting one would create a definition that lists and evaluates nothing. Only expectation definitions can be created here today; custom detector authoring is tracked in issue #502 |
-| `GET /api/definitions/schema` | admin-only: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
-| `GET /api/definitions/{id}` | admin-only: one definition |
-| `PUT /api/definitions/{id}` | admin-only: change any of `enabled`, `scope`, `params`, `suppressions`, `name`/`expectation` (expectations only). An absent field is left alone; a param outside its declared bounds is a 400, never a stored zero. Takes effect on the next ingested event |
-| `DELETE /api/definitions/{id}` | admin-only: remove a custom definition. A shipped one is refused with a 409 -- shipped definitions are disabled, never deleted |
-| `POST /api/definitions/{id}/clone` | admin-only: copy an expectation into a new definition with its own id. Refused for a shipped detector, whose logic is keyed by its own id and would evaluate nothing in a copy |
-| `POST /api/definitions/{id}/reset` | admin-only: discard every param override, putting a shipped definition back to what it shipped with |
-| `POST /api/definitions/{id}/replay` | admin-only: re-run one definition over the stored event corpus with candidate params, returning a receipt (emission count, evidence sample, and the window it actually covered) or a stated decline. A definition that can never answer honestly declines with its reason rather than reporting a misleading zero |
-| `POST /api/definitions/{id}/promote` | admin-only: move one or more observed destinations into an inverted expectation's permitted set |
-| `POST /api/definitions/{id}/observing` | admin-only: turn an inverted expectation's observe mode on or off |
-| `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
-| `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
-| `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
+| `POST /api/definitions` | user tier: create a custom definition, either an expectation or (#502) a custom detection, chosen by `intent`. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. An `intent: "detection"` request's `detection` block carries the detector's structure: `conditions` (the match language), `key`/`counting`/`distinctField` (the aggregation around them), and `detailTemplate` (the flag's rendered sentence); `threshold` and `window` ride alongside it but land as ordinary tunable params, not part of the stored block |
+| `GET /api/definitions/schema` | user tier: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
+| `GET /api/definitions/{id}` | user tier: one definition |
+| `PUT /api/definitions/{id}` | user tier: change any of `enabled`, `scope`, `params`, `name`/`expectation` (expectations only). An absent field is left alone; a param outside its declared bounds is a 400, never a stored zero. Takes effect on the next ingested event |
+| `DELETE /api/definitions/{id}` | user tier: remove a custom definition. A shipped one is refused with a 409 -- shipped definitions are disabled, never deleted |
+| `POST /api/definitions/{id}/clone` | user tier: copy a definition that is data all the way down -- an expectation, or a detector you authored (its conditions, aggregation and tuning) -- into a new definition with its own id. A copied detector is created paused, so a half-edited one never runs. Refused for a shipped detector, whose logic is keyed by its own id and would evaluate nothing in a copy (#810) |
+| `POST /api/definitions/{id}/reset` | user tier: discard every param override, putting a shipped definition back to what it shipped with |
+| `POST /api/definitions/{id}/replay` | user tier: re-run one definition over the stored event corpus with candidate params, returning a receipt (emission count, evidence sample, and the window it actually covered) or a stated decline -- a definition that can never answer honestly declines with its reason rather than reporting a misleading zero. When the request carries a candidate, the response also carries a `current` receipt: the same replay run again with the definition's live params, so the candidate's count has something to be compared against |
+| `POST /api/definitions/{id}/promote` | user tier: move one or more observed destinations into an inverted expectation's permitted set |
+| `POST /api/definitions/{id}/observing` | user tier: turn an inverted expectation's observe mode on or off |
+| `GET /api/entities` | user tier (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity. Widened from admin by #653's "watchers" bench ruling |
+| `POST /api/entities` | user tier: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body. Widened from admin by #653 |
+| `DELETE /api/entities` | user tier: remove the entity identified by `(type, key)` in the JSON body. Widened from admin by #653 |
 | `GET /api/coverage/declarations` | open to any signed-in user (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)): every persisted coverage-gap declaration |
-| `PUT /api/coverage/declarations/{key}` | admin-only: create or replace (upsert) the declaration at `key`, taking `{"reason": "..."}` in the JSON body. `declaredBy`/`declaredAt` are set server-side. 400 on an empty/oversized key or reason |
-| `DELETE /api/coverage/declarations/{key}` | admin-only: remove the declaration at `key`. 404 if none exists there |
-| `GET /api/naming/provenance` | admin-only: where the name currently shown for one token comes from, given `type` (`host`/`rule`/`port`), `key` (the raw value) and, for a host, `device`. Answers `source` (`none`, `entity`, `config`, or one of `router-dns-static`/`router-dhcp-lease`/`router-wireguard-peer`), the `name` in use, your own saved `label` if any, and `editable` -- false when a router-pushed name would shadow anything saved here, which is what the live view's inline editor checks before offering a field |
+| `PUT /api/coverage/declarations/{key}` | user tier: create or replace (upsert) the declaration at `key`, taking `{"reason": "..."}` in the JSON body. `declaredBy`/`declaredAt` are set server-side. 400 on an empty/oversized key or reason. Widened from admin by #653, following the entity labels it reasons alongside |
+| `DELETE /api/coverage/declarations/{key}` | user tier: remove the declaration at `key`. 404 if none exists there. Widened from admin by #653 |
+| `GET /api/naming/provenance` | user tier: where the name currently shown for one token comes from, given `type` (`host`/`rule`/`port`), `key` (the raw value) and, for a host, `device`. Answers `source` (`none`, `entity`, `config`, or one of `router-dns-static`/`router-dhcp-lease`/`router-wireguard-peer`), the `name` in use, your own saved `label` if any, and `editable` -- false when a router-pushed name would shadow anything saved here, which is what the live view's inline editor checks before offering a field. Widened from admin to user tier by #653, alongside `GET /api/entities` it serves |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/matches` | a windowed query over the persisted match log, in one of two modes -- by device, with `mac` and/or `ip` (at least one required), or across every watchlist entry with `entries=all`, which returns the most recent matches anywhere in the log, newest first. `entries=all` may not be combined with `mac`/`ip`. Both modes take `since`/`until` (RFC 3339) and `limit`, and both are bounded: `limit` defaults to 100 and is capped at 5000 whatever the caller asks for. Open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
-| `GET /api/suggestions` | admin-only: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide` |
-| `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real expectation definition |
-| `POST /api/suggestions/{id}/hide` | admin-only: decline an undecided suggestion |
-| `POST /api/suggestions/{id}/unhide` | admin-only: return a hidden suggestion to undecided |
-| `POST /api/suggestions/reset` | admin-only, destructive: wipes the entire watchlist and regenerates suggestions from scratch -- requires `{"confirm": true}` in the request body |
+| `GET /api/suggestions` | user tier: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide`. Widened from admin by #653, same as the definitions surface |
+| `POST /api/suggestions/{id}/accept` | user tier: accept an undecided suggestion, creating a real expectation definition. Widened from admin by #653 |
+| `POST /api/suggestions/{id}/hide` | user tier: decline an undecided suggestion. Widened from admin by #653 |
+| `POST /api/suggestions/{id}/unhide` | user tier: return a hidden suggestion to undecided. Widened from admin by #653 |
+| `POST /api/suggestions/reset` | user tier, destructive: wipes the entire watchlist and regenerates suggestions from scratch -- requires `{"confirm": true}` in the request body. Widened from admin by #653; the confirm body, not the role gate, is the safeguard against an accidental call |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
+| `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser |
+| `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
+| `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |
 | `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
-| `GET /api/tokens` | open to any signed-in user, not admin-gated (#490 -- the engine room's "which machines may speak" door reads it): list tokens (name/created/last-used, never the value or hash -- a token's raw value appears in the response that mints it and nowhere else, which is what makes widening this safe) |
+| `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash -- a token's raw value appears in the response that mints it and nowhere else). Narrowed back from user tier by #657: the viewer-readable settings page it was widened for (#490) is gone, and issuing keys is treated as a setup task rather than day-to-day product use |
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
 | `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, so the same person can sign in either way -- see [Connecting your account to SSO](#single-sign-on-oidcsso) |
 | `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what mikroview has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
+| `GET /api/persistence` | admin-only: which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
+| `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
