@@ -120,7 +120,7 @@ await page.reload()
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
 const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
-await slider.fill('4') // the city stop
+await slider.fill('3') // the city stop; the seven-stop axis is clients 0 .. street 6 (#869)
 await new Promise((r) => setTimeout(r, 900))
 
 async function heightOf(ip) {
