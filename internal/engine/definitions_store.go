@@ -114,7 +114,7 @@ func OpenDefinitionsStore(path string) (*DefinitionsStore, error) {
 // persist.Backend -- a JSON file by default, or Postgres when
 // configured. Deliberately seeds nothing: filling an empty store with
 // this binary's shipped catalogue is SeedShippedDefinitions' job
-// (definitions_migrate.go), run on every boot once this store is open.
+// (definitions_convert.go), run on every boot once this store is open.
 func OpenDefinitionsStoreWithBackend(b persist.Backend) (*DefinitionsStore, error) {
 	s := &DefinitionsStore{raw: make(map[string]json.RawMessage), watchingSince: time.Now()}
 

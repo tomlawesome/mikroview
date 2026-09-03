@@ -309,7 +309,7 @@ func newShippedCriticalPortDefinition(t *testing.T, fs *flags.Store, ports []int
 // defaultCriticalPorts mirrors internal/detect.DefaultConfig()'s
 // CriticalPorts, restated here rather than imported so this package's
 // tests do not depend on internal/detect at all (that dependency exists
-// only for the one-way migration, definitions_migrate.go, and is due to
+// only for the one-way migration, definitions_convert.go, and is due to
 // disappear with the rest of that package).
 var defaultCriticalPorts = []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729}
 
