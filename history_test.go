@@ -56,10 +56,20 @@ func historyEvent(at time.Time, src string) store.Event {
 // The engine's own tests use a fake for the disk half. This is the test
 // that would catch the fake and the real store drifting apart.
 func TestHistoryReplaySpansDiskAndMemory(t *testing.T) {
+	// Three events in memory, the newest of them now.
+	ring := store.New(1000, 72*time.Hour)
+	ringStart := time.Now().UTC().Add(-3 * time.Minute)
+	for i := range 3 {
+		ring.Insert(historyEvent(ringStart.Add(time.Duration(i)*time.Minute), "10.2.0.1"))
+	}
+
+	// Through the runtime owner, which is what main actually wires
+	// (#910) -- coming up does not backfill, so the ring's three stay
+	// memory-only.
 	cfg := historyConfig(t, true, writeKeyFile(t))
-	hist := openHistory(quietLog(), cfg)
-	if hist == nil {
-		t.Fatal("openHistory returned nothing with a key present and the switch on")
+	hist := newHistoryRuntime(quietLog(), cfg, unpersistedSettings(t), ring)
+	if !hist.HistorySettings().Enabled {
+		t.Fatal("the history did not come up with a key present and the switch on")
 	}
 	t.Cleanup(func() { hist.Close() })
 
@@ -72,14 +82,7 @@ func TestHistoryReplaySpansDiskAndMemory(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 
-	// Three events in memory, the newest of them now.
-	ring := store.New(1000, 72*time.Hour)
-	ringStart := time.Now().UTC().Add(-3 * time.Minute)
-	for i := range 3 {
-		ring.Insert(historyEvent(ringStart.Add(time.Duration(i)*time.Minute), "10.2.0.1"))
-	}
-
-	corpus := engine.NewRetainedCorpus(ring, historyForReplay(hist))
+	corpus := engine.NewRetainedCorpus(ring, hist)
 	var got []store.Event
 	w := corpus.Replay(func(e store.Event) { got = append(got, e) })
 
@@ -108,9 +111,6 @@ func TestOpenHistoryWithoutAKeyIsOffAndSilentlyNormal(t *testing.T) {
 	if hist := openHistory(quietLog(), cfg); hist != nil {
 		hist.Close()
 		t.Fatal("openHistory returned a store with no key configured")
-	}
-	if historyForReplay(nil) != nil {
-		t.Error("historyForReplay(nil) must be a nil interface, not an interface holding nil")
 	}
 }
 
