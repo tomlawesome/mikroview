@@ -628,6 +628,14 @@ rewritten.
 
 ### Removed
 
+- **An account with no `role` in the accounts file no longer defaults to
+  `user`** (#873). The default existed for accounts persisted before
+  roles existed (#653); every account mikroview writes has carried a role
+  since. A roleless account can now only be hand-edited in, so it is
+  loaded as-is and fails closed -- denied by every role gate, admin and
+  user alike. Give the account a role in the file, or set one as an
+  admin.
+
 - **The rule-usage store no longer reads the bare-array
   `rule-usage.json` it wrote before `recordingSince` existed** (#873).
   Only the current object shape is read; an array-shaped document is now
