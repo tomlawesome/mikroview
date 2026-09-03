@@ -13,6 +13,24 @@ import (
 	"github.com/tomlawesome/mikroview/internal/entities"
 )
 
+// TestAuditActorInvariantViolationValue pins auditActor's fallback for a
+// request with no caller in context (#873): every routed handler that
+// records an audit entry is gated by callerIsAdmin, so this path should
+// be unreachable in practice, but the value it writes if it ever is
+// reached must never look like a real actor. A plain http.Request built
+// directly, rather than through the router, has no user attached to its
+// context -- the same shape this fallback exists to guard against.
+func TestAuditActorInvariantViolationValue(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/whatever", nil)
+	got := auditActor(r)
+	if got != auditActorInvariantViolation {
+		t.Errorf("auditActor with no caller in context = %q, want %q", got, auditActorInvariantViolation)
+	}
+	if got == "unauthenticated" {
+		t.Error("the fallback must not read as a plausible anonymous actor")
+	}
+}
+
 // fetchAudit is a small test helper: GET /api/audit via client, decoded
 // into an audit.Result.
 func fetchAudit(t *testing.T, client *http.Client, ts *httptest.Server) audit.Result {
