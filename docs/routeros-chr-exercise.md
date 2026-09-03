@@ -76,9 +76,8 @@ other change.
 
 ## Setup this job needs before it can run
 
-Two things the owner creates, neither of which this change can create
-on its own (see the top-level report that shipped alongside this
-change for why):
+Three things the owner creates, none of which this change can create
+on its own (repository and runner settings are the owner's alone):
 
 1. A GitLab Pipeline Schedule for this project, weekly, carrying one
    variable: `CHR_EXERCISE` = `true`. Nothing else runs this job — it
@@ -92,11 +91,21 @@ change for why):
    read once from the job's environment and never written to disk,
    the same pattern `sync:mirror-to-github` already uses for its own
    token in `.gitlab-ci.yml`.
+3. The privileged runner tagged `image-build` (the one orbit's image
+   builds use) enabled for this project: Settings → CI/CD → Runners.
+   The job needs Docker-in-Docker to boot the CHR, which the shared
+   untagged runner the rest of the pipeline uses may not allow. Without
+   it the job sits pending rather than failing.
 
 ## What has not been run
 
 Nobody has run this job. Building it happened without touching
 GitLab, starting QEMU, downloading a CHR image, or running the live
-gate — see the top-level report for exactly what was and was not
-verified, and for the open questions about the runner's actual Docker
-access.
+gate. Verified without running it: the Go command's output is
+byte-identical to what the wizard serves (`go test ./internal/api`),
+both scripts pass shellcheck, the CI file parses. Not verified until
+the first real run: that Docker-in-Docker works on the `image-build`
+runner for this project, the boot and run time under software
+emulation, and the refusal-detection pattern in
+`scripts/routeros-chr-exercise.sh`, which must be calibrated against
+the first real transcript. Record the first run's timing on #894.
