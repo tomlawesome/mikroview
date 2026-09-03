@@ -39,11 +39,17 @@ type keyedState struct {
 
 // Export renders every tracked entry as JSON, using encode for the
 // value. Takes k.mu for the whole walk, exactly as ForEach and Snapshot
-// do -- which is what makes it safe to call from the snapshot writer's
-// goroutine rather than the evaluation goroutine (GetOrCreate blocks
-// for the duration, the same trade ForEach already documents).
+// do, so the map cannot change underneath it.
 //
-// encode runs under that lock, so it must not call back into this
+// That lock covers the map and nothing else -- the same boundary the
+// type's own doc comment draws. A V that is single-writer state owned by
+// the evaluation goroutine (a ring, a definition's day bookkeeping) is
+// no safer to encode from a second goroutine here than anywhere else, so
+// Export belongs on the evaluation goroutine too whenever V is one of
+// those. Engine.ExportState arranges exactly that; see
+// Engine.runOnEvaluationGoroutine.
+//
+// encode runs under the lock, so it must not call back into this
 // Keyed[V]. Every caller in this package encodes a ring or a small
 // struct, which is a pure read of the value itself.
 //
