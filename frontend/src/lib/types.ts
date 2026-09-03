@@ -179,6 +179,15 @@ export interface Stats {
   // query's windowStart, which is the configured retention -- capacity
   // eviction moves this one and leaves that one alone (#703).
   oldestHeld: string | null
+  // When this process started observing, and when the snapshot its
+  // counters were restored from was taken (#795). Mirrors
+  // internal/store.Stats: `restoredTo` is absent on a cold start rather
+  // than null, so its presence *is* the answer to "was this a warm
+  // restart"; `liveSince` is optional here only so an older server that
+  // does not send it leaves the statement off rather than rendering an
+  // invalid date. See lib/provenance.ts for the one place they are read.
+  liveSince?: string
+  restoredTo?: string
   connectedClients: number
   // The event buffer's budget, the range it may be moved within, and
   // what the process is actually costing (#796) -- mirrors
