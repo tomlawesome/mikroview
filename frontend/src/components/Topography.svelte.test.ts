@@ -6,6 +6,7 @@ import { flushSync } from 'svelte'
 import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { zonesState } from '../lib/zones.svelte'
+import { tunnelsState, type TunnelInterface } from '../lib/tunnels.svelte'
 import { policyState } from '../lib/policy.svelte'
 import { coverageState } from '../lib/coverage.svelte'
 import { flagsState } from '../lib/flags.svelte'
@@ -75,6 +76,19 @@ function internetCardCidr(container: HTMLElement): Element | null {
   return name?.parentElement?.querySelector('.n-cidr') ?? null
 }
 
+// A pushed tunnel interface (#874's tables, as tunnelsState holds
+// them). The 2D map's node is WireGuard only, so `kind` matters.
+function tunnel(overrides: Partial<TunnelInterface> = {}): TunnelInterface {
+  return { iface: 'wg0', routerId: 'router1', kind: 'wg', apiState: 'up', peers: [], ...overrides }
+}
+
+// The tunnel node's own card, found by its name rather than document
+// order -- there are two upper cards now.
+function tunnelCard(container: HTMLElement): Element | null {
+  const name = [...container.querySelectorAll('.n-name')].find((n) => n.textContent?.trim() === 'WireGuard')
+  return name?.parentElement ?? null
+}
+
 function watchEntry(overrides: Partial<WatchlistEntry> = {}): WatchlistEntry {
   const id = `w${nextEntryId++}`
   return {
@@ -93,6 +107,7 @@ beforeEach(() => {
   appState.view = 'topography'
   authState.role = 'admin'
   zonesState.pushed = []
+  tunnelsState.byDevice = new Map()
   policyState.edges = []
   policyState.byDevice = {}
   coverageState.declarations = []
@@ -1976,5 +1991,147 @@ describe('#715 item 3: the flags and watch overlays', () => {
     }
 
     expect(traffic.classList.contains('on')).toBe(true)
+  })
+})
+
+describe('the tunnel node (#877)', () => {
+  it('draws nothing until a tunnel table has been pushed', () => {
+    // An interface named wg0 in the events is not a pushed tunnel.
+    // #874 exists so this state comes from the router rather than from
+    // a name that looks like one -- and the issue is explicit: no
+    // placeholder node, no "unknown" card.
+    appState.events = [event({ inInterface: 'wg0', srcIp: '10.99.0.2' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(tunnelCard(container)).toBeNull()
+    const ribs = [...container.querySelectorAll('path.rib')].map((p) => p.getAttribute('d'))
+    expect(ribs).not.toContain('M1080 186 C 990 215, 880 240, 830 252')
+  })
+
+  it('draws the card with its interface and subnet, as round 30 writes them', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    zonesState.pushed = [address({ interface: 'wg0', address: '10.99.0.1/24', network: '10.99.0.0' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = tunnelCard(container)
+    expect(card).not.toBeNull()
+    // `wg0 · 10.99.0.0/24` -- the network form the mockup draws, not
+    // the router's own host address in that range.
+    expect(card?.querySelector('.n-cidr')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('wg0 · 10.99.0.0/24')
+  })
+
+  it('says QUIET when the router calls the tunnel up but nothing has crossed it', () => {
+    // Exactly what round 30 draws on this card, and the reading that
+    // is mikroview's own rather than the API's vocabulary.
+    tunnelsState.byDevice = new Map([['router1', [tunnel({ apiState: 'up' })]]])
+    const { container } = render(Topography)
+    flushSync()
+
+    const badge = tunnelCard(container)?.querySelector('.n-cov')
+    expect(badge?.textContent?.trim()).toBe('QUIET')
+    expect(badge?.classList.contains('cov-q')).toBe(true)
+  })
+
+  it('says UP once traffic has actually crossed it', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel({ apiState: 'up' })]]])
+    appState.events = [event({ inInterface: 'wg0', srcIp: '10.99.0.2' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const badge = tunnelCard(container)?.querySelector('.n-cov')
+    expect(badge?.textContent?.trim()).toBe('UP')
+    expect(badge?.classList.contains('cov-l')).toBe(true)
+  })
+
+  it('says DOWN in the alarm ink when the router says down', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel({ apiState: 'down' })]]])
+    appState.events = [event({ inInterface: 'wg0', srcIp: '10.99.0.2' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const badge = tunnelCard(container)?.querySelector('.n-cov')
+    // Events on a tunnel the router calls down do not overrule it --
+    // down is the pushed fact, and this card reports facts.
+    expect(badge?.textContent?.trim()).toBe('DOWN')
+    expect(badge?.classList.contains('cov-d')).toBe(true)
+  })
+
+  it('says the state was never pushed rather than guessing at it', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel({ apiState: 'unknown' })]]])
+    const { container } = render(Topography)
+    flushSync()
+
+    const badge = tunnelCard(container)?.querySelector('.n-cov')
+    expect(badge?.textContent?.trim()).toBe('state not pushed')
+    expect(badge?.classList.contains('cov-q')).toBe(true)
+  })
+
+  it('says so when no address names the tunnel, rather than going blank', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    zonesState.pushed = [address({ interface: 'bridge1' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const cidr = tunnelCard(container)?.querySelector('.n-cidr')
+    expect(cidr?.textContent?.replace(/\s+/g, ' ').trim()).toBe('wg0 · no address pushed')
+    // Not the whole-map degraded toggle, which would hide this behind
+    // a class that only shows when no table was pushed at all.
+    expect(cidr?.querySelector('.cidr-none')).not.toBeNull()
+  })
+
+  it('joins the tunnel to the router with its own line', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    const { container } = render(Topography)
+    flushSync()
+
+    // Ported from the-whole.html:935, ending at the waist card's edge.
+    const ribs = [...container.querySelectorAll('path.rib')].map((p) => p.getAttribute('d'))
+    expect(ribs).toContain('M1080 186 C 990 215, 880 240, 830 252')
+  })
+
+  it('draws the ghost reference line only once traffic has reached a lane', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    const bare = render(Topography)
+    flushSync()
+    // Nothing observed crossing it: no destination to reference, so no
+    // line rather than a guessed one.
+    expect(bare.container.querySelector('path.rib-ghost')).toBeNull()
+    bare.unmount()
+
+    appState.events = [
+      event({ inInterface: 'wg0', outInterface: 'bridge1', srcIp: '10.99.0.2' }),
+      event({ inInterface: 'bridge1', srcIp: '192.168.1.5' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const ghost = container.querySelector('path.rib-ghost')
+    expect(ghost).not.toBeNull()
+    // One lane, so it lands on the lane row's centre -- laneX's own
+    // single-lane answer, not a hard-coded 610 from the mockup's
+    // four-lane scene.
+    expect(ghost?.getAttribute('d')).toBe('M 1100 186 C 945 300, 795 385, 700 476')
+  })
+
+  it('gives the node a watch bar only when a pushed range can correlate one', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    watchlistState.entries = [watchEntry({ source: { ip: '10.99.0.2' } })]
+
+    const bare = render(Topography)
+    flushSync()
+    // No address pushed for wg0, so nothing correlates -- the same
+    // refusal a degraded lane's bar already makes.
+    expect(tunnelCard(bare.container)?.querySelector('.hb-w')).toBeNull()
+    bare.unmount()
+
+    zonesState.pushed = [address({ interface: 'wg0', address: '10.99.0.1/24', network: '10.99.0.0' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = tunnelCard(container)
+    expect(card?.querySelector('.hb-w')).not.toBeNull()
+    expect(card?.querySelector('.hbt.wp')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('◉ 1')
   })
 })
