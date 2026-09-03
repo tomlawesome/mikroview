@@ -98,6 +98,22 @@ type Store struct {
 	// reused for a new minute.
 	minuteBuckets    [timeSeriesMinutes][len(actionSlots)]uint64
 	minuteBucketTime [timeSeriesMinutes]int64
+
+	// liveSince is when this Store started observing, and restoredTo is
+	// the taken time of the snapshot its counters came from (zero on a
+	// cold start). Together they are what lets the UI say "counters from
+	// a snapshot 4 m old; live from 14:02" and drop the statement once
+	// the series has refilled -- see #795.
+	//
+	// liveSince is set in New, i.e. effectively process start, not the
+	// first Insert. The question it answers is "from when is this
+	// process's own account of the traffic complete", and that is the
+	// moment it began listening: a quiet first ten minutes is a real
+	// observation of quiet, not an absence of observation, and dating
+	// liveSince from the first event would report those ten minutes as
+	// unobserved and re-date them every restart of a quiet network.
+	liveSince  time.Time
+	restoredTo time.Time
 }
 
 // New creates a Store holding at most capacity events, logically windowed
@@ -112,6 +128,7 @@ func New(capacity int, window time.Duration) *Store {
 		window:        window,
 		totalByAction: make(map[Action]uint64),
 		totalByRule:   make(map[string]uint64),
+		liveSince:     time.Now(),
 	}
 }
 
@@ -237,6 +254,15 @@ type Stats struct {
 	// offers a span from this and would otherwise claim a day of quiet
 	// that was really an evicted buffer.
 	OldestHeld time.Time `json:"oldestHeld"`
+	// RestoredTo is when the snapshot these counters were restored from
+	// was taken, or nil on a cold start -- a pointer so "not restored" is
+	// absent from the wire rather than a zero date the UI has to
+	// special-case, the same shape internal/api's oldestHeldJSON uses.
+	// LiveSince is when this process started observing. Between them a
+	// caller can say which part of the hour is this process's own account
+	// and which came off disk (#795).
+	RestoredTo *time.Time `json:"restoredTo,omitempty"`
+	LiveSince  time.Time  `json:"liveSince"`
 }
 
 // Stats returns current totals and a rolling events/sec rate averaged over
@@ -309,6 +335,11 @@ func (s *Store) Stats() Stats {
 		Count:           s.count,
 		Window:          s.window,
 		OldestHeld:      oldestHeld,
+		LiveSince:       s.liveSince,
+	}
+	if !s.restoredTo.IsZero() {
+		restored := s.restoredTo
+		out.RestoredTo = &restored
 	}
 	s.mu.RUnlock()
 
@@ -417,6 +448,25 @@ func (s *Store) HourTops() []HourTop {
 	out := make([]HourTop, timeSeriesMinutes)
 	for i := range out {
 		out[i] = HourTop{Time: time.Unix((axisStart+int64(i))*60, 0).UTC(), Complete: true}
+	}
+
+	// A restored store knows, from the snapshot, that events happened in
+	// minutes whose event lines it does not have -- snapshots carry
+	// counts, never lines (#795). Those minutes are exactly the #644
+	// case: an answer computed from what the ring holds would be an
+	// undercount dressed up as a total, so they read as unknown instead.
+	//
+	// The cut is liveSince rather than the snapshot's own taken time,
+	// because the gap between the two -- the restart itself -- is just as
+	// unheld. Minutes that start after this process began listening are
+	// unaffected, so the flag clears by itself as live traffic refills
+	// the axis, which is the "and later clears" half of #795.
+	if !s.restoredTo.IsZero() {
+		for i := range out {
+			if out[i].Time.Before(s.liveSince) {
+				out[i].Complete = false
+			}
+		}
 	}
 
 	if s.count == 0 {
