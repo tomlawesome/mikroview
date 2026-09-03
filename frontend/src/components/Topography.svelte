@@ -416,15 +416,24 @@
     return text.length * BADGE_CH + 2 * PLATE_PAD
   }
 
-  /** A badge's resolved plate: centre, and the plate's own width. */
+  /** A badge's resolved plate: centre, the plate's own width, and its
+   * height where that is not the ordinary one-line plate. The escalated
+   * unplanned card (#715 item 4) is two lines and 40 tall, and a
+   * layout that assumed every plate was PLATE_H would let ordinary
+   * badges settle inside it. */
   interface PlacedBadge {
     x: number
     y: number
     w: number
+    h?: number
   }
 
   const PLATE_H = 14
   const PLATE_CLEAR = 3
+  /** The escalated card's own box, ported from the-whole.html:941 --
+   * a 40-tall rect with the mockup's 12-unit left inset. */
+  const CARD_H = 40
+  const CARD_PAD = 26
 
   // The corridor is the free band between the two islands every crossing
   // line runs through: the internet island's own bar ends at y=118 and
@@ -456,19 +465,38 @@
    * label with no text takes no space, so a lens that badges only some
    * of its edges still keeps its indices aligned.
    */
-  function placeBadges(items: { line: Line; text: string; dy?: number }[]): PlacedBadge[] {
+  function placeBadges(items: { line: Line; text: string; dy?: number }[], reserved?: PlacedBadge): PlacedBadge[] {
     const raw = items.map((it, i) => {
       const p = edgeBadgeAt(it.line, i)
       return { x: p.x, y: p.y + (it.dy ?? 0), w: plateW(it.text), text: it.text }
     })
-    const inCorridor = (b: (typeof raw)[number]) => b.text !== '' && b.y > 100 && b.y < 310 && Math.abs(b.x - WAIST.x) < 170
+    const inCorridor = (b: { x: number; y: number; text?: string }) =>
+      b.text !== '' && b.y > 100 && b.y < 310 && Math.abs(b.x - WAIST.x) < 170
 
+    // The escalated card is placed by the data, not by this pass, and
+    // never moved by it. It goes in first so everything else dodges it
+    // -- an opaque two-line card with a badge settled inside it is the
+    // exact failure the corridor rules exist to prevent (#715 item 4).
     const settled: PlacedBadge[] = []
+    const cardSide = reserved ? (reserved.x < WAIST.x ? -1 : 1) : 0
+    const cardInCorridor = reserved ? inCorridor({ ...reserved, text: 'card' }) : false
+    if (reserved) settled.push(reserved)
+
+    // A plate's box hangs from its anchor: y-10 to y-10+h. So two
+    // boxes clear each other on their centres, not on their anchors --
+    // which are the same thing only while every plate is the same
+    // height, as they were before the escalated card (#715 item 4).
+    // For two ordinary plates this is exactly the old arithmetic.
+    const centreOf = (b: { y: number; h?: number }) => b.y - 10 + (b.h ?? PLATE_H) / 2
+
     for (const side of [-1, 1]) {
       const col = raw.filter((b) => inCorridor(b) && (b.x < WAIST.x ? -1 : 1) === side).sort((a, b) => b.y - a.y)
-      const slot = Math.min(CORRIDOR_SLOT, (CORRIDOR_FLOOR - CORRIDOR_TOP) / Math.max(1, col.length - 1))
+      // A card holding this side's floor pushes the whole stack above
+      // it, rather than letting the first badge land inside it.
+      const floor = cardInCorridor && side === cardSide ? CORRIDOR_FLOOR - (CARD_H - PLATE_H) - PLATE_H - PLATE_CLEAR : CORRIDOR_FLOOR
+      const slot = Math.min(CORRIDOR_SLOT, (floor - CORRIDOR_TOP) / Math.max(1, col.length - 1))
       col.forEach((b, k) => {
-        b.y = CORRIDOR_FLOOR - k * slot
+        b.y = floor - k * slot
         b.x = WAIST.x + side * (CORRIDOR_GUTTER + b.w / 2)
         settled.push({ x: b.x, y: b.y, w: b.w })
       })
@@ -479,10 +507,13 @@
       // conflict, and there are finitely many of them.
       for (let pass = 0; pass < settled.length + 1; pass++) {
         const hit = settled.find(
-          (d) => Math.abs(d.x - b.x) < (d.w + b.w) / 2 + PLATE_CLEAR && Math.abs(d.y - b.y) < PLATE_H + PLATE_CLEAR,
+          (d) =>
+            Math.abs(d.x - b.x) < (d.w + b.w) / 2 + PLATE_CLEAR &&
+            Math.abs(centreOf(d) - centreOf(b)) < ((d.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR,
         )
         if (!hit) break
-        b.y = hit.y + PLATE_H + PLATE_CLEAR
+        // Solve centreOf(b) for b.y: the anchor sits 10 above its box.
+        b.y = centreOf(hit) + ((hit.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR + 10 - PLATE_H / 2
       }
       settled.push({ x: b.x, y: b.y, w: b.w })
     }
@@ -689,11 +720,70 @@
   // traffic lens's reality badges and its ghost-intent labels share a
   // corridor, so they are laid out together rather than in two passes
   // that cannot see each other.
+  // Round 30 escalates the worst unplanned flow out of the row of
+  // identical pills into its own two-line card (the-whole.html:940-944).
+  // "Worst" is busiest: realityEdges already sorts by events, so this
+  // adds no third ranking to the app. #701's recency weight belongs to a
+  // sentence that claims "now"; this card claims no such thing.
+  // One card only, however close the runners-up -- "worst" is a
+  // superlative, and two cards un-say it. Ties break on drops, then key,
+  // so the same data always escalates the same pair (Fable 5, #715
+  // item 4).
+  const worstUnplanned = $derived.by((): DrawnReality | null => {
+    const unplanned = drawnReality.drawn.filter((d) => d.r.verdict === 'unplanned')
+    if (unplanned.length === 0) return null
+    return unplanned.reduce((best, d) =>
+      d.r.events !== best.r.events
+        ? d.r.events > best.r.events
+          ? d
+          : best
+        : d.r.drops !== best.r.drops
+          ? d.r.drops > best.r.drops
+            ? d
+            : best
+          : d.r.key < best.r.key
+            ? d
+            : best,
+    )
+  })
+
+  function cardLines(r: RealityEdge): [string, string] {
+    const asked = r.topAsked[0]
+    const one = `UNPLANNED · ${r.from} → ${r.to}${asked ? ` · ${asked.proto}/${asked.port}` : ''}`
+    // All three shapes an unplanned pair comes in, each said truthfully:
+    // traffic passing where the table only refuses; drops caught by a
+    // rule that named itself; drops caught by one that did not.
+    const caught = r.accepts > 0 ? `${r.accepts}× passing` : r.refusedBy ? `caught by ${r.refusedBy}` : 'caught, no rule named'
+    return [one, `${caught} · ${r.events}× · open ▸`]
+  }
+
+  const worstUnplannedCard = $derived.by((): PlacedBadge | undefined => {
+    if (!worstUnplanned) return undefined
+    const [one, two] = cardLines(worstUnplanned.r)
+    const at = edgeBadgeAt(worstUnplanned.line, drawnReality.drawn.indexOf(worstUnplanned))
+    const w = Math.max(plateW(one), plateW(two)) + CARD_PAD
+    // The card obeys the corridor like any other plate: several lanes'
+    // edges run up the same waist-to-internet segment, so a card left
+    // where the line put it lands on the stack rather than beside it.
+    // It takes the floor of its own side and the badges stack above.
+    if (at.y > 100 && at.y < 310 && Math.abs(at.x - WAIST.x) < 170) {
+      const side = at.x < WAIST.x ? -1 : 1
+      return { x: WAIST.x + side * (CORRIDOR_GUTTER + w / 2), y: CORRIDOR_FLOOR - (CARD_H - PLATE_H), w, h: CARD_H }
+    }
+    return { x: at.x, y: at.y, w, h: CARD_H }
+  })
+
   const trafficBadges = $derived.by(() =>
-    placeBadges([
-      ...drawnReality.drawn.map((d) => ({ line: d.line, text: realityBadge(d.r) })),
-      ...ghostIntents.map((g) => ({ line: g.line, text: 'never exercised', dy: -12 })),
-    ]),
+    placeBadges(
+      [
+        // The escalated pair keeps its slot in this array so every other
+        // index still lines up; its own text is empty, so it takes no
+        // space and draws no pill -- the card replaces it.
+        ...drawnReality.drawn.map((d) => ({ line: d.line, text: d === worstUnplanned ? '' : realityBadge(d.r) })),
+        ...ghostIntents.map((g) => ({ line: g.line, text: 'never exercised', dy: -12 })),
+      ],
+      worstUnplannedCard,
+    ),
   )
 
   function coverageBadgeText(e: PolicyEdge): string {
@@ -1899,6 +1989,47 @@
             </text>
           </g>
         {/each}
+
+        <!-- The worst unplanned flow, escalated out of the row of
+             identical pills into round 30's own card
+             (the-whole.html:940-944, its inks kept exactly).
+             The mockup's `open ▸` opens a flags-table drawer for an
+             UNPLANNED flag. This product has no such flag type:
+             "unplanned" is a reality verdict computed here in the
+             client (reality.ts), with no id and no drawer. So the card
+             opens the stream filtered to the pair -- what every other
+             reality plate already does, and where the mockup's own
+             drawer ultimately led. Only the middle layer is missing
+             (Fable 5, #715 item 4; the finding is on the issue). -->
+        {#if worstUnplanned && worstUnplannedCard}
+          {@const c = worstUnplannedCard}
+          {@const [line1, line2] = cardLines(worstUnplanned.r)}
+          <g
+            class="detail unplanned-card"
+            role="button"
+            tabindex="0"
+            aria-label="Open the stream filtered to this pair: {realityLabel(worstUnplanned.r)}"
+            onclick={() => openPair(worstUnplanned.r.from, worstUnplanned.r.to, worstUnplanned.r.topPorts)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openPair(worstUnplanned.r.from, worstUnplanned.r.to, worstUnplanned.r.topPorts)
+              }
+            }}
+          >
+            <title>{realityLabel(worstUnplanned.r)}</title>
+            <!-- The box hangs from the anchor exactly as an ordinary
+                 plate does (y-10), so the layout pass above can reason
+                 about both in one geometry. Everything inside is
+                 measured from the box's own top-left, at the mockup's
+                 offsets: the dot 13 down and 14 in, the two baselines
+                 16 and 30 down (the-whole.html:941-944). -->
+            <rect class="uc-box" x={c.x - c.w / 2} y={c.y - 10} width={c.w} height={CARD_H} rx="9" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.8" />
+            <circle cx={c.x - c.w / 2 + 14} cy={c.y + 3} r="3" fill="var(--alarm)" />
+            <text class="alarm-t" x={c.x - c.w / 2 + CARD_PAD} y={c.y + 6}>{line1}</text>
+            <text class="chip-t" x={c.x - c.w / 2 + CARD_PAD} y={c.y + 20}>{line2}</text>
+          </g>
+        {/if}
         {#each ghostIntents as g, gi (g.edge.key)}
           {@const badge = trafficBadges[drawnReality.drawn.length + gi]}
           <g class="detail">
