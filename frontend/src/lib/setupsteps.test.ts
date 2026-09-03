@@ -18,7 +18,12 @@ import {
   pushStep,
   rulesStep,
   silenceExplanation,
+  sourceSplitObservation,
+  sourceSplitReceipt,
+  sourceSplits,
+  srcAddressCommand,
   syslogCommands,
+  syslogReceipt,
   syslogStep,
 } from './setupsteps'
 import type { Device, SetupMark, SetupStatus } from './types'
@@ -248,6 +253,77 @@ function device(over: Partial<Device> = {}): Device {
     ...over,
   }
 }
+
+// --- The source-address split (#442) -----------------------------------
+//
+// A router declared under one address whose logs arrive from another.
+// The server pairs the silent declared device with every undeclared
+// address that is streaming (Registry.MultihomedCandidates); what is
+// tested here is the wording -- the ratified copy on #442, verbatim.
+
+describe('the source-address split', () => {
+  const declared = device({
+    id: 'office',
+    name: 'office',
+    sourceIp: '192.168.88.1',
+    configured: true,
+    eventCount: 0,
+    status: 'never_seen',
+    multihomedCandidates: ['10.0.20.1'],
+  })
+  const arriving = device({ id: '10.0.20.1', name: '10.0.20.1', sourceIp: '10.0.20.1' })
+  const connected = status({ sources: [{ source: '10.0.20.1', syslogFirstSeenAt: '2026-08-13T00:00:00Z' }] })
+
+  it('reads as partial, in the voice of evidence composed wrongly, never blocked', () => {
+    const s = syslogStep(connected, [declared, arriving])
+    expect(s.state).toBe('partial')
+    expect(s.detail).toBe(
+      "Connected — but from 10.0.20.1, an address you haven't declared, while 192.168.88.1, " +
+        'which you declared in config.yaml, has sent nothing.',
+    )
+  })
+
+  it('carries the split into the step list receipt', () => {
+    expect(syslogReceipt(connected, [declared, arriving])).toBe('syslog from 10.0.20.1 · declared 192.168.88.1 silent')
+    const ledger = buildLedger(connected, [declared, arriving], 'h')
+    expect(ledger[1].status.state).toBe('partial')
+    expect(ledger[1].outcome).toBe('done')
+    expect(ledger[1].receipt).toBe('syslog from 10.0.20.1 · declared 192.168.88.1 silent')
+  })
+
+  // The existing receipt already states a match; no new words.
+  it('says nothing new when the declared device is the one sending', () => {
+    const speaking = device({ ...declared, eventCount: 5, status: 'live', multihomedCandidates: undefined })
+    const s = syslogStep(connected, [speaking])
+    expect(s.state).toBe('done')
+    expect(sourceSplits([speaking])).toEqual([])
+    expect(syslogReceipt(connected, [speaking])).toContain('syslog connected from 10.0.20.1')
+  })
+
+  // The server returns candidates, not a diagnosis, so every arriving
+  // address is listed and none is picked.
+  it('lists every arriving address rather than picking one', () => {
+    const two = device({ ...declared, multihomedCandidates: ['10.0.20.1', '10.0.30.1'] })
+    const splits = sourceSplits([two])
+    expect(sourceSplitObservation(splits)).toBe(
+      "Connected — but from 10.0.20.1 and 10.0.30.1, addresses you haven't declared, while " +
+        '192.168.88.1, which you declared in config.yaml, has sent nothing.',
+    )
+    expect(sourceSplitReceipt(splits)).toBe('syslog from 10.0.20.1, 10.0.30.1 · declared 192.168.88.1 silent')
+  })
+
+  // The remedy keeps the declared address: the command needs only that
+  // one value, and it is printed, never run.
+  it('prints the src-address command with the declared address filled in', () => {
+    expect(srcAddressCommand('192.168.88.1')).toBe('/system logging action set mikroview src-address=192.168.88.1')
+  })
+
+  // Only a declared device with a pairing is a split. An undeclared
+  // device never is, whatever the server sent alongside it.
+  it('ignores undeclared devices and declared ones with no pairing', () => {
+    expect(sourceSplits([arriving, device({ ...declared, multihomedCandidates: [] })])).toEqual([])
+  })
+})
 
 describe('the claim ledger', () => {
   // The count of five is stable whatever the state: the record is
