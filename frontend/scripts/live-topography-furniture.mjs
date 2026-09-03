@@ -87,6 +87,13 @@ check(entry.status === 201, `the watch entry is created (${entry.status})`)
 await new Promise((r) => setTimeout(r, 1200))
 await page.reload()
 await page.click('.rail-name >> text=Topography')
+// #869: the slider now defaults to the city, its centre -- check that
+// default here, before moving to a 2D stop so the rest of this scenario
+// (which predates the join and draws entirely from the 2D map) can wait
+// on what the 2D map draws.
+await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
+check((await page.locator('[data-card="topography"] .altitude input[type="range"]').inputValue()) === '3', 'the altitude defaults to "city", the axis\' centre (#869)')
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2') // zones
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
 // --- the health dials -----------------------------------------------------
@@ -100,12 +107,20 @@ check(
   'the flags ring draws an alarm segment, not the rest state',
 )
 
+// #724: a dial click opens its own condensed panel first (one flag or
+// watcher raised above, so its first row is the only one); a second
+// click, on that row, is what actually leaves for the docket (filed
+// separately as #892, found while fixing this scenario for #869/#880 --
+// unrelated to either, so fixed here rather than left broken).
 await page.click('[data-card="topography"] .dial >> nth=0')
+await page.waitForSelector('[data-card="topography"] .dial-panel .dp-row', { timeout: 5000 })
+await page.click('[data-card="topography"] .dial-panel .dp-row >> nth=0')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=flags', { timeout: 5000 })
-check(true, 'clicking the flags dial opens the docket on the flags tab')
+check(true, 'clicking the flags dial, then its own panel row, opens the docket on the flags tab')
 
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
+await new Promise((r) => setTimeout(r, 300)) // let the camera's own opacity transition settle before clicking inside it
 
 // --- the aggregate bar ------------------------------------------------------
 
@@ -126,19 +141,25 @@ check(true, 'the red half opens the flags tab, pre-filtered to the zone')
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
-// --- the altitude slider -----------------------------------------------------
+// --- the altitude slider (#869) -----------------------------------------------
 
 const range = page.locator('[data-card="topography"] .alt-range')
-check((await range.getAttribute('value')) === '2', 'the altitude defaults to "zones", today\'s unchanged map')
-check((await page.locator('[data-card="topography"] .tick').count()) === 8, 'eight stops (four 2D, four city), no text labels')
-const altitudeText = await page.locator('[data-card="topography"] .altitude').textContent()
-check((altitudeText ?? '').trim() === '', 'the stops carry no text, symbols only')
-
-await range.fill('3')
-await page.waitForSelector('[data-card="topography"] .camera.cam-survey', { timeout: 5000 })
-check(true, 'moving the slider to survey applies the tilted camera')
+// Navigating away (into the docket, above) and back is exactly the
+// "across visits" the persisted last stop (#869) is for: this instance
+// was left at zones a few steps up, so it is still there, not back at
+// the city's own default.
+check((await range.inputValue()) === '2', 'the last stop visited (zones) persisted across navigating away and back')
+check((await page.locator('[data-card="topography"] .tick').count()) === 7, 'seven stops (three 2D, the city, three more), tick symbols only')
+// #880: the ticks between the two named ends carry no text -- symbols
+// only -- but the two ends ("clients", "street") are real furniture
+// labels, not ticks, and are meant to carry text. Reading only
+// `.alt-ticks` is the fix #880 asked for.
+const ticksText = await page.locator('[data-card="topography"] .alt-ticks').textContent()
+check((ticksText ?? '').trim() === '', 'the ticks carry no text, symbols only')
 
 await range.fill('2')
+await page.waitForSelector('[data-card="topography"] .camera.cam-zones', { timeout: 5000 })
+check(true, 'moving the slider to zones applies the flat ground-plan camera')
 
 // --- node info cards ---------------------------------------------------------
 

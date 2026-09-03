@@ -76,7 +76,30 @@
   import CityDeviceDefs from './CityDeviceDefs.svelte'
   import type { Building, CityLens, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
 
-  let { stop, ground: groundProp, lens = 'traffic' }: { stop: Stop; ground?: Ground; lens?: CityLens } = $props()
+  let {
+    stop,
+    ground: groundProp,
+    lens = 'traffic',
+    initialS,
+    initialCentre,
+    onCameraChange,
+    onStandChange,
+  }: {
+    stop: Stop
+    ground?: Ground
+    lens?: CityLens
+    /** The pan this side had when the slider last crossed away from it
+     * (#869): Topography saves what onCameraChange reports below and
+     * hands it back here across City's own mount/unmount, since a fresh
+     * mount would otherwise always start centred on the stop's default. */
+    initialS?: number
+    initialCentre?: Pt
+    onCameraChange?: (s: number, centre: Pt) => void
+    /** Which building (if any) the city currently stands on, so a
+     * crossing back to the 2D side can open the same host's reach there
+     * (#869) -- null when nothing is stood on. */
+    onStandChange?: (building: Building | null) => void
+  } = $props()
 
   const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--lane-5)']
   const VERDICT: Record<RoadKind, string> = { a: 'var(--accept)', d: 'var(--drop)', x: 'var(--alarm)', q: 'var(--fg-dim)' }
@@ -213,8 +236,8 @@
       const to = centreFor(s, focus)
       if (!started) {
         started = true
-        S = STOP_HEIGHT[s]
-        centre = clampCentre(to, g.bounds)
+        S = initialS ?? STOP_HEIGHT[s]
+        centre = clampCentre(initialCentre ?? to, g.bounds)
         return
       }
       moveCamera(STOP_HEIGHT[s], to)
@@ -223,6 +246,15 @@
 
   $effect(() => () => {
     if (anim !== null) cancelAnimationFrame(anim)
+  })
+
+  // Reports the live camera back to whoever asked (#869: Topography
+  // saves this to hand back as initialS/initialCentre next time this
+  // side mounts, since crossing the slider's centre destroys and
+  // recreates this component). Not gated on anything -- a caller that
+  // does not care simply does not pass the callback.
+  $effect(() => {
+    onCameraChange?.(S, centre)
   })
 
   /* ---------------- the reach: standing on a building (#868) ---------------- */
@@ -238,6 +270,13 @@
     const s = stand
     if (!s) return null
     return s.districtId ? (districtOf(s.districtId)?.buildings.find((b) => b.id === s.id) ?? null) : (ground.nodes.find((n) => n.id === s.id) ?? null)
+  })
+
+  // Reports the stood-on building back to whoever asked (#869: crossing
+  // the slider's centre while standing on a host hands it to the 2D
+  // side's reach, if the same host exists there).
+  $effect(() => {
+    onStandChange?.(standBuilding)
   })
 
   // reachFor is #626/#485's own strand model, unchanged: the city draws

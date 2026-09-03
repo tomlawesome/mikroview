@@ -100,8 +100,14 @@ describe('a flag\'s where link (#678) lands on whichever side of the slider is a
     expect(topologyNavState.pendingDescend).toBeNull()
   })
 
-  it('still stands on the 2D reach when the 2D map is the active side', () => {
+  it('still stands on the 2D reach when the 2D map is the active side', async () => {
     const topo = render(Topography)
+    flushSync()
+    // The slider now defaults to the city, its centre (#869) -- move to
+    // a 2D stop first so this is actually the "2D map is active" case
+    // the test's own title names.
+    const slider = topo.container.querySelector('.alt-range') as HTMLInputElement
+    await fireEvent.input(slider, { target: { value: '2' } }) // altitude 2: zones
     flushSync()
     topologyNavState.pendingDescend = { zoneId: 'bridge1', host: HOST_IP, ip: HOST_IP }
     flushSync()
@@ -111,8 +117,14 @@ describe('a flag\'s where link (#678) lands on whichever side of the slider is a
 
 describe('the composer prints the same line in the city as in 2D (#868)', () => {
   it('is byte-identical for the same blocked strand', async () => {
-    // Path 1: the 2D map's own reach and composer.
+    // Path 1: the 2D map's own reach and composer. The slider defaults
+    // to the city (#869), so it has to be moved to a 2D stop first for
+    // this path to be the one under test.
     const topo = render(Topography)
+    flushSync()
+    const slider = topo.container.querySelector('.alt-range') as HTMLInputElement
+    await fireEvent.input(slider, { target: { value: '2' } }) // altitude 2: zones
+    flushSync()
     topologyNavState.pendingDescend = { zoneId: 'bridge1', host: HOST_IP, ip: HOST_IP }
     flushSync()
     const door = topo.container.querySelector('.strand-door') as HTMLElement
