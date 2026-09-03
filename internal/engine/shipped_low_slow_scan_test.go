@@ -297,6 +297,125 @@ func TestShippedLowSlowScanFiresAtDefaultWindowScale(t *testing.T) {
 // weakest axis is overshootConfidence(8,8)==0), the byte-for-byte Detail
 // prefix, the σ tail's shape, the 8-port/8-host Evidence, and the
 // re-fire/clear/revive sequence.
+// lowSlowRampEvents builds n events from srcIP, spaced step apart
+// starting at t0, each touching a brand-new distinct destination port and
+// host -- port/host breadth grows by exactly 2 every event, the fastest
+// this definition's own Replay loop can grow it (one port, one host per
+// event), which is what
+// TestShippedLowSlowScanReplaySampleKeepsMostRecent needs to keep the
+// per-source baseline's z-score clearing emaMinZ for a good long run
+// before the EMA catches up and firing tails off.
+func lowSlowRampEvents(srcIP string, n int, step time.Duration, t0 time.Time) []store.Event {
+	events := make([]store.Event, n)
+	for i := 0; i < n; i++ {
+		events[i] = lowSlowEvt(srcIP, fmt.Sprintf("10.9.0.%d", i+1), 20000+i, store.ActionDrop, t0.Add(time.Duration(i)*step))
+	}
+	return events
+}
+
+// TestShippedLowSlowScanReplaySampleKeepsMostRecent pins issue #860 for
+// the low-slow-scan replay path. Unlike this file's other definitions,
+// low_slow_scan's Replay gates firing on a z-score
+// (before.ZScore < emaMinZ) that no candidate override can bypass, and a
+// single source's own EMA baseline catches up with a sustained breadth
+// ramp after a few dozen events regardless of how fast the ramp climbs --
+// so this test cannot lean on "one long burst" the way the global-spike
+// and rule-spike siblings do.
+//
+// Instead it uses two sources, srcA then srcB, each ramping port/host
+// breadth independently (per-source state, so neither's baseline sees the
+// other). It measures each source's own fire count from a solo Replay
+// first -- not a hand-derived constant, since the exact EMA cutoff point
+// is a property of the baseline math, not of this test -- then checks the
+// combined replay's sample against those measured counts: the sample
+// must be made up of all of srcB's (the later source's) fires plus only
+// the tail of srcA's, never the other way around. The old first-N
+// behaviour would keep all of srcA's fires (it fired first) and only as
+// much of srcB's as fits after that -- the opposite split.
+func TestShippedLowSlowScanReplaySampleKeepsMostRecent(t *testing.T) {
+	params := Params{
+		"window":             (5 * time.Minute).String(),
+		"portThreshold":      3,
+		"hostThreshold":      3,
+		"minObservation":     (30 * time.Second).String(),
+		"dropRatio":          0.5,
+		"baselineMultiplier": 1.0,
+	}
+	step := 5 * time.Second
+	n := 70
+
+	solo := func(srcIP string, t0 time.Time) int {
+		fs := newTestFlagsStore(t)
+		d := newShippedLowSlowScanDefinition(t, FlagsSink(fs), params, Scope{}, true)
+		res, err := d.Replay(fakeCorpus{events: lowSlowRampEvents(srcIP, n, step, t0)}, nil)
+		if err != nil {
+			t.Fatalf("Replay (solo %s): %v", srcIP, err)
+		}
+		if res.Receipt == nil {
+			t.Fatalf("Replay (solo %s) declined unexpectedly: %+v", srcIP, res.Decline)
+		}
+		return res.Receipt.EmissionCount()
+	}
+
+	t0 := time.Now().Add(-2 * time.Hour)
+	eventsA := lowSlowRampEvents("203.0.113.21", n, step, t0)
+	tB := eventsA[len(eventsA)-1].ReceivedAt.Add(step)
+	eventsB := lowSlowRampEvents("203.0.113.22", n, step, tB)
+
+	firesA := solo("203.0.113.21", t0)
+	firesB := solo("203.0.113.22", tB)
+	if firesA+firesB <= replaySampleBound {
+		t.Fatalf("test setup produces only %d+%d=%d fires, want more than replaySampleBound=%d", firesA, firesB, firesA+firesB, replaySampleBound)
+	}
+
+	fs := newTestFlagsStore(t)
+	d := newShippedLowSlowScanDefinition(t, FlagsSink(fs), params, Scope{}, true)
+	var events []store.Event
+	events = append(events, eventsA...)
+	events = append(events, eventsB...)
+	res, err := d.Replay(fakeCorpus{events: events}, nil)
+	if err != nil {
+		t.Fatalf("Replay (combined): %v", err)
+	}
+	if res.Receipt == nil {
+		t.Fatalf("Replay (combined) declined unexpectedly: %+v", res.Decline)
+	}
+	if got, want := res.Receipt.EmissionCount(), firesA+firesB; got != want {
+		t.Fatalf("combined EmissionCount() = %d, want firesA+firesB = %d (the two sources' baselines are independent, so replaying them together should not change either's count)", got, want)
+	}
+
+	sample := res.Receipt.Sample()
+	if len(sample) != replaySampleBound {
+		t.Fatalf("len(Sample()) = %d, want exactly replaySampleBound=%d", len(sample), replaySampleBound)
+	}
+	wantSrcBCount := firesB
+	if wantSrcBCount > replaySampleBound {
+		wantSrcBCount = replaySampleBound
+	}
+	wantSrcACount := replaySampleBound - wantSrcBCount
+
+	var gotACount, gotBCount int
+	seenB := false
+	for i, s := range sample {
+		switch s.Target {
+		case "203.0.113.21":
+			gotACount++
+			if seenB {
+				t.Fatalf("sample[%d] is srcA (%s) after an srcB entry -- sample must stay chronological, and srcA is entirely earlier than srcB", i, s.At)
+			}
+		case "203.0.113.22":
+			gotBCount++
+			seenB = true
+		default:
+			t.Fatalf("sample[%d].Target = %q, want srcA or srcB", i, s.Target)
+		}
+	}
+	if gotACount != wantSrcACount || gotBCount != wantSrcBCount {
+		t.Fatalf("sample holds %d srcA + %d srcB entries, want %d srcA + %d srcB -- sample must keep all of the later source's (srcB) emissions before trimming into the earlier source's (srcA), not the reverse",
+			gotACount, gotBCount, wantSrcACount, wantSrcBCount)
+	}
+}
+
 func TestShippedLowSlowScan_FieldsRefireClearRevive(t *testing.T) {
 	fs := newTestFlagsStore(t)
 	d := newShippedLowSlowScanDefinition(t, FlagsSink(fs), nil, Scope{}, true)
