@@ -91,6 +91,12 @@ export interface Device {
   // arrives, same absence-is-not-evidence convention as everything else
   // routerstate-derived.
   routerosVersion?: string
+  // routerosStanding (#436) is how that reported version compares to the
+  // dialect table's covered range -- 'below-minimum' or 'ahead-of-review'
+  // are the only two cases the wizard's warning ever speaks to. Omitted
+  // (not 'unknown') until a version has been reported, the same
+  // absence-is-not-evidence convention routerosVersion already uses.
+  routerosStanding?: 'below-minimum' | 'reviewed' | 'ahead-of-review'
   // multihomedCandidates (#442) is present only on a configured device
   // that has received nothing while undeclared devices stream: the
   // source addresses those undeclared devices arrive from, in id order,
@@ -1231,4 +1237,89 @@ export interface SetupMark {
   // What had not arrived when the decision was made, as the wizard's own
   // observation line worded it.
   note?: string
+}
+
+// --- RouterOS version-aware commands (#436) --------------------------
+//
+// Mirrors internal/routeros's response to POST /api/setup/commands. The
+// commands themselves moved server-side with #436: the wizard used to
+// generate RouterOS syntax itself (lib/setupsteps.ts before this issue),
+// and now only renders what the server sends, selected by the row that
+// covers the router's (derived or picked) version.
+
+// RouterosStanding is how a version compares to the dialect table's
+// covered range. 'unknown' is a version the table cannot speak to, and
+// never appears for a row, picked or router entry the caller can render
+// a name against without evidence.
+export type RouterosStanding = 'unknown' | 'below-minimum' | 'reviewed' | 'ahead-of-review'
+
+// RouterosRow is one entry of the dialect table -- a version range this
+// dialect's commands are the same across, how that row was verified, and
+// any per-version note (e.g. 7.24.0's find-lookup bug).
+export interface RouterosRow {
+  from: string
+  to: string
+  dialect: string
+  verifiedBy: string
+  note: string
+}
+
+export interface RouterosTable {
+  minimum: string
+  newest: string
+  rows: RouterosRow[]
+}
+
+// PickedVersion is the operator's version pick echoed back with its
+// standing, once the server has matched it against a row -- null when no
+// version was sent (routeros.picked in the contract).
+export interface PickedVersion {
+  version: string
+  standing: RouterosStanding
+  dialect: string
+}
+
+// RouterosWarningRouter is one router the response carries a version for
+// (only those the server knows a version for at all), what it reports,
+// and how that compares to the table.
+export interface RouterosWarningRouter {
+  id: string
+  name: string
+  routerosVersion: string
+  standing: RouterosStanding
+  note: string
+}
+
+// CommandStep is one rendered block: the commands themselves, and any
+// note that goes with this exact step (e.g. the 7.24.0 rule-tagging
+// caveat) -- distinct from the router-standing warning, which is about
+// the router's version generally rather than one step's content.
+export interface CommandStep {
+  commands: string
+  note: string
+}
+
+export interface SetupCommandsResponse {
+  routeros: RouterosTable
+  picked: PickedVersion | null
+  routers: RouterosWarningRouter[]
+  steps: {
+    caTrust: CommandStep
+    syslog: CommandStep
+    ruleTagging: CommandStep
+    push: CommandStep
+    schedule: CommandStep
+  }
+}
+
+// SetupCommandsRequest is the POST /api/setup/commands body. Every field
+// but address is optional -- kinds/token are omitted before step 4 has
+// anything to embed, and version is omitted until the operator has
+// picked one or a router has reported.
+export interface SetupCommandsRequest {
+  address: string
+  syslogPort?: string
+  token?: string
+  kinds?: string[]
+  version?: string
 }

@@ -312,6 +312,81 @@ func TestRouterOSVersionIsPerDeviceAndSticky(t *testing.T) {
 	}
 }
 
+// TestVersionHint covers #436 step 3's fallback: an unauthenticated
+// /ca.crt?ros= hint fills in a device's version only until a real push
+// reports one, and a pushed version always wins from then on -- even a
+// push that arrives after the hint, and even one that arrives without a
+// version at all (RouterOSVersion's own "silence doesn't clear it" rule
+// applies here too, since a hint is not a push).
+func TestVersionHint(t *testing.T) {
+	s := New()
+
+	if _, _, ok := s.VersionHint("203.0.113.9"); ok {
+		t.Error("an address that was never hinted reported one")
+	}
+
+	now := time.Now()
+	s.NoteVersionHint("203.0.113.9", "7.20.1", now)
+	got, at, ok := s.VersionHint("203.0.113.9")
+	if !ok || got != "7.20.1" {
+		t.Fatalf("VersionHint = %q/%v, want the noted hint", got, ok)
+	}
+	if !at.Equal(now) {
+		t.Errorf("VersionHint at = %v, want %v", at, now)
+	}
+
+	// A later hint from the same address replaces the earlier one.
+	later := now.Add(time.Minute)
+	s.NoteVersionHint("203.0.113.9", "7.23.3", later)
+	if got, _, _ := s.VersionHint("203.0.113.9"); got != "7.23.3" {
+		t.Errorf("VersionHint = %q, want the newer hint", got)
+	}
+
+	// A hint is device-less by construction: it is keyed on source IP,
+	// which is not the same key RouterOSVersion reads (device id). A
+	// caller has to look a hint up by address and a push up by device --
+	// this only asserts the hint side answers nothing for an
+	// unrelated key.
+	if _, _, ok := s.VersionHint("203.0.113.9-not-a-real-key"); ok {
+		t.Error("an unrelated key reported a hint")
+	}
+
+	// Empty inputs are refused rather than stored, same as every other
+	// Note* method here.
+	s.NoteVersionHint("", "7.24.1", now)
+	s.NoteVersionHint("203.0.113.10", "", now)
+	if _, _, ok := s.VersionHint(""); ok {
+		t.Error("an empty source reported a hint")
+	}
+	if _, _, ok := s.VersionHint("203.0.113.10"); ok {
+		t.Error("noting an empty version stored one anyway")
+	}
+}
+
+// TestVersionHintIsOnlyAFallback is the override half of #436 step 3:
+// this package exposes RouterOSVersion (a real push) and VersionHint (an
+// unauthenticated guess) as two separate reads on purpose -- neither
+// overwrites the other's storage -- and it is the caller's job (the
+// devices handler and POST /api/setup/commands) to prefer the push and
+// fall back to the hint only when no push exists. This test pins that
+// the two stay independent so that contract holds: noting a hint after a
+// real push does not disturb what RouterOSVersion reports, and vice
+// versa.
+func TestVersionHintIsOnlyAFallback(t *testing.T) {
+	s := New()
+	now := time.Now()
+
+	apply(t, s, "router-1", `{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.23.3 (stable)","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`)
+	s.NoteVersionHint("192.0.2.50", "7.18", now)
+
+	if got, _, ok := s.RouterOSVersion("router-1"); !ok || got != "7.23.3 (stable)" {
+		t.Errorf("a hint disturbed the pushed version: %q/%v", got, ok)
+	}
+	if got, _, ok := s.VersionHint("192.0.2.50"); !ok || got != "7.18" {
+		t.Errorf("a pushed version disturbed the hint: %q/%v", got, ok)
+	}
+}
+
 // TestHostNameUsesEveryAllowedAddressOfAPeer is the routerstate half of
 // issue #443: a WireGuard peer holds a *set* of allowed addresses, and
 // each one names the peer. Before the schema took the array shape only

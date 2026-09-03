@@ -89,6 +89,84 @@ check(
   `the syslog command uses this instance's port (${syslogPort})`,
 )
 
+// --- The RouterOS version pick-list (#436 item 4) -----------------------
+// commandsHead renders on steps 1-4 only (the loop above ended on step
+// 5, which never shows it), so land back on step 1 before looking for
+// it.
+await page.locator('.setup-wizard .steps li:nth-child(1) .step-row').click()
+await page.locator('.setup-wizard .body').waitFor({ state: 'visible' })
+
+const versionSelect = page.locator('.setup-wizard select#routeros-version-select')
+check((await versionSelect.count()) === 1, 'the "your RouterOS version" pick-list is present')
+const versionOptions = await versionSelect.locator('option').allTextContents()
+check(
+  versionOptions[0] === 'Not sure — the router will report it',
+  `its first option is the "not sure" one (${JSON.stringify(versionOptions[0])})`,
+)
+check(
+  versionOptions.length > 1 &&
+    versionOptions
+      .slice(1)
+      .every((label) => /^\d+\.\d+(?:\.\d+)?(–\d+\.\d+(?:\.\d+)?)?$/.test(label)),
+  `at least one further option is built from a dialect row (${JSON.stringify(versionOptions)})`,
+)
+
+// --- No standing warning on a fresh instance (#436 item 5) --------------
+// Nothing has pushed a routerosVersion on this harness and the picker is
+// still at "not sure", so the router-standing warning must not render --
+// below-minimum and ahead-of-review share the same copy fragment
+// ("runs RouterOS"), so this catches either kind.
+const standingWarning = page.locator('.setup-wizard .note', { hasText: 'runs RouterOS' })
+check(
+  (await standingWarning.count()) === 0,
+  'no standing warning renders when no router has reported a version',
+)
+
+// --- Choosing a row re-renders, same dialect today -----------------------
+// Picking an explicit version feeds `version` into the commands request
+// (commandsKey above). The wizard keeps the old blocks on screen until
+// the new response lands, so a stale render would pass a text
+// comparison on its own: wait for the request the pick triggers, and
+// check the server answered it, before comparing. Every supported
+// version renders the same dialect today, so the answer must come back
+// byte-identical to the blocks already collected.
+const pickedLabel = versionOptions.find((label, i) => i > 0)
+const [pickResponse] = await Promise.all([
+  page.waitForResponse((r) => r.url().includes('/api/setup/commands')),
+  versionSelect.selectOption({ label: pickedLabel }),
+])
+check(pickResponse.status() === 200, `picking ${pickedLabel} re-requests the commands (${pickResponse.status()})`)
+await page.locator('.setup-wizard .body').waitFor({ state: 'visible' })
+
+const reseen = []
+for (let step = 1; step <= 5; step++) {
+  await page.locator(`.setup-wizard .steps li:nth-child(${step}) .step-row`).click()
+  await page.locator('.setup-wizard .body').waitFor({ state: 'visible' })
+  const blocks = await page.$$eval('.setup-wizard .body pre', (els) => els.map((e) => e.textContent ?? ''))
+  reseen.push(...blocks)
+}
+check(reseen.length > 0, `the wizard still renders command blocks after picking ${pickedLabel} (${reseen.length})`)
+check(
+  JSON.stringify(reseen) === JSON.stringify(seen),
+  "picking a version re-requests the commands, and today's single dialect renders the same text back",
+)
+
+// --- The version hint never breaks the CA fetch (#436 item 3) -----------
+// Step 1's CA fetch gains a `?ros=` query string so mikroview learns the
+// version from the very first request, before any push. The value is
+// untrusted operator-controlled text, so the one thing that must always
+// be true is that the fetch still works and still returns the
+// certificate -- not that a warning follows, since whether the browser's
+// own source address maps to a device the gate has declared is not
+// something this scenario controls.
+const caResponse = await page.request.get(`${URL_BASE}/ca.crt?ros=7.16`)
+check(caResponse.status() === 200, `the CA fetch with a version hint still succeeds (${caResponse.status()})`)
+const caBody = await caResponse.text()
+check(
+  caBody.startsWith('-----BEGIN CERTIFICATE-----'),
+  'and the hint never breaks the certificate it returns',
+)
+
 // --- Observation lines reflect what the server observed ----------------
 // The harness has already fed events, so events-arriving must be true,
 // and those events carry log-prefixes, so actions decode.
