@@ -880,6 +880,74 @@ const (
 	MinSnapshotInterval = 30 * time.Second
 )
 
+// History configures the on-disk event history internal/retention
+// writes (#856): encrypted, compressed daily files holding the same
+// events the ring holds, so a replay can reach further back than memory
+// does.
+//
+// Off unless two things are true: KeyFile names a readable key, and
+// Enabled is set. Both, deliberately. The key alone must not start
+// writing events to disk on an operator who mounted it for something
+// else -- #853 puts the state store and the warm-restart snapshots under
+// the same key -- and the switch alone cannot write anything, because
+// there is no unencrypted mode to fall back to. See
+// docs/decisions/event-retention.md.
+//
+// Unlike Snapshot above, this holds custody data: event lines,
+// addresses, who talked to whom. That is the entire reason for the key
+// and for the default being off. SECURITY.md says the same thing to
+// operators.
+type History struct {
+	// KeyFile is the path to the master key, which must live outside
+	// the data directory. A key kept beside the files it protects is
+	// decoration: whoever copies the directory copies both.
+	//
+	// Not a key value, and not an environment variable -- a path to a
+	// file the operator mounts, per AGENTS.md's secret rule.
+	KeyFile string `yaml:"keyFile"`
+	// Enabled is the operator's switch, beside the memory slider.
+	// Turning it off deletes what was retained (see CFG-0080's note and
+	// retention.Store.Purge): off has to mean the history is gone, or
+	// the setting is a lie.
+	Enabled bool `yaml:"enabled"`
+	// Days is how many days are kept. Below 1 the default is applied
+	// (CFG-0081): zero would mean the day just written is deleted on the
+	// next flush, which is retention that reports itself as on and keeps
+	// nothing.
+	Days int `yaml:"days"`
+	// MaxBytes is the second cap, applied alongside Days -- the oldest
+	// day is dropped when either is hit. It exists because the day count
+	// alone does not bound anything on a deployment logging far more
+	// than it should: the ADR's sizing puts thirty days at roughly
+	// 600MB at the recommended posture, and at ~560 events/sec the same
+	// thirty days would be tens of gigabytes. Below MinRetentionBytes
+	// the default is applied (CFG-0082).
+	MaxBytes int64 `yaml:"maxBytes"`
+	// Dir is where the daily files live, mode 0600 in a 0700 directory.
+	// Left empty, mikroview puts them beside its other state -- see
+	// main.retentionDirectory.
+	Dir string `yaml:"dir"`
+}
+
+const (
+	// defaultRetentionDays: thirty days is what docs/decisions/event-retention.md
+	// settled on -- long enough that a threshold can be loosened against
+	// a fortnight of real traffic rather than an afternoon of it.
+	defaultRetentionDays = 30
+	// defaultRetentionMaxBytes: 1 GiB. At the recommended logging
+	// posture thirty days is about 600MB, so this is only reached by a
+	// deployment that is logging too much -- which is exactly the case
+	// needing a bound the day count cannot give it.
+	defaultRetentionMaxBytes = 1 << 30
+	// MinRetentionBytes is the smallest byte cap accepted. Below about a
+	// megabyte the cap is smaller than a single day at any realistic
+	// rate, so every flush would drop everything but the open day and
+	// the feature would report itself on while holding hours. A smaller
+	// value is treated as a mistake and the default applied -- see
+	// CFG-0082.
+	MinRetentionBytes = 1 << 20
+)
+
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
@@ -903,6 +971,7 @@ type Config struct {
 	NetClass   NetClass   `yaml:"netClass"`
 	Engine     Engine     `yaml:"engine"`
 	Snapshot   Snapshot   `yaml:"snapshot"`
+	History    History    `yaml:"history"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -1086,6 +1155,14 @@ func defaults() Config {
 			// it from the data directory at startup, so a deployment that
 			// moved its state (auth.storePath) keeps its snapshots beside
 			// it rather than on the default volume.
+		},
+		History: History{
+			// Enabled and KeyFile stay zero on purpose: memory-only is
+			// the default and a first-class mode, not a setup step
+			// somebody forgot. Dir is resolved from the data directory
+			// at startup, same as Snapshot.Dir.
+			Days:     defaultRetentionDays,
+			MaxBytes: defaultRetentionMaxBytes,
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -1572,6 +1649,32 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_SNAPSHOT_DIR"); v != "" {
 		cfg.Snapshot.Dir = v
+	}
+	// MIKROVIEW_HISTORY_KEY_FILE is a path, never the key itself.
+	// There is deliberately no environment variable carrying key
+	// material: AGENTS.md's secret rule keeps secrets out of the
+	// environment, where a process listing, a crash dump or a container
+	// inspect would expose them.
+	if v := os.Getenv("MIKROVIEW_HISTORY_KEY_FILE"); v != "" {
+		cfg.History.KeyFile = v
+	}
+	if v := os.Getenv("MIKROVIEW_HISTORY_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.History.Enabled = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_HISTORY_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.History.Days = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_HISTORY_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.History.MaxBytes = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_HISTORY_DIR"); v != "" {
+		cfg.History.Dir = v
 	}
 }
 

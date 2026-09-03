@@ -114,6 +114,16 @@ func migratedStores(cfg config.Config) []migratedStore {
 		migratedStore{Name: "tls", Path: cfg.TLS.StorePath, Dir: true},
 		migratedStore{Name: "recovery_pepper", Path: cfg.Auth.RecoveryPepperPath},
 		migratedStore{Name: "geoip_db", Path: cfg.GeoIP.DBPath},
+		// The retained event history (#856), a directory like tls above.
+		// Carried, unlike the snapshot directory: a snapshot is
+		// disposable state whose loss costs one cold start, while this
+		// is the operator's event history -- up to thirty days of it --
+		// and leaving it behind is exactly the "data the operator
+		// believes they moved" this list exists to prevent. It moves as
+		// the encrypted files it already is; the key stays where it is
+		// mounted, so the copy is readable at the destination and the
+		// key is not duplicated into it.
+		migratedStore{Name: "event_history", Path: historyDirectory(cfg), Dir: true},
 		// Not a config field, so no reflection walk would ever find it;
 		// named here because losing it is the worst outcome of the whole
 		// operation. See this file's header comment.
@@ -125,10 +135,15 @@ func migratedStores(cfg config.Config) []migratedStore {
 // that migratedStores deliberately does not carry, keyed by its dotted
 // field path, with the reason.
 //
-// All three name files the operator supplies and mounts themselves,
+// All of them name files the operator supplies and mounts themselves,
 // rather than state mikroview writes into its data directory. Moving the
 // data directory does not move them and must not claim to.
 var excludedFromMigration = map[string]string{
+	"History.KeyFile": "the key the retained event history is encrypted with, mounted by the operator " +
+		"from outside the data directory -- which is the whole point of it. Copying it into the new " +
+		"volume would put the key beside the files it protects, so whoever copied the directory would " +
+		"have both, and it would spread the secret rather than move it. The history itself is carried " +
+		"(see migratedStores' event_history) and stays readable, because the key does not move.",
 	"TLS.CertFile": "an operator-supplied certificate, mounted read-only from wherever they keep it " +
 		"(deploy/docker-compose.yml mounts such files under /etc/mikroview). mikroview never writes it, " +
 		"so it is not part of the data directory and does not move with it. The TLS store mikroview " +
