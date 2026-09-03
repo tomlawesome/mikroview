@@ -211,6 +211,76 @@ hour after a restart the hourline and the docket say
 `restored to 13:14 · live since 13:18`, or `counting since 13:18 —
 nothing before` if it started cold.
 
+### On-disk event history (optional, off by default)
+
+Everything described so far -- `store.retention`, `store.maxMemory` -- is
+the in-memory ring: a fixed block of memory holding the most recent
+events, gone on restart or once the ring wraps. `history:` is a
+separate, optional feature that writes the same events to one
+encrypted, compressed file per day, so a threshold can be loosened
+against weeks of real traffic instead of whatever the ring still holds.
+These are two different settings answering two different questions:
+`store.retention` is how far back a live query into memory can reach;
+`history.days` is how many days of files exist on disk at all. Neither
+setting changes the other.
+
+**Off by default, and staying off is a first-class choice.** An
+operator who wants nothing about traffic on disk is choosing that, not
+missing a setup step:
+
+```yaml
+history:
+  enabled: false
+  keyFile: ""
+  days: 30
+  maxBytes: 1073741824   # 1 GiB
+  dir: ""
+```
+
+- `history.enabled` — the switch. **Turning it off deletes what was
+  already retained** — off has to mean the history is actually gone, or
+  the setting is a lie.
+- `history.keyFile` — path to a master key file that you generate and
+  mount, e.g.:
+
+  ```
+  head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+  ```
+
+  The file must hold at least 32 bytes. This is a path, never the key
+  itself — there is deliberately no environment variable carrying key
+  material; `MIKROVIEW_HISTORY_KEY_FILE` only names the file.
+
+  **It must be mounted outside the data directory.** A key kept beside
+  the files it protects is decoration: whoever copies the directory
+  copies both, and now has everything needed to read it.
+
+  **There is no unencrypted mode.** `history.enabled: true` with no key
+  file set does not mean "retain, unencrypted" — it means nothing is
+  retained at all, and mikroview turns the switch back off and says so
+  (see [CFG-0080](#cfg-0080)).
+- `history.days` — how many days of files to keep. Below 1 the 30-day
+  default is applied (see [CFG-0081](#cfg-0081)): zero would drop the
+  day just written on the very next flush, leaving history "on" and
+  holding nothing.
+- `history.maxBytes` — a second cap, applied alongside `days` — whichever
+  is hit first drops the oldest day. Below 1 MiB the 1 GiB default is
+  applied (see [CFG-0082](#cfg-0082)): below about a megabyte the cap is
+  smaller than a single day at any realistic logging rate, so every
+  flush would drop all but the day still being written.
+- `history.dir` — where the daily files live, mode 0600 in a 0700
+  directory. Left empty, mikroview puts them beside the data directory.
+
+**What encryption buys, and what it doesn't.** Copying the data
+directory, or restoring a backup of it, yields nothing readable without
+the key file — and the key file lives outside that directory, so
+copying one doesn't carry the other. It is not protection against
+everything: root on the running host can still read whatever the
+mikroview process itself can, because the process holds the key to do
+its own reads and writes. The only way to avoid that is not retaining
+history at all, which is why staying off is a real, supported choice
+rather than a lesser one.
+
 ### Running behind a reverse proxy
 
 Mikroview rate-limits failed logins per source address as well as per
@@ -615,6 +685,42 @@ written and silently turn warm restart off. The default of 6 is applied.
 ```yaml
 snapshot:
   keep: 6
+```
+
+#### CFG-0080
+
+`history.enabled` is on but `history.keyFile` is empty. There is no
+unencrypted mode, so nothing would be retained — mikroview turns
+retention back off rather than write anything unprotected. See
+[On-disk event history](#on-disk-event-history-optional-off-by-default).
+
+```yaml
+history:
+  enabled: true
+  keyFile: /run/secrets/mikroview-history.key   # outside the data directory
+```
+
+#### CFG-0081
+
+`history.days` is below 1, which would drop the day just written on the
+next flush — history would report itself as on while holding nothing.
+The 30-day default is applied instead.
+
+```yaml
+history:
+  days: 30
+```
+
+#### CFG-0082
+
+`history.maxBytes` is below 1 MiB, the minimum. Below about a megabyte
+the cap is smaller than a single day at any realistic logging rate, so
+every flush would drop all but the day still open. The 1 GiB default is
+applied instead.
+
+```yaml
+history:
+  maxBytes: 1073741824   # 1 GiB
 ```
 
 ## Logging
@@ -3002,6 +3108,11 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_SNAPSHOT_INTERVAL` | `snapshot.interval` -- how often a warm-restart snapshot is written (see [Warm restart](#warm-restart-what-survives-a-restart)); anything under 30s falls back to the default |
 | `MIKROVIEW_SNAPSHOT_KEEP` | `snapshot.keep` -- how many snapshot generations to keep; anything under 1 falls back to the default |
 | `MIKROVIEW_SNAPSHOT_DIR` | `snapshot.dir` -- where the snapshot files live. A file path even on a Postgres deployment: a snapshot is derived counters, not custody data |
+| `MIKROVIEW_HISTORY_KEY_FILE` | `history.keyFile` -- path to the master key file, mounted outside the data directory (see [On-disk event history](#on-disk-event-history-optional-off-by-default)); no variable carries the key itself |
+| `MIKROVIEW_HISTORY_ENABLED` | `history.enabled` |
+| `MIKROVIEW_HISTORY_DAYS` | `history.days` -- below 1 the 30-day default is applied |
+| `MIKROVIEW_HISTORY_MAX_BYTES` | `history.maxBytes` -- below 1 MiB the 1 GiB default is applied |
+| `MIKROVIEW_HISTORY_DIR` | `history.dir` -- where the daily history files live. Left empty, they sit beside the data directory |
 
 ## Checking your version
 
