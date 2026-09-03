@@ -52,7 +52,14 @@ type Server struct {
 	// nil-means-disabled convention as Reputation. Deliberately display-
 	// only: it is read in handleIPLookup and nowhere near flag scoring.
 	NetClass *netclass.Classifier
-	Flags    *flags.Store
+	// History is the on-disk event history a replay reads before it
+	// reaches the ring (#856). Nil means memory-only, which is the
+	// default and a first-class mode, not a missing dependency -- same
+	// nil-means-disabled convention as NetClass and Reputation above.
+	// It is read for replays and nowhere else; ingest writes to it
+	// through main, not through here.
+	History engine.RetainedDays
+	Flags   *flags.Store
 	// Definitions is the one document holding every definition the engine
 	// evaluates -- shipped detectors, the operator's expectations, and
 	// anything a builder UI authors from scratch (issue #404). It backs
