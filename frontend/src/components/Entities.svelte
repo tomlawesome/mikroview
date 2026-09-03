@@ -97,7 +97,7 @@
   import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatRelative, formatHM } from '../lib/format'
-  import { deviceState, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
   import { syslogCommands, instanceAddress, portOf } from '../lib/setupsteps'
   import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
 
@@ -585,6 +585,12 @@
                 <div class="frow dim">never heard from yet</div>
               {:else}
                 <div class="frow dim">last heard {formatRelative(d.lastSeen, appState.now)} — quiet is a fact, not a fault</div>
+              {/if}
+              {#if multihomedEcho(d)}
+                <!-- The source-address split's echo (#442), the same
+                     sentence Fleet.svelte carries: the wizard's step 2
+                     owns the diagnosis and the command. -->
+                <div class="frow dim">{multihomedEcho(d)}</div>
               {/if}
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
             </div>
