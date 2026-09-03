@@ -35,6 +35,16 @@ export function mockupEstate(): CityInput {
       { key: 'wlan-wsh|bridge-lan', from: 'wlan-wsh', to: 'bridge-lan', events: 20, verdict: 'planned' },
     ],
     wan: 'ether1',
-    tunnels: ['l2tp-out1', 'wg0'],
+    wanLogged: true,
+    tunnels: [
+      {
+        iface: 'l2tp-out1',
+        routerId: 'rb5009',
+        apiState: 'up',
+        events: 3,
+        peers: [{ id: 'l2tp-out1/ppp/branch', name: 'branch-office', address: '10.90.0.2', kind: 'ppp' }],
+      },
+      { iface: 'wg0', routerId: 'rb5009', apiState: 'down', events: 0, peers: [] },
+    ],
   }
 }

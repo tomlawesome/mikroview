@@ -324,6 +324,12 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/routeros/{device}/rules", s.handleRouterOSRules},
 		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
 		{http.MethodGet, "/api/routeros/{device}/addresses", s.handleRouterOSAddresses},
+		// Per-tunnel state (issue #874, City 9's ingest side): WireGuard
+		// handshake-derived up/down and the /ppp/active table backing
+		// L2TP/PPTP/SSTP/OVPN alike. Same session-gated, read-only shape
+		// as the three routes above.
+		{http.MethodGet, "/api/routeros/{device}/wireguard", s.handleRouterOSWireguard},
+		{http.MethodGet, "/api/routeros/{device}/ppp-active", s.handleRouterOSPPPActive},
 		{http.MethodGet, "/api/stats", s.handleStats},
 		// #644 round 21's top port/top talker table columns -- see
 		// handleStatsTops' own doc comment for why this is a separate

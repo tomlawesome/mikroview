@@ -83,6 +83,16 @@ export interface Road {
   label: string
 }
 
+/** A tunnel's peer, drawn as the far-bank hamlet (#866): a WireGuard
+ * peer (by allowedAddress/comment) or a ppp-active session (by
+ * name/address). */
+export interface CityPeer {
+  id: string
+  name: string
+  address: string
+  kind: 'wg' | 'ppp'
+}
+
 export interface Bridge {
   id: string
   iface: string
@@ -96,7 +106,17 @@ export interface Bridge {
   w: number
   /** The gate post standing at the bridge head, by building id. */
   post: string
-  state: 'up' | 'quiet' | 'down'
+  /**
+   * The road bridge (the WAN) never reads down/quiet: 'up' means a
+   * logging rule covers the boundary (lamped), 'unknown' means it does
+   * not (unlit) -- see cityInputFrom's wanLogged. A footbridge's state
+   * is tunnelState.ts's bridgeStateFor: 'up'/'down' from the API,
+   * 'quiet' when up but nothing crossed in the window, 'unknown' when
+   * the API has no state for it at all (never a guessed down).
+   */
+  state: 'up' | 'quiet' | 'down' | 'unknown'
+  /** The far-bank hamlet: empty for the road bridge. */
+  peers: CityPeer[]
 }
 
 export interface River {
