@@ -315,6 +315,66 @@ func TestShippedGlobalSpikeIsReplayable(t *testing.T) {
 	}
 }
 
+// TestShippedGlobalSpikeReplaySampleKeepsMostRecent pins issue #860 for
+// the global-spike replay path: once emissions exceed replaySampleBound,
+// the receipt's Sample must hold the most recent ticks, not whichever
+// fifty fired first. The candidate overrides multiplier down to
+// something negligible so every tick once the burst starts clears the
+// baseline gate -- the point of this test is the sample's recency, not
+// the baseline's own creep behaviour, which TestShippedGlobalSpikeIsReplayable
+// already covers. This would fail under the old first-N behaviour, whose
+// sample would freeze at the burst's first fifty ticks and never reach
+// the ticks near the corpus's end.
+func TestShippedGlobalSpikeReplaySampleKeepsMostRecent(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedGlobalSpikeDefinition(t, fs, &fixedRate{}, nil)
+
+	t0 := time.Now()
+	var events []store.Event
+	// A long quiet stretch to prime the baseline low, then a burst far
+	// longer than replaySampleBound*globalSpikeCheckInterval so the tick
+	// count comfortably exceeds the sample bound.
+	for i := 0; i < 300; i++ {
+		events = append(events, store.Event{SrcIP: "203.0.113.9", ReceivedAt: t0.Add(time.Duration(i) * time.Second)})
+	}
+	burst := t0.Add(300 * time.Second)
+	burstSpan := (replaySampleBound + 20) * int(globalSpikeCheckInterval/time.Second)
+	for i := 0; i < burstSpan*10; i++ {
+		events = append(events, store.Event{SrcIP: "203.0.113.9", ReceivedAt: burst.Add(time.Duration(i) * 100 * time.Millisecond)})
+	}
+
+	res, err := d.Replay(fakeCorpus{events: events}, Params{"multiplier": 0.001})
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if res.Receipt == nil {
+		t.Fatalf("Replay declined unexpectedly: %+v", res)
+	}
+	if res.Receipt.EmissionCount() <= replaySampleBound {
+		t.Fatalf("EmissionCount() = %d, want more than replaySampleBound=%d for this test to exercise truncation", res.Receipt.EmissionCount(), replaySampleBound)
+	}
+	sample := res.Receipt.Sample()
+	if len(sample) != replaySampleBound {
+		t.Fatalf("len(Sample()) = %d, want exactly replaySampleBound=%d", len(sample), replaySampleBound)
+	}
+	for i := 1; i < len(sample); i++ {
+		if !sample[i].At.After(sample[i-1].At) {
+			t.Fatalf("sample[%d].At = %s is not after sample[%d].At = %s -- sample must stay chronological", i, sample[i].At, i-1, sample[i-1].At)
+		}
+		if got := sample[i].At.Sub(sample[i-1].At); got != globalSpikeCheckInterval {
+			t.Errorf("sample[%d..%d] gap = %s, want exactly globalSpikeCheckInterval=%s (every tick in the burst fires)", i-1, i, got, globalSpikeCheckInterval)
+		}
+	}
+	// The discriminating check: the sample's last entry must be near the
+	// corpus's last event, not stranded near the burst's start the way
+	// first-N would leave it.
+	lastEventAt := events[len(events)-1].ReceivedAt
+	if gap := lastEventAt.Sub(sample[len(sample)-1].At); gap > 2*globalSpikeCheckInterval {
+		t.Fatalf("sample's last entry at %s is %s before the corpus's last event at %s -- want the most recent emissions, not the oldest",
+			sample[len(sample)-1].At, gap, lastEventAt)
+	}
+}
+
 // TestShippedGlobalSpikeConfidenceGrowsWithSampleHistory is
 // internal/detect/global_spike_test.go's test of the same name: an
 // identical spike reads as more confident when more history backs the
