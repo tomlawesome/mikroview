@@ -92,13 +92,14 @@
     fetchRouterAddresses,
     fetchRules,
     fetchSetupStatus,
+    fetchSetupCommands,
     type RouterFilterRule,
   } from '../lib/api'
   import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatRelative, formatHM } from '../lib/format'
   import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
-  import { syslogCommands, instanceAddress, portOf } from '../lib/setupsteps'
+  import { instanceAddress, portOf } from '../lib/setupsteps'
   import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
 
   // --- routers (folded in from Fleet, #647; cards since #675) ---------
@@ -128,6 +129,11 @@
   const canRename = $derived(authState.canEdit)
 
   let status = $state<SetupStatus | null>(null)
+  // berthSyslogCommands is the empty berth's two paste lines -- POST
+  // /api/setup/commands' steps.syslog.commands (#436 moved the RouterOS
+  // syntax server-side), fetched once status carries the syslog port it
+  // needs.
+  let berthSyslogCommands = $state('')
 
   // The empty berth (#718): one more card at the end of the router row,
   // the same size and shape as a real one but empty -- an outline with
@@ -457,7 +463,16 @@
       // Lane names fall back to the raw boundary id until this resolves.
     })
     fetchSetupStatus()
-      .then((s) => (status = s))
+      .then((s) => {
+        status = s
+        return fetchSetupCommands({
+          address: instanceAddress({ host: location.host }),
+          syslogPort: s.instance.syslogPort,
+        })
+      })
+      .then((r) => {
+        if (typeof r !== 'string') berthSyslogCommands = r.steps.syslog.commands
+      })
       .catch(() => {
         // The "add a third router" card's paste-lines disclosure simply
         // has nothing to show until this resolves.
@@ -621,8 +636,8 @@
                   it appears here.
                 </p>
                 <p>Routers push to mikroview — it never connects to them.</p>
-                {#if status}
-                  <pre class="paste">{syslogCommands(instanceAddress({ host: location.host }), status.instance.syslogPort)}</pre>
+                {#if berthSyslogCommands}
+                  <pre class="paste">{berthSyslogCommands}</pre>
                 {:else}
                   <p class="dim">Loading the commands to paste…</p>
                 {/if}

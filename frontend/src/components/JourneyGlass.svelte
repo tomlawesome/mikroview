@@ -10,7 +10,6 @@
   import { journeyState, tourLengthSentence } from '../lib/journey.svelte'
   import { appState } from '../lib/state.svelte'
   import { wizardState } from '../lib/wizard.svelte'
-  import { syslogCommands } from '../lib/setupsteps'
 
   // Beat 3 opens on evidence, never on a clock (#750 B1, owner ruling
   // 2026-09-02): the moment the first line lands, the glass moves. See
@@ -22,16 +21,19 @@
 
   // The waiting beat shows the two lines again, so the operator can
   // paste them without walking back. Same source as JourneyAttach's --
-  // syslogCommands() is what step 2 of the full wizard emits, never
-  // invented copy -- and it asks for the status itself rather than
-  // assuming the attach beat's own fetch has landed.
+  // steps.syslog.commands (POST /api/setup/commands, #436) is what step
+  // 2 of the full wizard renders, never invented copy -- and it asks for
+  // the status itself rather than assuming the attach beat's own fetch
+  // has landed.
   $effect(() => {
     if (!wizardState.status) wizardState.refresh()
   })
 
-  const commands = $derived(
-    wizardState.status ? syslogCommands(wizardState.address, wizardState.status.instance.syslogPort) : '',
-  )
+  $effect(() => {
+    if (wizardState.status && !wizardState.commands) wizardState.refreshCommands()
+  })
+
+  const commands = $derived(wizardState.commands?.steps.syslog.commands ?? '')
 
   const cardCount = $derived(journeyState.cards.length)
 </script>

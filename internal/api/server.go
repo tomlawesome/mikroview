@@ -420,6 +420,10 @@ func (s *Server) routes() []route {
 		// The guided setup wizard's view of what has actually landed
 		// (#320) -- open to any signed-in user, see handleSetupStatus.
 		{http.MethodGet, "/api/setup/status", s.handleSetupStatus},
+		// Renders the wizard's RouterOS commands for a router or an
+		// operator-picked version (#436) -- same tier as the status GET
+		// beside it, see handleSetupCommands.
+		{http.MethodPost, "/api/setup/commands", s.handleSetupCommands},
 		// The claim ledger's own marks (#487): a step skipped or forced
 		// past. Admin-only, matching the modal it is written from.
 		{http.MethodPost, "/api/setup/mark", s.handleSetupMark},

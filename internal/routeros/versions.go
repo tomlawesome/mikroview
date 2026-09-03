@@ -14,47 +14,41 @@ import (
 // those commands were written against except a comment, and nothing
 // noticed when MikroTik shipped a release nobody had reviewed.
 //
-// This file is the machine-readable half of that: one place saying what
-// the command knowledge is good for, and the comparison that decides
-// whether a given router falls outside it. Where the answer is *shown*
-// is a separate question; this package only answers it.
+// This file answers "where does a reported version stand" by comparing
+// it against dialects.go's table (Rows, RowFor, NewestVersion), which is
+// the actual record of what has been reviewed and what it renders. Where
+// the answer is *shown* is a separate question; this package only
+// answers it.
 
 const (
 	// MinimumVersion is the oldest RouterOS the commands mikroview
 	// presents are expected to work on. Stated in docs/routeros-setup.md
-	// as the supported floor.
+	// as the supported floor, and the lower bound of dialects.go's first
+	// row.
 	MinimumVersion = "7.18"
 
 	// ReviewedVersion is the newest RouterOS release whose changes have
-	// actually been read against the commands in this repository.
+	// actually been read against the commands in this repository. Held
+	// as its own constant, separate from computing it from dialects.Rows
+	// every time, because scripts/routeros-freshness.sh's failure
+	// message names this constant directly and something has to be the
+	// stable thing a person reads. TestReviewedVersionMatchesNewest is
+	// what stops it silently drifting from dialects.NewestVersion() --
+	// bump both together, in the same change that adds or extends a row,
+	// or that test fails.
 	//
-	// This is the marker the scheduled freshness check compares against
-	// (scripts/routeros-freshness.sh). Bumping it is a claim that
-	// someone reviewed that release's notes for command-set changes --
-	// so bump it when that has been done, not when a release appears.
+	// Reviewed, not exercised: 7.23.3 was verified against a real
+	// router; 7.24 and 7.24.1 were read from release notes only. See
+	// dialects.go's Rows for which, when, and what each review found --
+	// in particular the 7.24.0 find-lookup bug recorded on that row's
+	// Note.
 	//
-	// Reviewed, not exercised. The commands were *verified against a
-	// real router* at 7.23.3 -- see setupsteps.ts's blockSpecs comment,
-	// docs/routeros-setup.md, and CHR_VERSION in
-	// scripts/live-routeros.sh, which still boots 7.23.3. This marker
-	// means someone has read the intervening release notes for changes
-	// affecting those commands, which is a weaker claim and the one the
-	// freshness check is actually about.
-	//
-	// Review log:
-	//   7.23.3 -- commands written and verified against a real router.
-	//   7.24, 7.24.1 -- read 2026-08-29. Nothing renames, removes or
-	//     changes the syntax of any command mikroview emits. The fetch
-	//     and scheduler changes are additive; the script fix concerns an
-	//     empty "policy", and mikroview always sets one.
-	//     Two things worth knowing rather than swallowing:
-	//       - 7.24 introduced a "find" command argument lookup bug,
-	//         fixed in 7.24.1. mikroview tags rules with
-	//         `/ip firewall filter set [find !dynamic ...]`, so 7.24.0
-	//         exactly is the one release where that step is suspect.
-	//       - 7.24 made the console "produce runtime errors for bad
-	//         command parameters". Nothing here relies on a parameter
-	//         being tolerated, but it raises the cost of any that did.
+	// One review finding has nowhere in a per-row Note to live, because
+	// it isn't about any one version range: 7.24 made the console
+	// "produce runtime errors for bad command parameters", where earlier
+	// releases tolerated them silently. Nothing mikroview emits relies
+	// on a bad parameter being tolerated, but it raises the cost of any
+	// command that turns out to have one.
 	ReviewedVersion = "7.24.1"
 )
 
@@ -72,30 +66,35 @@ const (
 	// StandingBelowMinimum means older than MinimumVersion. The commands
 	// may not exist in that syntax at all.
 	StandingBelowMinimum
-	// StandingReviewed means at or below ReviewedVersion and at or above
-	// MinimumVersion -- inside the range someone has actually checked.
+	// StandingReviewed means a row in dialects.Rows covers this version
+	// -- someone has actually checked the commands against it (or the
+	// release notes for it).
 	StandingReviewed
-	// StandingAheadOfReview means newer than ReviewedVersion. Not an
-	// error and usually harmless: it means nobody has read that release
-	// against these commands, which is a statement about mikroview
-	// rather than about the router.
+	// StandingAheadOfReview means newer than every row's upper bound.
+	// Not an error and usually harmless: it means nobody has read that
+	// release against these commands, which is a statement about
+	// mikroview rather than about the router.
 	StandingAheadOfReview
 )
 
+// String renders Standing the way the API contract does (#436): the wire
+// value both POST /api/setup/commands and GET /api/devices's
+// routerosStanding use.
 func (s Standing) String() string {
 	switch s {
 	case StandingBelowMinimum:
-		return "belowMinimum"
+		return "below-minimum"
 	case StandingReviewed:
 		return "reviewed"
 	case StandingAheadOfReview:
-		return "aheadOfReview"
+		return "ahead-of-review"
 	default:
 		return "unknown"
 	}
 }
 
-// VersionStanding classifies the version a router reported.
+// VersionStanding classifies the version a router reported, against
+// dialects.go's table rather than a single marker.
 //
 // reported is what arrives on a push -- `/system/resource get version`,
 // which yields strings like "7.23.3 (stable)" or "7.19beta2". Anything
@@ -111,17 +110,24 @@ func VersionStanding(reported string) Standing {
 	if !ok {
 		return StandingUnknown
 	}
-	reviewed, ok := parseVersion(ReviewedVersion)
-	if !ok {
-		return StandingUnknown
-	}
 	if compareVersions(got, min) < 0 {
 		return StandingBelowMinimum
 	}
-	if compareVersions(got, reviewed) > 0 {
+	if _, ok := RowFor(reported); ok {
+		return StandingReviewed
+	}
+	newest, ok := parseVersion(NewestVersion())
+	if !ok {
+		return StandingUnknown
+	}
+	if compareVersions(got, newest) > 0 {
 		return StandingAheadOfReview
 	}
-	return StandingReviewed
+	// At or above the floor, at or below the newest row's bound, but
+	// covered by no row: a gap in the table itself, which today's
+	// contiguous Rows never produce. Read the same as "nobody has
+	// reviewed this release", because that is exactly what it means.
+	return StandingAheadOfReview
 }
 
 // CompareToReviewed reports whether candidate is newer than

@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-only
 #
-# Fails when MikroTik has published a stable RouterOS newer than the
-# release mikroview's command knowledge was last reviewed against
-# (routeros.ReviewedVersion, internal/routeros/versions.go).
+# Fails when MikroTik has published a stable RouterOS with no row
+# covering it in internal/routeros/dialects.go (Rows) -- mechanically,
+# that means newer than routeros.ReviewedVersion
+# (internal/routeros/versions.go), which is kept equal to the table's own
+# newest row by TestReviewedVersionMatchesNewest, so comparing against
+# the constant and comparing against the table agree by construction.
 #
 # What it is not: a check that anything is broken. RouterOS command
 # syntax drifts between releases, mikroview presents commands the
 # operator pastes into their router, and nothing was watching for a
 # release nobody had read. Full semantic diffing of the command set is
-# not automatable; a loud "a release shipped that nobody has reviewed"
-# is, and is the actual requirement (#436).
+# not automatable; a loud "a stable release exists with no row" is, and
+# is the actual requirement (#436).
 #
 # Acting on a failure means reading that release's notes against the
-# commands in frontend/src/lib/setupsteps.ts and docs/routeros-setup.md,
-# fixing anything that moved, and only then bumping ReviewedVersion.
-# Bumping it to silence this without reading anything is the one wrong
-# response.
+# commands in internal/routeros/commands.go and docs/routeros-setup.md
+# (or exercising them against a real router, the stronger claim a row's
+# VerifiedBy can make), fixing anything that moved, and only then adding
+# or extending a row in internal/routeros/dialects.go and bumping
+# ReviewedVersion to match. Bumping ReviewedVersion to silence this
+# without reading anything is the one wrong response.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -61,19 +66,24 @@ if [ "$cmp_status" -eq 0 ]; then
 fi
 
 cat >&2 <<MSG
-routeros-freshness: RouterOS $upstream has shipped, and mikroview's command
-knowledge is only reviewed up to $reviewed.
+routeros-freshness: a stable release exists with no row in
+internal/routeros/dialects.go -- RouterOS $upstream has shipped, and the
+newest row only covers up to $reviewed.
 
-Nothing is necessarily broken. What this means is that nobody has read
-$upstream's release notes against the commands mikroview asks operators to
-paste into their routers.
+Nothing is necessarily broken. What this means is that nobody has
+exercised or reviewed $upstream against the commands mikroview asks
+operators to paste into their routers.
 
 To clear it:
-  1. Read the release notes for command-syntax changes affecting
-     frontend/src/lib/setupsteps.ts and docs/routeros-setup.md.
+  1. Read the release notes (or exercise the commands against a real
+     router) for changes affecting internal/routeros/commands.go and
+     docs/routeros-setup.md.
   2. Fix anything that moved.
-  3. Bump routeros.ReviewedVersion in internal/routeros/versions.go to $upstream.
+  3. Add or extend a row in internal/routeros/dialects.go's Rows,
+     with an honest VerifiedBy, and bump ReviewedVersion in
+     internal/routeros/versions.go to match its newest bound.
 
-Do not do step 3 alone.
+Bumping ReviewedVersion without doing 1 and 2 -- exercising or reviewing
+the release -- is the one wrong response.
 MSG
 exit 1

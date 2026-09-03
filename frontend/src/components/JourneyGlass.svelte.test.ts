@@ -1,10 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
+
+const SYSLOG_COMMANDS =
+  '/system logging action add name=mikroview target=remote remote=mv.example remote-port=6514 ' +
+  'remote-protocol=tls check-certificate=yes\n/system logging add topics=firewall,info action=mikroview'
 
 vi.mock('../lib/api', () => ({
   fetchSetupStatus: vi.fn(),
+  fetchSetupCommands: vi.fn(async () => ({
+    routeros: { minimum: '7.18', newest: '7.24.1', rows: [] },
+    picked: null,
+    routers: [],
+    steps: {
+      caTrust: { commands: '', note: '' },
+      syslog: { commands: SYSLOG_COMMANDS, note: '' },
+      ruleTagging: { commands: '', note: '' },
+      push: { commands: '', note: '' },
+      schedule: { commands: '', note: '' },
+    },
+  })),
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
 }))
@@ -44,6 +60,7 @@ beforeEach(() => {
   appState.events = []
   wizardState.open = false
   wizardState.status = null
+  wizardState.commands = null
 })
 
 // #750 B1: nothing may claim the pipe is alive until a line has landed.
@@ -62,12 +79,14 @@ describe('JourneyGlass -- waiting for the first line', () => {
     expect(screen.queryByText('MikroView is flowing.')).toBeNull()
   })
 
-  it('keeps the two router lines up, so they can still be pasted', () => {
+  it('keeps the two router lines up, so they can still be pasted', async () => {
     wizardState.status = STATUS
     render(JourneyGlass)
-    const code = document.querySelector('.glass .code')
-    expect(code?.textContent).toContain('/system logging action add name=mikroview')
-    expect(code?.textContent).toContain('/system logging add topics=firewall')
+    await waitFor(() => {
+      const code = document.querySelector('.glass .code')
+      expect(code?.textContent).toContain('/system logging action add name=mikroview')
+      expect(code?.textContent).toContain('/system logging add topics=firewall')
+    })
   })
 
   it('offers the wizard rather than a way to skip into an untrue claim', async () => {

@@ -48,6 +48,13 @@ signal; dropping it cut volume 97–99%
 ([docs/routeros-setup.md](docs/routeros-setup.md)). Fixing what an operator
 logs is the product's opening argument, not onboarding decoration.
 
+Coverage is about watching the right things in the right places, not about
+accepts versus denies. An accept where there should not be one is as much
+signal as a deny that keeps repeating; which matters is a property of the
+boundary, not the rule's action. The volume story above is about noise, not
+about which action to log -- the owner has corrected the "log denies, not
+accepts" reading more than once (last 2026-09-03, designing #435).
+
 ## mikroview observes; it never scans or connects
 
 Owner decision, ratified 2026-08-15, and a design invariant, not a

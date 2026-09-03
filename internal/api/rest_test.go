@@ -448,6 +448,124 @@ func TestHandleDevicesRouterOSVersionNilRouterState(t *testing.T) {
 	}
 }
 
+// TestHandleDevicesReportsRouterOSStanding covers #436's
+// routerosStanding: present and derived correctly for a version a row
+// covers, and omitted -- not "unknown" -- for a device that never
+// reported one at all.
+func TestHandleDevicesReportsRouterOSStanding(t *testing.T) {
+	s, _ := newTestServer(t)
+	p, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.20.1 (stable)","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Devices []struct {
+			ID               string `json:"id"`
+			RouterOSStanding string `json:"routerosStanding"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]string{}
+	for _, d := range decoded.Devices {
+		byID[d.ID] = d.RouterOSStanding
+	}
+	if byID["core"] != "reviewed" {
+		t.Errorf(`core's routerosStanding = %q, want "reviewed"`, byID["core"])
+	}
+	// A device that never pushed anything must not even carry the key --
+	// omitempty means the field is entirely absent, never "unknown".
+	if strings.Contains(string(body), `"unknown"`) {
+		t.Error(`a devices response carried a literal "unknown" standing -- routerosStanding must be omitted, not spelled out, for a device with no known version`)
+	}
+}
+
+// TestHandleDevicesFallsBackToVersionHint covers #436 step 3: a device
+// with no push at all still reports a version if its source address
+// received a /ca.crt?ros= hint, and a real push always wins once one
+// arrives, even if the hint is newer.
+func TestHandleDevicesFallsBackToVersionHint(t *testing.T) {
+	s, _ := newTestServer(t)
+	// "core" is declared with sourceIp 192.168.1.1 in newTestServer.
+	s.RouterState.NoteVersionHint("192.168.1.1", "7.18", time.Now())
+
+	fetchDevices := func() map[string]struct {
+		Version  string
+		Standing string
+	} {
+		ts := httptest.NewServer(s.mux())
+		defer ts.Close()
+		resp, err := http.Get(ts.URL + "/api/devices")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var decoded struct {
+			Devices []struct {
+				ID               string `json:"id"`
+				RouterOSVersion  string `json:"routerosVersion"`
+				RouterOSStanding string `json:"routerosStanding"`
+			} `json:"devices"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]struct {
+			Version  string
+			Standing string
+		}{}
+		for _, d := range decoded.Devices {
+			out[d.ID] = struct {
+				Version  string
+				Standing string
+			}{d.RouterOSVersion, d.RouterOSStanding}
+		}
+		return out
+	}
+
+	got := fetchDevices()
+	if got["core"].Version != "7.18" || got["core"].Standing != "reviewed" {
+		t.Fatalf("core = %+v, want the hinted version and its standing", got["core"])
+	}
+
+	// A real push for the same device overrides the hint, even though
+	// the hint's version parses as newer -- see effectiveRouterOSVersion.
+	p, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.12.1","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	got = fetchDevices()
+	if got["core"].Version != "7.12.1" || got["core"].Standing != "below-minimum" {
+		t.Fatalf("core = %+v, want the pushed version to override the hint", got["core"])
+	}
+}
+
 // TestHandleDeviceMACs covers issue #675's Entities table source: every
 // persisted MAC entry, with its paired IP, comes back from GET
 // /api/devices/macs -- and a Server with no MACRegistry configured

@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest'
 import {
   buildLedger,
   caStep,
-  caTrustCommands,
   certificateCovers,
   finishHeadline,
   firstOpenStep,
@@ -13,8 +12,6 @@ import {
   nameStep,
   notObserved,
   portOf,
-  pushBlock,
-  pushScript,
   pushStep,
   rulesStep,
   silenceExplanation,
@@ -22,7 +19,6 @@ import {
   sourceSplitReceipt,
   sourceSplits,
   srcAddressCommand,
-  syslogCommands,
   syslogReceipt,
   syslogStep,
 } from './setupsteps'
@@ -92,78 +88,6 @@ describe('certificate cover check', () => {
       instance: { tlsEnabled: false, hosts: ['192.168.11.30'], syslogPort: ':6514', syslogEnabled: true },
     })
     expect(certificateCovers(s, '192.168.11.30:18084')).toBe(true)
-  })
-})
-
-describe('generated commands', () => {
-  // The wizard must never emit a placeholder: a saved script still
-  // containing <mikroview-host> fails much later, somewhere else.
-  const placeholders = /<[a-z-]+>/
-
-  it('fills in the address for the CA fetch', () => {
-    const cmd = caTrustCommands('192.0.2.10:8080')
-    expect(cmd).toContain('https://192.0.2.10:8080/ca.crt')
-    expect(cmd).not.toMatch(placeholders)
-  })
-
-  it('uses the configured syslog port, not an assumed one', () => {
-    expect(syslogCommands('192.0.2.10:8080', ':16514')).toContain('remote-port=16514')
-  })
-
-  it('sends syslog to the host without the web port', () => {
-    const cmd = syslogCommands('192.0.2.10:8080', ':6514')
-    expect(cmd).toContain('remote=192.0.2.10')
-    expect(cmd).not.toContain('remote=192.0.2.10:8080')
-  })
-
-  it('embeds the token in every push block', () => {
-    const script = pushScript('192.0.2.10:8080', 'tok-123', ['filter-rule', 'arp'])
-    expect(script.match(/Bearer tok-123/g)).toHaveLength(2)
-    expect(script).not.toMatch(placeholders)
-  })
-
-  it('renames RouterOS fields to mikroview names', () => {
-    const block = pushBlock('h', 't', 'filter-rule')
-    expect(block).toContain('"logPrefix"=($v->"log-prefix")')
-    expect(block).toContain('"srcAddressList"=($v->"src-address-list")')
-    // #408's fields. connection-state is a set, passed through as the
-    // array RouterOS sends rather than joined by the script.
-    expect(block).toContain('"connectionState"=($v->"connection-state")')
-    expect(block).toContain('"inInterface"=($v->"in-interface")')
-    expect(block).toContain('"outInterface"=($v->"out-interface")')
-    // The wrapping that makes it a list of records rather than one
-    // merged map -- silently wrong without it.
-    expect(block).toContain('{$rec}')
-  })
-
-  it('reports the router version on every block, on the payload not a record', () => {
-    const script = pushScript('h', 't', ['filter-rule', 'arp'])
-    expect(script.match(/"routerosVersion"=\[\/system\/resource get version\]/g)).toHaveLength(2)
-    // On the envelope beside kind/page/pages -- never inside the
-    // per-record map, which describes a rule and not the router.
-    expect(script).not.toContain('"routerosVersion"=[/system/resource get version]; "comment"')
-  })
-
-  it('gives each block its own variables, since they share one script', () => {
-    const script = pushScript('h', 't', ['filter-rule', 'arp'])
-    expect(script).toContain('ruleRecs')
-    expect(script).toContain('arpRecs')
-  })
-
-  it('emits nothing for a kind it does not know', () => {
-    expect(pushBlock('h', 't', 'not-a-kind')).toBe('')
-  })
-
-  // #627: the pushed /ip/address table, same renaming contract as the
-  // filter-rule case above.
-  it('renames /ip/address fields to mikroview names', () => {
-    const block = pushBlock('h', 't', 'ip-address')
-    expect(block).toContain('/ip/address print as-value')
-    expect(block).toContain('"address"=($v->"address")')
-    expect(block).toContain('"network"=($v->"network")')
-    expect(block).toContain('"interface"=($v->"interface")')
-    expect(block).toContain('"comment"=($v->"comment")')
-    expect(block).toContain('{$rec}')
   })
 })
 
