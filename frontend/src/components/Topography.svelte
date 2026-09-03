@@ -11,12 +11,18 @@
   // data (frames first, traffic arrives into them), the empty state is
   // honest ("the map draws itself as traffic arrives" -- round 26's
   // first-hour beat), and while the /ip address table has not been
-  // pushed the zones degrade to boundary-derived names with a caption
-  // naming the missing push. The lens row carries Traffic and Policy
-  // (#628, layer 2); the remaining lenses are unbuilt surfaces, absent
-  // rather than disabled. One fixed picture, tabs repaint it: the
-  // Policy lens keeps every island where Traffic put it and swaps the
-  // observed ribs for what the pushed rule table intends.
+  // pushed the zones degrade to boundary-derived names, with the router
+  // card carrying the one statement that names the missing push and
+  // every address slot saying what it truly holds (#802, round 36 --
+  // nothing floats over the map). The lens row carries round 30's and
+  // round 39's five: three base lenses that repaint the pair lines, and
+  // two overlays -- flags and watch -- that place ledger objects on top
+  // of whichever base is showing (#715 item 3). The two families split
+  // by data source, which is why one is exclusive and the other is not:
+  // a base lens is a different reading of the same edges, an overlay is
+  // a different kind of thing marked on them. One fixed picture, tabs
+  // repaint it: the Policy lens keeps every island where Traffic put it
+  // and swaps the observed ribs for what the pushed rule table intends.
   //
   // Deviation from #627's letter, declared on the issue: "the Map page
   // in the Live group's reserved slot" predates the deck -- topography
@@ -31,17 +37,23 @@
   import type { ReachStrand } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
   import { reachFor } from '../lib/reach'
-  import { formatEps, isPublicIp, formatHM, formatRelative } from '../lib/format'
+  import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
+  import { wizardState } from '../lib/wizard.svelte'
   import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
   import { FLAG_TYPE_LABELS } from '../lib/metricsSeries'
   import { nightlySummary } from '../lib/watchWindow'
   import type { Flag, WatchlistEntry } from '../lib/types'
+  import City from './City.svelte'
+  import { STOPS } from '../lib/city/project'
 
-  const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--marked)']
+  // Five fixed lane inks. The fifth was --marked until #715 item 11 --
+  // the ink this same screen uses for watchers, so one colour carried
+  // two meanings. It has its own token now; see app.css for why olive.
+  const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--lane-5)']
 
   // The pushed /ip address table names the zones, the pushed rule
   // table draws the policy edges; both refreshed whenever the device
@@ -62,10 +74,19 @@
   // Which lens repaints the fixed picture. Reach layers on top of
   // any of them (#626: a mode, not a place).
   let lens = $state<'traffic' | 'policy' | 'coverage'>('traffic')
+  // The two overlays (#715 item 3). Independent of `lens` and of each
+  // other, both on by default, and session state like `lens` -- nothing
+  // here is persisted.
+  let flagsOn = $state(true)
+  let watchOn = $state(true)
+  // Estate-wide, deliberately: this is the same number the dial and the
+  // scene bar show, and a second map-scoped flag count on one screen
+  // would fight them. Drawn only above zero -- no round draws "flags 0",
+  // and a zero is not a thing to report.
+  const flagCountAll = $derived(flagsState.activeCount)
 
   const zones = $derived(zonesState.zones)
   const eps = $derived(appState.stats?.eventsPerSecond ?? 0)
-  const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
 
   const primaryDevice = $derived.by(() => {
     const list = appState.devices
@@ -73,6 +94,29 @@
     const configured = list.filter((d) => d.configured)
     const pool = configured.length > 0 ? configured : list
     return [...pool].sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())[0]
+  })
+
+  // The waist card's sub-line: round 30 draws
+  // "RouterOS <version> · the waist · <N> rules"
+  // (the-whole.html:978). Each end is dropped when it cannot be
+  // answered, leaving "the waist" alone rather than a placeholder --
+  // and "the waist" is always true, so the line never empties.
+  //
+  // The count is enabled pushed filter rules for this device only
+  // (owner, 2026-09-03, #701 fact 2). Never pushed is null, not zero:
+  // "0 rules" about a router with a full rule set would be a fact about
+  // our own silence dressed as a fact about the network.
+  //
+  // The live events/s figure this line used to carry is gone. Round 30
+  // draws no rate on this node, and #715 item 7 is that divergence; the
+  // rate is still on the scene bar and in Metrics, so nothing is lost.
+  const waistRuleCount = $derived(policyState.enabledRuleCount(primaryDevice?.id))
+  const waistSub = $derived.by(() => {
+    const parts: string[] = []
+    if (primaryDevice?.routerosVersion) parts.push(`RouterOS ${primaryDevice.routerosVersion}`)
+    parts.push('the waist')
+    if (waistRuleCount !== null) parts.push(`${waistRuleCount.toLocaleString()} ${waistRuleCount === 1 ? 'rule' : 'rules'}`)
+    return parts.join(' · ')
   })
 
   // Lane geometry (#699). The old spread pinned the first and last lane
@@ -117,7 +161,6 @@
   // whatever the estimate gets wrong the clip catches, so a name can
   // never reach the neighbouring lane again.
   const HOST_CH = 5.5
-  const HOST_DOT_W = 9
 
   function hostsShown(z: ZoneInfo): { hosts: { label: string; ip: string }[]; more: number } {
     const budget = cardW - 2 * cardPad
@@ -125,7 +168,7 @@
     let used = 0
     for (const h of z.hosts) {
       if (shown.length >= 3) break
-      const w = HOST_DOT_W + h.label.length * HOST_CH + (shown.length > 0 ? 3 * HOST_CH : 0)
+      const w = h.label.length * HOST_CH + (shown.length > 0 ? 3 * HOST_CH : 0)
       const rest = z.hostCount - (shown.length + 1)
       const tail = rest > 0 ? (4 + String(rest).length) * HOST_CH : 0
       // The first name always draws: a card that names none of its
@@ -137,9 +180,16 @@
     return { hosts: shown, more: z.hostCount - shown.length }
   }
 
+  // Shared by ribPath and the internet-edge limbs (#726: "bundle the
+  // corridor, fan at the waist") so a rib and its edge cannot drift
+  // apart -- both draw the same slot for the same lane.
+  function slotSpread(i: number, n: number): number {
+    return n === 1 ? 0 : -55 + (110 / (n - 1)) * i
+  }
+
   function ribPath(i: number, n: number): string {
     const x = laneX(i, n)
-    const spread = n === 1 ? 0 : -55 + (110 / (n - 1)) * i
+    const spread = slotSpread(i, n)
     return `M ${700 + spread} 302 C ${700 + spread * 2.2} 380, ${x + (700 - x) * 0.25} 420, ${x} 480`
   }
 
@@ -158,14 +208,17 @@
   const WAIST = { x: 700, y: 312 }
   const EDGE_CAP = 12
 
-  type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'any' }
+  // `idx` is only set for 'zone' anchors -- an internet edge's own slot
+  // is its zone end's lane index (#726), so it rides along with the
+  // anchor rather than being re-derived from the edge's position.
+  type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'any'; idx?: number }
 
   function anchorOf(iface: string): EdgeAnchor | null {
     if (iface === '') return { ...WAIST, kind: 'any' }
     if (iface === zonesState.wanInterface) return { x: 700, y: 104, kind: 'internet' }
     const i = zones.findIndex((z) => z.id === iface)
     if (i === -1) return null
-    return { x: laneX(i, zones.length), y: 484, kind: 'zone' }
+    return { x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }
   }
 
   // A line between two anchors, shared by both lenses: the Policy lens
@@ -180,6 +233,23 @@
     crosses: boolean
   }
 
+  const SPLIT = 7
+  // An edge to "anywhere" ends on the waist itself, which is the point
+  // every crossing edge is pulled through -- so at the ordinary split it
+  // runs along that same lane's edge to the internet, and neither line
+  // can be followed (#726: measured, 0.30 of the run within 4 units).
+  // It keeps its anchor and takes a wider lane instead, so it still
+  // reads as leaving the same island toward the same waist.
+  //
+  // 26, not the 13 this started at: once internet edges landed on their
+  // own slots (#726's bundle decision) the lane holding the middle slot
+  // ends its limb 10 units from the waist, which is where an "anywhere"
+  // edge dies -- so the old clearance smeared those two together again
+  // for that one lane. The gate caught it on the real map. Measured, the
+  // fault clears at 15 and holds from 22 up; 26 keeps a margin without
+  // reading as a line detached from its own island.
+  const ANY_CLEAR = 26
+
   function lineFor(fromIface: string, toIface: string, crosses: boolean): Line | null {
     const from = anchorOf(fromIface)
     const to = anchorOf(toIface)
@@ -189,8 +259,9 @@
     const dx = to.x - from.x
     const dy = to.y - from.y
     const len = Math.hypot(dx, dy) || 1
+    const spread = from.kind === 'any' || to.kind === 'any' ? SPLIT + ANY_CLEAR : SPLIT
     // A→B and B→A split to either side of the pair's shared line.
-    return { from, to, off: { x: (-dy / len) * 7, y: (dx / len) * 7 }, crosses }
+    return { from, to, off: { x: (-dy / len) * spread, y: (dx / len) * spread }, crosses }
   }
 
   interface DrawnEdge {
@@ -213,16 +284,51 @@
     return { drawn, undrawn }
   })
 
-  // A refusal dies on the waist's near side, so its bar is never behind
-  // the island: arriving from the internet it dies at the top edge,
-  // from a lane at the bottom.
-  function deathPoint(l: Line): { x: number; y: number } {
-    return { x: WAIST.x + l.off.x, y: (l.from.y < 268 ? 226 : WAIST.y) + l.off.y }
+  // #726 ("bundle the corridor, fan at the waist"): an edge whose far
+  // end is the internet no longer runs through the single WAIST point --
+  // it draws only the limb between its lane's own slot and the router
+  // card, and the corridor above carries one shared trunk instead. An
+  // edge to "anywhere" (kind 'any') is unaffected -- it still crosses at
+  // WAIST, per ANY_CLEAR above.
+  function isInternetEdge(l: Line): boolean {
+    return (l.from.kind === 'internet' && l.to.kind === 'zone') || (l.from.kind === 'zone' && l.to.kind === 'internet')
   }
 
-  // The visible line: a cubic pulled through the waist, or dying there.
+  // The lane end's own slot -- shared by the limb, its death point and
+  // its badge, so all three agree on where a given lane's internet edge
+  // rides. Keyed off the lane's index in `zones`, never the edge's
+  // position in the edge list.
+  function internetSlotSpread(l: Line): number {
+    const laneAnchor = l.from.kind === 'zone' ? l.from : l.to
+    return slotSpread(laneAnchor.idx ?? 0, zones.length)
+  }
+
+  // A refusal dies on the waist's near side, so its bar is never behind
+  // the island: arriving from the internet it dies at the top edge,
+  // from a lane at the bottom. An internet edge's death point takes its
+  // own lane's slot on the x axis rather than the shared waist x, so two
+  // refusals to different lanes no longer coincide (#726).
+  function deathPoint(l: Line): { x: number; y: number } {
+    const x = isInternetEdge(l) ? 700 + internetSlotSpread(l) : WAIST.x
+    return { x: x + l.off.x, y: (l.from.y < 268 ? 226 : WAIST.y) + l.off.y }
+  }
+
+  // The visible line: a cubic pulled through the waist, dying there, or
+  // (for an internet edge) the limb alone -- ribPath's own cubic,
+  // reversed, landing on the lane's slot rather than the waist (#726).
   function edgePath(l: Line): string {
     const { from, to, off } = l
+    if (isInternetEdge(l) && l.crosses) {
+      const spread = internetSlotSpread(l)
+      const laneAnchor = from.kind === 'zone' ? from : to
+      const waistPt = { x: 700 + spread, y: 302 }
+      const laneCtrl = { x: laneAnchor.x + (700 - laneAnchor.x) * 0.25, y: 420 }
+      const waistCtrl = { x: 700 + spread * 2.2, y: 380 }
+      const pt = (p: { x: number; y: number }) => `${p.x + off.x} ${p.y + off.y}`
+      return from.kind === 'zone'
+        ? `M ${pt(laneAnchor)} C ${pt(laneCtrl)}, ${pt(waistCtrl)}, ${pt(waistPt)}`
+        : `M ${pt(waistPt)} C ${pt(waistCtrl)}, ${pt(laneCtrl)}, ${pt(laneAnchor)}`
+    }
     const w = { x: WAIST.x + off.x, y: WAIST.y + off.y }
     if (l.crosses) {
       return `M ${from.x + off.x} ${from.y + off.y} C ${w.x} ${w.y}, ${w.x} ${w.y}, ${to.x + off.x} ${to.y + off.y}`
@@ -286,6 +392,22 @@
         y: dp.y + (dy / len) * back + off.y * 4.2 + p.y * BADGE_CLEAR * side,
       }
     }
+    if (isInternetEdge(l)) {
+      // On the limb itself, measured from the waist end -- the corridor
+      // stagger above has nothing left to separate now that each lane
+      // has its own slot (#726).
+      const spread = internetSlotSpread(l)
+      const waistPt = { x: 700 + spread, y: 302 }
+      const laneAnchor = from.kind === 'zone' ? from : to
+      const dx = laneAnchor.x - waistPt.x
+      const dy = laneAnchor.y - waistPt.y
+      const f = 0.35 + (i % 4) * 0.13
+      const p = perp(dx, dy)
+      return {
+        x: waistPt.x + dx * f + off.x * 4.2 + p.x * BADGE_CLEAR * side,
+        y: waistPt.y + dy * f + off.y * 4.2 + p.y * BADGE_CLEAR * side,
+      }
+    }
     // Past the waist, toward the destination, on its own side -- and
     // off the line itself.
     const f = BADGE_FRAC_0 + (i % BADGE_FRAC_N) * BADGE_FRAC_STEP
@@ -310,15 +432,24 @@
     return text.length * BADGE_CH + 2 * PLATE_PAD
   }
 
-  /** A badge's resolved plate: centre, and the plate's own width. */
+  /** A badge's resolved plate: centre, the plate's own width, and its
+   * height where that is not the ordinary one-line plate. The escalated
+   * unplanned card (#715 item 4) is two lines and 40 tall, and a
+   * layout that assumed every plate was PLATE_H would let ordinary
+   * badges settle inside it. */
   interface PlacedBadge {
     x: number
     y: number
     w: number
+    h?: number
   }
 
   const PLATE_H = 14
   const PLATE_CLEAR = 3
+  /** The escalated card's own box, ported from the-whole.html:941 --
+   * a 40-tall rect with the mockup's 12-unit left inset. */
+  const CARD_H = 40
+  const CARD_PAD = 26
 
   // The corridor is the free band between the two islands every crossing
   // line runs through: the internet island's own bar ends at y=118 and
@@ -350,19 +481,38 @@
    * label with no text takes no space, so a lens that badges only some
    * of its edges still keeps its indices aligned.
    */
-  function placeBadges(items: { line: Line; text: string; dy?: number }[]): PlacedBadge[] {
+  function placeBadges(items: { line: Line; text: string; dy?: number }[], reserved?: PlacedBadge): PlacedBadge[] {
     const raw = items.map((it, i) => {
       const p = edgeBadgeAt(it.line, i)
       return { x: p.x, y: p.y + (it.dy ?? 0), w: plateW(it.text), text: it.text }
     })
-    const inCorridor = (b: (typeof raw)[number]) => b.text !== '' && b.y > 100 && b.y < 310 && Math.abs(b.x - WAIST.x) < 170
+    const inCorridor = (b: { x: number; y: number; text?: string }) =>
+      b.text !== '' && b.y > 100 && b.y < 310 && Math.abs(b.x - WAIST.x) < 170
 
+    // The escalated card is placed by the data, not by this pass, and
+    // never moved by it. It goes in first so everything else dodges it
+    // -- an opaque two-line card with a badge settled inside it is the
+    // exact failure the corridor rules exist to prevent (#715 item 4).
     const settled: PlacedBadge[] = []
+    const cardSide = reserved ? (reserved.x < WAIST.x ? -1 : 1) : 0
+    const cardInCorridor = reserved ? inCorridor({ ...reserved, text: 'card' }) : false
+    if (reserved) settled.push(reserved)
+
+    // A plate's box hangs from its anchor: y-10 to y-10+h. So two
+    // boxes clear each other on their centres, not on their anchors --
+    // which are the same thing only while every plate is the same
+    // height, as they were before the escalated card (#715 item 4).
+    // For two ordinary plates this is exactly the old arithmetic.
+    const centreOf = (b: { y: number; h?: number }) => b.y - 10 + (b.h ?? PLATE_H) / 2
+
     for (const side of [-1, 1]) {
       const col = raw.filter((b) => inCorridor(b) && (b.x < WAIST.x ? -1 : 1) === side).sort((a, b) => b.y - a.y)
-      const slot = Math.min(CORRIDOR_SLOT, (CORRIDOR_FLOOR - CORRIDOR_TOP) / Math.max(1, col.length - 1))
+      // A card holding this side's floor pushes the whole stack above
+      // it, rather than letting the first badge land inside it.
+      const floor = cardInCorridor && side === cardSide ? CORRIDOR_FLOOR - (CARD_H - PLATE_H) - PLATE_H - PLATE_CLEAR : CORRIDOR_FLOOR
+      const slot = Math.min(CORRIDOR_SLOT, (floor - CORRIDOR_TOP) / Math.max(1, col.length - 1))
       col.forEach((b, k) => {
-        b.y = CORRIDOR_FLOOR - k * slot
+        b.y = floor - k * slot
         b.x = WAIST.x + side * (CORRIDOR_GUTTER + b.w / 2)
         settled.push({ x: b.x, y: b.y, w: b.w })
       })
@@ -373,10 +523,13 @@
       // conflict, and there are finitely many of them.
       for (let pass = 0; pass < settled.length + 1; pass++) {
         const hit = settled.find(
-          (d) => Math.abs(d.x - b.x) < (d.w + b.w) / 2 + PLATE_CLEAR && Math.abs(d.y - b.y) < PLATE_H + PLATE_CLEAR,
+          (d) =>
+            Math.abs(d.x - b.x) < (d.w + b.w) / 2 + PLATE_CLEAR &&
+            Math.abs(centreOf(d) - centreOf(b)) < ((d.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR,
         )
         if (!hit) break
-        b.y = hit.y + PLATE_H + PLATE_CLEAR
+        // Solve centreOf(b) for b.y: the anchor sits 10 above its box.
+        b.y = centreOf(hit) + ((hit.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR + 10 - PLATE_H / 2
       }
       settled.push({ x: b.x, y: b.y, w: b.w })
     }
@@ -583,11 +736,70 @@
   // traffic lens's reality badges and its ghost-intent labels share a
   // corridor, so they are laid out together rather than in two passes
   // that cannot see each other.
+  // Round 30 escalates the worst unplanned flow out of the row of
+  // identical pills into its own two-line card (the-whole.html:940-944).
+  // "Worst" is busiest: realityEdges already sorts by events, so this
+  // adds no third ranking to the app. #701's recency weight belongs to a
+  // sentence that claims "now"; this card claims no such thing.
+  // One card only, however close the runners-up -- "worst" is a
+  // superlative, and two cards un-say it. Ties break on drops, then key,
+  // so the same data always escalates the same pair (Fable 5, #715
+  // item 4).
+  const worstUnplanned = $derived.by((): DrawnReality | null => {
+    const unplanned = drawnReality.drawn.filter((d) => d.r.verdict === 'unplanned')
+    if (unplanned.length === 0) return null
+    return unplanned.reduce((best, d) =>
+      d.r.events !== best.r.events
+        ? d.r.events > best.r.events
+          ? d
+          : best
+        : d.r.drops !== best.r.drops
+          ? d.r.drops > best.r.drops
+            ? d
+            : best
+          : d.r.key < best.r.key
+            ? d
+            : best,
+    )
+  })
+
+  function cardLines(r: RealityEdge): [string, string] {
+    const asked = r.topAsked[0]
+    const one = `UNPLANNED · ${r.from} → ${r.to}${asked ? ` · ${asked.proto}/${asked.port}` : ''}`
+    // All three shapes an unplanned pair comes in, each said truthfully:
+    // traffic passing where the table only refuses; drops caught by a
+    // rule that named itself; drops caught by one that did not.
+    const caught = r.accepts > 0 ? `${r.accepts}× passing` : r.refusedBy ? `caught by ${r.refusedBy}` : 'caught, no rule named'
+    return [one, `${caught} · ${r.events}× · open ▸`]
+  }
+
+  const worstUnplannedCard = $derived.by((): PlacedBadge | undefined => {
+    if (!worstUnplanned) return undefined
+    const [one, two] = cardLines(worstUnplanned.r)
+    const at = edgeBadgeAt(worstUnplanned.line, drawnReality.drawn.indexOf(worstUnplanned))
+    const w = Math.max(plateW(one), plateW(two)) + CARD_PAD
+    // The card obeys the corridor like any other plate: several lanes'
+    // edges run up the same waist-to-internet segment, so a card left
+    // where the line put it lands on the stack rather than beside it.
+    // It takes the floor of its own side and the badges stack above.
+    if (at.y > 100 && at.y < 310 && Math.abs(at.x - WAIST.x) < 170) {
+      const side = at.x < WAIST.x ? -1 : 1
+      return { x: WAIST.x + side * (CORRIDOR_GUTTER + w / 2), y: CORRIDOR_FLOOR - (CARD_H - PLATE_H), w, h: CARD_H }
+    }
+    return { x: at.x, y: at.y, w, h: CARD_H }
+  })
+
   const trafficBadges = $derived.by(() =>
-    placeBadges([
-      ...drawnReality.drawn.map((d) => ({ line: d.line, text: realityBadge(d.r) })),
-      ...ghostIntents.map((g) => ({ line: g.line, text: 'never exercised', dy: -12 })),
-    ]),
+    placeBadges(
+      [
+        // The escalated pair keeps its slot in this array so every other
+        // index still lines up; its own text is empty, so it takes no
+        // space and draws no pill -- the card replaces it.
+        ...drawnReality.drawn.map((d) => ({ line: d.line, text: d === worstUnplanned ? '' : realityBadge(d.r) })),
+        ...ghostIntents.map((g) => ({ line: g.line, text: 'never exercised', dy: -12 })),
+      ],
+      worstUnplannedCard,
+    ),
   )
 
   function coverageBadgeText(e: PolicyEdge): string {
@@ -898,11 +1110,16 @@
   // -- never a fabricated new layer of data this app does not have.
   // Deliberately not reset by descend()/surface(): round 24's "keeps the
   // level and zoom you left" falls out of that for free.
-  const ALTITUDE_LABELS = ['clients', 'services', 'zones', 'survey'] as const
-  let altitude = $state<0 | 1 | 2 | 3>(2)
+  // The four city stops (#863) sit to the right of survey: the same
+  // estate in isometric, each stop a camera height (lib/city/project.ts).
+  // #869 owns the full join of the two views on this slider.
+  const ALTITUDE_LABELS = ['clients', 'services', 'zones', 'survey', ...STOPS] as const
+  type Altitude = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
+  let altitude = $state<Altitude>(2)
+  const cityStop = $derived(altitude >= 4 ? STOPS[altitude - 4] : null)
 
   function jumpAltitude(i: number) {
-    altitude = Math.max(0, Math.min(3, Math.round(i))) as 0 | 1 | 2 | 3
+    altitude = Math.max(0, Math.min(ALTITUDE_LABELS.length - 1, Math.round(i))) as Altitude
   }
 
   function onAltitudeInput(e: Event) {
@@ -1350,17 +1567,25 @@
     if (nodeCard) nodeCard = null
   }
 
-  // Off for round-30 fidelity: round 30 draws no explanatory box anywhere
-  // on the topography (docs/design/concepts/round-30/README.md, "No
-  // apparatus, anywhere") -- this "zones are boundary-derived" note is
-  // exactly that apparatus. Per the project's build-to-the-mockup-first
-  // policy (#700) this stays implemented rather than deleted; it is just
-  // unmounted here so nothing renders. Re-mounting it (or replacing it) is
-  // tracked as a gap on #691. Typed rather than inferred so the block
-  // stays reachable to the type checker -- a bare `false` narrows to
-  // `never` and reports it as unreachable. Same pattern as LiveTable's
-  // RESIZE_HANDLES_ENABLED and MetricsRegister's LEDGER_ENABLED.
-  const DEGRADED_NOTE_ENABLED: boolean = false
+  // The degraded map (#802; round 36, carried into rounds 37-38).
+  // Round 29's floating "zones are boundary-derived" note is gone rather
+  // than re-mounted: round 36 draws no note over the map at all
+  // (round-36/README.md, "#s3 -- the degraded note"). The one statement
+  // lives on the router card where its other pushed-table facts live
+  // (the-whole.html:997-998), and every address slot holds what it truly
+  // holds -- the `#s3.degraded` rules at the-whole.html:118-125.
+  //
+  // Only while the map itself is what is on screen: under a reach the map
+  // is a blurred backdrop whose single affordance is surfacing again, and
+  // a live "Run setup… ▸" behind the blur would be a second one.
+  const degradedStatement = $derived(zonesState.degraded && zones.length > 0 && !reach)
+
+  // The WAN card's own address slot. zonesState.zones deliberately drops
+  // the wan interface from the lanes, so the pushed row for the internet
+  // boundary is read here rather than through a zone.
+  const wanAddress = $derived(
+    zonesState.pushed.find((a) => !!a.interface && a.interface === zonesState.wanInterface)?.address ?? null,
+  )
 </script>
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
@@ -1431,6 +1656,29 @@
             · <b class="alarm">{b.direction === 'out' ? `blocked toward ${far}` : `knocked from ${far}, refused`} — {b.count}×</b>
           {/if}
         </div>
+        <!-- Round 30 states this on the reach's own zone card
+             (the-whole.html:1136); this build's reach is the membrane
+             view, whose analogue of that facts line is this crumb sub,
+             which already carries the reach's derived facts.
+             The mockup words it "right now", and the ranking is a
+             decayed sum over the whole buffer rather than an
+             instantaneous reading -- a pathway that stopped ten minutes
+             ago can still win it. So the owner's ruling requires the
+             sentence to say it is weighted toward now, and it does,
+             in their words (#701; wording by Fable 5).
+             No empty state of its own: `busiest` is null exactly when
+             no strand was observed, which the reach block already
+             answers with "nothing observed this window". -->
+        {#if reachSummary.busiest}
+          {@const bp = reachSummary.busiest}
+          {@const peer = bp.peers[0] ?? (bp.counterpart === 'internet' ? 'the internet' : bp.counterpart)}
+          {@const hit = bp.portHits[0]}
+          <div class="sub">
+            the busiest pathway, weighted toward now:
+            {bp.direction === 'out' ? `${reach.host} → ${peer}` : `${peer} → ${reach.host}`}{hit ? ` · ${hit.proto}/${hit.port}` : ''}
+            · {#if bp.outcome === 'blocked'}<b class="alarm">refused</b>{:else}accepted{/if}
+          </div>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -1615,29 +1863,72 @@
   <!-- The lens selector (#682, ported from the scene's `.wlens2`): the
        bottom-left bar, not a top-right tab strip -- round 29 has no
        such strip beside the dials. -->
-  <div class="wlens2" role="tablist" aria-label="Map lenses">
-    {#if reach}
-      <span class="on" role="tab" aria-selected="true">reach</span>
-      <span role="tab" aria-selected="false">{lens === 'policy' ? 'policy' : 'traffic'}</span>
-    {:else}
-      <button class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
-        traffic
-      </button>
-      <button class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
-        policy
-      </button>
-      <button class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
-        coverage
-      </button>
+  <div class="wlens2">
+    <div class="wl-tabs" role="tablist" aria-label="Map lenses">
+      {#if reach}
+        <span class="on" role="tab" aria-selected="true">reach</span>
+        <span role="tab" aria-selected="false">{lens === 'policy' ? 'policy' : 'traffic'}</span>
+      {:else}
+        <button class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
+          traffic
+        </button>
+        <button class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
+          policy
+        </button>
+        <button class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
+          coverage
+        </button>
+      {/if}
+    </div>
+    {#if !reach}
+      <!-- The overlays sit outside the tablist, behind a hairline
+           (round-39:943). Two reasons, and they agree: a toggle inside
+           a tablist breaks its semantics, and the divider is what tells
+           a reader that these two latch while the three to their left
+           move a highlight. Both default on -- rounds 30 and 39 draw
+           the scene wearing them, and an overlay with nothing to show
+           paints nothing, so the calm default survives (Fable 5). -->
+      <span class="wl-div" aria-hidden="true"></span>
+      <div class="wl-overlays" role="group" aria-label="Map overlays">
+        <button
+          type="button"
+          class="wl-ov"
+          class:on={flagsOn}
+          aria-pressed={flagsOn}
+          aria-label={flagCountAll > 0
+            ? `Flags overlay — ${flagCountAll} open: mark flagged places on the map`
+            : 'Flags overlay — mark flagged places on the map'}
+          onclick={() => (flagsOn = !flagsOn)}
+        >
+          flags{#if flagCountAll > 0}&nbsp;<span class="ov-n">{flagCountAll}</span>{/if}
+        </button>
+        <button
+          type="button"
+          class="wl-ov"
+          class:on={watchOn}
+          aria-pressed={watchOn}
+          aria-label="Watch overlay — mark watched places on the map"
+          onclick={() => (watchOn = !watchOn)}
+        >
+          watch
+        </button>
+      </div>
     {/if}
   </div>
 
   <!-- While descended, the map stays beneath as the reach's backdrop —
        blurred, at the level you left (round 24); clicking it surfaces
        exactly there. -->
+  <!-- `map-degraded` is the drawing's `#s3.degraded` (the-whole.html:118-125),
+       named apart from a bare `degraded` because that class already names
+       something else here: round 29's removed floating note, whose absence
+       the "floats no note over the map" test still guards by that literal
+       class name. -->
   <div
     class="stage"
     class:backdrop={reach !== null}
+    class:map-degraded={zonesState.degraded}
+    hidden={cityStop !== null}
     onclick={reach ? surface : undefined}
     role={reach ? 'button' : undefined}
     aria-label={reach ? 'Surface — back to the map as you left it' : undefined}
@@ -1659,9 +1950,12 @@
            real map, never a fabricated layer. "Zones" (index 2) is
            unchanged from today's card. -->
       <g class="camera" class:cam-clients={altitude === 0} class:cam-services={altitude === 1} class:cam-survey={altitude === 3}>
+      <!-- The trunk: router to internet, one line, every lens, never
+           per-edge (#726 -- "bundle the corridor, fan at the waist").
+           Individual edges fan at the waist card instead; see
+           edgePath's internet-edge branch. -->
+      <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
       {#if lens === 'traffic'}
-        <!-- The one-way spine: internet into the waist. -->
-        <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
         {#if eps > 0}
           <circle class="mote" r="2.5" fill="var(--accent)" />
         {/if}
@@ -1753,6 +2047,47 @@
             </text>
           </g>
         {/each}
+
+        <!-- The worst unplanned flow, escalated out of the row of
+             identical pills into round 30's own card
+             (the-whole.html:940-944, its inks kept exactly).
+             The mockup's `open ▸` opens a flags-table drawer for an
+             UNPLANNED flag. This product has no such flag type:
+             "unplanned" is a reality verdict computed here in the
+             client (reality.ts), with no id and no drawer. So the card
+             opens the stream filtered to the pair -- what every other
+             reality plate already does, and where the mockup's own
+             drawer ultimately led. Only the middle layer is missing
+             (Fable 5, #715 item 4; the finding is on the issue). -->
+        {#if worstUnplanned && worstUnplannedCard}
+          {@const c = worstUnplannedCard}
+          {@const [line1, line2] = cardLines(worstUnplanned.r)}
+          <g
+            class="detail unplanned-card"
+            role="button"
+            tabindex="0"
+            aria-label="Open the stream filtered to this pair: {realityLabel(worstUnplanned.r)}"
+            onclick={() => openPair(worstUnplanned.r.from, worstUnplanned.r.to, worstUnplanned.r.topPorts)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openPair(worstUnplanned.r.from, worstUnplanned.r.to, worstUnplanned.r.topPorts)
+              }
+            }}
+          >
+            <title>{realityLabel(worstUnplanned.r)}</title>
+            <!-- The box hangs from the anchor exactly as an ordinary
+                 plate does (y-10), so the layout pass above can reason
+                 about both in one geometry. Everything inside is
+                 measured from the box's own top-left, at the mockup's
+                 offsets: the dot 13 down and 14 in, the two baselines
+                 16 and 30 down (the-whole.html:941-944). -->
+            <rect class="uc-box" x={c.x - c.w / 2} y={c.y - 10} width={c.w} height={CARD_H} rx="9" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.8" />
+            <circle cx={c.x - c.w / 2 + 14} cy={c.y + 3} r="3" fill="var(--alarm)" />
+            <text class="alarm-t" x={c.x - c.w / 2 + CARD_PAD} y={c.y + 6}>{line1}</text>
+            <text class="chip-t" x={c.x - c.w / 2 + CARD_PAD} y={c.y + 20}>{line2}</text>
+          </g>
+        {/if}
         {#each ghostIntents as g, gi (g.edge.key)}
           {@const badge = trafficBadges[drawnReality.drawn.length + gi]}
           <g class="detail">
@@ -1903,7 +2238,17 @@
           <rect class="isl" x="-100" y="-30" width="200" height="60" rx="12" />
           <text x="-82" y="-3" class="n-name">Internet</text>
           {#if zonesState.wanInterface}
-            <text x="-82" y="14" class="n-cidr">{zonesState.wanInterface}</text>
+            <!-- `ether1 · 203.0.113.7` where the push names the boundary's
+                 address, `ether1 · no address pushed` where it does not
+                 (the-whole.html:977). Both tspans are drawn, sibling to
+                 each other, and the `.stage.map-degraded` toggle (the-whole
+                 .html:118-125's `#s3.degraded`) picks which one shows --
+                 the slot is never blank and never stale either way. -->
+            <text x="-82" y="14" class="n-cidr"
+              >{zonesState.wanInterface}<tspan class="cidr-v">{` · ${wanAddress ?? ''}`}</tspan><tspan class="cidr-deg"
+                >{' · no address pushed'}</tspan
+              ></text
+            >
           {:else}
             <text x="-82" y="14" class="n-sub">no public traffic observed yet</text>
           {/if}
@@ -1921,11 +2266,36 @@
            routes through here, and the island must not eat their clicks. -->
       <g transform="translate(700 268)" class="passive">
         <g class="isl-card">
-          <rect class="isl waist" x="-128" y="-34" width="256" height="68" rx="12" />
+          <!-- The card grows to hold the statement rather than the
+               statement overrunning the card (round-36/README.md's own
+               validation note): the-whole.html's `#s3.degraded .rt-isl
+               { height: 100px }`, bound here rather than set in CSS so
+               the geometry is the attribute the renderer reads. -->
+          <rect class="isl waist" x="-128" y="-34" width="256" height={degradedStatement ? 100 : 68} rx="12" />
           <text x="-110" y="-6" class="n-name">{primaryDevice?.name ?? 'your router'}</text>
-          <text x="-110" y="12" class="n-sub">
-            the waist{epsText ? ` · ${epsText} events/s` : ''}
-          </text>
+          <text x="-110" y="12" class="n-sub">{waistSub}</text>
+          {#if degradedStatement}
+            <text x="-110" y="34" class="deg-t">no address table pushed — zones from boundaries</text>
+            <text x="-110" y="50" class="deg-t"
+              ><tspan
+                class="deg-go"
+                role="button"
+                tabindex="0"
+                aria-label="Run setup — it adds the /ip address table"
+                onclick={(e) => {
+                  e.stopPropagation()
+                  wizardState.launch()
+                }}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    wizardState.launch()
+                  }
+                }}>Run setup… ▸</tspan
+              > adds it</text
+            >
+          {/if}
         </g>
         <g class="g-dot">
           <circle r="22" class="station-ring" />
@@ -1961,41 +2331,33 @@
             <rect class="isl" x={-cardHalf} y="0" width={cardW} height="106" rx="12" />
             <circle cx={-cardHalf + cardPad} cy="22" r="3.5" fill={ink} />
             <text x={-cardHalf + cardPad + 11} y="26" class="n-name">{z.name}</text>
-            {#if z.cidr}
-              <!-- Anchored to the card's right inset, not a fixed x: a
-                   narrower card moves it in rather than past the edge. -->
-              <text x={cardHalf - 14} y="26" class="n-cidr" text-anchor="end">{z.cidr}</text>
-            {/if}
+            <!-- Anchored to the card's right inset, not a fixed x: a
+                 narrower card moves it in rather than past the edge. The
+                 slot always holds something true: the pushed CIDR, or
+                 "from boundaries" where the zone's name and extent rest
+                 on the boundary alone -- both tspans drawn sibling to
+                 each other (the-whole.html:1026), the `.stage.map-degraded`
+                 toggle picking which one shows. -->
+            <text x={cardHalf - 14} y="26" class="n-cidr" text-anchor="end"
+              ><tspan class="cidr-v">{z.cidr ?? ''}</tspan><tspan class="cidr-deg">from boundaries</tspan></text
+            >
             {#if shown.hosts.length > 0}
               <!-- Each host is the reach's door (#626): clicking the name
-                   recentres on that node rather than opening the zone. The
-                   dot beside it (#648, round 23: "node symbols bigger")
-                   does the exact same thing -- the dot opens what the name
-                   opens, never a second, different affordance. How many
-                   names are drawn is the card's own width budget (#699);
-                   the clip is the backstop, so an unusually long name
-                   cannot reach the neighbouring lane whatever the
-                   estimate said. -->
+                   recentres on that node rather than opening the zone.
+                   The name is the whole target. Rounds 23 and 30 both
+                   draw this list as plain names (round-23:871,
+                   round-30's own `n-sub` line); #648's "node symbols
+                   bigger" was about the map's circles -- the zone dots
+                   and station rings -- and a per-name text dot was read
+                   into it that no round ever drew (Fable 5, #715 item
+                   10). How many names are drawn is the card's own width
+                   budget (#699); the clip is the backstop, so an
+                   unusually long name cannot reach the neighbouring lane
+                   whatever the estimate said. -->
               <text x={-cardHalf + cardPad} y="52" class="n-hosts" clip-path="url(#{uid}-hosts)">
                 {#each shown.hosts as h, hi (h.ip)}
                   {#if hi > 0}<tspan> · </tspan>{/if}
                   <tspan
-                    class="host-dot"
-                    role="button"
-                    tabindex="0"
-                    aria-hidden="true"
-                    onclick={(e) => {
-                      e.stopPropagation()
-                      descend(z.id, h.label, h.ip)
-                    }}
-                    onkeydown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        descend(z.id, h.label, h.ip)
-                      }
-                    }}>●</tspan
-                  ><tspan
                     class="host-link"
                     role="button"
                     tabindex="0"
@@ -2026,7 +2388,12 @@
                 <text x={-cardHalf + cardPad} y="88" class="n-sub">{detail}</text>
               {/if}
             {/if}
-            <text x={-cardHalf + cardPad} y="100" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
+            <!-- Round 30's zone card carries name, subnet, hosts and the
+                 coverage badge, and stops there (the-whole.html:1002-1008).
+                 A fifth "N events this window" line was drawn here and the
+                 mockup draws it nowhere, so it is off (#715 item 9). The
+                 count itself stays: `zones.svelte.ts:161` sorts the lane row
+                 by it, so it is load-bearing data, not dead code. -->
             {#if agg}
               <!-- Flush with the card and 16 tall (#699; round 30's
                    `translate(-108 110)` at 216x16, the-whole.html:
@@ -2041,7 +2408,12 @@
                the same unreadable cards. -->
           <g class="g-dot">
             <circle r="8" class="zone-dot" stroke={ink} />
-            {#if agg && agg.watchBroken > 0}
+            <!-- One halo per dot even when both overlays have something
+                 to say about it: flags take the ring, since an alarm
+                 outranks a broken watch on the same place. -->
+            {#if flagsOn && agg && agg.flagCount > 0}
+              <circle r="13" class="dot-halo" />
+            {:else if watchOn && agg && agg.watchBroken > 0}
               <circle r="13" class="dot-halo" />
             {/if}
             {#if capt?.startsWith('DARK')}
@@ -2216,6 +2588,12 @@
       </button>
     {/if}
   </div>
+
+  {#if cityStop}
+    <!-- The city (#863): the same estate in isometric, at the four stops
+         right of survey. -->
+    <City stop={cityStop} />
+  {/if}
 
   {#if reach && reachSummary}
     <!-- The membrane view. pointer-events pass through everywhere
@@ -2468,16 +2846,6 @@
     </div>
   {/if}
 
-  {#if DEGRADED_NOTE_ENABLED && zonesState.degraded && zones.length > 0 && !reach}
-    <!-- The sentence is worth saying, but round 29 puts explanatory
-         notes in the scene's own chrome, not floating loose over the
-         drawing (#682): a bounded, backed pill, inset from every edge
-         like the rest of this card's furniture. -->
-    <p class="degraded">
-      zones are boundary-derived — no <span class="mono">/ip address</span> table has been pushed; Run setup… adds it
-    </p>
-  {/if}
-
   <!-- The altitude slider (#648, concept T; named ends #682): one quiet
        axis at the map's foot, its two extremes named ("clients" ...
        "survey", ratified round-29), a tiny symbol per stop between
@@ -2493,11 +2861,11 @@
         class="alt-range"
         type="range"
         min="0"
-        max="3"
+        max={ALTITUDE_LABELS.length - 1}
         step="1"
         value={altitude}
         oninput={onAltitudeInput}
-        aria-label="Altitude: clients, services, zones, survey"
+        aria-label="Altitude: {ALTITUDE_LABELS.join(', ')}"
         aria-valuetext={ALTITUDE_LABELS[altitude]}
       />
       <div class="alt-ticks" aria-hidden="true">
@@ -2506,7 +2874,7 @@
         {/each}
       </div>
     </span>
-    <span class="alt-end">survey</span>
+    <span class="alt-end">street</span>
   </div>
 
   {#if nodeCard}
@@ -2639,6 +3007,33 @@
 
   .wlens2 .on {
     color: var(--fg);
+  }
+
+  /* The three tabs and the two overlays, split by a hairline
+     (round-39:943). The row is one flex line; the two groups are their
+     own so the divider sits between them rather than between any two
+     controls. */
+  .wl-tabs,
+  .wl-overlays {
+    display: flex;
+    gap: 14px;
+  }
+
+  .wl-div {
+    width: 1px;
+    align-self: stretch;
+    background: var(--hair-2);
+  }
+
+  /* An overlay's count wears the alarm ink, as round 39 draws it, but
+     only the digits -- the word stays the row's own colour so an
+     overlay that is merely available does not read as an alarm. */
+  .wl-ov.on {
+    color: var(--fg);
+  }
+
+  .wl-ov.on .ov-n {
+    color: var(--alarm);
   }
 
   .stage {
@@ -3350,29 +3745,44 @@
     fill: var(--accent);
   }
 
-  .degraded {
-    position: absolute;
-    /* Stacked above the wlens2 lens row (#682) rather than sharing its
-       bottom-left corner -- both are chrome now, so they take turns
-       rather than colliding. */
-    bottom: 38px;
-    left: 24px;
-    z-index: 2;
-    margin: 0;
-    padding: 5px 11px;
-    width: max-content;
-    max-width: 320px;
-    font-size: 10.5px;
-    font-style: italic;
-    color: var(--fg-dim);
-    background: var(--glass);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+  /* The degraded map (#802). the-whole.html:121-122 draws the statement
+     in the mono face at 10px in the quiet ink; --fg-muted rather than
+     --fg-dim for the reason .n-sub gives above (contrast on this scene's
+     two grounds). */
+  .deg-t {
+    fill: var(--fg-muted);
+    font-size: 10px;
+    font-family: var(--font-mono);
   }
 
-  .degraded .mono {
-    font-family: var(--font-mono);
-    font-style: normal;
+  /* The way in, in the accent -- the one ability the statement carries.
+     The waist card is `.passive` so policy edges beneath it stay
+     clickable; this restores pointer events for the link alone. */
+  .deg-go {
+    fill: var(--accent);
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  .deg-go:hover,
+  .deg-go:focus-visible {
+    text-decoration: underline;
+  }
+
+  /* Two sibling tspans, drawn once per address slot (the-whole.html:977,
+     :1026): the pushed CIDR/address, and the never-pushed fallback.
+     `.stage.map-degraded` (the-whole.html:118-125's `#s3.degraded`) toggles
+     which one shows; italic marks the fallback apart from a real
+     address (the-whole.html:125). */
+  .cidr-deg {
+    display: none;
+  }
+  .stage.map-degraded .cidr-v {
+    display: none;
+  }
+  .stage.map-degraded .cidr-deg {
+    display: initial;
+    font-style: italic;
   }
 
   /* --- the health dials (#648, rounds 19-20; #699) ---------------------- */
@@ -3919,18 +4329,6 @@
      own clicks (#699: the internet island gained one). */
   .passive .hbar-g {
     pointer-events: auto;
-  }
-
-  /* --- node symbols (#648, round 23: "node symbols bigger") -------------- */
-  .host-dot {
-    fill: var(--fg-dim);
-    font-size: 13px;
-    cursor: pointer;
-  }
-
-  .host-dot:hover,
-  .host-dot:focus-visible {
-    fill: var(--accent);
   }
 
   /* --- node info cards (#648, rounds 22-23) ------------------------------ */

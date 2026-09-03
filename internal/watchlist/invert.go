@@ -112,6 +112,38 @@ var ErrNotInverted = errors.New("watchlist: entry is not inverted")
 // the rule is the entry's, not the storage's, so it lives on the entry
 // and engine.DefinitionsStore.UpdateExpectation is what persists the
 // result.
+// Unpermit removes the given destination/port pairs from e's Permitted
+// allow-list, leaving any pair not named alone. The exact reverse of
+// Promote's first half, and deliberately not of its second: a pair
+// removed here does not go back into Observed, because Observed is what
+// this entry has *seen* and an unpermitted pair may never have been seen
+// by the entry at all -- #641's expected verdict permits what a flag's
+// evidence recorded, which is a different observer.
+//
+// Exists for that reversal (see internal/api's verdict handler): an
+// expected verdict permits a flag's evidence pairs automatically, and
+// undoing or re-judging that verdict has to take back exactly what it
+// added, or the device would go on being allowed somewhere on the
+// strength of a judgement the operator has retracted. Idempotent: a pair
+// that is not permitted is a no-op, not an error.
+func (e *Entry) Unpermit(dests []PermittedDest) {
+	if len(dests) == 0 || len(e.Permitted) == 0 {
+		return
+	}
+	drop := make(map[PermittedDest]struct{}, len(dests))
+	for _, d := range dests {
+		drop[d] = struct{}{}
+	}
+	kept := e.Permitted[:0]
+	for _, p := range e.Permitted {
+		if _, ok := drop[p]; ok {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	e.Permitted = kept
+}
+
 func (e *Entry) Promote(dests []PermittedDest) {
 	for _, d := range dests {
 		if !e.isPermitted(d.DestIP, d.Port) {

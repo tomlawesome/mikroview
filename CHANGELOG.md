@@ -18,6 +18,149 @@ rewritten.
 
 ### Added
 
+- **The setup wizard names a multi-homed router's source-address
+  split** (#442). A router holds an address on every network it routes,
+  and its logs arrive stamped with whichever one faces mikroview --
+  often not the one declared as `sourceIp`. The declared router then
+  sits silent while the real stream auto-discovers under another
+  address, and a token minted for the declared identity enriches
+  nothing: pushes return 200 and the popups still say no data. Step 2
+  (Send logs) now reads this as partial -- "Connected — but from
+  10.0.20.1, an address you haven't declared, while 192.168.88.1, which
+  you declared in config.yaml, has sent nothing" -- states that
+  mikroview cannot tell whether the two are one router, and prints the
+  fix with the operator's values: keep the declared address by setting
+  `src-address` on the router's logging action (recommended, because the
+  token and its pushed tables follow the declared identity), or change
+  `sourceIp` and reissue the token. Two genuinely different routers is
+  not an error; the notice clears itself when the declared one sends its
+  first log. The router cards on Entities and the viewer's Fleet carry a
+  one-line echo pointing at step 2. `GET /api/devices` gains
+  `multihomedCandidates` on a configured device that has received nothing
+  while undeclared devices stream -- every arriving address, never a
+  pick. Detection itself shipped in #499.
+- **The watchers station now lists what it has been told to expect**
+  (#640, part C). An **Expected** verdict teaches mikroview that a
+  certain amount of a certain thing, from a certain host, is normal
+  here. Until now nothing in the interface said what it had learned, so
+  a flag that stopped appearing was indistinguishable from a detector
+  that had quietly stopped working. A new section under the detector
+  bench (**Settings ▸ detection ▸ tune…**) lists every expectation:
+  detector, host, the size recorded when it was made ("up to 30", or
+  "any size" for a detector that declares no size), how many firings it
+  has absorbed since, and when it was made. **Forget** on a row removes
+  it and that pair raises again from its next firing. The absorbed count
+  is the point of the list -- an expectation that has absorbed nothing
+  for months is visibly not earning its place. Two new endpoints back
+  it: `GET /api/flags/expectations` (any signed-in user, the same tier
+  as `GET /api/flags` -- an expectation is the reason a flag you would
+  otherwise see is absent) and `DELETE /api/flags/expectations/{id}`
+  (user tier and audit-logged, matching the verdict that records one:
+  the operator who can call a flag expected can take it back). A viewer
+  reads the ledger and gets no Forget button. Nothing removed here;
+  part B (above) retired the admin-only exclusions API this replaces.
+- **A detector's candidate numbers can be tried before they are saved**
+  (#786). Changing a threshold was a guess with no shown workings: the
+  new value went live, and whether it was right showed up later as flags
+  that did or did not arrive. A **Try** button now sits at the foot of an
+  expanded detector row, beside Save. Pressing it replays the numbers as
+  typed over the traffic mikroview still holds -- the detector's own
+  logic, with the candidate window and threshold substituted for its
+  stored ones -- and puts the answer in one slot under the fields. Either
+  a receipt: *"Would have fired 3 times in the last 4h 12m"*, with the
+  hosts that would have been flagged listed beneath it. Or a decline:
+  *"Can't replay: needs a 6h window, only 4h 12m held"*, in the same
+  slot, in grey rather than red, because a corpus shorter than the
+  detector's own window is an honest limit of the traffic held rather
+  than an error, and reporting "it would have fired zero times" instead
+  would be a claim nothing established. Where the server says its read
+  was cut short, the count reads "at least"; where the listed sample is
+  bounded, the hosts read "at least these". Try writes nothing -- the
+  detector the engine is evaluating is untouched, whether the receipt is
+  encouraging or not -- and it never blocks Save. New `replayDefinition`
+  wrapper over `POST /api/definitions/{id}/replay`, which existed
+  server-side but had no caller anywhere in the client. One known limit,
+  recorded rather than hidden: a candidate carries only the window and
+  the threshold, which is the closed set the engine's replay accepts -- a
+  detector's other tuning fields are saved as normal but are not part of
+  what Try asks.
+- **Try now says what the detector counts as it stands, beside the
+  candidate's count** (#786). *"Would have fired 3 times in the last 4h
+  12m — currently: 41"*: without the second number the first one settles
+  nothing, since a count only means something against the count it would
+  replace. It is measured, not looked up: `POST
+  /api/definitions/{id}/replay` runs the same replay a second time with
+  the detector's live params over the same traffic and returns it as
+  `current`, because nothing already counted asks the same question (the
+  flag time series counts newly-raised episodes over the last sixty
+  minutes, and a flag's own count is re-fires within one episode). Where
+  the live window is longer than the traffic held, the slot says so in
+  the same grey the decline uses rather than showing a number nothing
+  established. No new counter and no new storage; a Try with nothing
+  changed carries no comparison, because its count is the current one
+  already.
+- **A live memory control for the event buffer, not just a config-file
+  setting** (#796). Settings' memory group now carries a slider under
+  the hours bar: dragging it only proposes a figure, and nothing changes
+  until you press apply. Applying it -- from the UI, or directly via the
+  new `PUT /api/settings/store` (admin-only, audit-logged as
+  `settings.store_max_memory`) -- stores the figure and resizes the
+  running ring immediately: growing it keeps everything already held,
+  shrinking it drops the oldest events first. An out-of-range figure is
+  refused with a 400 rather than clamped. Once set, the stored figure
+  wins over `store.maxMemory` in `config.yaml` on every future restart
+  too -- mikroview says so in the startup log, and deleting the new
+  `store.settingsStorePath` document (`/var/lib/mikroview/settings.json`
+  by default) is how you go back to the file's figure. The allowed range
+  is worked out per host at startup: 32MiB at the low end, and at the
+  high end whatever's left of the smaller of the cgroup memory limit or
+  the machine's RAM once a quarter of it (or 256MiB, whichever's larger)
+  is reserved as headroom and the same 1.47x ring-to-resident overhead
+  CFG-0012 already quotes is priced in -- so the slider never offers a
+  figure the host would be OOM-killed for taking, and never reports a
+  deliberately large `config.yaml` budget as out of range. `GET
+  /api/stats` gains a `memory` object (`maxMemory`, `min`, `max`,
+  `hostTotal`, `bytesPerEvent`, `resident`, `stored`) so any reader sees
+  the same numbers the UI does, and the setting is now included in
+  `-backup`/`-restore` alongside every other store. A viewer sees the
+  bar and the figure; only an admin is offered the drag.
+- **A detector's thresholds and windows can be edited in the app**
+  (#787). Until now the only thing the watchers station could change was
+  a detector's *scope* -- which hosts, ports or rules it watches -- and
+  even that was typed as comma-separated text. A detector whose
+  threshold or window was wrong for a particular network could not be
+  corrected anywhere in the interface. A row on the bench now expands
+  downward in place (one open at a time; no side drawer) into its
+  editing panel: typed tuning fields built from `GET
+  /api/definitions/schema`, so every field's type, bounds, unit and
+  description come from the server's own declaration rather than a
+  second copy of every detector's knobs written in the frontend. A
+  duration is edited as a plain second count and written back as the Go
+  duration string the server validates. Each scope axis is now a set of
+  removable chips with an add box that suggests what the app already
+  knows -- hosts from Entities, rule labels from the router-pushed
+  filter tables -- and the ports box takes a range (`8000-8010`) as well
+  as a single port, refusing anything that is not a port with a reason
+  instead of dropping it. The allow/deny/no-restriction select stays,
+  and source classification stays a select because it holds one value,
+  not a list. **Reset to stock** puts a detector's params back to
+  exactly what it shipped with, leaving its scope alone (the server's
+  reset is a params operation, and a button that also cleared an
+  operator's host exclusions would be doing something nobody pressed it
+  for). A viewer sees every row and every fact and no control at all --
+  hidden, never disabled, the same grammar the run/pause tick already
+  used. New `fetchDefinitionSchema` and `getDefinition` wrappers;
+  `resetDefinition` and `cloneDefinition` have callers for the first
+  time. **Clone** copies a detector you wrote -- its match conditions,
+  its aggregation and its tuning -- into a second detector that appears
+  paused, already expanded, with its name selected to be typed over, so
+  authoring a variant is one press and a rename (#810). It is offered
+  only on those rows: a shipped detector's logic is Go compiled into
+  this binary and keyed by its own id, so a copy of it would list, look
+  configurable and evaluate nothing -- the server refuses, and the
+  button is not there to press. Overriding a shipped detector's params
+  is the operation that exists for it; starting a custom detector *from*
+  one needs a conditions editor and is filed as #829.
 - **A demo seeder that exercises the whole interface, not just syslog**
   (#687). Every UI review this project has run was hampered by a demo
   that only ever sent syslog: one lane on the fall, no pushed rule/NAT/
@@ -309,8 +452,129 @@ rewritten.
   index can narrow it to the events it might match, or whether it is
   evaluated against every event instead. `POST /api/definitions`'s
   refusal of `intent=detection` is gone, since it is no longer true.
+- **The learning shelf says when the record is still thin** (#640). A
+  freshly-deployed mikroview flags plenty before it has learned what is
+  normal, and until now nothing said why. While fewer than five
+  expectations have been recorded, the shelf now reads *"Flags will be
+  noisy until mikroview has learned what is normal here — N
+  expectation(s) recorded so far. Judge each flag and the inbox
+  settles."* — viewer-readable, since an expectation is not owner-only
+  information.
 
 ### Changed
+
+- **"Never flag this again" now records how much is normal, and comes
+  back when a host outgrows it** (#640, part A: store and engine). It
+  used to silence a detector on a host outright, forever, whatever the
+  host did next. It now records the size of the firing you judged
+  normal -- the measure that detector compares against its threshold,
+  such as the number of distinct ports for a port scan -- and absorbs
+  later firings up to one and a half times that size. Past that the
+  flag returns, carrying both numbers, so it can say what was expected
+  and what was actually seen rather than repeating a count you already
+  looked at. Saying it is expected again raises the recorded size to
+  the new firing; the size only ever goes up.
+
+  Every shipped detector now states what its size is, or states that it
+  has none. Detectors with no size -- device silence, known bad IP,
+  unexpected mail sender, stale rule, and the two that judge a rate
+  against a moving baseline (global spike, rule spike) -- keep the old
+  meaning exactly: silencing one of those ignores that host on that
+  detector outright. Silences recorded before this release have no size
+  and keep that same meaning; nothing needs migrating.
+
+- **Every flag now ends with a judgement: expected, checked,
+  investigate or resolved** (#640, part B: API and the verdict row). The
+  flags tab offers **expected · checked · investigate** on a fresh flag,
+  and **expected · resolved** once something is being investigated. All
+  four are available to any signed-in user, not just an admin, through
+  `POST /api/flags/{id}/verdict`.
+
+  - **expected** is what records an expectation now (see part A's entry
+    below): normal for this host, at the size you just looked at.
+  - **checked** means "looked suspicious, checked, fine this time". It
+    clears the flag and suppresses nothing, but it is remembered: if
+    the same detector fires on the same host again, the flag comes back
+    saying *you checked this on 2 Sept and found it fine*.
+  - **investigate** leaves the flag open while you work on it.
+  - **resolved** means dealt with, normally by a firewall change. It
+    clears the flag and deliberately does not suppress anything: a line
+    only reaches mikroview if the firewall let it get that far, so a
+    correct fix makes the lines stop. If the same circumstances recur
+    the flag returns, reading *resolved on 2 Sept -- it's back*, because
+    the fix was not what was intended. Wanting to keep logging those
+    drops is an expected verdict at that rate, not a resolved one.
+
+  A flag that returns past an expectation says so on its own row --
+  "expected up to 30, saw 120", the two real numbers -- and saying
+  expected again raises the recorded size. Undo still sits beside the
+  stamp for as long as the flag carries the verdict, and undoing an
+  expected verdict now withdraws the expectation it recorded rather than
+  leaving a suppression standing behind a re-opened flag.
+
+  Verdicts and their undo are audit-logged, carrying the verdict as the
+  entry's detail. The exclude-forever action they replace was admin-only
+  and logged; these are user-tier, so the record of who decided a pair
+  stops being flagged matters more, not less.
+
+  The expectations themselves are not listed anywhere in the interface
+  yet -- one made by mistake can only be withdrawn by undoing the
+  verdict while the row is still in front of you. The ledger that lists
+  them, with absorbed counts, and lets you prune them is the remaining
+  part of #640.
+
+- **A verdict now writes to the watchlist as well as to the flag**
+  (#641). Recognising traffic as legitimate and recording it as expected
+  used to be two separate errands, so the second rarely happened.
+
+  - **expected** records the destinations the flag actually saw -- each
+    with the port it was reached on -- as permitted on the device's own
+    inverted watchlist entry. If the device has no entry, one is created
+    **observing**: it lists where the device goes and fires nothing, so
+    an automatic step never arms a fence. No form and no extra click,
+    because it is reversible -- undoing the verdict, or changing it to
+    something else, takes the permissions back and removes an entry that
+    existed only to hold them. Only what that verdict added is removed;
+    anything permitted separately stays.
+  - **resolved** offers instead of acting. The line it leaves behind
+    reads *resolved — undo · watch for this*. Taking the offer opens the
+    watchlist's own entry form, prefilled with the host (by MAC where
+    the evidence carries one, otherwise by address) and the pairs the
+    flag saw, and states where those values came from: which firing
+    window, how many of how many pairs, and whether the watch is MAC- or
+    IP-bound. Saving *or* discarding puts you back in the flags inbox,
+    so declining costs nothing. The flag stays resolved either way.
+
+  Why offer a watcher at all: after a block, the first packet that gets
+  through matters more than the detector's threshold being crossed
+  again. The detector brings a resolved flag back only when the host
+  re-crosses its threshold; a watch fires on the first line that
+  reappears.
+
+  **outbound_anomaly and internal_recon now record the port alongside
+  each destination**, which is what makes their evidence precise enough
+  to permit or watch. Nothing is inferred by crossing a host list
+  against a port list -- that would allow combinations the device never
+  made -- so a flag from a detector that records no pairs permits
+  nothing, and offers no watcher.
+- **Metrics: the hourline reads every series, and the ledger sits above
+  the table's minutes** (#803, design rounds 36-37). The line under the
+  scene bar used to answer the minute under the cursor with a ratio that
+  named two series and hid the rest ("9 refused of 61 events"); it now
+  reads the whole minute in one line -- a figure per series, refused in
+  the refused ink, and the flag-episode count followed by the type names
+  behind it. That was already the hourline's job, so the register's
+  cross-section aside is gone rather than duplicating it beside the
+  paper, and the "Pick a minute on the register to read it across every
+  series" instruction it printed when empty went with it.
+
+  On the table view the ledger -- top rules, top talkers, by device, by
+  protocol, the hour by action, episodes by flag type -- moves from a
+  narrow column down the left side to a full-width band across the head
+  of the view, ruled off from the minutes below it, with the table
+  taking the whole width instead of what a 320px sidebar left it. Its
+  six columns are bars without boxes: the bordered cards around each one
+  are gone, since a box inside a ruled band draws the same border twice.
 
 - **The docket's flags tab is the ratified round-29 table, not a card
   grid** (#688). One row per open flag -- flag · where · evidence ·
@@ -364,6 +628,78 @@ rewritten.
 
 ### Removed
 
+- **An account with no `role` in the accounts file no longer defaults to
+  `user`** (#873). The default existed for accounts persisted before
+  roles existed (#653); every account mikroview writes has carried a role
+  since. A roleless account can now only be hand-edited in, so it is
+  loaded as-is and fails closed -- denied by every role gate, admin and
+  user alike. Give the account a role in the file, or set one as an
+  admin.
+
+- **The rule-usage store no longer reads the bare-array
+  `rule-usage.json` it wrote before `recordingSince` existed** (#873).
+  Only the current object shape is read; an array-shaped document is now
+  an unparseable document, which is a hard startup error by design
+  (#378), so an instance still holding one refuses to start until that
+  stale `rule-usage.json` is deleted.
+
+- **`watchlist.storePath` and `flags.detectorSettingsStorePath` are
+  gone, with the boot-time migration that read them** (config keys,
+  `MIKROVIEW_WATCHLIST_STORE_PATH` and
+  `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH`). Both documents were
+  migration sources only: the stores that owned them
+  (`internal/watchlist.Store`, `internal/detect.SettingsStore`) were
+  deleted in #405/#407, and nothing has written either since. Watchlist
+  entries and detector toggles both live in the definitions store
+  (`engine.definitionsStorePath`), which is what `-backup` carries. The
+  server no longer opens the two documents at boot, so a read failure on
+  either can no longer stop it starting. Remove the keys from
+  `config.yaml`; unknown keys are ignored, and the files themselves can
+  be deleted once a deployment has upgraded past #407. Upgrading
+  straight from a pre-#407 release skips the one-time entry adoption:
+  upgrade through a release that still had it, or re-create the entries.
+
+- **The Noise verdict, the plain Clear control, "never flag this again"
+  and the exclusions API are gone** (#640), wholesale, with no aliases
+  and no stub endpoints. Each is replaced by a verdict, above:
+
+  - **Noise** existed only to feed a threshold-suggestion generator the
+    owner dropped: raising a detector's threshold hides real events for
+    every host in order to quiet one. Gone from the UI, the API and the
+    store; `POST /api/flags/{id}/verdict` now rejects `"noise"` as an
+    unrecognised verdict rather than accepting it as anything.
+  - **The plain Clear** (`POST /api/flags/{id}/clear`, and the drawer's
+    "clear with a note") dismissed a flag without recording what you
+    concluded. **checked** is that action with the conclusion kept.
+    "Clear all" is unchanged -- it still clears every active flag in one
+    request, records nothing, and suppresses nothing.
+  - **"Clear and never flag this again"**
+    (`POST /api/flags/{id}/clear-permanent`) silenced a (detector,
+    target) pair outright, forever. **expected** does the same job
+    bounded by the size of the firing you judged, so a host that grows
+    past it comes back.
+  - **The admin exclusions API** (`GET /api/flags/exclusions`,
+    `DELETE /api/flags/exclusions/{id}`) and the Exclusions tab that
+    read it are removed. Their replacement -- a ledger of expectations
+    with their sizes and absorbed counts -- is the remaining part of
+    #640; until it lands there is no screen or endpoint that lists
+    recorded expectations.
+
+  Expectations recorded before this release are untouched, and an
+  operator's stored data needs no migration. Anything scripted against
+  the four removed endpoints will now get a 404 or a 400 rather than a
+  quiet no-op.
+- **`Definition.Suppressions` is gone** (#640). The per-definition
+  suppression list was modelled on the definition envelope in #401 and
+  never given matching semantics -- nothing ever consulted it before an
+  emission. #640 settles on one suppression mechanism, so the field is
+  removed rather than left as a second, silent one: from the definition
+  envelope, from `GET /api/definitions`' response, from
+  `PUT /api/definitions/{id}`'s accepted fields (a request that sends
+  `suppressions` now has that field ignored), and from the frontend
+  types. Any value stored in an existing definitions document is simply
+  not read back.
+
 - **The `system` and `light` themes are gone** (#708), wholesale. Round
   30 -- the ratified design -- is dark throughout, and dark stops being
   a preference and becomes what the stylesheet simply is. The light/dark
@@ -379,6 +715,23 @@ rewritten.
 
 ### Fixed
 
+- **`docs/configuration.md`'s API reference table had drifted from the
+  authorization matrix** (#847). Several rows still said `admin-only`
+  for routes #653's "watchers" bench ruling had widened to user tier
+  months earlier (`/api/entities`, `/api/naming/provenance`,
+  `/api/coverage/declarations/{key}`, `/api/suggestions*`), one said the
+  opposite -- `GET /api/tokens` was narrowed back to admin-only by #657
+  after the table was last updated -- and nine registered routes had no
+  row at all. The table now states the tier `internal/api/authz_matrix_test.go`
+  actually pins for every route in it.
+- **The engine room's event-buffer row lost its live count** (#842).
+  #823's memory slider replaced "8,412 of 201,000 events · ~9 h window"
+  with "120 MiB · ~201 000 events · ~9 h at today's rate" -- the
+  configured ceiling and a reckoning from it, with no number anywhere in
+  the row that the server actually publishes as traffic arrives.
+  `bufferRow()` now takes the live held count and prints it ahead of the
+  ceiling ("120 MiB · 8 412 of ~201 000 events · ~9 h at today's rate"),
+  and the engine room passes the buffer's current occupancy in.
 - **Pages could scroll far past their own content into empty space**
   (#689). Metrics' own sr-only screen-reader region is `position:
   absolute` with no offset of its own, and none of the deck's wrappers
@@ -481,6 +834,26 @@ rewritten.
   waiting on a quiet gap that a fast enough burst never has. A sender
   left on the previous default format has no header to split on and
   keeps the old behaviour.
+- **A second `make live-check-remote` run could force-push over the
+  first's branch and delete the tree it was still standing in** (#809).
+  `scripts/gate-remote.sh` used one fixed branch (`gate-run`) and one
+  fixed work tree (`~/gate-work`) on the host, with nothing to stop two
+  runs overlapping -- the second run's push, reclaim and `rm -rf` landed
+  on top of the first mid-run, and the tell was the bare repo's
+  `gate-run` ref pointing at someone else's commit. The script now takes
+  an atomic `mkdir ~/gate-lock` on the host right before it pushes,
+  writing who holds it (host, user, ref, sha, pid, start time) to
+  `~/gate-lock/owner`; a second run that cannot take the lock prints the
+  owner and refuses rather than racing it. A lock older than 15 minutes
+  with no `mv-gate-run` container running is treated as abandoned and
+  taken over, printing what was found. Released in a `trap ... EXIT` so
+  Ctrl-C, a dropped SSH connection or a normal finish all clear it
+  without disturbing the run's real exit status. Separately, the
+  checkout is now verified after cloning -- `git status --porcelain`
+  and `git ls-files --deleted` must both be empty, or the run refuses
+  before building rather than failing confusingly partway through
+  `live-check` -- and a `RECLAIM` chown failure against an existing tree
+  now prints a warning instead of failing silently.
 
 ## [0.4.0] - 2026-08-25
 

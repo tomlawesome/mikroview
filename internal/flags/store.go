@@ -152,9 +152,12 @@ const flagTimeSeriesMinutes = 60
 //     (capped, see internal/detect's maxEvidenceHosts).
 //   - NAT: repeated_drops' triggering event's NAT translation info,
 //     when present.
-//   - Pairs/PairsTotal/PairsTotalIsFloor (#654): critical_port's distinct
+//   - Pairs/PairsTotal/PairsTotalIsFloor (#654): the distinct
 //     (destination host, destination port) combinations actually seen
-//     together, capped for display at internal/engine's maxEvidencePairs
+//     together -- critical_port's, and since #641 outbound_anomaly's and
+//     internal_recon's, which is what makes an expected verdict able to
+//     permit exactly what a device was seen doing rather than the cross
+//     product of two lists. Capped for display at internal/engine's maxEvidencePairs
 //     (== maxEvidencePorts, see that constant's own doc comment for why).
 //     Ports and Hosts above are independent sets -- crossing them implies
 //     every combination was seen, which for a detector recording many of
@@ -281,14 +284,52 @@ type Flag struct {
 	// (additive, no migration needed) so the persisted shape and its
 	// round trip are proven ahead of anything setting it to true.
 	Provisional bool `json:"provisional,omitempty"`
-	// Verdict is an operator's judgement of this flag (#638): expected
-	// (legitimate traffic), noise (real traffic, wrong threshold) or
-	// real (genuine concern). Empty (omitted from JSON) means unjudged
-	// -- same "empty is the common, unset case" convention Provisional
-	// above follows. Set only through SetVerdict, which also owns
-	// VerdictBy/VerdictAt and, for expected/noise, reuses clearLocked
-	// rather than duplicating what Clear already does.
+	// Size is this firing's own size: the measure the detector compares
+	// against its threshold (#640) -- distinct ports for port_scan,
+	// events in the window for activity_spike, and so on. Supplied by
+	// whatever raised the flag; see internal/engine's shipped size
+	// declarations for what each detector calls its size.
+	//
+	// nil (omitted) means the detector declares no size, the same
+	// "nil means not scored" convention Confidence above already uses.
+	// It is what an expectation on this pair records, and what a later
+	// firing is judged against -- see Exclusion.Absorbs.
+	Size *int `json:"size,omitempty"`
+	// ExpectedSize is the size an expectation for this (Type, Target)
+	// had recorded at the moment this flag was raised past it -- set
+	// only on a firing that an existing expectation refused to absorb,
+	// so a card can read "expected up to 30, saw 120" from
+	// ExpectedSize and Size together.
+	//
+	// nil (omitted) is the ordinary case: no expectation exists for this
+	// pair, so nothing was expected and nothing was exceeded.
+	ExpectedSize *int `json:"expectedSize,omitempty"`
+	// Verdict is an operator's judgement of this flag (#640, replacing
+	// #638's expected/noise/real): expected (normal for this host, and
+	// an expectation recorded for it), checked (looked at, fine this
+	// time), investigate (of concern, being looked at) or resolved
+	// (dealt with, normally a firewall change). Empty (omitted from
+	// JSON) means unjudged -- same "empty is the common, unset case"
+	// convention Provisional above follows. Set only through SetVerdict,
+	// which also owns VerdictBy/VerdictAt and, for the three that clear,
+	// reuses clearLocked rather than duplicating it.
 	Verdict Verdict `json:"verdict,omitempty"`
+	// PriorVerdict is the checked-or-resolved judgement this pair
+	// carried when it was last cleared, kept across the revival that
+	// wipes Verdict (#640). It is what makes a returning flag able to
+	// say "you checked this on 2 Sept and found it fine" or "resolved on
+	// 2 Sept -- it's back": both verdicts clear the flag and suppress
+	// nothing, so the only trace they leave is this memory.
+	//
+	// Only checked and resolved are remembered. Expected leaves an
+	// expectation instead, and a flag that returns past one already says
+	// so with Size/ExpectedSize; investigate never clears, so there is
+	// no revival to carry it over.
+	PriorVerdict Verdict `json:"priorVerdict,omitempty"`
+	// PriorVerdictAt is when PriorVerdict was given -- the date the
+	// returning card reads. Zero (omitted) exactly when PriorVerdict is
+	// empty, same omitzero convention as VerdictAt below.
+	PriorVerdictAt time.Time `json:"priorVerdictAt,omitzero"`
 	// VerdictBy is the account that set Verdict -- empty exactly when
 	// Verdict is empty.
 	VerdictBy string `json:"verdictBy,omitempty"`
@@ -318,27 +359,80 @@ type Flag struct {
 	// flight; nothing here makes that worse, and persisting one more
 	// bit doesn't fix it either.
 	verdictCleared bool
+	// expectationBefore is what this pair's expectation looked like just
+	// before the current expected verdict recorded one -- nil when the
+	// current verdict is anything else, or when this process never set
+	// it. UndoVerdict reads it to put the expectation back.
+	//
+	// Unexported for exactly the reasons verdictCleared above gives: no
+	// json tag, no persistence, one reader, called moments later in the
+	// same process. A verdict that outlived its process is undoable as a
+	// verdict; the expectation it recorded is then the ledger's to prune
+	// (#640 part C), not this bit's to guess at.
+	expectationBefore *expectationSnapshot
+}
+
+// expectationSnapshot is the before-picture recordExpectationLocked
+// takes so undo has something exact to restore: whether an expectation
+// existed at all, and what size it carried if it did.
+type expectationSnapshot struct {
+	existed bool
+	size    *int
 }
 
 // Verdict is an operator's judgement of a flag -- see Flag.Verdict.
 type Verdict string
 
+// The four verdicts (#640). Every flag ends as one of them: either
+// mikroview is told this traffic is acceptable at these characteristics
+// (expected), or a human says what looking at it concluded (checked,
+// investigate, resolved). Noise and the plain clear are gone -- there is
+// no way to dismiss a flag without a judgement.
 const (
+	// VerdictExpected records an expectation from the flag: normal for
+	// this host, at this size. Clears, and suppresses further firings of
+	// the same pair within ExpectationTolerance -- see Exclusion.
 	VerdictExpected Verdict = "expected"
-	VerdictNoise    Verdict = "noise"
-	VerdictReal     Verdict = "real"
+	// VerdictChecked is "looked suspicious, checked, fine this time".
+	// Clears, suppresses nothing, and is remembered on PriorVerdict so a
+	// re-fire can say when it was checked.
+	VerdictChecked Verdict = "checked"
+	// VerdictInvestigate is "of concern, being looked at". The one
+	// verdict that leaves the flag open; the row then offers expected or
+	// resolved.
+	VerdictInvestigate Verdict = "investigate"
+	// VerdictResolved is "dealt with", normally by a firewall change.
+	// Clears, and is deliberately not a suppression: a line reaches
+	// mikroview only if the firewall let it get that far, so a correct
+	// fix makes the lines stop. If the same circumstances recur the flag
+	// returns, saying when it was called resolved.
+	VerdictResolved Verdict = "resolved"
 )
 
-// Valid reports whether v is one of the three recognised verdicts --
+// Valid reports whether v is one of the four recognised verdicts --
 // used by the API handler to reject anything else with 400 before it
 // ever reaches the store.
 func (v Verdict) Valid() bool {
 	switch v {
-	case VerdictExpected, VerdictNoise, VerdictReal:
+	case VerdictExpected, VerdictChecked, VerdictInvestigate, VerdictResolved:
 		return true
 	default:
 		return false
 	}
+}
+
+// Clears reports whether v clears the flag it is given to. Everything
+// but investigate does: investigate's whole purpose is a flag that
+// stays open while someone works on it.
+func (v Verdict) Clears() bool {
+	return v != VerdictInvestigate
+}
+
+// Remembered reports whether v is carried across a revival on
+// PriorVerdict, so a returning flag can say what was concluded last
+// time -- see Flag.PriorVerdict for why only two verdicts are.
+func (v Verdict) Remembered() bool {
+	return v == VerdictChecked || v == VerdictResolved
 }
 
 // FlagTimeBucket is one point in Store.TimeSeries: counts of newly-raised
@@ -353,16 +447,149 @@ type FlagTimeBucket struct {
 	ByType map[Type]uint64 `json:"byType"`
 }
 
+// ExpectationTolerance is the one number an expectation is allowed to
+// grow by before it stops absorbing (#640): a firing whose size is
+// within 1.5x the recorded size is normal for this host, and anything
+// above that is the behaviour having changed enough to be worth a
+// human's attention again.
+//
+// Deliberately a single package-level constant rather than a per-
+// expectation or per-detector knob. The owner's design (#640) states one
+// factor, shown on the ledger row, and a tolerance an operator can tune
+// per entry is a threshold by another name -- the same global-threshold
+// raise that issue rejected, just spelled locally. If this ever needs to
+// vary it becomes a real design question, not a field quietly added.
+const ExpectationTolerance = 1.5
+
 // Exclusion is one permanently-excluded (Type, Target) pair -- see
 // Store.Exclude's doc comment. ID is the same flagID(Type, Target) key
 // flags themselves use, included so a caller (the admin exclusions API)
 // can operate on an entry without recomputing it and without ambiguity
 // from splitting it back apart (Target can itself contain ":", e.g. an
 // IPv6 address, which would make that split ambiguous).
+//
+// #640 grew it from a flat "never flag this again" into a *sized*
+// expectation: "this much of this, from this host, is normal." The key
+// is unchanged -- still (Type, Target) -- and every added field is
+// additive JSON with an omit-when-unset tag, so an exclusion written
+// before this change reads back with Size nil and keeps meaning exactly
+// what it always meant. There is no migration and none is needed.
 type Exclusion struct {
 	ID     string `json:"id"`
 	Type   Type   `json:"type"`
 	Target string `json:"target"`
+	// Size is the measure recorded when this expectation was made --
+	// whatever the detector declares its size to be (distinct ports for
+	// port_scan, events in the window for activity_spike, and so on: see
+	// internal/engine's shipped size declarations). Compared against a
+	// later firing's own size through Absorbs.
+	//
+	// nil means "this expectation has no size", which is both the
+	// pre-#640 shape read back off disk and what a detector that
+	// declares no size produces. It reads as the original, blunter
+	// meaning: ignore this host on this detector outright. That is a
+	// deliberate, documented fallback, not a degraded case -- some
+	// detectors genuinely have no count to be normal at (device_silence
+	// is an absence, known_bad_ip is list membership), and pretending
+	// otherwise would put a made-up number on the ledger.
+	Size *int `json:"size,omitempty"`
+	// Absorbed counts firings this expectation has suppressed. It is the
+	// evidence the entry is earning its place -- the ledger (#640 part C)
+	// shows it, and an expectation absorbing nothing is a candidate for
+	// pruning.
+	Absorbed uint64 `json:"absorbed,omitempty"`
+	// Since is when this expectation was first recorded. Zero (omitted)
+	// for an exclusion written before #640, which has no such record --
+	// the ledger renders that absence rather than inventing a date.
+	Since time.Time `json:"since,omitzero"`
+	// Permitted is what each expected verdict on this pair wrote onto the
+	// watchlist as well as here (#641): the device's evidence pairs,
+	// recorded as permitted destinations on its inverted entry. One
+	// record per verdict, appended in the order the verdicts were given.
+	//
+	// It lives on the expectation rather than in a store of its own
+	// because the two halves are one act and the ledger (#640 part C)
+	// shows them together: the detector learned a size, and the device
+	// was allowed these destinations. Part C is what prunes them; this
+	// package only has to be able to say what was added, by which
+	// verdict, and when -- see PermittedRecord.
+	//
+	// Additive, omitted when empty, so an expectation recorded before
+	// #641 reads back with nothing here and means exactly what it did.
+	Permitted []PermittedRecord `json:"permitted,omitempty"`
+}
+
+// PermittedRecord is one expected verdict's write onto the watchlist --
+// the reversible half of an automatic step (#641).
+//
+// Written by the API layer through Store.RecordPermitted rather than by
+// SetVerdict itself: this store holds flags, and the entry the
+// destinations landed on is an expectation definition in
+// internal/engine's store, which this package neither imports nor should.
+// What it does own is the *record* -- undo has to know exactly what to
+// take back, and the ledger has to be able to show it.
+type PermittedRecord struct {
+	// EntryID is the inverted watchlist entry the destinations were
+	// written to.
+	EntryID string `json:"entryId"`
+	// Dests is what was permitted, in the flag's own evidence order.
+	// Stored as this package's HostPort rather than
+	// watchlist.PermittedDest for the same reason HostPort exists at all:
+	// the persisted shape belongs here, not to whichever package happens
+	// to consume it.
+	Dests []HostPort `json:"dests,omitempty"`
+	// CreatedEntry records that this verdict is what brought the entry
+	// into existence -- there was no inverted entry for the device, so
+	// one was created in its observing state to hold the permission.
+	// Undo removes an entry it created and nothing else has touched;
+	// without this bit it could not tell that entry from one the
+	// operator made themselves.
+	CreatedEntry bool `json:"createdEntry,omitempty"`
+	// Verdict is the judgement that wrote this. Always VerdictExpected
+	// today -- it is the only verdict that permits anything -- and stated
+	// rather than assumed so the ledger reads what happened off the
+	// record instead of inferring it from the record's existence.
+	Verdict Verdict `json:"verdict,omitempty"`
+	// At is when it was written.
+	At time.Time `json:"at,omitzero"`
+}
+
+// Absorbs reports whether a firing of the given observed size is still
+// covered by this expectation -- true means suppress it and count it,
+// false means the behaviour has outgrown what was recorded and the flag
+// must be raised again carrying both numbers.
+//
+// Three cases, in the order they are decided:
+//
+//   - e.Size nil: a size-less expectation absorbs everything, forever.
+//     That is the pre-#640 exclusion's meaning kept intact, and the
+//     meaning of an expectation on a detector that declares no size.
+//   - observed nil against a sized expectation: absorb. This should not
+//     arise (the expectation's own size came from a firing of the same
+//     detector, so that detector does declare one), but if a detector's
+//     declaration ever changes underneath a stored entry, the honest
+//     answer is that nothing measurable grew. Re-raising would mean
+//     printing "expected up to 30, saw <nothing>", which is a claim we
+//     cannot support.
+//   - both sized: absorbed while observed is within ExpectationTolerance
+//     times the recorded size, inclusive.
+func (e Exclusion) Absorbs(observed *int) bool {
+	if e.Size == nil || observed == nil {
+		return true
+	}
+	return float64(*observed) <= float64(*e.Size)*ExpectationTolerance
+}
+
+// Ceiling is the largest size this expectation still absorbs -- the
+// recorded size scaled by ExpectationTolerance and truncated, since a
+// size is a whole count. Reports ok=false for a size-less expectation,
+// which has no ceiling because it absorbs everything. For display and
+// for callers that want the number without re-deriving the tolerance.
+func (e Exclusion) Ceiling() (int, bool) {
+	if e.Size == nil {
+		return 0, false
+	}
+	return int(float64(*e.Size) * ExpectationTolerance), true
 }
 
 // persistedState is the on-disk JSON shape written by persistLocked and
@@ -539,7 +766,7 @@ func flagID(t Type, target string) string {
 // DefaultConfig are kept in internal/detect for tests that don't need
 // their own full configurability.
 func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", false, now)
+	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", false, nil, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -548,7 +775,7 @@ func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
 // confident it is in this specific flag (0-100) rather than a simple
 // deterministic threshold crossing -- see Flag.Confidence.
 func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, Evidence{}, "", false, now)
+	isNew, f := s.add(t, target, detail, &confidence, Evidence{}, "", false, nil, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -558,7 +785,7 @@ func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int,
 // exactly what was touched, not just a count -- see Evidence and
 // Flag.Country.
 func (s *Store) AddWithDetail(t Type, target, detail string, confidence int, evidence Evidence, country string, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, evidence, country, false, now)
+	isNew, f := s.add(t, target, detail, &confidence, evidence, country, false, nil, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -572,7 +799,7 @@ func (s *Store) AddWithDetail(t Type, target, detail string, confidence int, evi
 // trip are proven ahead of anything depending on them. See
 // TestAddProvisionalPersistsAndSurvivesReload.
 func (s *Store) AddProvisional(t Type, target, detail string, confidence int, evidence Evidence, country string, provisional bool, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, evidence, country, provisional, now)
+	isNew, f := s.add(t, target, detail, &confidence, evidence, country, provisional, nil, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -592,8 +819,15 @@ func (s *Store) AddProvisional(t Type, target, detail string, confidence int, ev
 // its absence. That is the gap FlagsSink's own doc comment said was
 // worth widening this API to close rather than papering over; this is
 // the widening.
-func (s *Store) AddEmission(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, confidence, evidence, country, provisional, now)
+// size is this firing's own size (#640), nil for a definition that
+// declares none -- the value an expectation for this (Type, Target) is
+// judged against, and recorded by a later expected verdict. Only this
+// entry point takes one: it is the only raise path with an Emission
+// behind it, and every other Add* above belongs to a caller that has no
+// size to offer. They pass nil, which is the same "no size" the
+// declares-none case already means.
+func (s *Store) AddEmission(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, size *int, now time.Time) bool {
+	isNew, f := s.add(t, target, detail, confidence, evidence, country, provisional, size, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -607,20 +841,47 @@ func (s *Store) maybeNotify(isNew bool, f Flag) {
 	}
 }
 
-func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, now time.Time) (bool, Flag) {
+func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, size *int, now time.Time) (bool, Flag) {
 	id := flagID(t, target)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// A permanently excluded (Type, Target) never raises, silently -- no
-	// entry is created, updated, or revived, and the caller sees "not a
-	// new episode" so nothing downstream (notifications, reputation
-	// lookups) fires either. See Store.Exclude's doc comment for why
-	// this is a deliberate permanent no-op rather than a raise that then
-	// gets auto-cleared.
-	if _, excluded := s.excluded[id]; excluded {
-		return false, Flag{}
+	// An expectation for this (Type, Target) is consulted before
+	// anything else, and this is the one place that check lives (#640).
+	//
+	// It sits here, in add(), rather than in internal/engine's flags sink
+	// for two reasons. Every raise path in the product funnels through
+	// this function -- the engine's sink, main.go's new_device raise,
+	// and any future caller -- so one check covers all of them and none
+	// can be written that quietly bypasses it. And absorbing a firing
+	// means incrementing the expectation's own counter, which is store
+	// state under the lock this function already holds; doing it a layer
+	// up would mean reaching back into the store for a second, separately
+	// locked call on every suppressed firing, with the raise decision and
+	// the count that justifies it able to disagree in between.
+	//
+	// Within tolerance: silently absorbed and counted -- no entry is
+	// created, updated, or revived, and the caller sees "not a new
+	// episode" so nothing downstream (notifications, reputation lookups)
+	// fires either. See Store.Exclude's doc comment for why this is a
+	// deliberate no-op rather than a raise that then gets auto-cleared.
+	//
+	// Above tolerance: the expectation no longer covers what this host is
+	// doing, so the flag is raised carrying both numbers (see
+	// Flag.ExpectedSize). The expectation is left exactly as it was --
+	// raising the recorded size is an operator's judgement, made by
+	// saying Expected again (SetVerdict), never something the store
+	// does to itself on the strength of the traffic that broke it.
+	var expectedSize *int
+	if ex, excluded := s.excluded[id]; excluded {
+		if ex.Absorbs(size) {
+			ex.Absorbed++
+			s.excluded[id] = ex
+			s.persistLocked()
+			return false, Flag{}
+		}
+		expectedSize = copyIntPtr(ex.Size)
 	}
 
 	f, ok := s.byID[id]
@@ -635,17 +896,40 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 		s.clearedCount--
 		f.ClearedAt = time.Time{}
 		f.Count = 0
-		f.ReputationFloor = nil   // a revived flag starts its confidence history fresh
-		f.Reputation = nil        // ...and its detail history, including any stale reputation snapshot
-		f.Verdict = ""            // ...and its judgement: a past "expected"/"noise" call was about the
-		f.VerdictBy = ""          // episode that just got cleared, not about this new one, so it
-		f.VerdictAt = time.Time{} // must not silently carry forward and suppress attention on a fresh firing
-		f.verdictCleared = false  // this Clear=false transition is the revival's doing, not any verdict's
+		f.ReputationFloor = nil // a revived flag starts its confidence history fresh
+		f.Reputation = nil      // ...and its detail history, including any stale reputation snapshot
+		// ...and its judgement: a past call was about the episode that
+		// just got cleared, not about this new one, so it must not
+		// silently carry forward and suppress attention on a fresh
+		// firing. A checked or resolved verdict is *remembered* first
+		// (#640): it suppressed nothing, so this revival is exactly the
+		// "you checked this on 2 Sept and found it fine" / "resolved on
+		// 2 Sept -- it's back" case, and PriorVerdict is the only trace
+		// of it left. Any other verdict clears the memory rather than
+		// leaving a stale one standing: it is the last judgement that
+		// counts, not the last remembered one.
+		if f.Verdict.Remembered() {
+			f.PriorVerdict = f.Verdict
+			f.PriorVerdictAt = f.VerdictAt
+		} else {
+			f.PriorVerdict = ""
+			f.PriorVerdictAt = time.Time{}
+		}
+		f.Verdict = ""
+		f.VerdictBy = ""
+		f.VerdictAt = time.Time{}
+		f.verdictCleared = false // this Clear=false transition is the revival's doing, not any verdict's
 	}
 	f.Detail = detail
 	f.Confidence = mergeConfidence(confidence, f.ReputationFloor)
 	f.Evidence = evidence
 	f.Country = country
+	// Size/ExpectedSize describe this firing, so they are refreshed on
+	// every call like Detail above, not fixed at episode start: a re-fire
+	// that has grown further past an expectation must say so with its own
+	// current numbers, not the ones the episode opened with.
+	f.Size = copyIntPtr(size)
+	f.ExpectedSize = expectedSize
 	// Provisional is fixed at episode start (isNew: first-ever raise, or
 	// a revival from Cleared), same as FirstSeen just above -- not
 	// overwritten on a plain re-fire of an already-active episode.
@@ -754,6 +1038,18 @@ func mergeConfidence(fresh, floor *int) *int {
 	}
 }
 
+// copyIntPtr returns an independent copy of p, so a *int stored on a
+// Flag or an Exclusion is never aliased to a caller's variable that
+// could change underneath it -- the same guard internal/engine's own
+// copyIntPtr (router.go) applies when translating an Emission.
+func copyIntPtr(p *int) *int {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
 // RaiseConfidenceFloor raises id's confidence to at least floor, if the
 // flag is still known and floor is higher than its current score or
 // previously applied floor. Never lowers an existing score -- a
@@ -837,9 +1133,9 @@ func (s *Store) ApplyReputationSnapshot(t Type, target string, snapshot reputati
 
 // clearLocked marks f cleared, if it isn't already -- the one place that
 // touches Cleared/ClearedAt/clearedCount, called under s.mu by both
-// Clear and SetVerdict (an expected/noise verdict clears via this same
-// path rather than a parallel one -- see SetVerdict's doc comment). A
-// no-op on an already-cleared flag, same as Clear's own contract.
+// ClearAll and SetVerdict (every verdict but investigate clears via this
+// same path rather than a parallel one -- see SetVerdict's doc
+// comment). A no-op on an already-cleared flag.
 //
 // Reports whether it actually changed anything -- false on the no-op
 // path -- so a caller that needs to know whether *it* was the one that
@@ -874,35 +1170,27 @@ func (s *Store) unclearLocked(f *Flag) {
 	s.clearedCount--
 }
 
-// Clear marks id as cleared. It reports whether an active flag with that
-// ID was found -- clearing an already-cleared or unknown ID is a no-op,
-// not an error, since the caller (a browser tab that might be showing a
-// stale list) can't always know which is which.
-func (s *Store) Clear(id string, now time.Time) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	f, ok := s.byID[id]
-	if !ok || f.Cleared {
-		return false
-	}
-	s.clearLocked(f, now)
-	s.persistLocked()
-	return true
-}
-
-// SetVerdict records an operator's judgement of id (#638) and reports
+// SetVerdict records an operator's judgement of id (#640) and reports
 // the updated flag plus whether id was known at all -- an unknown ID is
 // the one failure case (the handler maps it to 404); the caller is
 // expected to have already rejected an unrecognised Verdict value via
 // Verdict.Valid() before this is reached, so an invalid v here is a
 // programmer error, not a runtime one.
 //
-// expected and noise both clear the flag, via the exact same
-// clearLocked path Clear uses -- not a parallel clear -- so there is
-// only ever one place a flag transitions to Cleared. real records the
-// verdict and leaves Cleared untouched, per #638's contract: a real
-// verdict must never itself clear the flag.
+// This is the only way a flag ever leaves the inbox one at a time: the
+// plain clear is gone (#640), so every dismissal carries a judgement.
+// expected, checked and resolved all clear the flag through the same
+// clearLocked path ClearAll uses -- not a parallel clear -- so there is
+// only ever one place a flag transitions to Cleared. investigate records
+// the verdict and leaves Cleared untouched: a flag someone is working on
+// stays open.
+//
+// expected additionally records the expectation itself -- "this much of
+// this, from this host, is normal" -- in the same atomic step under the
+// same lock, so a flag can never be cleared as expected without the
+// expectation that justifies it landing too. See
+// recordExpectationLocked for what it records and what a repeat call
+// does.
 //
 // Re-judging an already-judged flag overwrites the previous verdict --
 // there's no history kept of a changed mind, same as every other
@@ -920,12 +1208,24 @@ func (s *Store) SetVerdict(id string, v Verdict, by string, now time.Time) (Flag
 	if !ok {
 		return Flag{}, false
 	}
+	// Changing one's mind away from expected withdraws the expectation
+	// that verdict recorded, exactly as undoing it would. Without this,
+	// re-judging an expected flag as checked would leave a suppression
+	// standing that nothing on screen still claims, and the pair would
+	// go quiet for a reason the operator had just retracted.
+	if f.Verdict == VerdictExpected && v != VerdictExpected {
+		s.undoExpectationLocked(f)
+	}
 	f.Verdict = v
 	f.VerdictBy = by
 	f.VerdictAt = now
 	f.verdictCleared = false
-	if v == VerdictExpected || v == VerdictNoise {
+	f.expectationBefore = nil
+	if v.Clears() {
 		f.verdictCleared = s.clearLocked(f, now)
+	}
+	if v == VerdictExpected {
+		s.recordExpectationLocked(f, now)
 	}
 	s.persistLocked()
 	return *f, true
@@ -941,17 +1241,23 @@ func (s *Store) SetVerdict(id string, v Verdict, by string, now time.Time) (Flag
 // Resets Verdict/VerdictBy/VerdictAt to their zero values, and re-opens
 // the flag only if the verdict being undone is what cleared it --
 // f.verdictCleared, set by SetVerdict -- never if the flag was already
-// cleared beforehand by something else (a plain Clear, or an earlier
-// verdict later overwritten by this one). That is the one subtlety
-// here: undo must not resurrect a flag that undoing the verdict had no
-// part in clearing.
+// cleared beforehand by something else (an earlier verdict later
+// overwritten by this one, say). That is the one subtlety here: undo
+// must not resurrect a flag that undoing the verdict had no part in
+// clearing.
+//
+// Undoing an expected verdict also puts its expectation back the way it
+// found it (#640) -- removed if that verdict created it, restored to its
+// old size if it raised one. An undo that reopened the flag while
+// leaving the suppression standing would be the worst of both: a flag
+// visibly back in the inbox and a store quietly absorbing every further
+// firing of it. See undoExpectationLocked.
 //
 // Reports whether id was known at all, same true/false contract as
 // every other id-keyed mutator here. Undoing an unjudged flag (empty
-// Verdict, verdictCleared false) is a deliberate no-op, not an error --
-// same "no-op, not an error" reasoning Clear's doc comment gives: the
-// caller may be a stale undo affordance racing a page that already
-// moved on, and it can't always know which is which either.
+// Verdict, verdictCleared false) is a deliberate no-op, not an error:
+// the caller may be a stale undo affordance racing a page that already
+// moved on, and it can't always know which is which.
 func (s *Store) UndoVerdict(id string) (Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -963,6 +1269,9 @@ func (s *Store) UndoVerdict(id string) (Flag, bool) {
 	if f.verdictCleared {
 		s.unclearLocked(f)
 	}
+	if f.Verdict == VerdictExpected {
+		s.undoExpectationLocked(f)
+	}
 	f.Verdict = ""
 	f.VerdictBy = ""
 	f.VerdictAt = time.Time{}
@@ -971,41 +1280,94 @@ func (s *Store) UndoVerdict(id string) (Flag, bool) {
 	return *f, true
 }
 
-// ClearAndExclude is the "Clear and never flag this again" action:
-// clears id's current episode (if still active) and permanently
-// excludes its (Type, Target) going forward, in one atomic step under a
-// single lock. Reports whether id was known at all, the same true/false
-// contract as Clear -- an unknown ID is a no-op, not an error, for the
-// same reason Clear's doc comment gives. Unlike Clear, this succeeds
-// (and still records the exclusion) even if the flag was already
-// cleared, since the point of this call is future suppression, not the
-// current episode's state.
-func (s *Store) ClearAndExclude(id string, now time.Time) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// recordExpectationLocked records an expectation from a flag -- "this
+// much of this, from this host, is normal" for its (Type, Target) going
+// forward. Called by SetVerdict under the lock it already holds, so the
+// clear and the expectation that justifies it land together or not at
+// all; there is no separate entry point, since an expectation only ever
+// comes from an operator saying expected about a flag they looked at.
+//
+// The expectation's size is the flag's own Size -- the firing the
+// operator just looked at and judged normal, not a number typed in --
+// so what gets suppressed is bounded by what was actually seen. A flag
+// from a detector that declares no size records a size-less expectation,
+// which is the older, blunter "ignore this host on this detector"
+// (see Exclusion.Size).
+//
+// Calling it again on a pair that already has an expectation is how the
+// recorded size is *raised*: a firing that broke the old ceiling and was
+// judged normal anyway becomes the new normal. Three deliberate
+// restrictions on that:
+//
+//   - The size only ever goes up. A quieter firing later does not
+//     silently narrow an expectation the operator widened on purpose.
+//   - A size-less expectation stays size-less. It already absorbs
+//     everything, so attaching a size would *narrow* it -- turning
+//     "ignore this outright" into a ceiling the operator never asked
+//     for, which is a suppression quietly becoming a re-raise.
+//   - Absorbed and Since are kept. They are the entry's history, and the
+//     ledger's evidence that it has been earning its place; a raise is
+//     the same expectation grown, not a new one.
+//
+// What the entry looked like before this call is snapshotted onto the
+// flag (expectationBefore) so UndoVerdict can put it back -- see
+// undoExpectationLocked.
+func (s *Store) recordExpectationLocked(f *Flag, now time.Time) {
+	if existing, already := s.excluded[f.ID]; already {
+		f.expectationBefore = &expectationSnapshot{existed: true, size: copyIntPtr(existing.Size)}
+		if existing.Size != nil && f.Size != nil && *f.Size > *existing.Size {
+			existing.Size = copyIntPtr(f.Size)
+			s.excluded[f.ID] = existing
+		}
+		return
+	}
+	f.expectationBefore = &expectationSnapshot{}
+	s.excluded[f.ID] = Exclusion{
+		ID:     f.ID,
+		Type:   f.Type,
+		Target: f.Target,
+		Size:   copyIntPtr(f.Size),
+		Since:  now,
+	}
+}
 
-	f, ok := s.byID[id]
+// undoExpectationLocked reverses recordExpectationLocked for the verdict
+// UndoVerdict is undoing: an expectation this verdict created is
+// removed, and one it raised goes back to the size it had. Absorbed and
+// Since are left alone -- firings absorbed in between really were
+// absorbed, and rewriting that count would make the ledger lie about
+// what happened.
+//
+// Silently does nothing when there is no snapshot to work from: the
+// verdict was set in an earlier process (expectationBefore is in-memory
+// only, same reasoning as verdictCleared's own doc comment), and
+// inventing a removal on the strength of an entry that might predate it
+// would delete an expectation this undo has no claim on.
+func (s *Store) undoExpectationLocked(f *Flag) {
+	snap := f.expectationBefore
+	f.expectationBefore = nil
+	if snap == nil {
+		return
+	}
+	if !snap.existed {
+		delete(s.excluded, f.ID)
+		return
+	}
+	existing, ok := s.excluded[f.ID]
 	if !ok {
-		return false
+		return
 	}
-	if !f.Cleared {
-		f.Cleared = true
-		s.clearedCount++
-		f.ClearedAt = now
-	}
-	if _, already := s.excluded[id]; !already {
-		s.excluded[id] = Exclusion{ID: id, Type: f.Type, Target: f.Target}
-	}
-	s.persistLocked()
-	return true
+	existing.Size = copyIntPtr(snap.size)
+	s.excluded[f.ID] = existing
 }
 
 // ClearAll clears every currently-active (not yet Cleared) flag in one
 // pass, returning how many it cleared. Regular clears only -- it must
-// never create a permanent exclusion (see ClearAndExclude for that
-// action); "Clear all" on the frontend (issue #198) has no permanent
-// variant and none is planned, since a single click-again confirm is
-// not the amount of intent a bulk permanent suppression should require.
+// never record an expectation (see SetVerdict's expected verdict for
+// that); "Clear all" on the frontend (issue #198) has no expectation-
+// recording variant and none is planned, since a single click-again
+// confirm is not the amount of intent a bulk suppression should
+// require.
 //
 // One lock for the whole pass rather than one Clear call per flag: a
 // concurrent Add landing mid-sweep either sees the old state and gets
@@ -1041,6 +1403,13 @@ func (s *Store) ClearAll(now time.Time) int {
 // (nothing was solved) or it doesn't (permanent exclusion was what was
 // wanted all along). Idempotent: excluding an already-excluded pair is a
 // no-op.
+//
+// This is the size-less form (see Exclusion.Size): it records no size
+// and so absorbs every future firing of that pair regardless of how far
+// the behaviour grows. An expected verdict is what records a *sized*
+// expectation from a flag the operator actually looked at (#640); this
+// entry point has no flag to take a size from, and inventing one would
+// put a number on the ledger nobody measured.
 func (s *Store) Exclude(t Type, target string) {
 	id := flagID(t, target)
 
@@ -1057,7 +1426,7 @@ func (s *Store) Exclude(t Type, target string) {
 	// existing active flag would otherwise sit in List() as
 	// Cleared:false forever, frozen -- every later update silently
 	// no-op'd, and no path to clear it but RemoveExclusion. Not reachable
-	// through the API today, since ClearAndExclude clears first, but that
+	// through the API today, since an expected verdict clears first, but that
 	// makes this a landmine for the next caller of Exclude rather than a
 	// non-issue: the method's own contract says the pair goes silent from
 	// this call on, and an entry stuck visible is the opposite.
@@ -1070,15 +1439,16 @@ func (s *Store) Exclude(t Type, target string) {
 // RemoveExclusion reverses Exclude for (t, target), letting that pair
 // raise again going forward -- existing flag history (if any) is
 // untouched either way. Reports whether an exclusion was actually
-// present, same true/false contract as Clear.
+// present, same true/false contract as every other id-keyed mutator here.
 func (s *Store) RemoveExclusion(t Type, target string) bool {
 	return s.RemoveExclusionByID(flagID(t, target))
 }
 
 // RemoveExclusionByID is RemoveExclusion, keyed directly by the same ID
-// Exclusion.ID/Flag.ID already use -- what the admin exclusions API
-// (which lists Exclusion values, not raw (Type, Target) pairs) actually
-// has on hand to act on.
+// Exclusion.ID/Flag.ID already use -- what a caller holding listed
+// Exclusion values, rather than raw (Type, Target) pairs, has on hand to
+// act on. That is the ledger's prune (#640 part C) and UndoVerdict's own
+// reversal; the admin exclusions API that used to call it is gone.
 func (s *Store) RemoveExclusionByID(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1101,17 +1471,124 @@ func (s *Store) Excluded(t Type, target string) bool {
 	return ok
 }
 
-// ListExclusions returns every currently-excluded (Type, Target) pair,
-// sorted by ID for a stable display order -- the admin-only surface
-// (see internal/api's callerIsAdminOrOpen-gated exclusions endpoints)
-// that lets a permanent exclusion made by mistake actually be undone.
+// Expectation returns the recorded expectation for (t, target) and
+// whether one exists at all -- the sized counterpart to Excluded above,
+// for a caller (the ledger, a test) that needs the recorded size,
+// absorbed count and since-when rather than only the yes/no. Returns a
+// copy: the Size pointer it carries is independent of the stored entry,
+// so a caller cannot mutate store state through it.
+func (s *Store) Expectation(t Type, target string) (Exclusion, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.excluded[flagID(t, target)]
+	if !ok {
+		return Exclusion{}, false
+	}
+	return copyExclusion(e), true
+}
+
+// copyExclusion detaches an Exclusion from store state before it is
+// handed out: an independent Size pointer, and an independent Permitted
+// slice (whose own Dests slices are copied too). Without it a caller
+// holding a listed entry could mutate what the store is about to
+// consult, which for Permitted matters more than for Size -- undo reads
+// it to decide what to take off the watchlist.
+func copyExclusion(e Exclusion) Exclusion {
+	e.Size = copyIntPtr(e.Size)
+	if len(e.Permitted) > 0 {
+		recs := make([]PermittedRecord, len(e.Permitted))
+		for i, r := range e.Permitted {
+			r.Dests = append([]HostPort(nil), r.Dests...)
+			recs[i] = r
+		}
+		e.Permitted = recs
+	}
+	return e
+}
+
+// Get returns one flag by id, and whether it exists -- the read every
+// caller that has to know a flag's state *before* changing it needs
+// (internal/api's verdict handler, which reads the verdict it is about
+// to replace so it can reverse what that verdict wrote onto the
+// watchlist). A copy, like every other read here.
+func (s *Store) Get(id string) (Flag, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	f, ok := s.byID[id]
+	if !ok {
+		return Flag{}, false
+	}
+	return *f, true
+}
+
+// RecordPermitted attaches rec to the expectation recorded for flagID --
+// what an expected verdict permitted on the watchlist, alongside the
+// size it learned (#641). Reports whether there was an expectation to
+// attach it to: there is nothing to record against a flag that never
+// recorded one, and inventing an entry here would put a permission on
+// the ledger with no expectation beside it.
+//
+// Appends rather than replaces. A second expected verdict on the same
+// pair (the firing came back past the ceiling and was judged normal
+// again) permits whatever that firing saw, which may be pairs the first
+// never did -- and undoing the second must take back only its own
+// additions. One record per verdict is what makes that exact.
+func (s *Store) RecordPermitted(flagID string, rec PermittedRecord) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e, ok := s.excluded[flagID]
+	if !ok {
+		return false
+	}
+	rec.Dests = append([]HostPort(nil), rec.Dests...)
+	e.Permitted = append(e.Permitted, rec)
+	s.excluded[flagID] = e
+	s.persistLocked()
+	return true
+}
+
+// WithdrawPermitted removes and returns the most recent PermittedRecord
+// for flagID -- the one the verdict now being undone or re-judged wrote
+// -- so its caller can take those destinations back off the watchlist.
+// Reports false when there is nothing recorded, which is the ordinary
+// case for every flag that was never judged expected and for one whose
+// evidence carried no pairs to permit.
+//
+// Called before the verdict itself is reversed, deliberately: undoing an
+// expected verdict that created the expectation deletes the expectation
+// outright (see undoExpectationLocked), and this record goes with it.
+func (s *Store) WithdrawPermitted(flagID string) (PermittedRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e, ok := s.excluded[flagID]
+	if !ok || len(e.Permitted) == 0 {
+		return PermittedRecord{}, false
+	}
+	last := e.Permitted[len(e.Permitted)-1]
+	e.Permitted = e.Permitted[:len(e.Permitted)-1]
+	if len(e.Permitted) == 0 {
+		e.Permitted = nil
+	}
+	s.excluded[flagID] = e
+	s.persistLocked()
+	return last, true
+}
+
+// ListExclusions returns every recorded expectation, sorted by ID for a
+// stable display order -- the read surface the ledger (#640 part C) is
+// built on: every expectation with its recorded size, absorbed count and
+// since-when, so it can be reviewed and pruned.
 func (s *Store) ListExclusions() []Exclusion {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	out := make([]Exclusion, 0, len(s.excluded))
 	for _, e := range s.excluded {
-		out = append(out, e)
+		// Detached, same reason Expectation detaches: a listed entry must
+		// not be a handle onto store state.
+		out = append(out, copyExclusion(e))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out

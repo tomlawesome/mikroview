@@ -114,14 +114,20 @@ fi
 #
 # Opt-in, and set after both branches above deliberately: the gate's
 # scenarios read devices[0], and internal/device.Registry.List is
-# map-ordered, so declaring four devices unconditionally would make that
+# map-ordered, so declaring six devices unconditionally would make that
 # nondeterministic. Unset, every existing caller behaves exactly as
 # before.
 #
 # guest-ap is declared and never fed on purpose -- a router that has
 # said nothing is part of the story the demo tells (#687).
+#
+# rb5009 and hap-ax3 are the city's own two boroughs (#870), added
+# alongside the first four rather than replacing them. hap-ax3's uplink
+# address is 10.0.10.9, inside rb5009's LAN -- but sourceIp here is where
+# its *syslog* arrives from, which is a loopback address like every other
+# router's, so the two are unrelated and 127.0.0.6 is not a typo.
 if [ "${MV_DEMO_DEVICES:-}" = "1" ]; then
-  DEVICES_BLOCK='devices: [{id: border-rb5009, name: border-rb5009, sourceIp: 127.0.0.1}, {id: office-hex, name: office-hex, sourceIp: 127.0.0.2}, {id: lab-crs, name: lab-crs, sourceIp: 127.0.0.3}, {id: guest-ap, name: guest-ap, sourceIp: 127.0.0.4}]'
+  DEVICES_BLOCK='devices: [{id: border-rb5009, name: border-rb5009, sourceIp: 127.0.0.1}, {id: office-hex, name: office-hex, sourceIp: 127.0.0.2}, {id: lab-crs, name: lab-crs, sourceIp: 127.0.0.3}, {id: guest-ap, name: guest-ap, sourceIp: 127.0.0.4}, {id: rb5009, name: rb5009, sourceIp: 127.0.0.5}, {id: hap-ax3, name: hap-ax3, sourceIp: 127.0.0.6}]'
 fi
 
 # The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
@@ -342,8 +348,8 @@ raw() {
 
 # portscan N [source-ip] -- N distinct destination ports from one source
 # IP, inside the default port-scan window, so a real port_scan flag gets
-# raised rather than synthesized -- for scenarios (live-exclusions.mjs,
-# live-flags-clearing.mjs) that need an actual flag to clear/exclude, not
+# raised rather than synthesized -- for scenarios (live-verdicts.mjs,
+# live-flags-expectations.mjs) that need an actual flag to judge, not
 # just events in the table. source-ip defaults to 198.51.100.77;
 # pass a different one to raise a second, independent flag.
 portscan() {
@@ -356,6 +362,24 @@ for i in range(n):
           f"{src}:{40000+i}->192.168.1.10:{1000+i}, len 60")
 PY
   echo "sent a ${1:-20}-port scan from ${2:-198.51.100.77}" >&2
+}
+
+# recon N [source-ip] [dest-port] -- N distinct *internal* destinations
+# from one LAN source inside internal_recon's default 60s window, each
+# reached on a stated port, so a real internal_recon flag is raised
+# carrying evidence pairs (#641) rather than the test synthesizing them.
+# source-ip defaults to 192.168.1.60 and the port to 445; pass a
+# different source to raise a second, independent flag.
+recon() {
+  python3 - "${1:-12}" "${2:-192.168.1.60}" "${3:-445}" <<'PY' | send_tls
+import sys
+n, src, port = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+for i in range(n):
+    print(f"firewall,info D|recon-src| forward: in:ether1 out:bridge1, "
+          f"connection-state:new, proto TCP (SYN), "
+          f"{src}:{40000+i}->192.168.1.{100+i}:{port}, len 60")
+PY
+  echo "sent a ${1:-12}-destination internal sweep from ${2:-192.168.1.60} on port ${3:-445}" >&2
 }
 
 down() {
@@ -372,6 +396,7 @@ case "${1:-}" in
   syslog) shift; syslog "$@" ;;
   raw) shift; raw "$@" ;;
   portscan) shift; portscan "$@" ;;
+  recon) shift; recon "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|syslog N [label]|raw LINE|portscan N [src-ip]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|syslog N [label]|raw LINE|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
 esac

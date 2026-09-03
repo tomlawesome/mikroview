@@ -147,6 +147,13 @@ Exclusions become suppressions scoped to a definition -- which is what
 "exclusions live with the feature they exclude for" (#385) means at the
 data layer.
 
+> **Superseded by #640 (2026-09-02).** The per-definition `Suppressions`
+> field was modelled on the envelope but never given matching semantics,
+> and #640 settled on one mechanism instead: a sized *expectation*, keyed
+> by (detector, target) in `internal/flags`, recorded by an operator's
+> `expected` verdict on a flag they looked at. The field and its API
+> surface were removed rather than left as a second, silent mechanism.
+
 ### 4. The tuning surface, because auto-tune builds on it
 
 Every definition exposes, uniformly: enabled, scope, its typed params,
