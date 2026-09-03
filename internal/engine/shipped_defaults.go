@@ -3,11 +3,7 @@
 package engine
 
 import (
-	"context"
-	"encoding/json"
 	"time"
-
-	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // This file is where internal/detect.Config landed when that package's
@@ -285,48 +281,18 @@ func DefaultDetectorDefaults() DetectorDefaults {
 	}
 }
 
-// DetectorSettings is one shipped detector's enabled + scope pair as the
-// pre-#405 detector-settings document stored it -- internal/detect.Settings,
-// moved here with the same JSON tags so the document round-trips
-// byte-identically.
+// DetectorSettings is one shipped detector's enabled + scope pair --
+// internal/detect.Settings, moved here when that package was deleted.
 //
 // It is deliberately NOT the shape anything evaluates. A definition's
 // enabled/scope live on the Definition itself (definition.go); this type
-// exists for exactly two callers: MigrateDefinitions, which reads a
-// pre-existing detector-settings document once to seed the definitions
-// store, and SeedShippedDefinitions, which layers config.yaml's own
-// per-detector toggles over the shipped defaults on every boot. Both are
-// seeding paths, which is why an "operator settings" type survives the
-// deletion of the store that used to own it.
+// exists for one caller, SeedShippedDefinitions, which layers
+// config.yaml's own per-detector toggles over the shipped defaults on
+// every boot. That is a seeding path, which is why an "operator
+// settings" type survives the deletion of the store that used to own it.
 type DetectorSettings struct {
 	Enabled bool  `json:"enabled"`
 	Scope   Scope `json:"scope"`
-}
-
-// detectorSettingsDocument is the whole pre-#405 detector-settings
-// document: a flat map of detector name to settings. Kept as this
-// package's own small copy of a shape internal/detect used to own,
-// exactly the precedent migrateWatchlistFile (definitions_migrate.go)
-// already sets for reading another package's persisted document without
-// depending on that package.
-type detectorSettingsDocument map[string]DetectorSettings
-
-// ReadDetectorSettingsDocument loads the pre-#405 detector-settings
-// document from b, or nil if b is not configured or holds no document.
-//
-// Fail-closed, like every other store's read: an unreadable or
-// unparseable document refuses to start rather than being treated as
-// empty (#378), because "no toggles found" and "your toggles could not
-// be read" must never look the same to an operator who switched a
-// detector off deliberately.
-func ReadDetectorSettingsDocument(ctx context.Context, b persist.Backend) (map[string]DetectorSettings, error) {
-	var doc detectorSettingsDocument
-	if _, _, err := persist.Open(ctx, b, "the detector settings store", func(data []byte) error {
-		return json.Unmarshal(data, &doc)
-	}); err != nil {
-		return nil, err
-	}
-	return doc, nil
 }
 
 // DefaultDetectorSettings returns every shipped definition enabled and
@@ -356,45 +322,6 @@ func ShippedDefinitionIDs() []string {
 func IsShippedDefinitionID(id string) bool {
 	for _, sd := range shippedDetectors {
 		if sd.id == id {
-			return true
-		}
-	}
-	return false
-}
-
-// LegacyDetectorIDs is internal/detect.AllDetectorNames, frozen: the
-// twelve definitions that package exposed as settings-toggleable, in its
-// own order.
-//
-// It is deliberately NOT ShippedDefinitionIDs(). The shipped catalogue
-// grew five definitions with issue #405's final block
-// (unexpected_mail_sender, stale_rule, known_bad_ip, netclass,
-// reputation), each of which internal/detect ran as an always-on pass
-// with no name, no toggle and no scope. Giving them an envelope makes
-// them toggleable for the first time -- but the detector-settings page
-// carries hand-written label, explanation, scope-note and example copy
-// per detector for exactly these twelve, so listing five more through
-// that endpoint would render rows with no name and no explanation.
-//
-// That is a product surface with product copy to write, not a deletion's
-// business: #405's own rule is that no behaviour change rides along with
-// the port. The five are fully present in the definitions store, fully
-// evaluated, and fully toggleable through the definitions API when #407
-// builds it with the UI to match. Until then this endpoint answers the
-// same twelve it always did.
-func LegacyDetectorIDs() []string {
-	return []string{
-		"port_scan", "activity_spike", "critical_port",
-		"global_spike", "distributed_brute_force", "outbound_anomaly",
-		"internal_recon", "rule_spike", "repeated_drops",
-		"low_slow_scan", "off_hours_activity", "device_silence",
-	}
-}
-
-// IsLegacyDetectorID reports whether id is one of LegacyDetectorIDs.
-func IsLegacyDetectorID(id string) bool {
-	for _, name := range LegacyDetectorIDs() {
-		if name == id {
 			return true
 		}
 	}

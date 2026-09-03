@@ -62,7 +62,6 @@ store:
 # the defaults are already sensible. See docs/configuration.md's
 # "Watchlist" section.
 # watchlist:
-#   storePath: /var/lib/mikroview/watchlist.json
 #   matchLogPath: /var/lib/mikroview/matchlog.jsonl
 #   matchLogCapacity: 200000    # file backend only -- no ceiling on Postgres
 #   matchLogRetention: 168h     # 7 days -- Postgres backend only
@@ -174,13 +173,12 @@ store:
 #
 #   # Per-detector on/off + scope restrictions -- every detector defaults
 #   # to enabled and unscoped; a live admin-only UI toggle can override
-#   # these at runtime without a restart (persisted separately to
-#   # detectorSettingsStorePath below, seeded from these values the first
-#   # time that file doesn't exist yet). See docs/configuration.md's
+#   # these at runtime without a restart (persisted onto the definition
+#   # itself, seeded from these values for a definition the definitions
+#   # store does not already hold). See docs/configuration.md's
 #   # "Per-detector toggles" section for the full per-detector field
 #   # table (not every detector consults every scope field) and the
 #   # allow/deny + AND-combination rules.
-#   detectorSettingsStorePath: /var/lib/mikroview/detector-settings.json
 #   detectors:
 #     critical_port:
 #       enabled: true
