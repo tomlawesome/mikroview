@@ -114,7 +114,7 @@ var GlobalSpikeParamSchema = []ParamSchema{
 // docs/decisions/evaluation-engine.md means by per-definition params --
 // and is not a behaviour change on migration, since both are seeded from
 // the same DefaultConfig().CriticalPorts (see shippedDetectors,
-// definitions_migrate.go). An operator who wants them to keep agreeing
+// definitions_convert.go). An operator who wants them to keep agreeing
 // simply leaves both alone.
 var DistributedBruteForceParamSchema = []ParamSchema{
 	{Name: "ports", Type: ParamTypePortList, Required: true,
@@ -359,7 +359,7 @@ func (m SizeMeasure) Declared() bool { return m.Unit != "" }
 
 // shippedSizeMeasures is the size declaration for every shipped
 // definition, one entry per shippedDetectors entry
-// (definitions_migrate.go) -- exhaustively, including the ones with no
+// (definitions_convert.go) -- exhaustively, including the ones with no
 // size, which TestShippedSizeMeasureCoversEveryShippedDefinition
 // enforces. A missing entry fails that test rather than defaulting to
 // "none": #640 asks for an explicit declaration per detector, and a

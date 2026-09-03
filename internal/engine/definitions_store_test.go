@@ -292,8 +292,9 @@ func TestDefinitionsStoreRefusesToOverwriteAShippedDefinition(t *testing.T) {
 }
 
 // TestDefinitionsStorePreservesUnknownDefinitionByteForByte is issue
-// #404's central guarantee, tested directly against the store (the
-// migration-scoped version lives in definitions_migrate_test.go): a
+// #404's central guarantee, tested directly against the store -- and now
+// the only place it is tested, since the migration-scoped version went
+// with the migration itself (2026-09-03): a
 // definition this binary cannot identify -- an unrecognized Kind, the
 // "downgrade" case StoredDefinition.Available documents -- survives a
 // boot, an unrelated write, and a reopen with its stored value
@@ -413,8 +414,8 @@ func TestDefinitionsStoreListIncludesUnavailableDefinitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Upsert can't create an unavailable entry directly (it validates),
-	// so seed one the same way MigrateDefinitions' unrecognized-detector
-	// path does: an empty Kind.
+	// so seed one the same way convertDetectSettings' unrecognized-
+	// detector path does: an empty Kind.
 	s.mu.Lock()
 	s.raw["unavailable-1"] = json.RawMessage(`{"id":"unavailable-1","name":"x","intent":"detection","kind":"","provenance":{"origin":"shipped"}}`)
 	s.mu.Unlock()

@@ -37,7 +37,6 @@ func seedDataDir(t *testing.T) (string, config.Config) {
 
 	write("users.json", `{"users":[{"name":"admin"}]}`)
 	write("tokens.json", `{"tokens":[]}`)
-	write("watchlist.json", `{"entries":["203.0.113.4"]}`)
 	write("matchlog.jsonl", "{\"seq\":1}\n{\"seq\":2}\n")
 	// Placeholder text, deliberately not PEM-shaped: this exercises the
 	// TLS store as a *directory of files*, and nothing here needs to be
@@ -51,7 +50,6 @@ func seedDataDir(t *testing.T) (string, config.Config) {
 	cfg.Auth.StorePath = filepath.Join(dir, "users.json")
 	cfg.Auth.TokensStorePath = filepath.Join(dir, "tokens.json")
 	cfg.Auth.RecoveryPepperPath = filepath.Join(dir, "recovery-pepper.key")
-	cfg.Watchlist.StorePath = filepath.Join(dir, "watchlist.json")
 	cfg.Watchlist.MatchLogPath = filepath.Join(dir, "matchlog.jsonl")
 	cfg.TLS.StorePath = filepath.Join(dir, "tls")
 	return dir, cfg
@@ -125,7 +123,7 @@ func TestMigrationCarriesWhatBackupDeliberatelyLeavesBehind(t *testing.T) {
 	// The CA in particular, byte for byte: #537 exists because losing it
 	// means every browser and every router has to re-trust.
 	for _, rel := range []string{
-		"users.json", "tokens.json", "watchlist.json", "matchlog.jsonl",
+		"users.json", "tokens.json", "matchlog.jsonl",
 		"tls/ca.pem", "tls/issued.pem", "recovery-pepper.key", postgresAdoptedMarker,
 	} {
 		want := mustRead(t, filepath.Join(src, rel))
@@ -139,8 +137,8 @@ func TestMigrationCarriesWhatBackupDeliberatelyLeavesBehind(t *testing.T) {
 		}
 	}
 
-	if len(digests) != 8 {
-		t.Errorf("hashed %d file(s), want 8 -- the copy is not covering the whole tree", len(digests))
+	if len(digests) != 7 {
+		t.Errorf("hashed %d file(s), want 7 -- the copy is not covering the whole tree", len(digests))
 	}
 
 	// A copy, never a move: the operator has to be able to fall back.

@@ -1063,17 +1063,15 @@ entry, creating that entry (observing) if there is none, and a
 `resolved` verdict offers to open this page's own entry form prefilled.
 See [What a verdict writes to the watchlist](#what-a-verdict-writes-to-the-watchlist).
 
+Entries themselves are definitions and live in the definitions store
+(`engine.definitionsStorePath`), alongside every detector.
+
 ```yaml
 watchlist:
-  # Where watchlist entries themselves are persisted, as a small JSON
-  # file. Same optional-persistence contract as entities.storePath: left
-  # unset, entries still work, they just don't survive a restart.
-  storePath: "/var/lib/mikroview/watchlist.json"
-
-  # Where matches are recorded, append-only. Unlike storePath above,
-  # this has NO in-memory-only mode: durability is the entire reason
-  # this store exists (a match must survive a restart), so an empty
-  # value is treated as unusable rather than as an opt-out (CFG-0040).
+  # Where matches are recorded, append-only. This has NO in-memory-only
+  # mode: durability is the entire reason this store exists (a match
+  # must survive a restart), so an empty value is treated as unusable
+  # rather than as an opt-out (CFG-0040).
   matchLogPath: "/var/lib/mikroview/matchlog.jsonl"
 
   # The match log's hard ceiling on distinct records -- once reached, a
@@ -1880,14 +1878,8 @@ together:
   whatever it had already accumulated (a half-full counting window is not
   reset by an unrelated edit).
 
-  `detectorSettingsStorePath` is no longer written to. It is still
-  *read*, once, to carry an existing deployment's toggles into the
-  definitions store on first boot after upgrading, and is then inert --
-  leave it configured through one upgrade, and it can be removed after.
-
 ```yaml
 flags:
-  detectorSettingsStorePath: "/var/lib/mikroview/detector-settings.json"
   detectors:
     critical_port:
       enabled: true
@@ -2877,7 +2869,6 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL` | `flags.staleRuleCheckInterval` |
 | `MIKROVIEW_FLAGS_VPN_INTERFACES` | `flags.vpnInterfaces` (comma-separated, e.g. `wireguard1,wireguard2`) |
 | `MIKROVIEW_FLAGS_VPN_CONFIDENCE_MULTIPLIER` | `flags.vpnConfidenceMultiplier` |
-| `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
@@ -2885,7 +2876,6 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_COVERAGE_STORE_PATH` | `coverage.storePath` (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
-| `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION` | `watchlist.matchLogRetention` |
