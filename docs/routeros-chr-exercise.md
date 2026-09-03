@@ -14,10 +14,10 @@ only on a human having read about it.
    covers that version, the job stops here and passes — there is
    nothing new to exercise.
 3. Otherwise it boots that exact RouterOS version as MikroTik's own CHR
-   (Cloud Hosted Router) image, inside a container, under QEMU with
-   software emulation rather than hardware acceleration — this only
-   needs to run configuration commands, not push real traffic, so no
-   `/dev/kvm` access is required.
+   (Cloud Hosted Router) image, directly inside the job's own container,
+   under QEMU with software emulation rather than hardware acceleration
+   — this only needs to run configuration commands, not push real
+   traffic, so no `/dev/kvm` access (and no Docker) is required.
 4. It asks `scripts/routeroscommands` — a small program that reads
    straight from `internal/routeros`, the same table
    `POST /api/setup/commands` renders from — for the wizard's starting
@@ -76,26 +76,28 @@ other change.
 
 ## Setup this job needs before it can run
 
-Three things the owner creates, none of which this change can create
-on its own (repository and runner settings are the owner's alone):
+Two things the owner creates, neither of which this change can create
+on its own (repository and CI/CD settings are the owner's alone).
+Both already exist:
 
 1. A GitLab Pipeline Schedule for this project, weekly, carrying one
    variable: `CHR_EXERCISE` = `true`. Nothing else runs this job — it
    is scoped to that one schedule so it cannot fire from a `dev` push
    or a merge request pipeline, and cannot collide with any other
    scheduled pipeline added later.
-2. A GitLab CI/CD variable, `GITLAB_MR_TOKEN` (masked, protected): a
-   project access token scoped to this project only, with
-   `write_repository` and `api` scopes — the minimum needed to push a
-   branch and open a merge request through GitLab's own API. It is
-   read once from the job's environment and never written to disk,
-   the same pattern `sync:mirror-to-github` already uses for its own
-   token in `.gitlab-ci.yml`.
-3. The privileged runner tagged `image-build` (the one orbit's image
-   builds use) enabled for this project: Settings → CI/CD → Runners.
-   The job needs Docker-in-Docker to boot the CHR, which the shared
-   untagged runner the rest of the pipeline uses may not allow. Without
-   it the job sits pending rather than failing.
+2. A GitLab CI/CD variable, `GITLAB_MR_TOKEN` (masked, protected): an
+   impersonation token of the `mikroview-bot` user, who is a Developer
+   on this project — the minimum needed to push a branch and open a
+   merge request through GitLab's own API. It is read once from the
+   job's environment and never written to disk, the same pattern
+   `sync:mirror-to-github` already uses for its own token in
+   `.gitlab-ci.yml`.
+
+No runner setup is needed: the job runs on the same untagged shared
+runner as the rest of this pipeline. It has no Docker-in-Docker to
+enable, because it has no Docker at all — see `.gitlab-ci.yml`'s
+`chr-exercise` stage comment and `scripts/routeros-chr-boot.sh` for why
+software-emulated QEMU (`-accel tcg`) needs no privileged runner.
 
 ## What has not been run
 
@@ -103,9 +105,9 @@ Nobody has run this job. Building it happened without touching
 GitLab, starting QEMU, downloading a CHR image, or running the live
 gate. Verified without running it: the Go command's output is
 byte-identical to what the wizard serves (`go test ./internal/api`),
-both scripts pass shellcheck, the CI file parses. Not verified until
-the first real run: that Docker-in-Docker works on the `image-build`
-runner for this project, the boot and run time under software
-emulation, and the refusal-detection pattern in
+every touched script passes shellcheck, and the CI file parses. Not
+verified until the first real run: that `qemu-system-x86` installs and
+boots cleanly on the shared runner's `golang:1.27` image, the boot and
+run time under software emulation, and the refusal-detection pattern in
 `scripts/routeros-chr-exercise.sh`, which must be calibrated against
 the first real transcript. Record the first run's timing on #894.
