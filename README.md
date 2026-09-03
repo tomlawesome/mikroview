@@ -241,9 +241,9 @@ every restart) but not fatal.
   [docs/configuration.md](docs/configuration.md) for the API and the
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
-  ~92KB of JavaScript over the wire (~307KB before compression). CI
-  gates the bundle at 200KB gzipped — headroom for the v0.4.0
-  interface reshape, re-derived as measured+15% once it ships (see
+  ~201KB of JavaScript over the wire (~667KB before compression). CI
+  gates the bundle at 230KB gzipped — the measured reading plus ~15%,
+  re-derived after the v0.4.0 interface reshape shipped (see
   [docs/decisions/ui-framework.md](docs/decisions/ui-framework.md)).
 - **Logging**: leveled (debug/info/warn/error) and colorized server
   output, auto-plain when piped or `NO_COLOR` is set. See
