@@ -49,23 +49,59 @@ class ZonesState {
   }
 
   /**
-   * The interface that faces the internet: the one whose inbound events
-   * most often carry a public source. An observation, not a probe --
-   * and null until anything public has actually arrived.
+   * Per device: the interface whose inbound events most often carry a
+   * public source, computed from that device's own events alone -- an
+   * observation, not a probe. A device with nothing public inbound yet
+   * has no entry here, not a guessed one (#850: a second router's real
+   * WAN used to be counted against the first's and lose).
+   */
+  deviceWans = $derived.by((): Map<string, { iface: string; count: number }> => {
+    const perDevice = new Map<string, Map<string, number>>()
+    for (const e of appState.events) {
+      if (!e.inInterface || !isPublicIp(e.srcIp)) continue
+      let publicIn = perDevice.get(e.deviceId)
+      if (!publicIn) {
+        publicIn = new Map()
+        perDevice.set(e.deviceId, publicIn)
+      }
+      publicIn.set(e.inInterface, (publicIn.get(e.inInterface) ?? 0) + 1)
+    }
+    const wans = new Map<string, { iface: string; count: number }>()
+    for (const [deviceId, publicIn] of perDevice) {
+      let best: string | null = null
+      let bestN = 0
+      for (const [iface, n] of publicIn) {
+        if (n > bestN) {
+          best = iface
+          bestN = n
+        }
+      }
+      if (best) wans.set(deviceId, { iface: best, count: bestN })
+    }
+    return wans
+  })
+
+  /** Every device's WAN interface name -- excluded from the lane row
+   * regardless of which device it belongs to (#850). Two devices whose
+   * WAN happens to share a name still collapse to one entry here, same
+   * as they always have in the lane row; keying zones by device is #852. */
+  wanInterfaces = $derived.by((): Set<string> => new Set([...this.deviceWans.values()].map((w) => w.iface)))
+
+  /**
+   * The estate's internet-facing boundary, for callers that still want
+   * one name: the busiest device's own WAN (most public inbound
+   * events), an observation, not a probe -- and null until any device
+   * has one. Existing callers (Topography.svelte's internet anchor,
+   * coverage keys, the WAN card, reach) keep this single-boundary
+   * notion for now; splitting it per device is #852.
    */
   wanInterface = $derived.by((): string | null => {
-    const publicIn = new Map<string, number>()
-    for (const e of appState.events) {
-      if (e.inInterface && isPublicIp(e.srcIp)) {
-        publicIn.set(e.inInterface, (publicIn.get(e.inInterface) ?? 0) + 1)
-      }
-    }
     let best: string | null = null
     let bestN = 0
-    for (const [iface, n] of publicIn) {
-      if (n > bestN) {
+    for (const { iface, count } of this.deviceWans.values()) {
+      if (count > bestN) {
         best = iface
-        bestN = n
+        bestN = count
       }
     }
     return best
@@ -75,11 +111,11 @@ class ZonesState {
    * at five (the map is spare by design; a sixth lane is a design
    * question, not a rendering one). */
   zones = $derived.by((): ZoneInfo[] => {
-    const wan = this.wanInterface
+    const wans = this.wanInterfaces
     const byIface = new Map<string, { count: number; hosts: Map<string, { label: string; n: number }> }>()
     for (const e of appState.events) {
       for (const iface of [e.inInterface, e.outInterface]) {
-        if (!iface || iface === wan) continue
+        if (!iface || wans.has(iface)) continue
         let z = byIface.get(iface)
         if (!z) {
           z = { count: 0, hosts: new Map() }
@@ -104,7 +140,7 @@ class ZonesState {
     // draws config, not just traffic.
     const byPush = new Map<string, RouterIPAddress>()
     for (const a of this.pushed) {
-      if (a.interface && a.interface !== wan) byPush.set(a.interface, a)
+      if (a.interface && !wans.has(a.interface)) byPush.set(a.interface, a)
     }
     const ifaces = new Set([...byPush.keys(), ...byIface.keys()])
     return [...ifaces]
