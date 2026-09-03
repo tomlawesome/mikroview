@@ -147,6 +147,70 @@ rather than the config file). All of those are byte counts except
 `stored`. Same access tier as the rest of `/api/stats` -- see
 [API reference](#api-reference).
 
+### Warm restart: what survives a restart
+
+Everything in the section above lives in memory, so a restart used to
+take all of it with it: the hourline went blank, every detector's
+rolling window started from nothing, and every device's "first seen"
+date silently became today. Mikroview now writes a small snapshot of
+that derived state every few minutes and puts it back on the next boot.
+
+**On by default.** These are the values in effect if you set nothing:
+
+```yaml
+snapshot:
+  interval: 5m                       # how often one is written; 30s minimum
+  keep: 6                            # generations kept, oldest deleted first
+  dir: /var/lib/mikroview/snapshots   # default: beside the data directory
+```
+
+- `snapshot.interval` — how often a snapshot is written, as a Go
+  duration string. Anything shorter than `30s` is treated as a mistake
+  and the 5m default applied (see [CFG-0070](#cfg-0070)): the write
+  briefly borrows the same goroutine that evaluates events, so
+  snapshotting every second costs more evaluation than the counters it
+  saves are worth. One more is written at shutdown, so a planned restart
+  loses nothing.
+- `snapshot.keep` — how many generations to keep. Older ones are
+  deleted after each write. Below 1 the default is applied (see
+  [CFG-0071](#cfg-0071)), since keeping none would delete the file just
+  written. More than one is kept because the newest file is the one a
+  power cut mid-write can truncate; mikroview then falls through to the
+  next-newest rather than starting cold.
+- `snapshot.dir` — where the files go, as `snapshot-<UTC stamp>.json`,
+  mode 0600 in a 0700 directory. Left empty, mikroview puts them beside
+  its other state.
+
+**What a snapshot holds:** counts, minute stamps, rule and log-prefix
+labels, device ids and names with their first and last seen, and each
+detector's per-source window counts keyed by address. **What it never
+holds:** event lines, packet payloads, or the rule/NAT/DHCP tables your
+routers push. Those stay in memory for the life of the process, which is
+the promise SECURITY.md makes and this feature does not change. The file
+is **not encrypted at rest** — treat it as you would the rest of
+`/var/lib/mikroview`.
+
+**Snapshots are files even on Postgres.** A deployment that has moved
+its stores to Postgres still writes snapshots to `snapshot.dir` on the
+local disk. This is not an oversight: a snapshot is derived, ephemeral
+counters, not custody data. Nothing in it is authoritative, nothing in
+it is unrecoverable, and losing the whole directory costs exactly one
+cold start — so there is no reason to spend a database round trip on it
+every few minutes, and no reason to carry it in a backup.
+
+**It never stops mikroview starting.** If `snapshot.dir` cannot be
+created or written — a read-only mount, a wrong owner after a volume
+move — mikroview says so once in the startup log and runs without
+snapshots. You get the same monitoring, just a cold start after the next
+restart.
+
+**Seeing whether it worked.** `GET /api/stats` reports `liveSince` (when
+this process started) and, only after a warm restart, `restoredTo` (when
+the snapshot it loaded was taken). The UI reads the same pair: for the
+hour after a restart the hourline and the docket say
+`restored to 13:14 · live since 13:18`, or `counting since 13:18 —
+nothing before` if it started cold.
+
 ### Running behind a reverse proxy
 
 Mikroview rate-limits failed logins per source address as well as per
@@ -528,6 +592,29 @@ full reasoning; it is a refusal, not a warning you can configure away.
 oidc:
   # a self-hosted provider, not a multi-tenant one
   issuerUrl: "https://id.example.com"
+```
+
+#### CFG-0070
+
+`snapshot.interval` is shorter than the 30s minimum. The 5m default is
+applied instead. A snapshot write briefly borrows the goroutine that
+evaluates events, so a very short cadence spends the process's time
+describing itself rather than watching traffic. See
+[Warm restart](#warm-restart-what-survives-a-restart).
+
+```yaml
+snapshot:
+  interval: 5m   # 30s or longer
+```
+
+#### CFG-0071
+
+`snapshot.keep` is below 1, which would delete the snapshot just
+written and silently turn warm restart off. The default of 6 is applied.
+
+```yaml
+snapshot:
+  keep: 6
 ```
 
 ## Logging
@@ -2912,6 +2999,9 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
 | `MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH` | `engine.definitionsStorePath` -- where the definitions store (issue #404) lives: shipped detectors, migrated watchlist expectations, and eventually builder-authored custom definitions, all in one document |
+| `MIKROVIEW_SNAPSHOT_INTERVAL` | `snapshot.interval` -- how often a warm-restart snapshot is written (see [Warm restart](#warm-restart-what-survives-a-restart)); anything under 30s falls back to the default |
+| `MIKROVIEW_SNAPSHOT_KEEP` | `snapshot.keep` -- how many snapshot generations to keep; anything under 1 falls back to the default |
+| `MIKROVIEW_SNAPSHOT_DIR` | `snapshot.dir` -- where the snapshot files live. A file path even on a Postgres deployment: a snapshot is derived counters, not custody data |
 
 ## Checking your version
 
@@ -3147,7 +3237,7 @@ exits, rather than starting the server. See
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
 | `GET /api/devices/macs` | the persisted MAC-registry history (issue #675): every MAC mikroview has seen, its first/last-seen times, and the IP it was last paired with -- backs the Entities panel's named-host join, same tier as `GET /api/devices` |
 | `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated. Also carries `recordingSince`: when this store started recording, so a client computing "rules seen firing in the last 7 days" can bound that window by what mikroview actually covered instead of claiming a fixed seven days it may not have seen (issue #701) |
-| `GET /api/stats` | totals, per-action counts, rolling events/sec, and a `memory` object naming the event buffer's current budget, the range it may be moved within, and what it's actually costing the host (see [How events are stored](#how-events-are-stored)) |
+| `GET /api/stats` | totals, per-action counts, rolling events/sec, and a `memory` object naming the event buffer's current budget, the range it may be moved within, and what it's actually costing the host (see [How events are stored](#how-events-are-stored)). Also `liveSince` (RFC 3339 UTC, when this process started observing) and, only after a warm restart, `restoredTo` (when the snapshot it loaded was taken) -- absent rather than null on a cold start, see [Warm restart](#warm-restart-what-survives-a-restart) |
 | `GET /api/stats/tops` | per-minute top-port/top-talker breakdown of the last hour, same tier as `GET /api/stats` -- feeds the Metrics page |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
