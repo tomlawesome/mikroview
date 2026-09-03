@@ -89,7 +89,7 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 
 func TestOpenSkipsNilArrayElements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rule-usage.json")
-	data := `[null, {"rule":"r1","firstSeen":"2026-01-01T00:00:00Z","lastSeen":"2026-01-01T00:00:00Z","count":1}, null]`
+	data := `{"recordingSince":"2026-01-01T00:00:00Z","rules":[null, {"rule":"r1","firstSeen":"2026-01-01T00:00:00Z","lastSeen":"2026-01-01T00:00:00Z","count":1}, null]}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -379,55 +379,24 @@ func TestRecordingSinceSurvivesRoundTripAndDoesNotMoveOnReopen(t *testing.T) {
 	}
 }
 
-// TestRecordingSinceInferredFromEarliestFirstSeenOnLegacyFile covers
-// loading a document written before RecordingSince existed: the bare
-// `[...]` array this package wrote pre-#701, with no stamp to read.
-// Since the earliest FirstSeen across its records is the earliest
-// moment this store can actually prove it was recording, that is what
-// RecordingSince must report -- not the (later) moment this Open call
-// happens to run.
-func TestRecordingSinceInferredFromEarliestFirstSeenOnLegacyFile(t *testing.T) {
+// TestOpenBareArrayFileFailsClosed pins the consequence of dropping the
+// dual-shape decode: the bare `[...]` array this package wrote before
+// recordingSince existed is now just an unparseable document, so it is
+// refused outright under issue #378's policy. An instance still holding
+// one refuses to start until its stale rule-usage.json is deleted.
+func TestOpenBareArrayFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rule-usage.json")
-	earliest := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	data := `[
-		{"rule":"r1","firstSeen":"2026-01-02T00:00:00Z","lastSeen":"2026-01-02T00:00:00Z","count":1},
-		{"rule":"r2","firstSeen":"2026-01-01T00:00:00Z","lastSeen":"2026-01-01T00:00:00Z","count":1}
-	]`
+	data := `[{"rule":"r1","firstSeen":"2026-01-01T00:00:00Z","lastSeen":"2026-01-01T00:00:00Z","count":1}]`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open() on a legacy bare-array file returned an error: %v", err)
+	if err == nil {
+		t.Fatal("expected a non-nil error for a bare-array document, want fail-closed")
 	}
-	if got := s.RecordingSince(); !got.Equal(earliest) {
-		t.Errorf("expected RecordingSince to be inferred as the earliest FirstSeen (%v), got %v", earliest, got)
-	}
-}
-
-// TestRecordingSinceInferredAsLoadTimeOnLegacyFileWithNoRecords is
-// TestRecordingSinceInferredFromEarliestFirstSeenOnLegacyFile's
-// companion for the edge case the spec calls out explicitly: a
-// pre-#701 document with no records at all (every element null) has no
-// FirstSeen to infer from, so RecordingSince falls back to the load
-// time.
-func TestRecordingSinceInferredAsLoadTimeOnLegacyFileWithNoRecords(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "rule-usage.json")
-	if err := os.WriteFile(path, []byte(`[null, null]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	before := time.Now()
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open() on a legacy empty-array file returned an error: %v", err)
-	}
-	after := time.Now()
-
-	got := s.RecordingSince()
-	if got.Before(before) || got.After(after) {
-		t.Errorf("expected RecordingSince to fall back to the load time, got %v, want between %v and %v", got, before, after)
+	if s != nil {
+		t.Error("expected a nil store on a load failure -- a non-nil store here would still carry a live backend")
 	}
 }
 

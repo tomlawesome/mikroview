@@ -49,10 +49,11 @@ const (
 // rank orders roles from lowest privilege to highest, backing
 // Role.AtLeast. An unrecognized Role -- including the zero value -- ranks
 // below RoleViewer, so it is refused everything AtLeast ever gates for a
-// legitimate min. A value can only reach that state by being constructed
-// outside this package (every path inside it produces one of the three
-// named constants); applyLoaded's migration below additionally makes
-// sure the empty string specifically never reaches a live User.Role.
+// legitimate min. Every path inside this package produces one of the
+// three named constants, so the only way one reaches a live User.Role is
+// a document written outside this package -- a hand-edited accounts
+// file. That account then fails closed, denied by every role gate, which
+// is the right direction for a role nobody legitimately assigned.
 func (r Role) rank() int {
 	switch r {
 	case RoleAdmin:
@@ -313,18 +314,6 @@ func (s *Store) applyLoaded(file storeFile, version int64) {
 		// catch it.
 		if u == nil {
 			continue
-		}
-		// An account persisted before roles existed at all has no Role in
-		// the file, which unmarshals to the zero value (""), not RoleUser
-		// -- and rank() above treats that as lower than RoleViewer,
-		// denying it everything. #653's decision 1 is that an upgrade
-		// costs an existing deployment no ability, so it is normalized to
-		// RoleUser here, on load, the same place migrateHasLocalPassword
-		// used to run before the legacy-format fallbacks were deleted.
-		// RoleChangedAt is deliberately left untouched: this is a read-
-		// time default, not an admin action.
-		if u.Role == "" {
-			u.Role = RoleUser
 		}
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
