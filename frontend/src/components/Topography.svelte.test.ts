@@ -689,8 +689,9 @@ describe('the lens selector, ported to the scene\'s own bottom-left bar (#682)',
     const bar = container.querySelector('.wlens2')
     expect(bar).not.toBeNull()
 
-    const labels = [...bar!.querySelectorAll('button')].map((b) => b.textContent?.trim())
-    expect(labels).toEqual(['traffic', 'policy', 'coverage'])
+    // Three exclusive base lenses, then the two overlays (#715 item 3).
+    const tabs = [...bar!.querySelectorAll('[role="tablist"] button')].map((b) => b.textContent?.trim())
+    expect(tabs).toEqual(['traffic', 'policy', 'coverage'])
 
     const policyTab = [...bar!.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'policy')!
     expect(policyTab.classList.contains('on')).toBe(false)
@@ -1861,5 +1862,93 @@ describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () =
       const overlaps = Math.abs(px - cx) < (cw + Number(plate.getAttribute("width"))) / 2 && Math.abs(py - cy) < 27
       expect(overlaps).toBe(false)
     }
+  })
+})
+
+describe('#715 item 3: the flags and watch overlays', () => {
+  const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+
+  function overlays(container: HTMLElement) {
+    return [...container.querySelectorAll('[aria-label="Map overlays"] button')]
+  }
+
+  function toSurvey(container: HTMLElement) {
+    const range = container.querySelector<HTMLInputElement>('.alt-range')!
+    range.value = '3'
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+  }
+
+  it('draws five controls: three exclusive tabs and two independent toggles, both on', () => {
+    const { container } = render(Topography)
+    flushSync()
+
+    const tabs = [...container.querySelectorAll('[aria-label="Map lenses"] button')]
+    expect(tabs.map((t) => t.textContent?.trim())).toEqual(['traffic', 'policy', 'coverage'])
+    // The toggles sit outside the tablist deliberately: a toggle inside
+    // one breaks its semantics.
+    expect(container.querySelectorAll('[aria-label="Map lenses"] [aria-pressed]').length).toBe(0)
+
+    const ov = overlays(container)
+    expect(ov.length).toBe(2)
+    expect(ov.map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'true'])
+  })
+
+  it('shows no digit when nothing is flagged, and the count when something is', () => {
+    flagsState.list = []
+    const { container } = render(Topography)
+    flushSync()
+    expect(overlays(container)[0].textContent?.trim()).toBe('flags')
+
+    flagsState.list = [flag('port_scan', '10.0.1.20'), flag('critical_port', '10.0.1.21'), flag('repeated_drops', '10.0.1.22')]
+    flushSync()
+    expect(overlays(container)[0].textContent?.replace(/\s+/g, ' ').trim()).toBe('flags 3')
+  })
+
+  it('marks a flagged zone at survey, and unmarks it when the overlay is switched off', () => {
+    zonesState.pushed = oneLane
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'desk' })]
+    flagsState.list = [flag('port_scan', '10.0.1.20')]
+    const { container } = render(Topography)
+    flushSync()
+    toSurvey(container)
+
+    expect(container.querySelectorAll('.dot-halo').length).toBeGreaterThan(0)
+
+    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('false')
+    expect(container.querySelectorAll('.dot-halo').length).toBe(0)
+  })
+
+  it('leaves the aggregate-bar counts alone: they are drawn in every round, overlay or not', () => {
+    zonesState.pushed = oneLane
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'desk' })]
+    flagsState.list = [flag('port_scan', '10.0.1.20')]
+    const { container } = render(Topography)
+    flushSync()
+
+    const before = container.querySelectorAll('.fchip').length
+    expect(before).toBeGreaterThan(0)
+
+    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    overlays(container)[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    expect(container.querySelectorAll('.fchip').length).toBe(before)
+  })
+
+  it('never changes the base lens', () => {
+    const { container } = render(Topography)
+    flushSync()
+    const traffic = [...container.querySelectorAll('[aria-label="Map lenses"] button')][0]
+    expect(traffic.classList.contains('on')).toBe(true)
+
+    for (const b of overlays(container)) {
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+    }
+
+    expect(traffic.classList.contains('on')).toBe(true)
   })
 })
