@@ -17,6 +17,18 @@ import { session, check, done, feedRaw, feedPortScan } from './live-browser.mjs'
 // #869: the city is the axis's centre and its default, so a scenario about
 // the 2D map's furniture must say which side it means. `zones` is the
 // left-of-centre stop that draws the zone cards this file asserts on.
+// The aggregate bar's halves are SVG groups whose children do not cover
+// the group's own centre, so a click aimed there lands on the map behind
+// them. They carry role="button" and an Enter handler for exactly this
+// reason, so drive them the way a keyboard user does -- it proves the
+// same binding without depending on where the ink happens to fall.
+async function activate(page, selector) {
+  const el = page.locator(selector).first()
+  await el.waitFor({ state: 'attached', timeout: 10000 })
+  await el.evaluate((n) => n.focus())
+  await page.keyboard.press('Enter')
+}
+
 async function toZonesStop(page) {
   await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
   const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
@@ -148,14 +160,14 @@ const bars = await page.locator('[data-card="topography"] .zone .hbar-g').count(
 check(bars >= 2, `the LAN island draws both halves of the aggregate bar (${bars} found)`)
 check((await page.locator('[data-card="topography"] .zone .hb-div').count()) >= 1, 'a centre divider is drawn between them')
 
-await page.click('[data-card="topography"] .zone .hbar-g[aria-label*="watcher"] >> nth=0')
+await activate(page, '[data-card="topography"] .zone .hbar-g[aria-label*="watcher"]')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=watchlist', { timeout: 5000 })
 check(true, 'the purple half opens the watchlist')
 
 await page.click('.rail-name >> text=Topography')
 await toZonesStop(page)
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
-await page.click('[data-card="topography"] .zone .hbar-g[aria-label*="open flag"] >> nth=0')
+await activate(page, '[data-card="topography"] .zone .hbar-g[aria-label*="open flag"]')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=flags', { timeout: 5000 })
 check(true, 'the red half opens the flags tab, pre-filtered to the zone')
 
@@ -185,6 +197,11 @@ check(true, 'moving the slider to zones applies the flat ground-plan camera')
 
 // --- node info cards ---------------------------------------------------------
 
+// #869's one ground plan: `zones` draws cards with a host count and no
+// per-host labels, and hosts get their own names one stop down. So the
+// host link this section follows lives at `clients`, not `zones`.
+await range.fill('0')
+await page.waitForSelector('[data-card="topography"] .host-link', { timeout: 10000 })
 await page.click('[data-card="topography"] .host-link >> text=192.168.1.60')
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
 
