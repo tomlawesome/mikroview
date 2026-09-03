@@ -72,14 +72,44 @@ type deviceView struct {
 	// already tracks it (main.go wires the same push into both), and
 	// duplicating it into a second store risks the two disagreeing.
 	RouterOSVersion string `json:"routerosVersion,omitempty"`
+	// MultihomedCandidates is set only on a configured device that has
+	// received nothing while undeclared devices are streaming: the
+	// source addresses of those undeclared devices, in id order, from
+	// device.Registry.MultihomedCandidates (#442). It is the evidence
+	// shape of a multi-homed router declared under one address and
+	// logging from another -- candidates, never a diagnosis, because
+	// the registry cannot know which discovered address (if any) is
+	// the same box. The wizard's step 2 and the fleet cards read it;
+	// neither re-derives it.
+	MultihomedCandidates []string `json:"multihomedCandidates,omitempty"`
+}
+
+// multihomedCandidatesByDevice indexes Registry.MultihomedCandidates by
+// the silent declared device's id, as the arriving source addresses --
+// what the operator can act on -- rather than whole Info records.
+func multihomedCandidatesByDevice(reg *device.Registry) map[string][]string {
+	out := map[string][]string{}
+	for _, c := range reg.MultihomedCandidates() {
+		arriving := make([]string, 0, len(c.Discovered))
+		for _, d := range c.Discovered {
+			arriving = append(arriving, d.SourceIP)
+		}
+		out[c.DeclaredID] = arriving
+	}
+	return out
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	infos := s.Devices.List()
+	multihomed := multihomedCandidatesByDevice(s.Devices)
 	views := make([]deviceView, 0, len(infos))
 	for _, info := range infos {
-		v := deviceView{Info: info, Status: deviceStatus(info, s.DeviceStaleAfter, now)}
+		v := deviceView{
+			Info:                 info,
+			Status:               deviceStatus(info, s.DeviceStaleAfter, now),
+			MultihomedCandidates: multihomed[info.ID],
+		}
 		if s.RouterState != nil {
 			if version, _, ok := s.RouterState.RouterOSVersion(info.ID); ok {
 				v.RouterOSVersion = version
