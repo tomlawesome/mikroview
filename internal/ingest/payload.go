@@ -144,6 +144,13 @@ type FilterRule struct {
 	ConnectionState RouterOSList     `json:"connectionState"`
 	InInterface     string           `json:"inInterface"`
 	OutInterface    string           `json:"outInterface"`
+	// Disabled is what lets a count of this table mean "rules doing
+	// something" rather than "rules present" (#701 fact 2). NATRule has
+	// carried it since #445; the filter table was never asked for it.
+	// A push made before the field was added omits it, which decodes as
+	// false -- enabled -- so an old push over-counts rather than
+	// under-counts, and re-pushing corrects it.
+	Disabled bool `json:"disabled"`
 }
 
 // NATRule mirrors one /ip/firewall/nat rule.
