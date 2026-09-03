@@ -76,12 +76,10 @@ func ExpectationSourceIdentityCondition(id matchlog.Identity) Condition {
 var expectationWindow = time.Minute
 
 // ExpectationDefinitionFor converts one watchlist entry into the
-// Definition envelope it is evaluated as -- the same conversion
-// MigrateDefinitions performs when seeding the definitions document
-// (definitions_migrate.go), called here so the definition a live entry
-// evaluates as and the definition it migrates into are the same value,
-// produced by the same code, rather than two conversions that could
-// drift.
+// Definition envelope it is evaluated as -- convertWatchlistEntry
+// (definitions_migrate.go), so the definition a live entry evaluates as
+// and the definition stored for it are the same value, produced by the
+// same code, rather than two conversions that could drift.
 func ExpectationDefinitionFor(entry watchlist.Entry) (Definition, error) {
 	return convertWatchlistEntry(&entry)
 }

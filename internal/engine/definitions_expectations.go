@@ -26,10 +26,10 @@ import (
 // and its params lived on the definition, while the entry itself lived
 // somewhere else, and nothing structurally stopped the two disagreeing.
 //
-// The conversion is not new. MigrateDefinitions already writes every
-// entry into this store (definitions_migrate.go's convertWatchlistEntry),
-// and #406's ExpectationDefinitionFor calls the same function so a live
-// entry and a migrated one are the same value. What this file adds is
+// The conversion is not new. Every entry becomes a definition through
+// definitions_migrate.go's convertWatchlistEntry, which #406's
+// ExpectationDefinitionFor calls, so one function produces every stored
+// expectation. What this file adds is
 // the other direction -- EntryFromDefinition -- plus the operator-facing
 // entry-set API (list, get, upsert, update, delete, reset) and the
 // observation recorder, all against the one document.
