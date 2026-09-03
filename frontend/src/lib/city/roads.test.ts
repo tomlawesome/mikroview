@@ -15,6 +15,8 @@ const plate = (id: string, u: number, v: number, r: number): District => ({
   dark: false,
   buildings: [],
   more: 0,
+  gates: [],
+  rulesPushed: true,
 })
 
 describe('city roads: curves', () => {

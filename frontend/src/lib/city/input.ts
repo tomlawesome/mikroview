@@ -4,12 +4,16 @@
 // Topography.svelte already derives for the 2D stops, reduced to plain
 // data so layout.ts stays pure and testable without the stores.
 import { addressInCidr, parseCidr } from '../addressMatch'
+import type { RouterFilterRule } from '../api'
 import type { PolicyEdge } from '../policy.svelte'
 import type { RealityEdge } from '../reality'
 import type { TunnelInterface } from '../tunnels.svelte'
 import type { Device, FirewallEvent } from '../types'
 import type { ZoneInfo } from '../zones.svelte'
+import { gatesFromRules, type CityGate } from './gates'
 import type { CityPeer } from './types'
+
+export type { CityGate } from './gates'
 
 export interface CityRouter {
   id: string
@@ -39,6 +43,13 @@ export interface CityEdge {
   to: string
   events: number
   verdict: RealityEdge['verdict']
+  /** Refused crossings on this pair, from the events -- the second key
+   * in the escalation tie-break (escalate.ts), matching Topography's
+   * own worst-unplanned card. */
+  drops?: number
+  /** The rule that refused traffic on this pair, from the events' own
+   * label -- never invented when absent. */
+  refusedBy?: string
 }
 
 /**
@@ -76,6 +87,14 @@ export interface CityInput {
   /** Every tunnel interface this build knows about, from events and/or
    * the pushed tunnel tables: each gets a footbridge. */
   tunnels: CityTunnel[]
+  /** Every gate the pushed rule tables actually open -- [] whenever
+   * rulesPushed is false, so "nothing pushed" and "pushed with nothing
+   * accepting" are never confused with each other downstream (#865). */
+  gates: CityGate[]
+  /** Whether any router has ever pushed a rule table at all -- distinct
+   * from a zone being dark (a table WAS pushed and nothing on it logs).
+   * The wall's own "says why" reads this. */
+  rulesPushed: boolean
 }
 
 /** Interface names that are tunnels, not zones: the far side is another
@@ -105,6 +124,11 @@ export function cityInputFrom(
    * reads as "nothing pushed yet" rather than needing an update just to
    * keep compiling. */
   tunnelInterfaces: TunnelInterface[] = [],
+  /** The pushed filter tables across every device (policyState.pushed) --
+   * #865's own gates. Defaults to none for the same reason
+   * tunnelInterfaces does: every caller that predates walls-and-gates
+   * still compiles and reads as "nothing pushed yet". */
+  rules: RouterFilterRule[] = [],
 ): CityInput {
   const primary = primaryId ?? devices[0]?.id ?? ''
   const routers: CityRouter[] = devices.map((d) => ({ id: d.id, name: d.name, primary: d.id === primary, sourceIp: d.sourceIp }))
@@ -176,10 +200,12 @@ export function cityInputFrom(
   return {
     routers,
     zones: cityZones,
-    edges: edges.map((e) => ({ key: e.key, from: e.from, to: e.to, events: e.events, verdict: e.verdict })),
+    edges: edges.map((e) => ({ key: e.key, from: e.from, to: e.to, events: e.events, verdict: e.verdict, drops: e.drops, refusedBy: e.refusedBy })),
     wan,
     wanLogged,
     tunnels: cityTunnels,
+    gates: anyPushed ? gatesFromRules(rules) : [],
+    rulesPushed: anyPushed,
   }
 }
 

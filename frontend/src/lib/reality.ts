@@ -34,6 +34,11 @@ export interface RealityEdge {
    * - unjudged: no rule table pushed; no claim made either way.
    */
   verdict: 'planned' | 'holding' | 'unplanned' | 'unjudged'
+  /** The rule that refused traffic on this pair, from the events
+   * themselves -- the same provenance reach.ts's refusedBy carries: what
+   * the router said it did, never what was inferred. Undefined when a
+   * refused event on this pair never carried a rule label. */
+  refusedBy?: string
 }
 
 /**
@@ -43,7 +48,7 @@ export interface RealityEdge {
  * testability.
  */
 export function realityEdges(events: FirewallEvent[], intents: PolicyEdge[], anyRulesPushed: boolean): RealityEdge[] {
-  const byPair = new Map<string, { from: string; to: string; events: number; accepts: number; drops: number; ports: Map<string, number> }>()
+  const byPair = new Map<string, { from: string; to: string; events: number; accepts: number; drops: number; ports: Map<string, number>; refusedBy?: string }>()
   for (const e of events) {
     if (!e.inInterface || !e.outInterface) continue
     const key = `${e.inInterface}|${e.outInterface}`
@@ -61,6 +66,7 @@ export function realityEdges(events: FirewallEvent[], intents: PolicyEdge[], any
       }
     } else if (e.action === 'drop' || e.action === 'reject') {
       r.drops++
+      if (!r.refusedBy && e.ruleLabel) r.refusedBy = e.ruleLabel
     }
   }
   const intentByKey = new Map(intents.map((i) => [i.key, i]))
@@ -80,6 +86,7 @@ export function realityEdges(events: FirewallEvent[], intents: PolicyEdge[], any
         accepts: r.accepts,
         drops: r.drops,
         topPorts: [...r.ports.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t),
+        refusedBy: r.refusedBy,
         verdict,
       }
     })
