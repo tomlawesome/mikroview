@@ -278,6 +278,15 @@ type WireguardInterface struct {
 //     property rather than sending "disabled":false, so a plain bool
 //     already reads "absent" as false, which is the correct reading
 //     for a property that defaults to enabled.
+//
+// Interface was added afterward, once #874's own API layer found it had
+// no way to attribute a peer to a specific WireGuard interface: RouterOS
+// carries that as the peer's own "interface" property, mirrored here
+// verbatim. Optional like the five above -- a push script that predates
+// it (or #874 itself) leaves every peer's Interface empty, which
+// internal/api reads as "attribution unavailable" and falls back to
+// treating every peer as belonging to every interface, rather than as
+// "this peer belongs to no interface."
 type WireguardPeer struct {
 	PublicKey       string       `json:"publicKey"`
 	AllowedAddress  RouterOSList `json:"allowedAddress"`
@@ -289,6 +298,7 @@ type WireguardPeer struct {
 	RX                     RouterOSInt64 `json:"rx,omitempty"`
 	TX                     RouterOSInt64 `json:"tx,omitempty"`
 	Disabled               bool          `json:"disabled,omitempty"`
+	Interface              string        `json:"interface,omitempty"`
 }
 
 // IPAddressEntry mirrors one /ip/address entry -- issue #627: an

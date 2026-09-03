@@ -423,7 +423,10 @@ func (p WireguardPeer) validate() error {
 	if err := validateFieldText("lastHandshake", p.LastHandshake); err != nil {
 		return err
 	}
-	return validateFieldText("currentEndpointAddress", p.CurrentEndpointAddress)
+	if err := validateFieldText("currentEndpointAddress", p.CurrentEndpointAddress); err != nil {
+		return err
+	}
+	return validateFieldText("interface", p.Interface)
 }
 
 func (a PPPActiveSession) validate() error {
