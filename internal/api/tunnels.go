@@ -104,18 +104,15 @@ type wireguardPeerView struct {
 // wireguardInterfaceView is one pushed wireguard-interface record plus
 // its derived state and the device's peers.
 //
-// Peers are attributed to a specific interface by ingest.WireguardPeer's
-// Interface field when it is present -- a follow-up to #874's original
-// cut, which shipped without it because RouterOS's peer record carries
-// it as its own "interface" property, and only listing every peer under
-// every interface once that field is populated does. A push script old
-// enough to predate it (or a #874-shaped push that itself predates this
-// follow-up) leaves every peer's Interface empty; when that is true of
-// every peer for the device, this falls back to the original
-// every-peer-under-every-interface reading rather than attributing zero
-// peers to every interface, which would be strictly less honest than
-// the old behaviour. An interface's State is "up" if any peer attached
-// to it is.
+// A peer belongs to the interface named by ingest.WireguardPeer's
+// Interface field, which RouterOS supplies as the peer record's own
+// "interface" property. Where every peer for a device leaves it empty --
+// a push script written before this field was collected -- there is
+// nothing to attribute by, so every peer is listed under every
+// interface, as the first cut of #874 did for all of them. That is the
+// more honest fallback: attributing no peers to any interface would
+// report every tunnel down on a device whose tunnels may be fine. An
+// interface's State is "up" if any peer attached to it is.
 type wireguardInterfaceView struct {
 	ingest.WireguardInterface
 	// State is "unknown" when the wireguard-peer kind has never been
