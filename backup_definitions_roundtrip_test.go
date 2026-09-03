@@ -10,75 +10,58 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/backup"
 	"github.com/tomlawesome/mikroview/internal/engine"
-	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
-// TestBackupRestoreRoundTripCarriesMigratedDefinitions is issue #404's
-// end-to-end backup requirement: `-backup` on a *migrated* deployment,
-// `-restore` onto a fresh one, same definitions set comes back --
-// exercised through runBackup/runRestore (the real CLI entry points),
-// mirroring TestBackupRestoreRoundTripCarriesWatchlist's own shape for
-// #372.
+// TestBackupRestoreRoundTripCarriesDefinitions is issue #404's end-to-end
+// backup requirement: `-backup` on a deployment with a populated
+// definitions store, `-restore` onto a fresh one, same definitions set
+// comes back -- exercised through runBackup/runRestore (the real CLI
+// entry points), mirroring TestBackupRestoreRoundTripCarriesWatchlist's
+// own shape for #372.
 //
-// Setting up "a migrated deployment" (a detector settings document and a
-// watchlist document with real content, converted once via
-// engine.MigrateDefinitions) is precondition setup, not the thing under
-// test -- what's actually asserted is that the definitions document that
+// Populating the store (the shipped catalogue with one detector switched
+// off, plus one watchlist expectation) is precondition setup, not the
+// thing under test -- what's actually asserted is that the document that
 // setup produced survives runBackup followed by runRestore into a fresh
 // directory unchanged, which is the only part this test checks by
 // re-opening a store rather than by comparing bytes.
-func TestBackupRestoreRoundTripCarriesMigratedDefinitions(t *testing.T) {
+func TestBackupRestoreRoundTripCarriesDefinitions(t *testing.T) {
 	srcDir := t.TempDir()
-	settingsPath := filepath.Join(srcDir, "detector-settings.json")
-	watchlistPath := filepath.Join(srcDir, "watchlist.json")
 	definitionsPath := filepath.Join(srcDir, "definitions.json")
-
-	// A pre-#405 detector-settings document, written as bytes rather than
-	// through a store: internal/detect owned that store and is deleted
-	// (issue #405), but its document is still a migration source and this
-	// test's whole point is a deployment migrated from one.
-	settingsDoc := `{"port_scan":{"enabled":false},"critical_port":{"enabled":true}}`
-	if err := os.WriteFile(settingsPath, []byte(settingsDoc), 0o600); err != nil {
-		t.Fatalf("writing the detector settings document: %v", err)
-	}
-
-	// A pre-#407 watchlist document, written as bytes rather than through
-	// a store: internal/watchlist.Store is deleted (issue #407), but its
-	// document is still a migration source, and this test's setup needs
-	// exactly the same "migrated from a real watchlist document" starting
-	// point TestBackupRestoreRoundTripCarriesWatchlist writes through
-	// writeWatchlistDocument.
-	writeWatchlistDocument(t, watchlistPath, watchlist.Entry{ID: "e1", Name: "ssh-watch", Ports: []int{22}})
-
-	migrated, err := engine.MigrateDefinitions(context.Background(),
-		persist.NewFileBackend(definitionsPath),
-		persist.NewFileBackend(settingsPath),
-		persist.NewFileBackend(watchlistPath))
-	if err != nil {
-		t.Fatalf("MigrateDefinitions: %v", err)
-	}
-	if !migrated {
-		t.Fatal("test setup: expected migration to run")
-	}
 
 	defsBefore, err := engine.OpenDefinitionsStore(definitionsPath)
 	if err != nil {
 		t.Fatalf("OpenDefinitionsStore: %v", err)
 	}
+	// The shipped catalogue with port_scan switched off, exactly as a boot
+	// seeds it from config.yaml's flags.detectors.
+	seed := engine.DefaultDetectorSettings()
+	seed["port_scan"] = engine.DetectorSettings{Enabled: false}
+	if err := engine.SeedShippedDefinitions(defsBefore, seed, engine.DefaultShippedDefaults()); err != nil {
+		t.Fatalf("SeedShippedDefinitions: %v", err)
+	}
+	// One operator-authored expectation alongside them.
+	expectation, err := engine.ExpectationDefinitionFor(watchlist.Entry{ID: "e1", Name: "ssh-watch", Ports: []int{22}})
+	if err != nil {
+		t.Fatalf("ExpectationDefinitionFor: %v", err)
+	}
+	if err := defsBefore.Upsert(expectation); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	// The definitions store persists write-behind, so the bytes runBackup
+	// reads below only exist once this returns.
+	if err := defsBefore.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
 	wantList := defsBefore.List()
 	if len(wantList) == 0 {
-		t.Fatal("test setup: migrated definitions store is empty")
-	}
-	wl1, ok := defsBefore.Get("e1")
-	if !ok || wl1.Definition.Name != "ssh-watch" {
-		t.Fatalf("test setup: migrated watchlist entry missing or wrong: %+v, %v", wl1, ok)
+		t.Fatal("test setup: definitions store is empty")
 	}
 
 	t.Setenv("MIKROVIEW_CONFIG", "")
 	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
-	t.Setenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH", settingsPath)
-	t.Setenv("MIKROVIEW_WATCHLIST_STORE_PATH", watchlistPath)
 	t.Setenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH", definitionsPath)
 
 	// --force: t.TempDir() is world-readable in some sandboxes -- same
@@ -103,14 +86,9 @@ func TestBackupRestoreRoundTripCarriesMigratedDefinitions(t *testing.T) {
 	}
 
 	// Restore into a fresh directory -- a different set of paths, the
-	// same way a disaster recovery restores onto a new host. The other
-	// two source stores are pointed at empty paths in the new directory
-	// too, purely so restore's existing-file refusal doesn't trip on
-	// them; this test's assertions are all about the definitions store.
+	// same way a disaster recovery restores onto a new host.
 	dstDir := t.TempDir()
 	newDefinitionsPath := filepath.Join(dstDir, "definitions.json")
-	t.Setenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH", filepath.Join(dstDir, "detector-settings.json"))
-	t.Setenv("MIKROVIEW_WATCHLIST_STORE_PATH", filepath.Join(dstDir, "watchlist.json"))
 	t.Setenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH", newDefinitionsPath)
 
 	if code := runRestore([]string{backupPath}); code != 0 {
@@ -146,14 +124,14 @@ func TestBackupRestoreRoundTripCarriesMigratedDefinitions(t *testing.T) {
 		}
 	}
 
-	// The disabled detector and the migrated watchlist entry
-	// specifically -- not just the count.
+	// The disabled detector and the expectation specifically -- not just
+	// the count.
 	portScan, ok := defsAfter.Get("port_scan")
 	if !ok || portScan.Definition.Enabled {
 		t.Errorf("restored port_scan = %+v, %v, want present and disabled", portScan, ok)
 	}
 	restoredEntry, ok := defsAfter.Get("e1")
 	if !ok || restoredEntry.Definition.Name != "ssh-watch" {
-		t.Errorf("restored watchlist-derived definition e1 = %+v, %v", restoredEntry, ok)
+		t.Errorf("restored expectation definition e1 = %+v, %v", restoredEntry, ok)
 	}
 }
