@@ -104,6 +104,12 @@ export function minimapCam(bounds: GroundRect, W: number, H: number, pad = 6): C
   }
 }
 
+/** Whether the reader has asked for reduced motion -- the one place the
+ * city decides that, so a camera move (moveCamera) and a plinth height
+ * change (importance.ts's tweenHeights, wired up in City.svelte) read
+ * the same answer rather than each asking matchMedia itself. */
+export const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+
 /** The mockup's easing for a camera move, sampled: 0..1 in, 0..1 out. */
 export function ease(t: number): number {
   // cubic-bezier(0.45, 0.02, 0.2, 1), close enough by a smoothstep on
