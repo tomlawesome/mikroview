@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./api', () => ({
   fetchSetupStatus: vi.fn(),
+  fetchSetupCommands: vi.fn(),
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
 }))

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildQuery, replayDefinition } from './api'
+import { buildQuery, fetchSetupCommands, replayDefinition } from './api'
 import { emptyFilters } from './types'
 
 // buildQuery's `ip` forwarding is refetchWithFilters()'s only path back to
@@ -233,5 +233,95 @@ describe('replayDefinition (#786)', () => {
   it('falls back to a status-bearing message when the refusal carries no body', async () => {
     stubFetch(403, '')
     expect(await replayDefinition('port_scan', {})).toBe('replayDefinition: 403')
+  })
+})
+
+// fetchSetupCommands (#436): POST /api/setup/commands, the wizard's
+// version-aware RouterOS command blocks. `version` is the one field that
+// is sometimes present and sometimes not, depending on whether the
+// operator has picked one from the wizard's list -- these pin that
+// JSON.stringify's own handling of an `undefined` property (dropping it
+// rather than sending `"version":null`) is actually what goes on the
+// wire, since a server that treats a present-but-null field differently
+// from an absent one would otherwise disagree with this client silently.
+describe('fetchSetupCommands (#436)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubFetch(status: number, body: unknown) {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+      text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  const RESPONSE = {
+    routeros: { minimum: '7.18', newest: '7.24.1', rows: [] },
+    picked: null,
+    routers: [],
+    steps: {
+      caTrust: { commands: '', note: '' },
+      syslog: { commands: '', note: '' },
+      ruleTagging: { commands: '', note: '' },
+      push: { commands: '', note: '' },
+      schedule: { commands: '', note: '' },
+    },
+  }
+
+  it('posts to /api/setup/commands and sends version when the operator picked one', async () => {
+    const fetchMock = stubFetch(200, RESPONSE)
+    await fetchSetupCommands({
+      address: 'mv.example.net:8443',
+      syslogPort: ':6514',
+      token: 'one-time-token',
+      kinds: ['filter', 'nat'],
+      version: '7.24.1',
+    })
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/setup/commands')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      address: 'mv.example.net:8443',
+      syslogPort: ':6514',
+      token: 'one-time-token',
+      kinds: ['filter', 'nat'],
+      version: '7.24.1',
+    })
+  })
+
+  it('omits version entirely rather than sending it empty when nothing was picked', async () => {
+    const fetchMock = stubFetch(200, RESPONSE)
+    await fetchSetupCommands({ address: 'mv.example.net:8443' })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const sent = JSON.parse(String(init?.body))
+    expect(sent).toEqual({ address: 'mv.example.net:8443' })
+    expect('version' in sent).toBe(false)
+    expect('token' in sent).toBe(false)
+    expect('kinds' in sent).toBe(false)
+  })
+
+  it('returns the response as a value', async () => {
+    stubFetch(200, RESPONSE)
+    const result = await fetchSetupCommands({ address: 'mv.example.net:8443' })
+    expect(typeof result).not.toBe('string')
+    if (typeof result === 'string') return
+    expect(result.routeros.minimum).toBe('7.18')
+  })
+
+  it('returns the server refusal as a string', async () => {
+    stubFetch(403, 'not signed in')
+    expect(await fetchSetupCommands({ address: 'mv.example.net:8443' })).toBe('not signed in')
+  })
+
+  it('falls back to a status-bearing message when the refusal carries no body', async () => {
+    stubFetch(500, '')
+    expect(await fetchSetupCommands({ address: 'mv.example.net:8443' })).toBe('fetchSetupCommands: 500')
   })
 })

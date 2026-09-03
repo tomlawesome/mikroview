@@ -67,6 +67,18 @@ vi.mock('../lib/api', () => ({
   createToken: vi.fn(),
   revokeToken: vi.fn(),
   fetchDevices: vi.fn(async () => []),
+  fetchSetupCommands: vi.fn(async () => ({
+    routeros: { minimum: '7.18', newest: '7.24.1', rows: [] },
+    picked: null,
+    routers: [],
+    steps: {
+      caTrust: { commands: '', note: '' },
+      syslog: { commands: '', note: '' },
+      ruleTagging: { commands: '', note: '' },
+      push: { commands: '', note: '' },
+      schedule: { commands: '', note: '' },
+    },
+  })),
   signOutEverywhere: vi.fn(async () => null),
   fetchPersistence: vi.fn(async () => ({ backend: 'file', dir: '/var/lib/mikroview' })),
   fetchAuthSession: vi.fn(async () => ({
