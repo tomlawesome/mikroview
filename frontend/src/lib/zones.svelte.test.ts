@@ -93,3 +93,26 @@ describe('zonesState per-device WAN (#850)', () => {
     expect(zonesState.wanInterface).toBe('sfp-sfpplus1')
   })
 })
+
+describe('the lane row is ordered by how busy each lane is', () => {
+  it('puts the busier lane first', () => {
+    // #715 item 9 took the "N events this window" line off the zone
+    // card, because round 30 draws no such line. The count behind it is
+    // not decorative and does not go with it: it is what orders the
+    // lane row, and the row's order is what the reader takes from left
+    // to right. Asserted here so removing the field breaks a test that
+    // says why it exists.
+    appState.events = [
+      event({ id: 1, deviceId: 'router1', inInterface: 'ether1', srcIp: '203.0.113.9' }),
+      event({ id: 2, deviceId: 'router1', inInterface: 'bridge2', srcIp: '192.168.2.5' }),
+      event({ id: 3, deviceId: 'router1', inInterface: 'bridge2', srcIp: '192.168.2.6' }),
+      event({ id: 4, deviceId: 'router1', inInterface: 'bridge2', srcIp: '192.168.2.7' }),
+      event({ id: 5, deviceId: 'router1', inInterface: 'bridge1', srcIp: '192.168.1.5' }),
+    ]
+
+    const laneIds = zonesState.zones.map((z) => z.id)
+    expect(laneIds).toContain('bridge1')
+    expect(laneIds).toContain('bridge2')
+    expect(laneIds.indexOf('bridge2')).toBeLessThan(laneIds.indexOf('bridge1'))
+  })
+})
