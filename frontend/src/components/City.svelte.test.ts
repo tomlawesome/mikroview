@@ -12,6 +12,8 @@ import { layoutGround } from '../lib/city/layout'
 import { cityImportanceState } from '../lib/cityImportance.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
+import { appState } from '../lib/state.svelte'
+import type { ClientEvent } from '../lib/types'
 import City from './City.svelte'
 
 const ground = layoutGround(mockupEstate())
@@ -121,6 +123,125 @@ describe('City', () => {
     quiet.unmount()
     const lit = render(City, { props: { stop: 'district', ground, lens: 'policy' } })
     expect(lit.container.querySelectorAll('.gate-n').length).toBeGreaterThan(0)
+  })
+})
+
+describe('standing on a building (#868)', () => {
+  const LAN1 = 'bridge-lan/10.10.0.10'
+  const SRV1 = 'vlan-srv/10.20.0.10'
+
+  let nextId = 1
+  function event(over: Partial<ClientEvent> = {}): ClientEvent {
+    return {
+      id: nextId++,
+      time: '2026-09-03T12:00:00Z',
+      receivedAt: Date.now(),
+      deviceId: 'rb5009',
+      sourceIp: '10.10.0.10',
+      action: 'accept',
+      ruleLabel: 'r',
+      chain: 'forward',
+      raw: '',
+      ...over,
+    }
+  }
+
+  beforeEach(() => {
+    matchMedia(true) // reduced motion: every camera move lands at once
+    appState.events = []
+  })
+
+  afterEach(() => {
+    appState.events = []
+  })
+
+  it('drops the camera to the street stop centred on the building, and Escape restores the exact stop and pan it came from', () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const before = container.querySelector('.mini rect.viewport')?.getAttribute('x')
+    const lan1 = container.querySelector('[data-cid="' + LAN1 + '"]') as Element
+    fireEvent.click(lan1)
+    flushSync()
+    expect(container.querySelector('.city')?.getAttribute('data-stop')).toBe('street')
+    expect(container.querySelector('.city svg')?.getAttribute('aria-label')).toContain('Standing on lan-1')
+
+    lan1.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    flushSync()
+    expect(container.querySelector('.city')?.getAttribute('data-stop')).toBe('district')
+    expect(container.querySelector('.mini rect.viewport')?.getAttribute('x')).toBe(before)
+  })
+
+  it('Enter stands on the focused building, same as a click', async () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    // districts[0] is LAN, and ArrowRight from it walks onto its first
+    // building -- lan-1, the same LAN1 id the other tests click.
+    const firstDistrict = container.querySelector('.plate[tabindex="0"]') as Element
+    key(firstDistrict, 'ArrowRight')
+    await tick()
+    expect(document.activeElement?.getAttribute('data-cid')).toBe(LAN1)
+    key(document.activeElement as Element, 'Enter')
+    await tick()
+    expect(container.querySelector('.city')?.getAttribute('data-stop')).toBe('street')
+  })
+
+  it('fades every road that is not its own, lights the accepted peer through the gate, and marks direction from the flow', () => {
+    appState.events = [
+      // lan-1 spoke to srv-1, accepted, through the lit lan->srv gate.
+      // Nothing else in the buffer names lan-1 at all, so every other
+      // road on the map -- including the fixture's own bridge-lan|wlan-wsh
+      // road, one boundary over -- is unrelated to it.
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 990, protocol: 'tcp' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+
+    // Its own lane and the lan->srv road keep full opacity and flow;
+    // an unrelated road elsewhere on the map fades and carries no flow.
+    const ownRoad = container.querySelector('[data-road="bridge-lan|vlan-srv"]') as SVGPathElement
+    const otherRoad = container.querySelector('[data-road="bridge-lan|wlan-wsh"]') as SVGPathElement
+    expect(otherRoad).not.toBeNull()
+    expect(Number(ownRoad.getAttribute('stroke-opacity'))).toBeGreaterThan(Number(otherRoad.getAttribute('stroke-opacity')))
+    expect(container.querySelector('[data-road="bridge-lan|wlan-wsh"].flow')).toBeNull()
+    // lan-1 spoke (direction 'out'): the flow is not reversed.
+    expect(container.querySelector('[data-road="bridge-lan|vlan-srv"].flow')).not.toBeNull()
+    expect(container.querySelector('[data-road="bridge-lan|vlan-srv"].flow.flow-rev')).toBeNull()
+
+    // srv-1, the accepted peer, is not dimmed; an uninvolved iot host is.
+    const srv1 = container.querySelector('[data-cid="' + SRV1 + '"]')
+    expect(srv1?.classList.contains('focused')).toBe(false) // sanity: it's lit, not merely keyboard-focused
+    const srv1Paints = srv1?.querySelectorAll('path') ?? []
+    expect([...srv1Paints].some((p) => p.getAttribute('fill-opacity') === '0.12')).toBe(false)
+
+    // The port it asked for is drawn on the road.
+    expect(container.textContent).toContain(':990')
+  })
+
+  it('shows dashes moving toward the host when it was spoken to, not away', () => {
+    appState.events = [event({ srcIp: '10.20.0.10', dstIp: '10.10.0.10', inInterface: 'vlan-srv', outInterface: 'bridge-lan', action: 'accept' })]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    expect(container.querySelector('[data-road="bridge-lan|vlan-srv"].flow.flow-rev')).not.toBeNull()
+  })
+
+  it('a refused road ends at the wall carrying the refusing rule from the event itself, even where no aggregate road already drops', () => {
+    appState.events = [
+      event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel: 'no-cross-router-cams' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    expect(container.textContent).toContain('caught by no-cross-router-cams')
+  })
+
+  it('says plainly when the refusing event carried no rule label, rather than inventing one', () => {
+    appState.events = [
+      event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel: '' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    expect(container.textContent).toContain('caught, no rule named')
   })
 })
 

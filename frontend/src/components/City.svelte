@@ -9,8 +9,9 @@
   // drawing; the model behind it lives in lib/city and is tested there.
   //
   // What stands on a plinth comes from one place, symbolFor (#864
-  // replaces the plain blocks). Enter and Escape are left alone for the
-  // reach (#868). Rule gates and walls are #866's; importance is #867's.
+  // replaces the plain blocks). Rule gates and walls are #865's; the
+  // river and bridges are #866's; importance is #867's; standing on a
+  // building (#868) is this file's own "the reach" section below.
   import { tick, untrack } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { zonesState } from '../lib/zones.svelte'
@@ -48,7 +49,8 @@
     type Pt,
     type Stop,
   } from '../lib/city/project'
-  import { lerpP, roadPieces, type Entity } from '../lib/city/roads'
+  import { gateToward, lerpP, roadPieces, type Entity } from '../lib/city/roads'
+  import { portsLine, reachFor, type ReachStrand } from '../lib/reach'
   import { riverScene } from '../lib/city/river'
   import { P, type Paint } from '../lib/city/paint'
   import { bridgeStateLabel } from '../lib/city/tunnelState'
@@ -116,10 +118,27 @@
 
   /* ---------------- the camera ---------------- */
 
+  // Standing on a building (#868): a click or Enter drops the camera to
+  // the street stop centred on it, whatever stop the slider is actually
+  // at. `effectiveStop` is what every rendering decision below reads
+  // instead of the bare `stop` prop, so standing reuses exactly the
+  // street stop's own geometry, lanes and labels rather than a second
+  // copy of them. `savedS`/`savedCentre` are the camera as it stood the
+  // instant before standing -- not recomputed on surfacing, so Esc and
+  // the crumb land on the exact pan position, never a default.
+  interface Stand {
+    districtId: string | null
+    id: string
+    savedS: number
+    savedCentre: Pt
+  }
+  let stand = $state<Stand | null>(null)
+  const effectiveStop = $derived<Stop>(stand ? 'street' : stop)
+
   // Geometry is built at the stop's own height with the camera at the
   // origin; S and centre are what the viewer sees, and the group's
   // transform reconciles the two.
-  const Sgeom = $derived(STOP_HEIGHT[stop])
+  const Sgeom = $derived(STOP_HEIGHT[effectiveStop])
   const geomCam = $derived<Cam>({ S: Sgeom, ox: 0, oy: 0 })
 
   let S = $state(STOP_HEIGHT.city)
@@ -184,6 +203,11 @@
     const s = stop
     const g = ground
     untrack(() => {
+      // While standing, the camera belongs to standOn/standSurface --
+      // the slider's own stop keeps changing under it unread, so
+      // surfacing lands on the position it actually saved rather than
+      // wherever the prop drifted to meanwhile.
+      if (stand) return
       const to = centreFor(s, focus)
       if (!started) {
         started = true
@@ -198,6 +222,57 @@
   $effect(() => () => {
     if (anim !== null) cancelAnimationFrame(anim)
   })
+
+  /* ---------------- the reach: standing on a building (#868) ---------------- */
+
+  // The design record: clicking a building at any city stop drops the
+  // camera to the street stop centred on it; Esc or the crumb surfaces
+  // to the exact camera you came from. `standBuilding` re-resolves the
+  // id every render (rather than caching the object standOn saw) so a
+  // live layout change is reflected while standing; if the building
+  // itself disappears (aged out of the window), standing has nothing
+  // left to mean and the effect below surfaces on its own.
+  const standBuilding = $derived.by((): Building | null => {
+    const s = stand
+    if (!s) return null
+    return s.districtId ? (districtOf(s.districtId)?.buildings.find((b) => b.id === s.id) ?? null) : (ground.nodes.find((n) => n.id === s.id) ?? null)
+  })
+
+  // reachFor is #626/#485's own strand model, unchanged: the city draws
+  // exactly what it derives, never a second reading of the same events.
+  const standReach = $derived(standBuilding ? reachFor(standBuilding.ip, zonesState.wanInterface, appState.events) : null)
+
+  function standOn(districtId: string | null, id: string) {
+    const b = districtId ? districtOf(districtId)?.buildings.find((x) => x.id === id) : ground.nodes.find((n) => n.id === id)
+    if (!b) return
+    // Re-standing on another building (from within the reach) keeps the
+    // original saved camera -- surfacing always returns to where you
+    // stood before the first click, not to whichever building you last
+    // passed through.
+    const savedS = stand ? stand.savedS : S
+    const savedCentre = stand ? stand.savedCentre : centre
+    stand = { districtId, id, savedS, savedCentre }
+    focus = { districtId, id }
+    moveCamera(STOP_HEIGHT.street, [b.u, b.v])
+  }
+
+  function standSurface() {
+    if (!stand) return
+    const { savedS, savedCentre } = stand
+    stand = null
+    moveCamera(savedS, savedCentre)
+  }
+
+  $effect(() => {
+    if (stand && !standBuilding) standSurface()
+  })
+
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && stand) {
+      e.preventDefault()
+      standSurface()
+    }
+  }
 
   /* ---------------- importance: the plinth's height (#867) ---------------- */
 
@@ -292,6 +367,18 @@
     void focusItem(f)
   }
 
+  /** A building click stands on it (#868) rather than merely focusing
+   * it -- a district plate keeps the plain focus/pan onItemClick above. */
+  function onBuildingClick(districtId: string | null, id: string) {
+    if (dragged) return
+    standOn(districtId, id)
+  }
+
+  function isBuildingFocus(f: Focus): boolean {
+    if (!f) return false
+    return f.districtId ? (districtOf(f.districtId)?.buildings.some((b) => b.id === f.id) ?? false) : ground.nodes.some((n) => n.id === f.id)
+  }
+
   function panByStage(dx: number, dy: number) {
     moveCamera(S, [centre[0] - dx / (IK * S), centre[1] - dy / (VK * S)])
   }
@@ -321,6 +408,13 @@
   function onKey(e: KeyboardEvent) {
     const f = focus
     const key = e.key
+    // Enter stands on the focused building (#868); a focused district
+    // plate takes no action here, same as before this build.
+    if (key === 'Enter' && isBuildingFocus(f)) {
+      e.preventDefault()
+      standOn(f!.districtId, f!.id)
+      return
+    }
     if (e.shiftKey && key.startsWith('Arrow')) {
       e.preventDefault()
       const step = 120
@@ -353,7 +447,7 @@
   /* ---------------- drawing ---------------- */
 
   type Solid =
-    | { kind: 'piece'; v: number; paints: Paint[]; flow: Paint | null; label: string }
+    | { kind: 'piece'; v: number; paints: Paint[]; flow: Paint | null; label: string; roadId: string }
     | { kind: 'other'; v: number; paints: Paint[]; lamps: { x: number; y: number; r: number; rr: number; h: number }[] }
     | { kind: 'building'; v: number; b: Building; district: District | null; ink: string; dim: boolean; paints: Paint[]; stamp: { x: number; y: number; k: number }; aria: string }
     | { kind: 'hamlet'; v: number; id: string; aria: string; attrs: DeviceStampAttrs }
@@ -414,9 +508,131 @@
     return entitiesState.list.find((e) => e.type === 'host' && e.key === ip)?.tags
   }
 
-  const showLanes = $derived(stop === 'district' || stop === 'street')
-  const showBoroughs = $derived(stop === 'city' || stop === 'borough')
-  const compact = $derived(stop === 'city')
+  const showLanes = $derived(effectiveStop === 'district' || effectiveStop === 'street')
+  const showBoroughs = $derived(effectiveStop === 'city' || effectiveStop === 'borough')
+  const compact = $derived(effectiveStop === 'city')
+
+  /* ---------------- the reach's own drawing (#868) ---------------- */
+
+  /** Whether a road's own point order already runs away from the
+   * standing building (start end nearer it than the end is) -- the
+   * diamond metric, same as roads.ts's own `dm`, is exact for these
+   * footprints and cheap enough to call per road per render. */
+  function dm(p: Pt, q: Pt): number {
+    return Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1])
+  }
+
+  /** True when this road's default flow direction (its own point order)
+   * reads the opposite of what the strand says -- so the flow paint
+   * needs its animation reversed to show dashes moving away when the
+   * host spoke, toward when it was spoken to. */
+  function flowReversed(pts: Pt[], direction: ReachStrand['direction'], myU: number, myV: number): boolean {
+    const near: Pt = [myU, myV]
+    const runsAway = dm(pts[0], near) <= dm(pts[pts.length - 1], near)
+    return runsAway !== (direction === 'out')
+  }
+
+  interface ReachOverlay {
+    /** Road ids that are this building's own -- everything else fades. */
+    ownRoadIds: Set<string>
+    /** Own road ids whose flow should animate reversed (toward, not away). */
+    reverseIds: Set<string>
+    /** Buildings the standing host actually reaches or is reached by,
+     * always including itself. */
+    litBuildingIds: Set<string>
+    /** A port label to draw at an accepted own road's midpoint. */
+    portChips: { roadId: string; text: string }[]
+    /** Where a blocked strand's road would have crossed this district's
+     * wall, and the rule that refused it (absent said plainly, never
+     * guessed -- #865's own rule, the same source: the event's own
+     * ruleLabel). */
+    dropMarks: { p: Pt; refusedBy?: string }[]
+  }
+
+  /**
+   * The one place standing on a building turns its own reachFor summary
+   * into what the scene fades, lights and labels. `ownRoadIds` matches
+   * against the ground's own road ids: this building's lane (from
+   * layout.ts's `lane:<id>`), the district-pair road toward each
+   * strand's counterpart (layout.ts's own `[a,b].sort().join('|')`
+   * key), and a boundary bridge's two legs (`rb-<id>`, `<id>-span`)
+   * when the counterpart is the WAN or a tunnel -- the same ids the
+   * ground model already draws, never a second road invented for the
+   * occasion.
+   */
+  const reachOverlay = $derived.by((): ReachOverlay | null => {
+    const b = standBuilding
+    const summary = standReach
+    if (!b || !summary) return null
+    const ownRoadIds = new Set<string>()
+    const reverseIds = new Set<string>()
+    const litBuildingIds = new Set<string>([b.id])
+    const portChips: { roadId: string; text: string }[] = []
+    const dropMarks: { p: Pt; refusedBy?: string }[] = []
+    const wan = zonesState.wanInterface
+    const myToken = b.districtId ?? b.id
+    const myDistrict = b.districtId ? districtOf(b.districtId) : null
+
+    const lane = b.districtId ? (ground.roads.find((r) => r.lane && r.from === b.id) ?? null) : null
+    if (lane && summary.busiest) {
+      ownRoadIds.add(lane.id)
+      if (flowReversed(lane.pts, summary.busiest.direction, b.u, b.v)) reverseIds.add(lane.id)
+    }
+
+    for (const s of summary.strands) {
+      const counterpartToken = s.counterpart === 'internet' ? (wan ?? '') : s.counterpart
+      if (counterpartToken) {
+        const pairId = [myToken, counterpartToken].sort().join('|')
+        const road = ground.roads.find((r) => !r.lane && r.id === pairId)
+        if (road) {
+          ownRoadIds.add(road.id)
+          if (flowReversed(road.pts, s.direction, b.u, b.v)) reverseIds.add(road.id)
+          if (s.outcome === 'accepted' && s.ports.length > 0) portChips.push({ roadId: road.id, text: portsLine(s.ports) })
+        }
+        const bridge = ground.bridges.find((br) => br.iface === counterpartToken)
+        if (bridge) {
+          ownRoadIds.add('rb-' + bridge.id)
+          ownRoadIds.add(bridge.id + '-span')
+        }
+      }
+      if (s.outcome === 'accepted') {
+        for (const addr of s.peerAddrs) {
+          const peer = allBuildings.find((x) => x.ip === addr)
+          if (!peer) continue
+          litBuildingIds.add(peer.id)
+          const peerLane = ground.roads.find((r) => r.lane && r.from === peer.id)
+          if (peerLane) ownRoadIds.add(peerLane.id)
+        }
+      }
+      if (s.outcome === 'blocked' && myDistrict) {
+        // The aggregate district-pair road already ends at the wall with
+        // its own mark when the pair's overall verdict is a drop or the
+        // one escalated unplanned pair (#865) -- drawing a second one on
+        // top of it would just double the bollards, so this strand's own
+        // mark is only new ground when that road stayed standing.
+        const pairId = counterpartToken ? [myToken, counterpartToken].sort().join('|') : null
+        const already = pairId ? ground.roads.some((r) => !r.lane && r.id === pairId && r.stop === 'drop') : false
+        if (!already) {
+          const targetCentre: Pt = (() => {
+            const d = counterpartToken ? districtOf(counterpartToken) : null
+            if (d) return [d.u, d.v]
+            const n = counterpartToken ? ground.nodes.find((x) => x.id === counterpartToken) : undefined
+            if (n) return [n.u, n.v]
+            const bridge = counterpartToken ? ground.bridges.find((br) => br.iface === counterpartToken) : undefined
+            if (bridge) return bridge.f
+            // Nothing this build has a place for: aim at the district's
+            // own router, gates.ts's own fallback for the same case.
+            const rn = ground.nodes.find((x) => x.id === myDistrict!.routerId)
+            return rn ? [rn.u, rn.v] : [myDistrict!.u, myDistrict!.v]
+          })()
+          const gate = gateToward(myDistrict, targetCentre)
+          dropMarks.push({ p: gate.p, refusedBy: s.refusedBy })
+        }
+      }
+    }
+
+    return { ownRoadIds, reverseIds, litBuildingIds, portChips, dropMarks }
+  })
 
   /** Everything on the ground, in the geometry camera. */
   const scene = $derived.by(() => {
@@ -556,16 +772,58 @@
 
     // Roads, cut into pieces that carry their own depth.
     const dropLabels: { x: number; y: number; text: string; alarm: boolean }[] = []
+    const portChipMarks: { x: number; y: number; text: string }[] = []
     const ents = new Map<string, Entity>()
     for (const b of allBuildings) ents.set(b.id, { u: b.u, v: b.v, R: b.R })
+
+    // The bollards, cross and red mark a dropped road ends at (#865) --
+    // pulled out so standing on a building (#868) can pin the same mark
+    // exactly where a blocked strand's own road would have crossed the
+    // wall, not just where the district-pair aggregate already draws
+    // one. `e` is the ground point the mark centres on (depth reads its
+    // v, same as every other solid).
+    function dropMarkAt(e: Pt, alarm: boolean, text: string) {
+      const col2 = alarm ? 'var(--alarm)' : 'var(--drop)'
+      const px = X(c, e[0])
+      const py = Y(c, e[1])
+      const bo = (dx: number): Paint => ({ cx: R2(px + dx), cy: R2(py - 2.2 * c.S * ZK * 0.4), rx: R2(0.5 * c.S * IK), ry: R2(1.5 * c.S * ZK * 0.4), fill: col2, fo: 0.5 })
+      const k = Math.max(0.9, c.S / 8)
+      const mx = R2(px)
+      const my = R2(py - 1.8 * c.S * ZK)
+      const cross = 'M' + R2(mx - 6 * k) + ' ' + R2(my - 6 * k) + 'L' + R2(mx + 6 * k) + ' ' + R2(my + 6 * k) + 'M' + R2(mx - 6 * k) + ' ' + R2(my + 6 * k) + 'L' + R2(mx + 6 * k) + ' ' + R2(my - 6 * k)
+      solids.push({
+        kind: 'other',
+        v: e[1] + 8,
+        paints: [
+          bo(-1.6 * c.S * IK),
+          bo(1.6 * c.S * IK),
+          { d: cross, stroke: col2, sw: R2(2.1 * k), cls: 'round' },
+          { cx: mx, cy: my, rx: R2(9.5 * k), ry: R2(9.5 * k), stroke: col2, so: 0.45, sw: 1 },
+        ],
+        lamps: [],
+      })
+      // The refusing rule's own name, beside the mark -- the event's
+      // rule label, exactly as the 2D reach does; said plainly when
+      // no event on this pair carried one, never guessed (#865).
+      dropLabels.push({ x: mx, y: my - 14 * k, text, alarm })
+    }
+
     for (const r of g.roads) {
       if (r.lane && !showLanes) continue
+      const own = !reachOverlay || reachOverlay.ownRoadIds.has(r.id)
       const col = VERDICT[r.k]
       const w = Math.max(1.2, r.w * c.S * 0.3)
       // The policy lens fades every road so the walls and their gates
       // read as the rules; the traffic lens is the reverse (#865).
-      const op = (r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : 0.52) * (policyLens ? 0.22 : 1)
-      const flow = showLanes && (r.w > 1.4 || r.k === 'x') && !r.lane
+      // Standing on a building (#868) fades every road that is not its
+      // own the same way -- the two are independent dimmers on the same
+      // opacity, never confused with each other.
+      const op = (r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : 0.52) * (policyLens ? 0.22 : 1) * (own ? 1 : 0.16)
+      // While standing, only this building's own roads flow, in the
+      // direction its own strand reads; otherwise the ordinary busy/
+      // alarm-road flow from before this build.
+      const flow = reachOverlay ? own : showLanes && (r.w > 1.4 || r.k === 'x') && !r.lane
+      const reversed = !!reachOverlay?.reverseIds.has(r.id)
       let cum = 0
       const pieces = roadPieces(r, ents)
       const glowD: string[] = []
@@ -576,39 +834,20 @@
         if (fade > 0) glowD.push(d)
         const paints: Paint[] = [{ d, stroke: col, sw: R2(w), so: R2(op * fade), cls: r.k === 'x' ? 'road-alarm' : undefined }]
         const fl: Paint | null = flow
-          ? { d, stroke: col, sw: R2(Math.max(1.1, w * 0.42)), so: R2(0.9 * fade), cls: 'flow', dash: String(R2(-cum)) }
+          ? { d, stroke: col, sw: R2(Math.max(1.1, w * 0.42)), so: R2(0.9 * fade), cls: reversed ? 'flow flow-rev' : 'flow', dash: String(R2(-cum)) }
           : null
         cum += Math.hypot(X(c, q[3][0]) - X(c, q[0][0]), Y(c, q[3][1]) - Y(c, q[0][1]))
-        solids.push({ kind: 'piece', v: pieceDepth(p), paints, flow: fl, label: r.label })
+        solids.push({ kind: 'piece', v: pieceDepth(p), paints, flow: fl, label: r.label, roadId: r.id })
       }
       if (glowD.length) glows.push({ d: glowD.join(''), stroke: col, sw: R2(w + 4), so: 0.07 })
-      if (r.stop === 'drop') {
-        const e = r.pts[r.pts.length - 1]
-        const col2 = r.k === 'x' ? 'var(--alarm)' : 'var(--drop)'
-        const px = X(c, e[0])
-        const py = Y(c, e[1])
-        const bo = (dx: number): Paint => ({ cx: R2(px + dx), cy: R2(py - 2.2 * c.S * ZK * 0.4), rx: R2(0.5 * c.S * IK), ry: R2(1.5 * c.S * ZK * 0.4), fill: col2, fo: 0.5 })
-        const k = Math.max(0.9, c.S / 8)
-        const mx = R2(px)
-        const my = R2(py - 1.8 * c.S * ZK)
-        const cross = 'M' + R2(mx - 6 * k) + ' ' + R2(my - 6 * k) + 'L' + R2(mx + 6 * k) + ' ' + R2(my + 6 * k) + 'M' + R2(mx - 6 * k) + ' ' + R2(my + 6 * k) + 'L' + R2(mx + 6 * k) + ' ' + R2(my - 6 * k)
-        solids.push({
-          kind: 'other',
-          v: e[1] + 8,
-          paints: [
-            bo(-1.6 * c.S * IK),
-            bo(1.6 * c.S * IK),
-            { d: cross, stroke: col2, sw: R2(2.1 * k), cls: 'round' },
-            { cx: mx, cy: my, rx: R2(9.5 * k), ry: R2(9.5 * k), stroke: col2, so: 0.45, sw: 1 },
-          ],
-          lamps: [],
-        })
-        // The refusing rule's own name, beside the mark -- the event's
-        // rule label, exactly as the 2D reach does; said plainly when
-        // no event on this pair carried one, never guessed (#865).
-        dropLabels.push({ x: mx, y: my - 14 * k, text: r.refusedBy ? 'caught by ' + r.refusedBy : 'caught, no rule named', alarm: r.k === 'x' })
+      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x', r.refusedBy ? 'caught by ' + r.refusedBy : 'caught, no rule named')
+      const chip = reachOverlay?.portChips.find((pc) => pc.roadId === r.id)
+      if (chip) {
+        const mid = r.pts[Math.floor(r.pts.length / 2)]
+        portChipMarks.push({ x: R2(X(c, mid[0])), y: R2(Y(c, mid[1]) - 10), text: chip.text })
       }
     }
+    if (reachOverlay) for (const dm2 of reachOverlay.dropMarks) dropMarkAt(dm2.p, false, dm2.refusedBy ? 'caught by ' + dm2.refusedBy : 'caught, no rule named')
 
     // Buildings on their plinths. The plinth's own height is the
     // current importance reading (#867), never b.h -- the device
@@ -616,7 +855,12 @@
     // regardless, so importance never redraws what a building looks
     // like, only how tall its base stands.
     const building = (b: Building, d: District | null) => {
-      const dim = d?.dark ?? false
+      // The same dim styling a dark district already draws its
+      // buildings in also carries standing on a building (#868): every
+      // building that is neither the standing host nor one it reaches
+      // or is reached by fades, reusing one visual word for "not what
+      // matters right now" rather than inventing a second.
+      const dim = (d?.dark ?? false) || (reachOverlay ? !reachOverlay.litBuildingIds.has(b.id) : false)
       const ink = dim ? 'var(--fg-dim)' : d ? inkOf(d) : 'var(--accent)'
       const R = b.R
       const h = heightOf(b)
@@ -728,13 +972,13 @@
       bridgeChips.push({ x, y, w: R2(w), t, stroke })
     }
 
-    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, gateBadges, dropLabels, claim }
+    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, gateBadges, dropLabels, portChipMarks, claim }
   })
 
   /** Names float over buildings at the street stop, for what the
    * viewport shows; the claim is re-run so they never overlap. */
   const toppers = $derived.by(() => {
-    if (stop !== 'street') return []
+    if (effectiveStop !== 'street') return []
     const c = geomCam
     const vp = viewport
     const out: { b: Building; x: number; y: number; w: number }[] = []
@@ -796,13 +1040,17 @@
   const tabbable = (id: string) => (focus ? focus.id === id : ground.districts[0]?.id === id) ? 0 : -1
 </script>
 
-<div class="city" data-stop={stop}>
+<svelte:window onkeydown={onWindowKeydown} />
+
+<div class="city" data-stop={effectiveStop}>
   <svg
     bind:this={svgEl}
     viewBox="0 0 {STAGE_W} {STAGE_H}"
     preserveAspectRatio="xMidYMid meet"
     role="application"
-    aria-label="The estate as a city at the {stop} stop: drag or hold Shift with the arrow keys to pan; arrow keys walk the districts and their buildings"
+    aria-label={standBuilding
+      ? `Standing on ${standBuilding.name}${standBuilding.ip ? ' at ' + standBuilding.ip : ''}: Escape surfaces to where you were`
+      : `The estate as a city at the ${effectiveStop} stop: drag or hold Shift with the arrow keys to pan; arrow keys walk the districts and their buildings`}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
@@ -846,10 +1094,10 @@
         {#each scene.solids as s, i (i)}
           {#if s.kind === 'piece'}
             {#each s.paints as p, j (j)}
-              <path d={p.d} fill="none" stroke={p.stroke} stroke-width={p.sw} stroke-opacity={p.so} class={p.cls} data-v={R2(s.v)} />
+              <path d={p.d} fill="none" stroke={p.stroke} stroke-width={p.sw} stroke-opacity={p.so} class={p.cls} data-v={R2(s.v)} data-road={s.roadId} />
             {/each}
             {#if s.flow}
-              <path d={s.flow.d} fill="none" stroke={s.flow.stroke} stroke-width={s.flow.sw} stroke-opacity={s.flow.so} class="flow" stroke-dashoffset={s.flow.dash} />
+              <path d={s.flow.d} fill="none" stroke={s.flow.stroke} stroke-width={s.flow.sw} stroke-opacity={s.flow.so} class={s.flow.cls ?? 'flow'} stroke-dashoffset={s.flow.dash} data-road={s.roadId} />
             {/if}
           {:else if s.kind === 'other'}
             {#each s.paints as p, j (j)}
@@ -878,7 +1126,7 @@
               data-cid={s.b.id}
               data-near={R2(s.b.v + s.b.R)}
               aria-label={s.aria}
-              onclick={() => onItemClick({ districtId: s.district?.id ?? null, id: s.b.id })}
+              onclick={() => onBuildingClick(s.district?.id ?? null, s.b.id)}
               onkeydown={onKey}
             >
               <title>{s.aria}</title>
@@ -944,6 +1192,15 @@
         {/each}
         {#each scene.dropLabels as dl, i (i)}
           <text x={dl.x} y={dl.y} text-anchor="middle" class="drop-t" class:alarm-t={dl.alarm}>{dl.text}</text>
+        {/each}
+        {#each scene.portChipMarks as pc, i (i)}
+          <!-- The ports an accepted own road carries, while standing on
+               a building (#868) -- the design record's "with the ports
+               on the road". -->
+          <g transform="translate({pc.x} {pc.y})">
+            <rect x={R2(-pc.text.length * 3.1 - 8)} y="-8.5" width={R2(pc.text.length * 6.2 + 16)} height="17" rx="8" fill="#080c16" fill-opacity="0.92" stroke="var(--hair)" stroke-opacity="0.75" />
+            <text x="0" y="3.5" text-anchor="middle" class="port-t">{pc.text}</text>
+          </g>
         {/each}
       </g>
     </g>
@@ -1072,6 +1329,12 @@
     fill: var(--fg-muted);
   }
 
+  /* The ports on a road while standing on a building (#868). */
+  .port-t {
+    font: 600 9.5px var(--font-mono);
+    fill: var(--fg);
+  }
+
   .gate-n {
     font: 700 9px var(--font-mono);
     fill: var(--accent);
@@ -1105,6 +1368,13 @@
   .flow {
     stroke-dasharray: 7 11;
     animation: flow 1.5s linear infinite;
+  }
+
+  /* Standing on a building (#868): a strand's own direction reverses
+     the same animation rather than a second one -- dashes moving
+     toward the host read as the mirror of moving away from it. */
+  .flow.flow-rev {
+    animation-direction: reverse;
   }
 
   @keyframes flow {
