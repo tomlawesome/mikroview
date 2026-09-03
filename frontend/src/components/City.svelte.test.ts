@@ -243,6 +243,25 @@ describe('standing on a building (#868)', () => {
     flushSync()
     expect(container.textContent).toContain('caught, no rule named')
   })
+
+  it('the crumb states name, address, reach counts and that Esc surfaces, as in 2D', () => {
+    appState.events = [
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv' }),
+      event({ srcIp: '10.40.0.10', dstIp: '10.10.0.10', inInterface: 'vlan-guest', outInterface: 'bridge-lan' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    expect(container.querySelector('.crumb')).toBeNull()
+    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    const crumb = container.querySelector('.crumb') as HTMLElement
+    expect(crumb).not.toBeNull()
+    expect(crumb.querySelector('b')?.textContent).toBe('lan-1')
+    expect(crumb.textContent).toContain('10.10.0.10')
+    expect(crumb.textContent).toContain('reaches')
+    expect(crumb.textContent).toContain('reached by')
+    expect(crumb.textContent).toContain('1')
+    expect(crumb.textContent).toContain('Esc surfaces')
+  })
 })
 
 describe('the importance toggle (#867)', () => {
