@@ -32,7 +32,7 @@
   import { zonesState, type ZoneInfo } from '../lib/zones.svelte'
   import { tunnelsState } from '../lib/tunnels.svelte'
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
-  import { realityEdges, unexercisedIntents, type RealityEdge } from '../lib/reality'
+  import { realityEdges, unexercisedIntents, worstUnplannedOf, type RealityEdge } from '../lib/reality'
   import { coverageState } from '../lib/coverage.svelte'
   import { composeCommand, reachComposeInput, refusingCommentFor } from '../lib/compose'
   import type { ReachStrand } from '../lib/reach'
@@ -746,30 +746,10 @@
   // that cannot see each other.
   // Round 30 escalates the worst unplanned flow out of the row of
   // identical pills into its own two-line card (the-whole.html:940-944).
-  // "Worst" is busiest: realityEdges already sorts by events, so this
-  // adds no third ranking to the app. #701's recency weight belongs to a
-  // sentence that claims "now"; this card claims no such thing.
-  // One card only, however close the runners-up -- "worst" is a
-  // superlative, and two cards un-say it. Ties break on drops, then key,
-  // so the same data always escalates the same pair (Fable 5, #715
-  // item 4).
-  const worstUnplanned = $derived.by((): DrawnReality | null => {
-    const unplanned = drawnReality.drawn.filter((d) => d.r.verdict === 'unplanned')
-    if (unplanned.length === 0) return null
-    return unplanned.reduce((best, d) =>
-      d.r.events !== best.r.events
-        ? d.r.events > best.r.events
-          ? d
-          : best
-        : d.r.drops !== best.r.drops
-          ? d.r.drops > best.r.drops
-            ? d
-            : best
-          : d.r.key < best.r.key
-            ? d
-            : best,
-    )
-  })
+  // The choice of which pair is reality.ts's worstUnplannedOf, shared
+  // with the city's own escalated road, so the two views cannot name
+  // different pairs from the same data (#869).
+  const worstUnplanned = $derived(worstUnplannedOf(drawnReality.drawn, (d) => d.r))
 
   function cardLines(r: RealityEdge): [string, string] {
     const asked = r.topAsked[0]
