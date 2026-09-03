@@ -47,14 +47,16 @@
   import { versionState } from '../lib/version.svelte'
   import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
-  import { fetchSetupStatus, fetchDevices, fetchSetupCommands } from '../lib/api'
+  import { fetchSetupStatus, fetchDevices, fetchSetupCommands, fetchHistorySettings } from '../lib/api'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
+  import type { DiskPhase } from '../lib/history'
   import MemoryControl from './MemoryControl.svelte'
+  import DiskControl from './DiskControl.svelte'
   import { usersState } from '../lib/users.svelte'
   import { tokensState } from '../lib/tokens.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
-  import type { SetupStatus, FlagType, Device } from '../lib/types'
+  import type { SetupStatus, FlagType, Device, HistorySettings } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -87,6 +89,13 @@
       usersState.refresh().catch(() => {})
       tokensState.refresh().catch(() => {})
     }
+    // The disk group (#910) reads its own endpoint: the switch, the
+    // window and what is held. Refreshed slowly, since the held window
+    // moves by the day; a change made here refreshes it at once. A
+    // refusal (an older server, say) leaves the group absent rather
+    // than drawing a switch nothing stands behind.
+    refreshHistory()
+    const historyTimer = setInterval(refreshHistory, 60_000)
     fetchDevices()
       .then((all) => {
         // Same de-dup/order rule the former tokens door applied -- an
@@ -103,7 +112,18 @@
       .catch(() => {
         knownDevices = []
       })
+    return () => clearInterval(historyTimer)
   })
+
+  // --- disk: the on-disk history's switch (#910, round 42) --------------
+  let history = $state<HistorySettings | null>(null)
+  let diskPhase = $state<DiskPhase>('rest')
+
+  function refreshHistory() {
+    fetchHistorySettings()
+      .then((h) => (history = h))
+      .catch(() => {})
+  }
 
   const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
 
@@ -996,6 +1016,33 @@
         </div>
       </div>
 
+      <!-- Round 42's disk group (#910): the days held on disk, the days
+           allowed, the cap as a figure and off as a link -- see
+           docs/design/concepts/round-42/disk.html, `#diskg`, whose
+           `data-d` states are the classes on this section. -->
+      {#if history}
+        <div
+          id="diskg"
+          class="stsection wide"
+          class:dshrink={diskPhase === 'dshrink'}
+          class:dgrow={diskPhase === 'dgrow'}
+          class:dcap={diskPhase === 'dcap'}
+          class:doff={diskPhase === 'doff'}
+          class:dcapped={diskPhase === 'dcapped'}
+          class:dstopped={diskPhase === 'dstopped'}
+          class:dnokey={diskPhase === 'dnokey'}
+        >
+          <h3>disk</h3>
+          <DiskControl
+            settings={history}
+            stats={appState.stats}
+            canEdit={isAdmin}
+            bind:phase={diskPhase}
+            onchanged={(next) => (history = next)}
+          />
+        </div>
+      {/if}
+
       <div class="stsection">
         <h3>account</h3>
         <div class="orow">
@@ -1178,6 +1225,13 @@
 
   .stsection.wide .wleft .oghint {
     margin-bottom: 0;
+  }
+
+  /* No key mounted: the disk group is two statements and no diagram, so
+     it stacks like account rather than holding an empty left column
+     (round 42's `#set.dnokey #diskg { display: block }`). */
+  .stsection.wide.dnokey {
+    display: block;
   }
 
   @media (max-width: 1100px) {

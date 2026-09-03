@@ -81,6 +81,16 @@ vi.mock('../lib/api', () => ({
   })),
   signOutEverywhere: vi.fn(async () => null),
   fetchPersistence: vi.fn(async () => ({ backend: 'file', dir: '/var/lib/mikroview' })),
+  fetchHistorySettings: vi.fn(async () => ({
+    keyed: true,
+    enabled: true,
+    days: 30,
+    maxBytes: 1024 * 1024 * 1024,
+    held: { days: 27, oldest: '2026-08-07', newest: '2026-09-02', bytes: 812 * 1024 * 1024 },
+    capped: false,
+    bytesPerDay: 30 * 1024 * 1024,
+  })),
+  setHistorySettings: vi.fn(),
   fetchAuthSession: vi.fn(async () => ({
     setupRequired: false,
     authenticated: true,
@@ -544,6 +554,21 @@ describe('The settings shelf (#633)', () => {
       screen.getByText(/holds flags, definitions, watchlist entries, entities and tokens/),
     ).toBeTruthy()
     expect(screen.getByText(/the event buffer above is memory-only and clears on restart/)).toBeTruthy()
+  })
+
+  it('the disk group sits directly after memory, with its statements (#910)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const disk = document.getElementById('diskg')
+    expect(disk).toBeTruthy()
+    expect(disk?.previousElementSibling?.id).toBe('memg')
+    expect(disk?.querySelector('h3')?.textContent).toBe('disk')
+    expect(screen.getByRole('slider', { name: 'Days kept on disk' })).toBeTruthy()
+    expect(screen.getByText(/^27 days · since .* · 812 MiB — filling$/)).toBeTruthy()
   })
 
   it('states Postgres, not a file path, when that backend is live', async () => {
