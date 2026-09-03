@@ -93,9 +93,11 @@ func liveSlot(at, now time.Time, span time.Duration) (int64, bool) {
 // snapshot written seconds before a restart would drop buckets the
 // restarted process could still legitimately count.
 //
-// Single-writer, like the rest of CountRing: call it from the evaluation
-// goroutine, or through the Keyed[V].Export walk that holds Keyed's own
-// mutex.
+// Single-writer, like the rest of CountRing, and no exception is made
+// for reading: Keyed's mutex protects its map, never the values inside
+// it, so exporting a ring while the evaluation goroutine adds to it is a
+// data race. Engine.ExportState is what arranges for this to run on that
+// goroutine -- see Engine.runOnEvaluationGoroutine.
 func (r *CountRing) ExportState() (json.RawMessage, error) {
 	state := countRingState{}
 	for i := range r.buckets {
