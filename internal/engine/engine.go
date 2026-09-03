@@ -49,6 +49,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime/debug"
 	"sort"
@@ -220,6 +221,37 @@ type Ticked interface {
 	// Engine.Tick honours this: a driver may call it as often as it
 	// likes, and each definition still runs at its own declared rate.
 	TickInterval() time.Duration
+}
+
+// Snapshotted is implemented by definitions whose in-memory windows
+// are worth carrying across a restart (#795). Baselines already survive
+// through StateStore (state.go); what does not is everything a
+// definition holds in a Keyed[V] -- the per-minute buckets, distinct-value
+// rings and per-source day bookkeeping a baseline is actually compared
+// against. A restart throws those away today, so a warm baseline spends
+// its first window judging an empty ring.
+//
+// Owner decision on #795, 2026-09-02: this state is written whole every
+// few minutes and read back on boot, separate from StateStore and
+// deliberately holding no event lines -- counts, timestamps and
+// identifiers only.
+//
+// Both methods are the definition's own state, whole: the chassis never
+// interprets the bytes, it only routes them by definition ID (see
+// Engine.ExportState/ImportState).
+type Snapshotted interface {
+	// ExportState renders this definition's carried-across state as
+	// JSON. Called from the snapshot writer's goroutine, not the
+	// evaluation goroutine, so an implementation reads through the
+	// locking its own primitives already provide (Keyed.Export).
+	ExportState() (json.RawMessage, error)
+	// ImportState restores raw, which was exported at taken, into a
+	// definition evaluating as of now. Implementations drop whatever
+	// the elapsed time has made meaningless rather than restoring it
+	// stale, must be safe to call before any event has been evaluated,
+	// and must never emit: a restored window is state to judge the next
+	// event against, never a firing in its own right.
+	ImportState(raw json.RawMessage, taken, now time.Time) error
 }
 
 // evaluationRank reports d's Ordered rank, or 0 for a definition that
