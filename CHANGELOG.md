@@ -18,14 +18,25 @@ rewritten.
 
 ### Added
 
-- **Tune logging (frontend half)** (#435): a new "Tune logging" page --
-  upload your router's `/export`, tick which dark-connection rules to
-  switch logging on for, and get back the annotated config (download)
-  or the equivalent `set` commands (copy), with a `beforeunload` guard
-  until either is used. Reached from the wizard's finish screen and
-  from a dark pair on the topography's coverage lens. Depends on the Go
-  half (`/api/tune-logging/analyse`, `/api/tune-logging/render`) to
-  function; this change is the frontend surface alone.
+- **Tune logging** (#435): a new "Tune logging" page turns a dark
+  connection -- one with no rule logging what crosses it -- into a
+  watched one. Upload the router's `/export hide-sensitive`; once
+  mikroview has observed the device for 24 hours, the page lists every
+  filter rule that crosses an operator-chosen dark boundary, ticked by
+  default, each shown with how often it has fired and how many bytes
+  since observation began -- RouterOS's own per-rule packet/byte
+  counters, now carried on the push -- as the cost of turning its
+  logging on. Reached from the wizard's finish screen and from a dark
+  pair on the topography's coverage lens. Rendering gets back the
+  annotated export (download first, copy second) or the equivalent
+  `/ip firewall filter set` commands, with a `beforeunload` guard until
+  either is used. The change is mechanically checked before it is ever
+  returned -- parse the config before and after, strip logging
+  attributes, compare -- so it can only ever be logging, never anything
+  else; a check failure answers 500 rather than shipping an edit nobody
+  asked for. The uploaded export itself is never logged, persisted, or
+  stored anywhere: it lives in memory for the one request and is gone
+  once the page is left.
 - **RouterOS commands are now version-aware, server-rendered, and keyed
   by dialect rather than by a single reviewed marker** (#436, Go half).
   `internal/routeros` gained a dialect table (`Rows`): a row is a version
@@ -51,31 +62,6 @@ rewritten.
   push -- a real push always overrides the hint.
   `scripts/routeros-freshness.sh` now reports a stable release with no
   covering row, rather than only comparing against a marker.
-- **"Tune logging" (#435, Go half): a new `internal/routeros/export`
-  parser for RouterOS's `/export hide-sensitive`, and the two endpoints
-  built on it.** The parser keeps every source line verbatim and decodes
-  only `/ip firewall filter` `add` lines (either section-header form)
-  into attributes, refusing outright when a value is present for a
-  secret-shaped key (`password`, the pre-shared-key family, `psk`, and
-  their kin) -- the sign that the text handed in was not actually
-  exported with `hide-sensitive`. `POST /api/tune-logging/analyse`
-  (user tier, 2 MiB body cap) reports how long mikroview has observed a
-  device and, once that reaches 24 hours, every filter rule that crosses
-  an operator-chosen dark boundary, with its packet/byte counters
-  matched from the latest push. `POST /api/tune-logging/render` (same
-  tier and cap) switches logging on for the selected rules and returns
-  both the edited export and one `/ip firewall filter set` command per
-  rule, with the change mechanically checked -- parse before and after,
-  compare every rule stripped of its logging attributes -- to differ
-  only in logging before it is ever returned; a check failure answers
-  500 rather than shipping an edit nobody asked for. Nothing about an
-  uploaded export is logged, persisted, or stored.
-  The push payload gains rule counters: `internal/ingest.FilterRule`
-  carries `packets`/`bytes` (RouterOS's own per-rule hit counters, kept
-  whether or not a rule logs), and the generated push script's
-  `filter-rule` block sends them. The frontend half (`frontend/`, the
-  new "Tune logging" view) is tracked separately against the same
-  contract.
 - **The setup wizard names a multi-homed router's source-address
   split** (#442). A router holds an address on every network it routes,
   and its logs arrive stamped with whichever one faces mikroview --
