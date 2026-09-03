@@ -104,7 +104,7 @@ await page.reload()
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
 const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
-await slider.fill('6') // the district stop -- the gate and wall are drawn here
+await slider.fill('5') // the district stop; the seven-stop axis is clients 0 .. street 6 (#869)
 await new Promise((r) => setTimeout(r, 900))
 
 // Stand on LAN1 from the keyboard: the district stop's own camera can

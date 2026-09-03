@@ -196,7 +196,12 @@ for (let i = 0; i < STOPS.length; i++) {
   check(!!m && m.stop === stop, `${at}: the city renders at its stop (${m?.stop})`)
   if (!m) continue
   check(m.stageHidden, `${at}: the 2D stage is put away`)
-  check(m.plates === 4, `${at}: one district per lane (${m.plates})`)
+  // "At least", never "exactly": the suite shares one instance in
+  // filename order, so a scenario that ran earlier may have pushed
+  // ranges of its own and the city draws every zone it is given. The
+  // claim worth making is that each pushed lane gets a district, not
+  // that nothing else exists (#897).
+  check(m.plates >= 4, `${at}: a district per pushed lane (${m.plates} plates, 4 lanes pushed here)`)
   check(m.blks >= 8, `${at}: buildings stand on the plates (${m.blks})`)
   check(m.unnamed === 0, `${at}: every district and building carries an accessible name (${m.unnamed} bare)`)
   check(!!m.viewport, `${at}: the minimap shows the viewport`)

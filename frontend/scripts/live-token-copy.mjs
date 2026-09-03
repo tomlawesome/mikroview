@@ -20,13 +20,13 @@ import { session, feedRaw, check, done } from './live-browser.mjs'
 const URL_BASE = process.env.MV_URL
 const RULE = 'live-token-copy'
 // 203.0.113.0/24 (RFC 5737 TEST-NET-3), not .2 specifically -- that's
-// live-router-lookup.mjs's camera.lan dns-static entry, the only other
+// live-before-router-lookup.mjs's camera.lan dns-static entry, the only other
 // exact claim in this block.
 //
 // Deliberately NOT 198.51.100.0/24 (this scenario's address until this
 // fix) or 192.0.2.0/24: this suite's scenarios all share one device
 // (live-router, loopback mode's only declared device -- every feeder
-// connects from 127.0.0.1), and live-router-lookup.mjs -- which sorts
+// connects from 127.0.0.1), and live-before-router-lookup.mjs -- which sorts
 // before this scenario in run-scenarios.sh's glob and so always runs
 // first -- pushes a wireguard-peer record with
 // allowedAddress: ['192.0.2.0/24', '198.51.100.0/24'] and
@@ -37,7 +37,7 @@ const RULE = 'live-token-copy'
 // the host name across *every* CIDR in AllowedAddress -- so any address
 // in either /24, this scenario's own entity label included, resolved to
 // "branch office" instead, in the full suite (never standalone, where
-// live-router-lookup.mjs hadn't run). Root-caused via
+// live-before-router-lookup.mjs hadn't run). Root-caused via
 // internal/naming/naming.go + internal/routerstate/routerstate.go
 // (rebuildIdentityLocked's WireguardPeer branch), then confirmed with
 // the diagnostic fetch below before this fix landed: it printed

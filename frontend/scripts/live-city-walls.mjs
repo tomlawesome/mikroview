@@ -28,7 +28,7 @@ async function toDistrictStop() {
   await page.click('.rail-name >> text=Topography')
   await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
   const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
-  await slider.fill('6') // the district stop -- where a wall's gates are drawn
+  await slider.fill('5') // the district stop; the seven-stop axis is clients 0 .. street 6 (#869)
   await new Promise((r) => setTimeout(r, 900))
 }
 
@@ -150,6 +150,12 @@ check(
   `every lit gate carries a plain rule count, not invented text (${JSON.stringify(gateNumbers)})`,
 )
 
+// Both marks below are drawn per refused road, not only on the
+// escalated one, so read them at the city stop where the whole estate
+// is in frame -- the district stop frames one district and which one
+// that is depends on the data (#869's axis, #897).
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('3') // the city stop
+await new Promise((r) => setTimeout(r, 900))
 const cityText = await page.locator('[data-card="topography"] .city').textContent()
 check(cityText.includes('caught by guest-isolation'), 'the refused boundary names its own rule beside the mark, from the event itself')
 check(cityText.includes('caught, no rule named'), 'the escalated pair with no rule label says so plainly rather than guessing one')

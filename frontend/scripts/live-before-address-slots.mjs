@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
+// Named live-before-* because the name carries a precondition the glob
+// runner cannot: its first assertion is about the state before any /ip
+// address table has been pushed, and the suite shares one instance in
+// filename order. A pusher running earlier makes that state unreachable
+// (#897).
+//
 // #802, round 36's degraded map: with no `/ip address` table pushed, the
 // router card carries one statement in place of its pushed-table facts,
 // and every address slot on the map says what it truly holds. Nothing
@@ -67,6 +73,12 @@ check(
 
 await page.reload()
 await page.click('.rail-name >> text=Topography')
+// #869 made the city the axis's centre and its default stop, and the 2D
+// stage is put away there. Everything below reads the 2D map's zone
+// cards, so say which side of the axis is meant rather than relying on
+// whichever one opens.
+await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
 const topo = '[data-card="topography"]'
