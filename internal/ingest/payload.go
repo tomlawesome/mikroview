@@ -151,6 +151,23 @@ type FilterRule struct {
 	// false -- enabled -- so an old push over-counts rather than
 	// under-counts, and re-pushing corrects it.
 	Disabled bool `json:"disabled"`
+	// Packets and Bytes were added for #435: RouterOS keeps a per-rule
+	// hit counter whether or not the rule logs, so the tune-logging
+	// helper can show "fired 41,000 times in the last day" beside a
+	// tick-box before any logging is switched on -- cost, from the
+	// router's own evidence, ahead of the decision to watch. Both are
+	// RouterOSInt (not RouterOSInt64): :serialize to=json emits them as
+	// the same float shape every other RouterOS integer here uses, and
+	// this schema follows FilterRule's own precedent of a plain int32
+	// range rather than WireguardPeer.RX/TX's wider type -- a fixed
+	// contract decision (#435), not an oversight; a counter that
+	// genuinely outgrows int32 is a rule worth flagging on its own
+	// terms; refusing the push. A push made before this field existed
+	// omits it, which decodes as 0 -- the same "absent means not yet
+	// reported" reading Disabled documents above, not "fired zero
+	// times".
+	Packets RouterOSInt `json:"packets"`
+	Bytes   RouterOSInt `json:"bytes"`
 }
 
 // NATRule mirrors one /ip/firewall/nat rule.
