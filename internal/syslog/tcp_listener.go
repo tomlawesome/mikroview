@@ -96,6 +96,29 @@ const maxTCPMessageBytes = 64 * 1024
 // bare messages sent back to back are never coalesced into one.
 const tcpQuiescence = 75 * time.Millisecond
 
+// tcpHeaderCompletionWindow is how much longer the read loop waits once
+// tcpQuiescence has already expired but the bytes at the end of pending
+// are an RFC3164 header that has not finished arriving (see
+// rfc3164HeaderStillArriving).
+//
+// tcpQuiescence guesses "the sender has finished" from silence alone,
+// because a bare RouterOS message offers nothing else to go on. A
+// half-arrived header is the one case where the bytes themselves say
+// otherwise: a sender that has written "<30>Aug 29 20:52:4" is
+// demonstrably in the middle of a message, so treating that silence as
+// the end of the *previous* message glues a fragment of the next
+// message's header onto a real record -- which mikroview then displays
+// as fact (#914). Waiting instead costs nothing when the rest arrives,
+// which on a working connection it does.
+//
+// One second is far above both plausible causes of that gap -- a single
+// TCP retransmission (Linux's TCP_RTO_MIN is 200ms) and a read loop
+// that lost the CPU on a contended host, which is how #914 first showed
+// up -- and far below anything an operator would notice. It is only
+// ever reached after a message has already gone quiet mid-header, so it
+// adds no latency to ordinary traffic at all.
+const tcpHeaderCompletionWindow = time.Second
+
 func init() {
 	maxTCPConnectionsPerSource.Store(8)
 }
@@ -546,6 +569,145 @@ func nextHeaderStart(data []byte, from int) int {
 // waiting on a later read to complete it.
 const rfc3164MaxHeaderBytes = 5 + len(bsdTimeLayout)
 
+// rfc3164HeaderStillArriving reports whether the bytes at the end of
+// data are an RFC3164 header that has not finished arriving -- either a
+// header with no message after it yet, or one that is itself only
+// partly here. Both mean the sender is mid-message, so a silence must
+// not be read as the end of whatever sits in front of it.
+//
+// This is the counterpart to the headerScanned watermark's trailing
+// margin, which already holds back rfc3164MaxHeaderBytes-1 bytes from
+// "already scanned" on exactly the grounds that a header could still be
+// forming there. The eager split loop respected that margin; the
+// quiescence flush did not, and emptied pending wholesale -- delivering
+// a real record with the first bytes of the next message's header stuck
+// on the end of it (#914).
+//
+// Only the tail is examined. A header further back has either already
+// been split on (it was complete) or is not a boundary at all.
+func rfc3164HeaderStillArriving(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	// A complete header and nothing else: the message it introduces has
+	// not started arriving. A header on its own is never a message.
+	if rfc3164HeaderLen(data) == len(data) {
+		return true
+	}
+	// Otherwise a header can only be part-way through arriving if it
+	// runs to the very end of data, and it is at most one byte short of
+	// rfc3164MaxHeaderBytes wide.
+	from := len(data) - (rfc3164MaxHeaderBytes - 1)
+	if from < 0 {
+		from = 0
+	}
+	for i := from; i < len(data); i++ {
+		if rfc3164HeaderPrefix(data[i:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// rfc3164HeaderPrefix reports whether data is a proper prefix of a
+// header rfc3164HeaderLen would accept -- the same shape, with the tail
+// end of it not yet arrived.
+//
+// How much of a prefix counts as evidence differs by whether the PRI is
+// there, and deliberately so, because the cost of being wrong is a
+// delayed message. A leading '<' is decisive on its own: RouterOS log
+// text does not contain one, so "<", "<3", "<30", "<30>" can only be a
+// PRI starting. A bare header has no such marker -- a single capital
+// letter ends real message bodies constantly -- so nothing counts until
+// the month abbreviation is complete enough for time.Parse to rule on.
+func rfc3164HeaderPrefix(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+
+	i := 0
+	hasPRI := false
+	if data[0] == '<' {
+		end := bytes.IndexByte(data, '>')
+		if end < 0 {
+			// The PRI itself is still arriving: '<' plus at most the
+			// three digits of the widest legal value.
+			if len(data) > 4 {
+				return false
+			}
+			for _, b := range data[1:] {
+				if b < '0' || b > '9' {
+					return false
+				}
+			}
+			return true
+		}
+		if end <= 0 || end > 4 {
+			return false
+		}
+		pri, err := strconv.Atoi(string(data[1:end]))
+		if err != nil || pri < 0 || pri > 191 {
+			return false
+		}
+		i = end + 1
+		hasPRI = true
+	}
+
+	ts := data[i:]
+	if len(ts) >= len(bsdTimeLayout) {
+		// Wide enough to hold a whole header. If it were a valid one
+		// rfc3164HeaderLen would have said so, and nothing here is
+		// still on its way.
+		return false
+	}
+	if len(ts) == 0 {
+		// "<PRI>" complete, timestamp not started.
+		return true
+	}
+	if !hasPRI && len(ts) < 3 {
+		return false
+	}
+	return bsdTimestampPrefix(ts)
+}
+
+// bsdTimestampPrefix is looksLikeBSDTimestamp for a timestamp that is
+// still arriving: the same separator-and-digit positions, checked only
+// as far as the bytes present, and shorter than the full layout.
+//
+// Once three letters are here the month is decidable, and deciding it
+// is time.Parse's job rather than this file's -- the same delegation
+// rfc3164HeaderLen makes, so "is this a real month" cannot drift
+// between the two. The day and time fields are filled in with values
+// that always parse, leaving only the month under test.
+func bsdTimestampPrefix(ts []byte) bool {
+	isDigit := func(b byte) bool { return b >= '0' && b <= '9' }
+	for i, b := range ts {
+		ok := false
+		switch i {
+		case 0:
+			ok = b >= 'A' && b <= 'Z'
+		case 1, 2:
+			ok = b >= 'a' && b <= 'z'
+		case 3, 6:
+			ok = b == ' '
+		case 4:
+			ok = b == ' ' || isDigit(b)
+		case 5, 7, 8, 10, 11, 13, 14:
+			ok = isDigit(b)
+		case 9, 12:
+			ok = b == ':'
+		}
+		if !ok {
+			return false
+		}
+	}
+	if len(ts) < 3 {
+		return true
+	}
+	_, err := time.Parse(bsdTimeLayout, string(ts[:3])+"  1 00:00:00")
+	return err == nil
+}
+
 func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	defer conn.Close()
 
@@ -709,6 +871,14 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	// boundary just resolved, so nothing learned about the old buffer's
 	// indexing still applies to the new one.
 	headerScanned := 0
+	// awaitingHeader records that the last deadline set was
+	// tcpHeaderCompletionWindow rather than tcpQuiescence, because
+	// pending ended in a header that had not finished arriving. It is
+	// what tells the two timeouts apart: everywhere else the loop
+	// infers which deadline fired from pending being non-empty, and
+	// this is the one state that breaks that inference. Cleared by any
+	// read that returns bytes -- the wait is over, whatever arrived.
+	awaitingHeader := false
 
 	emit := func(data []byte) {
 		data = bytes.TrimRight(data, "\r")
@@ -742,6 +912,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	for {
 		n, err := conn.Read(buf)
 		if n > 0 {
+			awaitingHeader = false
 			conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 
 			if oversized {
@@ -855,15 +1026,35 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 			// closes right behind its last bare message, or resets
 			// mid-stream, still gets what it sent rather than nothing.
 			ambiguous := !oversized && len(pending) > 0
+			ne, isNetErr := err.(net.Error)
+			timedOut := isNetErr && ne.Timeout()
+
+			if ambiguous && timedOut && !awaitingHeader && rfc3164HeaderStillArriving(pending) {
+				// tcpQuiescence expired, but pending ends in a header
+				// that is still on its way -- so the sender is
+				// mid-message, and this silence is not the end of the
+				// message in front of it. Flushing here is what glued
+				// a fragment of the next message's header onto a real
+				// record (#914). Wait out one bounded window instead;
+				// if the rest arrives, the ordinary eager split
+				// resolves the boundary exactly, and if it never does
+				// the next timeout falls through to the flush below.
+				awaitingHeader = true
+				conn.SetReadDeadline(time.Now().Add(tcpHeaderCompletionWindow))
+				continue
+			}
+
 			if ambiguous {
 				emit(pending)
 				pending = pending[:0]
 				headerScanned = 0
 			}
-			if ne, ok := err.(net.Error); ok && ne.Timeout() && ambiguous {
-				// This was tcpQuiescence's short deadline, not the
-				// ordinary idle one: the sender simply finished a bare
-				// message rather than going idle. Flushed above; the
+			awaitingHeader = false
+			if timedOut && ambiguous {
+				// This was tcpQuiescence's short deadline (or the
+				// header-completion window above), not the ordinary
+				// idle one: the sender simply finished a bare message
+				// rather than going idle. Flushed above; the
 				// connection stays open.
 				conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 				continue
