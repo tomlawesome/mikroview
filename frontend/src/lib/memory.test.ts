@@ -60,6 +60,12 @@ describe('round 39 draws these exact figures', () => {
     expect(formatSize(2 * 1024 * MIB)).toBe('2 GiB')
   })
 
+  it('reads a first day of a few kilobytes as KiB, not "0 MiB" (#910)', () => {
+    expect(formatSize(1981)).toBe('2 KiB')
+    expect(formatSize(1)).toBe('1 KiB')
+    expect(formatSize(0)).toBe('0 MiB')
+  })
+
   it('writes the event counts the way the drawing writes them', () => {
     expect(formatEvents(201649)).toBe('201 000')
     expect(formatEvents(806597)).toBe('806 000')

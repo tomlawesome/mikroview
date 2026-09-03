@@ -19,8 +19,22 @@ rewritten.
 ### Added
 
 - **The on-disk event history is now a setting you change while
-  mikroview is running, not one you restart for** (#910, backend half
-  of the control the design round ratified). `history.enabled`,
+  mikroview is running, not one you restart for** (#910, design round
+  42 under `docs/design/concepts/round-42/`). Settings gains a `disk`
+  group directly under `memory`, the same two things one storey down:
+  a bar of the days actually held on disk (`27 days · since 7 Aug ·
+  812 MiB — filling`, `— full` when the cap is what decides), a track
+  for the days allowed with a dashed mark where the byte cap runs out
+  at today's rate, the cap as a figure that opens a field in place,
+  and `turn off` as a link. Every change that would delete something
+  is a proposal until a link that names the deletion is taken --
+  `delete 13 days · keep all 27` -- and turning on asks nothing, since
+  it deletes nothing. With no key mounted there is no control at all,
+  only two statements and a link to the guide. Below a mebibyte,
+  sizes now read in KiB, so a first day of a few kilobytes is not
+  `0 MiB`.
+
+  Underneath: `history.enabled`,
   `history.days` and `history.maxBytes` move to the same runtime
   settings store `store.maxMemory` already uses: the config file gives
   the figure a fresh instance comes up on, and whatever is set from
