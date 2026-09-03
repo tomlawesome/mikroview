@@ -408,6 +408,21 @@ export async function fetchRouterAddresses(device: string): Promise<RouterTable<
   return res.json()
 }
 
+// fetchRouterWireguard and fetchRouterPPPActive are #866's own readers
+// of issue #874's ingest: the city's footbridges (lib/tunnels.svelte.ts)
+// are the first caller of either.
+export async function fetchRouterWireguard(device: string): Promise<RouterWireguardTunnels> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/wireguard`)
+  if (!res.ok) throw new ApiError(`fetchRouterWireguard: ${res.status}`, res.status)
+  return res.json()
+}
+
+export async function fetchRouterPPPActive(device: string): Promise<RouterPPPActive> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/ppp-active`)
+  if (!res.ok) throw new ApiError(`fetchRouterPPPActive: ${res.status}`, res.status)
+  return res.json()
+}
+
 // Per-tunnel state derived server-side from the pushed WireGuard tables
 // (issue #874, City 9's ingest side): a peer is "up" when its last
 // handshake was under three minutes old at push time, an interface is
