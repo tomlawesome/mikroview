@@ -66,7 +66,7 @@ func echoEnabled(t *testing.T, f *os.File) bool {
 // This test drives the real prompt over a real pty and reads back what
 // the terminal would have displayed. It fails if the key is visible.
 func TestReadRecoveryKeyIsNotEchoedToTheTerminal(t *testing.T) {
-	const key = "OBDLRCVYP6VQ2KNC4IQ6JMCKEO76JSYY"
+	const key = "TESTRECOVERYKEYPROMPTAAAAAAAAAAA"
 
 	master, slave := openPTY(t)
 
@@ -147,7 +147,7 @@ func TestReadRecoveryKeyIsNotEchoedToTheTerminal(t *testing.T) {
 // already sitting in a pipe is the caller's exposure, not ours, but the
 // path still has to actually read the key.
 func TestReadRecoveryKeyStillReadsFromAPipe(t *testing.T) {
-	const key = "5OYZ4NRSNIRDCM5RQZJ7ANVBGDNXZ2WK"
+	const key = "TESTRECOVERYKEYPROMPTBBBBBBBBBBB"
 
 	r, w, err := os.Pipe()
 	if err != nil {
