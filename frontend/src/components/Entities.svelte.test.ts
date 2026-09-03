@@ -48,6 +48,28 @@ vi.mock('../lib/api', () => ({
         instance: { tlsEnabled: true, syslogPort: ':16893', hosts: [] },
       }) as unknown,
   ),
+  // The berth panel's paste lines (#436 moved the RouterOS syntax
+  // server-side) -- built from the request's own syslogPort, the same
+  // way the retired client-side syslogCommands() did, so the port
+  // assertion below still means something.
+  fetchSetupCommands: vi.fn(async (req: { syslogPort?: string }) => ({
+    routeros: { minimum: '7.18', newest: '7.24.1', rows: [] },
+    picked: null,
+    routers: [],
+    steps: {
+      caTrust: { commands: '', note: '' },
+      syslog: {
+        commands:
+          `/system logging action add name=mikroview target=remote remote=localhost ` +
+          `remote-port=${(req.syslogPort ?? ':6514').replace(/^:/, '')} remote-protocol=tls ` +
+          `check-certificate=yes\n/system logging add topics=firewall,info action=mikroview`,
+        note: '',
+      },
+      ruleTagging: { commands: '', note: '' },
+      push: { commands: '', note: '' },
+      schedule: { commands: '', note: '' },
+    },
+  })),
 }))
 
 import { appState } from '../lib/state.svelte'

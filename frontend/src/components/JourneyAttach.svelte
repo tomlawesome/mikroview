@@ -6,8 +6,9 @@
   // this is still before any data exists to show -- but not the door
   // itself; AuthSetup.svelte's onEnter already ran.
   //
-  // The two lines are the real ones: syslogCommands() (lib/setupsteps.ts)
-  // is exactly what step 2 of the full wizard emits, and what
+  // The two lines are the real ones: steps.syslog.commands from POST
+  // /api/setup/commands (#436 moved the RouterOS syntax server-side) is
+  // exactly what step 2 of the full wizard renders, and what
   // docs/routeros-setup.md documents as "2. Forward firewall log events
   // to it" -- never invented copy. Round 27's verdict, verbatim: "one
   // account kept here, then the two RouterOS lines to paste... that is
@@ -15,7 +16,6 @@
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
-  import { syslogCommands } from '../lib/setupsteps'
 
   let copied = $state(false)
 
@@ -23,14 +23,18 @@
   // same field step 2 of the full wizard reads. SetupWizard's own effect
   // also refreshes this on becoming authenticated, but this beat can
   // render first, so it asks for itself rather than assuming a race it
-  // wins.
+  // wins. Fetching the commands is guarded on their absence rather than
+  // repeated every render -- this beat needs no token, no picked
+  // version, nothing that would call for a second fetch later.
   $effect(() => {
     if (!wizardState.status) wizardState.refresh()
   })
 
-  const commands = $derived(
-    wizardState.status ? syslogCommands(wizardState.address, wizardState.status.instance.syslogPort) : '',
-  )
+  $effect(() => {
+    if (wizardState.status && !wizardState.commands) wizardState.refreshCommands()
+  })
+
+  const commands = $derived(wizardState.commands?.steps.syslog.commands ?? '')
 
   async function copy() {
     if (!commands) return
