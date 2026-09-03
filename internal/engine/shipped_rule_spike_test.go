@@ -348,6 +348,66 @@ func TestShippedRuleSpikeIsReplayable(t *testing.T) {
 	}
 }
 
+// TestShippedRuleSpikeReplaySampleKeepsMostRecent pins issue #860 for the
+// rule-spike replay path: once emissions exceed replaySampleBound, the
+// receipt's Sample must hold the most recent ones, not whichever fifty
+// fired first. The candidate overrides multiplier down to something
+// negligible so every event once the rate clears minRate keeps firing --
+// the point here is the sample's recency, not the baseline's own creep
+// behaviour. This would fail under the old first-N behaviour, whose
+// sample would freeze at the burst's first fifty hits and never reach the
+// hits near the corpus's end.
+func TestShippedRuleSpikeReplaySampleKeepsMostRecent(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedRuleSpikeDefinition(t, fs, ShippedDeps{}, Scope{})
+
+	t0 := time.Now()
+	var events []store.Event
+	// Warm-up: steady, sparse hits, far enough apart (>60s window) that
+	// each tick reads a constant rate, priming the baseline low.
+	warmupEnd := t0
+	for i := 0; i < 10; i++ {
+		warmupEnd = t0.Add(time.Duration(i) * 65 * time.Second)
+		events = append(events, ruleEvt("wan-in", warmupEnd))
+	}
+	// Burst: a steady 1/s rate, long enough that -- once the trailing
+	// window fills enough to clear minRate -- the fires comfortably
+	// exceed replaySampleBound.
+	burstStart := warmupEnd.Add(65 * time.Second)
+	burstLen := replaySampleBound + 40
+	for i := 0; i < burstLen; i++ {
+		events = append(events, ruleEvt("wan-in", burstStart.Add(time.Duration(i)*time.Second)))
+	}
+
+	res, err := d.Replay(fakeCorpus{events: events}, Params{"multiplier": 0.001})
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if res.Receipt == nil {
+		t.Fatalf("Replay declined unexpectedly: %+v", res)
+	}
+	if res.Receipt.EmissionCount() <= replaySampleBound {
+		t.Fatalf("EmissionCount() = %d, want more than replaySampleBound=%d for this test to exercise truncation", res.Receipt.EmissionCount(), replaySampleBound)
+	}
+	sample := res.Receipt.Sample()
+	if len(sample) != replaySampleBound {
+		t.Fatalf("len(Sample()) = %d, want exactly replaySampleBound=%d", len(sample), replaySampleBound)
+	}
+	for i := 1; i < len(sample); i++ {
+		if !sample[i].At.After(sample[i-1].At) {
+			t.Fatalf("sample[%d].At = %s is not after sample[%d].At = %s -- sample must stay chronological", i, sample[i].At, i-1, sample[i-1].At)
+		}
+	}
+	// The discriminating check: the sample's last entry must be near the
+	// corpus's last event, not stranded near the burst's start the way
+	// first-N would leave it.
+	lastEventAt := events[len(events)-1].ReceivedAt
+	if gap := lastEventAt.Sub(sample[len(sample)-1].At); gap > 2*time.Second {
+		t.Fatalf("sample's last entry at %s is %s before the corpus's last event at %s -- want the most recent emissions, not the oldest",
+			sample[len(sample)-1].At, gap, lastEventAt)
+	}
+}
+
 // TestShippedRuleSpike_RefireClearRevive carries forward the half of
 // internal/detect's TestCharacterizationRuleSpike_FieldsRefireClearRevive
 // that #368 does NOT change: what happens on a second crossing of the

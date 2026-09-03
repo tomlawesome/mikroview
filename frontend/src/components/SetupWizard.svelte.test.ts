@@ -185,6 +185,87 @@ describe('SetupWizard', () => {
     expect(wizardState.pane).toBe(2)
   })
 
+  // #442: a router declared under one address whose logs arrive from
+  // another. Step 2 reads it as partial -- evidence arrived, composed
+  // wrongly -- states both facts, and prints the remedy with the
+  // operator's values. It never claims the two addresses are one box.
+  it('surfaces the source-address split on step 2 with the printed remedy', async () => {
+    wizardState.pane = 2
+    wizardState.status = status({
+      sources: [{ source: '10.0.20.1', syslogFirstSeenAt: '2026-08-23T09:00:00Z' }],
+    })
+    wizardState.devices = [
+      {
+        id: 'office',
+        name: 'office',
+        sourceIp: '192.168.88.1',
+        configured: true,
+        firstSeen: '',
+        lastSeen: '',
+        eventCount: 0,
+        status: 'never_seen',
+        multihomedCandidates: ['10.0.20.1'],
+      },
+      {
+        id: '10.0.20.1',
+        name: '10.0.20.1',
+        sourceIp: '10.0.20.1',
+        configured: false,
+        firstSeen: '2026-08-23T09:00:00Z',
+        lastSeen: '2026-08-23T09:00:00Z',
+        eventCount: 12,
+        status: 'live',
+      },
+    ]
+    const { container } = render(SetupWizard)
+
+    const observation = container.querySelector('.observation')
+    expect(observation?.textContent?.trim()).toBe(
+      "Connected — but from 10.0.20.1, an address you haven't declared, while 192.168.88.1, which you declared in config.yaml, has sent nothing.",
+    )
+    // Partial reads in the arrived voice, never attention.
+    expect(observation?.classList.contains('attention')).toBe(false)
+
+    const body = container.querySelector('.split')?.textContent?.replace(/\s+/g, ' ') ?? ''
+    expect(body).toContain("MikroView can't tell whether these are the same router")
+    expect(body).toContain('You can tell.')
+    expect(body).toContain('Keep 192.168.88.1 (recommended). Run this on the router')
+    expect(body).toContain('Or keep 10.0.20.1: change sourceIp to 10.0.20.1 in config.yaml and restart.')
+    expect(body).toContain('If they are two different routers, nothing is wrong.')
+    expect(body).toContain('this notice clears itself when 192.168.88.1 sends its first log.')
+
+    const pres = [...container.querySelectorAll('.split pre')].map((p) => p.textContent)
+    expect(pres).toEqual(['/system logging action set mikroview src-address=192.168.88.1'])
+
+    // The step list carries the split as its receipt.
+    const rows = container.querySelectorAll('.steps .step-row')
+    expect(rows[1].querySelector('.step-receipt')?.textContent).toBe(
+      'syslog from 10.0.20.1 · declared 192.168.88.1 silent',
+    )
+  })
+
+  it('shows no split body when the declared router is the one sending', () => {
+    wizardState.pane = 2
+    wizardState.status = status({
+      sources: [{ source: '192.168.88.1', syslogFirstSeenAt: '2026-08-23T09:00:00Z' }],
+    })
+    wizardState.devices = [
+      {
+        id: 'office',
+        name: 'office',
+        sourceIp: '192.168.88.1',
+        configured: true,
+        firstSeen: '2026-08-23T09:00:00Z',
+        lastSeen: '2026-08-23T09:00:00Z',
+        eventCount: 12,
+        status: 'live',
+      },
+    ]
+    const { container } = render(SetupWizard)
+    expect(container.querySelector('.split')).toBeNull()
+    expect(container.querySelector('.observation')?.textContent).toContain('open syslog connection')
+  })
+
   // Step 3 counts, and can only count upward. There is no waiting check
   // to force past, so Next is free and the hint is absent.
   it('leaves Next free on the counting step', async () => {

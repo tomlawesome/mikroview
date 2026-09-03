@@ -138,6 +138,44 @@ describe('Fleet deck identity (#657/#706)', () => {
     expect(container.textContent).toMatch(/seen on the wire, not in the devices config/)
   })
 
+  // #442's echo: the fleet already shows the pair -- a declared router
+  // that has sent nothing, an unregistered one streaming -- so the
+  // configured-silent card carries one sentence pointing at the wizard,
+  // where the command is printed. Nothing here diagnoses; the card
+  // states what was declared and what arrived.
+  it('echoes the source-address split on the configured-silent card, pointing at step 2', () => {
+    setDevices([
+      device({
+        id: 'office',
+        name: 'office',
+        status: 'never_seen',
+        lastSeen: '',
+        sourceIp: '192.168.88.1',
+        eventCount: 0,
+        multihomedCandidates: ['10.0.20.1'],
+      }),
+      device({ id: '10.0.20.1', name: '10.0.20.1', configured: false, sourceIp: '10.0.20.1' }),
+    ])
+    const { container } = render(Fleet)
+    flushSync()
+
+    const cards = [...container.querySelectorAll('.fcard')]
+    const office = cards.find((c) => c.textContent?.includes('office'))
+    expect(office?.textContent).toContain(
+      'Declared as 192.168.88.1, nothing arrived. If 10.0.20.1 below is the same router on another of its addresses, Run setup… step 2 shows the one-line fix.',
+    )
+    const arriving = cards.find((c) => c.textContent?.includes('seen on the wire'))
+    expect(arriving?.textContent).not.toContain('Declared as')
+  })
+
+  it('carries no echo once the declared router is the one sending', () => {
+    setDevices([device({ id: 'office', name: 'office', sourceIp: '192.168.88.1' })])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.textContent).not.toContain('Declared as')
+  })
+
   it('gives an active silence flag a real door into the docket', async () => {
     setDevices([device({ status: 'stale', lastSeen: new Date(Date.now() - 3_600_000).toISOString() })])
     flagsState.list = [
