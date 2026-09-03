@@ -468,24 +468,50 @@ describe('the aggregate bar (#648)', () => {
 })
 
 describe('the altitude slider (#648, named ends #682)', () => {
-  it('renders one range input, four stop symbols, and its two named ends', () => {
+  it('renders one range input, eight stop symbols, and its two named ends', () => {
     const { container } = render(Topography)
     flushSync()
 
     const range = container.querySelector<HTMLInputElement>('.alt-range')
     expect(range).not.toBeNull()
     expect(range?.min).toBe('0')
-    expect(range?.max).toBe('3')
+    expect(range?.max).toBe('7') // four 2D stops, then the four city stops (#863)
     expect(range?.value).toBe('2') // defaults to "zones", today's unchanged map
 
     const ticks = container.querySelectorAll('.tick')
-    expect(ticks.length).toBe(4)
+    expect(ticks.length).toBe(8)
     expect(container.querySelector('.tick.diamond')).not.toBeNull() // survey's atlas diamond
 
     // Ratified round-29: the two extremes are named, the middle stops
-    // stay tick-only symbols -- never a full text label per stop.
+    // stay tick-only symbols -- never a full text label per stop. The
+    // far end is now the city's street stop (#863; #869 owns the join).
     const ends = [...container.querySelectorAll('.alt-end')].map((n) => n.textContent?.trim())
-    expect(ends).toEqual(['clients', 'survey'])
+    expect(ends).toEqual(['clients', 'street'])
+  })
+
+  it('the city stops swap the 2D stage for the city, and back (#863)', () => {
+    const { container } = render(Topography)
+    flushSync()
+
+    const range = container.querySelector<HTMLInputElement>('.alt-range')!
+    range.value = '4'
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+
+    expect(container.querySelector('.city[data-stop="city"]')).not.toBeNull()
+    expect(container.querySelector<HTMLElement>('.stage')?.hidden).toBe(true)
+    expect(container.querySelector('.city .mini rect.viewport')).not.toBeNull()
+
+    range.value = '7'
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+    expect(container.querySelector('.city[data-stop="street"]')).not.toBeNull()
+
+    range.value = '2'
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+    expect(container.querySelector('.city')).toBeNull()
+    expect(container.querySelector<HTMLElement>('.stage')?.hidden).toBe(false)
   })
 
   it('moving the slider reframes the map camera, including the survey tilt', () => {

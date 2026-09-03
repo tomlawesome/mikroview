@@ -43,6 +43,8 @@
   import { FLAG_TYPE_LABELS } from '../lib/metricsSeries'
   import { nightlySummary } from '../lib/watchWindow'
   import type { Flag, WatchlistEntry } from '../lib/types'
+  import City from './City.svelte'
+  import { STOPS } from '../lib/city/project'
 
   // Five fixed lane inks. The fifth was --marked until #715 item 11 --
   // the ink this same screen uses for watchers, so one colour carried
@@ -1004,11 +1006,16 @@
   // -- never a fabricated new layer of data this app does not have.
   // Deliberately not reset by descend()/surface(): round 24's "keeps the
   // level and zoom you left" falls out of that for free.
-  const ALTITUDE_LABELS = ['clients', 'services', 'zones', 'survey'] as const
-  let altitude = $state<0 | 1 | 2 | 3>(2)
+  // The four city stops (#863) sit to the right of survey: the same
+  // estate in isometric, each stop a camera height (lib/city/project.ts).
+  // #869 owns the full join of the two views on this slider.
+  const ALTITUDE_LABELS = ['clients', 'services', 'zones', 'survey', ...STOPS] as const
+  type Altitude = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
+  let altitude = $state<Altitude>(2)
+  const cityStop = $derived(altitude >= 4 ? STOPS[altitude - 4] : null)
 
   function jumpAltitude(i: number) {
-    altitude = Math.max(0, Math.min(3, Math.round(i))) as 0 | 1 | 2 | 3
+    altitude = Math.max(0, Math.min(ALTITUDE_LABELS.length - 1, Math.round(i))) as Altitude
   }
 
   function onAltitudeInput(e: Event) {
@@ -1758,6 +1765,7 @@
     class="stage"
     class:backdrop={reach !== null}
     class:map-degraded={zonesState.degraded}
+    hidden={cityStop !== null}
     onclick={reach ? surface : undefined}
     role={reach ? 'button' : undefined}
     aria-label={reach ? 'Surface — back to the map as you left it' : undefined}
@@ -2372,6 +2380,12 @@
     {/if}
   </div>
 
+  {#if cityStop}
+    <!-- The city (#863): the same estate in isometric, at the four stops
+         right of survey. -->
+    <City stop={cityStop} />
+  {/if}
+
   {#if reach && reachSummary}
     <!-- The membrane view. pointer-events pass through everywhere
          except its own content, so clicking off anywhere surfaces. -->
@@ -2638,11 +2652,11 @@
         class="alt-range"
         type="range"
         min="0"
-        max="3"
+        max={ALTITUDE_LABELS.length - 1}
         step="1"
         value={altitude}
         oninput={onAltitudeInput}
-        aria-label="Altitude: clients, services, zones, survey"
+        aria-label="Altitude: {ALTITUDE_LABELS.join(', ')}"
         aria-valuetext={ALTITUDE_LABELS[altitude]}
       />
       <div class="alt-ticks" aria-hidden="true">
@@ -2651,7 +2665,7 @@
         {/each}
       </div>
     </span>
-    <span class="alt-end">survey</span>
+    <span class="alt-end">street</span>
   </div>
 
   {#if nodeCard}
