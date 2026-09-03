@@ -15,6 +15,7 @@
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import Fleet from './components/Fleet.svelte'
+  import TuneLogging from './components/TuneLogging.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
@@ -234,6 +235,14 @@
           <JourneyAttach />
         {:else if inDeck}
           <Deck />
+        {:else if appState.view === 'tune-logging'}
+          <!-- Tune logging (#435) is deliberately outside the deck: a
+               workflow stepped into from the wizard's finish screen or
+               the topography's coverage lens, not a dashboard to swipe
+               among. Same operate-page shape this branch has always
+               offered Fleet. -->
+          <SceneBar />
+          <TuneLogging />
         {:else}
           <SceneBar />
           <Fleet />

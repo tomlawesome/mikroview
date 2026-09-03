@@ -18,6 +18,14 @@ rewritten.
 
 ### Added
 
+- **Tune logging (frontend half)** (#435): a new "Tune logging" page --
+  upload your router's `/export`, tick which dark-connection rules to
+  switch logging on for, and get back the annotated config (download)
+  or the equivalent `set` commands (copy), with a `beforeunload` guard
+  until either is used. Reached from the wizard's finish screen and
+  from a dark pair on the topography's coverage lens. Depends on the Go
+  half (`/api/tune-logging/analyse`, `/api/tune-logging/render`) to
+  function; this change is the frontend surface alone.
 - **RouterOS commands are now version-aware, server-rendered, and keyed
   by dialect rather than by a single reviewed marker** (#436, Go half).
   `internal/routeros` gained a dialect table (`Rows`): a row is a version
