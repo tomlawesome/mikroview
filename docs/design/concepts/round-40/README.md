@@ -62,3 +62,9 @@ Later the same day: "I think we should view these as two alternative views, not 
 Relief dropped. Second cut of isometric (`isometric.html`, replacing the
 first): curved roads, a map larger than the viewport with the scenes as
 viewports onto it, and a device library — see `BRIEF.md` "Second cut".
+
+Owner, 2026-09-03, on the second cut (`isometric.html`, commit f36fba1):
+
+> YESSSSS FABLE. This is EXCELLENT! Approved.
+
+**Ratified.** The buildable record is `docs/design/screens/city/DESIGN.md`.
