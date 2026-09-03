@@ -155,6 +155,26 @@ describe('standing on a building (#868)', () => {
     appState.events = []
   })
 
+  it('standing drops the camera at once under reduced motion, and animates otherwise', () => {
+    const raf = vi.fn(() => 1)
+    window.requestAnimationFrame = raf as unknown as typeof window.requestAnimationFrame
+    window.cancelAnimationFrame = () => {}
+
+    matchMedia(true)
+    const quiet = render(City, { props: { stop: 'district', ground } })
+    fireEvent.click(quiet.container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    expect(raf).not.toHaveBeenCalled()
+    expect(quiet.container.querySelector('.city')?.getAttribute('data-stop')).toBe('street')
+    quiet.unmount()
+
+    matchMedia(false)
+    const lively = render(City, { props: { stop: 'district', ground } })
+    fireEvent.click(lively.container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    expect(raf).toHaveBeenCalled()
+  })
+
   it('drops the camera to the street stop centred on the building, and Escape restores the exact stop and pan it came from', () => {
     const { container } = render(City, { props: { stop: 'district', ground } })
     const before = container.querySelector('.mini rect.viewport')?.getAttribute('x')
