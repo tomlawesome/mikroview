@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,74 +13,19 @@ import (
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
-	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
-// watchlistDocument is the on-disk shape of the watchlist JSON document:
-// {"entries": [...]}, unchanged by #407. internal/watchlist.Store owned
-// this shape (as an unexported storeFile) before #407 deleted the store
-// entirely; engine.migrateWatchlistFile (definitions_migrate.go) mirrors
-// it independently for the same reason this does -- the document itself
-// is still real, read at boot as a migration source by
-// engine.MigrateDefinitions and engine.AdoptWatchlistEntries, and these
-// tests write and read it directly since there is no store left to go
-// through. A typed helper is deliberate over a raw string literal or a
-// map: an "entries" field rename breaks this test loudly at compile
-// time, rather than the test silently asserting nothing.
-type watchlistDocument struct {
-	Entries []watchlist.Entry `json:"entries"`
-}
-
-// writeWatchlistDocument writes a watchlist document holding entries
-// straight to path, standing in for watchlist.Store.Upsert now that the
-// store is gone (#407) -- see watchlistDocument's own doc comment. There
-// is no write-behind persistence to flush afterward, unlike the store it
-// replaces: the bytes are on disk before this returns.
-func writeWatchlistDocument(t *testing.T, path string, entries ...watchlist.Entry) {
-	t.Helper()
-	doc := watchlistDocument{Entries: entries}
-	b, err := json.Marshal(doc)
-	if err != nil {
-		t.Fatalf("marshaling watchlist document: %v", err)
-	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		t.Fatalf("writing watchlist document: %v", err)
-	}
-}
-
-// readWatchlistDocument reads back a watchlist document -- one written
-// by writeWatchlistDocument, or one produced by a real deployment and
-// carried through a backup/restore round trip.
-func readWatchlistDocument(t *testing.T, path string) watchlistDocument {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading watchlist document: %v", err)
-	}
-	var doc watchlistDocument
-	if err := json.Unmarshal(b, &doc); err != nil {
-		t.Fatalf("unmarshaling watchlist document: %v", err)
-	}
-	return doc
-}
-
 // TestBackupRestoreRoundTripCarriesWatchlist pins the failure scenario
-// #372 reported: an operator's watchlist entries, suggestions and match
-// log surviving `-backup` followed by `-restore` into a fresh directory,
-// end to end through the real stores and documents rather than through
+// #372 reported: an operator's watchlist suggestions and match log
+// surviving `-backup` followed by `-restore` into a fresh directory, end
+// to end through the real stores and documents rather than through
 // backedUpStores' (Name, Path) pairs alone. It fails against the pre-fix
-// backedUpStores (verified by hand: with the three Watchlist entries
-// removed, the envelope carries none of these three stores and the
-// restored watchlist document is empty).
+// backedUpStores (verified by hand: with the Watchlist entries removed,
+// the envelope carries neither of these stores).
 //
-// #407 deleted internal/watchlist.Store: the watchlist document is now a
-// migration source only, read at boot by engine.MigrateDefinitions and
-// engine.AdoptWatchlistEntries into the definitions store (see
-// backup_definitions_roundtrip_test.go for that half). It is still
-// listed in backedUpStores and this test still pins that it survives
-// backup/restore -- a backup silently dropping it would still lose every
-// entry an unmigrated (or not-yet-upgraded) deployment has, exactly as
-// before #407, just one hop further back in the pipeline.
+// The entries themselves are definitions now (#407) and travel in the
+// definitions store -- see backup_definitions_roundtrip_test.go for that
+// half.
 //
 // The match log gets two records, deliberately, not one -- a single
 // record is the one case that happens to already be valid JSON on its
@@ -91,17 +35,8 @@ func readWatchlistDocument(t *testing.T, path string) watchlistDocument {
 // match log has more than one line unless that wrapping is in place.
 func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 	srcDir := t.TempDir()
-	watchlistPath := filepath.Join(srcDir, "watchlist.json")
 	suggestionsPath := filepath.Join(srcDir, "suggestions.json")
 	matchLogPath := filepath.Join(srcDir, "matchlog.jsonl")
-
-	// Write the watchlist document directly with one entry -- the
-	// document is a migration source only now (#407: internal/watchlist.
-	// Store is deleted), so there is no store to seed through, and
-	// correspondingly no write-behind persistence to flush before
-	// runBackup reads watchlistPath below: the bytes are already on disk.
-	entry := watchlist.Entry{ID: "e1", Name: "ssh-watch", Ports: []int{22}}
-	writeWatchlistDocument(t, watchlistPath, entry)
 
 	// Populate suggestions with one candidate.
 	sg, err := suggest.Open(suggestionsPath)
@@ -141,7 +76,6 @@ func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 
 	t.Setenv("MIKROVIEW_CONFIG", "")
 	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
-	t.Setenv("MIKROVIEW_WATCHLIST_STORE_PATH", watchlistPath)
 	t.Setenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH", suggestionsPath)
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH", matchLogPath)
 
@@ -155,9 +89,9 @@ func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 		t.Fatalf("runBackup = %d, want 0", code)
 	}
 
-	// Unpack the envelope directly and assert the three watchlist stores
-	// are present -- this is the part that silently failed before #372's
-	// fix: none of these three keys existed in the envelope at all.
+	// Unpack the envelope directly and assert both watchlist stores are
+	// present -- this is the part that silently failed before #372's fix:
+	// none of these keys existed in the envelope at all.
 	f, err := os.Open(backupPath)
 	if err != nil {
 		t.Fatalf("opening backup: %v", err)
@@ -167,7 +101,7 @@ func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backup.Read: %v", err)
 	}
-	for _, name := range []string{"watchlist", "suggestions", "match_log"} {
+	for _, name := range []string{"suggestions", "match_log"} {
 		if _, ok := env.Stores[name]; !ok {
 			t.Errorf("backup envelope is missing store %q", name)
 		}
@@ -176,32 +110,13 @@ func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 	// Restore into a fresh directory -- a different set of paths, the
 	// same way a disaster recovery restores onto a new host.
 	dstDir := t.TempDir()
-	newWatchlistPath := filepath.Join(dstDir, "watchlist.json")
 	newSuggestionsPath := filepath.Join(dstDir, "suggestions.json")
 	newMatchLogPath := filepath.Join(dstDir, "matchlog.jsonl")
-	t.Setenv("MIKROVIEW_WATCHLIST_STORE_PATH", newWatchlistPath)
 	t.Setenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH", newSuggestionsPath)
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH", newMatchLogPath)
 
 	if code := runRestore([]string{backupPath}); code != 0 {
 		t.Fatalf("runRestore = %d, want 0", code)
-	}
-
-	// The watchlist entry comes back -- read directly out of the restored
-	// document, there being no store left to Open it through (#407).
-	restoredWatchlist := readWatchlistDocument(t, newWatchlistPath)
-	var got *watchlist.Entry
-	for i := range restoredWatchlist.Entries {
-		if restoredWatchlist.Entries[i].ID == "e1" {
-			got = &restoredWatchlist.Entries[i]
-			break
-		}
-	}
-	if got == nil {
-		t.Fatal("restored watchlist document has no entry \"e1\"")
-	}
-	if got.Name != "ssh-watch" || len(got.Ports) != 1 || got.Ports[0] != 22 {
-		t.Errorf("restored watchlist entry = %+v, want Name=ssh-watch Ports=[22]", *got)
 	}
 
 	// The suggestion comes back.

@@ -246,20 +246,17 @@ func TestScopeMatchesClassificationAnyInternalExternal(t *testing.T) {
 	}
 }
 
-// TestIsLegacyDetectorID is internal/detect/settings_test.go's
-// TestIsValidDetectorName -- the same question, asked of the list that
-// replaced AllDetectorNames.
-func TestIsLegacyDetectorID(t *testing.T) {
-	if !IsLegacyDetectorID("port_scan") {
+// TestIsShippedDefinitionID is internal/detect/settings_test.go's
+// TestIsValidDetectorName -- the same question, asked of the catalogue
+// that replaced AllDetectorNames.
+func TestIsShippedDefinitionID(t *testing.T) {
+	if !IsShippedDefinitionID("port_scan") {
 		t.Error("expected port_scan to be valid")
 	}
-	if IsLegacyDetectorID("not_a_real_detector") {
+	if IsShippedDefinitionID("not_a_real_detector") {
 		t.Error("expected an unknown name to be invalid")
 	}
 	if !IsShippedDefinitionID("known_bad_ip") {
 		t.Error("expected known_bad_ip to be in the shipped catalogue")
-	}
-	if IsLegacyDetectorID("known_bad_ip") {
-		t.Error("expected known_bad_ip to be outside the legacy twelve -- see LegacyDetectorIDs")
 	}
 }

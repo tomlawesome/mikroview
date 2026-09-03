@@ -628,6 +628,37 @@ rewritten.
 
 ### Removed
 
+- **An account with no `role` in the accounts file no longer defaults to
+  `user`** (#873). The default existed for accounts persisted before
+  roles existed (#653); every account mikroview writes has carried a role
+  since. A roleless account can now only be hand-edited in, so it is
+  loaded as-is and fails closed -- denied by every role gate, admin and
+  user alike. Give the account a role in the file, or set one as an
+  admin.
+
+- **The rule-usage store no longer reads the bare-array
+  `rule-usage.json` it wrote before `recordingSince` existed** (#873).
+  Only the current object shape is read; an array-shaped document is now
+  an unparseable document, which is a hard startup error by design
+  (#378), so an instance still holding one refuses to start until that
+  stale `rule-usage.json` is deleted.
+
+- **`watchlist.storePath` and `flags.detectorSettingsStorePath` are
+  gone, with the boot-time migration that read them** (config keys,
+  `MIKROVIEW_WATCHLIST_STORE_PATH` and
+  `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH`). Both documents were
+  migration sources only: the stores that owned them
+  (`internal/watchlist.Store`, `internal/detect.SettingsStore`) were
+  deleted in #405/#407, and nothing has written either since. Watchlist
+  entries and detector toggles both live in the definitions store
+  (`engine.definitionsStorePath`), which is what `-backup` carries. The
+  server no longer opens the two documents at boot, so a read failure on
+  either can no longer stop it starting. Remove the keys from
+  `config.yaml`; unknown keys are ignored, and the files themselves can
+  be deleted once a deployment has upgraded past #407. Upgrading
+  straight from a pre-#407 release skips the one-time entry adoption:
+  upgrade through a release that still had it, or re-create the entries.
+
 - **The Noise verdict, the plain Clear control, "never flag this again"
   and the exclusions API are gone** (#640), wholesale, with no aliases
   and no stub endpoints. Each is replaced by a verdict, above:
