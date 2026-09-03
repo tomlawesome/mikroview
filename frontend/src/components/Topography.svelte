@@ -36,8 +36,8 @@
   import { coverageState } from '../lib/coverage.svelte'
   import { composeCommand, refusingCommentFor } from '../lib/compose'
   import type { ReachStrand } from '../lib/reach'
+  import { portsLine, reachFor } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
-  import { reachFor } from '../lib/reach'
   import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
@@ -1085,13 +1085,6 @@
       y: MY + (dy / len) * MR + (dx / len) * off,
       angle: (Math.atan2(dy, dx) * 180) / Math.PI + 90,
     }
-  }
-
-  function portsLine(ports: number[]): string {
-    return ports
-      .slice(0, 3)
-      .map((p) => `:${p}`)
-      .join(' ')
   }
 
   const reachZoneInk = $derived(reach ? LANE_INKS[Math.max(0, zoneIndex(reach.zoneId)) % LANE_INKS.length] : 'var(--accent)')
