@@ -31,6 +31,12 @@
   import { appState } from '../lib/state.svelte'
   import { zonesState, type ZoneInfo } from '../lib/zones.svelte'
   import { tunnelsState } from '../lib/tunnels.svelte'
+  // The tunnel node's state comes from the city's own derivation rather
+  // than a second one beside it (#877): two readings of "is this tunnel
+  // up" would eventually disagree, and #874 exists precisely so the app
+  // stops guessing. If its shape ever stops suiting both drawings, it
+  // moves out of city/ -- it does not get forked.
+  import { bridgeStateFor, bridgeStateLabel } from '../lib/city/tunnelState'
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
   import { realityEdges, unexercisedIntents, worstUnplannedOf, type RealityEdge } from '../lib/reality'
   import { coverageState } from '../lib/coverage.svelte'
@@ -219,11 +225,22 @@
   // `idx` is only set for 'zone' anchors -- an internet edge's own slot
   // is its zone end's lane index (#726), so it rides along with the
   // anchor rather than being re-derived from the edge's position.
-  type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'any'; idx?: number }
+  type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'tunnel' | 'any'; idx?: number }
+
+  // The tunnel node's own place on the stage, ported from round 30
+  // (the-whole.html:986, `translate(1128 132)`). Its card is drawn
+  // asymmetrically about this point -- -84 to +104 -- exactly as the
+  // mockup does; TUNNEL_ANCHOR is the underside its lines leave from.
+  const TUNNEL = { x: 1128, y: 132 }
+  const TUNNEL_ANCHOR = { x: 1080, y: 186 }
 
   function anchorOf(iface: string): EdgeAnchor | null {
     if (iface === '') return { ...WAIST, kind: 'any' }
     if (iface === zonesState.wanInterface) return { x: 700, y: 104, kind: 'internet' }
+    // Before the lane row is consulted: the tunnel left it (#877), and
+    // an edge that used to find its lane card must now find the node
+    // rather than fall through to null and be dropped silently.
+    if (iface === tunnelIface) return { ...TUNNEL_ANCHOR, kind: 'tunnel' }
     const i = zones.findIndex((z) => z.id === iface)
     if (i === -1) return null
     return { x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }
@@ -1638,6 +1655,99 @@
   const wanAddress = $derived(
     zonesState.pushed.find((a) => !!a.interface && a.interface === zonesState.wanInterface)?.address ?? null,
   )
+
+  // --- the tunnel node (#877, #701's fact 3 as split) ----------------------
+  // Round 30 draws a second upper node beside Internet: `WireGuard` /
+  // `wg0 · 10.99.0.0/24` / `QUIET`, with its own watch bar
+  // (the-whole.html:986-1006). Nothing drew it before because a tunnel
+  // was not a thing this scene had -- a WireGuard interface could only
+  // land in the lane row, which is what zonesState.tunnelInterface now
+  // takes it out of.
+  const tunnelIface = $derived(zonesState.tunnelInterface)
+
+  const tunnelApi = $derived(tunnelIface ? (tunnelsState.list.find((t) => t.iface === tunnelIface) ?? null) : null)
+
+  /** The tunnel's own events in this window: what separates an API
+   * `up` that is carrying traffic from one that is lit and empty. */
+  const tunnelEvents = $derived(
+    tunnelIface
+      ? appState.events.filter((e) => e.inInterface === tunnelIface || e.outInterface === tunnelIface).length
+      : 0,
+  )
+
+  // 'quiet' is mikroview's own reading on top of the API's vocabulary,
+  // and QUIET is exactly what round 30 draws on this card.
+  const tunnelState = $derived(bridgeStateFor(tunnelApi?.apiState ?? null, tunnelEvents))
+  const tunnelStateLabel = $derived(bridgeStateLabel(tunnelState))
+  const tunnelCovClass = $derived(tunnelState === 'up' ? 'cov-l' : tunnelState === 'down' ? 'cov-d' : 'cov-q')
+
+  /**
+   * `wg0 · 10.99.0.0/24`, as drawn: the tunnel's own row in the pushed
+   * /ip address table, read the way wanAddress reads the WAN's.
+   *
+   * The network form rather than the host address because that is what
+   * round 30 draws here, and RouterIPAddress carries `network`
+   * alongside `address` -- so no arithmetic and no guess. Null where no
+   * address has been pushed for the tunnel: the slot then says so,
+   * rather than inferring a range from a peer's allowed address, which
+   * is a /32 of one peer and not the tunnel's subnet at all.
+   */
+  const tunnelSubnet = $derived.by((): string | null => {
+    if (!tunnelIface) return null
+    const row = zonesState.pushed.find((a) => a.interface === tunnelIface)
+    if (!row) return null
+    const slash = row.address.indexOf('/')
+    const prefix = slash === -1 ? '' : row.address.slice(slash + 1)
+    if (row.network && prefix) return `${row.network}/${prefix}`
+    return row.address || null
+  })
+
+  /** The node's watch bar. Correlated exactly as a lane's is -- through
+   * the pushed CIDR -- so no third correlation rule enters the scene,
+   * and absent entirely while no address names the tunnel's range,
+   * which is the same refusal zoneAggregate already makes. */
+  const tunnelAggregate = $derived.by((): ZoneAggregate | null => {
+    if (!tunnelIface || !tunnelSubnet) return null
+    return zoneAggregate({
+      id: tunnelIface,
+      name: tunnelIface,
+      cidr: tunnelSubnet,
+      hosts: [],
+      hostCount: 0,
+      eventCount: tunnelEvents,
+    })
+  })
+
+  /**
+   * The ghost reference line's far end: the lane the tunnel's traffic
+   * actually reaches most, or null while nothing has been observed
+   * crossing it.
+   *
+   * Round 30 draws this line ending inside a lane card rather than at
+   * the router (`the-whole.html:936` runs to 610,476, the srv lane's
+   * top edge), which reads as where the tunnel's traffic goes -- a
+   * reference, drawn faintly, not a policy edge. Absent rather than
+   * guessed: a tunnel nobody has crossed has no such destination.
+   */
+  const tunnelGhostLane = $derived.by((): number | null => {
+    if (!tunnelIface) return null
+    const counts = new Map<string, number>()
+    for (const e of appState.events) {
+      const other = e.inInterface === tunnelIface ? e.outInterface : e.outInterface === tunnelIface ? e.inInterface : null
+      if (!other) continue
+      counts.set(other, (counts.get(other) ?? 0) + 1)
+    }
+    let best = -1
+    let bestN = 0
+    zones.forEach((z, i) => {
+      const n = counts.get(z.id) ?? 0
+      if (n > bestN) {
+        best = i
+        bestN = n
+      }
+    })
+    return best === -1 ? null : best
+  })
 </script>
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
@@ -2007,6 +2117,24 @@
            Individual edges fan at the waist card instead; see
            edgePath's internet-edge branch. -->
       <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
+      <!-- The tunnel's own two lines (#877), drawn like the trunk: once,
+           on every lens, never per-edge. Both are ported from round 30
+           (the-whole.html:935-936), which draws them outside the node's
+           own group -- easy to miss, and the reason an earlier reading
+           of the mockup called the card free-floating.
+           Deviation, deliberate: round 30 strokes the solid lane
+           `var(--lan)`, the LAN lane's own ink, because in that scene
+           the tunnel's traffic goes to LAN. With real data that ink
+           would claim a lane this line does not touch, so it takes the
+           trunk's accent instead -- the same relationship the trunk
+           draws, an upper node joined to the router. -->
+      {#if tunnelIface}
+        <path class="rib" d="M1080 186 C 990 215, 880 240, 830 252" stroke="var(--accent)" stroke-width="1.7" />
+        {#if tunnelGhostLane !== null}
+          {@const gx = laneX(tunnelGhostLane, zones.length)}
+          <path class="rib-ghost" d="M 1100 186 C 945 300, {gx + 95} 385, {gx} 476" />
+        {/if}
+      {/if}
       {#if lens === 'traffic'}
         {#if eps > 0}
           <circle class="mote" r="2.5" fill="var(--accent)" />
@@ -2309,6 +2437,43 @@
           {/if}
         </g>
       </g>
+
+      <!-- The tunnel node (#877): the second upper node round 30 draws
+           beside Internet (the-whole.html:986-1006), ported including
+           its asymmetry -- the card runs -84 to +104 about its own
+           point, not centred on it, and its bar is flush with the left
+           edge. Passive for the same reason Internet is; its bar takes
+           its own clicks back through `.passive .hbar-g`.
+           Drawn only when a WireGuard interface has actually been
+           pushed: no placeholder node, and no "unknown" card standing
+           in for a tunnel nobody has told us about. -->
+      {#if tunnelIface}
+        <g transform="translate(1128 132)" class="passive">
+          <g class="isl-card">
+            <rect class="isl" x="-84" y="-28" width="188" height="56" rx="12" />
+            <text x="-66" y="-2" class="n-name tn-name">WireGuard</text>
+            {#if tunnelSubnet}
+              <text x="-66" y="14" class="n-cidr">{tunnelIface}{` · ${tunnelSubnet}`}</text>
+            {:else}
+              <!-- One interface's own missing row, not the whole map's
+                   degraded state, so this is not `.cidr-deg`'s toggle. -->
+              <text x="-66" y="14" class="n-cidr"
+                >{tunnelIface}<tspan class="cidr-none">{' · no address pushed'}</tspan></text
+              >
+            {/if}
+            <text x="54" y="-4" class="n-cov {tunnelCovClass}">{tunnelStateLabel}</text>
+            {#if tunnelAggregate}
+              {@render aggregateBar(tunnelAggregate, -84, 188, 32, 16, { id: tunnelIface, name: tunnelIface })}
+            {/if}
+          </g>
+          <g class="g-dot">
+            <!-- Mirrored: the node sits at the right of the stage, so
+                 its survey label runs leftward off the dot. -->
+            <circle r="8" class="zone-dot" stroke="var(--accent)" />
+            <text x="-16" y="4" text-anchor="end" class="zone-label">WireGuard</text>
+          </g>
+        </g>
+      {/if}
 
       <!-- The waist. Passive like the internet: every policy edge
            routes through here, and the island must not eat their clicks. -->
@@ -3182,6 +3347,22 @@
 
   .n-cidr.small {
     font-size: 9.5px;
+  }
+
+  /* The tunnel node's name, a size down from Internet's as round 30
+     draws it (the-whole.html:989). A class rather than the mockup's
+     inline style: a static `style` attribute is refused under this
+     app's CSP in Firefox, which is how #659 shipped past every check
+     and broke on the owner's screen. */
+  .tn-name {
+    font-size: 13px;
+  }
+
+  /* No pushed address row for the tunnel. Distinct from `.cidr-deg`,
+     which is the whole-map toggle for "no push at all" -- this is one
+     interface missing from a table that did arrive. */
+  .cidr-none {
+    font-style: italic;
   }
 
   .cluster-name {

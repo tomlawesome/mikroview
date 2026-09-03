@@ -37,9 +37,9 @@ func captureStdout(t *testing.T, fn func()) string {
 }
 
 var testKeys = []string{
-	"TV76ZRXG3AMSQF2NJZUTBP3MWOWZGJHB",
-	"SQZZDR4QB7XSJVEB5R5OKSODXMUT55GY",
-	"TAANIFDZS2HXIRQPHPDB3XUZXNFXN3K5",
+	"TESTRECOVERYKEYAAAAAAAAAAAAAAAAA",
+	"TESTRECOVERYKEYBBBBBBBBBBBBBBBBB",
+	"TESTRECOVERYKEYCCCCCCCCCCCCCCCCC",
 }
 
 // The operator has to be able to read the keys, or the command achieves

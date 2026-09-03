@@ -15,6 +15,12 @@ export type TunnelPeer = CityPeer
 export interface TunnelInterface {
   iface: string
   routerId: string
+  /** Which pushed table this came from. The city draws both kinds as
+   * footbridges, so it never had to tell them apart; the 2D map's
+   * tunnel node is WireGuard only (#877, round 30 draws no PPP node),
+   * and a peer's own `kind` cannot answer it -- a WireGuard interface
+   * with no peers pushed has an empty list. */
+  kind: 'wg' | 'ppp'
   apiState: 'up' | 'down' | 'unknown'
   peers: TunnelPeer[]
 }
@@ -50,6 +56,7 @@ class TunnelsState {
           list.push({
             iface: iface.name,
             routerId: d.id,
+            kind: 'wg',
             apiState: iface.state,
             peers: iface.peers.map((p, i) => ({
               id: iface.name + '/wg/' + (p.publicKey || String(i)),
@@ -69,6 +76,7 @@ class TunnelsState {
           list.push({
             iface: sess.name,
             routerId: d.id,
+            kind: 'ppp',
             // A row present in /ppp/active is itself the up signal
             // (#874) -- there is no separate "down but configured"
             // reading this endpoint can offer.
