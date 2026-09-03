@@ -134,6 +134,23 @@ type ReplaySample struct {
 	Provisional bool
 }
 
+// appendReplaySample adds s to a replay's running sample, keeping at most
+// replaySampleBound entries. Once full, a new sample bumps out the oldest
+// one rather than being refused -- issue #860: an operator pressing Try is
+// judging something that just happened, so the receipt should illustrate
+// with the emissions they are most likely to recognise, not whichever fifty
+// happened to fire first over however much corpus is held. Every Replay
+// call feeds this in chronological (oldest-to-newest) walk order, so the
+// returned slice comes out chronological too -- oldest of the kept entries
+// first -- without needing a re-sort.
+func appendReplaySample(sample []ReplaySample, s ReplaySample) []ReplaySample {
+	sample = append(sample, s)
+	if len(sample) > replaySampleBound {
+		sample = sample[1:]
+	}
+	return sample
+}
+
 // Receipt is what a Replayable definition's Replay call returns when
 // the corpus was long enough to answer honestly (see Decline for the
 // alternative). Every field issue #403 asks a receipt to carry is here:

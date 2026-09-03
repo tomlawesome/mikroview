@@ -163,16 +163,14 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 		}
 
 		emissionCount++
-		if len(sample) < replaySampleBound {
-			sample = append(sample, ReplaySample{
-				At:     now,
-				Target: st.target,
-				Detail: em.Detail,
-				Ports:  em.Ports,
-				Hosts:  em.Hosts,
-				Labels: em.Labels,
-			})
-		}
+		sample = appendReplaySample(sample, ReplaySample{
+			At:     now,
+			Target: st.target,
+			Detail: em.Detail,
+			Ports:  em.Ports,
+			Hosts:  em.Hosts,
+			Labels: em.Labels,
+		})
 	})
 
 	span := corpusWindow.End.Sub(corpusWindow.Start)
