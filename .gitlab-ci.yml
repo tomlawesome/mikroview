@@ -51,6 +51,30 @@ variables:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
 
+# Every job that shells out to git needs this. `go build` stamps VCS metadata
+# by running git, and git refuses a repository owned by another user unless it
+# is marked safe — which failed the whole lint stage with nothing but
+# "error obtaining VCS status: exit status 128" to go on (#908).
+#
+# The likely owner mismatch is our own doing: test:go chowns $CI_PROJECT_DIR to
+# ci-test, and the runner reuses its build directory between pipelines, so a
+# later job running as root meets a checkout owned by uid 10001. test:go now
+# hands ownership back, but marking the directory safe is the durable half —
+# it costs nothing and does not depend on that cleanup having run.
+#
+# The check below exists because the Go wrapper swallows git's actual message.
+# If git is still unusable, fail here with the real error rather than three
+# stages later with a riddle.
+.git_safe: &git_safe
+  before_script:
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - |
+      if ! git rev-parse --git-dir >/dev/null 2>&1; then
+        echo "git cannot read the checkout at $CI_PROJECT_DIR. Real error:"
+        git status || true
+        exit 1
+      fi
+
 # ---------------------------------------------------------------------------
 # LINT — mirrors what ci.yml already does on GitHub (build+vet+gofmt, svelte-check),
 # not introducing golangci-lint since mikroview doesn't use it today.
@@ -59,16 +83,25 @@ variables:
 lint:go:
   stage: lint
   image: golang:1.27
-  <<: *dev_or_mr
+  <<: [*dev_or_mr, *git_safe]
   script:
     - go build ./...
     - go vet ./...
     - |
-      unformatted=$(gofmt -l $(git ls-files '*.go'))
+      # Count the files first. A broken git makes `git ls-files` print nothing,
+      # gofmt then reads stdin instead of a file list, and the check passes
+      # having examined nothing at all — reported success, zero coverage.
+      # Reproduced locally on 2026-09-03 while diagnosing #908.
+      files=$(git ls-files '*.go')
+      if [ -z "$files" ]; then
+        echo "git ls-files returned no Go files -- refusing to report a gofmt pass on an empty list"
+        exit 1
+      fi
+      unformatted=$(gofmt -l $files)
       if [ -n "$unformatted" ]; then
         echo "Not gofmt-clean:"
         echo "$unformatted"
-        gofmt -d $(git ls-files '*.go')
+        gofmt -d $files
         exit 1
       fi
 
@@ -108,6 +141,11 @@ test:go:
     - useradd -m -u 10001 ci-test
     - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
     - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -coverprofile=coverage.out"
+  # The runner reuses its build directory between pipelines, so leaving the
+  # checkout owned by ci-test hands the next pipeline's root-run jobs a
+  # repository git will not touch. Give it back (#908).
+  after_script:
+    - chown -R root:root "$CI_PROJECT_DIR" || true
   artifacts:
     paths:
       - coverage.out
@@ -166,7 +204,7 @@ security:gosec:
 security:govulncheck:
   stage: security
   image: golang:1.27
-  <<: *dev_or_mr
+  <<: [*dev_or_mr, *git_safe]
   script:
     - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
     - govulncheck -format=json ./... > govulncheck.json
@@ -292,6 +330,9 @@ chr-exercise:run:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule" && $CHR_EXERCISE == "true"'
   before_script:
+    # Repeated rather than merged from .git_safe: a job-level before_script
+    # replaces an inherited one outright, so this job cannot have both.
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - apt-get update -qq && apt-get install -y -qq qemu-system-x86 qemu-utils python3 unzip curl >/dev/null
     # Quoted whole: a bare "key: value" inside the message makes YAML read
     # this line as a mapping and GitLab reject the file (pipeline 145).
