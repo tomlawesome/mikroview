@@ -16,6 +16,32 @@ import { appState } from '../lib/state.svelte'
 import type { ClientEvent } from '../lib/types'
 import City from './City.svelte'
 
+// #915: twelve of these tests timed out on the GitLab runner against
+// vitest's 5000ms default while GitHub CI stayed green. Measured here
+// rather than guessed. One render of City into jsdom builds 1576 elements
+// and costs 650-900ms; the slowest tests mount twice and re-render twice,
+// so they land near 2.5s on an idle machine and 5.3s on a busy one -- same
+// box, same commit, twice the time, purely from CPU contention. GitLab's
+// worst was 9260ms.
+//
+// The time is jsdom's, not the component's. In a CPU profile of a single
+// render, jsdom and its symbol-tree node store take 58% and Svelte's
+// runtime 23%, while City.svelte's own compiled code is 3% and the ground
+// model it renders is 9ms. The hottest single function is symbol-tree's
+// `index`, which jsdom calls on every insert to find a node's position
+// among its siblings; that walk is linear each time, so filling one wide
+// SVG parent is quadratic. No assertion here can be sharpened to avoid it
+// -- the cost is the size of the DOM the component builds, which is the
+// lever #690 ("the UI is very laggy") would have to pull, not this file.
+//
+// 20000ms is a shade over twice the worst time observed anywhere, picked
+// for the variance rather than the average: contention alone already
+// doubles these numbers, so 1.5x headroom would go red again on a busier
+// runner. It stays far below anything a genuinely stuck render could hide
+// behind, so a real hang still fails as a hang. Set per file on purpose --
+// every other suite keeps the 5000ms default, and should.
+vi.setConfig({ testTimeout: 20000 })
+
 const ground = layoutGround(mockupEstate())
 
 function matchMedia(matches: boolean) {
