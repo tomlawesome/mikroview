@@ -27,16 +27,17 @@ vi.hoisted(() => {
 // the operator can and cannot do to a half-finished setup.
 vi.mock('../lib/api', () => ({
   fetchSetupStatus: vi.fn(),
+  fetchSetupCommands: vi.fn(),
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
   createToken: vi.fn(),
 }))
 
-import { fetchDevices, fetchSetupStatus, markSetupStep } from '../lib/api'
+import { fetchDevices, fetchSetupCommands, fetchSetupStatus, markSetupStep } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { wizardState } from '../lib/wizard.svelte'
-import type { SetupStatus } from '../lib/types'
+import type { SetupCommandsResponse, SetupStatus } from '../lib/types'
 import SetupWizard from './SetupWizard.svelte'
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
@@ -50,10 +51,47 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
   }
 }
 
+// commandsFixture is built from #436's fixed API contract sample
+// response (POST /api/setup/commands), the same shape internal/routeros
+// serves -- one dialect, three rows, and edge-1's version below the
+// table's floor.
+function commandsFixture(over: Partial<SetupCommandsResponse> = {}): SetupCommandsResponse {
+  return {
+    routeros: {
+      minimum: '7.18',
+      newest: '7.24.1',
+      rows: [
+        { from: '7.18', to: '7.23.3', dialect: 'a', verifiedBy: 'exercised on CHR 7.23.3', note: '' },
+        {
+          from: '7.24',
+          to: '7.24',
+          dialect: 'a',
+          verifiedBy: 'release notes read 2026-08-29',
+          note:
+            '7.24.0 has a `find` argument-lookup bug, fixed in 7.24.1: on this release, tag rules ' +
+            'one at a time rather than with the bulk commands.',
+        },
+        { from: '7.24.1', to: '7.24.1', dialect: 'a', verifiedBy: 'release notes read 2026-08-29', note: '' },
+      ],
+    },
+    picked: null,
+    routers: [{ id: 'edge-1', name: 'edge-1', routerosVersion: '7.16', standing: 'below-minimum', note: '' }],
+    steps: {
+      caTrust: { commands: 'CA_TRUST_COMMANDS', note: '' },
+      syslog: { commands: 'SYSLOG_COMMANDS', note: '' },
+      ruleTagging: { commands: 'RULE_TAGGING_COMMANDS', note: '' },
+      push: { commands: '', note: '' },
+      schedule: { commands: '', note: '' },
+    },
+    ...over,
+  }
+}
+
 beforeEach(async () => {
   vi.resetAllMocks()
   vi.mocked(fetchSetupStatus).mockResolvedValue(status())
   vi.mocked(fetchDevices).mockResolvedValue([])
+  vi.mocked(fetchSetupCommands).mockResolvedValue(commandsFixture())
   authState.state = 'authenticated'
   authState.role = 'admin'
   authState.username = 'tom'
@@ -64,6 +102,8 @@ beforeEach(async () => {
   wizardState.pane = 1
   wizardState.showStepList = false
   wizardState.open = true
+  wizardState.commands = null
+  wizardState.pickedVersion = ''
 })
 
 describe('SetupWizard', () => {
@@ -320,5 +360,119 @@ describe('SetupWizard', () => {
     const live = container.querySelector('[role="status"]')?.textContent ?? ''
     expect(live).toContain('Step 1 of 5')
     expect(live).toContain('Trust the certificate')
+  })
+})
+
+// #436: the wizard stopped generating RouterOS syntax itself and now
+// renders what POST /api/setup/commands sends back -- these pin the
+// request it sends, the pick-list it builds from routeros.rows, and the
+// router-standing warning it renders from the same fixture.
+describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
+  it("requests the command blocks with the wizard's address, syslog port and push kinds, no version until picked", async () => {
+    render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+
+    const req = vi.mocked(fetchSetupCommands).mock.calls[0][0]
+    expect(req.address).toBe(wizardState.address)
+    expect(req.syslogPort).toBe(':6514')
+    expect(req.kinds).toEqual(['filter-rule', 'arp'])
+    expect(req.version).toBeUndefined()
+  })
+
+  it('re-requests with the picked version when the operator chooses one', async () => {
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('.routeros-version select')).toBeTruthy())
+
+    const select = container.querySelector('.routeros-version select') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: '7.24.1' } })
+
+    await waitFor(() => {
+      const last = vi.mocked(fetchSetupCommands).mock.calls.at(-1)?.[0]
+      expect(last?.version).toBe('7.24.1')
+    })
+  })
+
+  it('lists the dialect table\'s rows, range-labelled, with "Not sure" first', async () => {
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('.routeros-version select')).toBeTruthy())
+
+    const options = [...container.querySelectorAll('.routeros-version option')].map((o) => o.textContent)
+    expect(options).toEqual(['Not sure — the router will report it', '7.18–7.23.3', '7.24', '7.24.1'])
+  })
+
+  it("warns once, in the note register, for a router below the table's floor", async () => {
+    const { container } = render(SetupWizard)
+    await waitFor(() => {
+      const note = container.querySelector('.note.below-minimum')
+      expect(note?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+        'edge-1 runs RouterOS 7.16. These commands were written for 7.18 and later; on 7.16 some ' +
+          'may not apply as written. Check each against your router before running it.',
+      )
+    })
+  })
+
+  it('carries the amber left rule only on the below-minimum warning', async () => {
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('.note.below-minimum')).toBeTruthy())
+    // Never a modal, never dismissable -- just a note in the existing
+    // register, so there is exactly one warning paragraph here.
+    expect(container.querySelectorAll('.note.below-minimum').length).toBe(1)
+  })
+
+  it('warns for the operator\'s own picked version too, worded "Your picked version"', async () => {
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({ picked: { version: '7.25', standing: 'ahead-of-review', dialect: 'a' }, routers: [] }),
+    )
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => {
+      const notes = [...container.querySelectorAll('p.note')].map((p) => p.textContent?.replace(/\s+/g, ' ').trim())
+      expect(
+        notes.some((t) =>
+          t?.startsWith(
+            'Your picked version runs RouterOS 7.25. These commands were last checked against 7.24.1.',
+          ),
+        ),
+      ).toBe(true)
+    })
+    expect(container.querySelector('.note.below-minimum')).toBeNull()
+  })
+
+  it('says nothing for a router whose standing is unknown or reviewed', async () => {
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        routers: [
+          { id: 'core', name: 'core', routerosVersion: '7.20', standing: 'reviewed', note: '' },
+          { id: 'edge-2', name: 'edge-2', routerosVersion: '', standing: 'unknown', note: '' },
+        ],
+      }),
+    )
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+    expect(container.querySelector('.note.below-minimum')).toBeNull()
+    expect(container.textContent).not.toContain('runs RouterOS')
+  })
+
+  it("renders a step's own note directly under that step's block", async () => {
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        routers: [],
+        steps: {
+          caTrust: { commands: 'CA', note: '' },
+          syslog: { commands: 'SYS', note: '' },
+          ruleTagging: {
+            commands: 'TAG',
+            note: 'on this release, tag rules one at a time rather than with the bulk commands',
+          },
+          push: { commands: '', note: '' },
+          schedule: { commands: '', note: '' },
+        },
+      }),
+    )
+    wizardState.pane = 3
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('TAG'))
+    expect(container.textContent).toContain('on this release, tag rules one at a time')
   })
 })
