@@ -1332,3 +1332,86 @@ export interface SetupCommandsRequest {
   kinds?: string[]
   version?: string
 }
+
+// --- Tune logging (#435) ----------------------------------------------
+//
+// Mirrors internal/routeros/export and the two /api/tune-logging
+// handlers (the #435 fixed contract). The upload never leaves this
+// request/response pair -- nothing here is persisted, mirrored by the
+// component that renders it (TuneLogging.svelte) never writing the
+// export text anywhere but its own component state.
+
+// TuneLoggingObserving is how long mikroview has been watching this
+// device -- present whether or not that is yet a full day (§2 of the
+// contract: "advise, never lock, compute nothing early").
+export interface TuneLoggingObserving {
+  since: string
+  hours: number
+}
+
+// TuneLoggingRouterInfo is the export header's own version, read the
+// same way #436's dialect table reads a device's reported version --
+// reused RouterosStanding rather than a second enum for the same
+// answer.
+export interface TuneLoggingRouterInfo {
+  version: string
+  standing: RouterosStanding
+  dialect: string
+}
+
+// TuneLoggingRule is one /ip firewall filter `add` line from the
+// uploaded export, with RouterOS's own packet/byte counters (#435
+// decision 4) matched in from the latest push where the ordinal and
+// chain+action agree.
+export interface TuneLoggingRule {
+  id: number
+  chain: string
+  action: string
+  comment: string
+  inInterface: string
+  outInterface: string
+  inInterfaceList: string
+  outInterfaceList: string
+  boundary: string
+  crossesDark: boolean
+  log: boolean
+  logPrefix: string
+  packets: number
+  bytes: number
+  countersKnown: boolean
+  line: number
+}
+
+// TuneLoggingRejection is why the parser would not proceed -- key
+// material detected, meaning the upload was not `export hide-sensitive`
+// (§5 of the contract).
+export interface TuneLoggingRejection {
+  reason: string
+}
+
+export interface TuneLoggingAnalyseRequest {
+  device: string
+  export: string
+  darkBoundaries: string[]
+}
+
+export interface TuneLoggingAnalyseResponse {
+  ready: boolean
+  observing: TuneLoggingObserving
+  routeros: TuneLoggingRouterInfo
+  rules: TuneLoggingRule[]
+  rejected: TuneLoggingRejection | null
+}
+
+export interface TuneLoggingRenderRequest {
+  device: string
+  export: string
+  selected: number[]
+}
+
+export interface TuneLoggingRenderResponse {
+  annotated: string
+  commands: string
+  changed: number
+  routeros: TuneLoggingRouterInfo
+}

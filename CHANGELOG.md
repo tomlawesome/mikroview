@@ -50,6 +50,25 @@ rewritten.
   observing) and, after a warm restart only, `restoredTo` (when the
   snapshot it loaded was taken) -- absent rather than null on a cold
   start.
+- **Tune logging** (#435): a new "Tune logging" page turns a dark
+  connection -- one with no rule logging what crosses it -- into a
+  watched one. Upload the router's `/export hide-sensitive`; once
+  mikroview has observed the device for 24 hours, the page lists every
+  filter rule that crosses an operator-chosen dark boundary, ticked by
+  default, each shown with how often it has fired and how many bytes
+  since observation began -- RouterOS's own per-rule packet/byte
+  counters, now carried on the push -- as the cost of turning its
+  logging on. Reached from the wizard's finish screen and from a dark
+  pair on the topography's coverage lens. Rendering gets back the
+  annotated export (download first, copy second) or the equivalent
+  `/ip firewall filter set` commands, with a `beforeunload` guard until
+  either is used. The change is mechanically checked before it is ever
+  returned -- parse the config before and after, strip logging
+  attributes, compare -- so it can only ever be logging, never anything
+  else; a check failure answers 500 rather than shipping an edit nobody
+  asked for. The uploaded export itself is never logged, persisted, or
+  stored anywhere: it lives in memory for the one request and is gone
+  once the page is left.
 - **RouterOS commands are now version-aware, server-rendered, and keyed
   by dialect rather than by a single reviewed marker** (#436, Go half).
   `internal/routeros` gained a dialect table (`Rows`): a row is a version
