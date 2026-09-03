@@ -91,3 +91,34 @@ func TestVersionMarkersAreSane(t *testing.T) {
 		t.Errorf("MinimumVersion %q is newer than ReviewedVersion %q", MinimumVersion, ReviewedVersion)
 	}
 }
+
+// ReviewedVersion is a constant so scripts/routeros-freshness.sh's
+// -print-reviewed can name it without running the comparison logic, but
+// dialects.NewestVersion() is the table's own answer to the same
+// question. This is what stops the two silently drifting apart: add or
+// extend a row without also bumping ReviewedVersion (or the reverse) and
+// this test fails.
+func TestReviewedVersionMatchesNewest(t *testing.T) {
+	if ReviewedVersion != NewestVersion() {
+		t.Errorf("ReviewedVersion is %q but NewestVersion() (dialects.Rows' newest upper bound) is %q -- "+
+			"bump ReviewedVersion in the same change that adds or extends a row in dialects.go",
+			ReviewedVersion, NewestVersion())
+	}
+}
+
+// The API contract (#436) fixes routerosStanding's wire values as
+// kebab-case; this pins Standing.String() to it so a future edit can't
+// quietly revert to the old camelCase names nothing here would otherwise
+// catch.
+func TestStandingStringIsKebabCase(t *testing.T) {
+	for standing, want := range map[Standing]string{
+		StandingUnknown:       "unknown",
+		StandingBelowMinimum:  "below-minimum",
+		StandingReviewed:      "reviewed",
+		StandingAheadOfReview: "ahead-of-review",
+	} {
+		if got := standing.String(); got != want {
+			t.Errorf("Standing(%d).String() = %q, want %q", standing, got, want)
+		}
+	}
+}
