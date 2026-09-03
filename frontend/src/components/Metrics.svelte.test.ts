@@ -17,6 +17,7 @@ vi.mock('../lib/api', () => ({
 import { appState } from '../lib/state.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { metricsPref } from '../lib/metrics.svelte'
+import { formatHM } from '../lib/format'
 import type { Stats } from '../lib/types'
 import Metrics from './Metrics.svelte'
 
@@ -189,5 +190,66 @@ describe('Metrics', () => {
     expect(metricsPref.minute).not.toBeNull()
     await fireEvent.keyDown(surface, { key: 'Escape' })
     expect(metricsPref.minute).toBeNull()
+  })
+
+  // ── The restart statement (#795, design round 41, scene #s4) ──────────
+  //
+  // What the hour is an account of, after a restart: the last fact in the
+  // hourline's right-hand rate group. The wording and the sixty-minute
+  // clearing boundary are pinned in lib/provenance.test.ts, which both
+  // surfaces read; what is this page's own business, and pinned here, is
+  // that the fact is rendered, that it is *last* in the rate group (a
+  // fact about the other facts belongs after them), and that it is a
+  // statement rather than a control.
+  function statement(container: HTMLElement): HTMLElement | null {
+    return container.querySelector('.hourline .rate .fact.stmt')
+  }
+
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60 * 1000).toISOString()
+
+  it('names both times on the hourline after a warm restart', () => {
+    const liveSince = minutesAgo(34)
+    const restoredTo = minutesAgo(38)
+    appState.stats = { ...stats, liveSince, restoredTo }
+    const { container } = render(Metrics)
+
+    const el = statement(container)
+    expect(el?.textContent).toMatch(/^restored to \d\d:\d\d · live since \d\d:\d\d$/)
+    expect(el?.textContent).toBe(`restored to ${formatHM(restoredTo)} · live since ${formatHM(liveSince)}`)
+  })
+
+  it('says nothing came before after a cold start', () => {
+    const liveSince = minutesAgo(34)
+    appState.stats = { ...stats, liveSince }
+    const { container } = render(Metrics)
+
+    expect(statement(container)?.textContent).toBe(`counting since ${formatHM(liveSince)} — nothing before`)
+  })
+
+  it('draws the statement last in the rate group, as a fact and not a control', () => {
+    appState.stats = { ...stats, liveSince: minutesAgo(3), restoredTo: minutesAgo(7) }
+    const { container } = render(Metrics)
+
+    const rate = container.querySelector('.hourline .rate')!
+    expect(rate.lastElementChild!.classList.contains('stmt')).toBe(true)
+    // A statement, not a control: there is nowhere for it to lead.
+    expect(statement(container)!.tagName.toLowerCase()).toBe('span')
+    expect(rate.querySelector('button')).toBeNull()
+    // Its own separator went with it, rather than leaving a stray dot.
+    expect(rate.lastElementChild!.previousElementSibling!.classList.contains('sep')).toBe(true)
+  })
+
+  it('has cleared an hour after the process came up', () => {
+    appState.stats = { ...stats, liveSince: minutesAgo(61), restoredTo: minutesAgo(65) }
+    const { container } = render(Metrics)
+
+    expect(statement(container)).toBeNull()
+    expect(container.textContent).not.toContain('restored to')
+  })
+
+  it('says nothing at all when the server sends no liveSince', () => {
+    // The base fixture is a pre-#795 stats payload.
+    const { container } = render(Metrics)
+    expect(statement(container)).toBeNull()
   })
 })
