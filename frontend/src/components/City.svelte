@@ -40,6 +40,7 @@
     groundAt,
     lerpCam,
     minimapCam,
+    reducedMotion,
     viewportRect,
     wallFace,
     type BoxFaces,
@@ -54,7 +55,11 @@
   import { deviceKindFor } from '../lib/city/deviceKind'
   import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
   import { faceOf, wallPiece, wallSegments, type WallBreak } from '../lib/city/walls'
+  import { IMPORTANCE_FLOOR_H, dependedOnImportance, tweenHeights, watchedImportance, type Importance } from '../lib/city/importance'
+  import { cityImportanceState } from '../lib/cityImportance.svelte'
   import { entitiesState } from '../lib/entities.svelte'
+  import { flagsState } from '../lib/flags.svelte'
+  import { watchlistState } from '../lib/watchlist.svelte'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
   import type { Building, CityLens, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
 
@@ -144,8 +149,6 @@
     return d0 ? [d0.u, d0.v] : boundsCentre(ground.bounds)
   }
 
-  const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
-
   function moveCamera(toS: number, to: Pt) {
     const target = clampCentre(to, ground.bounds)
     if (anim !== null) cancelAnimationFrame(anim)
@@ -186,6 +189,54 @@
   $effect(() => () => {
     if (anim !== null) cancelAnimationFrame(anim)
   })
+
+  /* ---------------- importance: the plinth's height (#867) ---------------- */
+
+  // Reading in, per-building normalised height out -- allBuildings is
+  // every building this ground has, whichever stop is showing, so the
+  // reading never has to know about districts vs nodes.
+  const importance = $derived.by((): Map<string, Importance> => {
+    const buildings = allBuildings.map((b) => ({ id: b.id, ip: b.ip }))
+    return cityImportanceState.reading === 'watched'
+      ? watchedImportance(buildings, flagsState.list, watchlistState.entries)
+      : dependedOnImportance(buildings, appState.events)
+  })
+
+  // The plinth heights actually drawn: tweened toward `importance`'s
+  // target on every change (a toggle flip, new traffic, a flag raised),
+  // snapped instantly under reduced motion -- the same shape moveCamera
+  // above uses for the camera, via the same reducedMotion() and the
+  // reading's own tweenHeights (city/importance.ts).
+  let plinthHeights = $state<Map<string, number>>(new Map())
+  let heightAnim: number | null = null
+
+  $effect(() => {
+    const target = importance
+    untrack(() => {
+      if (heightAnim !== null) cancelAnimationFrame(heightAnim)
+      heightAnim = null
+      if (reducedMotion() || typeof requestAnimationFrame !== 'function') {
+        plinthHeights = tweenHeights(plinthHeights, target, 1, true)
+        return
+      }
+      const from = plinthHeights
+      const t0 = performance.now()
+      const step = (now: number) => {
+        const t = ease((now - t0) / MOVE_MS)
+        plinthHeights = tweenHeights(from, target, t, false)
+        heightAnim = t < 1 ? requestAnimationFrame(step) : null
+      }
+      heightAnim = requestAnimationFrame(step)
+    })
+  })
+
+  $effect(() => () => {
+    if (heightAnim !== null) cancelAnimationFrame(heightAnim)
+  })
+
+  /** The plinth height actually drawn for a building: its tweened
+   * importance, or the floor before the first tween has run. */
+  const heightOf = (b: Building): number => plinthHeights.get(b.id) ?? IMPORTANCE_FLOOR_H
 
   /* ---------------- pan: drag, keys, minimap ---------------- */
 
@@ -545,20 +596,25 @@
       }
     }
 
-    // Buildings on their plinths.
+    // Buildings on their plinths. The plinth's own height is the
+    // current importance reading (#867), never b.h -- the device
+    // symbol stamped on top keeps deviceScale's footprint-only size
+    // regardless, so importance never redraws what a building looks
+    // like, only how tall its base stands.
     const building = (b: Building, d: District | null) => {
       const dim = d?.dark ?? false
       const ink = dim ? 'var(--fg-dim)' : d ? inkOf(d) : 'var(--accent)'
       const R = b.R
+      const h = heightOf(b)
       const pin = (hh: number) => diamond(c, b.u, b.v, R, hh)
       const paints: Paint[] = [
         { d: pin(0), fill: '#000', fo: dim ? 0.22 : 0.4 },
-        { d: wallFace(c, b.u, b.v, R, b.h, 'l'), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
-        { d: wallFace(c, b.u, b.v, R, b.h, 'l'), fill: ink, fo: dim ? 0.1 : 0.2 },
-        { d: wallFace(c, b.u, b.v, R, b.h, 'r'), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
-        { d: wallFace(c, b.u, b.v, R, b.h, 'r'), fill: ink, fo: dim ? 0.16 : 0.34 },
-        { d: pin(b.h), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
-        { d: pin(b.h), fill: ink, fo: dim ? 0.12 : 0.26, stroke: ink, so: dim ? 0.55 : 0.95, sw: 1, dash: dim ? '3 3' : undefined },
+        { d: wallFace(c, b.u, b.v, R, h, 'l'), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
+        { d: wallFace(c, b.u, b.v, R, h, 'l'), fill: ink, fo: dim ? 0.1 : 0.2 },
+        { d: wallFace(c, b.u, b.v, R, h, 'r'), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
+        { d: wallFace(c, b.u, b.v, R, h, 'r'), fill: ink, fo: dim ? 0.16 : 0.34 },
+        { d: pin(h), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
+        { d: pin(h), fill: ink, fo: dim ? 0.12 : 0.26, stroke: ink, so: dim ? 0.55 : 0.95, sw: 1, dash: dim ? '3 3' : undefined },
       ]
       const what = b.kind === 'router' ? 'router' : b.kind === 'router-ant' ? 'router with antennas' : b.kind === 'post' ? 'bridge post' : 'host'
       const aria = b.name + (b.ip ? ' at ' + b.ip : '') + ', ' + what + (d ? ' in ' + d.name : '')
@@ -570,7 +626,7 @@
         ink,
         dim,
         paints,
-        stamp: { x: R2(X(c, b.u)), y: R2(Y(c, b.v, b.h)), k: R2((R * 0.74 * c.S) / SREF) },
+        stamp: { x: R2(X(c, b.u)), y: R2(Y(c, b.v, h)), k: R2((R * 0.74 * c.S) / SREF) },
         aria,
       })
     }
@@ -673,7 +729,7 @@
       if (b.u < vp.u0 || b.u > vp.u1 || b.v < vp.v0 || b.v > vp.v1) continue
       const k = (b.R * 0.74 * c.S) / SREF
       const x = R2(X(c, b.u))
-      const y = R2(Y(c, b.v, b.h) - symbolFor(b.kind).top * k - 10)
+      const y = R2(Y(c, b.v, heightOf(b)) - symbolFor(b.kind).top * k - 10)
       const w = Math.max(b.name.length, b.ip.length) * 6.6 + 22
       const r: [number, number, number, number] = [x - w / 2, y - 28, x + w / 2, y + 8]
       if (placed.some((p) => r[0] < p[2] - 4 && r[2] > p[0] + 4 && r[1] < p[3] - 4 && r[3] > p[1] + 4)) continue
