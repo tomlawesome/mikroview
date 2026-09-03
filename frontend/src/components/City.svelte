@@ -726,9 +726,9 @@
               <circle class="lamp" cx={l.x} cy={R2(l.y - l.h)} r={l.rr} fill="var(--now)" fill-opacity="0.13" />
             {/each}
           {:else if s.kind === 'hamlet'}
-            <g class="hamlet">
+            <g class="hamlet" role="img" aria-label={s.aria}>
               <title>{s.aria}</title>
-              <use href={s.attrs.href} transform={s.attrs.transform} style={s.attrs.style} aria-label={s.aria} role="img" />
+              <use href={s.attrs.href} transform={s.attrs.transform} style={s.attrs.style} />
             </g>
           {:else}
             <g
