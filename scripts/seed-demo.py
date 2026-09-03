@@ -13,6 +13,15 @@ appear in the pushed tables, the syslog traffic, the named entities and
 the watchlist, so a name seen on the stream is the same thing seen on
 the topography and in Entities.
 
+Since #870 that estate has a second half: the round-40 city story
+(`docs/design/screens/city/DESIGN.md`, ratified on #854) added as two
+more routers -- `rb5009` and `hap-ax3` -- alongside the original three
+rather than renamed over them, because #709's device block in
+scripts/live-env.sh is keyed by router id and the original names are the
+only thing that binds a pushed table to a device. Which block feeds
+which part of the city story is written against each one, under the
+ROUND-40 banner below.
+
 Every host below keeps ONE stable MAC for the life of the run. An
 earlier /tmp feeder generated a fresh random MAC on most lines, which
 mikroview correctly read as a fresh device every time -- measured at
@@ -28,7 +37,7 @@ Usage (against an already-running instance):
   scripts/seed-demo.py push        # rule/NAT/address tables (needs ingest tokens)
   scripts/seed-demo.py entities    # named hosts/rules/ports
   scripts/seed-demo.py accounts    # a user-tier and a viewer-tier account
-  scripts/seed-demo.py watchlist   # 4 entries: 2 healthy, 1 held, 1 broken ring
+  scripts/seed-demo.py watchlist   # 6 entries: 4 healthy, 1 held, 1 broken ring
   scripts/seed-demo.py all         # the four above, in order
   scripts/seed-demo.py feed        # runs forever: the syslog traffic generator
   scripts/seed-demo.py mutate      # a cleared flag+note, a rename, a definition edit
@@ -259,6 +268,387 @@ IP_ADDRESSES = {
     ],
 }
 
+# ---------------------------------------------------------------------------
+# ROUND-40: the city's own data story (#870), added to the estate above
+# rather than renamed over it. `docs/design/screens/city/DESIGN.md` is the
+# ratified record; `docs/design/concepts/round-40/BRIEF.md` §data story is
+# the same story in the mockup's words. Two more routers, so five in all.
+#
+# What each block below feeds, in the city's terms:
+#
+#   ROUND40 (routers)   the two boroughs. rb5009 is the primary; hap-ax3's
+#                       own WAN address is 10.0.10.9 -- inside rb5009's LAN
+#                       -- so the second borough is reached by a road from
+#                       the LAN district rather than from the river.
+#   ROUND40_HOSTS       the buildings, one per named device in the story,
+#                       plus hap-ax3 itself as a building in the LAN
+#                       district (the near end of that road).
+#   FILTER_RULES        the walls and gates. A gate is a forward-chain
+#                       accept on an (inInterface, outInterface) pair; a
+#                       lamp on it is log=True. frontend/src/lib/
+#                       policy.svelte.ts keys on exactly that pair, and
+#                       Topography.svelte's zoneCaption reads a district's
+#                       badge off the two pairs it makes with the WAN. So
+#                       the DARK districts are DARK here by *omission of
+#                       log*, never by omission of a rule: IoT's three
+#                       rules toward ether1 all carry log=False (DARK
+#                       TOWARD WAN), Guest's and Cams' carry log=False in
+#                       both directions (DARK), and everything the story
+#                       calls LOGGED has a logging rule each way.
+#   NAT_RULES           hap-ax3 masquerades its two districts behind
+#                       10.0.10.9, which is why workshop -> servers arrives
+#                       at rb5009 as traffic from that one address.
+#   IP_ADDRESSES        the district plaques: zones.svelte.ts takes a
+#                       zone's name from an entry's `comment` and its CIDR
+#                       from `address`, and draws a district from the push
+#                       alone -- which is how Guest and Cams exist on the
+#                       map at all while emitting no traffic.
+#   WIREGUARD_*         the wg0 footbridge and its far-bank hamlet
+#                       (phone-tom-away). Public keys only, and obviously
+#                       fake ones: a real router never shows a private key
+#                       to a read,test script either.
+#   lines_for_round40   the roads. LAN <-> Servers heavy on :53 :123 :445
+#                       :5001; workshop -> servers backups on :445; wg0 a
+#                       trickle (QUIET); l2tp about 0.3/s; and the one
+#                       alarm road -- UNPLANNED iot -> lan tcp/445, 14x,
+#                       caught by the default drop.
+#
+# NOT here, because today's ingest schema has no field for it (#874):
+# tunnel up/down state. `wireguard-peer` carries no lastHandshake and
+# there is no ppp-active kind, so wg0's QUIET and l2tp's UP are told the
+# only way that is honest today -- by the traffic on those interfaces and
+# by the addresses the interfaces carry.
+# ---------------------------------------------------------------------------
+
+ROUND40 = ("rb5009", "hap-ax3")
+
+ROUTERS.update({
+    "rb5009": {
+        "src": "127.0.0.5",
+        "wan": "ether1",
+        "wan_addr": "203.0.113.7/29",
+        "wan_net": "203.0.113.0",
+        "zones": [
+            ("bridge-lan", "10.0.10", "lan"),
+            ("vlan-srv", "10.0.20", "servers"),
+            ("vlan-iot", "10.0.30", "iot"),
+            ("vlan-guest", "10.0.40", "guest"),
+        ],
+    },
+    # Its ether1 is not on the river: 10.0.10.9 is an address in rb5009's
+    # own LAN, so this borough hangs off the LAN district's road.
+    "hap-ax3": {
+        "src": "127.0.0.6",
+        "wan": "ether1",
+        "wan_addr": "10.0.10.9/24",
+        "wan_net": "10.0.10.0",
+        "zones": [
+            ("bridge-workshop", "10.0.50", "workshop"),
+            ("vlan-cams", "10.0.60", "cams"),
+        ],
+    },
+})
+
+# Same tuple shape as HOSTS above, appended to it. The Guest and Cams
+# hosts never emit a line -- their districts have no logging rule, and a
+# district mikroview has never heard from is exactly what an unlit plate
+# means. They are still named entities, because the operator knows they
+# are there; the map's silence about them is the honest part.
+HOSTS += [
+    # rb5009 -- LAN. hap-ax3 is a building here as well as a borough.
+    ("rb5009", "lan", 9, "aa:bb:cc:40:01:09", "hap-ax3", 0),
+    ("rb5009", "lan", 20, "aa:bb:cc:40:01:20", "tom-desktop", 0),
+    ("rb5009", "lan", 21, "aa:bb:cc:40:01:21", "phone-tom", 0),
+    ("rb5009", "lan", 22, "aa:bb:cc:40:01:22", "laptop-anna", 0),
+    ("rb5009", "lan", 23, "aa:bb:cc:40:01:23", "tv-lounge", 0),
+    # rb5009 -- Servers.
+    ("rb5009", "servers", 10, "aa:bb:cc:40:02:10", "nas", 0),
+    ("rb5009", "servers", 11, "aa:bb:cc:40:02:11", "pihole", 0),
+    ("rb5009", "servers", 12, "aa:bb:cc:40:02:12", "unifi", 0),
+    # rb5009 -- IoT. cam-porch is the one that starts the alarm road.
+    ("rb5009", "iot", 31, "aa:bb:cc:40:03:31", "cam-porch", 0),
+    ("rb5009", "iot", 32, "aa:bb:cc:40:03:32", "hue-bridge", 0),
+    # "thermostat-hall" rather than the story's bare "thermostat": the
+    # original estate above already has a host by that name, and two
+    # entities with one label would break this file's own promise that a
+    # name on the stream is one thing.
+    ("rb5009", "iot", 33, "aa:bb:cc:40:03:33", "thermostat-hall", 0),
+    ("rb5009", "iot", 34, "aa:bb:cc:40:03:34", "doorbell", 0),
+    ("rb5009", "iot", 35, "aa:bb:cc:40:03:35", "esp-weather", 0),
+    ("rb5009", "iot", 36, "aa:bb:cc:40:03:36", "plug-kettle", 0),
+    ("rb5009", "iot", 37, "aa:bb:cc:40:03:37", None, 0),
+    ("rb5009", "iot", 38, "aa:bb:cc:40:03:38", None, 0),
+    # rb5009 -- Guest: named, never heard from (no logging rule).
+    ("rb5009", "guest", 50, "aa:bb:cc:40:04:50", "guest-e8b2", 0),
+    ("rb5009", "guest", 51, "aa:bb:cc:40:04:51", None, 0),
+    # hap-ax3 -- Workshop.
+    ("hap-ax3", "workshop", 10, "aa:bb:cc:40:05:10", "cnc", 0),
+    ("hap-ax3", "workshop", 11, "aa:bb:cc:40:05:11", "printer-3d", 0),
+    ("hap-ax3", "workshop", 12, "aa:bb:cc:40:05:12", "pc-bench", 0),
+    # hap-ax3 -- Cams: named, never heard from (no logging rule).
+    ("hap-ax3", "cams", 20, "aa:bb:cc:40:06:20", "cam-yard", 0),
+    ("hap-ax3", "cams", 21, "aa:bb:cc:40:06:21", "cam-gate", 0),
+]
+
+# rb5009's 41 rules, in the order a real /ip/firewall/filter print shows
+# them: input chain first (protect the router), then forward. Ordinal is
+# display order only -- logPrefix is what a log line resolves back to.
+#
+# Read the log= column as the city's lamps. Every logging rule carries an
+# explicit dstPort for the same reason the original estate's do (see
+# FILTER_RULES' own note above): a port-less logging rule makes every
+# watchlist entry read "covered" in internal/engine/coverage.go.
+FILTER_RULES["rb5009"] = [
+    dict(ordinal=0, comment="Accept established and related", chain="input", action="accept",
+         logPrefix="r40-in-established", log=False, connectionState=["established", "related"],
+         fires=False, inInterface="ether1"),
+    dict(ordinal=1, comment="Drop invalid", chain="input", action="drop",
+         logPrefix="r40-in-invalid", log=False, connectionState=["invalid"],
+         fires=False, inInterface="ether1"),
+    dict(ordinal=2, comment="Allow ICMP from LAN", chain="input", action="accept",
+         logPrefix="r40-in-icmp", log=False, protocol="icmp", fires=False,
+         inInterface="bridge-lan"),
+    dict(ordinal=3, comment="Winbox from LAN", chain="input", action="accept",
+         logPrefix="r40-winbox-lan", log=True, dstPort=8291, protocol="tcp", fires=True,
+         inInterface="bridge-lan"),
+    dict(ordinal=4, comment="SSH from LAN", chain="input", action="accept",
+         logPrefix="r40-ssh-lan", log=True, dstPort=22, protocol="tcp", fires=True,
+         inInterface="bridge-lan"),
+    dict(ordinal=5, comment="DNS from LAN to the router", chain="input", action="accept",
+         logPrefix="r40-dns-lan", log=False, dstPort=53, protocol="udp", fires=False,
+         inInterface="bridge-lan"),
+    dict(ordinal=6, comment="DNS from IoT to the router", chain="input", action="accept",
+         logPrefix="r40-dns-iot", log=False, dstPort=53, protocol="udp", fires=False,
+         inInterface="vlan-iot"),
+    # The two tunnel listeners. Unlogged on purpose: a handshake every few
+    # minutes is not the story, the traffic inside the tunnel is.
+    dict(ordinal=7, comment="WireGuard wg0 listener", chain="input", action="accept",
+         logPrefix="r40-wg-listen", log=False, dstPort=51820, protocol="udp", fires=False,
+         inInterface="ether1"),
+    dict(ordinal=8, comment="L2TP server listener", chain="input", action="accept",
+         logPrefix="r40-l2tp-listen", log=False, dstPort=1701, protocol="udp", fires=False,
+         inInterface="ether1"),
+    dict(ordinal=9, comment="Drop unsolicited WAN inbound", chain="input", action="drop",
+         logPrefix="r40-wan-in-drop", log=True, dstPort="22,23,445,3389,8291", protocol="tcp",
+         fires=True, inInterface="ether1"),
+
+    # LAN's gates. LOGGED BOTH WAYS toward the WAN needs a logging rule on
+    # bridge-lan|ether1 (below) and one on ether1|bridge-lan (ordinal 17).
+    dict(ordinal=10, comment="LAN to WAN web", chain="forward", action="accept",
+         logPrefix="r40-lan-wan-web", log=True, dstPort="80,443", protocol="tcp", fires=True,
+         inInterface="bridge-lan", outInterface="ether1"),
+    dict(ordinal=11, comment="LAN to WAN mail", chain="forward", action="accept",
+         logPrefix="r40-lan-wan-mail", log=True, dstPort="465,587,993", protocol="tcp", fires=False,
+         inInterface="bridge-lan", outInterface="ether1"),
+    dict(ordinal=12, comment="LAN to Servers DNS", chain="forward", action="accept",
+         logPrefix="r40-lan-srv-dns", log=True, dstPort=53, protocol="udp", fires=True,
+         inInterface="bridge-lan", outInterface="vlan-srv"),
+    dict(ordinal=13, comment="LAN to Servers NTP", chain="forward", action="accept",
+         logPrefix="r40-lan-srv-ntp", log=True, dstPort=123, protocol="udp", fires=True,
+         inInterface="bridge-lan", outInterface="vlan-srv"),
+    dict(ordinal=14, comment="LAN to Servers SMB", chain="forward", action="accept",
+         logPrefix="r40-lan-srv-smb", log=True, dstPort=445, protocol="tcp", fires=True,
+         inInterface="bridge-lan", outInterface="vlan-srv"),
+    dict(ordinal=15, comment="LAN to Servers NAS app", chain="forward", action="accept",
+         logPrefix="r40-lan-srv-app", log=True, dstPort=5001, protocol="tcp", fires=True,
+         inInterface="bridge-lan", outInterface="vlan-srv"),
+    dict(ordinal=16, comment="LAN to IoT control", chain="forward", action="accept",
+         logPrefix="r40-lan-iot-ctl", log=True, dstPort="80,1883", protocol="tcp", fires=True,
+         inInterface="bridge-lan", outInterface="vlan-iot"),
+
+    # Inbound from the river. Note ordinal 19: a logging rule on
+    # ether1|vlan-iot is what makes IoT read "DARK TOWARD WAN" rather than
+    # "DARK BOTH WAYS" -- inbound is watched, outbound is not.
+    dict(ordinal=17, comment="Port-forward NAS app from WAN", chain="forward", action="accept",
+         logPrefix="r40-wan-lan-app", log=True, dstPort=5001, protocol="tcp", fires=True,
+         inInterface="ether1", outInterface="bridge-lan"),
+    dict(ordinal=18, comment="Drop unsolicited WAN to Servers", chain="forward", action="drop",
+         logPrefix="r40-wan-srv-drop", log=True, dstPort="445,3389", protocol="tcp", fires=True,
+         inInterface="ether1", outInterface="vlan-srv"),
+    dict(ordinal=19, comment="Drop unsolicited WAN to IoT", chain="forward", action="drop",
+         logPrefix="r40-wan-iot-drop", log=True, dstPort="23,2323,445", protocol="tcp", fires=True,
+         inInterface="ether1", outInterface="vlan-iot"),
+
+    dict(ordinal=20, comment="Servers to WAN updates", chain="forward", action="accept",
+         logPrefix="r40-srv-wan", log=True, dstPort="80,443", protocol="tcp", fires=True,
+         inInterface="vlan-srv", outInterface="ether1"),
+    dict(ordinal=21, comment="Servers to WAN NTP", chain="forward", action="accept",
+         logPrefix="r40-srv-wan-ntp", log=False, dstPort=123, protocol="udp", fires=False,
+         inInterface="vlan-srv", outInterface="ether1"),
+    dict(ordinal=22, comment="Servers to LAN NAS app", chain="forward", action="accept",
+         logPrefix="r40-srv-lan-app", log=True, dstPort=5001, protocol="tcp", fires=True,
+         inInterface="vlan-srv", outInterface="bridge-lan"),
+    dict(ordinal=23, comment="Servers to LAN SMB", chain="forward", action="accept",
+         logPrefix="r40-srv-lan-smb", log=True, dstPort=445, protocol="tcp", fires=True,
+         inInterface="vlan-srv", outInterface="bridge-lan"),
+    dict(ordinal=24, comment="Servers to IoT polling", chain="forward", action="accept",
+         logPrefix="r40-srv-iot-poll", log=True, dstPort=80, protocol="tcp", fires=False,
+         inInterface="vlan-srv", outInterface="vlan-iot"),
+
+    # IoT: three gates to the river, not one of them lamped. This is the
+    # DARK TOWARD WAN badge, and it is a real configuration -- the traffic
+    # is allowed, nobody asked the router to write it down.
+    dict(ordinal=25, comment="IoT to WAN web", chain="forward", action="accept",
+         logPrefix="r40-iot-wan-web", log=False, dstPort="80,443", protocol="tcp", fires=False,
+         inInterface="vlan-iot", outInterface="ether1"),
+    dict(ordinal=26, comment="IoT to WAN NTP", chain="forward", action="accept",
+         logPrefix="r40-iot-wan-ntp", log=False, dstPort=123, protocol="udp", fires=False,
+         inInterface="vlan-iot", outInterface="ether1"),
+    dict(ordinal=27, comment="IoT to WAN MQTT", chain="forward", action="accept",
+         logPrefix="r40-iot-wan-mqtt", log=False, dstPort=8883, protocol="tcp", fires=False,
+         inInterface="vlan-iot", outInterface="ether1"),
+    dict(ordinal=28, comment="IoT to Servers DNS", chain="forward", action="accept",
+         logPrefix="r40-iot-srv-dns", log=True, dstPort=53, protocol="udp", fires=True,
+         inInterface="vlan-iot", outInterface="vlan-srv"),
+    dict(ordinal=29, comment="IoT to Servers NTP", chain="forward", action="accept",
+         logPrefix="r40-iot-srv-ntp", log=True, dstPort=123, protocol="udp", fires=True,
+         inInterface="vlan-iot", outInterface="vlan-srv"),
+    dict(ordinal=30, comment="IoT camera recording to NAS", chain="forward", action="accept",
+         logPrefix="r40-iot-srv-rec", log=True, dstPort=445, protocol="tcp", fires=False,
+         inInterface="vlan-iot", outInterface="vlan-srv"),
+
+    # Guest: gates in every direction, no lamp on any of them. Nothing
+    # from this district ever reaches the stream, which is the point --
+    # the plate is drawn from the pushed address table alone.
+    dict(ordinal=31, comment="Guest to WAN web", chain="forward", action="accept",
+         logPrefix="r40-guest-wan-web", log=False, dstPort="80,443", protocol="tcp", fires=False,
+         inInterface="vlan-guest", outInterface="ether1"),
+    dict(ordinal=32, comment="Guest to WAN DNS", chain="forward", action="accept",
+         logPrefix="r40-guest-wan-dns", log=False, dstPort=53, protocol="udp", fires=False,
+         inInterface="vlan-guest", outInterface="ether1"),
+    dict(ordinal=33, comment="Guest isolation from LAN", chain="forward", action="drop",
+         logPrefix="r40-guest-lan-drop", log=False, dstPort="139,445", protocol="tcp", fires=False,
+         inInterface="vlan-guest", outInterface="bridge-lan"),
+    dict(ordinal=34, comment="Guest isolation from Servers", chain="forward", action="drop",
+         logPrefix="r40-guest-srv-drop", log=False, dstPort="139,445", protocol="tcp", fires=False,
+         inInterface="vlan-guest", outInterface="vlan-srv"),
+
+    # The two footbridges.
+    dict(ordinal=35, comment="wg0 peers to LAN", chain="forward", action="accept",
+         logPrefix="r40-wg-lan", log=True, dstPort="22,445,5001", protocol="tcp", fires=True,
+         inInterface="wg0", outInterface="bridge-lan"),
+    dict(ordinal=36, comment="LAN to wg0 peers", chain="forward", action="accept",
+         logPrefix="r40-lan-wg", log=False, dstPort="445,5001", protocol="tcp", fires=False,
+         inInterface="bridge-lan", outInterface="wg0"),
+    dict(ordinal=37, comment="L2TP peer to Servers", chain="forward", action="accept",
+         logPrefix="r40-l2tp-srv", log=True, dstPort="445,5001", protocol="tcp", fires=True,
+         inInterface="l2tp-anna-remote", outInterface="vlan-srv"),
+    dict(ordinal=38, comment="wg0 peers to Servers DNS", chain="forward", action="accept",
+         logPrefix="r40-wg-srv-dns", log=False, dstPort=53, protocol="udp", fires=False,
+         inInterface="wg0", outInterface="vlan-srv"),
+
+    dict(ordinal=39, comment="Old DMZ segment drop (decommissioned)", chain="forward", action="drop",
+         logPrefix="r40-old-dmz", log=True, dstPort=139, protocol="tcp",
+         dstAddress="10.0.99.0/24", fires=False,
+         inInterface="ether1", outInterface="bridge-lan"),
+    # The last forward rule -- what the city's alarm road ends against.
+    # A real default drop names no interface and no port; this one names
+    # the boundary and the ports it actually catches, because the pair is
+    # what frontend/src/lib/fall.svelte.ts's boundary bands key on and the
+    # ports are what keeps watchlist coverage from reading "covered"
+    # everywhere. The callout still says what happened: caught by the
+    # default drop, no gate on this wall.
+    dict(ordinal=40, comment="Default drop -- no gate on this boundary", chain="forward",
+         action="drop", logPrefix="r40-default-drop", log=True, dstPort="139,445,3389,5900",
+         protocol="tcp", fires=True, inInterface="vlan-iot", outInterface="bridge-lan"),
+]
+
+# hap-ax3's 12. Its ether1 faces rb5009's LAN, not the river, so its
+# "WAN" rules are really uplink rules -- and Cams is dark for the same
+# reason Guest is: gates, no lamps.
+FILTER_RULES["hap-ax3"] = [
+    dict(ordinal=0, comment="Accept established and related", chain="input", action="accept",
+         logPrefix="ax3-in-established", log=False, connectionState=["established", "related"],
+         fires=False, inInterface="ether1"),
+    dict(ordinal=1, comment="Drop invalid", chain="input", action="drop",
+         logPrefix="ax3-in-invalid", log=False, connectionState=["invalid"], fires=False,
+         inInterface="ether1"),
+    dict(ordinal=2, comment="Winbox from Workshop", chain="input", action="accept",
+         logPrefix="ax3-winbox", log=True, dstPort=8291, protocol="tcp", fires=True,
+         inInterface="bridge-workshop"),
+    dict(ordinal=3, comment="Drop management from the uplink", chain="input", action="drop",
+         logPrefix="ax3-uplink-drop", log=True, dstPort="22,8291,8728", protocol="tcp", fires=True,
+         inInterface="ether1"),
+    dict(ordinal=4, comment="Workshop to uplink web", chain="forward", action="accept",
+         logPrefix="ax3-work-up-web", log=True, dstPort="80,443", protocol="tcp", fires=True,
+         inInterface="bridge-workshop", outInterface="ether1"),
+    dict(ordinal=5, comment="Workshop backups to the NAS", chain="forward", action="accept",
+         logPrefix="ax3-work-backup", log=True, dstPort=445, protocol="tcp", fires=True,
+         inInterface="bridge-workshop", outInterface="ether1"),
+    dict(ordinal=6, comment="Workshop to NAS app", chain="forward", action="accept",
+         logPrefix="ax3-work-app", log=True, dstPort=5001, protocol="tcp", fires=False,
+         inInterface="bridge-workshop", outInterface="ether1"),
+    dict(ordinal=7, comment="Workshop to Cams RTSP", chain="forward", action="accept",
+         logPrefix="ax3-work-cams", log=False, dstPort="80,554", protocol="tcp", fires=False,
+         inInterface="bridge-workshop", outInterface="vlan-cams"),
+    dict(ordinal=8, comment="Cams recording to the NAS", chain="forward", action="accept",
+         logPrefix="ax3-cams-nas", log=False, dstPort=445, protocol="tcp", fires=False,
+         inInterface="vlan-cams", outInterface="ether1"),
+    dict(ordinal=9, comment="Cams NTP", chain="forward", action="accept",
+         logPrefix="ax3-cams-ntp", log=False, dstPort=123, protocol="udp", fires=False,
+         inInterface="vlan-cams", outInterface="ether1"),
+    dict(ordinal=10, comment="Cams isolation from Workshop", chain="forward", action="drop",
+         logPrefix="ax3-cams-work-drop", log=False, dstPort="139,445", protocol="tcp", fires=False,
+         inInterface="vlan-cams", outInterface="bridge-workshop"),
+    dict(ordinal=11, comment="Default drop -- uplink to Workshop", chain="forward", action="drop",
+         logPrefix="ax3-default-drop", log=True, dstPort="139,445,3389", protocol="tcp", fires=True,
+         inInterface="ether1", outInterface="bridge-workshop"),
+]
+
+NAT_RULES["rb5009"] = [
+    dict(ordinal=0, comment="Masquerade WAN egress", chain="srcnat", action="masquerade",
+         logPrefix="r40-masq-wan", inInterface="bridge-lan", outInterface="ether1"),
+    dict(ordinal=1, comment="Port-forward NAS app", chain="dstnat", action="dst-nat",
+         logPrefix="r40-fwd-nas", dstPort=5001, toAddresses="10.0.20.10", toPorts=5001,
+         protocol="tcp", inInterface="ether1", outInterface="bridge-lan"),
+]
+# This masquerade is the reason workshop -> servers arrives at rb5009 as
+# traffic from 10.0.10.9 rather than from 10.0.50.x: the second borough
+# hides behind its own uplink address, which is a building in the LAN.
+NAT_RULES["hap-ax3"] = [
+    dict(ordinal=0, comment="Masquerade behind 10.0.10.9", chain="srcnat", action="masquerade",
+         logPrefix="ax3-masq-uplink", inInterface="bridge-workshop", outInterface="ether1"),
+]
+
+# The district plaques, plus the two tunnel interfaces' own addresses.
+# wg0 carries the story's 10.99.0.0/24; the l2tp entry is what a RouterOS
+# l2tp-server actually produces for a connected peer -- a dynamic /32 on
+# the per-peer interface, local address with the peer's as the network.
+IP_ADDRESSES["rb5009"] = [
+    dict(address="10.0.10.1/24", network="10.0.10.0", interface="bridge-lan", comment="LAN"),
+    dict(address="10.0.20.1/24", network="10.0.20.0", interface="vlan-srv", comment="Servers"),
+    dict(address="10.0.30.1/24", network="10.0.30.0", interface="vlan-iot", comment="IoT"),
+    dict(address="10.0.40.1/24", network="10.0.40.0", interface="vlan-guest", comment="Guest"),
+    dict(address="203.0.113.7/29", network="203.0.113.0", interface="ether1", comment="wan"),
+    dict(address="10.99.0.1/24", network="10.99.0.0", interface="wg0", comment="wg0"),
+    dict(address="10.98.0.1/32", network="10.98.0.2", interface="l2tp-anna-remote",
+         comment="l2tp anna-remote"),
+]
+IP_ADDRESSES["hap-ax3"] = [
+    dict(address="10.0.50.1/24", network="10.0.50.0", interface="bridge-workshop",
+         comment="Workshop"),
+    dict(address="10.0.60.1/24", network="10.0.60.0", interface="vlan-cams", comment="Cams"),
+    dict(address="10.0.10.9/24", network="10.0.10.0", interface="ether1",
+         comment="uplink -- inside rb5009's LAN"),
+]
+
+# The footbridge and its far bank. Keys are obviously-fake placeholders:
+# a WireGuard public key is not a secret, but a value that looks like a
+# working one has no place in a tracked file.
+WIREGUARD_INTERFACES = {
+    "rb5009": [
+        dict(name="wg0", comment="road warriors", listenPort=51820,
+             publicKey="DEMO-FAKE-wg0-public-key-not-a-real-key"),
+    ],
+}
+WIREGUARD_PEERS = {
+    "rb5009": [
+        dict(publicKey="DEMO-FAKE-phone-tom-away-public-key", allowedAddress=["10.99.0.2/32"],
+             endpointAddress="", comment="phone-tom-away"),
+    ],
+}
+
+
 # Named entities: hosts (from HOSTS' own names above), a handful of
 # rules and a handful of ports -- so the stream shows the name-over-
 # address pairing rather than the unnamed fallback on every row, without
@@ -270,9 +660,16 @@ RULE_ENTITIES = {
     "wan-in-drop": "WAN Inbound Drop",
     "voip-priority": "VoIP Priority",
     "mgmt-ssh-in": "Mgmt SSH Inbound",
+    # Round-40: the four the city's callouts name by hand.
+    "r40-lan-srv-smb": "LAN to Servers SMB",
+    "r40-default-drop": "Default Drop",
+    "r40-wg-lan": "WireGuard to LAN",
+    "ax3-work-backup": "Workshop Backups",
 }
 PORT_ENTITIES = {
     "443": "HTTPS", "80": "HTTP", "22": "SSH", "5060": "SIP/VoIP", "445": "SMB",
+    # Round-40's LAN <-> Servers ports, so the heavy roads carry names.
+    "53": "DNS", "123": "NTP", "5001": "NAS App",
 }
 
 # Watchlist targets: two healthy (covered by a logging rule's port),
@@ -284,6 +681,11 @@ WATCHLIST_ENTRIES = [
     dict(name="front-desk-phone-voip", ip="192.168.50.20", ports=[5060], pause=False, note=None),
     dict(name="build-server-db-exposure", ip="10.10.0.11", ports=[3306], pause=False,
          note="no pushed filter rule logs port 3306 anywhere -- ring broken by design"),
+    # Round-40: the two the story says the operator is watching, so the
+    # city's watch lens has buildings to ring (BRIEF.md's "watched"
+    # importance reading -- cam-porch tall, nas mid).
+    dict(name="cam-porch-smb-watch", ip="10.0.30.31", ports=[445], pause=False, note=None),
+    dict(name="nas-shares-watch", ip="10.0.20.10", ports=[445, 5001], pause=False, note=None),
 ]
 
 
@@ -342,6 +744,10 @@ def active_hosts(router, elapsed):
 def lines_for_router(router, elapsed, tick):
     """One tick of coherent, moderate-volume traffic for one router --
     every src-mac comes from a host's own stable identity in HOSTS."""
+    # The round-40 boroughs (#870) have their own generator: the
+    # per-router lookups below are exhaustive over the original three.
+    if router in ROUND40:
+        return lines_for_round40(router, elapsed, tick)
     out = []
     cfg = ROUTERS[router]
     wan = cfg["wan"]
@@ -488,6 +894,219 @@ def lines_for_router(router, elapsed, tick):
     return out
 
 
+# ---------------------------------------------------------------------------
+# ROUND-40 traffic: the city's roads (#870). Kept in its own function
+# rather than folded into lines_for_router above, because that function's
+# per-router lookups are exhaustive dicts over the original three routers
+# and a fourth key would only be a KeyError waiting for someone.
+#
+# Every line here uses an interface pair that a pushed rule in
+# FILTER_RULES declares with log=True, for the reason lines_for_router's
+# own comments give: a live event whose (chain, in, out) triple no pushed
+# rule carries lands in the fall's unmatched "other traffic" band, and on
+# the city that is a road with no wall behind it.
+# ---------------------------------------------------------------------------
+
+# The UNPLANNED episode's bookkeeping. cam-porch has been asking
+# tom-desktop for tcp/445 and the default drop has been refusing it: the
+# story's "14x". Emitted as a wave of exactly fourteen every ten minutes,
+# so the count the composer card quotes is real and the road stays lit
+# for a demo that runs for hours rather than going "stopped" after one
+# burst -- the two episode shapes #687 already draws elsewhere.
+UNPLANNED_WAVE_SECONDS = 600
+UNPLANNED_PER_WAVE = 14
+_r40_state = {"last_unplanned_wave": -1}
+
+
+def _fw(action, prefix, chain, in_iface, out_iface, src, sport, dst, dport,
+        proto="TCP (SYN)", mac=None, length=60):
+    """One RouterOS-shaped firewall line. `out_iface=None` omits the out:
+    token entirely, which is what a real input-chain line looks like."""
+    where = f"in:{in_iface}" + (f" out:{out_iface}" if out_iface else "")
+    # Exactly the two shapes lines_for_router already emits: with a
+    # src-mac the comma follows the MAC, without one it follows the state.
+    state = f"connection-state:new src-mac {mac}," if mac else "connection-state:new,"
+    return (f"firewall,info {action}|{prefix}| {chain}: {where}, "
+            f"{state} proto {proto}, "
+            f"{src}:{sport}->{dst}:{dport}, len {length}")
+
+
+def _eph():
+    return random.randint(1024, 65000)
+
+
+def lines_for_round40(router, elapsed, tick):
+    out = []
+    hosts = active_hosts(router, elapsed)
+    if not hosts:
+        return out
+    by_zone = collections.defaultdict(list)
+    for h in hosts:
+        by_zone[h[1]].append(h)
+
+    def one(zone):
+        return random.choice(by_zone[zone]) if by_zone[zone] else None
+
+    if router == "hap-ax3":
+        # The second borough. Workshop is lamped both ways; Cams is not
+        # lamped at all, so it never appears here -- that silence is the
+        # DARK badge, and inventing a line for it would be the one thing
+        # the city's honesty rule forbids.
+        for _ in range(random.randint(1, 3)):
+            h = one("workshop")
+            if h:
+                out.append(_fw("A", "ax3-work-up-web", "forward", "bridge-workshop", "ether1",
+                               full_ip(h), _eph(), random.choice(PUBLIC),
+                               random.choice([80, 443]), mac=h[3]))
+        # The backups road: workshop -> the NAS across in rb5009's Servers.
+        for _ in range(random.randint(1, 2)):
+            h = one("workshop")
+            if h:
+                out.append(_fw("A", "ax3-work-backup", "forward", "bridge-workshop", "ether1",
+                               full_ip(h), _eph(), "10.0.20.10", 445, mac=h[3]))
+        if random.random() < 0.25:
+            h = one("workshop")
+            if h:
+                out.append(_fw("A", "ax3-winbox", "input", "bridge-workshop", None,
+                               full_ip(h), _eph(), "10.0.50.1", 8291, mac=h[3]))
+        if random.random() < 0.2:
+            out.append(_fw("D", "ax3-uplink-drop", "input", "ether1", None,
+                           f"10.0.10.{random.randint(20, 23)}", _eph(), "10.0.10.9",
+                           random.choice([22, 8291, 8728])))
+        if random.random() < 0.15:
+            h = one("workshop")
+            if h:
+                out.append(_fw("D", "ax3-default-drop", "forward", "ether1", "bridge-workshop",
+                               f"10.0.10.{random.randint(20, 23)}", _eph(), full_ip(h),
+                               random.choice([139, 445, 3389])))
+        h = one("workshop")
+        if h:
+            pub = random.choice(PUBLIC)
+            out.append(f"firewall,info A|ax3-masq-uplink| srcnat: in:bridge-workshop out:ether1, "
+                       f"proto TCP, {full_ip(h)}:{_eph()}->{pub}:443, "
+                       f"NAT (10.0.10.9:12345->{pub}:443), len 73")
+        return out
+
+    # --- rb5009, the primary borough ---------------------------------
+    nas, pihole = "10.0.20.10", "10.0.20.11"
+
+    # LAN -> WAN, the busiest road out.
+    for _ in range(random.randint(3, 5)):
+        h = one("lan")
+        if h:
+            out.append(_fw("A", "r40-lan-wan-web", "forward", "bridge-lan", "ether1",
+                           full_ip(h), _eph(), random.choice(PUBLIC),
+                           random.choice([80, 443]), mac=h[3]))
+
+    # LAN <-> Servers, the heavy pair: :53 :123 :445 :5001, both ways.
+    for _ in range(random.randint(4, 7)):
+        h = one("lan")
+        if not h:
+            break
+        prefix, port, proto, dst = random.choice([
+            ("r40-lan-srv-dns", 53, "UDP", pihole),
+            ("r40-lan-srv-dns", 53, "UDP", pihole),
+            ("r40-lan-srv-ntp", 123, "UDP", pihole),
+            ("r40-lan-srv-smb", 445, "TCP (SYN)", nas),
+            ("r40-lan-srv-app", 5001, "TCP (SYN)", nas),
+        ])
+        out.append(_fw("A", prefix, "forward", "bridge-lan", "vlan-srv",
+                       full_ip(h), _eph(), dst, port, proto=proto, mac=h[3]))
+    for _ in range(random.randint(1, 3)):
+        s, h = one("servers"), one("lan")
+        if s and h:
+            prefix, port = random.choice([("r40-srv-lan-app", 5001), ("r40-srv-lan-smb", 445)])
+            out.append(_fw("A", prefix, "forward", "vlan-srv", "bridge-lan",
+                           full_ip(s), _eph(), full_ip(h), port, mac=s[3]))
+
+    # The second borough's backups, seen again on this side of the road:
+    # hap-ax3 masquerades, so they arrive from 10.0.10.9 -- the building
+    # in the LAN district that is also a borough.
+    gw = next((x for x in hosts if x[4] == "hap-ax3"), None)
+    if gw and random.random() < 0.5:
+        out.append(_fw("A", "r40-lan-srv-smb", "forward", "bridge-lan", "vlan-srv",
+                       full_ip(gw), _eph(), nas, 445, mac=gw[3]))
+
+    # Servers out, and IoT's one lamped road (to its own resolver).
+    if random.random() < 0.5:
+        s = one("servers")
+        if s:
+            out.append(_fw("A", "r40-srv-wan", "forward", "vlan-srv", "ether1",
+                           full_ip(s), _eph(), random.choice(PUBLIC),
+                           random.choice([80, 443]), mac=s[3]))
+    for _ in range(random.randint(1, 2)):
+        h = one("iot")
+        if h:
+            prefix, port = random.choice([("r40-iot-srv-dns", 53), ("r40-iot-srv-ntp", 123)])
+            out.append(_fw("A", prefix, "forward", "vlan-iot", "vlan-srv",
+                           full_ip(h), _eph(), pihole, port, proto="UDP", mac=h[3]))
+    if random.random() < 0.4:
+        h = one("lan")
+        if h:
+            out.append(_fw("A", "r40-lan-iot-ctl", "forward", "bridge-lan", "vlan-iot",
+                           full_ip(h), _eph(), full_ip(one("iot")),
+                           random.choice([80, 1883]), mac=h[3]))
+
+    # The river's own boundary: unsolicited inbound, no local src-mac.
+    if random.random() < 0.6:
+        out.append(_fw("D", "r40-wan-in-drop", "input", "ether1", None,
+                       random.choice(PUBLIC), _eph(), "203.0.113.7",
+                       random.choice([22, 23, 445, 3389, 8291])))
+    if random.random() < 0.3:
+        out.append(_fw("D", "r40-wan-srv-drop", "forward", "ether1", "vlan-srv",
+                       random.choice(PUBLIC), _eph(), nas, random.choice([445, 3389])))
+    if random.random() < 0.3:
+        h = one("iot")
+        if h:
+            out.append(_fw("D", "r40-wan-iot-drop", "forward", "ether1", "vlan-iot",
+                           random.choice(PUBLIC), _eph(), full_ip(h),
+                           random.choice([23, 2323, 445])))
+    if random.random() < 0.25:
+        out.append(_fw("A", "r40-wan-lan-app", "forward", "ether1", "bridge-lan",
+                       random.choice(PUBLIC), _eph(), nas, 5001))
+    if random.random() < 0.2:
+        h = one("lan")
+        if h:
+            prefix, port = random.choice([("r40-winbox-lan", 8291), ("r40-ssh-lan", 22)])
+            out.append(_fw("A", prefix, "input", "bridge-lan", None,
+                           full_ip(h), _eph(), "10.0.10.1", port, mac=h[3]))
+
+    h = one("lan")
+    if h:
+        pub = random.choice(PUBLIC)
+        out.append(f"firewall,info A|r40-masq-wan| srcnat: in:bridge-lan out:ether1, "
+                   f"proto TCP, {full_ip(h)}:{_eph()}->{pub}:443, "
+                   f"NAT (203.0.113.7:12345->{pub}:443), len 73")
+
+    # The two footbridges. wg0 is QUIET -- a trickle, not silence and not
+    # a stream; l2tp carries anna-remote's session at roughly 0.3/s (the
+    # tick below sleeps 3-6s, so one or two lines a tick). Neither line
+    # carries a src-mac: traffic arriving on a tunnel interface has no
+    # ethernet source, and inventing one would make the register believe
+    # in a device that does not exist.
+    if random.random() < 0.12:
+        out.append(_fw("A", "r40-wg-lan", "forward", "wg0", "bridge-lan",
+                       "10.99.0.2", _eph(), full_ip(one("lan")),
+                       random.choice([22, 445, 5001])))
+    for _ in range(random.randint(1, 2)):
+        out.append(_fw("A", "r40-l2tp-srv", "forward", "l2tp-anna-remote", "vlan-srv",
+                       "10.98.0.2", _eph(), nas, random.choice([445, 5001])))
+
+    # The alarm road: UNPLANNED, iot -> lan, tcp/445, 14x, caught by the
+    # default drop. cam-porch to tom-desktop, the same two buildings every
+    # wave, so the composer card's "it's been asking" is about one pair.
+    wave = int(elapsed // UNPLANNED_WAVE_SECONDS)
+    if wave != _r40_state["last_unplanned_wave"]:
+        _r40_state["last_unplanned_wave"] = wave
+        cam = next((x for x in hosts if x[4] == "cam-porch"), None)
+        desk = next((x for x in hosts if x[4] == "tom-desktop"), None)
+        if cam and desk:
+            for _ in range(UNPLANNED_PER_WAVE):
+                out.append(_fw("D", "r40-default-drop", "forward", "vlan-iot", "bridge-lan",
+                               full_ip(cam), _eph(), full_ip(desk), 445, mac=cam[3]))
+    return out
+
+
 def cmd_feed(args):
     print(f"seed-demo feed: {len(HOSTS)} stable-identity hosts across {len(ROUTERS)} routers "
           f"-> {args.syslog_host}:{args.syslog_port}", file=sys.stderr)
@@ -575,6 +1194,16 @@ def cmd_push(args):
         print(f"{router}: pushed {ack['records']} NAT rules")
         ack = ingest_push(args.url, tok, "ip-address", IP_ADDRESSES[router])
         print(f"{router}: pushed {ack['records']} address table entries")
+        # The tunnel tables, where the router has any (#870: rb5009 only).
+        # There is no read-back endpoint for either kind yet -- the city's
+        # bridges slice (#866) is what will grow one -- so a successful
+        # ack is all this can prove today.
+        if router in WIREGUARD_INTERFACES:
+            ack = ingest_push(args.url, tok, "wireguard-interface", WIREGUARD_INTERFACES[router])
+            print(f"{router}: pushed {ack['records']} wireguard interfaces")
+        if router in WIREGUARD_PEERS:
+            ack = ingest_push(args.url, tok, "wireguard-peer", WIREGUARD_PEERS[router])
+            print(f"{router}: pushed {ack['records']} wireguard peers")
 
 
 def cmd_entities(args):
