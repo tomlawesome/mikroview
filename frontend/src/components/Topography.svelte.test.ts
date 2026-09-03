@@ -715,8 +715,9 @@ describe('the lens selector, ported to the scene\'s own bottom-left bar (#682)',
     const bar = container.querySelector('.wlens2')
     expect(bar).not.toBeNull()
 
-    const labels = [...bar!.querySelectorAll('button')].map((b) => b.textContent?.trim())
-    expect(labels).toEqual(['traffic', 'policy', 'coverage'])
+    // Three exclusive base lenses, then the two overlays (#715 item 3).
+    const tabs = [...bar!.querySelectorAll('[role="tablist"] button')].map((b) => b.textContent?.trim())
+    expect(tabs).toEqual(['traffic', 'policy', 'coverage'])
 
     const policyTab = [...bar!.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'policy')!
     expect(policyTab.classList.contains('on')).toBe(false)
@@ -1684,5 +1685,296 @@ describe('#715 items 10 and 11: two treatments Fable ruled on, 2026-09-03', () =
     expect(dots.length).toBe(5)
     expect(dots[4]).toBe('var(--lane-5)')
     expect(dots).not.toContain('var(--marked)')
+  })
+})
+
+describe('#701: the reach names its busiest pathway, and says the ranking is weighted', () => {
+  // Enter the reach the way a reader does, then read the crumb.
+  function openReach(events: ClientEvent[]) {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = events
+    const { container } = render(Topography)
+    flushSync()
+    const hostLink = container.querySelector<SVGTSpanElement>('.host-link')
+    hostLink!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    return container
+  }
+
+  function busiestLine(container: HTMLElement): string | null {
+    const subs = [...container.querySelectorAll('.sub')].map((s) => s.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+    return subs.find((s) => s.startsWith('the busiest pathway')) ?? null
+  }
+
+  function talk(over: Partial<ClientEvent>): ClientEvent {
+    return event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'cam-porch', receivedAt: Date.now(), ...over })
+  }
+
+  it('names the pathway, its port and its outcome, and says the ranking is weighted toward now', () => {
+    const container = openReach([
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 445, protocol: 'tcp', action: 'drop' }),
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 445, protocol: 'tcp', action: 'drop' }),
+    ])
+
+    const line = busiestLine(container)
+    // The owner's own constraint, made regression-proof: the sentence
+    // must say the ranking is weighted, not merely imply "now".
+    expect(line).toContain('weighted toward now')
+    expect(line).toContain('cam-porch → nas')
+    expect(line).toContain('tcp/445')
+    expect(line).toContain('refused')
+  })
+
+  it('flips the arrow when the far side started it', () => {
+    // The centred host is cam-porch, put on the card by the one event
+    // it sent. Three inbound knocks against that one outbound, all
+    // equally recent, so the inbound strand wins outright rather than
+    // by a tie-break -- otherwise the arrow direction this test is
+    // about would not be the thing under test.
+    const inbound = (id: number) =>
+      talk({
+        id,
+        srcIp: '10.0.9.9',
+        srcHostName: 'scanner',
+        dstIp: '10.0.1.20',
+        dstHostName: 'cam-porch',
+        inInterface: 'bridge2',
+        outInterface: 'bridge1',
+        dstPort: 22,
+        protocol: 'tcp',
+        action: 'drop',
+      })
+    const container = openReach([
+      talk({ id: 1, outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 443, action: 'accept' }),
+      inbound(2),
+      inbound(3),
+      inbound(4),
+    ])
+
+    const line = busiestLine(container)
+    expect(line).toContain('scanner → cam-porch')
+    expect(line).not.toContain('cam-porch → scanner')
+    expect(line).toContain('tcp/22')
+    expect(line).toContain('refused')
+  })
+
+  it('drops the port clause entirely when the traffic carried no port', () => {
+    // ICMP and its kin. A dangling separator would read as a missing
+    // fact rather than an absent one.
+    const container = openReach([
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', protocol: 'icmp', action: 'accept' }),
+    ])
+
+    const line = busiestLine(container)
+    expect(line).toContain('cam-porch → nas')
+    expect(line).not.toMatch(/\/\d/)
+    expect(line).not.toMatch(/· ·/)
+    expect(line).toMatch(/nas · accepted$/)
+  })
+
+  it('says nothing at all when nothing was observed, leaving the one honest empty state', () => {
+    const container = openReach([talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 443 })])
+    // Re-enter with an empty buffer: the reach is open, the buffer is not.
+    appState.events = []
+    flushSync()
+
+    expect(busiestLine(container)).toBeNull()
+    expect(container.textContent).toContain('nothing observed this window')
+  })
+})
+
+describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () => {
+  const twoLanes: RouterIPAddress[] = [
+    { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+    { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+  ]
+
+  // Unplanned needs a pushed table to judge against -- with nothing
+  // pushed every pair is 'unjudged' and no claim is made either way.
+  function pushedButSilent() {
+    policyState.anyPushed = true
+    policyState.edges = []
+  }
+
+  function drops(n: number, over: Partial<ClientEvent>): ClientEvent[] {
+    return Array.from({ length: n }, () => event({ action: 'drop', ruleLabel: 'default drop', dstPort: 445, protocol: 'tcp', ...over }))
+  }
+
+  function cardText(container: HTMLElement): string {
+    const card = container.querySelector('.unplanned-card')
+    return card ? [...card.querySelectorAll('text')].map((t) => t.textContent?.trim()).join(' | ') : ''
+  }
+
+  it('escalates exactly one pair, and leaves the runner-up as an ordinary pill', () => {
+    zonesState.pushed = twoLanes
+    pushedButSilent()
+    appState.events = [
+      ...drops(14, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9' }),
+      ...drops(13, { inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.20', dstIp: '10.0.2.9' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelectorAll('.unplanned-card').length).toBe(1)
+    const text = cardText(container)
+    expect(text).toContain('UNPLANNED · bridge2 → bridge1')
+    expect(text).toContain('tcp/445')
+    expect(text).toContain('caught by default drop')
+    expect(text).toContain('14×')
+    expect(text).toContain('open ▸')
+    // The 13× pair keeps the ordinary treatment.
+    const pills = [...container.querySelectorAll('.edge-badge')].map((t) => t.textContent?.trim() ?? '')
+    expect(pills.some((p) => p.includes('13'))).toBe(true)
+  })
+
+  it('opens the stream filtered to the pair, since there is no flag to open', () => {
+    zonesState.pushed = twoLanes
+    pushedButSilent()
+    appState.events = drops(9, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9' })
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = container.querySelector('.unplanned-card')!
+    expect(card.getAttribute('role')).toBe('button')
+    card.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    // openPair sets the live view's own filters. The mockup's flag
+    // drawer cannot be opened because no unplanned flag type exists.
+    expect(appState.view).toBe('live')
+  })
+
+  it('says the rule caught it, or says plainly that none named itself', () => {
+    zonesState.pushed = twoLanes
+    pushedButSilent()
+    appState.events = drops(6, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9', ruleLabel: '' })
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(cardText(container)).toContain('caught, no rule named')
+  })
+
+  it('draws no card at all when nothing is unplanned', () => {
+    zonesState.pushed = twoLanes
+    policyState.anyPushed = false
+    appState.events = drops(6, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9' })
+    const { container } = render(Topography)
+    flushSync()
+
+    // Nothing pushed: every pair is unjudged, so no claim about intent.
+    expect(container.querySelector('.unplanned-card')).toBeNull()
+  })
+
+  it('keeps every other badge out of the card it reserved', () => {
+    zonesState.pushed = twoLanes
+    pushedButSilent()
+    appState.events = [
+      ...drops(14, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9' }),
+      ...drops(13, { inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.20', dstIp: '10.0.2.9' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const box = container.querySelector('.uc-box')!
+    const cx = Number(box.getAttribute('x')) + Number(box.getAttribute('width')) / 2
+    const cy = Number(box.getAttribute('y')) + Number(box.getAttribute('height')) / 2 // box centre
+    const cw = Number(box.getAttribute('width'))
+
+    // An opaque two-line card with a pill settled inside it is the
+    // failure the reservation exists to prevent.
+    for (const plate of container.querySelectorAll('.edge-plate')) {
+      const px = Number(plate.getAttribute('x')) + Number(plate.getAttribute('width')) / 2
+      const py = Number(plate.getAttribute('y')) + 7
+      const overlaps = Math.abs(px - cx) < (cw + Number(plate.getAttribute("width"))) / 2 && Math.abs(py - cy) < 27
+      expect(overlaps).toBe(false)
+    }
+  })
+})
+
+describe('#715 item 3: the flags and watch overlays', () => {
+  const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+
+  function overlays(container: HTMLElement) {
+    return [...container.querySelectorAll('[aria-label="Map overlays"] button')]
+  }
+
+  function toSurvey(container: HTMLElement) {
+    const range = container.querySelector<HTMLInputElement>('.alt-range')!
+    range.value = '3'
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+  }
+
+  it('draws five controls: three exclusive tabs and two independent toggles, both on', () => {
+    const { container } = render(Topography)
+    flushSync()
+
+    const tabs = [...container.querySelectorAll('[aria-label="Map lenses"] button')]
+    expect(tabs.map((t) => t.textContent?.trim())).toEqual(['traffic', 'policy', 'coverage'])
+    // The toggles sit outside the tablist deliberately: a toggle inside
+    // one breaks its semantics.
+    expect(container.querySelectorAll('[aria-label="Map lenses"] [aria-pressed]').length).toBe(0)
+
+    const ov = overlays(container)
+    expect(ov.length).toBe(2)
+    expect(ov.map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'true'])
+  })
+
+  it('shows no digit when nothing is flagged, and the count when something is', () => {
+    flagsState.list = []
+    const { container } = render(Topography)
+    flushSync()
+    expect(overlays(container)[0].textContent?.trim()).toBe('flags')
+
+    flagsState.list = [flag('port_scan', '10.0.1.20'), flag('critical_port', '10.0.1.21'), flag('repeated_drops', '10.0.1.22')]
+    flushSync()
+    expect(overlays(container)[0].textContent?.replace(/\s+/g, ' ').trim()).toBe('flags 3')
+  })
+
+  it('marks a flagged zone at survey, and unmarks it when the overlay is switched off', () => {
+    zonesState.pushed = oneLane
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'desk' })]
+    flagsState.list = [flag('port_scan', '10.0.1.20')]
+    const { container } = render(Topography)
+    flushSync()
+    toSurvey(container)
+
+    expect(container.querySelectorAll('.dot-halo').length).toBeGreaterThan(0)
+
+    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('false')
+    expect(container.querySelectorAll('.dot-halo').length).toBe(0)
+  })
+
+  it('leaves the aggregate-bar counts alone: they are drawn in every round, overlay or not', () => {
+    zonesState.pushed = oneLane
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'desk' })]
+    flagsState.list = [flag('port_scan', '10.0.1.20')]
+    const { container } = render(Topography)
+    flushSync()
+
+    const before = container.querySelectorAll('.fchip').length
+    expect(before).toBeGreaterThan(0)
+
+    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    overlays(container)[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    expect(container.querySelectorAll('.fchip').length).toBe(before)
+  })
+
+  it('never changes the base lens', () => {
+    const { container } = render(Topography)
+    flushSync()
+    const traffic = [...container.querySelectorAll('[aria-label="Map lenses"] button')][0]
+    expect(traffic.classList.contains('on')).toBe(true)
+
+    for (const b of overlays(container)) {
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+    }
+
+    expect(traffic.classList.contains('on')).toBe(true)
   })
 })
