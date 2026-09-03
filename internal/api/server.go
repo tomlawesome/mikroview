@@ -427,6 +427,18 @@ func (s *Server) routes() []route {
 		// The claim ledger's own marks (#487): a step skipped or forced
 		// past. Admin-only, matching the modal it is written from.
 		{http.MethodPost, "/api/setup/mark", s.handleSetupMark},
+
+		// "Tune logging" (#435): upload a RouterOS export, get back the
+		// filter rules that cross a dark boundary with their pushed
+		// counters as the cost of watching them, then render logging
+		// switched on for whichever the operator picks. Same tier as the
+		// operational writes above -- user, not admin -- since this
+		// changes a config file the operator downloads and applies
+		// themselves; mikroview never touches the router (see
+		// tunelogging.go).
+		{http.MethodPost, "/api/tune-logging/analyse", s.handleTuneLoggingAnalyse},
+		{http.MethodPost, "/api/tune-logging/render", s.handleTuneLoggingRender},
+
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 		{http.MethodGet, "/api/persistence", s.handlePersistence},
 
