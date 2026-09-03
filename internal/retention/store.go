@@ -135,7 +135,14 @@ func clamp(days int, maxBytes int64) (int, int64) {
 }
 
 // Append hands one event to retention. It never blocks on disk.
+//
+// Nil-safe, because the caller is the ingest path and retention being
+// off is the default: a nil check here beats a nil check at every call
+// site, and beats an ingest path that panics on the ordinary case.
 func (s *Store) Append(e store.Event) {
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -238,6 +245,9 @@ func (s *Store) appendToDay(day string, batch []record) error {
 
 // Close flushes, stops the flusher and releases the open file.
 func (s *Store) Close() error {
+	if s == nil {
+		return nil
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -419,6 +429,49 @@ type Window struct {
 // twice and the seam between disk and memory has no gap in it.
 func (s *Store) Replay(cutoff time.Time, visit func(store.Event)) Window {
 	return ReplayDir(s.dir, s.key, cutoff, visit)
+}
+
+// Days lists the days held on disk, oldest first.
+//
+// Exported so a caller that has to bound how much history it reads can
+// decide which days to open rather than being handed all of them. The
+// engine's corpus is that caller: it keeps the newest days that fit its
+// own budget, because a replay that silently drops the middle of its
+// window would report a continuous history it does not have.
+func Days(dir string) ([]string, error) {
+	s := &Store{dir: dir}
+	files, err := s.dayFiles()
+	if err != nil {
+		return nil, err
+	}
+	days := make([]string, 0, len(files))
+	for _, f := range files {
+		days = append(days, f.day)
+	}
+	return days, nil
+}
+
+// Days lists the days this store holds, oldest first.
+func (s *Store) Days() ([]string, error) { return Days(s.dir) }
+
+// ReplayDay visits one of this store's days. See the package-level
+// ReplayDay.
+func (s *Store) ReplayDay(day string, cutoff time.Time, visit func(store.Event)) (int, error) {
+	return ReplayDay(s.dir, s.key, day, cutoff, visit)
+}
+
+// ReplayDay visits one day's events, oldest first, skipping any at or
+// after cutoff. It reports how many it visited.
+func ReplayDay(dir string, key *Key, day string, cutoff time.Time, visit func(store.Event)) (int, error) {
+	n := 0
+	_, err := replayFile(filepath.Join(dir, fileNameFor(day)), day, key, func(e store.Event) {
+		if !cutoff.IsZero() && !e.ReceivedAt.Before(cutoff) {
+			return
+		}
+		n++
+		visit(e)
+	})
+	return n, err
 }
 
 // ReplayDir is Replay without a running Store, for a reader that has a

@@ -60,6 +60,20 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 // backedUpStores or here -- so adding a new *Path field without deciding
 // its backup coverage fails the build instead of silently drifting the
 // way Watchlist's three fields did (#372).
+//
+// Two things #856 keeps out of a backup are absent from this map rather
+// than listed in it, because the guard above walks *Path fields only and
+// rejects an entry naming anything else. Recorded here so the omission
+// reads as a decision:
+//
+//   - history.keyFile -- the key the retained event history is encrypted
+//     with. Same reasoning as Auth.RecoveryPepperPath below, and the
+//     reason the encryption is worth anything: a stolen backup should
+//     carry nothing able to open what it holds.
+//   - history.dir -- the retained files themselves.
+//     docs/decisions/event-retention.md settled that they stay out of
+//     any backup mikroview produces (#394) unless a later decision says
+//     otherwise.
 var excludedFromBackup = map[string]string{
 	"Auth.RecoveryPepperPath": "the server-side secret mixed into every recovery-key digest (#97) " +
 		"-- see that field's doc comment in internal/config/config.go. A stolen backup should carry " +

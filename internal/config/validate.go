@@ -41,6 +41,7 @@ func (c *Config) Validate() Result {
 	c.validateStore(fatal, warn)
 	c.validateWatchlist(warn)
 	c.validateSnapshot(warn)
+	c.validateHistory(warn)
 	c.validateAuth(fatal)
 	c.validateDevices(fatal)
 	c.validateNotify(warn)
@@ -164,6 +165,13 @@ auth:
   interval: 5m   # 30s or longer`,
 	"CFG-0071": `snapshot:
   keep: 6`,
+	"CFG-0080": `history:
+  enabled: true
+  keyFile: /run/secrets/mikroview-retention.key   # outside the data directory`,
+	"CFG-0081": `history:
+  days: 30`,
+	"CFG-0082": `history:
+  maxBytes: 1073741824   # 1 GiB`,
 }
 
 func (c *Config) validateListen(fatal problemFunc) {
@@ -310,6 +318,43 @@ func (c *Config) validateSnapshot(warn warnFunc) {
 			fmt.Sprintf("%d generations is not a usable retention -- keeping none would delete the snapshot just written, silently turning warm restart off", was),
 			fmt.Sprintf("%d", c.Snapshot.Keep),
 			"set a positive number of generations to keep, e.g. 6")
+	}
+}
+
+// validateHistory clamps the two caps and catches the one
+// configuration that asks for something impossible: retention on with
+// no key.
+//
+// Whether the key file can actually be read is not checked here.
+// Validate is pure (see its doc comment), and a readable path is a
+// filesystem question; main answers it at startup, and refuses to
+// retain if the answer is no. What can be caught here is the operator
+// who turned the switch on and never named a key, which is otherwise a
+// deployment that believes it is keeping thirty days and is keeping
+// none.
+func (c *Config) validateHistory(warn warnFunc) {
+	if c.History.Enabled && c.History.KeyFile == "" {
+		c.History.Enabled = false
+		warn("CFG-0080", "history.keyFile",
+			"retention is on but no key file is set -- there is no unencrypted mode, so nothing would be retained",
+			"false",
+			"set retention.keyFile to a key mounted outside the data directory, or leave retention off")
+	}
+	if c.History.Days < 1 {
+		was := c.History.Days
+		c.History.Days = defaultRetentionDays
+		warn("CFG-0081", "history.days",
+			fmt.Sprintf("%d days is not a usable history -- the day just written would be dropped on the next flush, leaving retention on and holding nothing", was),
+			fmt.Sprintf("%d", c.History.Days),
+			"set a positive number of days to keep, e.g. 30")
+	}
+	if c.History.MaxBytes < MinRetentionBytes {
+		was := c.History.MaxBytes
+		c.History.MaxBytes = defaultRetentionMaxBytes
+		warn("CFG-0082", "history.maxBytes",
+			fmt.Sprintf("%d bytes is smaller than a single day at any realistic rate, so every flush would drop all but the open day", was),
+			fmt.Sprintf("%d", c.History.MaxBytes),
+			fmt.Sprintf("set a cap of at least %d bytes, e.g. 1073741824 for 1 GiB", MinRetentionBytes))
 	}
 }
 
