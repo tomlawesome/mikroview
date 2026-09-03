@@ -53,6 +53,10 @@ process.on('exit', cleanup)
 try {
   for (let i = 0; i < 30; i++) {
     try {
+      // URL is http://127.0.0.1:<port>, the instance this script just
+      // started itself. The rule is about a browser app reaching a
+      // remote host in the clear; nothing here leaves the loopback.
+      // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request
       await fetch(`${URL}/api/healthz`)
       break
     } catch {
