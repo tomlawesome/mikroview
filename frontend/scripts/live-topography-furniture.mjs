@@ -130,7 +130,7 @@ await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
 const range = page.locator('[data-card="topography"] .alt-range')
 check((await range.getAttribute('value')) === '2', 'the altitude defaults to "zones", today\'s unchanged map')
-check((await page.locator('[data-card="topography"] .tick').count()) === 4, 'four stops, no text labels')
+check((await page.locator('[data-card="topography"] .tick').count()) === 8, 'eight stops (four 2D, four city), no text labels')
 const altitudeText = await page.locator('[data-card="topography"] .altitude').textContent()
 check((altitudeText ?? '').trim() === '', 'the stops carry no text, symbols only')
 
