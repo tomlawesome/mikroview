@@ -72,7 +72,13 @@ describe('city input', () => {
   it('carries a pushed tunnel table state through even with no events', () => {
     const devices = [device('rb', '10.0.0.1')]
     const input = cityInputFrom(devices, [], [], [], [], false, 'rb', null, [
-      { iface: 'wg0', routerId: 'rb', apiState: 'down', peers: [{ id: 'wg0/wg/1', name: 'phone', address: '10.9.0.2', kind: 'wg' }] },
+      {
+        iface: 'wg0',
+        routerId: 'rb',
+        kind: 'wg',
+        apiState: 'down',
+        peers: [{ id: 'wg0/wg/1', name: 'phone', address: '10.9.0.2', kind: 'wg' }],
+      },
     ])
     expect(input.tunnels).toEqual([{ iface: 'wg0', routerId: 'rb', apiState: 'down', events: 0, peers: [{ id: 'wg0/wg/1', name: 'phone', address: '10.9.0.2', kind: 'wg' }] }])
   })
