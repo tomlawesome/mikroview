@@ -59,6 +59,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/setup"
+	"github.com/tomlawesome/mikroview/internal/snapshot"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -1051,6 +1052,33 @@ func main() {
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
+	// Warm restart (#795): put back the derived state a restart would
+	// otherwise throw away -- the hourline's per-minute counters, each
+	// device's first and last seen, and every detector's rolling window.
+	//
+	// This is the last thing that happens before ingest and evaluation
+	// start, and it has to be. store.Import refuses a store that has
+	// already counted an event, and engine.ImportState refuses an engine
+	// that has already evaluated one: restoring over live state adds a
+	// snapshot's tallies to traffic this process has already counted,
+	// and nothing downstream could tell that had happened. It is also
+	// the earliest it can be, since the engine routes a snapshot by
+	// definition ID and the definitions are only registered above.
+	//
+	// The event ring is deliberately not among the parts. It holds raw
+	// log lines and addresses, and #795 settled that writing those to
+	// disk would change the data-custody promise in SECURITY.md -- so a
+	// warm-started store has its counters back and holds no events, and
+	// says so (see store.Stats' RestoredTo/LiveSince).
+	snapshotLog := logging.New("snapshot")
+	snapshotDir := usableSnapshotDir(snapshotLog, snapshotDirectory(cfg))
+	snapshotParts := []snapshot.Part{st.SnapshotPart(), devices.SnapshotPart(), engineSnapshotPart{eng: eng}}
+	restoreSnapshot(snapshotLog, snapshotDir, time.Now(), snapshotParts...)
+	var snapshotWriter *snapshot.Writer
+	if snapshotDir != "" {
+		snapshotWriter = snapshot.New(snapshotDir, cfg.Snapshot.Keep, snapshotParts...)
+	}
+
 	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore)
 	go eng.Run(ctx)
 	// One driver for every Ticked definition (issue #405). Deliberately
@@ -1072,6 +1100,12 @@ func main() {
 			}
 		}
 	}()
+	// The snapshot writer's own driver (#795), same ticker/select/recover
+	// shape as the engine tick driver above and the blocklist refresher
+	// below. Started after ingest deliberately: until events are
+	// arriving there is nothing new to write, and the first tick is a
+	// whole interval away in any case.
+	go runSnapshotWriter(ctx, snapshotLog, snapshotWriter, cfg.Snapshot.Interval)
 	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
 	if matchLogPostgres != nil {
 		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
@@ -1570,6 +1604,13 @@ func main() {
 	// Close error here is just the shutdown-budget case, worth one
 	// line, not fatal.
 	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions)
+
+	// One last snapshot, for the same reason and under the same budget
+	// (#795). Ingest and evaluation have both stopped by now, so this
+	// captures the state as it actually was at shutdown rather than as
+	// it was at the last tick -- which is what makes a planned restart
+	// lose nothing at all instead of up to snapshot.interval.
+	writeFinalSnapshot(snapshotLog, snapshotWriter, snapshotShutdownBudget)
 }
 
 // closeStoreOnShutdown flushes every write-behind-backed store passed to
