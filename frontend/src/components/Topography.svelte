@@ -2385,8 +2385,11 @@
 
   {#if cityStop}
     <!-- The city (#863): the same estate in isometric, at the four stops
-         right of survey. -->
-    <City stop={cityStop} />
+         right of survey. The ratified record gives both views the same
+         lens tabs (#865): threading Topography's own `lens` down is
+         "whatever lens plumbing City.svelte already has" until the
+         city grows lenses of its own. -->
+    <City stop={cityStop} lens={lens} />
   {/if}
 
   {#if reach && reachSummary}
