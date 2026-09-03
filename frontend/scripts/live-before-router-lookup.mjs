@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
+// Named live-before-* because the name carries a precondition the glob
+// runner cannot: this scenario asserts what the app says BEFORE anything
+// has been pushed, and the suite shares one instance in filename order.
+// Any scenario that pushes a rule or address table and runs earlier makes
+// the state under test unreachable -- which is what the city scenarios
+// did until this rename (#897).
+//
 // Issue #186 step 4's UI: the rule lookup button on event rows, backed
 // by a table genuinely pushed through POST /api/ingest/routeros with a
 // real ingest token -- not seeded into the store directly. Covers the
