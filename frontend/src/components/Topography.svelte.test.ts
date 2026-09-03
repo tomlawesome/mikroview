@@ -1599,3 +1599,64 @@ describe('#715 item 7 / #701 fact 2: the waist card says what round 30 says', ()
     expect(waistText(container)).not.toMatch(/events\/s/)
   })
 })
+
+describe('#715 items 10 and 11: two treatments Fable ruled on, 2026-09-03', () => {
+  const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+
+  it('lists host names plainly, with no per-name dot and one target each', () => {
+    zonesState.pushed = oneLane
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', srcHostName: 'tom-desktop', dstPort: 443 }),
+      event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.21', srcHostName: 'phone-tom', dstPort: 443 }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const hosts = container.querySelector('.n-hosts')
+    expect(hosts).not.toBeNull()
+    // No round ever drew a text dot here; #648's "node symbols bigger"
+    // was about the map's own circles.
+    expect(hosts!.textContent).not.toMatch(/●/)
+    expect(container.querySelector('.host-dot')).toBeNull()
+    // And one focusable target per name, not two. The dot was
+    // role="button" tabindex="0" aria-hidden="true" at once -- focusable
+    // yet hidden from assistive tech, doubling the tab stops per host.
+    const targets = hosts!.querySelectorAll('[role="button"]')
+    expect(targets.length).toBe(2)
+    expect([...targets].every((t) => t.getAttribute('aria-hidden') !== 'true')).toBe(true)
+  })
+
+  it('gives the fifth lane its own ink rather than the one that means watchers', () => {
+    // --marked is the watch chips' fill and the watch half of every
+    // aggregate bar on this same screen. A lane wearing it made one
+    // colour carry two meanings.
+    const inks = componentSource.match(/const LANE_INKS = \[([^\]]*)\]/)
+    expect(inks).not.toBeNull()
+    expect(inks![1]).not.toMatch(/--marked/)
+    expect(inks![1]).toMatch(/var\(--lane-5\)/)
+    expect(inks![1].split(',').length).toBe(5)
+    // That the token is actually defined, and defined as the validated
+    // colour, is asserted in style_guard_test.go: Vite's ?raw import
+    // hands a .css file back empty, and a Go test can read both files
+    // as text.
+  })
+
+  it('does not paint the fifth lane in the watch chips\' own fill', () => {
+    zonesState.pushed = ['bridge1', 'bridge2', 'bridge3', 'bridge4', 'bridge5'].map((iface, i) => ({
+      address: `10.0.${i + 1}.1/24`,
+      network: `10.0.${i + 1}.0`,
+      interface: iface,
+      comment: `Lane ${i + 1}`,
+    }))
+    appState.events = ['bridge1', 'bridge2', 'bridge3', 'bridge4', 'bridge5'].flatMap((iface, i) =>
+      Array.from({ length: 5 - i }, () => event({ inInterface: iface, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20`, dstPort: 443 })),
+    )
+    const { container } = render(Topography)
+    flushSync()
+
+    const dots = [...container.querySelectorAll('.zone .isl-card circle')].map((c) => c.getAttribute('fill'))
+    expect(dots.length).toBe(5)
+    expect(dots[4]).toBe('var(--lane-5)')
+    expect(dots).not.toContain('var(--marked)')
+  })
+})
