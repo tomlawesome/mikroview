@@ -815,6 +815,71 @@ type Postgres struct {
 	DSNFile string `yaml:"dsnFile"`
 }
 
+// Snapshot configures the rotated warm-restart documents
+// internal/snapshot writes (#795): the derived state mikroview has
+// learned since it started -- the hourline's per-minute counters, the
+// detectors' rolling windows, each device's first and last seen -- so a
+// restart resumes from a few minutes ago instead of from nothing.
+//
+// Always on, and deliberately without an off switch: the cost is one
+// small JSON file every few minutes, and the thing it prevents (a
+// restart silently resetting every counter and every device's first-seen
+// date to now) is invisible when it happens, which is the worst kind of
+// default to leave to an operator's attention.
+//
+// A snapshot is derived, disposable state, never custody data. It holds
+// counts, minute stamps, rule and log-prefix labels, device ids/names
+// and their first/last seen, and per-source window counts keyed by
+// address. It never holds event lines, payloads or the router-pushed
+// rule/NAT/DHCP tables -- see SECURITY.md and internal/snapshot's own
+// doc comment for why those two are out.
+//
+// This is why Dir is a plain directory even on a Postgres deployment:
+// there is nothing here worth a database round trip every few minutes,
+// and nothing here whose loss matters beyond one cold start.
+type Snapshot struct {
+	// Interval is how often a snapshot is written while mikroview runs.
+	// Below MinSnapshotInterval the default is applied instead
+	// (CFG-0070): the write borrows the evaluation goroutine for the
+	// duration of one export, so a very short interval spends the
+	// process's time describing itself rather than evaluating traffic.
+	Interval time.Duration `yaml:"interval"`
+	// Keep is how many generations are kept in Dir; older ones are
+	// deleted after each write. Below 1 the default is applied
+	// (CFG-0071), since keeping zero would delete the file just
+	// written.
+	//
+	// More than one is kept because the newest file is the one a crash
+	// mid-write can truncate, and the loader falls through to the next
+	// (see snapshot.Load).
+	Keep int `yaml:"keep"`
+	// Dir is where the snapshot-<stamp>.json files live, mode 0600 in a
+	// 0700 directory. Left empty, mikroview puts them beside its other
+	// state -- see main.snapshotDirectory. A directory it cannot create
+	// or write is one startup log line and no snapshots, never a refusal
+	// to boot.
+	Dir string `yaml:"dir"`
+}
+
+const (
+	// defaultSnapshotInterval: five minutes is what #795 settled on --
+	// short enough that a restart loses a few minutes of counters rather
+	// than an hour of them, long enough that the work is invisible next
+	// to evaluating traffic.
+	defaultSnapshotInterval = 5 * time.Minute
+	// defaultSnapshotKeep: six generations, half an hour of history at
+	// the default interval. Enough that a run of bad writes (a full disk
+	// truncating each one in turn) still leaves the loader something
+	// older to fall through to.
+	defaultSnapshotKeep = 6
+	// MinSnapshotInterval is the shortest cadence accepted. Below it,
+	// the write's share of the evaluation goroutine stops being
+	// negligible, and the counters it saves are worth less than the
+	// evaluation it displaces. A shorter value is treated as a mistake
+	// and the default applied -- see CFG-0070.
+	MinSnapshotInterval = 30 * time.Second
+)
+
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
@@ -837,6 +902,7 @@ type Config struct {
 	Blocklist  Blocklist  `yaml:"blocklist"`
 	NetClass   NetClass   `yaml:"netClass"`
 	Engine     Engine     `yaml:"engine"`
+	Snapshot   Snapshot   `yaml:"snapshot"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -1012,6 +1078,14 @@ func defaults() Config {
 			// the same ranges, so leaving Apple's own list out is what
 			// makes ordinary iPhone/iPad/Mac traffic read as a VPN exit.
 			Sources: []string{"tor", "apple_private_relay", "x4b_vpn"},
+		},
+		Snapshot: Snapshot{
+			Interval: defaultSnapshotInterval,
+			Keep:     defaultSnapshotKeep,
+			// Dir stays empty on purpose: main.snapshotDirectory resolves
+			// it from the data directory at startup, so a deployment that
+			// moved its state (auth.storePath) keeps its snapshots beside
+			// it rather than on the default volume.
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -1485,6 +1559,19 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH"); v != "" {
 		cfg.Engine.DefinitionsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_SNAPSHOT_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Snapshot.Interval = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_SNAPSHOT_KEEP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Snapshot.Keep = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_SNAPSHOT_DIR"); v != "" {
+		cfg.Snapshot.Dir = v
 	}
 }
 

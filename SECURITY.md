@@ -412,6 +412,23 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   history view, not a log archive; if you need durable logs, forward
   RouterOS's syslog output to a second, dedicated logging destination as
   well.
+- **What a warm restart saves, and what it does not.** So that a restart
+  does not silently reset every counter to zero, mikroview writes a
+  small snapshot of its *derived* state every few minutes and reads the
+  newest one back on the next boot (`snapshot.dir`,
+  `snapshots/` beside its other state by default, mode 0600 in a 0700
+  directory, six generations kept). A snapshot holds counts, the
+  per-minute stamps behind the hourline, rule and log-prefix labels,
+  device ids and names with their first and last seen, and each
+  detector's rolling window counts keyed by source address. It never
+  holds event lines, packet payloads, or the rule/NAT/DHCP tables your
+  routers push -- those three stay in memory for the life of the
+  process, which is what the bullet above promises and this feature does
+  not change. Snapshot files are **not encrypted at rest**: they are
+  covered by the same open decision as the other state files, issue
+  #853, and until that lands they need the same filesystem care as
+  `config.yaml`. Losing the directory costs nothing but a cold start, so
+  there is no reason to include it in a backup.
 - **Deliberate exceptions: behavioral flags, accounts, API tokens, the
   stale-rule usage record, and the new-device MAC registry.** Raised
   flags (port scans, activity spikes, critical-port attempts, volume

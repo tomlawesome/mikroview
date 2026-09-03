@@ -49,6 +49,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime/debug"
 	"sort"
@@ -222,6 +223,38 @@ type Ticked interface {
 	TickInterval() time.Duration
 }
 
+// Snapshotted is implemented by definitions whose in-memory windows
+// are worth carrying across a restart (#795). Baselines already survive
+// through StateStore (state.go); what does not is everything a
+// definition holds in a Keyed[V] -- the per-minute buckets, distinct-value
+// rings and per-source day bookkeeping a baseline is actually compared
+// against. A restart throws those away today, so a warm baseline spends
+// its first window judging an empty ring.
+//
+// Owner decision on #795, 2026-09-02: this state is written whole every
+// few minutes and read back on boot, separate from StateStore and
+// deliberately holding no event lines -- counts, timestamps and
+// identifiers only.
+//
+// Both methods are the definition's own state, whole: the chassis never
+// interprets the bytes, it only routes them by definition ID (see
+// Engine.ExportState/ImportState).
+type Snapshotted interface {
+	// ExportState renders this definition's carried-across state as
+	// JSON. Called on the evaluation goroutine (Engine.ExportState
+	// arranges that for a caller on any other one), so an implementation
+	// reads its own single-writer state directly, exactly as its
+	// Evaluate does.
+	ExportState() (json.RawMessage, error)
+	// ImportState restores raw, which was exported at taken, into a
+	// definition evaluating as of now. Implementations drop whatever
+	// the elapsed time has made meaningless rather than restoring it
+	// stale, must be safe to call before any event has been evaluated,
+	// and must never emit: a restored window is state to judge the next
+	// event against, never a firing in its own right.
+	ImportState(raw json.RawMessage, taken, now time.Time) error
+}
+
 // evaluationRank reports d's Ordered rank, or 0 for a definition that
 // does not declare one.
 func evaluationRank(d Evaluated) int {
@@ -277,6 +310,19 @@ type Engine struct {
 	dropped  atomic.Uint64
 	dropGate *logging.Limiter
 
+	// evaluatedEvents counts events that have reached evaluateEvent --
+	// the one thing ImportState needs to know to refuse a warm-restart
+	// import that has arrived too late to be safe (see its doc comment).
+	// An atomic add per event, on the same path that already does one
+	// for drops.
+	evaluatedEvents atomic.Uint64
+
+	// tasks is how a caller on another goroutine borrows the evaluation
+	// goroutine for one function -- see runOnEvaluationGoroutine, and
+	// ExportState for the one thing that needs it. Unbuffered: the point
+	// is the rendezvous, not queueing work up.
+	tasks chan func()
+
 	mu   sync.Mutex
 	defs map[string]*registration
 	// order is defs' values sorted by (Ordered rank, ID) -- maintained
@@ -284,6 +330,12 @@ type Engine struct {
 	// changes on an operator action and the sort runs on every single
 	// ingested event. See Ordered for why the order has to exist at all.
 	order []*registration
+	// running records whether Run is currently driving evaluation.
+	// Guarded by mu, and set under it before Run's first event, which is
+	// what lets ExportState/ImportState decide between doing the work
+	// inline and handing it to the evaluation goroutine without a window
+	// where both could happen at once -- see runOnEvaluationGoroutine.
+	running bool
 }
 
 // New constructs an Engine with an empty queue and no registered
@@ -292,6 +344,7 @@ func New() *Engine {
 	return &Engine{
 		queue:    make(chan store.Event, queueSize),
 		done:     make(chan struct{}),
+		tasks:    make(chan func()),
 		dropGate: logging.NewLimiter(dropLogInterval),
 		defs:     make(map[string]*registration),
 	}
@@ -403,15 +456,75 @@ func (e *Engine) Dropped() uint64 {
 // rather than firing and forgetting.
 func (e *Engine) Run(ctx context.Context) {
 	defer close(e.done)
+	e.setRunning(true)
+	defer e.setRunning(false)
 	for {
 		select {
 		case ev := <-e.queue:
 			e.evaluateEvent(ev)
+		case fn := <-e.tasks:
+			// Work another goroutine needs done with this one's
+			// exclusive access to definition state -- see
+			// runOnEvaluationGoroutine. Serviced between events, exactly
+			// like an event, so it can never interleave with one.
+			fn()
 		case <-ctx.Done():
 			e.drain()
 			return
 		}
 	}
+}
+
+// setRunning flips the running flag under mu. Taking the lock here is
+// what closes the gap between "is anything evaluating" and acting on the
+// answer: ExportState/ImportState hold mu while they check it and while
+// they do the work inline, so Run cannot start halfway through one.
+func (e *Engine) setRunning(running bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.running = running
+}
+
+// runOnEvaluationGoroutine runs fn where it is safe to read and write
+// the definitions' own state, and returns once fn has finished.
+//
+// A definition's windows (its Keyed values -- rings, day bookkeeping)
+// are single-writer by design: Keyed's mutex protects the map, never the
+// values inside it, and the per-event path deliberately takes no lock
+// around a ring (see Keyed and CountRing's own doc comments, and
+// internal/watchlist's measured cost of the alternative). So reading
+// them from a second goroutine is a data race however carefully it is
+// written -- which leaves borrowing the evaluation goroutine as the way
+// a periodic snapshot writer (#795) reads that state without putting a
+// lock on the ingest path.
+//
+// Run is servicing tasks: hand fn over and wait. Run has stopped, or
+// never started: nothing else can be touching definition state, so fn
+// runs here. The caller must hold mu, which is what makes the second
+// case honest -- Run takes mu before its first event (see setRunning),
+// so it cannot begin while fn is running inline.
+func (e *Engine) runOnEvaluationGoroutine(fn func()) {
+	if !e.running {
+		fn()
+		return
+	}
+	done := make(chan struct{})
+	task := func() {
+		defer close(done)
+		fn()
+	}
+	// mu is released for the rendezvous: the evaluation goroutine takes
+	// it itself on every event, so holding it here would deadlock.
+	e.mu.Unlock()
+	select {
+	case e.tasks <- task:
+		<-done
+	case <-e.done:
+		// Run stopped between the check above and this send. Nothing is
+		// evaluating any more, so fn is safe here.
+		fn()
+	}
+	e.mu.Lock()
 }
 
 // Done returns a channel that is closed once Run has returned -- the
@@ -447,6 +560,7 @@ func (e *Engine) drain() {
 // holds Engine.mu -- Register/Faults/ClearFault stay responsive from
 // other goroutines while evaluation is in progress.
 func (e *Engine) evaluateEvent(ev store.Event) {
+	e.evaluatedEvents.Add(1)
 	e.mu.Lock()
 	regs := append([]*registration(nil), e.order...)
 	e.mu.Unlock()
