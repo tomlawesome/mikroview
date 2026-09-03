@@ -143,6 +143,17 @@ var authzMatrix = []routeExpectation{
 			"is deliberately not here: the figure and its bounds ride GET /api/stats, so a viewer sees the bar " +
 			"and the number without being able to move it"},
 
+	{http.MethodGet, "/api/settings/history", accessAdmin,
+		"reports the on-disk event history's switch, caps and the window actually held (#910). Admin for the read " +
+			"as well, unlike the memory group directly above: the answer names how much custody data this " +
+			"deployment keeps and how far back it reaches, which is the same infrastructure disclosure " +
+			"/api/persistence is gated for, and the group is drawn on an admin surface so no other tier has " +
+			"anywhere to put it"},
+	{http.MethodPut, "/api/settings/history", accessAdmin,
+		"turns the on-disk event history on or off and sets its two caps (#910). Admin for the memory slider's " +
+			"reasons and one of its own: turning it off deletes every retained event before the call returns, " +
+			"which is the largest single act of evidence destruction available anywhere in mikroview"},
+
 	// -- Any authenticated session (viewer tier) ------------------------
 	{http.MethodGet, "/api/events", accessViewer,
 		"core read: the live firewall event feed"},

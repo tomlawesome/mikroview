@@ -119,12 +119,25 @@ func (c *RetainedCorpus) Replay(visit func(store.Event)) CorpusWindow {
 // result as continuous. Stopping makes the window shorter and true,
 // which is the honest of the two, and Truncated marks it.
 func (c *RetainedCorpus) readNewestDaysThatFit(cutoff time.Time, budget int) ([][]store.Event, bool) {
-	if c.retained == nil || budget <= 0 {
-		return nil, c.retained != nil && budget <= 0
+	if c.retained == nil {
+		return nil, false
 	}
 	days, err := c.retained.Days()
 	if err != nil {
 		logger.Warn("could not list the retained history", "err", err)
+		return nil, true
+	}
+	// Nothing on disk cannot have been truncated, and the days are
+	// asked for before the budget is checked so it can say so. This
+	// matters since #910: retention can now be turned on and off while
+	// the process runs, so the corpus is always constructed over a
+	// retained half whether or not one is currently open, and "the
+	// budget ran out" would otherwise report a history that was dropped
+	// from a disk holding nothing at all.
+	if len(days) == 0 {
+		return nil, false
+	}
+	if budget <= 0 {
 		return nil, true
 	}
 
