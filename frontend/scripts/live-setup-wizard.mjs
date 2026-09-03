@@ -124,12 +124,18 @@ check(
 
 // --- Choosing a row re-renders, same dialect today -----------------------
 // Picking an explicit version feeds `version` into the commands request
-// (commandsKey above). Every supported version renders the same dialect
-// today, so the proof that the round trip worked is that the blocks come
-// back byte-identical to the ones already collected -- not merely that
-// blocks exist at all, which a stale render would also satisfy.
+// (commandsKey above). The wizard keeps the old blocks on screen until
+// the new response lands, so a stale render would pass a text
+// comparison on its own: wait for the request the pick triggers, and
+// check the server answered it, before comparing. Every supported
+// version renders the same dialect today, so the answer must come back
+// byte-identical to the blocks already collected.
 const pickedLabel = versionOptions.find((label, i) => i > 0)
-await versionSelect.selectOption({ label: pickedLabel })
+const [pickResponse] = await Promise.all([
+  page.waitForResponse((r) => r.url().includes('/api/setup/commands')),
+  versionSelect.selectOption({ label: pickedLabel }),
+])
+check(pickResponse.status() === 200, `picking ${pickedLabel} re-requests the commands (${pickResponse.status()})`)
 await page.locator('.setup-wizard .body').waitFor({ state: 'visible' })
 
 const reseen = []
