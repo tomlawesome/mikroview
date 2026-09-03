@@ -293,6 +293,8 @@ chr-exercise:run:
     - if: '$CI_PIPELINE_SOURCE == "schedule" && $CHR_EXERCISE == "true"'
   before_script:
     - apt-get update -qq && apt-get install -y -qq qemu-system-x86 qemu-utils python3 unzip curl >/dev/null
-    - command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "chr-exercise: qemu-system-x86_64 missing after installing qemu-system-x86 — cannot boot CHR"; exit 1; }
+    # Quoted whole: a bare "key: value" inside the message makes YAML read
+    # this line as a mapping and GitLab reject the file (pipeline 145).
+    - 'command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "chr-exercise: qemu-system-x86_64 missing after installing qemu-system-x86 -- cannot boot CHR"; exit 1; }'
   script:
     - scripts/routeros-chr-exercise.sh
