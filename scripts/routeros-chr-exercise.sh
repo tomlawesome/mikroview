@@ -10,10 +10,14 @@
 #
 # This is its own container, not `make live-check`: it never runs the
 # live gate and never touches ~/gate-lock (AGENTS.md, "The second host
-# live-check runs on"). It reuses scripts/live-routeros.sh to boot and
-# talk to the router, and the same freshness comparison
-# scripts/routeros-freshness.sh uses (via scripts/routerosfreshness) to
-# decide whether there is anything to exercise at all.
+# live-check runs on"). It boots and talks to the router through
+# scripts/routeros-chr-boot.sh -- QEMU run directly, no Docker -- rather
+# than scripts/live-routeros.sh, whose Docker path exists only to spare
+# a local developer a root install and would need Docker-in-Docker
+# (and a privileged runner) to run inside this job instead. It uses the
+# same freshness comparison scripts/routeros-freshness.sh uses (via
+# scripts/routerosfreshness) to decide whether there is anything to
+# exercise at all.
 #
 # What "refused" means here, and its one known blind spot: RouterOS
 # rejects a command it does not understand immediately, with wording
@@ -88,12 +92,12 @@ export CHR_VERSION="$candidate"
 
 # shellcheck disable=SC2317  # only invoked indirectly, via 'trap cleanup EXIT' below
 cleanup() {
-  scripts/live-routeros.sh down >/dev/null 2>&1 || true
+  scripts/routeros-chr-boot.sh down >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 boot_start=$(date +%s)
-if ! up_output="$(scripts/live-routeros.sh up)"; then
+if ! up_output="$(scripts/routeros-chr-boot.sh up)"; then
   log "routeros-chr-exercise: CHR $candidate would not boot"
   exit 2
 fi
@@ -117,7 +121,7 @@ while IFS= read -r cmd; do
   case "$cmd" in
     '' | '#'*) continue ;;
   esac
-  out="$(scripts/live-routeros.sh run "$cmd" 2>&1 || true)"
+  out="$(scripts/routeros-chr-boot.sh run "$cmd" 2>&1 || true)"
   {
     printf '== %s\n' "$cmd"
     printf '%s\n' "$out"
