@@ -62,6 +62,12 @@ type offHoursDefinition struct {
 	// currently counting and how many events it has seen today -- the
 	// state that is not a baseline. Bounded by Keyed's own cap, the same
 	// way internal/detect's perSource map was bounded by maxTrackedSources.
+	//
+	// Never handed to the StateStore, which holds baselines and nothing
+	// else, but not lost on restart either: issue #795 (owner,
+	// 2026-09-02) carries it across through the periodic snapshot
+	// instead -- see this definition's ExportState/ImportState in
+	// shipped_export.go.
 	days      *Keyed[*offHoursDay]
 	baselines *baselineSet
 }
