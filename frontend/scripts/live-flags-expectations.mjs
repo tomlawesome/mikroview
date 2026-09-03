@@ -115,9 +115,23 @@ if (first.ok && resolveRaised.ok) {
   )
 
   await openFlags()
+  // The absorbed firing must not put the row back in play. It does not
+  // have to remove the row: #780 pins a just-judged row exactly where it
+  // was, struck through, so it does not vanish under the reader who
+  // judged it -- and this scenario judged this very flag a few steps
+  // ago, in this same page visit (the pin is reset by remounting, not by
+  // a tab change). Asserting no row at all therefore contradicted
+  // shipped, ratified behaviour rather than testing the absorption
+  // (#849).
+  const absorbedRow = rowFor(EXPECT_IP)
+  const rowCount = await absorbedRow.count()
   check(
-    (await rowFor(EXPECT_IP).count()) === 0,
-    'nothing about the absorbed firing reaches the inbox -- no row, not even a cleared one',
+    rowCount === 0 || (await absorbedRow.locator('.stamp.expected').count()) === 1,
+    `the absorbed firing never reopens the row: it is gone, or still struck as expected (${rowCount} row(s))`,
+  )
+  check(
+    (await absorbedRow.locator('button.v.expected').count()) === 0,
+    'and it offers no verdict to give again, which an open row would',
   )
 
   // --- 3. Past the ceiling it returns, carrying both numbers ---------
