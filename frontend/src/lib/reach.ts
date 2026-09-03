@@ -65,7 +65,11 @@ export interface ReachSummary {
   busiest: ReachStrand | null
 }
 
-const ACCEPTED = new Set(['accept', 'nat', 'log'])
+// What counts as a connection actually landing, rather than being
+// refused -- shared with lib/city/importance.ts's depended-on reading
+// (#867) so the two never quietly disagree about what "reached" means.
+export const ACCEPTED_ACTIONS = new Set(['accept', 'nat', 'log'])
+export const isAccepted = (action: string): boolean => ACCEPTED_ACTIONS.has(action)
 
 export function reachFor(ip: string, wanInterface: string | null, events: ClientEvent[], now: number = Date.now()): ReachSummary {
   const groups = new Map<
@@ -87,7 +91,7 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
     const farIface = out ? e.outInterface : e.inInterface
     if (!farIface) continue
     const counterpart = farIface === wanInterface ? 'internet' : farIface
-    const outcome: ReachStrand['outcome'] = ACCEPTED.has(e.action) ? 'accepted' : 'blocked'
+    const outcome: ReachStrand['outcome'] = isAccepted(e.action) ? 'accepted' : 'blocked'
     const direction: ReachStrand['direction'] = out ? 'out' : 'in'
     const key = `${counterpart}|${direction}|${outcome}`
     let g = groups.get(key)
