@@ -1470,3 +1470,21 @@ describe('#726: distinct edges are not drawn along each other', () => {
     expect(sharedRun(toBridge1, toBridge2)).toBeLessThan(SMEARED)
   })
 })
+
+describe('#715 item 9: the zone card stops where round 30 stops', () => {
+  it('draws no "events this window" line on a zone card', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    // Round 30's card is name, subnet, hosts, coverage badge and the
+    // aggregate bar (the-whole.html:1002-1015). The build had a fifth
+    // line the mockup draws nowhere. Asserted on the rendered text
+    // rather than the source, so reintroducing it anywhere on the card
+    // fails rather than only reintroducing this exact element.
+    expect(container.querySelector('.zone')).not.toBeNull()
+    const cardText = [...container.querySelectorAll('.zone .isl-card text')].map((t) => t.textContent ?? '').join(' | ')
+    expect(cardText).not.toMatch(/events this window/)
+  })
+})
