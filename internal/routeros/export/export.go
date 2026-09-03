@@ -114,3 +114,81 @@ type Export struct {
 func (e *Export) Text() string {
 	return joinLines(e.Lines)
 }
+
+// LoggingOnlyDiff reports whether after differs from before only in
+// filter rules' log and log-prefix attributes. This is the mechanical
+// guarantee behind Tune logging (#435): the lines outside the filter
+// rules must be the same lines in the same order, the rule count must
+// match, and each rule's other tokens must match key by key and byte by
+// byte in their original order. A rule's own physical layout is not
+// compared -- Render joins a wrapped rule's continuation lines when it
+// rewrites the rule, which changes nothing RouterOS reads. Fingerprint
+// is deliberately not used here: it names the attributes the coverage
+// lens reads, not every attribute a rule carries, and a renderer that
+// dropped dst-port from a rule would slip past a Fingerprint comparison.
+func LoggingOnlyDiff(before, after *Export) bool {
+	if before == nil || after == nil {
+		return false
+	}
+	if len(before.FilterRules) != len(after.FilterRules) {
+		return false
+	}
+	for i := range before.FilterRules {
+		if !sameTokensIgnoringLogging(before.FilterRules[i].tokens, after.FilterRules[i].tokens) {
+			return false
+		}
+	}
+	b, a := linesOutsideRules(before), linesOutsideRules(after)
+	if len(b) != len(a) {
+		return false
+	}
+	for i := range b {
+		if b[i] != a[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// linesOutsideRules returns e's lines with every filter rule's span
+// (Line..LineEnd, 1-based inclusive) removed, in order.
+func linesOutsideRules(e *Export) []string {
+	inRule := make([]bool, len(e.Lines))
+	for _, r := range e.FilterRules {
+		for l := r.Line; l <= r.LineEnd && l >= 1 && l <= len(inRule); l++ {
+			inRule[l-1] = true
+		}
+	}
+	out := make([]string, 0, len(e.Lines))
+	for i, line := range e.Lines {
+		if !inRule[i] {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func isLoggingKey(key string) bool { return key == "log" || key == "log-prefix" }
+
+func sameTokensIgnoringLogging(a, b []ruleToken) bool {
+	var fa, fb []ruleToken
+	for _, t := range a {
+		if !isLoggingKey(t.key) {
+			fa = append(fa, t)
+		}
+	}
+	for _, t := range b {
+		if !isLoggingKey(t.key) {
+			fb = append(fb, t)
+		}
+	}
+	if len(fa) != len(fb) {
+		return false
+	}
+	for i := range fa {
+		if fa[i] != fb[i] {
+			return false
+		}
+	}
+	return true
+}

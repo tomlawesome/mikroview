@@ -322,6 +322,29 @@ func TestTuneLoggingRenderMatcherFallsBackToNumbers(t *testing.T) {
 // this test is deleted or renderExport reverted to always trust
 // itself, a rendering bug that touched more than logging would ship
 // silently.
+// The old check compared a handful of attributes; this proves the
+// enforcement also catches an attribute it never read being dropped.
+func TestTuneLoggingRenderLoggingOnlyEnforcementSeesEveryAttribute(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+
+	original := renderExport
+	renderExport = func(ex *export.Export, selected []int, prefixFor export.LogPrefixFunc) (string, int) {
+		annotated, changed := original(ex, selected, prefixFor)
+		return strings.Replace(annotated, " in-interface=bridge1", "", 1), changed
+	}
+	defer func() { renderExport = original }()
+
+	body, _ := json.Marshal(tuneLoggingRenderRequest{Device: "core", Export: smallExport, Selected: []int{0}})
+	resp := postTuneLogging(t, ts.URL, "/api/tune-logging/render", body)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 when a non-logging attribute is dropped", resp.StatusCode)
+	}
+}
+
 func TestTuneLoggingRenderLoggingOnlyEnforcementBites(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asUser(s.mux()))
