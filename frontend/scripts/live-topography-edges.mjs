@@ -263,10 +263,18 @@ check(
 
 // A toggle latches and leaves the base lens alone -- the whole point of
 // the two families being different controls.
+//
+// The click and the read are two steps on purpose. Svelte 5 applies a
+// state change to the DOM in a microtask, so clicking and reading
+// aria-pressed inside one page.evaluate always reads the value the
+// click was about to replace -- the assertion fails on a control that
+// works. Drive the page the way openLens above does: Playwright clicks,
+// the page settles, a separate evaluate reads.
+await page.click('[data-card="topography"] [aria-label="Map overlays"] button >> nth=0')
+await page.waitForTimeout(300)
 const afterToggle = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
   const btn = card.querySelector('[aria-label="Map overlays"] button')
-  btn.click()
   const on = [...card.querySelectorAll('[aria-label="Map lenses"] button')].find((b) => b.classList.contains('on'))
   return { pressed: btn.getAttribute('aria-pressed'), lens: on?.textContent.trim() ?? '' }
 })
