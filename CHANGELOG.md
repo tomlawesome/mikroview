@@ -30,7 +30,7 @@ rewritten.
   New settings, all on by default and all documented in
   `docs/configuration.md`: `snapshot.interval` (5m, 30s minimum),
   `snapshot.keep` (6 generations) and `snapshot.dir`
-  (`/var/lib/mikroview/snapshots`), with `MIKROVIEW_SNAPSHOT_INTERVAL`,
+  (`snapshots/` beside the data directory), with `MIKROVIEW_SNAPSHOT_INTERVAL`,
   `MIKROVIEW_SNAPSHOT_KEEP` and `MIKROVIEW_SNAPSHOT_DIR` overrides. A
   cadence under the minimum or a retention under one generation is
   clamped with a named warning (CFG-0070, CFG-0071) rather than
