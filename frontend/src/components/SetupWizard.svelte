@@ -268,6 +268,15 @@
     wizardState.close()
   }
 
+  // The finish screen's own door into Tune logging (#435 decision 2):
+  // its other way in besides the topography's coverage lens. Closes the
+  // modal rather than leaving it open behind the new page, the same way
+  // leaveToLanding above does.
+  function openTuneLogging() {
+    appState.view = 'tune-logging'
+    wizardState.close()
+  }
+
   function dismiss() {
     if (onFinish) {
       leaveToLanding()
@@ -656,6 +665,10 @@
                 </div>
               {/if}
               <p class="note">Run setup… reopens this any time, from the Admin group.</p>
+              <p class="note">
+                <button type="button" class="link" onclick={openTuneLogging}>Tune logging…</button>
+                turns a dark connection into a watched one once mikroview has been listening a day.
+              </p>
             {/if}
           </div>
         {/if}
@@ -1015,6 +1028,19 @@
     border-color: var(--log);
     color: var(--bg);
     font-weight: 600;
+  }
+
+  /* Tune logging's own door on the finish pane (#435): reads as a link
+     inline with the sentence beside it, not a second boxed button next
+     to "Run setup… reopens this". */
+  button.link {
+    display: inline;
+    border: none;
+    padding: 0;
+    background: none;
+    color: var(--accent);
+    text-decoration: underline;
+    font-size: inherit;
   }
 
   button:disabled {
