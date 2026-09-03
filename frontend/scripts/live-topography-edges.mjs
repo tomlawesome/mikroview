@@ -240,5 +240,38 @@ if (mine && waist.name === mine.name) {
   console.log(`  - waist count skipped: the map's primary device is "${waist.name}", not this scenario's "${mine?.name}"`)
 }
 
+// The lens row in a real browser (#715 item 3): three exclusive base
+// tabs and two independent overlay toggles, both latched on. Asserted
+// here rather than in a scenario of its own because the row is on every
+// screen this file already drives.
+await openLens('Policy')
+const row = await page.evaluate(() => {
+  const card = document.querySelector('[data-card="topography"]')
+  const tabs = [...(card?.querySelectorAll('[aria-label="Map lenses"] button') ?? [])].map((b) => b.textContent.trim())
+  const ovs = [...(card?.querySelectorAll('[aria-label="Map overlays"] button') ?? [])].map((b) => ({
+    text: b.textContent.trim(),
+    pressed: b.getAttribute('aria-pressed'),
+  }))
+  return { tabs, ovs }
+})
+check(row.tabs.length === 3, `three base lenses (${row.tabs.join(' · ')})`)
+check(row.ovs.length === 2, `two overlay toggles (${row.ovs.map((o) => o.text).join(' · ')})`)
+check(
+  row.ovs.every((o) => o.pressed === 'true'),
+  'both overlays arrive switched on, as rounds 30 and 39 draw the scene',
+)
+
+// A toggle latches and leaves the base lens alone -- the whole point of
+// the two families being different controls.
+const afterToggle = await page.evaluate(() => {
+  const card = document.querySelector('[data-card="topography"]')
+  const btn = card.querySelector('[aria-label="Map overlays"] button')
+  btn.click()
+  const on = [...card.querySelectorAll('[aria-label="Map lenses"] button')].find((b) => b.classList.contains('on'))
+  return { pressed: btn.getAttribute('aria-pressed'), lens: on?.textContent.trim() ?? '' }
+})
+check(afterToggle.pressed === 'false', `an overlay latches off when clicked (${afterToggle.pressed})`)
+check(afterToggle.lens === 'policy', `toggling an overlay leaves the base lens where it was (${afterToggle.lens})`)
+
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()

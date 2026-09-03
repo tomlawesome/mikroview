@@ -428,11 +428,13 @@ export async function fetchRouterPPPActive(device: string): Promise<RouterPPPAct
 // handshake was under three minutes old at push time, an interface is
 // "up" if any of its peers is, and "unknown" means the wireguard-peer
 // kind has never been pushed for this device at all -- never a guessed
-// down. Peers are not attributed to a specific interface (see the
-// server-side doc comment on wireguardInterfaceView); every peer on the
-// device appears under every interface. #866 (the city's WireGuard
-// footbridges) and #701's fact 3 are the intended readers; nothing in
-// this codebase fetches this type yet.
+// down. A peer belongs to the interface its own pushed "interface"
+// property names; a push script old enough to omit that property leaves
+// every peer unattributed, and the server then lists every peer under
+// every interface rather than none (see the doc comment on
+// wireguardInterfaceView). The city's WireGuard footbridges read this
+// through tunnels.svelte.ts (#866); #877 draws the same state as the
+// topography's tunnel node.
 export interface RouterWireguardPeer {
   publicKey: string
   allowedAddress: string[]
