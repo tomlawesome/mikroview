@@ -262,7 +262,13 @@ security:gitleaks:
     # covers. A full clone finds none (#912).
     GIT_DEPTH: 0
   script:
-    - gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --exit-code 1
+    # --redact for the same reason secret-scan.yml gives on the GitHub
+    # side: without it, a job that finds a real secret republishes it into
+    # the build log and into an artifact anyone with repository access can
+    # download. The finding still names the file, the rule and the commit,
+    # which is what anyone fixing it needs. This lane had no redaction at
+    # all until #912.
+    - gitleaks detect --source . --redact --report-format sarif --report-path gitleaks.sarif --exit-code 1
   artifacts:
     when: always
     paths:
