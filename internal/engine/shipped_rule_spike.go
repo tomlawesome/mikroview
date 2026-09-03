@@ -260,13 +260,11 @@ func (d *ruleSpikeDefinition) Replay(corpus Corpus, candidate Params) (Result, e
 			return
 		}
 		emissionCount++
-		if len(sample) < replaySampleBound {
-			sample = append(sample, ReplaySample{
-				At:     now,
-				Target: e.RuleLabel,
-				Detail: fmt.Sprintf("%.1f hits/s vs a baseline of %.1f for this rule (%.1fσ above normal)", rate, before.Value, before.ZScore),
-			})
-		}
+		sample = appendReplaySample(sample, ReplaySample{
+			At:     now,
+			Target: e.RuleLabel,
+			Detail: fmt.Sprintf("%.1f hits/s vs a baseline of %.1f for this rule (%.1fσ above normal)", rate, before.Value, before.ZScore),
+		})
 	})
 
 	span := corpusWindow.End.Sub(corpusWindow.Start)
