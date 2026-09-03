@@ -127,8 +127,16 @@ check(
   'the ghost is named, not just faint',
 )
 
-// Click-through from a reality edge lands on the filtered stream.
-await page.click('[data-card="topography"] text.edge-badge.alarm-t >> nth=0')
+// Click-through from a reality edge lands on the filtered stream. The
+// worst unplanned pair -- the internet-side one this check is about --
+// draws as the escalated card and no longer as a pill (#897 item 2), so
+// click the card when it is there; the first alarm pill otherwise.
+const escalated = page.locator('[data-card="topography"] .unplanned-card')
+if ((await escalated.count()) > 0) {
+  await escalated.first().click()
+} else {
+  await page.click('[data-card="topography"] text.edge-badge.alarm-t >> nth=0')
+}
 await page.waitForFunction(() => location.search.includes('Query=') || location.search.includes('Scope='), null, { timeout: 5000 })
 check(
   decodeURIComponent(page.url()).includes('srcScope=external'),
