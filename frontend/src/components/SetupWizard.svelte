@@ -25,24 +25,20 @@
   import { journeyState } from '../lib/journey.svelte'
   import {
     announceStep,
-    caTrustCommands,
     deviceStanza,
     finishHeadline,
     forcedPastRecord,
     notObserved,
     prose,
-    pushScript,
-    ruleTaggingCommands,
-    scheduleCommands,
     sourceSplits,
     arrivingAddresses,
     srcAddressCommand,
-    syslogCommands,
     undeclaredDevices,
     SKIP_CONSEQUENCES,
     STEP_COUNT,
     type LedgerStep,
   } from '../lib/setupsteps'
+  import type { RouterosStanding } from '../lib/types'
   import MemoryControl from './MemoryControl.svelte'
 
   // Steps land seconds to minutes apart (the documented push scheduler
@@ -157,6 +153,62 @@
     token = result.value ?? ''
   }
 
+  // The RouterOS command blocks (#436) come from the server now, keyed
+  // to a plain string rather than to wizardState.status directly -- the
+  // status poll (POLL_MS above) reassigns that object every 5s whether
+  // or not anything relevant changed, and re-requesting commands on
+  // every poll tick would be wasted work. This key only changes when
+  // something the request actually carries changes.
+  const commandsKey = $derived(
+    wizardState.status
+      ? JSON.stringify([
+          wizardState.address,
+          wizardState.status.instance.syslogPort,
+          wizardState.status.pushKinds,
+          token,
+          wizardState.pickedVersion,
+        ])
+      : '',
+  )
+
+  $effect(() => {
+    if (!commandsKey) return
+    wizardState.refreshCommands({ token })
+  })
+
+  // The router-standing warning (#436): one line per router outside the
+  // dialect table's covered range, plus one for the operator's own pick
+  // when it is. Never per code block, never a diagnosis about a specific
+  // step -- see setupsteps.ts's module comment for why the commands
+  // themselves moved server-side.
+  interface WarningEntry {
+    key: string
+    kind: 'below-minimum' | 'ahead-of-review'
+    name: string
+    version: string
+  }
+
+  function isWarned(standing: RouterosStanding): standing is 'below-minimum' | 'ahead-of-review' {
+    return standing === 'below-minimum' || standing === 'ahead-of-review'
+  }
+
+  const warningEntries = $derived.by((): WarningEntry[] => {
+    const commands = wizardState.commands
+    if (!commands) return []
+    const entries: WarningEntry[] = commands.routers
+      .filter((r) => isWarned(r.standing))
+      .map((r) => ({ key: r.id, kind: r.standing as 'below-minimum' | 'ahead-of-review', name: r.name, version: r.routerosVersion }))
+    if (commands.picked && isWarned(commands.picked.standing)) {
+      entries.push({
+        key: 'picked',
+        kind: commands.picked.standing as 'below-minimum' | 'ahead-of-review',
+        name: 'Your picked version',
+        version: commands.picked.version,
+      })
+    }
+    return entries
+  })
+
   async function copy(text: string, label: string) {
     try {
       await navigator.clipboard.writeText(text)
@@ -230,6 +282,42 @@
 </script>
 
 <svelte:window onkeydown={onKeydown} />
+
+<!-- commandsHead (#436) sits at the head of every RouterOS command step
+     (1-4): the version pick-list, and the router-standing warning --
+     never blocking, never per code block, worded once here rather than
+     once per step. -->
+{#snippet commandsHead()}
+  {#if wizardState.commands}
+    {@const commands = wizardState.commands}
+    <div class="routeros-version">
+      <label for="routeros-version-select">Your RouterOS version</label>
+      <select
+        id="routeros-version-select"
+        value={wizardState.pickedVersion}
+        onchange={(e) => (wizardState.pickedVersion = (e.currentTarget as HTMLSelectElement).value)}
+      >
+        <option value="">Not sure — the router will report it</option>
+        {#each commands.routeros.rows as row (row.from)}
+          <option value={row.from}>{row.from === row.to ? row.from : `${row.from}–${row.to}`}</option>
+        {/each}
+      </select>
+    </div>
+    {#each warningEntries as w (w.key)}
+      <p class="note" class:below-minimum={w.kind === 'below-minimum'}>
+        {#if w.kind === 'below-minimum'}
+          <strong>{w.name} runs RouterOS {w.version}.</strong> These commands were written for {commands
+            .routeros.minimum} and later; on {w.version} some may not apply as written. Check each against
+          your router before running it.
+        {:else}
+          <strong>{w.name} runs RouterOS {w.version}.</strong> These commands were last checked against {commands
+            .routeros.newest}. Newer releases rarely change them, but if one is refused, that is the first
+          thing to suspect.
+        {/if}
+      </p>
+    {/each}
+  {/if}
+{/snippet}
 
 {#if wizardState.open}
   <!-- No click-outside dismissal, per the record: the veil is a veil and
@@ -349,16 +437,23 @@
             {:else if step}
               <p class="lead">{step.lead}</p>
 
+              {#if step.n <= 4}
+                {@render commandsHead()}
+              {/if}
+
               {#if step.n === 1 && wizardState.status}
                 {#if step.status.state !== 'blocked'}
-                  <pre>{caTrustCommands(wizardState.address)}</pre>
+                  <pre>{wizardState.commands?.steps.caTrust.commands ?? ''}</pre>
                   <button
                     type="button"
                     class="copy"
-                    onclick={() => copy(caTrustCommands(wizardState.address), 'ca')}
+                    onclick={() => copy(wizardState.commands?.steps.caTrust.commands ?? '', 'ca')}
                   >
                     {copied === 'ca' ? 'Copied' : 'Copy'}
                   </button>
+                  {#if wizardState.commands?.steps.caTrust.note}
+                    <p class="note">{wizardState.commands.steps.caTrust.note}</p>
+                  {/if}
                   <p class="note">
                     <code>check-certificate=no</code> belongs on this one line only — it is fetching
                     the thing everything else checks against.
@@ -366,25 +461,30 @@
                 {/if}
               {:else if step.n === 2 && wizardState.status}
                 {#if step.status.state !== 'blocked'}
-                  <pre>{syslogCommands(wizardState.address, wizardState.status.instance.syslogPort)}</pre>
+                  <pre>{wizardState.commands?.steps.syslog.commands ?? ''}</pre>
                   <button
                     type="button"
                     class="copy"
-                    onclick={() =>
-                      wizardState.status &&
-                      copy(
-                        syslogCommands(wizardState.address, wizardState.status.instance.syslogPort),
-                        'syslog',
-                      )}
+                    onclick={() => copy(wizardState.commands?.steps.syslog.commands ?? '', 'syslog')}
                   >
                     {copied === 'syslog' ? 'Copied' : 'Copy'}
                   </button>
+                  {#if wizardState.commands?.steps.syslog.note}
+                    <p class="note">{wizardState.commands.steps.syslog.note}</p>
+                  {/if}
                 {/if}
               {:else if step.n === 3}
-                <pre>{ruleTaggingCommands()}</pre>
-                <button type="button" class="copy" onclick={() => copy(ruleTaggingCommands(), 'rules')}>
+                <pre>{wizardState.commands?.steps.ruleTagging.commands ?? ''}</pre>
+                <button
+                  type="button"
+                  class="copy"
+                  onclick={() => copy(wizardState.commands?.steps.ruleTagging.commands ?? '', 'rules')}
+                >
                   {copied === 'rules' ? 'Copied' : 'Copy'}
                 </button>
+                {#if wizardState.commands?.steps.ruleTagging.note}
+                  <p class="note">{wizardState.commands.steps.ruleTagging.note}</p>
+                {/if}
                 <p class="note">
                   The letter is how mikroview knows what a rule did — <code>A</code>ccept,
                   <code>D</code>rop, <code>R</code>eject, <code>L</code>og. The trailing
@@ -416,28 +516,29 @@
                     The token below is shown once and is already in the script. Anyone who can read
                     the script on the router can read the token, so it is scoped to that one router.
                   </p>
-                  <pre class="script">{pushScript(
-                      wizardState.address,
-                      token,
-                      wizardState.status.pushKinds,
-                    )}</pre>
+                  <pre class="script">{wizardState.commands?.steps.push.commands ?? ''}</pre>
                   <button
                     type="button"
                     class="copy"
-                    onclick={() =>
-                      wizardState.status &&
-                      copy(
-                        pushScript(wizardState.address, token, wizardState.status.pushKinds),
-                        'script',
-                      )}
+                    onclick={() => copy(wizardState.commands?.steps.push.commands ?? '', 'script')}
                   >
                     {copied === 'script' ? 'Copied' : 'Copy script'}
                   </button>
+                  {#if wizardState.commands?.steps.push.note}
+                    <p class="note">{wizardState.commands.steps.push.note}</p>
+                  {/if}
                   <p class="note">Then save it and run it once:</p>
-                  <pre>{scheduleCommands()}</pre>
-                  <button type="button" class="copy" onclick={() => copy(scheduleCommands(), 'sched')}>
+                  <pre>{wizardState.commands?.steps.schedule.commands ?? ''}</pre>
+                  <button
+                    type="button"
+                    class="copy"
+                    onclick={() => copy(wizardState.commands?.steps.schedule.commands ?? '', 'sched')}
+                  >
                     {copied === 'sched' ? 'Copied' : 'Copy'}
                   </button>
+                  {#if wizardState.commands?.steps.schedule.note}
+                    <p class="note">{wizardState.commands.steps.schedule.note}</p>
+                  {/if}
                 {/if}
               {:else if step.n === 5}
                 {#each undeclared as d (d.id)}
@@ -807,6 +908,38 @@
   .note {
     font-size: 12.5px;
     color: var(--fg-muted);
+  }
+
+  /* The below-minimum router-standing warning (#436): the same amber
+     already used for this wizard's "heavy" caution register (.amber,
+     .heavy below), as a left rule rather than a new colour -- a router
+     outside the table's floor never blocks, but the note still reads as
+     the loudest thing on the step. */
+  .note.below-minimum {
+    border-left: 3px solid var(--log);
+    padding-left: 10px;
+  }
+
+  .routeros-version {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .routeros-version label {
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
+  .routeros-version select {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-size: 13px;
   }
 
   .headline {
