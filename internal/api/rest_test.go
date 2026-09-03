@@ -571,6 +571,11 @@ func TestDeviceStatus(t *testing.T) {
 // source: GET /api/rules must serve every rule label internal/rules.Store
 // has ever seen fire (via Touch), not just what's currently loaded --
 // mirroring TestHandleDevices' shape for the analogous device endpoint.
+// It also covers issue #701's honesty bound: the response must carry
+// recordingSince, matching what the underlying rules.Store reports, so
+// a client can bound an "active rules" claim by the window mikroview
+// actually recorded rather than a fixed seven days it may not have
+// seen.
 func TestHandleRules(t *testing.T) {
 	s, _ := newTestServer(t)
 	now := time.Now()
@@ -588,7 +593,8 @@ func TestHandleRules(t *testing.T) {
 	defer resp.Body.Close()
 
 	var body struct {
-		Rules []rules.Usage `json:"rules"`
+		Rules          []rules.Usage `json:"rules"`
+		RecordingSince time.Time     `json:"recordingSince"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
@@ -605,6 +611,23 @@ func TestHandleRules(t *testing.T) {
 	}
 	if byRule["r99"].Count != 1 {
 		t.Errorf("expected r99's count = 1, got %d", byRule["r99"].Count)
+	}
+	if !body.RecordingSince.Equal(s.Rules.RecordingSince()) {
+		t.Errorf("expected recordingSince = %v, got %v", s.Rules.RecordingSince(), body.RecordingSince)
+	}
+}
+
+// TestHandleRulesRecordingSinceOmittedWhenZero covers oldestHeldJSON's
+// zero-time convention (see its doc comment) applied to recordingSince:
+// a zero time must render as JSON null, not "0001-01-01T00:00:00Z",
+// which a client could otherwise mistake for a real two-thousand-year
+// recording window. rules.Store always stamps a non-zero RecordingSince
+// on Open in production, so this pins the wire contract directly
+// against oldestHeldJSON rather than relying on that store invariant to
+// exercise it.
+func TestHandleRulesRecordingSinceOmittedWhenZero(t *testing.T) {
+	if got := oldestHeldJSON(time.Time{}); got != nil {
+		t.Errorf("expected oldestHeldJSON(zero time) = nil, got %v", got)
 	}
 }
 
