@@ -628,6 +628,13 @@ rewritten.
 
 ### Removed
 
+- **The rule-usage store no longer reads the bare-array
+  `rule-usage.json` it wrote before `recordingSince` existed** (#873).
+  Only the current object shape is read; an array-shaped document is now
+  an unparseable document, which is a hard startup error by design
+  (#378), so an instance still holding one refuses to start until that
+  stale `rule-usage.json` is deleted.
+
 - **`watchlist.storePath` and `flags.detectorSettingsStorePath` are
   gone, with the boot-time migration that read them** (config keys,
   `MIKROVIEW_WATCHLIST_STORE_PATH` and
