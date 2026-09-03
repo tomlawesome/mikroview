@@ -362,15 +362,13 @@ func (d *lowSlowScanDefinition) Replay(corpus Corpus, candidate Params) (Result,
 			return
 		}
 		emissionCount++
-		if len(sample) < replaySampleBound {
-			sample = append(sample, ReplaySample{
-				At:     now,
-				Target: e.SrcIP,
-				Detail: fmt.Sprintf(
-					"%d distinct ports, %d distinct hosts over %s (%.0f%% drop/reject, %.1fσ above this source's normal breadth)",
-					portCount, hostCount, d.window, observedDropRatio*100, before.ZScore),
-			})
-		}
+		sample = appendReplaySample(sample, ReplaySample{
+			At:     now,
+			Target: e.SrcIP,
+			Detail: fmt.Sprintf(
+				"%d distinct ports, %d distinct hosts over %s (%.0f%% drop/reject, %.1fσ above this source's normal breadth)",
+				portCount, hostCount, d.window, observedDropRatio*100, before.ZScore),
+		})
 	})
 
 	span := corpusWindow.End.Sub(corpusWindow.Start)

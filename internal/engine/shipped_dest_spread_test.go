@@ -445,6 +445,60 @@ func TestShippedOutboundAnomalyReplayProducesReceipt(t *testing.T) {
 	}
 }
 
+// TestShippedOutboundAnomalyReplaySampleKeepsMostRecent pins issue #860
+// for the dest-spread replay path: once emissions exceed
+// replaySampleBound, the receipt's Sample must hold the most recent ones
+// (chronological order preserved), not whichever fifty fired first. This
+// would fail under the old first-N behaviour, which kept the earliest
+// fifty crossings instead of the latest.
+func TestShippedOutboundAnomalyReplaySampleKeepsMostRecent(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedDestSpreadDefinition(t, "outbound_anomaly", FlagsSink(fs),
+		Params{"threshold": 5, "window": time.Minute.String()}, Scope{}, true)
+
+	t0 := time.Now().Add(-time.Hour)
+	n := replaySampleBound + 20
+	var events []store.Event
+	for i := 0; i < n; i++ {
+		events = append(events, lanEvt("192.168.1.50", pub3(i), t0.Add(time.Duration(i)*time.Second)))
+	}
+
+	res, err := d.Replay(fakeCorpus{events: events}, nil)
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if res.Receipt == nil {
+		t.Fatalf("Replay declined unexpectedly: %+v", res.Decline)
+	}
+	sample := res.Receipt.Sample()
+	if len(sample) != replaySampleBound {
+		t.Fatalf("len(Sample()) = %d, want exactly replaySampleBound=%d", len(sample), replaySampleBound)
+	}
+	// threshold=5: the distinct-destination count first clears the
+	// threshold at event index 4 (the 5th distinct destination), and every
+	// event from there on keeps it cleared (destinations are always
+	// distinct, never expiring within this window), so events
+	// threshold-1..n-1 are each their own emission. The sample must be
+	// exactly the last replaySampleBound of those, oldest of those kept
+	// first.
+	firstFireIdx := 4
+	totalFires := n - firstFireIdx
+	if totalFires <= replaySampleBound {
+		t.Fatalf("test setup produces only %d fires, want more than replaySampleBound=%d", totalFires, replaySampleBound)
+	}
+	for i, s := range sample {
+		wantIdx := n - replaySampleBound + i
+		want := events[wantIdx].ReceivedAt
+		if !s.At.Equal(want) {
+			t.Fatalf("sample[%d].At = %s, want %s (event %d) -- sample must hold the most recent %d emissions in chronological order, not the first",
+				i, s.At, want, wantIdx, replaySampleBound)
+		}
+		if s.Target != "192.168.1.50" {
+			t.Errorf("sample[%d].Target = %q, want the LAN source", i, s.Target)
+		}
+	}
+}
+
 // TestShippedOutboundAnomalyConfidenceIdenticalWhenVPNInterfacesUnset is
 // internal/detect/vpn_test.go's
 // TestDestSpreadConfidenceIdenticalRegardlessOfInterfaceWhenVPNInterfacesUnset,

@@ -270,13 +270,11 @@ func (d *globalSpikeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 			return
 		}
 		emissionCount++
-		if len(sample) < replaySampleBound {
-			sample = append(sample, ReplaySample{
-				At:     now,
-				Target: "global",
-				Detail: fmt.Sprintf("%.1f events/s vs a baseline of %.1f (%.1fσ above normal)", current, before.Value, before.ZScore),
-			})
-		}
+		sample = appendReplaySample(sample, ReplaySample{
+			At:     now,
+			Target: "global",
+			Detail: fmt.Sprintf("%.1f events/s vs a baseline of %.1f (%.1fσ above normal)", current, before.Value, before.ZScore),
+		})
 	}
 
 	corpusWindow := corpus.Replay(func(e store.Event) {
