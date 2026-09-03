@@ -350,6 +350,31 @@ func TestFilterRuleWithoutNewFieldsStillDecodes(t *testing.T) {
 	if len(p.FilterRules) != 1 || p.FilterRules[0].Comment != "allow lan" {
 		t.Fatalf("a pre-#408 record was not accepted intact: %+v", p.FilterRules)
 	}
+	if p.FilterRules[0].Packets != 0 || p.FilterRules[0].Bytes != 0 {
+		t.Errorf("a push predating #435's counters decoded Packets=%v Bytes=%v, want 0/0 (absent, not observed)",
+			p.FilterRules[0].Packets, p.FilterRules[0].Bytes)
+	}
+}
+
+// TestFilterRuleRoundTripsPacketsAndBytes covers #435's rule counters:
+// RouterOS's :serialize to=json emits an integer as a float (the same
+// landmine RouterOSInt exists for elsewhere on this record), and a
+// push that carries them decodes to the exact values reported.
+func TestFilterRuleRoundTripsPacketsAndBytes(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"lan to wan","chain":"forward","action":"accept","srcAddressList":"","logPrefix":"","packets":41230.000000,"bytes":8817212.000000}]}`)
+	if len(p.FilterRules) != 1 {
+		t.Fatalf("decoded %d rules, want 1", len(p.FilterRules))
+	}
+	if p.FilterRules[0].Packets != 41230 || p.FilterRules[0].Bytes != 8817212 {
+		t.Errorf("Packets/Bytes = %v/%v, want 41230/8817212", p.FilterRules[0].Packets, p.FilterRules[0].Bytes)
+	}
+}
+
+// TestFilterRulePacketsRejectsFractional pins RouterOSInt's usual
+// whole-number guard on the two new fields, the same as every other
+// RouterOSInt field on this record.
+func TestFilterRulePacketsRejectsFractional(t *testing.T) {
+	decodeErr(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"","action":"","srcAddressList":"","logPrefix":"","packets":41230.5}]}`)
 }
 
 // TestPayloadCarriesRouterOSVersion covers #436's carry: the router
