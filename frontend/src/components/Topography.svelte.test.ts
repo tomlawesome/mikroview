@@ -1660,3 +1660,98 @@ describe('#715 items 10 and 11: two treatments Fable ruled on, 2026-09-03', () =
     expect(dots).not.toContain('var(--marked)')
   })
 })
+
+describe('#701: the reach names its busiest pathway, and says the ranking is weighted', () => {
+  // Enter the reach the way a reader does, then read the crumb.
+  function openReach(events: ClientEvent[]) {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = events
+    const { container } = render(Topography)
+    flushSync()
+    const hostLink = container.querySelector<SVGTSpanElement>('.host-link')
+    hostLink!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    return container
+  }
+
+  function busiestLine(container: HTMLElement): string | null {
+    const subs = [...container.querySelectorAll('.sub')].map((s) => s.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+    return subs.find((s) => s.startsWith('the busiest pathway')) ?? null
+  }
+
+  function talk(over: Partial<ClientEvent>): ClientEvent {
+    return event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'cam-porch', receivedAt: Date.now(), ...over })
+  }
+
+  it('names the pathway, its port and its outcome, and says the ranking is weighted toward now', () => {
+    const container = openReach([
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 445, protocol: 'tcp', action: 'drop' }),
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 445, protocol: 'tcp', action: 'drop' }),
+    ])
+
+    const line = busiestLine(container)
+    // The owner's own constraint, made regression-proof: the sentence
+    // must say the ranking is weighted, not merely imply "now".
+    expect(line).toContain('weighted toward now')
+    expect(line).toContain('cam-porch → nas')
+    expect(line).toContain('tcp/445')
+    expect(line).toContain('refused')
+  })
+
+  it('flips the arrow when the far side started it', () => {
+    // The centred host is cam-porch, put on the card by the one event
+    // it sent. Three inbound knocks against that one outbound, all
+    // equally recent, so the inbound strand wins outright rather than
+    // by a tie-break -- otherwise the arrow direction this test is
+    // about would not be the thing under test.
+    const inbound = (id: number) =>
+      talk({
+        id,
+        srcIp: '10.0.9.9',
+        srcHostName: 'scanner',
+        dstIp: '10.0.1.20',
+        dstHostName: 'cam-porch',
+        inInterface: 'bridge2',
+        outInterface: 'bridge1',
+        dstPort: 22,
+        protocol: 'tcp',
+        action: 'drop',
+      })
+    const container = openReach([
+      talk({ id: 1, outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 443, action: 'accept' }),
+      inbound(2),
+      inbound(3),
+      inbound(4),
+    ])
+
+    const line = busiestLine(container)
+    expect(line).toContain('scanner → cam-porch')
+    expect(line).not.toContain('cam-porch → scanner')
+    expect(line).toContain('tcp/22')
+    expect(line).toContain('refused')
+  })
+
+  it('drops the port clause entirely when the traffic carried no port', () => {
+    // ICMP and its kin. A dangling separator would read as a missing
+    // fact rather than an absent one.
+    const container = openReach([
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', protocol: 'icmp', action: 'accept' }),
+    ])
+
+    const line = busiestLine(container)
+    expect(line).toContain('cam-porch → nas')
+    expect(line).not.toMatch(/\/\d/)
+    expect(line).not.toMatch(/· ·/)
+    expect(line).toMatch(/nas · accepted$/)
+  })
+
+  it('says nothing at all when nothing was observed, leaving the one honest empty state', () => {
+    const container = openReach([talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 443 })])
+    // Re-enter with an empty buffer: the reach is open, the buffer is not.
+    appState.events = []
+    flushSync()
+
+    expect(busiestLine(container)).toBeNull()
+    expect(container.textContent).toContain('nothing observed this window')
+  })
+})

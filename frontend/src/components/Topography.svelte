@@ -1545,6 +1545,29 @@
             · <b class="alarm">{b.direction === 'out' ? `blocked toward ${far}` : `knocked from ${far}, refused`} — {b.count}×</b>
           {/if}
         </div>
+        <!-- Round 30 states this on the reach's own zone card
+             (the-whole.html:1136); this build's reach is the membrane
+             view, whose analogue of that facts line is this crumb sub,
+             which already carries the reach's derived facts.
+             The mockup words it "right now", and the ranking is a
+             decayed sum over the whole buffer rather than an
+             instantaneous reading -- a pathway that stopped ten minutes
+             ago can still win it. So the owner's ruling requires the
+             sentence to say it is weighted toward now, and it does,
+             in their words (#701; wording by Fable 5).
+             No empty state of its own: `busiest` is null exactly when
+             no strand was observed, which the reach block already
+             answers with "nothing observed this window". -->
+        {#if reachSummary.busiest}
+          {@const bp = reachSummary.busiest}
+          {@const peer = bp.peers[0] ?? (bp.counterpart === 'internet' ? 'the internet' : bp.counterpart)}
+          {@const hit = bp.portHits[0]}
+          <div class="sub">
+            the busiest pathway, weighted toward now:
+            {bp.direction === 'out' ? `${reach.host} → ${peer}` : `${peer} → ${reach.host}`}{hit ? ` · ${hit.proto}/${hit.port}` : ''}
+            · {#if bp.outcome === 'blocked'}<b class="alarm">refused</b>{:else}accepted{/if}
+          </div>
+        {/if}
       {/if}
     </div>
   {/if}
