@@ -47,6 +47,11 @@ class FlagsState {
   // resolution (see internal/flags.Store.TimeSeries), for metrics --
   // fetched alongside list in the same GET /api/flags response.
   timeSeries = $state<FlagTimeBucket[]>([])
+  // Whether refresh() has ever completed -- an empty list before this is
+  // true is "not fetched yet", not "no flags exist". The city's watched
+  // reading (#867) reads this rather than assuming an empty list means
+  // nothing is flagged.
+  loaded = $state(false)
 
   // The open-flags count is the *settled* ledger's count (#642): a
   // provisional flag -- raised while its baseline was still warming, so
@@ -88,6 +93,7 @@ class FlagsState {
     const res = await fetchFlags()
     this.list = res.flags
     this.timeSeries = res.timeSeries
+    this.loaded = true
   }
 
   // "Clear all" (issue #198) -- same optimistic-update reasoning as

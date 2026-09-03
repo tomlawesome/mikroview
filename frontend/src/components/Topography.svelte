@@ -38,12 +38,12 @@
   // moves out of city/ -- it does not get forked.
   import { bridgeStateFor, bridgeStateLabel } from '../lib/city/tunnelState'
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
-  import { realityEdges, unexercisedIntents, type RealityEdge } from '../lib/reality'
+  import { realityEdges, unexercisedIntents, worstUnplannedOf, type RealityEdge } from '../lib/reality'
   import { coverageState } from '../lib/coverage.svelte'
-  import { composeCommand, refusingCommentFor } from '../lib/compose'
+  import { composeCommand, reachComposeInput, refusingCommentFor } from '../lib/compose'
   import type { ReachStrand } from '../lib/reach'
+  import { portsLine, reachFor } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
-  import { reachFor } from '../lib/reach'
   import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
@@ -55,7 +55,12 @@
   import { nightlySummary } from '../lib/watchWindow'
   import type { Flag, WatchlistEntry } from '../lib/types'
   import City from './City.svelte'
-  import { STOPS } from '../lib/city/project'
+  import { STOPS, R2, flatFit, FX, FY } from '../lib/city/project'
+  import { layoutGround } from '../lib/city/layout'
+  import { cityInputFrom } from '../lib/city/input'
+  import type { Ground } from '../lib/city/types'
+  import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
+  import { altitudeStopState } from '../lib/altitudeStop.svelte'
 
   // Five fixed lane inks. The fifth was --marked until #715 item 11 --
   // the ink this same screen uses for watchers, so one colour carried
@@ -758,30 +763,10 @@
   // that cannot see each other.
   // Round 30 escalates the worst unplanned flow out of the row of
   // identical pills into its own two-line card (the-whole.html:940-944).
-  // "Worst" is busiest: realityEdges already sorts by events, so this
-  // adds no third ranking to the app. #701's recency weight belongs to a
-  // sentence that claims "now"; this card claims no such thing.
-  // One card only, however close the runners-up -- "worst" is a
-  // superlative, and two cards un-say it. Ties break on drops, then key,
-  // so the same data always escalates the same pair (Fable 5, #715
-  // item 4).
-  const worstUnplanned = $derived.by((): DrawnReality | null => {
-    const unplanned = drawnReality.drawn.filter((d) => d.r.verdict === 'unplanned')
-    if (unplanned.length === 0) return null
-    return unplanned.reduce((best, d) =>
-      d.r.events !== best.r.events
-        ? d.r.events > best.r.events
-          ? d
-          : best
-        : d.r.drops !== best.r.drops
-          ? d.r.drops > best.r.drops
-            ? d
-            : best
-          : d.r.key < best.r.key
-            ? d
-            : best,
-    )
-  })
+  // The choice of which pair is reality.ts's worstUnplannedOf, shared
+  // with the city's own escalated road, so the two views cannot name
+  // different pairs from the same data (#869).
+  const worstUnplanned = $derived(worstUnplannedOf(drawnReality.drawn, (d) => d.r))
 
   function cardLines(r: RealityEdge): [string, string] {
     const asked = r.topAsked[0]
@@ -932,10 +917,14 @@
   // rather than navigating here directly -- see topologyNav.svelte.ts's
   // own doc comment for why a shared slot, not a route param. Consumed
   // (cleared) the instant it's read, so arriving here a second time
-  // without a fresh request just shows the plain map.
+  // without a fresh request just shows the plain map. Left for City's
+  // own effect to consume when the city is the active side of the
+  // slider (#868) -- otherwise this effect runs regardless of altitude
+  // (the 2D map stays mounted, only hidden, while the city shows) and
+  // would steal the request before City ever saw it.
   $effect(() => {
     const pending = topologyNavState.pendingDescend
-    if (pending) {
+    if (pending && cityStop === null) {
       descend(pending.zoneId, pending.host, pending.ip)
       topologyNavState.pendingDescend = null
     }
@@ -987,23 +976,20 @@
     return hit ? { port: hit.port, proto: hit.proto } : { port: composePort, proto: 'tcp' }
   })
 
+  // The strand-to-command translation itself is reachComposeInput
+  // (lib/compose.ts, #868): this panel's own allow/block toggle,
+  // chosen port and host/subnet scope are just its overrides on the
+  // same defaults the city's plainer composer calls unadorned, so the
+  // two views print the same line for the same strand by construction,
+  // not by coincidence.
   const composedCommand = $derived.by((): string | null => {
-    if (!reach || !compose || !chosenPort) return null
-    const target = composeScope === 'subnet' && counterpartZone?.cidr ? counterpartZone.cidr : composePeerAddr
-    if (!target) return null
-    const pairFrom = compose.direction === 'out' ? reach.zoneId : counterpartIface
-    const pairTo = compose.direction === 'out' ? counterpartIface : reach.zoneId
-    return composeCommand({
-      hostIp: reach.ip,
-      direction: compose.direction,
-      target,
-      port: chosenPort.port,
-      proto: chosenPort.proto,
-      mode: composeMode,
-      hostName: reach.host,
-      targetName: composeScope === 'subnet' ? (counterpartZone?.name ?? composePeerName) : composePeerName,
-      placeBefore: refusingCommentFor(policyState.edges, pairFrom, pairTo),
-    })
+    if (!reach || !compose) return null
+    const input = reachComposeInput(
+      compose,
+      { hostIp: reach.ip, hostName: reach.host, zoneId: reach.zoneId, wanInterface: zonesState.wanInterface, zones, edges: policyState.edges },
+      { mode: composeMode, port: composePort, free: composeFree, scope: composeScope },
+    )
+    return input ? composeCommand(input) : null
   })
 
   const composePlaceBefore = $derived(
@@ -1104,13 +1090,6 @@
     }
   }
 
-  function portsLine(ports: number[]): string {
-    return ports
-      .slice(0, 3)
-      .map((p) => `:${p}`)
-      .join(' ')
-  }
-
   const reachZoneInk = $derived(reach ? LANE_INKS[Math.max(0, zoneIndex(reach.zoneId)) % LANE_INKS.length] : 'var(--accent)')
 
   const siblings = $derived.by(() => {
@@ -1120,26 +1099,96 @@
   })
 
   // --- the altitude slider (#648, concept T -- round 6 ratified, round
-  // 14/24 amendments) -----------------------------------------------------
-  // One quiet axis at the map's foot: clients, services, zones, survey.
-  // No text, a tiny symbol per stop on the line itself (survey wears the
-  // atlas diamond), click anywhere on the line to jump to the nearest
-  // stop. "Zones" is today's map, unchanged, and stays the default; the
-  // other three stops are a camera framing of the same real map -- closer
-  // for clients, a little back for services, tilted overview for survey
-  // -- never a fabricated new layer of data this app does not have.
+  // 14/24 amendments; joined to the city, #869) ---------------------------
+  // One axis, seven stops (lib/altitude.ts): clients, services, zones,
+  // then the city -- centred and the default -- then the city's own
+  // borough, district, street. No text, a tiny symbol per stop on the
+  // line itself (the city wears the atlas diamond now: it is the
+  // survey), click anywhere on the line to jump to the nearest stop.
+  // The three left of the diamond are a camera framing of the same real
+  // 2D map -- closer for clients, a little back for services, the whole
+  // estate flat and less detailed at zones (#852) -- never a fabricated
+  // new layer of data this app does not have. The three right of it are
+  // the city's own camera heights (lib/city/project.ts's STOPS).
   // Deliberately not reset by descend()/surface(): round 24's "keeps the
-  // level and zoom you left" falls out of that for free.
-  // The four city stops (#863) sit to the right of survey: the same
-  // estate in isometric, each stop a camera height (lib/city/project.ts).
-  // #869 owns the full join of the two views on this slider.
-  const ALTITUDE_LABELS = ['clients', 'services', 'zones', 'survey', ...STOPS] as const
-  type Altitude = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
-  let altitude = $state<Altitude>(2)
-  const cityStop = $derived(altitude >= 4 ? STOPS[altitude - 4] : null)
+  // level and zoom you left" falls out of that for free, and now
+  // carries across the join too (crossAltitudeCentre below).
+  //
+  // The last stop visited persists per user, the same small-module
+  // convention cityImportance.svelte.ts uses for its reading.
+  let altitude = $state<Altitude>(ALTITUDE_LABELS.indexOf(altitudeStopState.stop) as Altitude)
+  const cityStop = $derived(isCityAltitude(altitude) ? STOPS[altitude - CENTRE_ALTITUDE] : null)
+
+  // The one ground plan (#852, #869): the same estate the city already
+  // lays out, computed once here rather than once per view. Passed down
+  // to City below (its own `groundProp` fallback stays for City's own
+  // tests, which mount it without a Topography) and read directly by
+  // the zones stop's own flat drawing further down -- one source, so
+  // the two views can never quietly drift into disagreeing position
+  // models.
+  const ground = $derived<Ground>(
+    layoutGround(
+      cityInputFrom(
+        appState.devices,
+        zones,
+        appState.events,
+        realityEdges(appState.events, policyState.edges, policyState.anyPushed),
+        policyState.edges,
+        policyState.anyPushed,
+        primaryDevice?.id ?? null,
+        zonesState.wanInterface,
+        tunnelsState.list,
+        policyState.pushed,
+      ),
+    ),
+  )
+
+  // A flat (non-isometric) fit of that same ground into the 2D stage,
+  // for the zones stop below.
+  const flatCam = $derived(flatFit(ground.bounds, 1400, 720))
+
+  // Crossing the centre swaps which side draws. The lens is one piece
+  // of state already shared by both (`lens`, threaded straight into
+  // City), so it carries for free. The reach and the city's own
+  // "standing on a building" (#868) are each private to their own
+  // side, so a host reach carries only if the same host exists as a
+  // building on the other side -- otherwise it resets rather than
+  // half-applying (a router or a bridge post has no 2D reach to land
+  // on). The city's pan is saved across its own mount/unmount --
+  // City only ever exists in the DOM while a city stop is active (an
+  // existing test proves it) -- and restored on return: `cityView` is
+  // that save slot, `cityStandBuilding` the building (if any) the city
+  // currently has stood on, both kept current by the callbacks passed
+  // to <City> below.
+  let cityView = $state<{ S: number; centre: [number, number] } | null>(null)
+  let cityStandBuilding = $state<{ ip: string; name: string; districtId: string | null; kind: string } | null>(null)
+
+  function crossAltitudeCentre(intoCity: boolean) {
+    if (intoCity) {
+      if (reach) {
+        // Handed to City's own pending-descend effect (#868's own
+        // consumer, shared with the flags "where" link) rather than
+        // duplicated here: it already resolves an ip to a building, or
+        // leaves the request unconsumed when none exists, which is
+        // exactly "resets cleanly" for this direction.
+        topologyNavState.pendingDescend = { zoneId: reach.zoneId, host: reach.host, ip: reach.ip }
+        surface()
+      }
+    } else if (cityStandBuilding && cityStandBuilding.kind === 'host' && cityStandBuilding.districtId) {
+      const z = zones.find((zz) => zz.id === cityStandBuilding!.districtId)
+      const host = z?.hosts.find((h) => h.ip === cityStandBuilding!.ip)
+      if (z && host) descend(z.id, host.label, host.ip)
+    }
+  }
 
   function jumpAltitude(i: number) {
-    altitude = Math.max(0, Math.min(ALTITUDE_LABELS.length - 1, Math.round(i))) as Altitude
+    const next = Math.max(0, Math.min(ALTITUDE_LABELS.length - 1, Math.round(i))) as Altitude
+    if (next === altitude) return
+    const wasCity = isCityAltitude(altitude)
+    const willBeCity = isCityAltitude(next)
+    if (wasCity !== willBeCity) crossAltitudeCentre(willBeCity)
+    altitude = next
+    altitudeStopState.set(ALTITUDE_LABELS[next])
   }
 
   function onAltitudeInput(e: Event) {
@@ -2062,7 +2111,7 @@
       <!-- The altitude's camera (#648, concept T): a framing of the same
            real map, never a fabricated layer. "Zones" (index 2) is
            unchanged from today's card. -->
-      <g class="camera" class:cam-clients={altitude === 0} class:cam-services={altitude === 1} class:cam-survey={altitude === 3}>
+      <g class="camera" class:cam-clients={altitude === 0} class:cam-services={altitude === 1} class:cam-zones={altitude === 2}>
       <!-- The trunk: router to internet, one line, every lens, never
            per-edge (#726 -- "bundle the corridor, fan at the waist").
            Individual edges fan at the waist card instead; see
@@ -2387,10 +2436,6 @@
             {@render aggregateBar(internetAggregate, -100, 200, 34, 16, { id: zonesState.wanInterface ?? '', name: 'the internet' })}
           {/if}
         </g>
-        <g class="g-dot">
-          <circle r="8" class="zone-dot" stroke="var(--fg-dim)" />
-          <text x="16" y="4" class="zone-label">Internet</text>
-        </g>
       </g>
 
       <!-- The tunnel node (#877): the second upper node round 30 draws
@@ -2464,11 +2509,6 @@
               > adds it</text
             >
           {/if}
-        </g>
-        <g class="g-dot">
-          <circle r="22" class="station-ring" />
-          <circle r="3" class="station-core" />
-          <text x="34" y="4" class="station-label">{primaryDevice?.name ?? 'your router'}</text>
         </g>
       </g>
 
@@ -2568,31 +2608,6 @@
                    1009-1015). The old 188x12 floated inset under a
                    216-wide card and read as unrelated furniture. -->
               {@render aggregateBar(agg, -cardHalf, cardW, 110, 16, z)}
-            {/if}
-          </g>
-          <!-- The survey's overview mark (#699): round 30 hides the cards
-               at survey and reveals a dot per zone carrying its name and
-               its `gd-agg` aggregate, rather than tilting and shrinking
-               the same unreadable cards. -->
-          <g class="g-dot">
-            <circle r="8" class="zone-dot" stroke={ink} />
-            <!-- One halo per dot even when both overlays have something
-                 to say about it: flags take the ring, since an alarm
-                 outranks a broken watch on the same place. -->
-            {#if flagsOn && agg && agg.flagCount > 0}
-              <circle r="13" class="dot-halo" />
-            {:else if watchOn && agg && agg.watchBroken > 0}
-              <circle r="13" class="dot-halo" />
-            {/if}
-            {#if capt?.startsWith('DARK')}
-              <text y="-31" text-anchor="middle" class="zone-state bad">DARK</text>
-            {/if}
-            <text y="-16" text-anchor="middle" class="zone-label">{z.name}</text>
-            {#if agg}
-              <text y="24" text-anchor="middle" class="gd-agg">
-                {#if agg.watchCount > 0}<tspan class="wp">◉{agg.watchCount}{agg.watchBroken > 0 ? '!' : ''}</tspan>{/if}
-                {#if agg.flagCount > 0}<tspan class="fchip">{agg.watchCount > 0 ? ' ' : ''}✱{agg.flagCount}</tspan>{/if}
-              </text>
             {/if}
           </g>
         </g>
@@ -2739,6 +2754,72 @@
           <text x="0" y="58" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives; mikroview never draws a guess</text>
         </g>
       {/if}
+
+      <!-- The zones stop's own ground plan (#852, #869's ruling on
+           #852): the same positions the city lays out for every zone,
+           router, tunnel, river and road -- `ground`, computed once
+           above and shared with <City> below -- drawn flat, in the 2D
+           map's own vocabulary, and reduced: a card with a host count,
+           no dots, no per-host labels (those are `clients`'s job).
+           Present at every altitude like every other camera layer;
+           `.camera.cam-zones` is what shows it, the same convention the
+           removed survey dot used to follow. Left alongside the lens's
+           own edge lines above rather than reconciling the two
+           coordinate systems -- that reconciliation is #726's, still
+           open. -->
+      <g class="ground-flat">
+        {#if ground.river}
+          <path
+            class="gf-river"
+            d={'M' +
+              ground.river.bankN.map((p) => `${R2(FX(flatCam, p[0]))} ${R2(FY(flatCam, p[1]))}`).join(' L') +
+              ' L' +
+              [...ground.river.bankF]
+                .reverse()
+                .map((p) => `${R2(FX(flatCam, p[0]))} ${R2(FY(flatCam, p[1]))}`)
+                .join(' L') +
+              ' Z'}
+          />
+        {/if}
+        {#each ground.roads as r (r.id)}
+          <path class="gf-road gf-road-{r.k}" d={'M' + r.pts.map((p) => `${R2(FX(flatCam, p[0]))} ${R2(FY(flatCam, p[1]))}`).join(' L')} />
+        {/each}
+        {#each ground.nodes as n (n.id)}
+          {@const nx = FX(flatCam, n.u)}
+          {@const ny = FY(flatCam, n.v)}
+          <circle class="gf-node" cx={nx} cy={ny} r={Math.max(4, n.R * flatCam.S * 0.6)} />
+          <text class="gf-node-label" x={nx} y={ny - n.R * flatCam.S * 0.6 - 4} text-anchor="middle">{n.name}</text>
+        {/each}
+        {#each ground.districts as d (d.id)}
+          {@const gx = FX(flatCam, d.u)}
+          {@const gy = FY(flatCam, d.v)}
+          {@const gr = Math.max(30, d.r * flatCam.S * 0.9)}
+          {@const total = d.buildings.length + d.more}
+          <g
+            class="gf-card"
+            class:dark={d.dark}
+            transform="translate({R2(gx)} {R2(gy)})"
+            role="button"
+            tabindex="0"
+            aria-label="Open the stream filtered to {d.name}"
+            onclick={() => openZone(d.id)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openZone(d.id)
+              }
+            }}
+          >
+            <rect class="gf-plate" x={-gr} y={-gr * 0.42} width={gr * 2} height={gr * 0.84} rx="10" stroke={LANE_INKS[d.ink % LANE_INKS.length]} />
+            <text class="n-name" x={-gr + 12} y={-gr * 0.42 + 20}>{d.name}</text>
+            <text class="n-cidr" x={gr - 12} y={-gr * 0.42 + 20} text-anchor="end">{d.cidr ?? 'from boundaries'}</text>
+            <text class="gf-count" x={-gr + 12} y={-gr * 0.42 + 42}>{total} host{total === 1 ? '' : 's'}</text>
+            {#if d.dark}
+              <text class="zone-state bad" x={gr - 12} y={-gr * 0.42 + 42} text-anchor="end">DARK</text>
+            {/if}
+          </g>
+        {/each}
+      </g>
       </g>
     </svg>
     {#if reach}
@@ -2758,9 +2839,26 @@
   </div>
 
   {#if cityStop}
-    <!-- The city (#863): the same estate in isometric, at the four stops
-         right of survey. -->
-    <City stop={cityStop} />
+    <!-- The city (#863), joined to the map (#869): the same estate in
+         isometric, at the three stops right of the diamond. The
+         ratified record gives both views the same lens tabs, header,
+         badges and callout wording -- all the 2D map's, drawn once
+         above and reused here; threading Topography's own `lens` down
+         is "whatever lens plumbing City.svelte already has" until the
+         city grows lenses of its own. `ground` is the one shared layout
+         (#852) computed above, so this side and the zones stop can
+         never disagree on a position. `initialS`/`initialCentre` and
+         the two `on*` callbacks are the pan/reach carry described by
+         crossAltitudeCentre's own doc comment, above. -->
+    <City
+      stop={cityStop}
+      lens={lens}
+      ground={ground}
+      initialS={cityView?.S}
+      initialCentre={cityView?.centre}
+      onCameraChange={(s, centre) => (cityView = { S: s, centre })}
+      onStandChange={(b) => (cityStandBuilding = b)}
+    />
   {/if}
 
   {#if reach && reachSummary}
@@ -3014,10 +3112,12 @@
     </div>
   {/if}
 
-  <!-- The altitude slider (#648, concept T; named ends #682): one quiet
-       axis at the map's foot, its two extremes named ("clients" ...
-       "survey", ratified round-29), a tiny symbol per stop between
-       them, click anywhere on the line to jump. -->
+  <!-- The altitude slider (#648, concept T; named ends #682; joined to
+       the city #869): one quiet axis at the map's foot, its two
+       extremes named ("clients" ... "street", the city's own far
+       stop), a tiny symbol per stop between them -- the city, centred
+       and the default, wears the diamond -- click anywhere on the line
+       to jump. -->
   <div class="altitude">
     <span class="alt-end">clients</span>
     <span class="alt-track">
@@ -3038,7 +3138,7 @@
       />
       <div class="alt-ticks" aria-hidden="true">
         {#each ALTITUDE_LABELS as label (label)}
-          <i class="tick" class:on={ALTITUDE_LABELS[altitude] === label} class:diamond={label === 'survey'}></i>
+          <i class="tick" class:on={ALTITUDE_LABELS[altitude] === label} class:diamond={label === 'city'}></i>
         {/each}
       </div>
     </span>
@@ -4168,7 +4268,7 @@
      whatever it was meant to reveal. Round 30's stops instead reveal
      the services chips and then the client tier beneath each lane. */
   .camera .isl-card,
-  .camera .g-dot,
+  .camera .ground-flat,
   .camera .detail,
   .camera .svc,
   .camera .cli {
@@ -4199,39 +4299,26 @@
     pointer-events: auto;
   }
 
-  /* The survey (the-whole.html:376-380): the cards go, a dot per zone
-     arrives carrying the name and the aggregate marks. The build tilted
-     and shrank the same cards, so every card-sized fault survived the
-     one viewpoint meant to resolve them. */
-  .camera .g-dot {
+  /* zones (#852, #869): the cards and the old furniture go, the shared
+     ground plan's own flat drawing arrives -- a card with a host count,
+     no dots, no per-host labels. The dots' old survey camera tilt
+     (rotateX/scale/translateY) retired with the survey stop itself: the
+     city is the overview now, drawn in its own component, not a CSS
+     transform on this one. */
+  .camera .ground-flat {
     opacity: 0;
     pointer-events: none;
   }
 
-  .camera.cam-survey .g-dot {
+  .camera.cam-zones .ground-flat {
     opacity: 1;
+    pointer-events: auto;
   }
 
-  .camera.cam-survey .isl-card,
-  .camera.cam-survey .detail {
+  .camera.cam-zones .isl-card,
+  .camera.cam-zones .detail {
     opacity: 0;
     pointer-events: none;
-  }
-
-  .camera.cam-survey {
-    transform: rotateX(32deg) scale(0.88) translateY(-24px);
-  }
-
-  /* Ratified round 30 (the-whole.html:194, :374) uses 1400px here, on
-     both #topo and .stage -- this file had drifted to 900px, a smaller
-     distance that makes the very same rotateX/scale/translateY read as a
-     *stronger* tilt (perspective's foreshortening grows as this number
-     shrinks), pushing the survey dots further than the mockup ever
-     intended and toward the stage's own bottom edge (owner, #723-adjacent
-     "nodes clash with bottom"). Restored to the mockup's own figure
-     rather than picked fresh. */
-  .stage svg {
-    perspective: 1400px;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -4410,18 +4497,8 @@
     fill: var(--alarm);
   }
 
-  /* --- the survey's zone dots and the depth layers (#699) --------------- */
-  .zone-dot {
-    fill: var(--bg-elevated);
-    stroke-width: 2.5;
-  }
-
-  .zone-label {
-    fill: var(--fg);
-    font-size: 13.5px;
-    font-weight: 650;
-  }
-
+  /* --- the depth layers (#699) and the zones stop's flat ground plan
+     (#852, #869) ------------------------------------------------------ */
   .zone-state {
     font-family: var(--font-mono);
     font-size: 9px;
@@ -4434,32 +4511,59 @@
     fill: var(--alarm);
   }
 
-  .gd-agg {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    font-weight: 600;
+  .gf-river {
+    fill: var(--fg-dim);
+    fill-opacity: 0.08;
+    stroke: var(--fg-dim);
+    stroke-opacity: 0.3;
   }
 
-  .dot-halo {
+  .gf-road {
     fill: none;
+    stroke: var(--fg-dim);
+    stroke-width: 1.5;
+  }
+
+  .gf-road-a {
+    stroke: var(--accept);
+  }
+
+  .gf-road-d {
+    stroke: var(--drop);
+  }
+
+  .gf-road-x {
     stroke: var(--alarm);
-    stroke-width: 1.2;
   }
 
-  .station-ring {
-    fill: none;
+  .gf-node {
+    fill: var(--bg-elevated);
     stroke: var(--accent);
-    stroke-opacity: 0.5;
+    stroke-width: 2;
   }
 
-  .station-core {
-    fill: var(--accent);
+  .gf-node-label {
+    fill: var(--fg-muted);
+    font-size: 10.5px;
   }
 
-  .station-label {
-    fill: var(--fg);
-    font-size: 13.5px;
-    font-weight: 650;
+  .gf-card {
+    cursor: pointer;
+  }
+
+  .gf-plate {
+    fill: var(--bg-elevated);
+    stroke-width: 2;
+  }
+
+  .gf-card.dark .gf-plate {
+    opacity: 0.55;
+  }
+
+  .gf-count {
+    fill: var(--fg-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
   }
 
   .svc-t {

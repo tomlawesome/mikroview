@@ -12,7 +12,7 @@
 //
 // Named live-waterfall.mjs rather than #616's own literal live-fall.mjs
 // (a deliberate deviation from the issue text, recorded on the PR) --
-// live-router-lookup.mjs asserts "no filter-rule table has been pushed
+// live-before-router-lookup.mjs asserts "no filter-rule table has been pushed
 // yet" against the one shared device every scenario here pushes through,
 // and live-watchlist-coverage.mjs starts by assuming the table
 // live-watchlist-broken-ring.mjs leaves behind (non-logging). "live-fall"
@@ -31,7 +31,7 @@ feedSyslog(3, 'fall-probe')
 const { page, consoleErrors } = await session({ landing: 'fall' })
 
 // The ingest token must be scoped to exactly the device the probe events
-// carry (see live-router-lookup.mjs's own comment on this same lookup),
+// carry (see live-before-router-lookup.mjs's own comment on this same lookup),
 // or the pushed table attaches to a different device and every boundary
 // below reports 'unknown' instead of 'dark'/'observed'.
 let DEVICE
