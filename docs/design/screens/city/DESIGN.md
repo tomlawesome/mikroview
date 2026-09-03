@@ -139,7 +139,8 @@ for the city).
 
 ## Build
 
-Tracked from #854; build issues to be filed per slice: the ground
-model and cameras, the device library, walls and gates from the rule
-set, the river and bridges from interface and tunnel state, importance
-readings, the reach, and the slider's join with `Topography.svelte`.
+Ratified on #854 (closed); built in milestone M6 — The city: #863 ground
+model and cameras, #864 device library, #865 walls and gates from the
+rule set, #866 river and bridges from interface and tunnel state, #867
+importance readings, #868 the reach, #869 the slider's join with
+`Topography.svelte`, #870 demo feeder data.
