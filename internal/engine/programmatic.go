@@ -440,6 +440,30 @@ func (s *baselineSet) snapshot(key string, now time.Time) (Snapshot, bool) {
 	return kb.b.Snapshot(now), true
 }
 
+// resume materializes key's baseline from the StateStore if there is
+// persisted state for it, without folding any reading in, and reports
+// whether it did. For warm restart (#795): a definition that consults a
+// baseline through snapshot rather than reading -- activity_spike does,
+// for a source it has frozen -- would otherwise never resume the key at
+// all, because nothing on that path ever calls get. Restoring that
+// source's window from a snapshot and then judging it against a baseline
+// that reads as absent is worse than not restoring it, so the import
+// path resumes the keys it restored.
+//
+// Deliberately does not create a cold baseline for a key with nothing
+// persisted: that entry costs a slot in this set's own Keyed cap, and
+// the first event for the key creates it anyway.
+func (s *baselineSet) resume(key string, now time.Time) bool {
+	if s.state == nil {
+		return false
+	}
+	if _, ok := s.state.Get(s.defID, key); !ok {
+		return false
+	}
+	s.get(key, now)
+	return true
+}
+
 // learning reports this set's per-key progress toward its floor, as of
 // now -- iterate keyed.Snapshot, then Baseline.Snapshot(now) per key,
 // both already documented safe to call from any goroutine (see

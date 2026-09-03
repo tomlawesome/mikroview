@@ -37,6 +37,38 @@ rewritten.
   `TestReviewedVersionMatchesNewest` deliberately red until a human
   reads the release notes and bumps it in the same merge request. See
   `docs/routeros-chr-exercise.md`.
+- **A restart no longer throws away what mikroview has learned** (#795,
+  Go half). Every five minutes, and once more at shutdown, mikroview
+  writes a small snapshot of its derived state and reads the newest
+  usable one back on the next boot: the hourline's per-minute counters
+  and running totals, each detector's rolling 60-minute windows and
+  per-source day bookkeeping, and every device's first seen, last seen
+  and event count. Before this, a redeploy blanked the metrics register,
+  reset every detector to its full warm-up, and quietly replaced months
+  of "first seen" dates with today's.
+  New settings, all on by default and all documented in
+  `docs/configuration.md`: `snapshot.interval` (5m, 30s minimum),
+  `snapshot.keep` (6 generations) and `snapshot.dir`
+  (`snapshots/` beside the data directory), with `MIKROVIEW_SNAPSHOT_INTERVAL`,
+  `MIKROVIEW_SNAPSHOT_KEEP` and `MIKROVIEW_SNAPSHOT_DIR` overrides. A
+  cadence under the minimum or a retention under one generation is
+  clamped with a named warning (CFG-0070, CFG-0071) rather than
+  refused, and a snapshot directory that cannot be created or written
+  costs one startup log line and no snapshots -- never a refusal to
+  boot.
+  **Events are still never written to disk.** A snapshot holds counts,
+  minute stamps, rule and log-prefix labels, device ids/names with their
+  first and last seen, and per-source window counts keyed by address. It
+  holds no event lines, no payloads and none of the rule/NAT/DHCP tables
+  routers push; SECURITY.md now says so beside the "no persistence for
+  events" promise, including that the files are not encrypted at rest
+  (#853). Snapshots stay files even on a Postgres deployment: they are
+  derived, disposable counters, not custody data, and losing the whole
+  directory costs one cold start.
+  `GET /api/stats` gained `liveSince` (when this process started
+  observing) and, after a warm restart only, `restoredTo` (when the
+  snapshot it loaded was taken) -- absent rather than null on a cold
+  start.
 - **Tune logging** (#435): a new "Tune logging" page turns a dark
   connection -- one with no rule logging what crosses it -- into a
   watched one. Upload the router's `/export hide-sensitive`; once
