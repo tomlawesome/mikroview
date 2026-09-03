@@ -199,7 +199,7 @@ func (s *DefinitionsStore) updateNightsLocked(id string, mutate func(*watchlist.
 
 // setNightParams writes the nights, the ring and the sticky liveness mark
 // back into d's nightsJSON/ringJSON/silentJSON params -- the JSON-in-a-
-// string shape both watchlist schemas declare (definitions_migrate.go).
+// string shape both watchlist schemas declare (definitions_convert.go).
 // The window itself is not rewritten here: nothing on this path edits it.
 func setNightParams(d *Definition, e watchlist.Entry) error {
 	nights, err := json.Marshal(e.Nights)
