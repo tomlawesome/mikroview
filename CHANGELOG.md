@@ -18,6 +18,31 @@ rewritten.
 
 ### Added
 
+- **RouterOS commands are now version-aware, server-rendered, and keyed
+  by dialect rather than by a single reviewed marker** (#436, Go half).
+  `internal/routeros` gained a dialect table (`Rows`): a row is a version
+  range, the dialect it renders, an honest `verifiedBy` ("exercised on
+  CHR 7.23.3" vs. "release notes read 2026-08-29"), and any per-version
+  note -- today one dialect ("a") across three rows, with 7.24.0 split
+  out for its `find`-lookup bug. `ReviewedVersion` is now checked against
+  the table's own newest row rather than carried only in prose.
+  The six RouterOS command templates (CA trust, syslog, rule tagging,
+  push script, schedule) moved out of the frontend into
+  `internal/routeros/commands.go`, byte-identical to what they replace,
+  behind a new `POST /api/setup/commands` (same access tier as
+  `GET /api/setup/status`): it renders the table's bounds, what an
+  operator-picked version resolves to, every router whose version is
+  known and its standing, and the five command blocks themselves.
+  `GET /api/devices` gains `routerosStanding` (`below-minimum` /
+  `reviewed` / `ahead-of-review`, omitted when unknown) beside
+  `routerosVersion`. The wizard's push script already appends
+  `?ros=$[/system/resource get version]` to its `/ca.crt` fetch; mikroview
+  now reads that (validated, capped, and used for nothing else) as a
+  fallback version hint for the fetching address, so a router's version is
+  known from the wizard's first step rather than only after its first
+  push -- a real push always overrides the hint.
+  `scripts/routeros-freshness.sh` now reports a stable release with no
+  covering row, rather than only comparing against a marker.
 - **The setup wizard names a multi-homed router's source-address
   split** (#442). A router holds an address on every network it routes,
   and its logs arrive stamped with whichever one faces mikroview --

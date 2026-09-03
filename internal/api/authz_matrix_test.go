@@ -283,6 +283,8 @@ var authzMatrix = []routeExpectation{
 	{http.MethodDelete, "/api/tokens/{id}", accessAdmin, "revokes a bearer credential"},
 	{http.MethodGet, "/api/setup/status", accessViewer,
 		"widened for the viewer-readable settings page (#490): a signed-in caller at any tier can see every device, source address and pushed table the setup wizard shows, same as an admin. It now also carries the ledger's marks (#487), for the same reason: an empty stream explains its own silence with the forced-past line that accounts for it, and a viewer looking at that stream needs the explanation as much as an admin does. The write side is a separate, admin-only route (POST /api/setup/mark)"},
+	{http.MethodPost, "/api/setup/commands", accessViewer,
+		"renders the wizard's RouterOS commands (#436) -- same tier as GET /api/setup/status beside it, deliberately: a signed-in caller at any tier can already see the routers, versions and pushed tables this endpoint reads, so it only re-renders that same evidence as copy-paste commands, changing nothing on the instance or the router"},
 	{http.MethodPost, "/api/setup/mark", accessAdmin,
 		"writes to the setup wizard's claim ledger and to the audit log (#487) -- #490 keeps \"Run setup…\" absent for viewers and there is no read-only wizard, so a viewer has neither a way to reach this nor any business recording a decision under their own name"},
 	{http.MethodGet, "/api/audit", accessAdmin,

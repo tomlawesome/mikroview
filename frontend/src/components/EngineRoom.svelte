@@ -47,13 +47,13 @@
   import { versionState } from '../lib/version.svelte'
   import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
-  import { fetchSetupStatus, fetchDevices } from '../lib/api'
+  import { fetchSetupStatus, fetchDevices, fetchSetupCommands } from '../lib/api'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
   import MemoryControl from './MemoryControl.svelte'
   import { usersState } from '../lib/users.svelte'
   import { tokensState } from '../lib/tokens.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
-  import { portOf, pushScript } from '../lib/setupsteps'
+  import { portOf } from '../lib/setupsteps'
   import type { SetupStatus, FlagType, Device } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
 
@@ -408,15 +408,22 @@
   }
 
   // copyRouterLines hands back the same push script the setup wizard
-  // would (setupsteps.ts's pushScript, keyed to instance() address and
-  // status.pushKinds) with the freshly-minted key already embedded, so
-  // rotating an ingest key never sends the operator back through setup
-  // for a line-by-line diff.
+  // would -- POST /api/setup/commands' steps.push.commands (#436 moved
+  // the RouterOS syntax itself server-side), keyed to this instance's
+  // address and status.pushKinds -- with the freshly-minted key already
+  // embedded, so rotating an ingest key never sends the operator back
+  // through setup for a line-by-line diff.
   async function copyRouterLines(value: string) {
     if (!status) return
-    const script = pushScript(window.location.host, value, status.pushKinds)
+    const result = await fetchSetupCommands({
+      address: window.location.host,
+      syslogPort: status.instance.syslogPort,
+      token: value,
+      kinds: status.pushKinds,
+    })
+    if (typeof result === 'string') return
     try {
-      await navigator.clipboard.writeText(script)
+      await navigator.clipboard.writeText(result.steps.push.commands)
       routerCopied = true
     } catch {
       // Nothing else to fall back to -- the value itself stays copyable.
