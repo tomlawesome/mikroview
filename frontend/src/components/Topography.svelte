@@ -915,10 +915,14 @@
   // rather than navigating here directly -- see topologyNav.svelte.ts's
   // own doc comment for why a shared slot, not a route param. Consumed
   // (cleared) the instant it's read, so arriving here a second time
-  // without a fresh request just shows the plain map.
+  // without a fresh request just shows the plain map. Left for City's
+  // own effect to consume when the city is the active side of the
+  // slider (#868) -- otherwise this effect runs regardless of altitude
+  // (the 2D map stays mounted, only hidden, while the city shows) and
+  // would steal the request before City ever saw it.
   $effect(() => {
     const pending = topologyNavState.pendingDescend
-    if (pending) {
+    if (pending && cityStop === null) {
       descend(pending.zoneId, pending.host, pending.ip)
       topologyNavState.pendingDescend = null
     }

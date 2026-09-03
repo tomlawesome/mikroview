@@ -83,6 +83,32 @@ beforeEach(() => {
   )
 })
 
+describe('a flag\'s where link (#678) lands on whichever side of the slider is active (#868)', () => {
+  it('stands on the city when the city is the active side, not the 2D reach', async () => {
+    const topo = render(Topography)
+    flushSync()
+    const slider = topo.container.querySelector('.alt-range') as HTMLInputElement
+    await fireEvent.input(slider, { target: { value: '4' } }) // altitude 4: the city stop
+    flushSync()
+
+    topologyNavState.pendingDescend = { zoneId: 'bridge1', host: HOST_IP, ip: HOST_IP }
+    flushSync()
+
+    expect(topo.container.querySelector('.membrane-layer')).toBeNull()
+    expect(topo.container.querySelector('.city .crumb')).not.toBeNull()
+    expect(topo.container.querySelector('.city .crumb')?.textContent).toContain(HOST_IP)
+    expect(topologyNavState.pendingDescend).toBeNull()
+  })
+
+  it('still stands on the 2D reach when the 2D map is the active side', () => {
+    const topo = render(Topography)
+    flushSync()
+    topologyNavState.pendingDescend = { zoneId: 'bridge1', host: HOST_IP, ip: HOST_IP }
+    flushSync()
+    expect(topo.container.querySelector('.membrane-layer')).not.toBeNull()
+  })
+})
+
 describe('the composer prints the same line in the city as in 2D (#868)', () => {
   it('is byte-identical for the same blocked strand', async () => {
     // Path 1: the 2D map's own reach and composer.
