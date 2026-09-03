@@ -102,6 +102,25 @@ describe('City', () => {
     expect(raf).toHaveBeenCalled()
   })
 
+  it('starts from an explicit initial camera rather than the stop\'s own default, and reports every camera change back (#869)', () => {
+    // Topography saves what onCameraChange reports here across this
+    // component's own mount/unmount, so a slider crossing back into the
+    // city can hand the exact pan back in as initialS/initialCentre --
+    // "the pan position carries where the two views share coordinates".
+    const reported: { s: number; centre: [number, number] }[] = []
+    render(City, {
+      props: {
+        stop: 'district',
+        ground,
+        initialS: 30,
+        initialCentre: [12, 34],
+        onCameraChange: (s: number, centre: [number, number]) => reported.push({ s, centre }),
+      },
+    })
+    flushSync()
+    expect(reported[0]).toEqual({ s: 30, centre: [12, 34] })
+  })
+
   it('says plainly when no router has ever pushed a rule table, rather than claiming DARK or LOGGED', () => {
     const unpushed = layoutGround({ ...mockupEstate(), rulesPushed: false, gates: [] })
     const { container } = render(City, { props: { stop: 'district', ground: unpushed } })
