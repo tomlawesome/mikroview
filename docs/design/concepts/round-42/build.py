@@ -113,7 +113,7 @@ DISK = '''    <div class="og wide" id="diskg">
       ''' + days_bar(27, '', 'dcap', cut=10, cut_label='17 Aug — the oldest that 512 MiB would keep') + '''
       ''' + days_bar(27, '', 'doff', cut=27, cut_label='') + '''
       ''' + days_bar(25, '9 Aug — the oldest the 768 MiB cap keeps', 'dcapped') + '''
-      <p class="oghint" data-d="dstopped">nothing on disk — events live in memory only, ~9 h of them at today's rate; on keeps each day from now</p>
+      <p class="oghint" data-d="dstopped">nothing on disk — events live in memory only, ~9 h of them at today's rate; on keeps those and every day after</p>
       <p class="oghint" data-d="rest dgrow dshrink dcap doff dcapped">one encrypted file a day; the oldest day lets go when the days or the cap is reached, whichever first</p>
       ''' + track('rest doff dstopped', 30) + '''
       ''' + track('dshrink', 14, ghost=30) + '''
