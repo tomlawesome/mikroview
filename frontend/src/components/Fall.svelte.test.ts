@@ -37,6 +37,7 @@ vi.mock('../lib/api', () => ({
 import { fetchEventsWindow, fetchFlags } from '../lib/api'
 import { fallState, type FallBoundary } from '../lib/fall.svelte'
 import { flagsState } from '../lib/flags.svelte'
+import { appState } from '../lib/state.svelte'
 
 // jsdom has no window.matchMedia -- AccountMenu mounts ThemeMenu, which
 // pulls in lib/viewport.svelte.ts; its ViewportState singleton calls
@@ -205,27 +206,138 @@ describe('the rig draws no inline width cap of its own (#700 faults 4 and 10)', 
   })
 })
 
-describe('empty-band and quieter captions are unmounted, not deleted (#700 faults 5 and 6)', () => {
-  it('prints nothing in a band with zero traffic this window', async () => {
+// Round 36 (#801) gives both of these a home. They were live logic
+// behind a gate since round 30 (#700 faults 5 and 6); these tests now
+// pin what the drawing actually draws instead of their absence.
+describe("the empty band's quiet statement (#801, round 36 item 6.1)", () => {
+  it('states "quiet, not dark" on a logged band that caught nothing, in the quiet ink', async () => {
     const { container } = await renderFall({ boundaries: [boundary()], events: [] })
-    expect(container.textContent).not.toContain('no traffic in this window')
+    // Both halves of the drawing's own two-line plate, and the span it
+    // is actually drawn over rather than the drawing's fixed "15 m".
+    expect(container.textContent).toContain('nothing in these 15 m')
+    expect(container.textContent).toContain('logged — quiet, not dark')
+    // Never the dark red: quiet is a fact, not a fault (round 36).
+    const quiet = [...container.querySelectorAll('.quiet-anno')]
+    expect(quiet.length).toBe(2)
+    for (const n of quiet) expect(n.classList.contains('bad-anno')).toBe(false)
   })
 
-  it('folds quiet carriers without printing a "+n quieter" row', async () => {
-    // Nine distinct ports on one boundary: one more than MAX_CARRIERS
-    // (8), so the build's own logic would have a non-zero quieterCount.
-    const events = Array.from({ length: 9 }, (_, i) => makeEvent({ dstPort: 20000 + i }))
+  it('says nothing on a band whose coverage is unknown -- the claim rests on a logging rule', async () => {
+    // "logged — quiet, not dark" is a claim about a pushed rule that
+    // really does log this boundary. With no rule table pushed there is
+    // no such rule to point at, so the band stays silent rather than
+    // guessing -- the same "only ever a definite answer" rule the
+    // coverage model itself follows.
+    const { container } = await renderFall({
+      boundaries: [boundary({ coverage: 'unknown' })],
+      events: [],
+    })
+    expect(container.textContent).not.toContain('quiet, not dark')
+    expect(container.querySelectorAll('.quiet-anno')).toHaveLength(0)
+  })
+
+  it('says nothing on a band that does have traffic', async () => {
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', dstPort: 443 })]
     const { container } = await renderFall({ boundaries: [boundary()], events })
-    expect(container.textContent).not.toContain('quieter')
+    expect(container.textContent).not.toContain('quiet, not dark')
   })
 })
 
-describe('band status vocabulary matches the mockup (#700 fault 9)', () => {
-  it('reads WATCH HOLDING ✓ for a quiet-but-covered band, never QUIET', async () => {
+describe('the quieter count (#801, round 36 item 6.1)', () => {
+  it('prints "+n quieter ▸" for the carriers folded past the cap', async () => {
+    // Nine distinct ports on one boundary: one more than MAX_CARRIERS
+    // (8), so exactly one carrier folds.
+    const events = Array.from({ length: 9 }, (_, i) =>
+      makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', dstPort: 20000 + i }),
+    )
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const quieter = container.querySelector('.quieter')
+    expect(quieter?.textContent?.trim()).toBe('+1 quieter ▸')
+  })
+
+  it('sits beneath the band\'s port labels, not inside the fall', async () => {
+    // The drawing puts it below the foot, under the port labels
+    // (the-whole.html #s2) -- a name for the band, not a mark in its
+    // traffic. PORTLAB_Y is 775 in the rig's own units.
+    const events = Array.from({ length: 9 }, (_, i) =>
+      makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', dstPort: 20000 + i }),
+    )
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const y = Number(container.querySelector('.quieter')?.getAttribute('y'))
+    expect(y).toBeGreaterThan(775)
+    // ...and still inside the rig, not clipped off the bottom (RIG_H 800).
+    expect(y).toBeLessThan(800)
+  })
+
+  it('prints nothing when no carrier folded', async () => {
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', dstPort: 443 })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    expect(container.querySelector('.quieter')).toBeNull()
+  })
+
+  it('opens the stream filtered to its own boundary when activated', async () => {
+    // #801's "Done when": the folded ports are reachable, not merely
+    // counted. Pinned here as well as in live-waterfall.mjs because it
+    // is the one claim of the four that is behaviour rather than text.
+    const events = Array.from({ length: 9 }, (_, i) =>
+      makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', dstPort: 20000 + i }),
+    )
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    appState.view = 'fall'
+    await fireEvent.click(container.querySelector('.quieter')!)
+    flushSync()
+    expect(appState.view).toBe('live')
+    expect(appState.filters.interface).toBe('iot')
+    expect(appState.filters.chain).toBe('forward')
+  })
+})
+
+describe('the window-cap chip (#801, round 36 item 6.1)', () => {
+  it('states the cap only when the window really does hold more', async () => {
+    vi.mocked(fetchEventsWindow).mockResolvedValue({
+      events: [],
+      hasMore: true,
+      windowStart: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+      serverTime: new Date().toISOString(),
+    })
+    vi.mocked(fetchFlags).mockResolvedValue({ flags: [], timeSeries: [] })
+    const { container } = render(Fall)
+    await waitFor(() => expect(fallState.loading).toBe(false))
+    fallState.boundaries = [boundary()]
+    flushSync()
+    await waitFor(() => {
+      expect(container.textContent).toContain('this window holds more')
+    })
+    const chip = container.querySelector('.att.dim')
+    expect(chip?.textContent).toContain('the most recent 5,000 events')
+    // A statement, not a control: there is nowhere for it to lead.
+    expect(chip?.tagName.toLowerCase()).toBe('span')
+  })
+
+  it('is absent when the window holds everything', async () => {
+    // renderFall's own mock answers hasMore: false.
     const { container } = await renderFall({ boundaries: [boundary()], events: [] })
-    expect(container.textContent).toContain('WATCH HOLDING ✓')
+    expect(container.textContent).not.toContain('this window holds more')
+    expect(container.querySelector('.att.dim')).toBeNull()
+  })
+})
+
+describe('band status vocabulary matches the mockup (#700 fault 9, reworded by #790/#801)', () => {
+  it('reads WATCHED for a quiet-but-covered band -- no tick, and never QUIET', async () => {
+    const { container } = await renderFall({ boundaries: [boundary()], events: [] })
+    // The owner retired round 30's wording and its tick (#790, round 36:
+    // "watched in green says everything we need"). The ink carries the
+    // verdict; the tick said it twice. Asserted on the caption itself
+    // rather than the whole container -- AccountMenu mounts inside this
+    // component and draws ticks of its own.
+    const caption = container.querySelector('.band-caption')
+    expect(caption?.textContent?.trim()).toBe('WATCHED')
+    expect(caption?.textContent).not.toContain('✓')
+    expect(container.textContent).not.toContain('WATCH HOLDING')
+    // The caption keeps the accept ink it has always had.
+    expect(caption?.classList.contains('ch-ok')).toBe(true)
     expect(container.textContent).not.toContain('QUIET</text>')
-    // The literal word "QUIET" alone (not as part of "WATCH HOLDING" or
+    // The literal word "QUIET" alone (not as part of "WATCHED" or
     // "QUIETER") must not appear as a standalone band caption.
     const captions = [...container.querySelectorAll('.band-caption')].map((n) => n.textContent)
     expect(captions).not.toContain('QUIET')
