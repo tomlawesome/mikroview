@@ -26,10 +26,10 @@ import (
 // and its params lived on the definition, while the entry itself lived
 // somewhere else, and nothing structurally stopped the two disagreeing.
 //
-// The conversion is not new. MigrateDefinitions already writes every
-// entry into this store (definitions_migrate.go's convertWatchlistEntry),
-// and #406's ExpectationDefinitionFor calls the same function so a live
-// entry and a migrated one are the same value. What this file adds is
+// The conversion is not new. Every entry becomes a definition through
+// definitions_convert.go's convertWatchlistEntry, which #406's
+// ExpectationDefinitionFor calls, so one function produces every stored
+// expectation. What this file adds is
 // the other direction -- EntryFromDefinition -- plus the operator-facing
 // entry-set API (list, get, upsert, update, delete, reset) and the
 // observation recorder, all against the one document.
@@ -79,7 +79,7 @@ var ErrNotAnExpectation = errors.New("engine: that definition is not an expectat
 // watchlist.Match all still speak.
 //
 // Kind is what tells the two shapes apart, exactly as
-// convertWatchlistEntry writes them (definitions_migrate.go): a
+// convertWatchlistEntry writes them (definitions_convert.go): a
 // non-inverted entry converts to KindDeclarative (its matching is
 // conditions over an event), an inverted one to KindProgrammatic (its
 // matching is the observed/permitted state machine, which is Go). Nothing
@@ -173,7 +173,7 @@ func EntryFromDefinition(d Definition) (watchlist.Entry, error) {
 // value. An absent param is false rather than an error: every bool an
 // expectation carries is an opt-in whose absence means "not opted in",
 // the same "zero means absent" convention optionalStringList follows on
-// the way in (definitions_migrate.go).
+// the way in (definitions_convert.go).
 func paramBool(params Params, name string) (bool, error) {
 	raw, ok := params[name]
 	if !ok {

@@ -52,7 +52,7 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // Entities.svelte, issue #107); 'fleet' (issue #98) is the
 // multi-router-fleet health table (see Fleet.svelte) -- every known
 // device, live/stale/never-seen status, last-seen, and event counts in
-// one place, richer than the toolbar's always-on DeviceStatus dot-strip;
+// one place, and the only device-health view there is;
 // 'audit' (issue #112) is the admin-only, read-only log of
 // admin-privileged mutations (see AuditLog.svelte); 'engineroom' (#490)
 // is mikroview's own signal path drawn as a live vertical diagram, with
