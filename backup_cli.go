@@ -208,6 +208,7 @@ func runBackup(args []string) int {
 // placeholder would silently inherit it.
 func writeBackup(dest string, force bool, stores map[string][]byte) error {
 	if dir := filepath.Dir(dest); dir != "" && !force {
+		// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
 		if fi, err := os.Stat(dir); err == nil && fi.Mode().Perm()&0o007 != 0 {
 			return fmt.Errorf("refusing to write a backup into %s, which is world-readable -- "+
 				"this file carries your accounts and recovery-key digests. Choose a private "+
@@ -219,6 +220,7 @@ func writeBackup(dest string, force bool, stores map[string][]byte) error {
 	if force {
 		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	}
+	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
 	f, err := os.OpenFile(dest, flags, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
@@ -228,6 +230,7 @@ func writeBackup(dest string, force bool, stores map[string][]byte) error {
 		return err
 	}
 	defer f.Close()
+	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
 	if err := os.Chmod(dest, 0o600); err != nil {
 		return err
 	}
@@ -252,6 +255,7 @@ func runRestore(args []string) int {
 		return 1
 	}
 
+	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
 	f, err := os.Open(src)
 	if err != nil {
 		logger.Error(err.Error())
@@ -333,6 +337,24 @@ func runRestore(args []string) int {
 
 // firstNonFlag picks the path argument out of args, so `-backup x --force`
 // and `-backup --force x` both work.
+//
+// This is the single point every path-taking CLI command reads its
+// argument through -- -backup, -restore and -migrate-data -- and it is
+// what the "operator-supplied path" note on the #nosec G703 annotations
+// in this file and migrate_cli.go refers to. gosec's taint analysis
+// follows the value from here to each os.* call and reports a path
+// traversal at every one.
+//
+// It is not one. Path traversal is crossing a boundary you were meant to
+// stay inside; there is no boundary here. The value is a path the
+// operator typed into their own shell, and the process runs as them, so
+// every path they can reach this way is one they could already reach
+// with cp. Cleaning the path was tried and changes nothing -- gosec does
+// not treat filepath.Clean as a sanitiser -- so it would have been
+// obfuscation rather than a fix.
+//
+// The rule stays enabled because the shape it is looking for would be
+// real if a path ever arrived from an HTTP request instead.
 func firstNonFlag(args []string) (string, bool) {
 	for _, a := range args {
 		if a != "" && a[0] != '-' {

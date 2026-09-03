@@ -16,4 +16,9 @@ FROM alpine:3.22
 
 RUN apk add --no-cache qemu-system-x86_64 qemu-img
 
+# Pinning a USER here would fix the in-container uid, and /dev/kvm is
+# passed through only when the *calling* user can open it -- see the note
+# above. The rule is aimed at shipped images; this is a local live-check
+# fixture that never leaves the workstation.
+# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
 ENTRYPOINT ["qemu-system-x86_64"]
