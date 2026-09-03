@@ -852,8 +852,8 @@ func TestSnapshotDefaults(t *testing.T) {
 	if cfg.Snapshot.Keep != 6 {
 		t.Errorf("Snapshot.Keep = %d, want the default 6", cfg.Snapshot.Keep)
 	}
-	if cfg.Snapshot.Dir != DefaultDataDir+"/snapshots" {
-		t.Errorf("Snapshot.Dir = %q, want %q", cfg.Snapshot.Dir, DefaultDataDir+"/snapshots")
+	if cfg.Snapshot.Dir != "" {
+		t.Errorf("Snapshot.Dir = %q, want empty so main resolves it beside the data directory", cfg.Snapshot.Dir)
 	}
 }
 

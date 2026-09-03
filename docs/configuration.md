@@ -161,7 +161,7 @@ that derived state every few minutes and puts it back on the next boot.
 snapshot:
   interval: 5m                       # how often one is written; 30s minimum
   keep: 6                            # generations kept, oldest deleted first
-  dir: /var/lib/mikroview/snapshots
+  dir: /var/lib/mikroview/snapshots   # default: beside the data directory
 ```
 
 - `snapshot.interval` — how often a snapshot is written, as a Go

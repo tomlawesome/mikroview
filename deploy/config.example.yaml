@@ -225,7 +225,7 @@ store:
 # snapshot:
 #   interval: 5m                       # how often one is written; 30s minimum
 #   keep: 6                            # generations kept, oldest deleted first
-#   dir: /var/lib/mikroview/snapshots
+#   dir: /var/lib/mikroview/snapshots   # default: beside the data directory
 
 # Local IP/CIDR blocklist matching (issue #113 Part B): raises a
 # known_bad_ip flag directly when a source IP falls inside a CIDR range
