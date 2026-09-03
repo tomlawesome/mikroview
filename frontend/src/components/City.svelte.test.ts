@@ -244,6 +244,37 @@ describe('standing on a building (#868)', () => {
     expect(container.textContent).toContain('caught, no rule named')
   })
 
+  it('the composer pins to the wall, drafted, never run, with what it has been asking for and the count', () => {
+    appState.events = Array.from({ length: 14 }, (_, i) =>
+      event({
+        id: i + 1,
+        srcIp: '10.10.0.10',
+        dstIp: '10.60.0.10',
+        inInterface: 'bridge-lan',
+        outInterface: 'wlan-cams',
+        action: 'drop',
+        ruleLabel: 'no-cross-router-cams',
+        dstPort: 445,
+        protocol: 'tcp',
+      }),
+    )
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    expect(container.querySelector('.composer')).toBeNull()
+    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    const composer = container.querySelector('.composer') as HTMLElement
+    expect(composer).not.toBeNull()
+    expect(composer.textContent).toContain("it's been asking")
+    expect(composer.textContent).toContain('tcp/445')
+    expect(composer.textContent).toContain('14×')
+    expect(composer.textContent).toContain('caught by no-cross-router-cams')
+    expect(composer.textContent).toContain('drafted · never run')
+    const cmd = composer.querySelector('.cm-code')?.textContent ?? ''
+    expect(cmd).toContain('src-address=10.10.0.10')
+    expect(cmd).toContain('dst-address=10.60.0.10')
+    expect(cmd).toContain('action=accept')
+  })
+
   it('the crumb states name, address, reach counts and that Esc surfaces, as in 2D', () => {
     appState.events = [
       event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv' }),
