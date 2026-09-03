@@ -13,6 +13,7 @@
 import { appState } from './state.svelte'
 import { fetchRouterAddresses, type RouterIPAddress } from './api'
 import { isPublicIp } from './format'
+import { tunnelsState } from './tunnels.svelte'
 
 export interface ZoneInfo {
   /** The boundary interface this zone stands on (bridge1, ether5, ...). */
@@ -107,15 +108,57 @@ class ZonesState {
     return best
   })
 
+  /** Every WireGuard interface the estate has pushed, read through
+   * tunnelsState (#874's tables). PPP is deliberately absent: round 30
+   * draws no PPP node, so a ppp-active session stays an ordinary lane
+   * rather than being dropped from the map with nowhere else to go. */
+  tunnelInterfaces = $derived.by(
+    (): Set<string> => new Set(tunnelsState.list.filter((t) => t.kind === 'wg').map((t) => t.iface)),
+  )
+
+  /**
+   * The tunnel the map draws as its own upper node (#877): a tunnel is
+   * not a lane, so this one is dropped from the lane row below.
+   *
+   * Round 30 draws exactly one (the-whole.html:986), so the busiest
+   * pushed WireGuard interface takes the slot -- alphabetical where
+   * nothing has been observed on any of them, so the node does not hop
+   * between tunnels on every poll. Any others stay in the lane row
+   * rather than vanishing: a second tunnel node is a design question,
+   * not a rendering one, the same call the five-lane cap makes.
+   */
+  tunnelInterface = $derived.by((): string | null => {
+    const tunnels = this.tunnelInterfaces
+    if (tunnels.size === 0) return null
+    const counts = new Map<string, number>()
+    for (const e of appState.events) {
+      for (const iface of [e.inInterface, e.outInterface]) {
+        if (iface && tunnels.has(iface)) counts.set(iface, (counts.get(iface) ?? 0) + 1)
+      }
+    }
+    let best: string | null = null
+    let bestN = -1
+    for (const iface of [...tunnels].sort()) {
+      const n = counts.get(iface) ?? 0
+      if (n > bestN) {
+        best = iface
+        bestN = n
+      }
+    }
+    return best
+  })
+
   /** The lanes: every observed non-wan boundary, busiest first, capped
    * at five (the map is spare by design; a sixth lane is a design
-   * question, not a rendering one). */
+   * question, not a rendering one). The drawn tunnel is excluded too --
+   * it stands beside the internet as its own node (#877). */
   zones = $derived.by((): ZoneInfo[] => {
     const wans = this.wanInterfaces
+    const tunnel = this.tunnelInterface
     const byIface = new Map<string, { count: number; hosts: Map<string, { label: string; n: number }> }>()
     for (const e of appState.events) {
       for (const iface of [e.inInterface, e.outInterface]) {
-        if (!iface || wans.has(iface)) continue
+        if (!iface || wans.has(iface) || iface === tunnel) continue
         let z = byIface.get(iface)
         if (!z) {
           z = { count: 0, hosts: new Map() }
@@ -140,7 +183,7 @@ class ZonesState {
     // draws config, not just traffic.
     const byPush = new Map<string, RouterIPAddress>()
     for (const a of this.pushed) {
-      if (a.interface && !wans.has(a.interface)) byPush.set(a.interface, a)
+      if (a.interface && !wans.has(a.interface) && a.interface !== tunnel) byPush.set(a.interface, a)
     }
     const ifaces = new Set([...byPush.keys(), ...byIface.keys()])
     return [...ifaces]
