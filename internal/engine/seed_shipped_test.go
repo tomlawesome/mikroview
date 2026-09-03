@@ -10,10 +10,9 @@ import (
 // regression this function exists for, found by #405's live-check run:
 // with no definitions backend configured -- which nothing in the config
 // file requires, and which the live-check environment genuinely has --
-// the definitions store opens empty, MigrateDefinitions correctly no-ops
-// (there is nothing to migrate into), and every detector already ported
-// onto this chassis silently stops running. No error, no warning, just
-// flags that never appear.
+// the definitions store opens empty and every detector ported onto this
+// chassis silently stops running. No error, no warning, just flags that
+// never appear.
 func TestSeedShippedDefinitionsPopulatesAnUnpersistedStore(t *testing.T) {
 	s, err := OpenDefinitionsStoreWithBackend(nil) // no persistence at all
 	if err != nil {

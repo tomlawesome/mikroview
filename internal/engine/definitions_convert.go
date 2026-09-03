@@ -3,272 +3,14 @@
 package engine
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
-	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
-
-// migrateWatchlistFile mirrors watchlist's own unexported storeFile
-// shape (internal/watchlist/watchlist.go) -- duplicated here rather than
-// exported from that package solely for this one-time reader, the same
-// "each package keeps its own small copy" precedent
-// internal/watchlist/characterization_test.go's own doc comment already
-// sets for this codebase (pgTestDSN/pgNewTestPool). watchlist.Entry
-// itself is exported and decodes directly.
-type migrateWatchlistFile struct {
-	Entries []*watchlist.Entry `json:"entries"`
-}
-
-// MigrateDefinitions seeds a not-yet-existing definitions document from
-// internal/detect's settings store and internal/watchlist's entries
-// store -- issue #404's one-way migration. Call this once, before
-// OpenDefinitionsStoreWithBackend is ever called against
-// definitionsBackend, in a deployment's boot sequence.
-//
-// # Non-destructive
-//
-// This reads the two source documents and writes the new one; it never
-// deletes or modifies either source's bytes. Both old stores keep
-// working in production exactly as before this lands: internal/detect
-// and internal/watchlist still read and write their own documents until
-// #405/#406 port their evaluation logic onto this chassis and retire
-// them. Running this again once a definitions document exists is a
-// deliberate no-op -- see the existence check below -- which is what
-// makes a second boot idempotent rather than re-migrating (and silently
-// overwriting whatever an operator has since changed through this
-// store).
-//
-// # Fail-closed, all the way through
-//
-// persist.Open already guarantees an unreadable or unparseable *source*
-// document refuses to start rather than being treated as empty (#378) --
-// this function uses it for both sources, unchanged. What persist.Open
-// alone does not cover is a failure *during conversion*, after both
-// sources loaded and parsed cleanly: without an extra guarantee, a
-// converter that got halfway through building the new document before
-// hitting a bad value could still call Save with a partial result. This
-// function structurally cannot do that: conversion (convertToDefinitions)
-// runs entirely against local, in-memory values, and
-// definitionsBackend.Save is called exactly once, at the very end, only
-// after every prior step -- both loads, both parses, and the full
-// conversion -- has returned no error. Any failure anywhere before that
-// point returns immediately, before Save is ever reached, leaving
-// definitionsBackend exactly as it was (no document) and both sources
-// completely untouched. See
-// TestMigrateDefinitionsRefusesOnConversionFailure, which reproduces
-// this with a real value (an out-of-range port number a pre-migration
-// watchlist entry could legitimately contain) rather than a synthetic
-// hook.
-//
-// # One failure this function does NOT refuse to start over
-//
-// Everything above is about protecting existing data: an unreadable
-// source, or a conversion that cannot be trusted to be complete, must
-// never result in a partial write. A failure to perform the *final*
-// Save -- the destination directory does not exist and cannot be
-// created, a permission problem, Postgres being briefly unreachable --
-// is a different kind of failure with no data to protect: neither
-// source was ever touched, and the definitions document still does not
-// exist either way, exactly as before this function ran. That failure
-// is wrapped in ErrMigrationWriteFailed rather than left
-// indistinguishable from a source/conversion failure, so a caller (see
-// main.go) can do what every other store in this codebase already does
-// when it cannot currently reach its backend: log it and keep running
-// with an unmigrated definitions store, not refuse to start the whole
-// process. Migration is safely retried on the next boot, since the
-// document still does not exist.
-func MigrateDefinitions(ctx context.Context, definitionsBackend, detectSettingsBackend, watchlistBackend persist.Backend) (migrated bool, err error) {
-	if definitionsBackend == nil {
-		// Definitions persistence isn't configured for this deployment --
-		// same "empty path disables persistence, not the feature"
-		// contract every store in this codebase follows. There is
-		// nothing to migrate into, and no backend for
-		// OpenDefinitionsStoreWithBackend to seed later either.
-		return false, nil
-	}
-
-	existing, _, err := persist.LoadDocument(ctx, definitionsBackend)
-	if err != nil {
-		return false, &persist.StartupError{Store: "the definitions store", Location: definitionsBackend.Describe(), Err: err}
-	}
-	if existing != nil {
-		// Already migrated (or already holds a document of its own) --
-		// idempotent no-op, per this function's own doc comment.
-		return false, nil
-	}
-
-	settingsDoc, err := ReadDetectorSettingsDocument(ctx, detectSettingsBackend)
-	if err != nil {
-		return false, err
-	}
-
-	var wlFile migrateWatchlistFile
-	if _, _, err := persist.Open(ctx, watchlistBackend, "the watchlist (definitions migration source)", func(data []byte) error {
-		return json.Unmarshal(data, &wlFile)
-	}); err != nil {
-		return false, err
-	}
-
-	defs, err := convertToDefinitions(settingsDoc, wlFile.Entries, DefaultShippedDefaults())
-	if err != nil {
-		return false, fmt.Errorf("engine: converting detector settings/watchlist into definitions: %w", err)
-	}
-
-	raw := make(map[string]json.RawMessage, len(defs))
-	for id, d := range defs {
-		b, err := json.Marshal(d)
-		if err != nil {
-			return false, fmt.Errorf("engine: encoding migrated definition %q: %w", id, err)
-		}
-		raw[id] = b
-	}
-	payload, err := json.MarshalIndent(definitionsDocument{Version: definitionsDocumentVersion, Definitions: raw}, "", "  ")
-	if err != nil {
-		return false, fmt.Errorf("engine: encoding the migrated definitions document: %w", err)
-	}
-
-	if _, err := definitionsBackend.Save(ctx, payload, 0); err != nil {
-		if errors.Is(err, persist.ErrConflict) {
-			// Another process migrated first (a concurrent boot against
-			// the same backend) -- its copy stands; this is a success,
-			// not a collision to report, same reasoning
-			// persist.AdoptFile gives for the identical race.
-			return false, nil
-		}
-		return false, fmt.Errorf("%w: %v", ErrMigrationWriteFailed, err)
-	}
-	return true, nil
-}
-
-// ErrMigrationWriteFailed marks a failure in MigrateDefinitions' final
-// write specifically -- see that function's own doc comment, "One
-// failure this function does NOT refuse to start over," for what this
-// is and is not: every other error MigrateDefinitions can return (an
-// unreadable/unparseable source, wrapped as *persist.StartupError by
-// persist.Open; a conversion failure) is deliberately NOT wrapped in
-// this, so a caller can tell them apart with errors.Is.
-var ErrMigrationWriteFailed = errors.New("engine: writing the migrated definitions document failed")
-
-// convertToDefinitions is MigrateDefinitions's whole in-memory
-// conversion step, split out so MigrateDefinitions's own fail-closed
-// doc comment can point at one function as "everything that must
-// succeed before Save is ever reached."
-func convertToDefinitions(settingsDoc map[string]DetectorSettings, entries []*watchlist.Entry, cfg ShippedDefaults) (map[string]Definition, error) {
-	out := make(map[string]Definition, len(shippedDetectors)+len(entries))
-	if err := convertDetectSettings(settingsDoc, cfg, out); err != nil {
-		return nil, err
-	}
-	if err := convertWatchlistEntries(entries, out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// AdoptWatchlistEntries seeds this store with every watchlist entry the
-// definitions document does not already hold, and reports how many it
-// added -- issue #407's half of the entry-set move, and the reason an
-// upgrade across it keeps every entry, every observation and every
-// promoted destination.
-//
-// It is deliberately separate from MigrateDefinitions and, like
-// SeedShippedDefinitions, runs on every boot rather than once. The two
-// answer different questions, and the difference is exactly what this
-// function exists for: MigrateDefinitions asks "what did this deployment
-// have before the definitions document existed", and answers it only
-// while that document does not exist. A deployment that upgraded during
-// #404/#405/#406 therefore already has a definitions document -- and
-// went on creating watchlist entries in internal/watchlist's own store
-// afterwards, because that store was still the operator-facing entry set
-// until this issue deleted it. Those entries are in no definitions
-// document anywhere. Without this, the upgrade that deletes the store
-// silently loses them, which is precisely the failure #380's first item
-// describes: no error, no warning, just an entry set that is quietly
-// smaller than it was.
-//
-// The #404 migration conventions apply unchanged:
-//
-//   - Fail-closed on the source. An unreadable or unparseable watchlist
-//     document is a hard error (persist.Open, #378), not "no entries" --
-//     starting with a silently empty entry set is the outcome this
-//     refuses.
-//   - One write at the end. Every entry is converted first, entirely in
-//     memory; a single failure returns before anything is written, so a
-//     half-converted set can never reach the document.
-//   - The source is never touched. internal/watchlist's document is read
-//     and left exactly as it was, so a failure anywhere leaves the
-//     entries recoverable and the next boot simply tries again.
-//   - Idempotent. An entry already present (by ID) is left completely
-//     alone -- an operator's later edits win over the source document,
-//     which is what makes running this on every boot safe rather than a
-//     slow overwrite of live state.
-func AdoptWatchlistEntries(ctx context.Context, s *DefinitionsStore, watchlistBackend persist.Backend) (int, error) {
-	if s == nil || watchlistBackend == nil {
-		return 0, nil
-	}
-
-	var wlFile migrateWatchlistFile
-	if _, _, err := persist.Open(ctx, watchlistBackend, "the watchlist (entry adoption source)", func(data []byte) error {
-		return json.Unmarshal(data, &wlFile)
-	}); err != nil {
-		return 0, err
-	}
-	if len(wlFile.Entries) == 0 {
-		return 0, nil
-	}
-
-	converted := make(map[string]json.RawMessage, len(wlFile.Entries))
-	for _, e := range wlFile.Entries {
-		if e == nil || e.ID == "" {
-			continue
-		}
-		if _, exists := s.Get(e.ID); exists {
-			continue
-		}
-		d, err := convertWatchlistEntry(e)
-		if err != nil {
-			return 0, fmt.Errorf("engine: adopting watchlist entry %q: %w", e.ID, err)
-		}
-		raw, err := json.Marshal(d)
-		if err != nil {
-			return 0, fmt.Errorf("engine: encoding adopted watchlist entry %q: %w", e.ID, err)
-		}
-		converted[e.ID] = raw
-	}
-	if len(converted) == 0 {
-		return 0, nil
-	}
-	return s.adoptRaw(converted), nil
-}
-
-// adoptRaw inserts already-converted definitions for ids this store does
-// not hold, under one lock and one persist -- the "one write at the end"
-// half of AdoptWatchlistEntries' contract. Anything that appeared in the
-// store between conversion and here (a concurrent boot, an operator
-// creating the same id) wins: this never overwrites.
-func (s *DefinitionsStore) adoptRaw(defs map[string]json.RawMessage) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	added := 0
-	for id, raw := range defs {
-		if _, exists := s.raw[id]; exists {
-			continue
-		}
-		s.raw[id] = raw
-		added++
-	}
-	if added > 0 {
-		s.persistLocked()
-	}
-	return added
-}
 
 // --- internal/detect.SettingsStore -> shipped definitions --------------
 
@@ -559,8 +301,7 @@ var shippedDetectors = []shippedDetector{
 // its enabled/scope survives inside the placeholder's Params, and
 // decodeStored's availability check (definitions_store.go) marks the
 // placeholder unavailable via an empty Kind, so it is preserved
-// byte-for-byte on every future write without ever being evaluated. See
-// TestMigrateDefinitionsUnrecognizedDetectorNameIsPreservedUnavailable.
+// byte-for-byte on every future write without ever being evaluated.
 func convertDetectSettings(settingsDoc map[string]DetectorSettings, cfg ShippedDefaults, out map[string]Definition) error {
 	for _, sd := range shippedDetectors {
 		settings, ok := settingsDoc[sd.id]
@@ -719,29 +460,6 @@ var watchlistInvertedParamSchema = []ParamSchema{
 		Description: "JSON-encoded watchlist.Ring -- the recorded break in this expectation's run of kept nights, written at the moment it broke."},
 	{Name: "silentJSON", Type: ParamTypeStringList, Max: floatBound(1),
 		Description: "JSON-encoded []time.Time -- the Open instant of every currently-open-or-recent occurrence found, at some tick, to have the device behind this expectation's pathway gone stale (issue #730). Sticky: written while the occurrence is still open, so FillNights can still close it as not-observed even if the device recovered before the window shut."},
-}
-
-// convertWatchlistEntries converts every watchlist entry into an
-// expectation definition, keyed by the entry's own ID -- preserving
-// identity across the migration rather than generating a fresh one,
-// since a stable, predictable ID is what makes this migration
-// idempotent and lets a future direct reference (a UI link, a saved
-// filter) keep working across the move.
-func convertWatchlistEntries(entries []*watchlist.Entry, out map[string]Definition) error {
-	for _, e := range entries {
-		// A JSON array containing `null` unmarshals to a nil *Entry --
-		// same guard watchlist.OpenWithBackend's own decode closure
-		// applies.
-		if e == nil || e.ID == "" {
-			continue
-		}
-		d, err := convertWatchlistEntry(e)
-		if err != nil {
-			return fmt.Errorf("watchlist entry %q: %w", e.ID, err)
-		}
-		out[d.ID] = d
-	}
-	return nil
 }
 
 func convertWatchlistEntry(e *watchlist.Entry) (Definition, error) {
@@ -906,15 +624,12 @@ func convertInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
 // SeedShippedDefinitions makes sure every shipped detector definition
 // actually exists in s, adding any that are missing at their shipped
 // defaults (with enabled/scope taken from settingsDoc). Definitions
-// already present are left completely alone -- an operator's edits, and
-// the migration's own output, both win over a default.
+// already present are left completely alone -- an operator's edits win
+// over a default.
 //
-// This is deliberately separate from MigrateDefinitions, and runs on
-// every boot rather than once. Migration answers "what did this
-// deployment have before the definitions store existed"; this answers
-// "does the shipped catalogue this binary evaluates actually exist", and
-// the two are not the same question. Issue #405 is what made the
-// difference matter: before it, an absent or unwritable definitions
+// It runs on every boot, answering "does the shipped catalogue this
+// binary evaluates actually exist". Issue #405 is what made that
+// question matter: before it, an absent or unwritable definitions
 // document cost nothing, because internal/detect evaluated every
 // detector from its own settings store regardless. Once a detector's
 // evaluation logic lives here, a definition that does not exist is a
