@@ -172,11 +172,11 @@ var renderExport = func(ex *export.Export, selected []int, prefixFor export.LogP
 // and renders the same change as one `set` command per rule.
 //
 // The output is mechanically checked before it is ever returned: the
-// annotated text is re-parsed, every rule's Fingerprint (everything
-// except log/log-prefix) is compared against the input's, and any
+// annotated text is re-parsed, every line outside a rule and every
+// rule token other than log/log-prefix is compared against the input's, and any
 // difference -- meaning something other than logging changed -- refuses
 // the whole response with a 500 rather than shipping a config edit
-// nobody asked for. See export.Rule.Fingerprint.
+// nobody asked for. See export.LoggingOnlyDiff.
 func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request) {
 	if !callerIsUser(r) {
 		http.Error(w, "user role required", http.StatusForbidden)
@@ -205,7 +205,7 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 	annotated, changed := renderExport(before, req.Selected, prefixFor)
 
 	after, err := export.Parse(annotated)
-	if err != nil || !loggingOnlyDiff(before, after) {
+	if err != nil || !export.LoggingOnlyDiff(before, after) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "logging-only check failed"})
 		return
 	}
@@ -332,23 +332,6 @@ func buildTuneLoggingRules(s *Server, device string, ex *export.Export, darkBoun
 		})
 	}
 	return out
-}
-
-// loggingOnlyDiff is POST /api/tune-logging/render's mechanical
-// enforcement of the issue's central invariant: before and after must
-// decode to the same number of filter rules, each fingerprinting equal
-// (i.e. identical in everything but log/log-prefix -- see
-// export.Rule.Fingerprint).
-func loggingOnlyDiff(before, after *export.Export) bool {
-	if len(before.FilterRules) != len(after.FilterRules) {
-		return false
-	}
-	for i := range before.FilterRules {
-		if before.FilterRules[i].Fingerprint() != after.FilterRules[i].Fingerprint() {
-			return false
-		}
-	}
-	return true
 }
 
 // matcherFor picks how POST /api/tune-logging/render's per-rule `set`
