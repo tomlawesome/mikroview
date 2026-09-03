@@ -13,6 +13,7 @@ import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
 import { wizardState } from '../lib/wizard.svelte'
+import { altitudeStopState } from '../lib/altitudeStop.svelte'
 import type { RouterFilterRule, RouterIPAddress } from '../lib/api'
 import { emptyFilters, type ClientEvent, type Device, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
 import Topography from './Topography.svelte'
@@ -120,7 +121,14 @@ beforeEach(() => {
   watchlistState.coverage = {}
   topologyNavState.pendingFlagId = null
   topologyNavState.pendingWatchId = null
+  topologyNavState.pendingDescend = null
   wizardState.open = false
+  // Every test starts on a fresh slider: altitudeStopState is a
+  // module-level singleton (like cityImportanceState), so a test that
+  // moves the slider would otherwise leak its last stop into whichever
+  // test runs next in this file.
+  altitudeStopState.stop = 'city'
+  localStorage.removeItem('mikroview:topography-altitude')
   nextEventId = 1
   nextFlagId = 1
   nextEntryId = 1
@@ -486,42 +494,38 @@ describe('the aggregate bar (#648)', () => {
   })
 })
 
-describe('the altitude slider (#648, named ends #682)', () => {
-  it('renders one range input, eight stop symbols, and its two named ends', () => {
+describe('the altitude slider (#648, named ends #682; joined to the city #869)', () => {
+  it('renders one range input, seven stop symbols, and its two named ends, defaulting to the city (#869)', () => {
     const { container } = render(Topography)
     flushSync()
 
     const range = container.querySelector<HTMLInputElement>('.alt-range')
     expect(range).not.toBeNull()
     expect(range?.min).toBe('0')
-    expect(range?.max).toBe('7') // four 2D stops, then the four city stops (#863)
-    expect(range?.value).toBe('2') // defaults to "zones", today's unchanged map
+    expect(range?.max).toBe('6') // three 2D stops, the city, then its own three (#869)
+    expect(range?.value).toBe('3') // defaults to "city", centred on the axis
 
     const ticks = container.querySelectorAll('.tick')
-    expect(ticks.length).toBe(8)
-    expect(container.querySelector('.tick.diamond')).not.toBeNull() // survey's atlas diamond
+    expect(ticks.length).toBe(7)
+    expect(container.querySelector('.tick.diamond.on')).not.toBeNull() // the city's own atlas diamond
 
     // Ratified round-29: the two extremes are named, the middle stops
-    // stay tick-only symbols -- never a full text label per stop. The
-    // far end is now the city's street stop (#863; #869 owns the join).
+    // stay tick-only symbols -- never a full text label per stop.
     const ends = [...container.querySelectorAll('.alt-end')].map((n) => n.textContent?.trim())
     expect(ends).toEqual(['clients', 'street'])
   })
 
-  it('the city stops swap the 2D stage for the city, and back (#863)', () => {
+  it('the city stops swap the 2D stage for the city, and back (#863, #869)', () => {
     const { container } = render(Topography)
     flushSync()
 
-    const range = container.querySelector<HTMLInputElement>('.alt-range')!
-    range.value = '4'
-    range.dispatchEvent(new Event('input', { bubbles: true }))
-    flushSync()
-
+    // The default is already a city stop.
     expect(container.querySelector('.city[data-stop="city"]')).not.toBeNull()
     expect(container.querySelector<HTMLElement>('.stage')?.hidden).toBe(true)
     expect(container.querySelector('.city .mini rect.viewport')).not.toBeNull()
 
-    range.value = '7'
+    const range = container.querySelector<HTMLInputElement>('.alt-range')!
+    range.value = '6'
     range.dispatchEvent(new Event('input', { bubbles: true }))
     flushSync()
     expect(container.querySelector('.city[data-stop="street"]')).not.toBeNull()
@@ -533,17 +537,98 @@ describe('the altitude slider (#648, named ends #682)', () => {
     expect(container.querySelector<HTMLElement>('.stage')?.hidden).toBe(false)
   })
 
-  it('moving the slider reframes the map camera, including the survey tilt', () => {
-    const { container } = render(Topography)
+  it('remembers the last stop across mounts, the same convention cityImportance.svelte.ts uses (#869)', () => {
+    const first = render(Topography)
     flushSync()
-
-    const range = container.querySelector<HTMLInputElement>('.alt-range')!
-    range.value = '3'
+    const range = first.container.querySelector<HTMLInputElement>('.alt-range')!
+    range.value = '0' // clients
     range.dispatchEvent(new Event('input', { bubbles: true }))
     flushSync()
+    first.unmount()
 
-    expect(container.querySelector('.camera.cam-survey')).not.toBeNull()
-    expect(container.querySelector('.tick.diamond.on')).not.toBeNull()
+    expect(altitudeStopState.stop).toBe('clients')
+    const second = render(Topography)
+    flushSync()
+    expect(second.container.querySelector<HTMLInputElement>('.alt-range')?.value).toBe('0')
+  })
+})
+
+describe('crossing the altitude centre (#869)', () => {
+  const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+
+  function crossTo(container: HTMLElement, value: string) {
+    const range = container.querySelector<HTMLInputElement>('.alt-range')!
+    range.value = value
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+  }
+
+  it('keeps the selected lens when crossing the centre either way', () => {
+    const { container } = render(Topography)
+    flushSync()
+    const policyTab = [...container.querySelectorAll('[aria-label="Map lenses"] button')].find((b) => b.textContent?.trim() === 'policy')!
+    policyTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(policyTab.classList.contains('on')).toBe(true)
+
+    crossTo(container, '2') // to zones: the 2D side
+    expect(policyTab.classList.contains('on')).toBe(true)
+
+    crossTo(container, '4') // back across, to borough
+    expect(policyTab.classList.contains('on')).toBe(true)
+  })
+
+  it('hands a 2D reach across the centre to the same host, standing on it in the city', () => {
+    zonesState.pushed = oneLane
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'desk' })]
+    const { container } = render(Topography)
+    flushSync()
+    crossTo(container, '2') // zones: the 2D map is the active side
+
+    const hostLink = container.querySelector<SVGTSpanElement>('.host-link')!
+    hostLink.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(container.querySelector('.membrane-layer')).not.toBeNull()
+
+    crossTo(container, '3') // cross the centre into the city
+    expect(container.querySelector('.membrane-layer')).toBeNull()
+    expect(container.querySelector('.city .crumb')).not.toBeNull()
+    expect(container.querySelector('.city .crumb')?.textContent).toContain('desk')
+  })
+
+  it('resets cleanly, rather than half-applying, when the reached host has no building to land on', () => {
+    // MAX_BUILDINGS (lib/city/layout.ts) draws 8 hosts per plate; a 9th
+    // exists in the 2D map's reach but has no building in the city.
+    zonesState.pushed = oneLane
+    appState.events = Array.from({ length: 9 }, (_, i) => event({ inInterface: 'bridge1', srcIp: `10.0.1.${20 + i}`, srcHostName: `host-${i}` }))
+    const { container } = render(Topography)
+    flushSync()
+    crossTo(container, '0') // clients: a 2D stop, so this request opens the 2D reach
+
+    topologyNavState.pendingDescend = { zoneId: 'bridge1', host: 'host-8', ip: '10.0.1.28' }
+    flushSync()
+    expect(container.querySelector('.membrane-layer')).not.toBeNull()
+
+    crossTo(container, '3') // cross the centre into the city
+    expect(container.querySelector('.membrane-layer')).toBeNull()
+    expect(container.querySelector('.city[data-stop="city"]')).not.toBeNull()
+    expect(container.querySelector('.city .crumb')).toBeNull() // nothing to stand on -- resets, not half-applies
+  })
+
+  it('hands the city\'s own stand across the centre to a 2D reach on the same host', () => {
+    zonesState.pushed = oneLane
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'desk' })]
+    const { container } = render(Topography)
+    flushSync()
+    // Already on the city (the default); stand on the host the same way
+    // a flag's "where" link does.
+    topologyNavState.pendingDescend = { zoneId: 'bridge1', host: 'desk', ip: '10.0.1.20' }
+    flushSync()
+    expect(container.querySelector('.city .crumb')).not.toBeNull()
+
+    crossTo(container, '2') // cross the centre out to the 2D map
+    expect(container.querySelector('.membrane-layer')).not.toBeNull()
+    expect(container.querySelector('.here')?.textContent).toBe('desk')
   })
 })
 
@@ -910,16 +995,25 @@ describe('the round-30 layout (#699)', () => {
     }
   })
 
-  it('reveals a zone dot per lane at survey instead of tilting the cards', () => {
+  it('draws the zones stop\'s own flat ground plan -- a card per zone with a host count, no dots, no per-host names (#852, #869)', () => {
     pushLanes(3)
     const { container } = render(Topography)
     flushSync()
 
-    // The dots exist at every altitude; the stylesheet is what hides
-    // them, so assert the structure the survey rule keys off.
+    // Present at every altitude, like every other camera layer -- the
+    // stylesheet is what shows it only at zones (cam-zones).
+    const cards = container.querySelectorAll('.ground-flat .gf-card')
+    expect(cards.length).toBe(3)
+    for (const c of cards) {
+      expect(c.querySelector('.gf-count')?.textContent).toMatch(/^\d+ hosts?$/)
+      expect(c.querySelector('.n-hosts')).toBeNull()
+      expect(c.querySelector('circle')).toBeNull()
+    }
+    // The full card (host names included) stays available for clients
+    // and services -- "hosts appear at clients" -- so it is still drawn,
+    // just hidden by the stylesheet while zones is the active stop.
     expect(container.querySelectorAll('.zone .isl-card').length).toBe(3)
-    expect(container.querySelectorAll('.zone .g-dot .zone-dot').length).toBe(3)
-    expect(container.querySelectorAll('.zone .g-dot .zone-label').length).toBe(3)
+    expect(container.querySelectorAll('.zone .n-hosts').length).toBe(3)
   })
 
   it('adds a services layer and a client tier rather than scaling the map up', () => {
@@ -1096,14 +1190,6 @@ describe('#723: nodes stop clashing with the scene\'s own floor at the altitude 
     for (const bottom of dotBottoms) expect(bottom).toBeLessThanOrEqual(700)
   })
 
-  it('restores the survey tilt\'s own perspective to round 30\'s ratified 1400px, not the drifted 900px', () => {
-    // The rotateX/scale/translateY triple is unchanged from the mockup;
-    // only the perspective distance had drifted smaller, which makes the
-    // very same tilt read as stronger (foreshortening grows as this
-    // number shrinks) -- see the .stage svg comment in the component.
-    expect(componentSource).toMatch(/\.stage svg\s*{\s*perspective:\s*1400px;/)
-    expect(componentSource).not.toMatch(/perspective:\s*900px/)
-  })
 })
 
 describe('#723: a lane\'s port list gets a visible tie to its own card ("ports floating in the wind")', () => {
@@ -1951,13 +2037,6 @@ describe('#715 item 3: the flags and watch overlays', () => {
     return [...container.querySelectorAll('[aria-label="Map overlays"] button')]
   }
 
-  function toSurvey(container: HTMLElement) {
-    const range = container.querySelector<HTMLInputElement>('.alt-range')!
-    range.value = '3'
-    range.dispatchEvent(new Event('input', { bubbles: true }))
-    flushSync()
-  }
-
   it('draws five controls: three exclusive tabs and two independent toggles, both on', () => {
     const { container } = render(Topography)
     flushSync()
@@ -1982,22 +2061,6 @@ describe('#715 item 3: the flags and watch overlays', () => {
     flagsState.list = [flag('port_scan', '10.0.1.20'), flag('critical_port', '10.0.1.21'), flag('repeated_drops', '10.0.1.22')]
     flushSync()
     expect(overlays(container)[0].textContent?.replace(/\s+/g, ' ').trim()).toBe('flags 3')
-  })
-
-  it('marks a flagged zone at survey, and unmarks it when the overlay is switched off', () => {
-    zonesState.pushed = oneLane
-    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'desk' })]
-    flagsState.list = [flag('port_scan', '10.0.1.20')]
-    const { container } = render(Topography)
-    flushSync()
-    toSurvey(container)
-
-    expect(container.querySelectorAll('.dot-halo').length).toBeGreaterThan(0)
-
-    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    flushSync()
-    expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('false')
-    expect(container.querySelectorAll('.dot-halo').length).toBe(0)
   })
 
   it('leaves the aggregate-bar counts alone: they are drawn in every round, overlay or not', () => {

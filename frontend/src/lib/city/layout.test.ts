@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mockupEstate } from './fixture'
 import { bankV, layoutGround, plateRadius } from './layout'
 import { bezAt, bezTangent, dm, segsOf } from './roads'
+import type { CityInput } from './input'
 import type { Pt } from './project'
 import type { District, Ground, Road } from './types'
 
@@ -167,6 +168,69 @@ describe('city layout: roads', () => {
     for (const r of ground.roads) {
       expect(r.label).toBeTruthy()
       if (r.lane) expect(r.from).toMatch(/\//)
+    }
+  })
+
+  it('escalates the estate\'s one unplanned pair to bollards and a red mark, carrying its rule name', () => {
+    const worst = roads.find((r) => r.id === 'bridge-lan|vlan-iot') as Road
+    expect(worst.k).toBe('x')
+    expect(worst.stop).toBe('drop')
+    expect(worst.refusedBy).toBe('iot-egress-drop')
+  })
+
+  it('with two unplanned pairs, only the busier one escalates -- the tie-break is escalate.ts\'s own, proven there', () => {
+    const input = mockupEstate()
+    // A second unplanned pair, within the same borough as the first so
+    // the road stays short: escalate.ts's worst-means-busiest choice
+    // must still pick the busier one, not whichever comes first.
+    input.edges.push({ key: 'vlan-srv|vlan-guest', from: 'vlan-srv', to: 'vlan-guest', events: 40, verdict: 'unplanned', drops: 40, refusedBy: 'srv-guest-drop' })
+    const g = layoutGround(input)
+    const busier = g.roads.find((r) => r.id === 'vlan-guest|vlan-srv') as Road
+    expect(busier.stop).toBe('drop')
+    expect(busier.refusedBy).toBe('srv-guest-drop')
+    const quieter = g.roads.find((r) => r.id === 'bridge-lan|vlan-iot') as Road
+    expect(quieter.k).toBe('x')
+    expect(quieter.stop).toBeUndefined()
+  })
+
+  it('a drop road carries the refusing rule from the events, never a guess', () => {
+    const guest = roads.find((r) => r.id === 'bridge-lan|vlan-guest') as Road
+    expect(guest.stop).toBe('drop')
+    expect(guest.refusedBy).toBe('guest-isolation')
+  })
+})
+
+describe('city layout: gates', () => {
+  it('opens a gate on the district a pushed accept rule actually names, aimed at the resolvable neighbour', () => {
+    const lan = ground.districts.find((d) => d.id === 'bridge-lan') as District
+    const srv = ground.districts.find((d) => d.id === 'vlan-srv') as District
+    const lanToSrv = lan.gates.find((g) => g.key === 'forward|bridge-lan|vlan-srv')
+    expect(lanToSrv).toBeTruthy()
+    expect(lanToSrv?.lamp).toBe(true)
+    expect(lanToSrv?.toward).toBe('vlan-srv')
+    // The gate sits on the plate's own edge, not inside or outside it.
+    expect(dm(lanToSrv!.p, [lan.u, lan.v])).toBeCloseTo(lan.r, 5)
+    const srvToLan = srv.gates.find((g) => g.key === 'forward|vlan-srv|bridge-lan')
+    expect(srvToLan?.lamp).toBe(false)
+  })
+
+  it('draws no gate at all for a boundary no accept rule crosses', () => {
+    const iot = ground.districts.find((d) => d.id === 'vlan-iot') as District
+    expect(iot.gates).toEqual([])
+    const guest = ground.districts.find((d) => d.id === 'vlan-guest') as District
+    expect(guest.gates).toEqual([])
+  })
+
+  it('every district knows a rule table has been pushed', () => {
+    for (const d of ground.districts) expect(d.rulesPushed).toBe(true)
+  })
+
+  it('with no rule table pushed at all, every wall has no gates -- never a guess', () => {
+    const input: CityInput = { ...mockupEstate(), rulesPushed: false, gates: [] }
+    const g = layoutGround(input)
+    for (const d of g.districts) {
+      expect(d.gates).toEqual([])
+      expect(d.rulesPushed).toBe(false)
     }
   })
 })

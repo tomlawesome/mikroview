@@ -18,7 +18,7 @@ const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
 
 // The device the events actually arrive from, asked of the instance --
-// see live-router-lookup.mjs for why this is discovered, not assumed.
+// see live-before-router-lookup.mjs for why this is discovered, not assumed.
 syslog(2, 'topo-policy-probe')
 let DEVICE
 for (let i = 0; i < 40 && !DEVICE; i++) {
@@ -34,7 +34,7 @@ syslog(30, 'topo-policy-traffic')
 
 // --- The empty state: before any rule push -------------------------------
 // Scenarios share one instance in filename order, and earlier ones
-// (live-router-lookup.mjs) push rule tables of their own -- so the
+// (live-before-router-lookup.mjs) push rule tables of their own -- so the
 // empty state is only assertable when this scenario meets a fresh
 // instance (as a standalone run does). Skipping on a fed one is said,
 // not silent.

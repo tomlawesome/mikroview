@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { RECENCY_HALF_LIFE_MS, reachFor } from './reach'
+import { RECENCY_HALF_LIFE_MS, portsLine, reachFor } from './reach'
 import type { ClientEvent } from './types'
 
 const NOW = 1_780_000_000_000
@@ -95,5 +95,15 @@ describe('the busiest pathway is weighted toward now (#701)', () => {
     const { strands, busiest } = reachFor(HOST, null, events, NOW)
     expect(strands[0].counterpart).toBe('ether1')
     expect(busiest?.counterpart).toBe('bridge2')
+  })
+})
+
+describe('portsLine (#868: shared with the city so neither view invents its own wording)', () => {
+  it('joins up to three ports with a leading colon', () => {
+    expect(portsLine([445, 22, 80, 9999])).toBe(':445 :22 :80')
+  })
+
+  it('is empty for no ports', () => {
+    expect(portsLine([])).toBe('')
   })
 })
