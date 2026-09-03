@@ -43,6 +43,31 @@ rewritten.
   push -- a real push always overrides the hint.
   `scripts/routeros-freshness.sh` now reports a stable release with no
   covering row, rather than only comparing against a marker.
+- **"Tune logging" (#435, Go half): a new `internal/routeros/export`
+  parser for RouterOS's `/export hide-sensitive`, and the two endpoints
+  built on it.** The parser keeps every source line verbatim and decodes
+  only `/ip firewall filter` `add` lines (either section-header form)
+  into attributes, refusing outright when a value is present for a
+  secret-shaped key (`password`, the pre-shared-key family, `psk`, and
+  their kin) -- the sign that the text handed in was not actually
+  exported with `hide-sensitive`. `POST /api/tune-logging/analyse`
+  (user tier, 2 MiB body cap) reports how long mikroview has observed a
+  device and, once that reaches 24 hours, every filter rule that crosses
+  an operator-chosen dark boundary, with its packet/byte counters
+  matched from the latest push. `POST /api/tune-logging/render` (same
+  tier and cap) switches logging on for the selected rules and returns
+  both the edited export and one `/ip firewall filter set` command per
+  rule, with the change mechanically checked -- parse before and after,
+  compare every rule stripped of its logging attributes -- to differ
+  only in logging before it is ever returned; a check failure answers
+  500 rather than shipping an edit nobody asked for. Nothing about an
+  uploaded export is logged, persisted, or stored.
+  The push payload gains rule counters: `internal/ingest.FilterRule`
+  carries `packets`/`bytes` (RouterOS's own per-rule hit counters, kept
+  whether or not a rule logs), and the generated push script's
+  `filter-rule` block sends them. The frontend half (`frontend/`, the
+  new "Tune logging" view) is tracked separately against the same
+  contract.
 - **The setup wizard names a multi-homed router's source-address
   split** (#442). A router holds an address on every network it routes,
   and its logs arrive stamped with whichever one faces mikroview --
