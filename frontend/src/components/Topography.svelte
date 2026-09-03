@@ -2167,7 +2167,12 @@
                 <text x={-cardHalf + cardPad} y="88" class="n-sub">{detail}</text>
               {/if}
             {/if}
-            <text x={-cardHalf + cardPad} y="100" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
+            <!-- Round 30's zone card carries name, subnet, hosts and the
+                 coverage badge, and stops there (the-whole.html:1002-1008).
+                 A fifth "N events this window" line was drawn here and the
+                 mockup draws it nowhere, so it is off (#715 item 9). The
+                 count itself stays: `zones.svelte.ts:161` sorts the lane row
+                 by it, so it is load-bearing data, not dead code. -->
             {#if agg}
               <!-- Flush with the card and 16 tall (#699; round 30's
                    `translate(-108 110)` at 216x16, the-whole.html:
