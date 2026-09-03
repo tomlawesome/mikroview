@@ -96,4 +96,27 @@ describe('City', () => {
     flushSync()
     expect(raf).toHaveBeenCalled()
   })
+
+  it('says plainly when no router has ever pushed a rule table, rather than claiming DARK or LOGGED', () => {
+    const unpushed = layoutGround({ ...mockupEstate(), rulesPushed: false, gates: [] })
+    const { container } = render(City, { props: { stop: 'district', ground: unpushed } })
+    expect(container.textContent).toContain('NO RULES PUSHED')
+    expect(container.textContent).not.toContain('DARK')
+    expect(container.textContent).not.toContain('LOGGED')
+    for (const p of container.querySelectorAll('.plate')) expect(p.getAttribute('aria-label')).toMatch(/no rule table has been pushed yet/)
+  })
+
+  it('carries the refusing rule beside a drop mark, from the events themselves', () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    expect(container.textContent).toContain('caught by iot-egress-drop')
+    expect(container.textContent).toContain('caught by guest-isolation')
+  })
+
+  it('the policy lens lights every gate with its rule number; the traffic lens leaves the wall quiet', () => {
+    const quiet = render(City, { props: { stop: 'district', ground, lens: 'traffic' } })
+    expect(quiet.container.querySelectorAll('.gate-n').length).toBe(0)
+    quiet.unmount()
+    const lit = render(City, { props: { stop: 'district', ground, lens: 'policy' } })
+    expect(lit.container.querySelectorAll('.gate-n').length).toBeGreaterThan(0)
+  })
 })
