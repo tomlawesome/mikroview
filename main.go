@@ -54,6 +54,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -1079,7 +1080,14 @@ func main() {
 		snapshotWriter = snapshot.New(snapshotDir, cfg.Snapshot.Keep, snapshotParts...)
 	}
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore)
+	// On-disk event history (#856). Unlike a snapshot this holds custody
+	// data -- the log lines and addresses the note above says a snapshot
+	// deliberately excludes -- which is why it is encrypted, why it needs
+	// a key the operator mounts, and why it is off unless they ask for
+	// it. See docs/decisions/event-retention.md.
+	hist := openHistory(logging.New("history"), cfg)
+
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist)
 	go eng.Run(ctx)
 	// One driver for every Ticked definition (issue #405). Deliberately
 	// one goroutine at the finest cadence any shipped definition
@@ -1308,6 +1316,7 @@ func main() {
 
 	srv := &api.Server{
 		Store:             st,
+		History:           historyForReplay(hist),
 		Devices:           devices,
 		MACRegistry:       macRegistry,
 		Setup:             setupStore,
@@ -1611,6 +1620,14 @@ func main() {
 	// it was at the last tick -- which is what makes a planned restart
 	// lose nothing at all instead of up to snapshot.interval.
 	writeFinalSnapshot(snapshotLog, snapshotWriter, snapshotShutdownBudget)
+
+	// The retained history's last batch, for the same reason: ingest has
+	// stopped, so this is everything that arrived since the last flush.
+	// Losing it would cost a few minutes of the copy on disk, never the
+	// events themselves -- but a planned restart should lose nothing.
+	if err := hist.Close(); err != nil {
+		logging.New("history").Warn("could not flush the retained event history at shutdown", "err", err)
+	}
 }
 
 // closeStoreOnShutdown flushes every write-behind-backed store passed to
@@ -2253,14 +2270,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *retention.Store) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist)
 		}
 	}
 }
@@ -2271,7 +2288,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *retention.Store) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -2360,6 +2377,11 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	e.Raw, e.RawTruncated = store.ClampRaw(parsed.Raw)
 
 	stored := st.Insert(e)
+	// Retention takes the event as stored, so the copy on disk carries
+	// the same ID and ReceivedAt the ring assigned -- a replay reading
+	// disk then memory is then reading one series, not two. A nil hist
+	// is the ordinary memory-only default and costs a nil check.
+	hist.Append(stored)
 	h.Broadcast(stored)
 	// Every definition, of either intent, evaluates off this one hand-off
 	// (issues #405 and #406): internal/detect's queue, worker and

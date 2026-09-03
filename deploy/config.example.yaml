@@ -227,6 +227,25 @@ store:
 #   keep: 6                            # generations kept, oldest deleted first
 #   dir: /var/lib/mikroview/snapshots   # default: beside the data directory
 
+# On-disk event history (issue #856, optional): one encrypted, compressed
+# file per day holding the same events the in-memory ring above holds --
+# a separate setting from store.retention, which only bounds what a
+# live query can see in memory. Off by default, and staying off is a
+# first-class choice, not a missing step. There is no unencrypted mode:
+# this needs both enabled and a keyFile pointing at a key mounted
+# outside this data directory (never inside it, and never in this
+# file). Generate one with:
+#   head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+# Turning enabled back off deletes what was already retained. See
+# docs/configuration.md's "On-disk event history" section for what the
+# encryption does and doesn't protect against.
+# history:
+#   enabled: false
+#   keyFile: /run/secrets/mikroview-history.key   # must be outside the data directory
+#   days: 30
+#   maxBytes: 1073741824   # 1 GiB
+#   dir: /var/lib/mikroview/history   # default: beside the data directory
+
 # Local IP/CIDR blocklist matching (issue #113 Part B): raises a
 # known_bad_ip flag directly when a source IP falls inside a CIDR range
 # from one of the vetted feeds below -- independent of any behavioral
