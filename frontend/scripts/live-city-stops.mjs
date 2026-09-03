@@ -139,7 +139,7 @@ await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
 
 const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
-check((await slider.getAttribute('max')) === '7', 'the altitude slider carries four city stops beyond survey (max 7)')
+check((await slider.getAttribute('max')) === '6', 'the altitude slider carries three city stops beyond its centre (max 6, #869)')
 
 const STOPS = ['city', 'borough', 'district', 'street']
 
@@ -189,7 +189,7 @@ const measure = () =>
 let lastViewport = null
 for (let i = 0; i < STOPS.length; i++) {
   const stop = STOPS[i]
-  await slider.fill(String(4 + i))
+  await slider.fill(String(3 + i))
   await new Promise((r) => setTimeout(r, 900))
   const m = await measure()
   const at = `${stop}`
@@ -239,7 +239,7 @@ check(dragBefore !== dragAfter, `dragging the stage pans the camera (minimap vie
 
 // Reduced motion: the camera lands at once.
 await page.emulateMedia({ reducedMotion: 'reduce' })
-await slider.fill('4')
+await slider.fill('3')
 await new Promise((r) => setTimeout(r, 30))
 const instant = await page.evaluate(() => document.querySelector('.city')?.dataset.stop)
 const scale = await page.evaluate(() => {

@@ -130,9 +130,17 @@ export function cityInputFrom(
    * still compiles and reads as "nothing pushed yet". */
   rules: RouterFilterRule[] = [],
 ): CityInput {
-  const primary = primaryId ?? devices[0]?.id ?? ''
+  let primary = primaryId ?? devices[0]?.id ?? ''
   const routers: CityRouter[] = devices.map((d) => ({ id: d.id, name: d.name, primary: d.id === primary, sourceIp: d.sourceIp }))
-  if (routers.length === 0) routers.push({ id: 'router', name: 'router', primary: true, sourceIp: '' })
+  if (routers.length === 0) {
+    // No device known yet (the empty state, or a test that only pushes
+    // an address table and events): `primary` must name the fallback
+    // router below, or every zone's routerOf(...) resolves to an id no
+    // router actually has and placeBorough's own filter drops every
+    // zone -- a real district-count-zero bug, not merely a test gap.
+    primary = 'router'
+    routers.push({ id: primary, name: 'router', primary: true, sourceIp: '' })
+  }
 
   // Who logs on which interface, and how many events crossed a tunnel
   // in the window (the frontend's own half of a footbridge's state).

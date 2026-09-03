@@ -34,6 +34,18 @@ clients · services · zones · ◆ city · borough · district · street
 - The lens tabs (traffic · policy · coverage · flags · watch) apply to
   both views; the header, badges and callout wording are the 2D map's.
 
+**The join (#869).** One `<input type=range>` with seven stops carries
+the whole axis above; which stop was last open persists per user, the
+same way the importance reading above does. Crossing the centre swaps
+the drawing, and carries what still makes sense rather than resetting
+everything: the selected lens always carries (it is one piece of state
+threaded to both sides); a reach -- a host held open on the 2D map, or
+a building stood on in the city -- carries only if the same host exists
+as a building on the other side, and otherwise surfaces rather than
+half-applying; the city's own pan carries across its own mount and
+unmount (it only exists in the DOM while a city stop is active), so
+returning to the city lands back where it was left.
+
 ## The metaphor, and what each part means
 
 | City | Network | Drawn as |
