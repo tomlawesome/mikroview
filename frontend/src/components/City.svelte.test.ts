@@ -170,6 +170,18 @@ describe('standing on a building (#868)', () => {
     expect(container.querySelector('.mini rect.viewport')?.getAttribute('x')).toBe(before)
   })
 
+  it('the crumb itself surfaces, restoring the exact camera, same as Escape', async () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const before = container.querySelector('.mini rect.viewport')?.getAttribute('x')
+    await fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    expect(container.querySelector('.city')?.getAttribute('data-stop')).toBe('street')
+    await fireEvent.click(container.querySelector('.crumb') as Element)
+    flushSync()
+    expect(container.querySelector('.city')?.getAttribute('data-stop')).toBe('district')
+    expect(container.querySelector('.mini rect.viewport')?.getAttribute('x')).toBe(before)
+  })
+
   it('Enter stands on the focused building, same as a click', async () => {
     const { container } = render(City, { props: { stop: 'district', ground } })
     // districts[0] is LAN, and ArrowRight from it walks onto its first
