@@ -20,7 +20,12 @@ clients · services · zones · ◆ city · borough · district · street
   the skyline.
 - **Left of centre** is the existing 2D map at its existing stops
   (`Topography.svelte`); its old `survey` stop is gone — the city is the
-  survey.
+  survey. **Both views share one ground plan** (owner, 2026-09-03, #852):
+  the same positions for every zone, router, tunnel, river and road;
+  only the vocabulary changes. `zones` is the plan drawn flat and
+  carries less than the city at the same place — cards with a host
+  count, no dots, no per-host labels; the owner read the first flat
+  example (`../../concepts/round-40/one-layout.html`) as cluttered.
 - **Right of centre** zooms the city in: **borough** frames one router's
   territory, **district** one gated community and its gates, **street**
   the buildings with their labels and cards. Pan is free at every city
@@ -41,7 +46,7 @@ clients · services · zones · ◆ city · borough · district · street
 | Gate | an accept rule crossing a district boundary | a break in the wall; a road crosses a wall only through a gate |
 | Lamp on a gate | the rule logs | a lit post; a wall with no lamp toward a neighbour is that boundary's DARK badge made visible |
 | Bollards and a red mark on a wall | a drop — the road ends at the wall | with the refusing rule's name beside the mark (`caught by default drop`) |
-| River | the Internet | along one edge of the map; there is no Internet box |
+| River | the Internet | along one edge of the map; there is no Internet box. It must read as water — banks, an uneven edge, a ripple texture, no lane marks — the owner read the mockup's river as a road (2026-09-03) |
 | Road bridge | the WAN interface (ether1) | wide, lamped when logged |
 | Footbridge | a tunnel (wg0, l2tp) | narrow; lit when up, piers only when down, lit but empty when quiet |
 | Far bank hamlet | the tunnel's peers | the same device shapes across the water |

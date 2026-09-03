@@ -68,3 +68,20 @@ Owner, 2026-09-03, on the second cut (`isometric.html`, commit f36fba1):
 > YESSSSS FABLE. This is EXCELLENT! Approved.
 
 **Ratified.** The buildable record is `docs/design/screens/city/DESIGN.md`.
+
+## One layout (item 50, 2026-09-03)
+
+Owner ruling: the 2D map and the city share one ground plan; only the
+vocabulary changes. `one-layout.html` shows the round-40 model as a flat
+plan beside the city, with an overlay registering the two to 0 px
+(`shots/one-layout-*.png`). Recorded on #852.
+
+Owner, on the example:
+
+> To be honest the river reads as a road on both.
+>
+> I generally like this! 2D looks a bit cluttered.
+
+Carried into the build: the river must read as water in both views
+(#866); the flat plan at the `zones` stop carries less than the example
+draws (#869).
