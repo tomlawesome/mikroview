@@ -270,34 +270,29 @@ sync:close-github-issues:
 # itself carries a CHR_EXERCISE=true variable — set on that one
 # schedule, not project-wide, so this cannot fire from a dev push or a
 # merge request, and cannot collide with any other scheduled pipeline
-# this project adds later. The owner creates the schedule (weekly,
-# matching routeros-freshness.yml's GitHub cron: 0 7 * * 1) and the
-# GITLAB_MR_TOKEN CI/CD variable scripts/routeros-chr-open-mr.sh needs —
-# see that script's header and docs/routeros-chr-exercise.md. Neither
-# exists yet; this job does nothing until both do.
+# this project adds later. The owner has already created that schedule
+# (weekly, matching routeros-freshness.yml's GitHub cron: 0 7 * * 1) and
+# the GITLAB_MR_TOKEN CI/CD variable scripts/routeros-chr-open-mr.sh
+# needs — see that script's header and docs/routeros-chr-exercise.md.
 #
-# Runs under Docker-in-Docker because scripts/live-routeros.sh itself
-# shells out to `docker build`/`docker run` to boot the CHR under QEMU.
-# Docker-in-Docker needs a privileged runner: the `image-build` tag routes
-# this job to the one orbit's image builds already use (proven there,
-# 2026-09-03), not to the shared untagged runner the rest of this file
-# runs on. That runner must be enabled for this project by the owner or
-# the job sits pending — see docs/routeros-chr-exercise.md.
+# No Docker anywhere in this job, and so no privileged runner and no
+# runner tag: #894 only exercises RouterOS command syntax, never
+# throughput, which is exactly what QEMU's software emulation (-accel
+# tcg) is for. TCG needs no /dev/kvm and no elevated privilege, so
+# scripts/routeros-chr-boot.sh runs qemu-system-x86_64 directly inside
+# this job's own container — installed below — on the same untagged
+# shared runner the rest of this file already uses. scripts/live-routeros.sh's
+# Docker path stays for local development, unused by this job — see
+# routeros-chr-boot.sh's header for why the two scripts are split.
 # ---------------------------------------------------------------------------
 
 chr-exercise:run:
   stage: chr-exercise
   image: golang:1.27
-  tags:
-    - image-build
-  services:
-    - docker:29-dind
-  variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule" && $CHR_EXERCISE == "true"'
   before_script:
-    - apt-get update -qq && apt-get install -y -qq docker.io python3 unzip curl >/dev/null
+    - apt-get update -qq && apt-get install -y -qq qemu-system-x86 qemu-utils python3 unzip curl >/dev/null
+    - command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "chr-exercise: qemu-system-x86_64 missing after installing qemu-system-x86 — cannot boot CHR"; exit 1; }
   script:
     - scripts/routeros-chr-exercise.sh
