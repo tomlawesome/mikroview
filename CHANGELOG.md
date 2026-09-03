@@ -18,6 +18,25 @@ rewritten.
 
 ### Added
 
+- **A weekly job exercises new RouterOS releases against a real CHR,
+  and opens a merge request when they still parse** (#894, follow-on
+  from #436). `scripts/routeroscommands` prints the setup wizard's
+  starting commands (CA trust, syslog, rule tagging) straight from
+  `internal/routeros` -- the same functions `POST /api/setup/commands`
+  renders from -- so this and the wizard can never quietly disagree.
+  A new GitLab CI job (`.gitlab-ci.yml`, `chr-exercise` stage, inert
+  until the owner creates its schedule) boots MikroTik's newest stable
+  CHR release under software-emulated QEMU (no `/dev/kvm` needed) and
+  runs those commands against it: red names the refused command; green
+  appends a `scripts/routerosappendrow`-generated row to
+  `internal/routeros/dialects.go`'s table (`verifiedBy: "exercised on
+  CHR <version>, <date>"`) with the console transcript, and opens a
+  GitLab merge request into `dev` -- never auto-merged, and never a
+  claim that the release notes were read: `ReviewedVersion`
+  (`internal/routeros/versions.go`) is left untouched, which leaves
+  `TestReviewedVersionMatchesNewest` deliberately red until a human
+  reads the release notes and bumps it in the same merge request. See
+  `docs/routeros-chr-exercise.md`.
 - **Tune logging** (#435): a new "Tune logging" page turns a dark
   connection -- one with no rule logging what crosses it -- into a
   watched one. Upload the router's `/export hide-sensitive`; once
