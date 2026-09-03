@@ -231,7 +231,7 @@ func oldestHeldJSON(t time.Time) any {
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.Store.Stats()
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"total":           stats.Total,
 		"byAction":        stats.ByAction,
 		"topRules":        stats.TopRules,
@@ -257,7 +257,22 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		// second poll), and it lands on the tier a viewer already has,
 		// which is what lets a viewer see the bar and the figure without
 		// a second access decision. See settings.go.
-		"memory":           s.storeSettings(),
+		"memory": s.storeSettings(),
+		// When this process started observing (#795). Always present:
+		// "counting since 13:18 -- nothing before" is the honest thing
+		// to say about a cold start, not an absence.
+		//
+		// Taken from the store rather than from a boot time of this
+		// package's own, because the store's liveSince is the same
+		// instant HourTops uses to cut restored minutes from live ones
+		// -- two clocks here would let the hourline and the statement
+		// above it disagree about which minutes this process saw.
+		//
+		// Formatted rather than handed over as a time.Time: an explicit
+		// RFC3339 in UTC is the contract the UI reads, and marshalling
+		// the value directly would put a nanosecond fraction on the wire
+		// whose precision means nothing here.
+		"liveSince":        stats.LiveSince.UTC().Format(time.RFC3339),
 		"connectedClients": s.Hub.ClientCount(),
 		// Syslog listener saturation. Included here rather than behind
 		// its own endpoint because the condition it reports -- mikroview
@@ -265,7 +280,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		// visible only as a repeated line in the container log, which
 		// means visible to nobody. See internal/syslog.ListenerStats.
 		"syslog": syslog.Stats(),
-	})
+	}
+	// When the snapshot these counters came from was taken (#795), and
+	// only then. Absent on a cold start rather than null: the key's
+	// presence is the whole question the UI asks -- "was this a warm
+	// restart" -- and a null would make every client write the same
+	// two-step check to answer it.
+	if stats.RestoredTo != nil {
+		body["restoredTo"] = stats.RestoredTo.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleStatsTops serves #644 round 21's top-port/top-talker table
