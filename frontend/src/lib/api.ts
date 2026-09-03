@@ -33,6 +33,10 @@ import type {
   SetupStatus,
   Suggestion,
   SuggestionStatus,
+  TuneLoggingAnalyseRequest,
+  TuneLoggingAnalyseResponse,
+  TuneLoggingRenderRequest,
+  TuneLoggingRenderResponse,
   UserSummary,
   Verdict,
   WatchlistEntry,
@@ -349,6 +353,13 @@ export interface RouterFilterRule {
   // "disabled". Counting enabled rules therefore tests `=== true`
   // rather than falsiness.
   disabled?: boolean
+  // packets/bytes (#435 decision 4, contract §1) are RouterOS's own
+  // counters for this rule -- kept whether or not it logs, which is what
+  // lets Tune logging show "fired N times" as the cost of switching
+  // logging on before it is switched on. Optional for the same reason as
+  // the fields above: a push predating #435 sends nothing.
+  packets?: number
+  bytes?: number
 }
 
 // The NAT record's full rule anatomy (#408) plus the operator-set
@@ -1237,4 +1248,42 @@ export async function replayDefinition(
   const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/replay`, { params })
   if (res.ok) return await res.json()
   return (await res.text()) || `replayDefinition: ${res.status}`
+}
+
+// ===========================================================================
+// Tune logging (#435)
+//
+// The upload never leaves this pair of calls: the export text is sent in
+// the request body and nothing else in this file ever holds onto it (see
+// TuneLogging.svelte's own doc comment for how the component honours
+// that). Both endpoints share the fixed contract's shape -- a `rejected`
+// reason is a *value* in a normal 200 response body (see the contract's
+// §3 sample, `"rejected": null // or {"reason": "..."}`), not a thrown
+// error, so callers read it off the response rather than a caught
+// ApiError. The `T | string` convention below is only for the request
+// itself failing (network, body-limit, a non-2xx the parser never got to
+// classify) -- the same convention fetchSetupCommands/markSetupStep use.
+// ===========================================================================
+
+export async function fetchTuneLoggingAnalyse(
+  req: TuneLoggingAnalyseRequest,
+): Promise<TuneLoggingAnalyseResponse | string> {
+  const res = await postJSON('/api/tune-logging/analyse', req)
+  if (res.ok) return res.json()
+  return (await res.text()) || `fetchTuneLoggingAnalyse: ${res.status}`
+}
+
+// fetchTuneLoggingRender asks for the same diff twice over: the
+// annotated export (download first, per the record) and the line-by-line
+// `set` commands, both derived from the same selected rule ids. A 500
+// here (the logging-only check failing server-side) is not expected to
+// happen -- see the contract §4 -- and is surfaced through the same
+// string-error path as any other failure rather than a dedicated shape,
+// since the frontend has no remedy for it beyond reporting it.
+export async function fetchTuneLoggingRender(
+  req: TuneLoggingRenderRequest,
+): Promise<TuneLoggingRenderResponse | string> {
+  const res = await postJSON('/api/tune-logging/render', req)
+  if (res.ok) return res.json()
+  return (await res.text()) || `fetchTuneLoggingRender: ${res.status}`
 }
