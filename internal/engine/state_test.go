@@ -99,6 +99,31 @@ func TestStateStoreDeleteDefinitionRemovesAllKeys(t *testing.T) {
 	}
 }
 
+// TestOpenStateStoreLoadsADocumentCarryingAVersionKey pins that removing
+// stateDocument.Version (#873) did not also break loading a document
+// that still has one on disk -- Go's JSON decoder ignores unknown
+// fields, so a file written by an older binary, or one hand-written with
+// a "version" key, must load exactly like one without it.
+func TestOpenStateStoreLoadsADocumentCarryingAVersionKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "engine-state.json")
+	data := `{"version":1,"definitions":{"port_scan":{"203.0.113.9":{"value":4.2,"samples":10}}}}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := OpenStateStore(path)
+	if err != nil {
+		t.Fatalf("OpenStateStore on a document carrying a version key: %v", err)
+	}
+	got, ok := s.Get("port_scan", "203.0.113.9")
+	if !ok {
+		t.Fatal("expected the persisted state to load despite the extra version key")
+	}
+	if got.Value != 4.2 || got.Samples != 10 {
+		t.Errorf("unexpected state: %+v", got)
+	}
+}
+
 // TestOpenStateStoreMalformedFileFailsClosed pins issue #378's policy
 // for this store too: a document that exists but cannot be parsed is
 // refused outright, not treated as empty.

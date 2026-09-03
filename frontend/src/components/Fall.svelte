@@ -53,18 +53,27 @@
   // as individual marks; the rest fold into "+n quieter".
   const MAX_CARRIERS = 8
 
-  // The following three surfaces are implemented and load-bearing (the
-  // data behind them is real), but the ratified round-30 mockup
-  // (docs/design/concepts/round-30/shots/fall.png, the-whole.html #s2)
-  // draws none of them anywhere on the fall -- an empty band is simply
-  // empty, a quiet carrier count folds silently, and the window range
-  // is not printed in the bottom-right corner. Round 30 builds to the
-  // mockup first (#700); each gap is tracked on #691 for a future round
-  // to remount. Do not delete these -- flip the relevant const and
-  // restore the markup below when #691 is picked up.
-  const EMPTY_BAND_CAPTION_ENABLED: boolean = false
-  const QUIETER_COUNT_ENABLED: boolean = false
+  // Round 36 (#801) gives two of round 30's three unmounted surfaces a
+  // home, in the words the drawing itself uses
+  // (docs/design/concepts/round-38/the-whole.html #s2, shots/fall.png):
+  // an empty-but-logged band now states "quiet, not dark" rather than
+  // drawing nothing, and a folded carrier count now prints
+  // "+n quieter ▸" beneath the band's port labels. Both were live logic
+  // already; only their markup was gated off.
+  //
+  // The third stays gated, and deliberately so. Round 36's README rules
+  // the window *range* out for good -- "The range itself is already the
+  // time gutter; 'newest at the top' is documentation" -- so the
+  // bottom-right caption is not being remounted. What round 36 does draw
+  // is the narrower fact underneath it, that the window was truncated at
+  // all, and that is the window-cap chip in the fall's head below, not
+  // this caption.
   const WINDOW_RANGE_CAPTION_ENABLED: boolean = false
+
+  // The fall's own event budget, and the number the window-cap chip
+  // states. Named rather than written into the fetch below so the chip
+  // can never claim a different figure from the one actually asked for.
+  const WINDOW_LIMIT = 5000
 
   // ── The mockup's own geometry, in its own units ─────────────────────
   const RAIL = 76 // left time rail width
@@ -74,6 +83,13 @@
   const FALL_TOP = 196 // the fall's top edge
   const FALL_BOT = 760 // the fall's floor
   const PORTLAB_Y = 775 // port labels under the floor
+  // The quieter count sits below the port labels, not in the fall (#801).
+  // The drawing's own gap: port labels 10 units under its floor, the
+  // "+n quieter ▸" a further 16 under those (the-whole.html #s2, y=558
+  // and y=574 over a floor at 548). This rig's floor-to-port-label gap is
+  // 15 rather than 10, so the same proportion puts it 16 lower again,
+  // still clear of RIG_H below.
+  const QUIETER_Y = PORTLAB_Y + 16
   const RIG_H = 800
   const DASH_W = 2.4 // a carrier dash's width — thin, never a fill
   const HIT_W = 14 // a carrier's invisible click/focus target width
@@ -145,7 +161,7 @@
       .then((r) => (flags = r.flags))
       .catch(() => {})
     try {
-      const res = await fetchEventsWindow({ since: new Date(start).toISOString(), limit: 5000 })
+      const res = await fetchEventsWindow({ since: new Date(start).toISOString(), limit: WINDOW_LIMIT })
       const receivedAt = Date.now()
       windowEvents = res.events.map((e) => ({ ...e, receivedAt }))
       windowHasMore = res.hasMore
@@ -927,6 +943,19 @@
         <i></i>{darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
       </button>
     {/if}
+    <!-- The window cap (#801, round 36 item 6.1): the third chip in the
+         fall's head, dim, and present only when the window really does
+         hold more than the fall was handed -- `windowHasMore` is the
+         server's own answer to that, not a guess from the event count.
+         A statement, not a control: there is nowhere for it to lead
+         (the span pills are how you ask for a different window), so it
+         is a span among the buttons, exactly as the drawing writes it
+         (`<span class="fall-chip fc-dim">`, the-whole.html #s2). -->
+    {#if windowHasMore}
+      <span class="att dim">
+        <i></i>the most recent {WINDOW_LIMIT.toLocaleString()} events — this window holds more
+      </span>
+    {/if}
   </span>
 
   {#if fallState.loading}
@@ -1063,8 +1092,30 @@
                 <!-- Round 30 reads a quiet-but-covered band the same as
                      a busy one: the watch holds either way (README
                      "quiet is a fact, not a fault") -- there is no
-                     separate QUIET caption. -->
-                <text class="chip ch-ok band-caption ok" x={slot.bx + 6} y="50">WATCH HOLDING ✓</text>
+                     separate QUIET caption.
+                     The words are round 36's, chosen by the owner over
+                     round 30's "WATCH HOLDING ✓" (#790, #801): "watched
+                     in green says everything we need". No tick -- the
+                     ink carries the verdict, and every sibling caption
+                     on this line ("✱ NEW CARRIER", "DARK — NO LOG RULE",
+                     "NOT IN A PUSHED TABLE") is a plain statement too.
+
+                     The drawing's other half of this pair, "WATCH
+                     BROKEN" in the alarm ink, is deliberately NOT built
+                     here, and #790 asked for exactly that answer rather
+                     than an invented one. Nothing in mikroview can say
+                     which *boundary* a broken watcher belongs to: a
+                     watchlist entry scopes to a source identity (MAC or
+                     IP), a destination, ports and an address list --
+                     it carries no chain/inInterface/outInterface, and
+                     internal/engine/coverage.go never reads those off a
+                     rule either, so 'no-logging' coverage is a statement
+                     about the whole estate rather than about one band.
+                     Printing it on a band would attribute an estate-wide
+                     fact to one boundary that may be logging perfectly
+                     well -- the same class of dishonesty #737 fixed. The
+                     capability gap is tracked; see the PR body. -->
+                <text class="chip ch-ok band-caption ok" x={slot.bx + 6} y="50">WATCHED</text>
               {/if}
               <rect x={slot.bx} y="56" width={bandW} height="3" rx="1.5" fill={slot.laneColor} />
             </g>
@@ -1151,20 +1202,46 @@
                     {/if}
                   {/each}
                 {/each}
-                {#if QUIETER_COUNT_ENABLED && b.quieterCount > 0}
+                <!-- The quieter count (#801, round 36 item 6.1): beneath
+                     the band's own port labels, not inside the fall --
+                     the drawing puts it below the foot (`.quieter` at
+                     y=574 under port labels at y=558, the-whole.html
+                     #s2), where it reads as one more of that band's
+                     names rather than a mark in the traffic. The "▸" is
+                     the drawing's own: this is the way into the stream
+                     for the ports too quiet to draw. -->
+                {#if b.quieterCount > 0}
                   <text
                     class="quieter"
                     role="button"
                     tabindex="0"
                     aria-label="{b.quieterCount} quieter port{b.quieterCount === 1 ? '' : 's'} on {b.label}, folded out of the individual carriers above. Activate to open the whole boundary in Stream."
                     x={slot.bx + bandW / 2}
-                    y={FALL_BOT - 8}
+                    y={QUIETER_Y}
                     text-anchor="middle"
                     onclick={() => openInStream(b)}
-                    onkeydown={(e) => keyActivate(e, () => openInStream(b))}>+{b.quieterCount} quieter</text>
+                    onkeydown={(e) => keyActivate(e, () => openInStream(b))}>+{b.quieterCount} quieter ▸</text>
                 {/if}
-                {#if EMPTY_BAND_CAPTION_ENABLED && b.carriers.length === 0 && b.total === 0}
-                  <text class="anno" x={slot.bx + bandW / 2} y="420" text-anchor="middle">no traffic in this window</text>
+                <!-- The empty band's quiet statement (#801, round 36
+                     item 6.1): a band that logs and caught nothing says
+                     so, rather than leaving a blank column that reads
+                     exactly like the dark one beside it. In `.anno`'s
+                     ink-3 and never `bad-anno`'s red -- round 36: "quiet
+                     is a fact, not a fault".
+                     Only ever on an *observed* band, because that is the
+                     whole claim: "logged — quiet, not dark" rests on a
+                     pushed rule that really does log this boundary. An
+                     unknown-coverage band has no such rule to point at,
+                     so it says nothing instead of guessing, the same
+                     rule lib/fall.svelte.ts's coverage answer follows.
+                     The span is the live one, not the drawing's fixed
+                     "15 m": the sentence counts the window it is drawn
+                     over. -->
+                {#if b.coverage === 'observed' && b.total === 0 && b.carriers.length === 0}
+                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y="420" text-anchor="middle"
+                    >nothing in these {spanDef.label}</text>
+                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y="434" text-anchor="middle"
+                    >logged — quiet, not dark</text>
                 {/if}
               {/if}
             </g>
@@ -1392,6 +1469,15 @@
   .att.dark i {
     background: transparent;
     border: 1px solid var(--o-drop);
+  }
+  /* The window-cap chip (#801): the drawing's `.fc-dim` -- ink-2 text on
+     the hairline border `.att` already carries, and the same hollow "○"
+     the dark chip draws, in its own ink rather than the alarm's. `.att`
+     is already ink-2 and already bordered, so this rule is only the
+     circle. */
+  .att.dim i {
+    background: transparent;
+    border: 1px solid currentColor;
   }
 
   .state-msg {
@@ -1643,13 +1729,16 @@
     stroke-width: 1;
   }
 
+  /* The drawing's own `.quieter` (the-whole.html #s2): ink-3 at rest,
+     the accent under the hand -- the same ink its focus ring already
+     used here, so hover and keyboard focus now answer alike. */
   .quieter {
     fill: var(--o-ink3);
     font-size: 10.5px;
     cursor: pointer;
   }
   .quieter:hover {
-    fill: var(--o-ink);
+    fill: var(--accent);
   }
   .quieter:focus-visible {
     outline: none;

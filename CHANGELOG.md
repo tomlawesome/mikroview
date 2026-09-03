@@ -643,6 +643,15 @@ rewritten.
   (#378), so an instance still holding one refuses to start until that
   stale `rule-usage.json` is deleted.
 
+- **A stored definition whose `kind` or `intent` this binary does not
+  recognize is now a hard startup failure** (#873), naming the offending
+  definition and its unrecognized value. It was previously preserved
+  unevaluated rather than dropped -- the case a downgrade, or a shipped
+  definition since retired, could produce. Pre-1.0 with no user base,
+  downgrade is not a supported operation: delete the named definition
+  (its data stays on disk until you do), or restore the binary that
+  wrote it.
+
 - **`watchlist.storePath` and `flags.detectorSettingsStorePath` are
   gone, with the boot-time migration that read them** (config keys,
   `MIKROVIEW_WATCHLIST_STORE_PATH` and
