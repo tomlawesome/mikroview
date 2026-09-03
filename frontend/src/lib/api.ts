@@ -25,6 +25,8 @@ import type {
   ReplayResult,
   ReputationResult,
   RuleUsage,
+  SetupCommandsRequest,
+  SetupCommandsResponse,
   Stats,
   StoreMemory,
   SetupMark,
@@ -1060,6 +1062,21 @@ export async function fetchPersistence(): Promise<PersistenceInfo> {
   const res = await fetch('/api/persistence')
   if (!res.ok) throw new ApiError(`fetchPersistence: ${res.status}`, res.status)
   return res.json()
+}
+
+// fetchSetupCommands renders the wizard's RouterOS command blocks
+// server-side (#436) -- selected by the row covering the router's
+// version (derived or picked), so the client never re-derives which
+// dialect applies. address is the only required field; the rest are
+// omitted rather than sent empty (kinds/token before step 4 has
+// anything to embed, version before one is known), matching what
+// JSON.stringify already does with `undefined` properties.
+export async function fetchSetupCommands(
+  req: SetupCommandsRequest,
+): Promise<SetupCommandsResponse | string> {
+  const res = await postJSON('/api/setup/commands', req)
+  if (res.ok) return res.json()
+  return (await res.text()) || `fetchSetupCommands: ${res.status}`
 }
 
 // markSetupStep records that a setup step was skipped or forced past
