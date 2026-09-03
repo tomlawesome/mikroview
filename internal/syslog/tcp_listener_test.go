@@ -5,10 +5,12 @@ package syslog
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -628,6 +630,16 @@ func TestTCPBurstSplitsOnRFC3164Headers(t *testing.T) {
 // ordinary TCP/TLS segmentation, not a burst -- must not corrupt the
 // message still accumulating in front of it, and must not be mistaken
 // for a boundary until it is actually complete.
+//
+// This is the test that flaked on the GitLab runner in #914. The 50ms
+// pause below is deliberately shorter than tcpQuiescence, but on a
+// loaded host the listener's own read could land late enough for
+// quiescence to expire inside it -- and quiescence then flushed the
+// partial header along with the message in front of it. It no longer
+// matters which way that lands: rfc3164HeaderStillArriving makes the
+// assertion hold whether quiescence fires during the pause or not. The
+// version that does not depend on timing at all is
+// TestTCPMessageEndsBeforeAPartiallyArrivedHeader, below.
 func TestTCPHeaderSplitAcrossReadsDoesNotSplitMidHeader(t *testing.T) {
 	out := make(chan RawMessage, 8)
 	addr, stop := serveTCPForTest(t, out)
@@ -821,5 +833,243 @@ func TestTCPHeaderSplitRejectsBogusMonth(t *testing.T) {
 	case extra := <-out:
 		t.Errorf("expected exactly one message, got a second: %q", extra.Data)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// --- #914: a header still arriving must not end the message before it ----
+
+// scriptTimeout is the error a net.Conn returns when a read deadline
+// expires. handleTCPConn tells it apart from a real error by the
+// net.Error interface alone, so this is all a fake connection needs in
+// order to stand in for tcpQuiescence (or the idle timeout) elapsing.
+type scriptTimeout struct{}
+
+func (scriptTimeout) Error() string   { return "i/o timeout" }
+func (scriptTimeout) Timeout() bool   { return true }
+func (scriptTimeout) Temporary() bool { return true }
+
+// scriptStep is one Read outcome: either bytes handed to the read loop,
+// or the error that read returns instead of bytes.
+type scriptStep struct {
+	data []byte
+	err  error
+}
+
+// scriptedConn is a net.Conn whose reads are a fixed script, so a
+// framing test can state exactly where the read boundaries and the
+// deadline expiries fall instead of trying to provoke them with sleeps
+// over a real socket.
+//
+// That distinction is the whole of #914. The defect only shows when
+// tcpQuiescence expires *between* two segments of one message, and over
+// a real socket whether that happens depends on how loaded the machine
+// is -- it reproduced on the GitLab runner and never once on GitHub.
+// Driven from a script it reproduces everywhere, every time.
+type scriptedConn struct {
+	mu     sync.Mutex
+	steps  []scriptStep
+	closed bool
+}
+
+func (c *scriptedConn) Read(b []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || len(c.steps) == 0 {
+		return 0, io.EOF
+	}
+	step := c.steps[0]
+	c.steps = c.steps[1:]
+	if step.err != nil {
+		return 0, step.err
+	}
+	return copy(b, step.data), nil
+}
+
+func (c *scriptedConn) Write(b []byte) (int, error) { return len(b), nil }
+
+func (c *scriptedConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	return nil
+}
+
+func (c *scriptedConn) LocalAddr() net.Addr  { return scriptAddr("192.0.2.1:514") }
+func (c *scriptedConn) RemoteAddr() net.Addr { return scriptAddr("192.0.2.10:41234") }
+
+func (c *scriptedConn) SetDeadline(time.Time) error      { return nil }
+func (c *scriptedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *scriptedConn) SetWriteDeadline(time.Time) error { return nil }
+
+type scriptAddr string
+
+func (scriptAddr) Network() string  { return "tcp" }
+func (a scriptAddr) String() string { return string(a) }
+
+// runScriptedConn drives handleTCPConn to completion over a scripted
+// connection and returns every message it emitted, in order.
+func runScriptedConn(t *testing.T, steps ...scriptStep) []string {
+	t.Helper()
+	out := make(chan RawMessage, 32)
+	handleTCPConn(context.Background(), &scriptedConn{steps: steps}, out)
+	close(out)
+	var got []string
+	for m := range out {
+		got = append(got, string(m.Data))
+	}
+	return got
+}
+
+// TestTCPMessageEndsBeforeAPartiallyArrivedHeader is the #914 regression
+// test, and the deterministic form of the flake reported there: two
+// RouterOS syslog-format messages where the network splits the second
+// message's own RFC3164 header, and the gap between the two segments
+// outlasts tcpQuiescence -- an ordinary TCP retransmit, or (as on the
+// GitLab runner) a read loop that simply did not get scheduled in time.
+//
+// The table walks that split through every byte of the header, from the
+// message boundary itself to the header's final byte, because the
+// defect is invisible at all but a handful of offsets: only a split
+// that leaves *part* of a header sitting in pending exposes it.
+//
+// What must hold at every offset is that the first message is delivered
+// exactly as it was sent. Before the fix it was delivered with a
+// fragment of the next message's header glued onto its end, because the
+// quiescence flush emptied pending wholesale without asking whether the
+// bytes at the end of it were a header that had not finished arriving.
+//
+// The walk stops at the end of the header rather than running on into
+// the body: a header is the only part of a message whose incompleteness
+// is visible in the bytes themselves, so it is the only part quiescence
+// can be taught to wait for. A split inside a message *body* is, and
+// remains, indistinguishable from a message that simply ended there.
+func TestTCPMessageEndsBeforeAPartiallyArrivedHeader(t *testing.T) {
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	second := rfc3164Msg(base.Add(time.Second), "A|lan-wan| forward: second message")
+	whole := first + second
+
+	// The bytes rfc3164HeaderLen recognises: "<PRI>" plus the BSD
+	// timestamp. Everything past it -- hostname, body -- is message.
+	header := "<30>" + base.Add(time.Second).Format(bsdTimeLayout)
+
+	for cut := 0; cut <= len(header); cut++ {
+		t.Run(fmt.Sprintf("%02d_header_bytes_arrive_early", cut), func(t *testing.T) {
+			at := len(first) + cut
+			got := runScriptedConn(t,
+				scriptStep{data: []byte(whole[:at])},
+				// tcpQuiescence expires with the second message's
+				// header only partly present.
+				scriptStep{err: scriptTimeout{}},
+				scriptStep{data: []byte(whole[at:])},
+				// And again, now with one whole message pending and
+				// nothing following it -- the ordinary bare-message
+				// resolution tcpQuiescence exists for.
+				scriptStep{err: scriptTimeout{}},
+				scriptStep{err: io.EOF},
+			)
+
+			want := []string{first, second}
+			if len(got) != len(want) {
+				t.Fatalf("got %d messages, want %d:\n\t%q", len(got), len(want), got)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Errorf("message %d =\n\t%q\nwant\n\t%q", i, got[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestRFC3164HeaderStillArriving pins both sides of the #914 wait
+// condition, because both sides cost something. Holding a message that
+// really had ended delays a live view for tcpHeaderCompletionWindow;
+// flushing one that had not corrupts a record. The "arriving" cases are
+// what the fix has to catch; the "ended" cases are ordinary RouterOS
+// log lines, which must still resolve on quiescence as fast as they
+// always did.
+func TestRFC3164HeaderStillArriving(t *testing.T) {
+	arriving := []string{
+		// A header with no message behind it yet.
+		"<30>Aug 29 20:52:44",
+		// The PRI itself, part-way through.
+		"a whole message<",
+		"a whole message<3",
+		"a whole message<30",
+		"a whole message<30>",
+		// The timestamp, part-way through.
+		"a whole message<30>A",
+		"a whole message<30>Au",
+		"a whole message<30>Aug",
+		"a whole message<30>Aug 2",
+		"a whole message<30>Aug 29 20:52:4",
+		// A bare header, no PRI, once its month is decidable.
+		"a whole message Aug 29 20:5",
+	}
+	for _, s := range arriving {
+		if !rfc3164HeaderStillArriving([]byte(s)) {
+			t.Errorf("flushed while a header was still arriving: %q", s)
+		}
+	}
+
+	ended := []string{
+		"",
+		"firewall,info forward: in:ether1 out:ether2, proto TCP (SYN), 192.168.88.10:52344->142.250.187.238:443, len 60",
+		"dhcp,info dhcp1 assigned 192.168.88.253 to A8:A1:59:3B:0C:5A",
+		"system,info,account user admin logged in from 192.168.88.2 via winbox",
+		"<30>Aug 29 20:52:44 CHR A|live-in| input: first message",
+		"interface,info ether1 link up (speed 1G, full duplex)",
+		"firewall,info drop: proto ICMP, type 8, code 0, len 84",
+		// A capital letter, or a capitalised word, at the very end of a
+		// body: common enough that a bare header must show its whole
+		// month abbreviation before it counts as evidence of anything.
+		"wireless,info connected to AP",
+		"pppoe,info authenticated user Bob",
+		"script,info finished run X",
+		// PRI-shaped text that no legal PRI could extend to.
+		"a whole message<1999",
+		"a whole message<9x",
+		// A month that time.Parse rejects.
+		"a whole message<30>Xxx 29 20:5",
+	}
+	for _, s := range ended {
+		if rfc3164HeaderStillArriving([]byte(s)) {
+			t.Errorf("held back a message that had ended: %q", s)
+		}
+	}
+}
+
+// TestTCPHeaderThatNeverArrivesIsNotWaitedForForever records the
+// residual the #914 fix deliberately leaves, so it is a decision on
+// record rather than a gap nobody noticed.
+//
+// The wait is bounded: if the rest of the header never turns up, the
+// next timeout flushes pending exactly as the code always did, header
+// fragment and all. That case is a sender that wrote the start of a
+// header and then stopped -- a torn connection, not a message boundary
+// -- so there is no following message to protect, and the only cost is
+// that the last thing delivered off a dying connection is untidy. What
+// #914 was about is the case where the rest *does* arrive, which the
+// table test above covers; this only proves the wait cannot be used to
+// hold a connection open indefinitely by dribbling half a header.
+func TestTCPHeaderThatNeverArrivesIsNotWaitedForForever(t *testing.T) {
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	stump := "<30>Aug 29 20:52:4"
+
+	got := runScriptedConn(t,
+		scriptStep{data: []byte(first + stump)},
+		// tcpQuiescence expires: the header is still arriving, so wait.
+		scriptStep{err: scriptTimeout{}},
+		// tcpHeaderCompletionWindow expires too. Nothing more is
+		// coming; stop waiting and hand up what there is.
+		scriptStep{err: scriptTimeout{}},
+		scriptStep{err: io.EOF},
+	)
+
+	want := []string{first + stump}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
