@@ -4,11 +4,14 @@
 // under lib/city; this covers what only the component does -- names on
 // every district and building, the keyboard walk, and the camera
 // landing at once when the reader asked for reduced motion.
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
 import { layoutGround } from '../lib/city/layout'
+import { cityImportanceState } from '../lib/cityImportance.svelte'
+import { flagsState } from '../lib/flags.svelte'
+import { watchlistState } from '../lib/watchlist.svelte'
 import City from './City.svelte'
 
 const ground = layoutGround(mockupEstate())
@@ -118,5 +121,54 @@ describe('City', () => {
     quiet.unmount()
     const lit = render(City, { props: { stop: 'district', ground, lens: 'policy' } })
     expect(lit.container.querySelectorAll('.gate-n').length).toBeGreaterThan(0)
+  })
+})
+
+describe('the importance toggle (#867)', () => {
+  beforeEach(() => {
+    cityImportanceState.set('depended-on')
+    flagsState.loaded = false
+    watchlistState.loaded = false
+  })
+
+  it('only appears at the city stop, as a real button so it is in the tab order and Enter/Space already activate it', () => {
+    const district = render(City, { props: { stop: 'district', ground } })
+    expect(district.container.querySelector('.importance .reading')).toBeNull()
+    district.unmount()
+
+    const { container } = render(City, { props: { stop: 'city', ground } })
+    const btn = container.querySelector('.importance .reading')
+    expect(btn?.tagName).toBe('BUTTON')
+    expect(btn?.getAttribute('tabindex')).not.toBe('-1')
+  })
+
+  it('states the current reading in its own text and aria, not just a pressed style, and switches when activated', async () => {
+    const { container } = render(City, { props: { stop: 'city', ground } })
+    const btn = container.querySelector('.importance .reading') as HTMLButtonElement
+    expect(btn.textContent).toContain('depended-on')
+    expect(btn.getAttribute('aria-label')).toContain('depended-on')
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+
+    await fireEvent.click(btn)
+    await tick()
+    expect(cityImportanceState.reading).toBe('watched')
+    expect(btn.textContent).toContain('watched')
+    expect(btn.getAttribute('aria-label')).toContain('watched')
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+
+    await fireEvent.click(btn)
+    await tick()
+    expect(cityImportanceState.reading).toBe('depended-on')
+  })
+
+  it('says plainly that the watched reading is not yet known while the flags/watchlist stores have not loaded, and stops saying so once they have', async () => {
+    cityImportanceState.set('watched')
+    const { container } = render(City, { props: { stop: 'city', ground } })
+    expect(container.querySelector('.importance .notice')?.textContent).toMatch(/not loaded yet/)
+
+    flagsState.loaded = true
+    watchlistState.loaded = true
+    await tick()
+    expect(container.querySelector('.importance .notice')).toBeNull()
   })
 })

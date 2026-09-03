@@ -55,7 +55,16 @@
   import { deviceKindFor } from '../lib/city/deviceKind'
   import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
   import { faceOf, wallPiece, wallSegments, type WallBreak } from '../lib/city/walls'
-  import { IMPORTANCE_FLOOR_H, dependedOnImportance, tweenHeights, watchedImportance, type Importance } from '../lib/city/importance'
+  import {
+    IMPORTANCE_FLOOR_H,
+    IMPORTANCE_READINGS,
+    dependedOnImportance,
+    tweenHeights,
+    watchedImportance,
+    watchedNotice,
+    type Importance,
+    type ImportanceReading,
+  } from '../lib/city/importance'
   import { cityImportanceState } from '../lib/cityImportance.svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { flagsState } from '../lib/flags.svelte'
@@ -202,6 +211,8 @@
       : dependedOnImportance(buildings, appState.events)
   })
 
+  const importanceNotice = $derived(cityImportanceState.reading === 'watched' ? watchedNotice(flagsState.loaded, watchlistState.loaded) : null)
+
   // The plinth heights actually drawn: tweened toward `importance`'s
   // target on every change (a toggle flip, new traffic, a flag raised),
   // snapped instantly under reduced motion -- the same shape moveCamera
@@ -237,6 +248,9 @@
   /** The plinth height actually drawn for a building: its tweened
    * importance, or the floor before the first tween has run. */
   const heightOf = (b: Building): number => plinthHeights.get(b.id) ?? IMPORTANCE_FLOOR_H
+
+  const importanceLabel = (id: ImportanceReading) => IMPORTANCE_READINGS.find((r) => r.id === id)!.label
+  const otherReading = $derived<ImportanceReading>(cityImportanceState.reading === 'watched' ? 'depended-on' : 'watched')
 
   /* ---------------- pan: drag, keys, minimap ---------------- */
 
@@ -935,6 +949,28 @@
     </g>
   </svg>
 
+  {#if stop === 'city'}
+    <!-- Height = importance (#867): which reading sets a building's
+         plinth height, at the one stop that shows the whole skyline.
+         The button's own text states the current reading outright,
+         never only a pressed style, so it reads the same to a screen
+         reader as it does by eye. -->
+    <div class="importance">
+      <button
+        type="button"
+        class="reading"
+        aria-pressed={cityImportanceState.reading === 'watched'}
+        aria-label="Plinth height reads {importanceLabel(cityImportanceState.reading)}. Activate to switch to {otherReading}."
+        onclick={() => cityImportanceState.toggle()}
+      >
+        height: {importanceLabel(cityImportanceState.reading)}
+      </button>
+      {#if importanceNotice}
+        <p class="notice">{importanceNotice}</p>
+      {/if}
+    </div>
+  {/if}
+
   <div class="mini" aria-label="Minimap: the viewport is one part of a much larger map">
     <h4>ESTATE MAP</h4>
     <button type="button" class="look" aria-label="Look there: click a place on the estate map to centre on it" onclick={onMinimapClick}>
@@ -1150,6 +1186,47 @@
     margin-top: 5px;
     display: flex;
     justify-content: space-between;
+  }
+
+  .importance {
+    position: absolute;
+    z-index: 8;
+    left: 20px;
+    top: 58px;
+    max-width: 220px;
+    padding: 8px 9px;
+    background: var(--glass);
+    border: 1px solid var(--hair-2);
+    border-radius: 9px;
+    backdrop-filter: blur(7px);
+    box-sizing: border-box;
+  }
+
+  .importance .reading {
+    font: 600 11px var(--font-mono);
+    letter-spacing: 0.02em;
+    color: var(--fg);
+    background: rgba(157, 184, 232, 0.08);
+    border: 1px solid var(--hair-2);
+    border-radius: 6px;
+    padding: 5px 9px;
+    cursor: pointer;
+  }
+
+  .importance .reading[aria-pressed='true'] {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .importance .reading:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .importance .notice {
+    font: 9px var(--font-mono);
+    color: var(--fg-dim);
+    margin: 6px 0 0;
   }
 
   .sbar {
