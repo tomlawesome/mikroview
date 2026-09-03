@@ -823,3 +823,83 @@ func newTestDefinitionsStore(t *testing.T) *engine.DefinitionsStore {
 	}
 	return defs
 }
+
+// GET /api/stats always says when this process started observing, and
+// says when the counters were restored from only if they were (#795).
+//
+// The two shapes are what the hourline's last fact and the docket's
+// clear-all chip read to choose between "restored to 13:14 · live since
+// 13:18" and "counting since 13:18 -- nothing before". A cold start
+// omits restoredTo entirely rather than sending null: the key's presence
+// is the question being asked, and a null would make every client write
+// the same two-step check.
+func TestHandleStatsColdStartOmitsRestoredTo(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	body := getStats(t, ts.URL)
+	if _, present := body["restoredTo"]; present {
+		t.Errorf("restoredTo = %v on a cold start, want the key absent", body["restoredTo"])
+	}
+	live, ok := body["liveSince"].(string)
+	if !ok {
+		t.Fatalf("liveSince = %v (%T), want an RFC3339 string on every start, warm or cold", body["liveSince"], body["liveSince"])
+	}
+	if _, err := time.Parse(time.RFC3339, live); err != nil {
+		t.Errorf("liveSince %q is not RFC3339: %v", live, err)
+	}
+	if !strings.HasSuffix(live, "Z") {
+		t.Errorf("liveSince = %q, want UTC so the client is not left to guess the offset", live)
+	}
+}
+
+func TestHandleStatsWarmRestartReportsRestoredTo(t *testing.T) {
+	s, st := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	taken := time.Now().Add(-3 * time.Minute).UTC().Truncate(time.Second)
+	if err := st.SnapshotPart().Import(json.RawMessage(`{"total":7}`), taken, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getStats(t, ts.URL)
+	restored, ok := body["restoredTo"].(string)
+	if !ok {
+		t.Fatalf("restoredTo = %v (%T), want the snapshot's taken time as an RFC3339 string", body["restoredTo"], body["restoredTo"])
+	}
+	if restored != taken.Format(time.RFC3339) {
+		t.Errorf("restoredTo = %q, want the snapshot's own taken time %q", restored, taken.Format(time.RFC3339))
+	}
+	live, ok := body["liveSince"].(string)
+	if !ok {
+		t.Fatalf("liveSince = %v, want it present on a warm restart too -- the UI shows both", body["liveSince"])
+	}
+	// The pair only means anything in this order: the snapshot was taken
+	// before the process that loaded it started.
+	liveAt, err := time.Parse(time.RFC3339, live)
+	if err != nil {
+		t.Fatalf("liveSince %q is not RFC3339: %v", live, err)
+	}
+	if !taken.Before(liveAt) {
+		t.Errorf("restoredTo %s is not before liveSince %s, so the UI would report the future as restored", restored, live)
+	}
+}
+
+func getStats(t *testing.T, base string) map[string]any {
+	t.Helper()
+	resp, err := http.Get(base + "/api/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}

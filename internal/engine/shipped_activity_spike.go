@@ -111,12 +111,16 @@ type activitySpikeDefinition struct {
 
 // activitySpikeSourceState is one source's freeze/day bookkeeping -- the
 // state that is not itself a Baseline. Mirrors offHoursDay
-// (shipped_off_hours.go) in kind and, deliberately, in persistence: it
-// is Keyed in-memory bookkeeping only, never handed to the StateStore.
-// See buildActivitySpikeDefinition's doc comment on persistence for why
-// that split (baselines persisted, bespoke bookkeeping not) is this
-// package's existing convention rather than something invented for this
-// redesign.
+// (shipped_off_hours.go) in kind and in how it is carried: never handed
+// to the StateStore, which holds baselines and nothing else, but no
+// longer lost on restart either.
+//
+// It used to be lost. Issue #795 (owner, 2026-09-02) is the decision
+// that revisited that: this state now survives a restart through the
+// periodic snapshot, separate from the StateStore -- see this
+// definition's ExportState/ImportState in shipped_export.go, and that
+// file's doc comment for what a restored day is and is not allowed to
+// mean.
 type activitySpikeSourceState struct {
 	// hourDay/hourPeak track, per hour-of-day, which calendar day is
 	// currently accumulating for that hour and the peak windowed rate
