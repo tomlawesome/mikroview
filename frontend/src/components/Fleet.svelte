@@ -40,7 +40,7 @@
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { formatRelative } from '../lib/format'
-  import { deviceState, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
   import GhostRows from './GhostRows.svelte'
 
   const rows = $derived(sortedDevices(appState.devices))
@@ -111,6 +111,12 @@
                 <div class="frow dim">
                   last heard {formatRelative(d.lastSeen, appState.now)} — quiet is a fact, not a fault
                 </div>
+              {/if}
+              {#if multihomedEcho(d)}
+                <!-- The source-address split's echo (#442): the wizard's
+                     step 2 owns the diagnosis and the command; this card
+                     only says the pair is visible and where the fix is. -->
+                <div class="frow dim">{multihomedEcho(d)}</div>
               {/if}
               {#if d.sourceIp}
                 <div class="frow dim">syslog from <span class="mono">{d.sourceIp}</span></div>

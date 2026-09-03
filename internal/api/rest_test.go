@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -305,6 +306,79 @@ func TestHandleDevicesReportsStatus(t *testing.T) {
 	}
 }
 
+// TestHandleDevicesReportsMultihomedCandidates covers #442's operator
+// half through the real handler: a configured device that has received
+// nothing while undeclared devices stream carries their source
+// addresses, so the wizard's step 2 and the fleet cards can say "you
+// declared X, but logs arrive from Y" without re-deriving the pairing.
+// The field is candidates, not a diagnosis: every arriving address is
+// listed, and it is absent from every other device.
+func TestHandleDevicesReportsMultihomedCandidates(t *testing.T) {
+	s, _ := newTestServer(t)
+	// newTestServer's "core" device (192.168.1.1) is configured and
+	// silent; two undeclared sources are streaming.
+	s.Devices.Resolve("10.0.30.1", time.Now())
+	s.Devices.Resolve("10.0.20.1", time.Now())
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Devices []struct {
+			ID         string   `json:"id"`
+			Candidates []string `json:"multihomedCandidates"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string][]string{}
+	for _, d := range body.Devices {
+		byID[d.ID] = d.Candidates
+	}
+	if got := byID["core"]; len(got) != 2 || got[0] != "10.0.20.1" || got[1] != "10.0.30.1" {
+		t.Errorf("expected core to carry both arriving addresses in id order, got %v", got)
+	}
+	for _, id := range []string{"10.0.20.1", "10.0.30.1"} {
+		if byID[id] != nil {
+			t.Errorf("expected undeclared %s to carry no candidates, got %v", id, byID[id])
+		}
+	}
+}
+
+// TestHandleDevicesOmitsMultihomedCandidatesOnceDeclaredDeviceSpeaks
+// guards the notice clearing itself: once the declared device receives
+// its own traffic there is no silent declared side, so nothing is paired
+// even though an undeclared device is still streaming.
+func TestHandleDevicesOmitsMultihomedCandidatesOnceDeclaredDeviceSpeaks(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Devices.Resolve("192.168.1.1", time.Now())
+	s.Devices.Resolve("10.0.20.1", time.Now())
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "multihomedCandidates") {
+		t.Errorf("expected no multihomedCandidates field once the declared device has traffic, got %s", raw)
+	}
+}
+
 // TestHandleDevicesReportsRouterOSVersion covers issue #675's router
 // cards, which need "RouterOS 7.20.1" alongside the device's status: the
 // version comes from RouterState (a routerstate push), not from Devices
@@ -497,6 +571,11 @@ func TestDeviceStatus(t *testing.T) {
 // source: GET /api/rules must serve every rule label internal/rules.Store
 // has ever seen fire (via Touch), not just what's currently loaded --
 // mirroring TestHandleDevices' shape for the analogous device endpoint.
+// It also covers issue #701's honesty bound: the response must carry
+// recordingSince, matching what the underlying rules.Store reports, so
+// a client can bound an "active rules" claim by the window mikroview
+// actually recorded rather than a fixed seven days it may not have
+// seen.
 func TestHandleRules(t *testing.T) {
 	s, _ := newTestServer(t)
 	now := time.Now()
@@ -514,7 +593,8 @@ func TestHandleRules(t *testing.T) {
 	defer resp.Body.Close()
 
 	var body struct {
-		Rules []rules.Usage `json:"rules"`
+		Rules          []rules.Usage `json:"rules"`
+		RecordingSince time.Time     `json:"recordingSince"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
@@ -531,6 +611,23 @@ func TestHandleRules(t *testing.T) {
 	}
 	if byRule["r99"].Count != 1 {
 		t.Errorf("expected r99's count = 1, got %d", byRule["r99"].Count)
+	}
+	if !body.RecordingSince.Equal(s.Rules.RecordingSince()) {
+		t.Errorf("expected recordingSince = %v, got %v", s.Rules.RecordingSince(), body.RecordingSince)
+	}
+}
+
+// TestHandleRulesRecordingSinceOmittedWhenZero covers oldestHeldJSON's
+// zero-time convention (see its doc comment) applied to recordingSince:
+// a zero time must render as JSON null, not "0001-01-01T00:00:00Z",
+// which a client could otherwise mistake for a real two-thousand-year
+// recording window. rules.Store always stamps a non-zero RecordingSince
+// on Open in production, so this pins the wire contract directly
+// against oldestHeldJSON rather than relying on that store invariant to
+// exercise it.
+func TestHandleRulesRecordingSinceOmittedWhenZero(t *testing.T) {
+	if got := oldestHeldJSON(time.Time{}); got != nil {
+		t.Errorf("expected oldestHeldJSON(zero time) = nil, got %v", got)
 	}
 }
 
