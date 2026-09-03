@@ -416,7 +416,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   does not silently reset every counter to zero, mikroview writes a
   small snapshot of its *derived* state every few minutes and reads the
   newest one back on the next boot (`snapshot.dir`,
-  `/var/lib/mikroview/snapshots` by default, mode 0600 in a 0700
+  `snapshots/` beside its other state by default, mode 0600 in a 0700
   directory, six generations kept). A snapshot holds counts, the
   per-minute stamps behind the hourline, rule and log-prefix labels,
   device ids and names with their first and last seen, and each

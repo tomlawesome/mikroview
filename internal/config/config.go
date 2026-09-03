@@ -1082,7 +1082,10 @@ func defaults() Config {
 		Snapshot: Snapshot{
 			Interval: defaultSnapshotInterval,
 			Keep:     defaultSnapshotKeep,
-			Dir:      DefaultDataDir + "/snapshots",
+			// Dir stays empty on purpose: main.snapshotDirectory resolves
+			// it from the data directory at startup, so a deployment that
+			// moved its state (auth.storePath) keeps its snapshots beside
+			// it rather than on the default volume.
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
