@@ -189,6 +189,37 @@ func TestHTTPSRedirectTargetHostWithNoPort(t *testing.T) {
 	}
 }
 
+// TestValidRouterOSHint covers #436 step 3's validation of the
+// unauthenticated /ca.crt?ros= query parameter: capped at 32 bytes,
+// printable ASCII only, everything else refused rather than truncated
+// or sanitised.
+func TestValidRouterOSHint(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{"a real router's version string", "7.23.3 (stable)", "7.23.3 (stable)", true},
+		{"empty", "", "", false},
+		{"exactly 32 bytes", strings.Repeat("7", 32), strings.Repeat("7", 32), true},
+		{"33 bytes, over the cap", strings.Repeat("7", 33), "", false},
+		{"a control character", "7.23.3\n", "", false},
+		{"a NUL byte", "7.23.3\x00", "", false},
+		{"non-ASCII", "7.23.3\xc2\xa0", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := validRouterOSHint(tc.in)
+			if ok != tc.ok {
+				t.Fatalf("validRouterOSHint(%q) ok = %v, want %v", tc.in, ok, tc.ok)
+			}
+			if ok && got != tc.want {
+				t.Errorf("validRouterOSHint(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestHTTPSRedirectTargetPreservesPathAndQuery(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "http://mikroview:80/ca.crt", nil)
 	r.Host = "mikroview:80"
