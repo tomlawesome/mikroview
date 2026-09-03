@@ -128,3 +128,54 @@ export function unexercisedIntents(observed: RealityEdge[], intents: PolicyEdge[
   const seen = new Set(observed.map((o) => o.key))
   return intents.filter((i) => i.accepted && !seen.has(i.key))
 }
+
+/**
+ * worstUnplannedOf picks the one unplanned pair a view escalates out of
+ * the row of identical pills -- the topography's own two-line card
+ * (#715 item 4) and the city's bollards, red mark and callout (#865).
+ *
+ * It lives here, generic over the caller's own row type, because both
+ * views must escalate the same pair from the same data: two copies of
+ * this rule would agree on the day they were written and disagree the
+ * first time either was touched, and a reader comparing the two
+ * drawings would have no way to tell which one was lying.
+ *
+ * "Worst" is busiest -- realityEdges already sorts by events, so this
+ * adds no third ranking to the app. #701's recency weight belongs to a
+ * sentence claiming "now"; neither of these claims that. Ties break on
+ * drops, then on the pair's own key, so the same data always escalates
+ * the same pair. One pair only, however close the runners-up: "worst"
+ * is a superlative, and two callouts would un-say it.
+ */
+export function worstUnplannedOf<T>(rows: T[], edgeOf: (row: T) => Pick<RealityEdge, 'verdict' | 'events' | 'drops' | 'key'>): T | null {
+  let best: T | null = null
+  let bestEdge: Pick<RealityEdge, 'verdict' | 'events' | 'drops' | 'key'> | null = null
+  for (const row of rows) {
+    const e = edgeOf(row)
+    if (e.verdict !== 'unplanned') continue
+    if (!bestEdge) {
+      best = row
+      bestEdge = e
+      continue
+    }
+    if (e.events !== bestEdge.events) {
+      if (e.events > bestEdge.events) {
+        best = row
+        bestEdge = e
+      }
+      continue
+    }
+    if (e.drops !== bestEdge.drops) {
+      if (e.drops > bestEdge.drops) {
+        best = row
+        bestEdge = e
+      }
+      continue
+    }
+    if (e.key < bestEdge.key) {
+      best = row
+      bestEdge = e
+    }
+  }
+  return best
+}

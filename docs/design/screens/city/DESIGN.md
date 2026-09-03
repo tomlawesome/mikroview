@@ -34,6 +34,18 @@ clients · services · zones · ◆ city · borough · district · street
 - The lens tabs (traffic · policy · coverage · flags · watch) apply to
   both views; the header, badges and callout wording are the 2D map's.
 
+**The join (#869).** One `<input type=range>` with seven stops carries
+the whole axis above; which stop was last open persists per user, the
+same way the importance reading above does. Crossing the centre swaps
+the drawing, and carries what still makes sense rather than resetting
+everything: the selected lens always carries (it is one piece of state
+threaded to both sides); a reach -- a host held open on the 2D map, or
+a building stood on in the city -- carries only if the same host exists
+as a building on the other side, and otherwise surfaces rather than
+half-applying; the city's own pan carries across its own mount and
+unmount (it only exists in the DOM while a city stop is active), so
+returning to the city lands back where it was left.
+
 ## The metaphor, and what each part means
 
 | City | Network | Drawn as |
@@ -148,4 +160,23 @@ Ratified on #854 (closed); built in milestone M6 — The city: #863 ground
 model and cameras, #864 device library, #865 walls and gates from the
 rule set, #866 river and bridges from interface and tunnel state, #867
 importance readings, #868 the reach, #869 the slider's join with
-`Topography.svelte`, #870 demo feeder data.
+`Topography.svelte`, #870 demo feeder data, #874 the pushed tunnel
+state #866 reads, #877 the same state as the 2D map's tunnel node.
+
+Three wordings settled during the build, because each is a place the
+drawing could have claimed more than the app knows:
+
+- A footbridge with no pushed tunnel state reads **state not pushed**,
+  and a tunnel known only from its own events reads identically — from
+  the operator's chair those are the same fact. The road bridge never
+  reads up or down at all; its lamp says a rule logs that boundary and
+  nothing more (#866, #874).
+- A district on a router with no pushed rule table draws **no gates** and
+  says no rule table has been pushed yet. That is a different statement
+  from a dark boundary, where a table exists and nothing on it logs
+  (#865).
+- Both views escalate the same unplanned pair through one shared
+  function, `worstUnplannedOf` in `frontend/src/lib/reality.ts` — busiest
+  first, ties on drops, then the pair's own key. Two implementations of
+  one rule agree the day they are written and diverge on the first
+  one-line change to either (#865, #715 item 4).

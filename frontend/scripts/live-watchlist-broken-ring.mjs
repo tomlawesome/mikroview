@@ -26,11 +26,11 @@
 //   than icon + word" is a layout fact about a flex column, not a prop.
 //   Driving that leg here rather than in live-nav-bottom-bar.mjs is
 //   forced by ordering: it needs a pushed filter table to make coverage
-//   'no-logging', and live-router-lookup.mjs -- which sorts before every
+//   'no-logging', and live-before-router-lookup.mjs -- which sorts before every
 //   live-nav-* scenario -- asserts that no table has been pushed yet.
 //
 // Named and sorted alongside the other watchlist scenarios, not the nav
-// ones, and deliberately: live-router-lookup.mjs (which sorts earlier)
+// ones, and deliberately: live-before-router-lookup.mjs (which sorts earlier)
 // has its own "before any push, no table exists yet" check against the
 // one shared device every scenario here pushes through, so nothing may
 // push a filter-rule table before it runs. This scenario does not need

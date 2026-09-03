@@ -84,6 +84,13 @@ describe('realityEdges', () => {
     expect(realityEdges([ev({ outInterface: undefined })], [], true)).toEqual([])
   })
 
+  it('names the refusing rule from the event itself, never guessing when absent', () => {
+    const [named] = realityEdges([ev({ action: 'drop', ruleLabel: 'default-drop' })], [], true)
+    expect(named.refusedBy).toBe('default-drop')
+    const [unnamed] = realityEdges([ev({ action: 'drop', ruleLabel: '' })], [], true)
+    expect(unnamed.refusedBy).toBeUndefined()
+  })
+
   it('busiest pair sorts first, drops counted apart from accepts', () => {
     const rs = realityEdges(
       [
