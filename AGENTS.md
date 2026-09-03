@@ -111,9 +111,12 @@ assuming the checkout had done the right thing.
 >
 > Everything below describes the **target state of a cutover that has not
 > been activated**, written in the present tense before it happened. The
-> GitLab lane is real and valid — the project exists, `dev` is pushed
-> there, and its pipeline runs green through the `security` stage — but
-> `dev` has **not** moved, and the lane is not a gate on anything yet.
+> project exists and `dev` is pushed there, but **no pipeline on
+> `ai/mikroview` has ever passed** — all eight, 2026-08-08 to
+> 2026-09-03, failed (#908). An earlier version of this file claimed the
+> lane ran green through the `security` stage; that was almost certainly
+> observed on `ai/mikroview-mirror`, the other project. `dev` has **not**
+> moved, and the lane is not a gate on anything yet.
 >
 > **Until it goes live, work through GitHub as normal**: push feature
 > branches to `origin`, open GitHub pull requests, merge into `dev`
