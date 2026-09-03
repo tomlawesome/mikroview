@@ -173,9 +173,20 @@ test:frontend:
 
 security:semgrep:
   stage: security
-  image: semgrep/semgrep:1.170.1
+  image: semgrep/semgrep:1.176.0
   <<: *dev_or_mr
   script:
+    # The image sets SEMGREP_IN_DOCKER, which makes semgrep insist the
+    # code is bind-mounted at /src and chdir there before it looks at
+    # anything (config_resolver.adjust_for_docker). GitLab's docker
+    # executor mounts the checkout at $CI_PROJECT_DIR instead and gives
+    # a job no way to add a volume, so /src is empty and every run died
+    # with "Detected Docker environment without a code volume" -- before
+    # scanning a single file. Unsetting it here leaves semgrep working
+    # from the job's own directory, which is where the code actually is.
+    # Reproduced and the fix confirmed locally under the same image
+    # (#912).
+    - unset SEMGREP_IN_DOCKER
     - |
       if [ -n "$CI_MERGE_REQUEST_DIFF_BASE_SHA" ]; then
         semgrep scan --config p/security-audit --config p/owasp-top-ten \
@@ -192,7 +203,21 @@ security:semgrep:
 
 security:gosec:
   stage: security
-  image: securego/gosec:2.28.0
+  # ghcr, not Docker Hub. gosec stopped publishing to Docker Hub after
+  # 2.24.6, so `securego/gosec:2.28.0` resolved to nothing and the job
+  # failed before it started -- an image pull failure, which reads like
+  # a registry outage rather than a tag that was never published.
+  # Bumped to the current release while here, per AGENTS.md's
+  # pin-to-latest rule (#912).
+  #
+  # entrypoint: [""] for the same reason gitleaks and trivy below carry
+  # it: this image's entrypoint is a wrapper that execs `/bin/gosec $@`,
+  # so GitLab's generated shell script would arrive as gosec's arguments
+  # rather than as a script to run. That is the failure this job would
+  # have hit next, once the pull succeeded.
+  image:
+    name: ghcr.io/securego/gosec:2.29.0
+    entrypoint: [""]
   <<: *dev_or_mr
   script:
     - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
@@ -220,8 +245,30 @@ security:gitleaks:
     name: ghcr.io/gitleaks/gitleaks:v8.30.1
     entrypoint: [""]
   <<: *dev_or_mr
+  variables:
+    # The whole history, not GitLab's shallow default. This job reported
+    # 28 leaks that are not leaks, and the depth is why: `.gitleaksignore`
+    # pins each accepted finding to commit:path:rule:line, and a shallow
+    # clone's oldest commit presents the entire tree as newly added under
+    # *its* SHA rather than the SHA that really introduced each line. So
+    # every fingerprint missed, and every fixture key in
+    # recovery_prompt_test.go came back as a finding. The byte counts say
+    # the same thing: 177MB over 102 commits shallow, against 20MB over
+    # 999 full, because a truncated history has no diffs to scan, only
+    # whole files.
+    #
+    # Reproduced with `git clone --depth 20` of this repo and the job's
+    # own command: 24 findings, all in the file `.gitleaksignore` already
+    # covers. A full clone finds none (#912).
+    GIT_DEPTH: 0
   script:
-    - gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --exit-code 1
+    # --redact for the same reason secret-scan.yml gives on the GitHub
+    # side: without it, a job that finds a real secret republishes it into
+    # the build log and into an artifact anyone with repository access can
+    # download. The finding still names the file, the rule and the commit,
+    # which is what anyone fixing it needs. This lane had no redaction at
+    # all until #912.
+    - gitleaks detect --source . --redact --report-format sarif --report-path gitleaks.sarif --exit-code 1
   artifacts:
     when: always
     paths:
