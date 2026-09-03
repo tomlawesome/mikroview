@@ -10,6 +10,7 @@
 // Pure: CityInput in, Ground out. Nothing here knows about the camera.
 import type { Pt } from './project'
 import { bezAt, bulge, gateToward, routeRound, segsOf } from './roads'
+import { worstUnplanned } from './escalate'
 import type { CityEdge, CityInput, CityZone } from './input'
 import { zoneHolding } from './input'
 import { bridgeStateFor } from './tunnelState'
@@ -172,6 +173,8 @@ export function layoutGround(input: CityInput): Ground {
         dark: z.dark,
         buildings: [],
         more: Math.max(0, z.hostCount - Math.min(z.hosts.length, MAX_BUILDINGS)),
+        gates: [],
+        rulesPushed: input.rulesPushed,
       }
       d.buildings = placeBuildings(z, d, routerId)
       districts.push(d)
@@ -285,7 +288,25 @@ export function layoutGround(input: CityInput): Ground {
   }
   const centre = (e: End): Pt => (e.kind === 'district' ? [e.d.u, e.d.v] : [e.n.u, e.n.v])
 
-  const connect = (id: string, a: End, b: End, w: number, k: RoadKind, label: string, stop?: 'drop') => {
+  // Gates (#865): every accept-rule boundary that touches a district,
+  // aimed at whichever place its other interface resolves to -- another
+  // district or a bridge post, the same endOf a road already uses. An
+  // interface that resolves to nothing modelled (left blank on the
+  // rule, or naming a place this build has no ground for) aims at the
+  // district's own router: a defensible "somewhere out of town" rather
+  // than a guessed neighbour.
+  for (const d of districts) {
+    for (const gate of input.gates) {
+      if (gate.inInterface !== d.id && gate.outInterface !== d.id) continue
+      const other = gate.inInterface === d.id ? gate.outInterface : gate.inInterface
+      if (other === d.id) continue // a hairpin rule names no real neighbour
+      const targetEnd: End = (other && endOf(other)) || { kind: 'node', n: routerNode(d.routerId) }
+      const g = gateToward(d, centre(targetEnd))
+      d.gates.push({ key: gate.key, p: g.p, n1: g.n1, toward: other || d.name + '’s own gateway', lamp: gate.logged, ruleCount: gate.ruleCount })
+    }
+  }
+
+  const connect = (id: string, a: End, b: End, w: number, k: RoadKind, label: string, stop?: 'drop', refusedBy?: string) => {
     const exempt = new Set<string>()
     let pts: Pt[] = []
     let from: string | null = null
@@ -315,7 +336,7 @@ export function layoutGround(input: CityInput): Ground {
     const inner = routeRound(pts.slice(head - 1, pts.length - tail + 1), districts, { exempt })
     const bent = bulge(inner, id)
     pts = [...pts.slice(0, head - 1), ...bent, ...pts.slice(pts.length - tail + 1)]
-    roads.push({ id, pts, w, k, from, to, stop, label })
+    roads.push({ id, pts, w, k, from, to, stop, refusedBy, label })
   }
 
   // One road per pair whichever way the traffic runs: both directions
@@ -327,26 +348,42 @@ export function layoutGround(input: CityInput): Ground {
     const key = [e.from, e.to].sort().join('|')
     const had = pairs.get(key)
     if (!had) pairs.set(key, { ...e, key })
-    else pairs.set(key, { ...had, events: had.events + e.events, verdict: RANK[e.verdict] > RANK[had.verdict] ? e.verdict : had.verdict })
+    else
+      pairs.set(key, {
+        ...had,
+        events: had.events + e.events,
+        drops: (had.drops ?? 0) + (e.drops ?? 0),
+        refusedBy: had.refusedBy || e.refusedBy,
+        verdict: RANK[e.verdict] > RANK[had.verdict] ? e.verdict : had.verdict,
+      })
   }
+  // The one unplanned pair that escalates to bollards, a red mark and a
+  // callout (#865, escalate.ts) -- the same worst-means-busiest choice
+  // Topography.svelte's own card makes, so the two views escalate the
+  // same pair.
+  const escalatedKey = worstUnplanned([...pairs.values()])?.key ?? null
   // A zone's road to the WAN runs to its router (the bridge road takes
   // it on from there); any other pair runs gate to gate.
   const isWan = (i: string) => input.wan !== null && i === input.wan
   for (const e of pairs.values()) {
     const k = VERDICT_KIND[e.verdict]
     const w = roadWidth(e.events)
-    const stop = k === 'd' ? 'drop' : undefined
+    // Every 'holding' pair dies at the wall; an 'unplanned' pair only
+    // does when it is the one escalated pair (escalate.ts) -- the rest
+    // draw as the ordinary alarm road, per the ratified "worst is a
+    // superlative" reasoning.
+    const stop = k === 'd' || (k === 'x' && e.key === escalatedKey) ? 'drop' : undefined
     const label = e.from + ' to ' + e.to + ', ' + e.events + ' events, ' + e.verdict
     if (isWan(e.from) || isWan(e.to)) {
       const end = endOf(isWan(e.from) ? e.to : e.from)
       if (!end || end.kind !== 'district') continue
-      connect(e.key, end, { kind: 'node', n: routerNode(end.d.routerId) }, w, k, label, stop)
+      connect(e.key, end, { kind: 'node', n: routerNode(end.d.routerId) }, w, k, label, stop, e.refusedBy)
       continue
     }
     const a = endOf(e.from)
     const b = endOf(e.to)
     if (!a || !b) continue
-    connect(e.key, a, b, w, k, label, stop)
+    connect(e.key, a, b, w, k, label, stop, e.refusedBy)
   }
   // Router to each bridge head, then the crossing and what is beyond it.
   for (const b of bridges) {

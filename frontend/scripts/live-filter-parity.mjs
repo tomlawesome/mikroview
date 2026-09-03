@@ -18,7 +18,7 @@
 // several other scenarios) constantly emits traffic across
 // 203.0.113.0-249, so a CIDR check there would be counting rows other
 // scenarios are also contributing to. 198.51.100.0/24 is otherwise
-// unclaimed here (live-router-lookup.mjs's wireguard peer only overrides
+// unclaimed here (live-before-router-lookup.mjs's wireguard peer only overrides
 // *names* for 192.0.2.0/24 and 198.51.100.0/24, which doesn't matter for
 // this check -- it's about the raw address, not the label).
 

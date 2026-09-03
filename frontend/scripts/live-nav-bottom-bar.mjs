@@ -15,7 +15,7 @@
 //
 // The broken ring on the bar (#583) is deliberately not here: making
 // coverage 'no-logging' needs a pushed filter table, and
-// live-router-lookup.mjs -- which the scenario runner reaches before
+// live-before-router-lookup.mjs -- which the scenario runner reaches before
 // every live-nav-* file -- asserts that nothing has pushed one yet. It is
 // driven from live-watchlist-broken-ring.mjs instead, which already owns
 // that push and sorts after.

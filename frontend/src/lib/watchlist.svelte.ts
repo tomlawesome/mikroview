@@ -24,6 +24,12 @@ class WatchlistState {
   // (#274), keyed by entry id. Refreshed with the entries, since it is
   // derived from what routers have pushed rather than stored.
   coverage = $state<Record<string, WatchlistCoverage>>({})
+  // Whether refresh() has ever completed -- see flags.svelte.ts's
+  // `loaded` for why an empty `entries` before this is true must not be
+  // read as "nothing is watched" (#867's watched reading depends on the
+  // distinction; a viewer role that never calls refresh() stays honestly
+  // "not loaded" rather than silently "nothing watched").
+  loaded = $state(false)
 
   // #546's broken ring: how many *enabled* expectations currently answer
   // 'no-logging' -- the operator declared a watch and no pushed firewall
@@ -51,6 +57,7 @@ class WatchlistState {
     const { entries, coverage } = await fetchWatchlistEntries()
     this.entries = entries
     this.coverage = coverage
+    this.loaded = true
   }
 
   async create(req: WatchlistEntryRequest): Promise<string | null> {

@@ -29,13 +29,27 @@ export function mockupEstate(): CityInput {
       { key: 'bridge-lan|vlan-srv', from: 'bridge-lan', to: 'vlan-srv', events: 400, verdict: 'planned' },
       { key: 'vlan-srv|bridge-lan', from: 'vlan-srv', to: 'bridge-lan', events: 100, verdict: 'planned' },
       { key: 'vlan-iot|vlan-srv', from: 'vlan-iot', to: 'vlan-srv', events: 60, verdict: 'planned' },
-      { key: 'vlan-iot|bridge-lan', from: 'vlan-iot', to: 'bridge-lan', events: 12, verdict: 'unplanned' },
-      { key: 'vlan-guest|bridge-lan', from: 'vlan-guest', to: 'bridge-lan', events: 5, verdict: 'holding' },
+      { key: 'vlan-iot|bridge-lan', from: 'vlan-iot', to: 'bridge-lan', events: 12, verdict: 'unplanned', drops: 12, refusedBy: 'iot-egress-drop' },
+      { key: 'vlan-guest|bridge-lan', from: 'vlan-guest', to: 'bridge-lan', events: 5, verdict: 'holding', drops: 5, refusedBy: 'guest-isolation' },
       { key: 'bridge-lan|wg0', from: 'bridge-lan', to: 'wg0', events: 3, verdict: 'unjudged' },
       { key: 'wlan-wsh|bridge-lan', from: 'wlan-wsh', to: 'bridge-lan', events: 20, verdict: 'planned' },
     ],
     wan: 'ether1',
     wanLogged: true,
+    rulesPushed: true,
+    gates: [
+      // lan -> srv is a lit gate (an accept rule that logs); the reverse
+      // direction is a real gate too, but unlit -- two different gates
+      // on the same boundary, so a lamp is never assumed symmetric.
+      { key: 'forward|bridge-lan|vlan-srv', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'vlan-srv', logged: true, ruleCount: 3, comment: 'nas access' },
+      { key: 'forward|vlan-srv|bridge-lan', chain: 'forward', inInterface: 'vlan-srv', outInterface: 'bridge-lan', logged: false, ruleCount: 1, comment: '' },
+      // The second router's workshop opens onto the primary LAN too.
+      { key: 'forward|wlan-wsh|bridge-lan', chain: 'forward', inInterface: 'wlan-wsh', outInterface: 'bridge-lan', logged: true, ruleCount: 2, comment: '' },
+      // Nothing accepts vlan-iot -> bridge-lan or vlan-guest -> bridge-lan
+      // at all: those walls stand with no gate, matching the unplanned
+      // and holding verdicts above -- no rule anticipated the first, and
+      // only a drop rule (never an accept) answers the second.
+    ],
     tunnels: [
       {
         iface: 'l2tp-out1',
