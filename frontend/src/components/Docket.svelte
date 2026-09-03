@@ -13,6 +13,7 @@
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
+  import { startStatement } from '../lib/provenance'
   import Flags from './Flags.svelte'
   import Watchlist from './Watchlist.svelte'
   import AuditLog from './AuditLog.svelte'
@@ -31,6 +32,15 @@
     if (appState.view === 'audit' && isAdmin) return 'audit'
     return 'flags'
   })
+
+  // What the card is an account of, after a restart (#795, round 41
+  // #s7): the same sentence the metrics hourline says, from the same
+  // pure function in lib/provenance.ts and the same store update, so the
+  // two surfaces cannot word it differently or clear at different
+  // moments. Deliberately outside the tab gating below -- every tab's
+  // contents came out of the same restarted process, so the statement
+  // belongs to the card, not to the flags tab.
+  const provenance = $derived(startStatement(appState.stats, new Date()))
 
   let armed = $state(false)
   let busy = $state(false)
@@ -72,6 +82,17 @@
        Outlined, never filled; one click arms it 'confirm', the second
        clears, and clicking elsewhere disarms it. -->
   <div class="clear-row">
+    <!-- The restart statement (#795, round 41 #s7), drawn as the fall's
+         own "statement, not a control" chip: `<span class="att dim">`
+         with the hollow circle, the idiom Fall.svelte's window-cap chip
+         already established (#801, round 36 item 6.1). A span among the
+         buttons, because there is nowhere for it to lead. `.bubble`
+         carries margin-left:auto, so this sits hard left with the
+         controls still pinned right, which is how the drawing lays the
+         row out. -->
+    {#if provenance}
+      <span class="att dim"><i></i>{provenance}</span>
+    {/if}
     {#if tab === 'flags' && flagsState.activeCount > 0 && canEdit}
       <button class="bubble" class:armed disabled={busy} onclick={onClearAll} title="They keep their place in the audit log">
         {armed ? 'confirm' : 'clear all'}
@@ -123,6 +144,42 @@
     gap: 4px;
     padding: 0 6px 6px;
     min-height: 26px;
+  }
+
+  /* The statement chip (#795). The markup is Fall.svelte's `.att.dim`
+     verbatim, but Svelte scopes styles per component, so the rules have
+     to be repeated here -- and the two `--o-*` locals Fall declares on
+     its own `.fall` root are substituted for what they resolve to
+     (Fall.svelte:1328-1337). Kept to the three rules the chip actually
+     needs: no hover, no cursor, no pulse, because this one is a
+     statement and never a button. Round 41 draws it a weight lighter
+     than the fall's chips (`.clearall .stmt-chip { font-weight: 500 }`),
+     which is the only deliberate difference. */
+  .att {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    font-family: inherit;
+    border: 1px solid color-mix(in srgb, var(--fg) 15%, transparent);
+    border-radius: 12px;
+    padding: 3px 12px;
+    color: var(--fg-muted);
+    background: transparent;
+  }
+
+  .att i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  /* The drawing's hollow "○", in the chip's own ink. */
+  .att.dim i {
+    background: transparent;
+    border: 1px solid currentColor;
   }
 
   /* The bubble (round 29): outlined, never filled. */
