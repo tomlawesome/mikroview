@@ -45,4 +45,20 @@ Capture: from `frontend/`, `node ../docs/design/concepts/round-40/capture.mjs is
 
 ## Verdicts
 
-_Recorded verbatim from the owner as they arrive._
+Owner, 2026-09-03, on the first cut:
+
+> I prefer isometric - with some caveats. I don't like the straight/angular
+> connections. and we don't have to fit everything into one screen. This
+> view is already designed to zoom in/out and pan, so we shouldn't clutter
+> things together to squeeze them into a single screen.
+>
+> I also don't like every single thing being a cube. It would be really
+> cool if we produced a bunch of generic looking devices; a PoE cam, a
+> router, a server box, a workstation box, a laptop, a phone, a switch, etc
+> etc.
+
+Later the same day: "I think we should view these as two alternative views, not one replacing the other." The city is a second view beside the 2D topography, not its successor.
+
+Relief dropped. Second cut of isometric (`isometric.html`, replacing the
+first): curved roads, a map larger than the viewport with the scenes as
+viewports onto it, and a device library — see `BRIEF.md` "Second cut".
