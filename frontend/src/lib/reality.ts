@@ -34,6 +34,16 @@ export interface RealityEdge {
    * - unjudged: no rule table pushed; no claim made either way.
    */
   verdict: 'planned' | 'holding' | 'unplanned' | 'unjudged'
+  /** The rule that refused traffic on this pair, from the events
+   * themselves -- round 30's "caught by default drop" needs to name the
+   * catcher. Same shape and same provenance as reach.ts's `refusedBy`:
+   * what the router said it did, never what we inferred it meant. */
+  refusedBy?: string
+  /** Every port asked for on this pair, busiest first, whatever the
+   * answer was. `topPorts` counts accepted ports only, which cannot
+   * describe a pair that is entirely refused -- and a refused pair is
+   * exactly the one the escalated callout names. */
+  topAsked: { port: number; proto: string }[]
 }
 
 /**
@@ -43,16 +53,33 @@ export interface RealityEdge {
  * testability.
  */
 export function realityEdges(events: FirewallEvent[], intents: PolicyEdge[], anyRulesPushed: boolean): RealityEdge[] {
-  const byPair = new Map<string, { from: string; to: string; events: number; accepts: number; drops: number; ports: Map<string, number> }>()
+  const byPair = new Map<
+    string,
+    {
+      from: string
+      to: string
+      events: number
+      accepts: number
+      drops: number
+      ports: Map<string, number>
+      asked: Map<number, number>
+      askedProto: Map<number, string>
+      refusedBy?: string
+    }
+  >()
   for (const e of events) {
     if (!e.inInterface || !e.outInterface) continue
     const key = `${e.inInterface}|${e.outInterface}`
     let r = byPair.get(key)
     if (!r) {
-      r = { from: e.inInterface, to: e.outInterface, events: 0, accepts: 0, drops: 0, ports: new Map() }
+      r = { from: e.inInterface, to: e.outInterface, events: 0, accepts: 0, drops: 0, ports: new Map(), asked: new Map(), askedProto: new Map() }
       byPair.set(key, r)
     }
     r.events++
+    if (e.dstPort !== undefined) {
+      r.asked.set(e.dstPort, (r.asked.get(e.dstPort) ?? 0) + 1)
+      if (e.protocol && !r.askedProto.has(e.dstPort)) r.askedProto.set(e.dstPort, e.protocol.toLowerCase())
+    }
     if (e.action === 'accept') {
       r.accepts++
       if (e.dstPort !== undefined) {
@@ -61,6 +88,7 @@ export function realityEdges(events: FirewallEvent[], intents: PolicyEdge[], any
       }
     } else if (e.action === 'drop' || e.action === 'reject') {
       r.drops++
+      if (!r.refusedBy && e.ruleLabel) r.refusedBy = e.ruleLabel
     }
   }
   const intentByKey = new Map(intents.map((i) => [i.key, i]))
@@ -80,6 +108,10 @@ export function realityEdges(events: FirewallEvent[], intents: PolicyEdge[], any
         accepts: r.accepts,
         drops: r.drops,
         topPorts: [...r.ports.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t),
+        topAsked: [...r.asked.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([port]) => ({ port, proto: r.askedProto.get(port) ?? 'tcp' })),
+        refusedBy: r.refusedBy,
         verdict,
       }
     })
