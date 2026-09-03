@@ -287,6 +287,10 @@ var authzMatrix = []routeExpectation{
 		"renders the wizard's RouterOS commands (#436) -- same tier as GET /api/setup/status beside it, deliberately: a signed-in caller at any tier can already see the routers, versions and pushed tables this endpoint reads, so it only re-renders that same evidence as copy-paste commands, changing nothing on the instance or the router"},
 	{http.MethodPost, "/api/setup/mark", accessAdmin,
 		"writes to the setup wizard's claim ledger and to the audit log (#487) -- #490 keeps \"Run setup…\" absent for viewers and there is no read-only wizard, so a viewer has neither a way to reach this nor any business recording a decision under their own name"},
+	{http.MethodPost, "/api/tune-logging/analyse", accessUser,
+		"reads an uploaded RouterOS export and reports which filter rules cross a dark boundary (#435) -- user tier, same as the operational writes above: it changes nothing on the instance or the router, but a viewer may not act on what mikroview is watching, and choosing which rules to tune logging on is exactly that kind of operational decision, made concrete once the operator actually renders it below"},
+	{http.MethodPost, "/api/tune-logging/render", accessUser,
+		"renders logging switched on for the selected rules from an uploaded export, mechanically checked to differ only in logging (#435) -- same tier as analyse beside it. The output is a file the operator downloads and applies themselves; mikroview never connects to the router, so this is not a write to anything mikroview itself is exposed on -- but it is the same class of change-what-is-watched decision analyse already gates at user tier"},
 	{http.MethodGet, "/api/audit", accessAdmin,
 		"the admin action trail; also the record an attacker would want to read to see whether they were noticed"},
 }
