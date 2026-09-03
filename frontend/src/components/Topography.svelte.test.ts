@@ -1755,3 +1755,111 @@ describe('#701: the reach names its busiest pathway, and says the ranking is wei
     expect(container.textContent).toContain('nothing observed this window')
   })
 })
+
+describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () => {
+  const twoLanes: RouterIPAddress[] = [
+    { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+    { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+  ]
+
+  // Unplanned needs a pushed table to judge against -- with nothing
+  // pushed every pair is 'unjudged' and no claim is made either way.
+  function pushedButSilent() {
+    policyState.anyPushed = true
+    policyState.edges = []
+  }
+
+  function drops(n: number, over: Partial<ClientEvent>): ClientEvent[] {
+    return Array.from({ length: n }, () => event({ action: 'drop', ruleLabel: 'default drop', dstPort: 445, protocol: 'tcp', ...over }))
+  }
+
+  function cardText(container: HTMLElement): string {
+    const card = container.querySelector('.unplanned-card')
+    return card ? [...card.querySelectorAll('text')].map((t) => t.textContent?.trim()).join(' | ') : ''
+  }
+
+  it('escalates exactly one pair, and leaves the runner-up as an ordinary pill', () => {
+    zonesState.pushed = twoLanes
+    pushedButSilent()
+    appState.events = [
+      ...drops(14, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9' }),
+      ...drops(13, { inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.20', dstIp: '10.0.2.9' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelectorAll('.unplanned-card').length).toBe(1)
+    const text = cardText(container)
+    expect(text).toContain('UNPLANNED · bridge2 → bridge1')
+    expect(text).toContain('tcp/445')
+    expect(text).toContain('caught by default drop')
+    expect(text).toContain('14×')
+    expect(text).toContain('open ▸')
+    // The 13× pair keeps the ordinary treatment.
+    const pills = [...container.querySelectorAll('.edge-badge')].map((t) => t.textContent?.trim() ?? '')
+    expect(pills.some((p) => p.includes('13'))).toBe(true)
+  })
+
+  it('opens the stream filtered to the pair, since there is no flag to open', () => {
+    zonesState.pushed = twoLanes
+    pushedButSilent()
+    appState.events = drops(9, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9' })
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = container.querySelector('.unplanned-card')!
+    expect(card.getAttribute('role')).toBe('button')
+    card.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    // openPair sets the live view's own filters. The mockup's flag
+    // drawer cannot be opened because no unplanned flag type exists.
+    expect(appState.view).toBe('live')
+  })
+
+  it('says the rule caught it, or says plainly that none named itself', () => {
+    zonesState.pushed = twoLanes
+    pushedButSilent()
+    appState.events = drops(6, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9', ruleLabel: '' })
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(cardText(container)).toContain('caught, no rule named')
+  })
+
+  it('draws no card at all when nothing is unplanned', () => {
+    zonesState.pushed = twoLanes
+    policyState.anyPushed = false
+    appState.events = drops(6, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9' })
+    const { container } = render(Topography)
+    flushSync()
+
+    // Nothing pushed: every pair is unjudged, so no claim about intent.
+    expect(container.querySelector('.unplanned-card')).toBeNull()
+  })
+
+  it('keeps every other badge out of the card it reserved', () => {
+    zonesState.pushed = twoLanes
+    pushedButSilent()
+    appState.events = [
+      ...drops(14, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9' }),
+      ...drops(13, { inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.20', dstIp: '10.0.2.9' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const box = container.querySelector('.uc-box')!
+    const cx = Number(box.getAttribute('x')) + Number(box.getAttribute('width')) / 2
+    const cy = Number(box.getAttribute('y')) + Number(box.getAttribute('height')) / 2 // box centre
+    const cw = Number(box.getAttribute('width'))
+
+    // An opaque two-line card with a pill settled inside it is the
+    // failure the reservation exists to prevent.
+    for (const plate of container.querySelectorAll('.edge-plate')) {
+      const px = Number(plate.getAttribute('x')) + Number(plate.getAttribute('width')) / 2
+      const py = Number(plate.getAttribute('y')) + 7
+      const overlaps = Math.abs(px - cx) < (cw + Number(plate.getAttribute("width"))) / 2 && Math.abs(py - cy) < 27
+      expect(overlaps).toBe(false)
+    }
+  })
+})
