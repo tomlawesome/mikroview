@@ -457,9 +457,9 @@ func TestHandleDefinitionsListReturnsCreatedEntries(t *testing.T) {
 
 // TestShippedDefinitionsDefaultToEnabled is the /api/definitions
 // replacement for detector_settings_test.go's own list-defaults test:
-// the whole shipped catalogue -- not just the twelve
-// LegacyDetectorIDs the old /api/detectors endpoint exposed -- is
-// enabled out of the box (engine.SeedShippedDefinitions).
+// the whole shipped catalogue -- not just the twelve detectors the old
+// /api/detectors endpoint exposed -- is enabled out of the box
+// (engine.SeedShippedDefinitions).
 func TestShippedDefinitionsDefaultToEnabled(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))

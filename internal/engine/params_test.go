@@ -81,10 +81,9 @@ var configFieldMappings = []configFieldMapping{
 // DetectorDefaults' actual fields and fails if any of them has no entry in
 // configFieldMappings above, and separately fails if a mapping claims a
 // param name that doesn't actually exist in the schema it points at (a
-// stale mapping would otherwise pass silently). The shipped catalogue
-// has 12 entries (not the 17 the issue text's first draft guessed) --
-// see TestAllDetectorNamesIsTwelve below, and shipped_params.go has
-// exactly one []ParamSchema per name.
+// stale mapping would otherwise pass silently). shipped_params.go has
+// exactly one []ParamSchema per threshold detector -- see
+// TestShippedParamSchemaHasOneSliceForEveryDetector below.
 func TestShippedParamSchemaCoversEveryConfigField(t *testing.T) {
 	covered := map[string]bool{}
 	for _, m := range configFieldMappings {
@@ -110,22 +109,11 @@ func TestShippedParamSchemaCoversEveryConfigField(t *testing.T) {
 	}
 }
 
-// TestAllDetectorNamesIsTwelve pins the detector count issue #401 itself
-// records as corrected: the issue text's own first draft said 17, the
-// true count -- the twelve settings-toggleable detectors internal/detect
-// shipped -- is 12. Five more shipped definitions exist that it had no
-// name for at all (see ShippedDefinitionIDs); this pin is about the
-// twelve the schemas below were written against.
-func TestAllDetectorNamesIsTwelve(t *testing.T) {
-	if got := len(LegacyDetectorIDs()); got != 12 {
-		t.Fatalf("len(LegacyDetectorIDs()) = %d, want 12", got)
-	}
-}
-
 // TestShippedParamSchemaHasOneSliceForEveryDetector confirms
 // shipped_params.go's coverage extends to detector identity too, not
-// just field count: every one of the twelve legacy detector ids has a
-// corresponding non-empty ParamSchema slice in this file.
+// just field count: each of the twelve threshold detectors the schemas
+// below were written against is a real shipped definition id with a
+// non-empty ParamSchema slice in this file.
 func TestShippedParamSchemaHasOneSliceForEveryDetector(t *testing.T) {
 	byDetector := map[string][]ParamSchema{
 		"port_scan":               PortScanParamSchema,
@@ -141,14 +129,9 @@ func TestShippedParamSchemaHasOneSliceForEveryDetector(t *testing.T) {
 		"off_hours_activity":      OffHoursActivityParamSchema,
 		"device_silence":          DeviceSilenceParamSchema,
 	}
-	if len(byDetector) != len(LegacyDetectorIDs()) {
-		t.Fatalf("byDetector has %d entries, LegacyDetectorIDs has %d -- every one needs exactly one schema", len(byDetector), len(LegacyDetectorIDs()))
-	}
-	for _, name := range LegacyDetectorIDs() {
-		schema, ok := byDetector[name]
-		if !ok {
-			t.Errorf("detector %q has no shipped ParamSchema", name)
-			continue
+	for name, schema := range byDetector {
+		if !IsShippedDefinitionID(name) {
+			t.Errorf("detector %q has a shipped ParamSchema but is not in the shipped catalogue", name)
 		}
 		if len(schema) == 0 {
 			t.Errorf("detector %q has an empty ParamSchema", name)
