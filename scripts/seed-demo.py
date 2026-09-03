@@ -1173,6 +1173,10 @@ class API:
 
 
 def ingest_push(base_url, token, kind, records, page=1, pages=1):
+    # A demo seeder, pointed at a local instance serving the self-signed
+    # certificate it generated at startup. There is no certificate here
+    # worth checking and nothing this script does is deployed.
+    # nosemgrep: python.requests.security.disabled-cert-validation.disabled-cert-validation
     r = requests.post(f"{base_url.rstrip('/')}/api/ingest/routeros",
                        headers={"Authorization": f"Bearer {token}"},
                        json={"kind": kind, "page": page, "pages": pages, "records": records},

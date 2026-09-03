@@ -17,4 +17,9 @@ RUN apk add --no-cache openssh-server openssh-sftp-server \
  && printf 'Subsystem sftp internal-sftp\nPasswordAuthentication yes\nPermitRootLogin no\nMatch User mvingest\n  ForceCommand internal-sftp\n' >> /etc/ssh/sshd_config
 
 EXPOSE 22
+# sshd has to start as root to bind the port and to drop to mvingest per
+# connection, so a USER line here would stop the fixture working. The
+# rule is aimed at shipped images; this one is built by
+# scripts/live-routeros-step0.sh on a workstation and thrown away.
+# nosemgrep: dockerfile.security.missing-user.missing-user
 CMD ["/usr/sbin/sshd", "-D", "-e"]
