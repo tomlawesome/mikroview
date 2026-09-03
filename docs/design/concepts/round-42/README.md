@@ -36,7 +36,8 @@ group is the same two things one storey down:
 - **Off, with a key**: the bar is absent (nothing is held), the track
   stays live so days can be set first, and the row reads `30 days · at
   most 1 GiB · turn on`. Turning on deletes nothing, so it is not a
-  proposal.
+  proposal. It takes what memory already holds and every day after
+  (owner, 2026-09-03), so the first day on disk is not a short one.
 
 Data story (the whole's own): today is 2 Sep. History was turned on
 7 Aug: 27 days on disk, 812 MiB, about 30 MiB a day compressed. 30 days
@@ -67,6 +68,12 @@ Screenshots: `shots/settings.png`, `settings-disk.png`,
 `settings-disk-{shrink,grow,cap,off,capped,stopped,nokey}.png`. Looked at
 each; no collisions.
 
-## Verdicts
+## Verdicts (owner, 2026-09-03)
 
-Pending.
+All eight scenes: *"1-8 all look great"*. **Ratified as drawn.**
+
+On what turning on takes: *"what memory already holds + new"* — the
+ring's contents are written to disk at turn-on, then every event after.
+
+Build: `#910`. Port the group's markup and CSS from `disk.html`; the
+states are the section classes listed above.
