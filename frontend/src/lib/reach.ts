@@ -159,3 +159,13 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
 
   return { strands, reaches, reachedBy, topBlocked, busiest }
 }
+
+/** The top few ports a strand carries, as the reach's own short form --
+ * shared by the 2D membrane view and the city's standing view (#868) so
+ * neither invents its own port wording. */
+export function portsLine(ports: number[]): string {
+  return ports
+    .slice(0, 3)
+    .map((p) => `:${p}`)
+    .join(' ')
+}
