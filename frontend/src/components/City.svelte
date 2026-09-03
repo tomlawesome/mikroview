@@ -17,6 +17,7 @@
   import { zonesState } from '../lib/zones.svelte'
   import { tunnelsState } from '../lib/tunnels.svelte'
   import { policyState } from '../lib/policy.svelte'
+  import { topologyNavState } from '../lib/topologyNav.svelte'
   import { realityEdges } from '../lib/reality'
   import { symbolFor } from '../lib/city/blocks'
   import { buildingDepth, paintOrder, pieceDepth } from '../lib/city/depth'
@@ -298,6 +299,25 @@
       standSurface()
     }
   }
+
+  // A flag's own "where" link (#678) lands here when the city is the
+  // active side of the slider -- Topography.svelte's own copy of this
+  // effect stands down while cityStop is set, so exactly one of the two
+  // ever consumes a given request. City is only ever mounted while the
+  // city is the active side (Topography.svelte's `{#if cityStop}`), so
+  // that alone is the guard this effect needs. Left unconsumed when the
+  // address resolves to no drawn building yet (beyond the district's
+  // drawn cap, or the ground hasn't caught up with fresh traffic) --
+  // the request just waits rather than standing on nothing.
+  $effect(() => {
+    const pending = topologyNavState.pendingDescend
+    if (!pending) return
+    const match = allBuildings.find((b) => b.ip === pending.ip)
+    if (match) {
+      standOn(match.districtId, match.id)
+      topologyNavState.pendingDescend = null
+    }
+  })
 
   /* ---------------- importance: the plinth's height (#867) ---------------- */
 
@@ -1249,8 +1269,10 @@
          reaches N · reached by N · Esc surfaces -- the 2D map's own
          "reaches <b>N</b> · reached by <b>N</b>" wording (Topography.svelte's
          reach crumb), the round-40 mockup's layout and its own literal
-         "Esc surfaces" for the rest. -->
-    <div class="crumb" aria-label="Standing on {standBuilding.name}">
+         "Esc surfaces" for the rest. It is itself the other way to
+         surface (#868's own "Esc or the crumb"), restoring the exact
+         camera standing started from, same as Escape. -->
+    <button type="button" class="crumb" aria-label="Standing on {standBuilding.name}. Activate to surface." onclick={standSurface}>
       <b>{standBuilding.name}</b>
       <span>{standBuilding.ip}</span>
       <i></i>
@@ -1258,7 +1280,7 @@
       <span>reached by <b>{standReach.reachedBy}</b></span>
       <i></i>
       <span class="esc">Esc surfaces</span>
-    </div>
+    </button>
   {/if}
 
   {#if standBuilding && standReach?.topBlocked}
@@ -1558,6 +1580,12 @@
     font: 10.5px var(--font-mono);
     color: var(--fg-dim);
     white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .crumb:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .crumb > b {
