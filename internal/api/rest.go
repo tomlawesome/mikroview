@@ -72,14 +72,44 @@ type deviceView struct {
 	// already tracks it (main.go wires the same push into both), and
 	// duplicating it into a second store risks the two disagreeing.
 	RouterOSVersion string `json:"routerosVersion,omitempty"`
+	// MultihomedCandidates is set only on a configured device that has
+	// received nothing while undeclared devices are streaming: the
+	// source addresses of those undeclared devices, in id order, from
+	// device.Registry.MultihomedCandidates (#442). It is the evidence
+	// shape of a multi-homed router declared under one address and
+	// logging from another -- candidates, never a diagnosis, because
+	// the registry cannot know which discovered address (if any) is
+	// the same box. The wizard's step 2 and the fleet cards read it;
+	// neither re-derives it.
+	MultihomedCandidates []string `json:"multihomedCandidates,omitempty"`
+}
+
+// multihomedCandidatesByDevice indexes Registry.MultihomedCandidates by
+// the silent declared device's id, as the arriving source addresses --
+// what the operator can act on -- rather than whole Info records.
+func multihomedCandidatesByDevice(reg *device.Registry) map[string][]string {
+	out := map[string][]string{}
+	for _, c := range reg.MultihomedCandidates() {
+		arriving := make([]string, 0, len(c.Discovered))
+		for _, d := range c.Discovered {
+			arriving = append(arriving, d.SourceIP)
+		}
+		out[c.DeclaredID] = arriving
+	}
+	return out
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	infos := s.Devices.List()
+	multihomed := multihomedCandidatesByDevice(s.Devices)
 	views := make([]deviceView, 0, len(infos))
 	for _, info := range infos {
-		v := deviceView{Info: info, Status: deviceStatus(info, s.DeviceStaleAfter, now)}
+		v := deviceView{
+			Info:                 info,
+			Status:               deviceStatus(info, s.DeviceStaleAfter, now),
+			MultihomedCandidates: multihomed[info.ID],
+		}
 		if s.RouterState != nil {
 			if version, _, ok := s.RouterState.RouterOSVersion(info.ID); ok {
 				v.RouterOSVersion = version
@@ -119,8 +149,24 @@ func (s *Server) handleDeviceMACs(w http.ResponseWriter, r *http.Request) {
 // admin-gated, same as GET /api/devices: this is read-only usage data,
 // not the entity records themselves (POST/DELETE /api/entities stay
 // admin-only).
+//
+// recordingSince is issue #701's honesty bound for round 30's active
+// rule count: a client can already count distinct entries in rules for
+// "how many rules fired in the last 7 days," but the round 30 owner
+// decision requires the card to report the window it actually covered
+// rather than claim a fixed seven days it may not have seen (retention
+// runs 15 minutes to 14 days, and a fresh instance has recorded less
+// than that regardless). recordingSince is that window's start; the
+// client bounds its claim by max(recordingSince, now-7d). Rendered the
+// same zero-time-safe way as oldestHeldJSON below -- a zero
+// RecordingSince cannot occur in practice (Store always stamps one on
+// Open), but this keeps the wire contract identical to every other
+// instant on this API that might be unset.
 func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"rules": s.Rules.List()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rules":          s.Rules.List(),
+		"recordingSince": oldestHeldJSON(s.Rules.RecordingSince()),
+	})
 }
 
 // deviceStatus computes info's fleet-health status as of now -- see
