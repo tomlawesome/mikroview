@@ -8,8 +8,11 @@
 // browser renders when nothing named the tunnel's state, and the river
 // itself carries no dash of any kind.
 import { session, check, done, feedRaw } from './live-browser.mjs'
+import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
+const OUT = process.env.CITY_SHOTS || '/tmp/city866'
+mkdirSync(OUT, { recursive: true })
 
 const { page, consoleErrors } = await session()
 
@@ -86,6 +89,26 @@ check(
   chips.some((t) => t === 'wg0 · tunnel · state not pushed'),
   `wg0's bridge says its state was never pushed (chips: ${chips.join(' | ')})`,
 )
+
+// Screenshots for review (#866): the city stop, whose framing already
+// includes the far bank, and the street stop panned to the river via
+// the minimap -- the same "look there" the operator would use.
+await page.screenshot({ path: `${OUT}/city.png` })
+
+await slider.fill('7') // the street stop
+await new Promise((r) => setTimeout(r, 900))
+// Shift+arrow pans the camera at any stop (live-city-stops.mjs uses the
+// same keys); north is toward the river, so walking it there is the
+// same "look at the water" an operator would do.
+await page.locator('.city .plate').first().focus()
+for (let i = 0; i < 6; i++) {
+  await page.keyboard.press('Shift+ArrowUp')
+  await new Promise((r) => setTimeout(r, 60))
+}
+await new Promise((r) => setTimeout(r, 600))
+await page.screenshot({ path: `${OUT}/street.png` })
+console.log(`${OUT}/city.png`)
+console.log(`${OUT}/street.png`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()
