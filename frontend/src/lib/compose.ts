@@ -5,6 +5,7 @@
 // per the observes-never-connects invariant. mikroview prints, it never
 // runs: composing text is the whole job of this module.
 import type { PolicyEdge } from './policy.svelte'
+import type { ReachStrand } from './reach'
 
 export interface ComposeInput {
   /** The centred host's address -- one end of the rule. */
@@ -61,4 +62,80 @@ export function composeCommand(c: ComposeInput): string {
 export function refusingCommentFor(edges: PolicyEdge[], from: string, to: string): string | undefined {
   const e = edges.find((p) => p.key === `${from}|${to}`)
   return e?.refused && e.comment ? e.comment : undefined
+}
+
+/** What a strand needs turned into a ComposeInput: the centred host's
+ * own identity, its boundary interface, and the pushed policy table --
+ * everything reachComposeInput reads besides the strand itself. */
+export interface ReachComposeContext {
+  hostIp: string
+  hostName: string
+  /** The centred host's own zone/district -- 2D's `reach.zoneId`, the
+   * city's own standing building's district id. */
+  zoneId: string
+  wanInterface: string | null
+  zones: { id: string; cidr?: string | null; name: string }[]
+  edges: PolicyEdge[]
+}
+
+export interface ReachComposeOverrides {
+  mode?: 'allow' | 'block'
+  /** A chosen port hit; null/absent falls back to the strand's own
+   * busiest port. */
+  port?: number | null
+  /** A freely typed port, as text the same way the 2D panel's input
+   * does -- wins over `port` when it parses to a valid port number. */
+  free?: string
+  scope?: 'host' | 'subnet'
+}
+
+/**
+ * reachComposeInput turns a reach strand into the ComposeInput
+ * composeCommand prints -- the one place either view decides which
+ * port, target and place-before a drafted rule gets, so the 2D map's
+ * rich picker (allow/block, host/subnet, a free-typed port) and the
+ * city's plain default draft (#868, DESIGN.md "The reach": "it's been
+ * asking · tcp/445 · 14×" and the printed line, no picker of its own)
+ * are two callers of one function rather than two guesses that happen
+ * to agree today. Returns null exactly when there is nothing to draft
+ * from -- no port and no free-typed one, or no far-side address at all.
+ */
+export function reachComposeInput(strand: ReachStrand, ctx: ReachComposeContext, over: ReachComposeOverrides = {}): ComposeInput | null {
+  const counterpartIface = strand.counterpart === 'internet' ? (ctx.wanInterface ?? '') : strand.counterpart
+  const counterpartZone = strand.counterpart !== 'internet' ? ctx.zones.find((z) => z.id === strand.counterpart) : undefined
+  const mode = over.mode ?? 'allow'
+  const scope = over.scope ?? 'host'
+  const peerAddr = strand.peerAddrs[0] ?? ''
+  const peerName = strand.peers[0] ?? (strand.counterpart === 'internet' ? 'the internet' : strand.counterpart)
+
+  const free = Number.parseInt(over.free ?? '', 10)
+  const chosenPort =
+    !Number.isNaN(free) && free > 0 && free < 65536
+      ? { port: free, proto: 'tcp' }
+      : (() => {
+          const port = over.port ?? strand.portHits[0]?.port ?? null
+          if (port === null) return null
+          const hit = strand.portHits.find((h) => h.port === port)
+          return hit ? { port: hit.port, proto: hit.proto } : { port, proto: 'tcp' }
+        })()
+  if (!chosenPort) return null
+
+  const target = scope === 'subnet' && counterpartZone?.cidr ? counterpartZone.cidr : peerAddr
+  if (!target) return null
+  const targetName = scope === 'subnet' ? (counterpartZone?.name ?? peerName) : peerName
+
+  const pairFrom = strand.direction === 'out' ? ctx.zoneId : counterpartIface
+  const pairTo = strand.direction === 'out' ? counterpartIface : ctx.zoneId
+
+  return {
+    hostIp: ctx.hostIp,
+    direction: strand.direction,
+    target,
+    port: chosenPort.port,
+    proto: chosenPort.proto,
+    mode,
+    hostName: ctx.hostName,
+    targetName,
+    placeBefore: refusingCommentFor(ctx.edges, pairFrom, pairTo),
+  }
 }

@@ -34,7 +34,7 @@
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
   import { realityEdges, unexercisedIntents, type RealityEdge } from '../lib/reality'
   import { coverageState } from '../lib/coverage.svelte'
-  import { composeCommand, refusingCommentFor } from '../lib/compose'
+  import { composeCommand, reachComposeInput, refusingCommentFor } from '../lib/compose'
   import type { ReachStrand } from '../lib/reach'
   import { portsLine, reachFor } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
@@ -970,23 +970,20 @@
     return hit ? { port: hit.port, proto: hit.proto } : { port: composePort, proto: 'tcp' }
   })
 
+  // The strand-to-command translation itself is reachComposeInput
+  // (lib/compose.ts, #868): this panel's own allow/block toggle,
+  // chosen port and host/subnet scope are just its overrides on the
+  // same defaults the city's plainer composer calls unadorned, so the
+  // two views print the same line for the same strand by construction,
+  // not by coincidence.
   const composedCommand = $derived.by((): string | null => {
-    if (!reach || !compose || !chosenPort) return null
-    const target = composeScope === 'subnet' && counterpartZone?.cidr ? counterpartZone.cidr : composePeerAddr
-    if (!target) return null
-    const pairFrom = compose.direction === 'out' ? reach.zoneId : counterpartIface
-    const pairTo = compose.direction === 'out' ? counterpartIface : reach.zoneId
-    return composeCommand({
-      hostIp: reach.ip,
-      direction: compose.direction,
-      target,
-      port: chosenPort.port,
-      proto: chosenPort.proto,
-      mode: composeMode,
-      hostName: reach.host,
-      targetName: composeScope === 'subnet' ? (counterpartZone?.name ?? composePeerName) : composePeerName,
-      placeBefore: refusingCommentFor(policyState.edges, pairFrom, pairTo),
-    })
+    if (!reach || !compose) return null
+    const input = reachComposeInput(
+      compose,
+      { hostIp: reach.ip, hostName: reach.host, zoneId: reach.zoneId, wanInterface: zonesState.wanInterface, zones, edges: policyState.edges },
+      { mode: composeMode, port: composePort, free: composeFree, scope: composeScope },
+    )
+    return input ? composeCommand(input) : null
   })
 
   const composePlaceBefore = $derived(
