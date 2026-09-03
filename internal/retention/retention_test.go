@@ -402,3 +402,116 @@ func TestOpenWithoutAKeyIsRefused(t *testing.T) {
 		t.Errorf("Open without a key gave %v, want ErrNoKey", err)
 	}
 }
+
+// Lowering a cap has to bite immediately, not at whatever flush
+// happens next: an operator on a quiet deployment would otherwise move
+// the control and watch nothing happen (#910).
+func TestSetCapsPrunesAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	s := openStore(t, dir, key)
+
+	for d := 1; d <= 5; d++ {
+		s.Append(event(uint64(d), time.Date(2026, 9, d, 10, 0, 0, 0, time.UTC)))
+		if err := s.Flush(); err != nil {
+			t.Fatalf("Flush day %d: %v", d, err)
+		}
+	}
+	held, err := DaysHeld(dir)
+	if err != nil {
+		t.Fatalf("DaysHeld: %v", err)
+	}
+	if len(held) != 5 {
+		t.Fatalf("%d days retained, want 5", len(held))
+	}
+
+	if err := s.SetCaps(2, DefaultMaxBytes); err != nil {
+		t.Fatalf("SetCaps: %v", err)
+	}
+	held, err = DaysHeld(dir)
+	if err != nil {
+		t.Fatalf("DaysHeld: %v", err)
+	}
+	if len(held) != 2 {
+		t.Fatalf("%d days after SetCaps(2), want 2 -- nothing was pruned on the change", len(held))
+	}
+	if held[0].Day != "2026-09-04" || held[1].Day != "2026-09-05" {
+		t.Errorf("kept %s and %s, want the two newest days", held[0].Day, held[1].Day)
+	}
+	for _, d := range held {
+		if d.Bytes <= 0 {
+			t.Errorf("%s reports %d bytes, want the file's real size", d.Day, d.Bytes)
+		}
+	}
+	if days, maxBytes := s.Caps(); days != 2 || maxBytes != DefaultMaxBytes {
+		t.Errorf("caps read back as %d days / %d bytes, want 2 / %d", days, maxBytes, int64(DefaultMaxBytes))
+	}
+	// A day count prune is not the byte cap, and the two must not be
+	// confused: they lead an operator to different actions.
+	if s.Capped() {
+		t.Error("Capped() is true after a day-count prune")
+	}
+}
+
+// Capped names the byte cap specifically, because after the fact the
+// two bounds are indistinguishable from the files alone.
+func TestCappedNamesTheByteCap(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	s := openStore(t, dir, key)
+
+	for d := 1; d <= 3; d++ {
+		s.Append(event(uint64(d), time.Date(2026, 9, d, 10, 0, 0, 0, time.UTC)))
+		if err := s.Flush(); err != nil {
+			t.Fatalf("Flush day %d: %v", d, err)
+		}
+	}
+	if s.Capped() {
+		t.Fatal("Capped() before any cap was hit")
+	}
+
+	held, err := DaysHeld(dir)
+	if err != nil {
+		t.Fatalf("DaysHeld: %v", err)
+	}
+	var total int64
+	for _, d := range held {
+		total += d.Bytes
+	}
+	// Days still allows the default 30, so only the cap can drop one.
+	if err := s.SetCaps(DefaultDays, total-1); err != nil {
+		t.Fatalf("SetCaps: %v", err)
+	}
+	if held, _ := DaysHeld(dir); len(held) != 2 {
+		t.Fatalf("%d days after the cap dropped one, want 2", len(held))
+	}
+	if !s.Capped() {
+		t.Error("Capped() is false after the byte cap dropped a day")
+	}
+}
+
+// A closed store refuses rather than silently accepting a change
+// nothing will apply.
+func TestSetCapsOnAClosedStoreIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Options{Dir: dir, Key: testKey(t), flushInterval: time.Hour, flushEvents: 1 << 30})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := s.SetCaps(7, DefaultMaxBytes); err == nil {
+		t.Error("SetCaps on a closed store was accepted")
+	}
+}
+
+func TestDaysHeldOnAnAbsentDirectory(t *testing.T) {
+	held, err := DaysHeld(filepath.Join(t.TempDir(), "never-created"))
+	if err != nil {
+		t.Fatalf("DaysHeld on an absent directory: %v", err)
+	}
+	if len(held) != 0 {
+		t.Errorf("%d days reported from a directory that does not exist", len(held))
+	}
+}
