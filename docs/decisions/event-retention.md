@@ -68,5 +68,5 @@ compress 5–10×. So:
 
 - The state store (flags, entities, watchlist) is still plaintext on disk;
   this ADR does not change that. Whether the same key mechanism should cover
-  it is a separate question for M7.
+  it is a separate question for M8 (#853).
 - Anything replay-shaped keeps building against `Corpus`, not `MemoryCorpus`.
