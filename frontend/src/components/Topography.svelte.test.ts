@@ -110,6 +110,10 @@ beforeEach(() => {
   tunnelsState.byDevice = new Map()
   policyState.edges = []
   policyState.byDevice = {}
+  // Assigning byDevice directly does not recompute anyPushed, so
+  // without this a test that pushed a table leaves every later test
+  // judging traffic against a table it never pushed.
+  policyState.anyPushed = false
   coverageState.declarations = []
   flagsState.list = []
   watchlistState.entries = []
@@ -1903,6 +1907,40 @@ describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () =
       const overlaps = Math.abs(px - cx) < (cw + Number(plate.getAttribute("width"))) / 2 && Math.abs(py - cy) < 27
       expect(overlaps).toBe(false)
     }
+  })
+
+  // #897 item 2. The escalated pair is handed to the layout as empty
+  // text on purpose -- it takes no room and the card says its piece
+  // instead. The pill loop drew it anyway, so its label went out at
+  // full width over a plate sized for the empty string: the gate's
+  // "every edge label sits on a plate (10 labels, 1 bare)".
+  it('draws no pill for the pair it escalated, so no label hangs off the end of its plate', () => {
+    zonesState.pushed = twoLanes
+    pushedButSilent()
+    appState.events = [
+      ...drops(14, { inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstIp: '10.0.1.9' }),
+      ...drops(13, { inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.20', dstIp: '10.0.2.9' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelectorAll('.unplanned-card').length).toBe(1)
+
+    // A plate is sized from the string it carries and nothing else:
+    // the badge face is monospace at 9.5px, so 5.72 a character plus 6
+    // of padding either side (plateW). A label wider than its own plate
+    // is a label with nothing behind it.
+    const badges = [...container.querySelectorAll('.edge-badge')]
+    expect(badges.length).toBeGreaterThan(0)
+    for (const b of badges) {
+      const label = b.textContent?.trim() ?? ''
+      const plate = b.parentElement?.querySelector('.edge-plate')
+      expect(plate).not.toBeNull()
+      expect(Number(plate!.getAttribute('width'))).toBeGreaterThanOrEqual(label.length * 5.72 + 12 - 0.5)
+    }
+
+    // And the card is the only place the escalated pair is spoken.
+    expect(badges.filter((b) => (b.textContent ?? '').includes('14')).length).toBe(0)
   })
 })
 
