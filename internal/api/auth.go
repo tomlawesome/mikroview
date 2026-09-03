@@ -296,28 +296,38 @@ func ingestTokenFromContext(r *http.Request) *auth.Token {
 	return t
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, sessionID string) {
+// writeCookie is the only place in the package a cookie is handed to the
+// client, so the three security attributes are decided once instead of
+// being repeated at four call sites that would then have to be kept in
+// step by hand.
+//
+// SameSite is Lax rather than Strict because of the OIDC flow cookie:
+// the provider's redirect back to /callback is a top-level cross-site
+// GET navigation, and Strict would drop the cookie on it, breaking
+// login. The session cookie is happy either way.
+func (s *Server) writeCookie(w http.ResponseWriter, name, value, path string, maxAge int) {
+	// Secure is read from auth.secureCookie, which defaults to true and
+	// which validate.go reports as CFG-0021 when it is off while TLS is
+	// on. The rule looks for a literal true and cannot follow a config
+	// field, so it cannot see that the deployment already decides this.
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    sessionID,
-		Path:     "/",
+		Name:     name,
+		Value:    value,
+		Path:     path,
 		HttpOnly: true,
 		Secure:   s.SecureCookie,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(cookieMaxAge.Seconds()),
+		MaxAge:   maxAge,
 	})
 }
 
+func (s *Server) setSessionCookie(w http.ResponseWriter, sessionID string) {
+	s.writeCookie(w, sessionCookieName, sessionID, "/", int(cookieMaxAge.Seconds()))
+}
+
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   s.SecureCookie,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
+	s.writeCookie(w, sessionCookieName, "", "/", -1)
 }
 
 type sessionResponse struct {

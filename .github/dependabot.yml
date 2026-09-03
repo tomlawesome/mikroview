@@ -8,6 +8,12 @@ updates:
       day: monday
       time: "05:00"
       timezone: Europe/London
+    # A newly published version is at its most likely to be a compromised
+    # release in its first few days; waiting lets the ecosystem catch one
+    # before we take it. This is not the "pin to the latest version" rule
+    # loosened -- it delays taking a release, it does not sit on an old one.
+    cooldown:
+      default-days: 7
     target-branch: dev
     open-pull-requests-limit: 10
     groups:
@@ -22,6 +28,8 @@ updates:
       day: monday
       time: "05:30"
       timezone: Europe/London
+    cooldown:
+      default-days: 7
     target-branch: dev
     open-pull-requests-limit: 10
     ignore:
@@ -43,6 +51,8 @@ updates:
       day: monday
       time: "06:00"
       timezone: Europe/London
+    cooldown:
+      default-days: 7
     target-branch: dev
     groups:
       docker-minor-patch:
@@ -56,6 +66,8 @@ updates:
       day: monday
       time: "06:30"
       timezone: Europe/London
+    cooldown:
+      default-days: 7
     target-branch: dev
     groups:
       github-actions-minor-patch:
