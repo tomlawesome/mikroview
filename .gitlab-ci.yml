@@ -16,6 +16,15 @@
 # Status and remaining work:
 # gitlab-ci-plan/07-implementation-status-and-handover.md
 # Current instruction: AGENTS.md, "Where code review happens".
+#
+# One deliberate, scoped exception to all of the above: the
+# `chr-exercise` stage at the bottom (#894). The owner ratified running
+# it here specifically, on this runner, while the rest of the cutover
+# stays parked -- it is a standalone scheduled job, not a gate on `dev`
+# or on any merge request, and it is inert until a GitLab Pipeline
+# Schedule with CHR_EXERCISE=true exists (nothing creates one
+# automatically). See that stage's own comment and
+# docs/routeros-chr-exercise.md.
 # ============================================================
 #
 # GitLab CI for the `dev` lane. `preview`/`main` and everything they run
@@ -32,6 +41,7 @@ stages:
   - test
   - security
   - sync
+  - chr-exercise
 
 variables:
   GOFLAGS: "-mod=readonly"
@@ -246,3 +256,44 @@ sync:close-github-issues:
             "https://api.github.com/repos/tomlawesome/mikroview/issues/$num/comments" \
             -d "{\"body\":\"Closed by a merge to \`dev\` (via GitLab). Merged is not released — promotion to \`preview\` and then \`main\` is a separate, deliberate step.\"}" || true
         done
+
+# ---------------------------------------------------------------------------
+# CHR-EXERCISE — #894: weekly, boots MikroTik's own CHR image under
+# software-emulated QEMU (no /dev/kvm needed — this exercises
+# configuration commands, not throughput, per the owner's decision on
+# #894) at the newest stable RouterOS release, and runs the setup
+# wizard's starting commands against it. Green with nothing to exercise
+# is silent; green after actually booting a CHR opens a merge request
+# appending the verified row; red names the refused command.
+#
+# Inert on every pipeline source except a GitLab Pipeline Schedule that
+# itself carries a CHR_EXERCISE=true variable — set on that one
+# schedule, not project-wide, so this cannot fire from a dev push or a
+# merge request, and cannot collide with any other scheduled pipeline
+# this project adds later. The owner creates the schedule (weekly,
+# matching routeros-freshness.yml's GitHub cron: 0 7 * * 1) and the
+# GITLAB_MR_TOKEN CI/CD variable scripts/routeros-chr-open-mr.sh needs —
+# see that script's header and docs/routeros-chr-exercise.md. Neither
+# exists yet; this job does nothing until both do.
+#
+# Runs under Docker-in-Docker because scripts/live-routeros.sh itself
+# shells out to `docker build`/`docker run` to boot the CHR under QEMU.
+# Whether this runner's docker:dind service is actually available to it
+# has not been checked here — see docs/routeros-chr-exercise.md's
+# "Unverified" section.
+# ---------------------------------------------------------------------------
+
+chr-exercise:run:
+  stage: chr-exercise
+  image: golang:1.27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $CHR_EXERCISE == "true"'
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq docker.io python3 unzip curl >/dev/null
+  script:
+    - scripts/routeros-chr-exercise.sh
