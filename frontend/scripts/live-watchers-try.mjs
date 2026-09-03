@@ -106,10 +106,20 @@ check(
 
 // --- a replay that fires ------------------------------------------------
 //
-// Two distinct ports inside a second, from a source that just sent
-// twenty-five of them.
+// Twenty-two distinct ports inside a second: enough that the source
+// which just sent twenty-five of them fires, and few enough others do
+// that it lands in the receipt's sample.
+//
+// It used to ask for two, which fires for almost every host in the
+// corpus. Standalone that is harmless; in a suite run it produced 261
+// emissions, and the sample is the *first* fifty in replay order
+// (`replaySampleBound`, internal/engine/replay_declarative.go:166), so
+// the fifty shown were early traffic from scenarios that ran before this
+// one and this scenario's own scanner was nowhere in the list it then
+// asserted on (#849). A candidate that only its own traffic satisfies is
+// also what an operator tuning a detector would actually type.
 
-await thresholdField.fill('2')
+await thresholdField.fill('22')
 await windowField.fill('1')
 await row.locator('.panel .try').click()
 await row.locator('.panel .tried-count').waitFor({ state: 'visible', timeout: 20000 })
