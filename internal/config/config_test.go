@@ -509,34 +509,30 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]string{
-		"Flags.StorePath":                 cfg.Flags.StorePath,
-		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
-		"Flags.RuleUsageStorePath":        cfg.Flags.RuleUsageStorePath,
-		"Auth.StorePath":                  cfg.Auth.StorePath,
-		"Entities.StorePath":              cfg.Entities.StorePath,
-		"Audit.StorePath":                 cfg.Audit.StorePath,
-		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
-		"TLS.StorePath":                   cfg.TLS.StorePath,
-		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
-		"Engine.StorePath":                cfg.Engine.StorePath,
-		"Watchlist.StorePath":             cfg.Watchlist.StorePath,
-		"Watchlist.MatchLogPath":          cfg.Watchlist.MatchLogPath,
-		"Watchlist.SuggestionsStorePath":  cfg.Watchlist.SuggestionsStorePath,
+		"Flags.StorePath":                cfg.Flags.StorePath,
+		"Flags.RuleUsageStorePath":       cfg.Flags.RuleUsageStorePath,
+		"Auth.StorePath":                 cfg.Auth.StorePath,
+		"Entities.StorePath":             cfg.Entities.StorePath,
+		"Audit.StorePath":                cfg.Audit.StorePath,
+		"Auth.TokensStorePath":           cfg.Auth.TokensStorePath,
+		"TLS.StorePath":                  cfg.TLS.StorePath,
+		"DeviceMAC.StorePath":            cfg.DeviceMAC.StorePath,
+		"Engine.StorePath":               cfg.Engine.StorePath,
+		"Watchlist.MatchLogPath":         cfg.Watchlist.MatchLogPath,
+		"Watchlist.SuggestionsStorePath": cfg.Watchlist.SuggestionsStorePath,
 	}
 	want := map[string]string{
-		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
-		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
-		"Flags.RuleUsageStorePath":        "/var/lib/mikroview/rule-usage.json",
-		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
-		"Entities.StorePath":              "/var/lib/mikroview/entities.json",
-		"Audit.StorePath":                 "/var/lib/mikroview/audit.json",
-		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
-		"TLS.StorePath":                   "/var/lib/mikroview/tls",
-		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
-		"Engine.StorePath":                "/var/lib/mikroview/engine-state.json",
-		"Watchlist.StorePath":             "/var/lib/mikroview/watchlist.json",
-		"Watchlist.MatchLogPath":          "/var/lib/mikroview/matchlog.jsonl",
-		"Watchlist.SuggestionsStorePath":  "/var/lib/mikroview/suggestions.json",
+		"Flags.StorePath":                "/var/lib/mikroview/flags.json",
+		"Flags.RuleUsageStorePath":       "/var/lib/mikroview/rule-usage.json",
+		"Auth.StorePath":                 "/var/lib/mikroview/users.json",
+		"Entities.StorePath":             "/var/lib/mikroview/entities.json",
+		"Audit.StorePath":                "/var/lib/mikroview/audit.json",
+		"Auth.TokensStorePath":           "/var/lib/mikroview/tokens.json",
+		"TLS.StorePath":                  "/var/lib/mikroview/tls",
+		"DeviceMAC.StorePath":            "/var/lib/mikroview/mac-registry.json",
+		"Engine.StorePath":               "/var/lib/mikroview/engine-state.json",
+		"Watchlist.MatchLogPath":         "/var/lib/mikroview/matchlog.jsonl",
+		"Watchlist.SuggestionsStorePath": "/var/lib/mikroview/suggestions.json",
 	}
 	for field, got := range cases {
 		if got != want[field] {
@@ -599,7 +595,6 @@ func TestAuditEnvVarOverridesDefault(t *testing.T) {
 }
 
 func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
-	t.Setenv("MIKROVIEW_WATCHLIST_STORE_PATH", "/data/watchlist.json")
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH", "/data/matchlog.jsonl")
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY", "50000")
 	t.Setenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH", "/data/suggestions.json")
@@ -608,9 +603,6 @@ func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if cfg.Watchlist.StorePath != "/data/watchlist.json" {
-		t.Errorf("Watchlist.StorePath = %v, want /data/watchlist.json", cfg.Watchlist.StorePath)
 	}
 	if cfg.Watchlist.MatchLogPath != "/data/matchlog.jsonl" {
 		t.Errorf("Watchlist.MatchLogPath = %v, want /data/matchlog.jsonl", cfg.Watchlist.MatchLogPath)

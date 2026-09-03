@@ -16,7 +16,6 @@
 package rules
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -41,50 +40,23 @@ type Usage struct {
 
 // persistedState is the on-disk JSON shape persistLocked writes and
 // OpenWithBackend reads back: an object holding recordingSince (see
-// Store.RecordingSince) alongside every rule's usage record. Reads
-// either this object shape or the bare `[...]` array this package wrote
-// before RecordingSince existed (issue #701) -- see decodePersisted.
+// Store.RecordingSince) alongside every rule's usage record. This is the
+// only shape read -- see decodePersisted.
 type persistedState struct {
 	RecordingSince time.Time `json:"recordingSince"`
 	Rules          []*Usage  `json:"rules"`
 }
 
-// decodePersisted parses data as either persistedState's current object
-// shape or the bare `[...]` array this package wrote before
-// RecordingSince existed, distinguished by the first non-whitespace
-// byte -- same convention flags.Store's own persistedState uses for its
-// pre-exclusions upgrade (see that type's Open doc comment). The
-// bare-array shape has no stamp to report, so it always returns a zero
-// RecordingSince; OpenWithBackend infers one for that case.
+// decodePersisted parses data as persistedState and returns the stamp
+// and records it carries. Anything that is not that object shape is a
+// parse error, which OpenWithBackend's caller gets as a hard startup
+// failure (issue #378) rather than an empty store.
 func decodePersisted(data []byte) (time.Time, []*Usage, error) {
-	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && trimmed[0] == '[' {
-		var list []*Usage
-		if err := json.Unmarshal(data, &list); err != nil {
-			return time.Time{}, nil, err
-		}
-		return time.Time{}, list, nil
-	}
 	var state persistedState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return time.Time{}, nil, err
 	}
 	return state.RecordingSince, state.Rules, nil
-}
-
-// earliestFirstSeen returns the earliest FirstSeen across byRule, or the
-// zero Time if byRule is empty. OpenWithBackend uses this to infer
-// RecordingSince for a document that predates the field: the earliest
-// moment this store can actually prove it was recording. If byRule is
-// also empty there is nothing to infer from, and OpenWithBackend falls
-// back to the load time -- recording cannot have started before now.
-func earliestFirstSeen(byRule map[string]*Usage) time.Time {
-	var earliest time.Time
-	for _, u := range byRule {
-		if earliest.IsZero() || u.FirstSeen.Before(earliest) {
-			earliest = u.FirstSeen
-		}
-	}
-	return earliest
 }
 
 // Store holds every known rule label's Usage record, keyed by rule
@@ -126,7 +98,7 @@ func Open(path string) (*Store, error) {
 func OpenWithBackend(b persist.Backend) (*Store, error) {
 	s := &Store{byRule: make(map[string]*Usage)}
 
-	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the rule-usage store", persist.WriteBehindOptions{
+	wb, existed, err := persist.OpenWriteBehind(context.Background(), b, "the rule-usage store", persist.WriteBehindOptions{
 		MinInterval: persistMinInterval,
 		OnSaveError: func(msg string) { persistLog.Error(msg) },
 		OnConflict:  func(msg string) { persistLog.Warn(msg) },
@@ -149,17 +121,11 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// No document existed at all (fresh store), or one existed but
-	// predates RecordingSince (the bare-array shape, or -- defensively
-	// -- an object with a zero stamp): infer it. See earliestFirstSeen's
-	// doc comment for why FirstSeen is the right source and why "now" is
-	// the right fallback when there is nothing to infer from.
-	if s.recordingSince.IsZero() {
-		if since := earliestFirstSeen(s.byRule); !since.IsZero() {
-			s.recordingSince = since
-		} else {
-			s.recordingSince = time.Now()
-		}
+	// A document that parsed has already supplied its own stamp above.
+	// No document at all is the fresh-store case: recording starts now,
+	// because it cannot have started before this moment.
+	if !existed {
+		s.recordingSince = time.Now()
 	}
 	s.wb = wb
 	return s, nil
@@ -168,8 +134,8 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 // RecordingSince reports when this store started recording rule usage.
 // Set once and preserved across every subsequent Open/reopen, so it
 // never moves forward the way a per-process "when did I start" would --
-// see decodePersisted and earliestFirstSeen for how it is established
-// the first time a document is missing it.
+// see OpenWithBackend for how it is established when there is no
+// document yet.
 //
 // This is the honesty bound issue #701's owner decision requires: a
 // client can already derive "how many distinct rules have fired" from
