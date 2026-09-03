@@ -14,6 +14,21 @@
 
 import { session, check, done, feedRaw, feedPortScan } from './live-browser.mjs'
 
+// #869: the city is the axis's centre and its default, so a scenario about
+// the 2D map's furniture must say which side it means. `zones` is the
+// left-of-centre stop that draws the zone cards this file asserts on.
+async function toZonesStop(page) {
+  await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
+  const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
+  await slider.evaluate((el) => {
+    el.value = '2'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await new Promise((r) => setTimeout(r, 400))
+}
+
+
 const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session()
@@ -119,6 +134,11 @@ await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="tru
 check(true, 'clicking the flags dial, then its own panel row, opens the docket on the flags tab')
 
 await page.click('.rail-name >> text=Topography')
+// #869 put the city at the centre of the axis and made it the default, so
+// the 2D map's own furniture is only drawn left of centre. Everything below
+// is about that furniture, so move to the zones stop first rather than
+// asserting against whichever side happened to open.
+await toZonesStop(page)
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 await new Promise((r) => setTimeout(r, 300)) // let the camera's own opacity transition settle before clicking inside it
 
@@ -133,12 +153,14 @@ await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="tru
 check(true, 'the purple half opens the watchlist')
 
 await page.click('.rail-name >> text=Topography')
+await toZonesStop(page)
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 await page.click('[data-card="topography"] .zone .hbar-g[aria-label*="open flag"] >> nth=0')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=flags', { timeout: 5000 })
 check(true, 'the red half opens the flags tab, pre-filtered to the zone')
 
 await page.click('.rail-name >> text=Topography')
+await toZonesStop(page)
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
 // --- the altitude slider (#869) -----------------------------------------------
