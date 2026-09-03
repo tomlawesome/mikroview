@@ -628,3 +628,134 @@ func TestDecodeRealFilterRulePush(t *testing.T) {
 		t.Error("a rule with log=no decoded as logging -- every coverage answer built on this would be wrong")
 	}
 }
+
+// TestWireguardPeerHandshakeFieldsRoundTrip is issue #874's reproducer
+// for the new optional peer fields, against a realistic
+// :serialize-shaped push: keys alphabetical, an unset property as null,
+// and a byte counter big enough that a plain int32 would refuse it (the
+// float-as-integer landmine RouterOSInt64 exists for -- 5000000000 is
+// past int32's ~2.1 billion ceiling).
+func TestWireguardPeerHandshakeFieldsRoundTrip(t *testing.T) {
+	const body = `{"kind":"wireguard-peer","page":1,"pages":1,"records":[
+	  {"allowedAddress":"10.10.0.0/24","comment":"branch office","currentEndpointAddress":"203.0.113.9","disabled":false,"endpointAddress":"203.0.113.5:51820","interface":"wg0","lastHandshake":"1m23s","publicKey":"k1","rx":5000000000,"tx":123456.000000}
+	]}`
+	p := decodeOK(t, body)
+	if len(p.WireguardPeers) != 1 {
+		t.Fatalf("decoded %d peers, want 1", len(p.WireguardPeers))
+	}
+	got := p.WireguardPeers[0]
+	if got.LastHandshake != "1m23s" {
+		t.Errorf("LastHandshake = %q, want %q", got.LastHandshake, "1m23s")
+	}
+	if got.CurrentEndpointAddress != "203.0.113.9" {
+		t.Errorf("CurrentEndpointAddress = %q, want %q", got.CurrentEndpointAddress, "203.0.113.9")
+	}
+	if got.RX != 5000000000 {
+		t.Errorf("RX = %d, want 5000000000 (past int32's range -- the float-as-integer landmine)", got.RX)
+	}
+	if got.TX != 123456 {
+		t.Errorf("TX = %d, want 123456", got.TX)
+	}
+	if got.Disabled {
+		t.Errorf("Disabled = true, want false")
+	}
+	if got.Interface != "wg0" {
+		t.Errorf("Interface = %q, want %q", got.Interface, "wg0")
+	}
+}
+
+// TestWireguardPeerHandshakeFieldsAreOptional is #874's compatibility
+// half: a peer record with none of the five new fields (the shape every
+// push before this schema sent) must still decode, with the new fields
+// at their zero value -- absent, never a guessed-at "down" or "0 bytes
+// reported".
+func TestWireguardPeerHandshakeFieldsAreOptional(t *testing.T) {
+	p := decodeOK(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":"10.10.0.0/24","endpointAddress":"203.0.113.5:51820","comment":"branch office"}]}`)
+	got := p.WireguardPeers[0]
+	if got.LastHandshake != "" {
+		t.Errorf("LastHandshake = %q, want empty (never handshaken/not reported)", got.LastHandshake)
+	}
+	if got.CurrentEndpointAddress != "" {
+		t.Errorf("CurrentEndpointAddress = %q, want empty", got.CurrentEndpointAddress)
+	}
+	if got.RX != 0 || got.TX != 0 {
+		t.Errorf("RX/TX = %d/%d, want 0/0", got.RX, got.TX)
+	}
+	if got.Disabled {
+		t.Errorf("Disabled = true, want false (absent means enabled)")
+	}
+	if got.Interface != "" {
+		t.Errorf("Interface = %q, want empty (attribution unavailable)", got.Interface)
+	}
+}
+
+// TestWireguardPeerHandshakeFieldExplicitNull covers the other real
+// shape RouterOS's own :serialize sends for an unset property (null,
+// not an absent key) -- TestDecodeRealFilterRulePush already pins this
+// for FilterRule; wireguard-peer gets the same treatment for its own
+// never-handshaken peer.
+func TestWireguardPeerHandshakeFieldExplicitNull(t *testing.T) {
+	p := decodeOK(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":"10.10.0.0/24","endpointAddress":null,"comment":"c","lastHandshake":null,"currentEndpointAddress":null,"rx":null,"tx":null,"disabled":null}]}`)
+	got := p.WireguardPeers[0]
+	if got.LastHandshake != "" || got.CurrentEndpointAddress != "" || got.RX != 0 || got.TX != 0 || got.Disabled {
+		t.Errorf("explicit nulls decoded to %+v, want every new field at its zero value", got)
+	}
+}
+
+func TestRouterOSInt64AcceptsFloatShapePastInt32Range(t *testing.T) {
+	p := decodeOK(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":"10.0.0.0/24","endpointAddress":"","comment":"","rx":9007199254740992}]}`)
+	if p.WireguardPeers[0].RX != 9007199254740992 {
+		t.Errorf("RX = %d, want 9007199254740992 (2^53, float64's exact-integer ceiling)", p.WireguardPeers[0].RX)
+	}
+}
+
+func TestRouterOSInt64RejectsFractional(t *testing.T) {
+	decodeErr(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":"10.0.0.0/24","endpointAddress":"","comment":"","rx":1.5}]}`)
+}
+
+// TestDecodePPPActive is issue #874's second table: /ppp/active print
+// as-value, one row per currently connected L2TP/PPTP/SSTP/OVPN
+// session.
+func TestDecodePPPActive(t *testing.T) {
+	const body = `{"kind":"ppp-active","page":1,"pages":1,"records":[
+	  {"address":"10.20.0.5","callerId":"203.0.113.44","name":"branch-l2tp","service":"l2tp","uptime":"4w2d5h24m35s"},
+	  {"address":"10.20.0.6","callerId":"203.0.113.45","name":"laptop-sstp","service":"sstp","uptime":"3s"}
+	]}`
+	p := decodeOK(t, body)
+	if p.Kind != KindPPPActive {
+		t.Fatalf("Kind = %q, want %q", p.Kind, KindPPPActive)
+	}
+	if len(p.PPPActive) != 2 {
+		t.Fatalf("decoded %d sessions, want 2", len(p.PPPActive))
+	}
+	got := p.PPPActive[0]
+	if got.Name != "branch-l2tp" || got.Service != "l2tp" || got.Address != "10.20.0.5" || got.CallerID != "203.0.113.44" || got.Uptime != "4w2d5h24m35s" {
+		t.Errorf("PPPActive[0] = %+v, unexpected", got)
+	}
+	if p.RecordCount() != 2 {
+		t.Errorf("RecordCount() = %d, want 2", p.RecordCount())
+	}
+}
+
+// TestDecodePPPActiveMissingFieldsStillDecodes: every field on this
+// record is optional the same way every other record field in this
+// schema is -- a router that omits caller-id (PPTP has no such
+// property) or address must not be refused for it.
+func TestDecodePPPActiveMissingFieldsStillDecodes(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ppp-active","page":1,"pages":1,"records":[{"name":"vpn-user1","service":"pptp"}]}`)
+	got := p.PPPActive[0]
+	if got.Name != "vpn-user1" || got.Service != "pptp" {
+		t.Fatalf("PPPActive[0] = %+v, unexpected", got)
+	}
+	if got.Address != "" || got.CallerID != "" || got.Uptime != "" {
+		t.Errorf("omitted fields decoded non-empty: %+v", got)
+	}
+}
+
+func TestDecodePPPActiveRejectsUnknownRecordField(t *testing.T) {
+	decodeErr(t, `{"kind":"ppp-active","page":1,"pages":1,"records":[{"name":"n","bogus":"x"}]}`)
+}
+
+func TestDecodePPPActiveRejectsControlCharacterInField(t *testing.T) {
+	decodeErr(t, "{\"kind\":\"ppp-active\",\"page\":1,\"pages\":1,\"records\":[{\"name\":\"n\x01\",\"service\":\"l2tp\"}]}")
+}

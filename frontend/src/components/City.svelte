@@ -14,6 +14,7 @@
   import { tick, untrack } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { zonesState } from '../lib/zones.svelte'
+  import { tunnelsState } from '../lib/tunnels.svelte'
   import { policyState } from '../lib/policy.svelte'
   import { realityEdges } from '../lib/reality'
   import { symbolFor } from '../lib/city/blocks'
@@ -47,11 +48,18 @@
     type Stop,
   } from '../lib/city/project'
   import { lerpP, roadPieces, segsOf, type Entity } from '../lib/city/roads'
-  import type { Building, District, Ground, RoadKind } from '../lib/city/types'
+  import { riverScene } from '../lib/city/river'
+  import { P, type Paint } from '../lib/city/paint'
+  import { bridgeStateLabel } from '../lib/city/tunnelState'
+  import { deviceKindFor } from '../lib/city/deviceKind'
+  import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
+  import { entitiesState } from '../lib/entities.svelte'
+  import CityDeviceDefs from './CityDeviceDefs.svelte'
+  import type { Building, CityPeer, District, Ground, RoadKind } from '../lib/city/types'
 
   let { stop, ground: groundProp }: { stop: Stop; ground?: Ground } = $props()
 
-  const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--marked)']
+  const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--lane-5)']
   const VERDICT: Record<RoadKind, string> = { a: 'var(--accept)', d: 'var(--drop)', x: 'var(--alarm)', q: 'var(--fg-dim)' }
   const VOID = '#080d18'
   const MOVE_MS = 620
@@ -78,6 +86,7 @@
           policyState.anyPushed,
           primaryDevice?.id ?? null,
           zonesState.wanInterface,
+          tunnelsState.list,
         ),
       ),
   )
@@ -274,25 +283,16 @@
 
   /* ---------------- drawing ---------------- */
 
-  interface Paint {
-    d?: string
-    cx?: number
-    cy?: number
-    rx?: number
-    ry?: number
-    fill?: string
-    fo?: number
-    stroke?: string
-    so?: number
-    sw?: number
-    cls?: string
-    dash?: string
-  }
-
   type Solid =
     | { kind: 'piece'; v: number; paints: Paint[]; flow: Paint | null; label: string }
     | { kind: 'other'; v: number; paints: Paint[]; lamps: { x: number; y: number; r: number; rr: number; h: number }[] }
     | { kind: 'building'; v: number; b: Building; district: District | null; ink: string; dim: boolean; paints: Paint[]; stamp: { x: number; y: number; k: number }; aria: string }
+    | { kind: 'hamlet'; v: number; id: string; aria: string; attrs: DeviceStampAttrs }
+
+  /** This SVG root's own device-symbol prefix (#864's <use> convention):
+   * only one City is ever mounted at a time (Topography.svelte), so a
+   * fixed prefix is safe. */
+  const DEVICE_PREFIX = 'city'
 
   function gfaces(b: BoxFaces, ink: string, o: { t?: number; r?: number; l?: number; s?: number; sw?: number; bg?: boolean }): Paint[] {
     const out: Paint[] = []
@@ -305,19 +305,44 @@
     return out
   }
 
-  const P = (c: Cam, p: Pt, z = 0) => R2(X(c, p[0])) + ' ' + R2(Y(c, p[1], z))
+  const HAMLET_MAX = 6
+  const HAMLET_R = 8
 
-  /** A Catmull-Rom curve through ground points as a projected path. */
-  function curvePath(c: Cam, pts: Pt[]): string {
-    let d = ''
-    segsOf(pts).forEach((s, i) => {
-      d += (i ? '' : 'M' + P(c, s[0])) + 'C' + P(c, s[1]) + ' ' + P(c, s[2]) + ' ' + P(c, s[3])
-    })
-    return d
+  /**
+   * Ring positions for a tunnel's peers around a centre point on the far
+   * bank -- the same ring formula layout.ts's placeBuildings uses for a
+   * district, kept local since this is purely a rendering placement (the
+   * hamlet stands on no ground plan any other code depends on). Capped
+   * at HAMLET_MAX: a hamlet is a glance across the water, not another
+   * district with its own "N more".
+   */
+  function hamletPositions(peers: CityPeer[], centre: Pt): Pt[] {
+    const n = Math.min(peers.length, HAMLET_MAX)
+    if (n <= 1) return [centre]
+    const out: Pt[] = []
+    for (let i = 0; i < n; i++) {
+      const th = -Math.PI / 2 + (i / n) * Math.PI * 2
+      const cx = Math.cos(th)
+      const sy = Math.sin(th)
+      const s = Math.abs(cx) + Math.abs(sy) || 1
+      out.push([centre[0] + (cx / s) * HAMLET_R, centre[1] + (sy / s) * HAMLET_R])
+    }
+    return out
   }
-  function between(c: Cam, a: Pt[], b: Pt[]): string {
-    const rev = b.slice().reverse()
-    return curvePath(c, a) + 'L' + P(c, rev[0]) + curvePath(c, rev).replace(/^M[^C]*/, '') + 'Z'
+
+  /**
+   * An operator's own tags for a peer's address, from the entities
+   * register -- read only, never fetched from here (Topography.svelte's
+   * mount effect refreshes the zone, policy and tunnel tables; the
+   * entities register is refreshed by its own admin page). Undefined
+   * until the register has loaded is the generic puck's honest fallback,
+   * not a defect: "generic puck unless the entities register knows the
+   * kind" already covers "does not know yet".
+   */
+  function entityTagsFor(peer: CityPeer): string[] | undefined {
+    if (!peer.address) return undefined
+    const ip = peer.address.split('/')[0]
+    return entitiesState.list.find((e) => e.type === 'host' && e.key === ip)?.tags
   }
 
   const showLanes = $derived(stop === 'district' || stop === 'street')
@@ -333,22 +358,15 @@
     const solids: Solid[] = []
 
     if (g.river) {
-      const { bankN, bankF, width } = g.river
-      const mid = bankN.map((p): Pt => [p[0] - width * 0.5, p[1] - width * 0.5])
-      const midW = bankN.map((p): Pt => [p[0] - width * 0.28, p[1] - width * 0.72])
-      const area = between(c, bankN, bankF)
-      groundPaints.push(
-        { d: between(c, bankF, bankF.map((p): Pt => [p[0], p[1] - 58])), fill: VOID },
-        { d: area, fill: '#0a1526', fo: 0.94 },
-        { d: area, fill: 'var(--accent)', fo: 0.05 },
-        { d: curvePath(c, mid), stroke: 'var(--accent)', so: 0.2, sw: R2(Math.max(1, c.S * 0.22)), cls: 'current' },
-        { d: curvePath(c, midW), stroke: 'var(--accent)', so: 0.13, sw: R2(Math.max(1, c.S * 0.14)), cls: 'current slow' },
-        { d: curvePath(c, bankN), stroke: 'var(--accent)', so: 0.4, sw: 1.2 },
-        { d: curvePath(c, bankF), stroke: 'var(--fg-dim)', so: 0.5, sw: 1 },
-      )
+      groundPaints.push(...riverScene(c, g.river))
       for (const b of g.bridges) {
-        const down = b.state === 'down'
-        const ink = down ? 'var(--fg-dim)' : 'var(--accent)'
+        // A road bridge only ever reads up (lamped) or unknown (unlit) --
+        // never down/quiet. A footbridge with no state at all (unknown)
+        // draws exactly like down: piers only, no deck lighting, because
+        // this build makes no claim either way about a tunnel nothing
+        // pushed a state for.
+        const lit = b.state === 'up' || b.state === 'quiet'
+        const ink = lit ? 'var(--accent)' : 'var(--fg-dim)'
         for (const t of [0.3, 0.7]) {
           const p = lerpP(b.f, b.t, t)
           const pr = gbox(c, p[0], p[1], b.w * 0.5, b.w * 0.5, -0.9, 1.5)
@@ -363,6 +381,9 @@
         }
         paints.push({ d: rail(1), stroke: ink, so: 0.75, sw: 1 }, { d: rail(-1), stroke: ink, so: 0.55, sw: 1 })
         const lamps: { x: number; y: number; r: number; rr: number; h: number }[] = []
+        // The road bridge's lamp is coverage, not traffic: a logging
+        // rule covers the boundary (state 'up' means lamped for a road
+        // bridge -- see layout.ts's wanLogged wiring), never events.
         if (b.kind === 'road' && b.state === 'up') {
           for (let i = 0; i < 2; i++) {
             const p = lerpP(b.f, b.t, 0.24 + 0.52 * i)
@@ -370,6 +391,30 @@
           }
         }
         solids.push({ kind: 'other', v: b.mid[1] + b.w, paints, lamps })
+
+        // The far-bank hamlet (#866): this tunnel's peers, across the
+        // water past the footbridge's far head, using the device
+        // library's own shapes (#864) -- generic puck unless the
+        // entities register already knows the kind for that address.
+        if (b.kind === 'foot' && b.peers.length > 0) {
+          const dx = b.f[0] - b.t[0]
+          const dy = b.f[1] - b.t[1]
+          const dl = Math.hypot(dx, dy) || 1
+          const centreU = b.f[0] + (dx / dl) * 16
+          const centreV = b.f[1] + (dy / dl) * 16
+          for (const [i, hp] of hamletPositions(b.peers, [centreU, centreV]).entries()) {
+            const peer = b.peers[i]
+            const kind = deviceKindFor({ name: peer.name, tags: entityTagsFor(peer) })
+            const scale = deviceScale(2.2, c.S)
+            solids.push({
+              kind: 'hamlet',
+              v: hp[1] + 2.2,
+              id: b.id + '/' + peer.id,
+              aria: peer.name + (peer.address ? ' at ' + peer.address : '') + ', across the water on ' + b.iface,
+              attrs: deviceStampAttrs(kind, DEVICE_PREFIX, { ink: 'var(--fg-dim)', scale, x: X(c, hp[0]), y: Y(c, hp[1]) }),
+            })
+          }
+        }
       }
     }
 
@@ -529,14 +574,19 @@
       if (!claim(x, y, w, compact ? 20 : 38)) continue
       plaques.push({ d, x, y, w: R2(w), ink: inkOf(d), tally: d.buildings.length + d.more + (d.buildings.length + d.more === 1 ? ' host' : ' hosts') })
     }
+    // Only a footbridge carries a state chip: the road bridge (the WAN)
+    // never reads up/down/quiet, it is only ever lamped or unlit, and
+    // that is shown by the lamp itself, not a label.
     const bridgeChips: { x: number; y: number; w: number; t: string; stroke: string }[] = []
     for (const b of g.bridges) {
-      const t = b.iface + (b.kind === 'road' ? ' · the WAN' : ' · tunnel') + ' · ' + b.state.toUpperCase()
+      if (b.kind !== 'foot') continue
+      const t = b.iface + ' · tunnel · ' + bridgeStateLabel(b.state)
       const w = t.length * 5.9 + 18
       const x = R2(X(c, b.mid[0]) + c.S * 2.2)
       const y = R2(Y(c, b.mid[1]) + Math.max(20, c.S * 3.2))
       if (!claim(x, y - 9, w, 18)) continue
-      bridgeChips.push({ x, y, w: R2(w), t, stroke: b.state === 'quiet' ? 'var(--hair-2)' : 'rgba(232,176,90,0.45)' })
+      const stroke = b.state === 'up' ? 'rgba(232,176,90,0.45)' : b.state === 'down' ? 'rgba(255,84,112,0.4)' : 'var(--hair-2)'
+      bridgeChips.push({ x, y, w: R2(w), t, stroke })
     }
 
     return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, claim }
@@ -619,6 +669,7 @@
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
   >
+    <CityDeviceDefs prefix={DEVICE_PREFIX} />
     <g transform={viewTransform}>
       <g class="ground">
         {#if ground.river}
@@ -674,6 +725,11 @@
               <circle class="lamp" cx={l.x} cy={R2(l.y - l.h)} r={l.r} fill="var(--now)" />
               <circle class="lamp" cx={l.x} cy={R2(l.y - l.h)} r={l.rr} fill="var(--now)" fill-opacity="0.13" />
             {/each}
+          {:else if s.kind === 'hamlet'}
+            <g class="hamlet" role="img" aria-label={s.aria}>
+              <title>{s.aria}</title>
+              <use href={s.attrs.href} transform={s.attrs.transform} style={s.attrs.style} />
+            </g>
           {:else}
             <g
               class="blk"
@@ -867,18 +923,16 @@
     }
   }
 
-  .current {
-    stroke-dasharray: 30 46;
-    animation: current 7s linear infinite;
+  /* The river's ripple texture (#866): a very slow drift, never a dash
+   * -- the owner's verdict on the mockup's dashed "current" lines was
+   * that they made the river read as a road. */
+  .ripple {
+    animation: ripple-drift 15s ease-in-out infinite alternate;
   }
 
-  .current.slow {
-    animation-duration: 11s;
-  }
-
-  @keyframes current {
+  @keyframes ripple-drift {
     to {
-      stroke-dashoffset: -76;
+      transform: translate(3px, -1.5px);
     }
   }
 
@@ -985,12 +1039,11 @@
   @media (prefers-reduced-motion: reduce) {
     .flow,
     .lamp,
-    .current {
+    .ripple {
       animation: none;
     }
 
-    .flow,
-    .current {
+    .flow {
       stroke-dasharray: none;
     }
   }

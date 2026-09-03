@@ -408,6 +408,86 @@ export async function fetchRouterAddresses(device: string): Promise<RouterTable<
   return res.json()
 }
 
+// fetchRouterWireguard and fetchRouterPPPActive are #866's own readers
+// of issue #874's ingest: the city's footbridges (lib/tunnels.svelte.ts)
+// are the first caller of either.
+export async function fetchRouterWireguard(device: string): Promise<RouterWireguardTunnels> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/wireguard`)
+  if (!res.ok) throw new ApiError(`fetchRouterWireguard: ${res.status}`, res.status)
+  return res.json()
+}
+
+export async function fetchRouterPPPActive(device: string): Promise<RouterPPPActive> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/ppp-active`)
+  if (!res.ok) throw new ApiError(`fetchRouterPPPActive: ${res.status}`, res.status)
+  return res.json()
+}
+
+// Per-tunnel state derived server-side from the pushed WireGuard tables
+// (issue #874, City 9's ingest side): a peer is "up" when its last
+// handshake was under three minutes old at push time, an interface is
+// "up" if any of its peers is, and "unknown" means the wireguard-peer
+// kind has never been pushed for this device at all -- never a guessed
+// down. A peer belongs to the interface its own pushed "interface"
+// property names; a push script old enough to omit that property leaves
+// every peer unattributed, and the server then lists every peer under
+// every interface rather than none (see the doc comment on
+// wireguardInterfaceView). The city's WireGuard footbridges read this
+// through tunnels.svelte.ts (#866); #877 draws the same state as the
+// topography's tunnel node.
+export interface RouterWireguardPeer {
+  publicKey: string
+  allowedAddress: string[]
+  endpointAddress: string
+  comment: string
+  lastHandshake?: string
+  currentEndpointAddress?: string
+  rx?: number
+  tx?: number
+  disabled?: boolean
+  state: 'up' | 'down'
+  since?: string
+}
+
+export interface RouterWireguardInterface {
+  name: string
+  comment: string
+  publicKey: string
+  listenPort: number
+  state: 'up' | 'down' | 'unknown'
+  peers: RouterWireguardPeer[]
+}
+
+export interface RouterWireguardTunnels {
+  available: boolean
+  updatedAt?: string
+  peersAvailable: boolean
+  peersUpdatedAt?: string
+  interfaces: RouterWireguardInterface[]
+}
+
+// One currently active /ppp/active session (issue #874) -- covers
+// L2TP, PPTP, SSTP and OVPN alike, all surfaced through the same
+// RouterOS menu. A row exists here only while RouterOS considers the
+// session active, so presence in this list is itself the up signal; a
+// tunnel name a caller already knows about from elsewhere that is not
+// present here reads as down.
+export interface RouterPPPSession {
+  name: string
+  service: string
+  address: string
+  callerId: string
+  uptime: string
+  state: 'up'
+  since?: string
+}
+
+export interface RouterPPPActive {
+  available: boolean
+  updatedAt?: string
+  sessions: RouterPPPSession[]
+}
+
 // Mirrors internal/api/flags.go's handleFlagsList response: the flag
 // list plus the last hour of newly-raised-episode counts by type (see
 // FlagTimeBucket) for the metrics page -- one endpoint, same convention

@@ -30,6 +30,7 @@
   // this scene, not a place) follows in its own change.
   import { appState } from '../lib/state.svelte'
   import { zonesState, type ZoneInfo } from '../lib/zones.svelte'
+  import { tunnelsState } from '../lib/tunnels.svelte'
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
   import { realityEdges, unexercisedIntents, type RealityEdge } from '../lib/reality'
   import { coverageState } from '../lib/coverage.svelte'
@@ -56,13 +57,15 @@
   const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--lane-5)']
 
   // The pushed /ip address table names the zones, the pushed rule
-  // table draws the policy edges; both refreshed whenever the device
-  // list itself changes (it loads after mount).
+  // table draws the policy edges, and #874's tunnel tables give the
+  // city's footbridges their state (#866); all refreshed whenever the
+  // device list itself changes (it loads after mount).
   $effect(() => {
     if (appState.devices.length > 0) {
       zonesState.refresh()
       policyState.refresh()
       coverageState.refresh()
+      tunnelsState.refresh()
     }
   })
 
