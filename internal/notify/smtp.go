@@ -93,7 +93,7 @@ func (n *SMTPNotifier) Send(batch []flags.Flag) error {
 // has no concept of connecting over TLS from the first byte.
 func (n *SMTPNotifier) dial(addr string) (*smtp.Client, error) {
 	if n.cfg.TLSMode == TLSImplicit {
-		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: n.cfg.Host})
+		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: n.cfg.Host, MinVersion: tls.VersionTLS12})
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +109,7 @@ func (n *SMTPNotifier) dial(addr string) (*smtp.Client, error) {
 		return nil, err
 	}
 	if n.cfg.TLSMode == TLSStartTLS {
-		if err := client.StartTLS(&tls.Config{ServerName: n.cfg.Host}); err != nil {
+		if err := client.StartTLS(&tls.Config{ServerName: n.cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
 			client.Close()
 			return nil, err
 		}
