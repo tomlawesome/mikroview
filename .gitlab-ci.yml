@@ -212,6 +212,62 @@ test:build-checks:
     - node tools/licenses/generate-notices.mjs --check
     - node tools/docs/check-anchors.mjs
 
+# Postgres integration (#131), ported from GitHub's ci.yml (#942). Same
+# image and the same TLS-only shape: internal/persist refuses any
+# connection that could fall back to plaintext (its requireTLS), so the
+# server must present a certificate. GitHub built a one-line derived
+# image to get the cert in; here the service's entrypoint is overridden
+# to generate it before handing over to the stock entrypoint, which
+# needs no image build and no Docker inside the job. The cert is
+# self-signed and one day old at most, hence sslmode=require rather
+# than verify-full -- this checks the storage logic, not certificate
+# validation. Runs in every lane, dev included, for the reason ci.yml's
+# header gave: this job's absence from dev once let a storage defect
+# sit for 41 commits (#273).
+test:postgres:
+  stage: test
+  image: golang:1.27
+  <<: *dev_or_mr
+  services:
+    - name: postgres:18-alpine
+      alias: postgres
+      entrypoint: ["sh", "-c"]
+      command:
+        - |
+          apk add --no-cache openssl >/dev/null
+          mkdir -p /certs
+          openssl req -new -x509 -days 1 -nodes -subj "/CN=localhost" \
+            -keyout /certs/server.key -out /certs/server.crt
+          chown postgres:postgres /certs/server.crt /certs/server.key
+          chmod 600 /certs/server.key && chmod 644 /certs/server.crt
+          exec docker-entrypoint.sh postgres -c ssl=on \
+            -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
+  variables:
+    POSTGRES_PASSWORD: ci
+    POSTGRES_DB: mikroview
+    MIKROVIEW_TEST_POSTGRES: postgres://postgres:ci@postgres:5432/mikroview?sslmode=require
+  before_script:
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    # The runner only waits for the service's port, and Postgres listens
+    # briefly during its own init before restarting, so a port check can
+    # pass early. Ask the server itself, as ci.yml did. Debian's client
+    # is older than the server; pg_isready does not care. No `exit` in
+    # this loop: before_script and script share one shell, and an early
+    # exit here would end the job green with nothing tested.
+    - apt-get -qq update && apt-get -qq install -y postgresql-client >/dev/null
+    - |
+      ready=0
+      for attempt in $(seq 1 40); do
+        if pg_isready -h postgres -U postgres -d mikroview >/dev/null 2>&1; then ready=1; break; fi
+        sleep 1
+      done
+      [ "$ready" = 1 ] || { echo "postgres never became ready"; false; }
+  script:
+    # internal/matchlog alongside internal/persist (#243 slice 6): its
+    # Postgres backend is a second, independent SQL sink with its own
+    # table and needs the same real-database coverage.
+    - go test -race -count=1 ./internal/persist/... ./internal/matchlog/...
+
 # ---------------------------------------------------------------------------
 # SECURITY — parallel jobs, diff-scoped Semgrep on MRs, full scan on dev.
 # ---------------------------------------------------------------------------
