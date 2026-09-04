@@ -49,7 +49,7 @@
   import { familyOf } from '../lib/flagPalette'
   import { fetchSetupStatus, fetchDevices, fetchSetupCommands, fetchHistorySettings } from '../lib/api'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
-  import type { DiskPhase } from '../lib/history'
+  import { restartRow, stateRow, type DiskPhase } from '../lib/history'
   import MemoryControl from './MemoryControl.svelte'
   import DiskControl from './DiskControl.svelte'
   import { usersState } from '../lib/users.svelte'
@@ -78,7 +78,7 @@
     detectorSettingsState.refresh().catch(() => {})
     versionState.ensureLoaded().catch(() => {})
     // 403s for a non-admin (see persistenceState's own doc comment) --
-    // the persistence row below just states less for that caller,
+    // the disk group's `state` row is simply left out for that caller,
     // same swallow-and-degrade shape as fetchSetupStatus above.
     persistenceState.ensureLoaded().catch(() => {})
     // keys and people: never fetched below admin -- both GET /api/tokens
@@ -91,9 +91,10 @@
     }
     // The disk group (#910) reads its own endpoint: the switch, the
     // window and what is held. Refreshed slowly, since the held window
-    // moves by the day; a change made here refreshes it at once. A
-    // refusal (an older server, say) leaves the group absent rather
-    // than drawing a switch nothing stands behind.
+    // moves by the day; a change made here refreshes it at once. A 403
+    // (not an admin) leaves the group absent -- the drawing is an admin
+    // surface; any other failure draws round 43's unanswered state
+    // rather than a switch nothing stands behind (see refreshHistory).
     refreshHistory()
     const historyTimer = setInterval(refreshHistory, 60_000)
     fetchDevices()
@@ -112,18 +113,48 @@
       .catch(() => {
         knownDevices = []
       })
-    return () => clearInterval(historyTimer)
+    return () => {
+      clearInterval(historyTimer)
+      if (historyRetry) clearTimeout(historyRetry)
+    }
   })
 
   // --- disk: the on-disk history's switch (#910, round 42) --------------
   let history = $state<HistorySettings | null>(null)
   let diskPhase = $state<DiskPhase>('rest')
+  // Round 43's `dfail`: the GET failed for a reason other than role --
+  // an older server, a 5xx, no network. The group stays, says so and
+  // offers to ask again, rather than vanishing (round 42's gap 9).
+  let historyUnanswered = $state(false)
+  let historyRetry: ReturnType<typeof setTimeout> | null = null
 
   function refreshHistory() {
     fetchHistorySettings()
-      .then((h) => (history = h))
-      .catch(() => {})
+      .then((h) => {
+        history = h
+        historyUnanswered = false
+      })
+      .catch((err: unknown) => {
+        // ApiError carries the status; read it by shape so a test's
+        // mocked api module needs no class of its own.
+        if ((err as { status?: number } | null)?.status === 403) return
+        historyUnanswered = true
+      })
   }
+
+  // A change the server accepted comes back with what is held *now*,
+  // which right after `turn on` on a quiet instance can still be nothing:
+  // the first day's file appears at the next flush once events arrive.
+  // So ask once more shortly after, rather than leaving `nothing` on
+  // the row for up to a minute (round 42's gap 8).
+  function historyChanged(next: HistorySettings) {
+    history = next
+    if (historyRetry) clearTimeout(historyRetry)
+    historyRetry = setTimeout(refreshHistory, 6_000)
+  }
+
+  // The `state` row (round 43): the state store, beside the key.
+  const stateStoreRow = $derived(stateRow(persistenceState.info))
 
   const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
 
@@ -329,24 +360,6 @@
     if (!(span > 0)) return null
     const fraction = Math.min(1, Math.max(0, (cutAt - oldestHeldAt) / span))
     return { x: TRACK_X0 + (TRACK_X1 - TRACK_X0) * fraction, at: clockTime(cutAt) }
-  })
-
-  // --- memory: persistence (#677) -------------------------------------
-  // Two halves, both live truth rather than the ratified copy's "JSON
-  // store · 14 d" (no such event-retention feature exists -- see
-  // internal/persist's own package doc): which backend the stores it
-  // does cover (flags, definitions, watchlist entries, entities,
-  // tokens/accounts) actually use, from persistenceState -- absent
-  // entirely for a non-admin, the same absent-not-disabled grammar the
-  // rest of Settings' admin-only facts already follow -- plus the one
-  // fact that holds regardless of role or config: the event buffer
-  // above is memory-only.
-  const persistenceSummary = $derived.by(() => {
-    const bufferFact = 'the event buffer above is memory-only and clears on restart'
-    const info = persistenceState.info
-    if (!info) return bufferFact
-    const backend = info.backend === 'postgres' ? 'Postgres' : `file store · ${info.dir ?? '—'}`
-    return `${backend} — holds flags, definitions, watchlist entries, entities and tokens; ${bufferFact}`
   })
 
   // --- ingest --------------------------------------------------------------
@@ -1000,18 +1013,16 @@
             <span>what reads it</span>
             <span class="ov">every scene below reads from here; nothing anywhere probes</span>
           </div>
-          <!-- #677: "persistence — JSON store · 14 d" was the ratified
-               copy, but no event store with a day-based retention exists
-               -- internal/persist's own package doc calls the live event
-               stream the one deliberate in-memory-only exception, with no
-               config path that changes it. internal/persist IS real,
-               though, and backs flags/definitions/watchlist/entities/
-               tokens -- persistenceSummary states which backend it
-               actually uses (see persistenceState) alongside the buffer
-               fact, rather than only the negative half. -->
+          <!-- Round 43's `on restart` row (#921): the buffer alone, and
+               what outlives it, read per the disk group's state -- see
+               restartRow. Dim only when the disk's state is unknown,
+               since then the row claims the least. (#677's "persistence
+               — JSON store · 14 d" was the ratified copy before an
+               event store existed; the state-store half of that row now
+               lives in the disk group beside the key.) -->
           <div class="orow">
-            <span>persistence</span>
-            <span class="ov dim">{persistenceSummary}</span>
+            <span>on restart</span>
+            <span class="ov" class:dim={history === null}>{restartRow(history)}</span>
           </div>
         </div>
       </div>
@@ -1037,9 +1048,22 @@
             settings={history}
             stats={appState.stats}
             canEdit={isAdmin}
+            stateStore={stateStoreRow}
             bind:phase={diskPhase}
-            onchanged={(next) => (history = next)}
+            onchanged={historyChanged}
           />
+        </div>
+      {:else if historyUnanswered}
+        <!-- Round 43's unanswered state (`dfail`): one row, no control,
+             and a link that asks again. -->
+        <div id="diskg" class="stsection wide dfail">
+          <h3>disk</h3>
+          <div class="wrows">
+            <div class="orow">
+              <span>on disk</span>
+              <span class="ov">unknown — the server did not answer · <button class="olink" onclick={refreshHistory}>ask again</button></span>
+            </div>
+          </div>
         </div>
       {/if}
 
@@ -1230,7 +1254,8 @@
   /* No key mounted: the disk group is two statements and no diagram, so
      it stacks like account rather than holding an empty left column
      (round 42's `#set.dnokey #diskg { display: block }`). */
-  .stsection.wide.dnokey {
+  .stsection.wide.dnokey,
+  .stsection.wide.dfail {
     display: block;
   }
 
