@@ -42,8 +42,8 @@ await goTo(page, 'Settings')
 const groupNames = await page.$$eval('.stsection h3', (els) => els.map((e) => e.textContent.trim()))
 check(
   JSON.stringify(groupNames) ===
-    JSON.stringify(['ingest', 'keys', 'detection', 'memory', 'account', 'people']),
-  `the groups render in order -- ingest, keys, detection, memory, account, people -- got ${JSON.stringify(groupNames)}`,
+    JSON.stringify(['ingest', 'keys', 'detection', 'memory', 'disk', 'account', 'people']),
+  `the groups render in order -- ingest, keys, detection, memory, disk, account, people -- got ${JSON.stringify(groupNames)}`,
 )
 check(
   await page.locator(`${MACHINES} h3`).isVisible(),
