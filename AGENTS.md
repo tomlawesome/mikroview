@@ -113,7 +113,7 @@ name `gitlab`. Branches, merge requests and the `dev` → `preview` → `main`
 promotions all happen there; full CI is `.gitlab-ci.yml` at the repo root.
 GitHub (`origin`) is a read-only mirror of those three branches, and keeps
 what already works there: CodeQL, the container registry and cosign signing,
-Pages, secret scanning, `chr-watch`, and release tags.
+Pages, secret scanning, and release tags.
 
 Why: the owner's runner hardware is faster and never queued; the project
 keeps moving on days GitHub does not; checks that need Docker on the host
