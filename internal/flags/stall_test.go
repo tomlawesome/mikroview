@@ -160,8 +160,21 @@ func TestSustainedFailuresCostOneAttemptPerBackoffWindow(t *testing.T) {
 		s.Add(TypePortScan, "203.0.113.9", "re-fire", now)
 	}
 
+	// time.Sleep only guarantees a floor, not ~3*persistMinInterval on
+	// the nose: a starved runner sleeps longer than requested, which
+	// lets more 200ms back-off windows fit in the same wait -- and the
+	// one-attempt-per-window property still holds, so more attempts is
+	// not a regression. Measure the actual elapsed wall time around the
+	// sleep and bound saves by how many windows really elapsed, rather
+	// than assuming the requested duration, so this stays a property
+	// check and not a machine-speed test.
+	sleepStart := time.Now()
 	time.Sleep(3 * persistMinInterval)
-	if saves := b.count(); saves > 6 {
-		t.Errorf("500 re-fires over ~3 back-off windows against a permanently failing backend produced %d attempts, want roughly one per window, not one per event", saves)
+	elapsed := time.Since(sleepStart)
+
+	const slack = 2
+	maxSaves := int(elapsed/persistMinInterval) + slack
+	if saves := b.count(); saves > maxSaves {
+		t.Errorf("500 re-fires over %s (~%d back-off windows) against a permanently failing backend produced %d attempts, want at most one per window plus slack (%d)", elapsed, int(elapsed/persistMinInterval), saves, maxSaves)
 	}
 }
