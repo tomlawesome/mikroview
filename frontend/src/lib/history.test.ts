@@ -18,6 +18,8 @@ import {
   proposeCap,
   proposeDays,
   proposeOff,
+  restartRow,
+  stateRow,
   stepDays,
 } from './history'
 import type { HistorySettings } from './types'
@@ -277,5 +279,39 @@ describe('the stopped state’s line', () => {
 
   it('leaves the span out when there is nothing in memory yet', () => {
     expect(memoryHint(null)).toBe('nothing on disk — events live in memory only; on keeps those and every day after')
+  })
+})
+
+describe('the memory group’s on-restart row (round 43, #921)', () => {
+  it('with history on, names the days that stay and the one thing that reads them', () => {
+    expect(restartRow(story())).toBe('the buffer clears — the 27 days on disk stay; trying a watcher reads them')
+    expect(restartRow(story({ held: { days: 1, oldest: '2026-09-02', newest: '2026-09-02', bytes: 3 * MIB } }))).toBe(
+      'the buffer clears — the 1 day on disk stays; trying a watcher reads it',
+    )
+  })
+
+  it('just turned on with nothing filed yet, claims no count', () => {
+    expect(restartRow(story({ held: null }))).toBe('the buffer clears — what is on disk stays; trying a watcher reads it')
+  })
+
+  it('off with a key points one storey down; no key says why nothing outlives it elsewhere', () => {
+    expect(restartRow(story({ enabled: false, held: null }))).toBe(
+      'the buffer clears — nothing outlives it; days can be kept on disk below',
+    )
+    expect(restartRow(story({ keyed: false, enabled: false, held: null }))).toBe('the buffer clears — nothing outlives it')
+  })
+
+  it('claims only that the buffer clears when the disk state is unknown', () => {
+    expect(restartRow(null)).toBe('the buffer clears')
+  })
+})
+
+describe('the disk group’s state row', () => {
+  it('names the backend and what it keeps, or nothing for a caller the GET refuses', () => {
+    expect(stateRow({ backend: 'file', dir: '/var/lib/mikroview' })).toBe(
+      'file store · /var/lib/mikroview — flags, definitions, watchlist, entities, tokens',
+    )
+    expect(stateRow({ backend: 'postgres' })).toBe('Postgres — flags, definitions, watchlist, entities, tokens')
+    expect(stateRow(null)).toBeNull()
   })
 })
