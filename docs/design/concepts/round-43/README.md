@@ -80,6 +80,10 @@ States are section classes on `#set`, round 42's own plus `dfail`;
 Screenshots: `shots/settings.png`, `pair-{on,stopped,nokey,fail}.png`
 (memory and disk together). Looked at each; no collisions.
 
-## Verdicts
+## Verdicts (owner, 2026-09-04)
 
-Pending.
+Scenes 3–6 and the listed sentences: *"All look fine"*. **Ratified as
+drawn**, the gap-6 sentences as built, gap 8 as a build fix.
+
+Build: #921, on the same branch. Port the two rows and the `dfail` state
+from `restart.html`.
