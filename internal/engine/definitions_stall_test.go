@@ -115,9 +115,14 @@ func TestUpsertExpectationDoesNotBlockOnAStuckBackend(t *testing.T) {
 		close(done)
 	}()
 
+	// 60s here is a hang detector, not a performance budget: it bounds a
+	// deadlock (the lock held across a backend call), not how fast the
+	// goroutine runs. The real property under test is the maxInFlight()
+	// assertion below, which is already timing-independent -- nobody
+	// should read this number as a latency target and tighten it.
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("UpsertExpectation/ListExpectations blocked against a stalled backend -- the lock must never be held across a backend call")
 	}
 

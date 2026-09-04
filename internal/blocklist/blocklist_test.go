@@ -319,43 +319,75 @@ func TestMatchReturnsSourceAndLabel(t *testing.T) {
 	}
 }
 
-// TestSearchRangesIsFastAtCap is a coarse performance sanity check, not
-// a strict benchmark: a linear scan over maxTotalEntries entries would
-// still "pass" a generous wall-clock budget on modern hardware, so this
-// doesn't prove O(log n) on its own -- but it does catch a gross
-// regression (e.g. accidentally reintroducing a linear scan across many
-// thousands of Match calls) within CI's own time budget, and documents
-// the expectation that a single lookup against a full-size table is
-// microsecond-scale, not millisecond-scale.
+// TestSearchRangesIsFastAtCap checks searchRanges' growth rate rather
+// than an absolute wall-clock budget: an absolute budget (e.g. "100k
+// lookups must finish under 2s") is really a machine-speed assertion in
+// disguise, and a saturated CI runner can cross it while the search is
+// still perfectly O(log n). Instead this times the same number of
+// lookups against a small table and against the full-cap table and
+// asserts the per-lookup cost barely grows between them: binary search
+// over a 100x larger table should cost only a few more comparisons
+// (roughly 1.5-2x per lookup), whereas a linear scan would cost about
+// 100x. Asserting the ratio stays small survives a slow or contended
+// machine (both timings inflate together) while still catching a gross
+// regression like accidentally reintroducing a linear scan.
 func TestSearchRangesIsFastAtCap(t *testing.T) {
-	prefixes := make([]netip.Prefix, 0, maxTotalEntries)
-	for i := 0; i < maxTotalEntries; i++ {
-		addr := netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0})
-		prefixes = append(prefixes, netip.PrefixFrom(addr, 24))
-	}
-	ranges := buildRanges(prefixes)
-
-	// A target address picked from the middle of the generated range
-	// (i = maxTotalEntries/2), rather than an arbitrary literal --
-	// using one outside the actual generated address space would make
-	// every lookup a guaranteed (fast) miss instead of exercising a
-	// real match.
-	mid := maxTotalEntries / 2
-	target := netip.AddrFrom4([4]byte{10, byte(mid >> 8), byte(mid), 128})
-	start := time.Now()
-	const iterations = 100_000
-	hits := 0
-	for i := 0; i < iterations; i++ {
-		if _, ok := searchRanges(ranges, target); ok {
-			hits++
+	buildPrefixes := func(n int) []netip.Prefix {
+		prefixes := make([]netip.Prefix, 0, n)
+		for i := 0; i < n; i++ {
+			addr := netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0})
+			prefixes = append(prefixes, netip.PrefixFrom(addr, 24))
 		}
+		return prefixes
 	}
-	elapsed := time.Since(start)
-	if hits != iterations {
-		t.Fatalf("expected every lookup to match, got %d/%d", hits, iterations)
+
+	const iterations = 100_000
+
+	// timeLookups returns the total elapsed time for `iterations`
+	// lookups against a table built from `n` prefixes, all targeting a
+	// real match near the middle of the generated address space (an
+	// out-of-range literal would make every lookup a guaranteed miss
+	// instead of exercising a real match).
+	timeLookups := func(n int) (elapsed time.Duration, hits int) {
+		ranges := buildRanges(buildPrefixes(n))
+		mid := n / 2
+		target := netip.AddrFrom4([4]byte{10, byte(mid >> 8), byte(mid), 128})
+
+		// Warm up so the timed loop isn't paying for cache/branch-predictor
+		// warmup, which would otherwise skew the small-table timing more
+		// than the large-table one.
+		for i := 0; i < 1000; i++ {
+			searchRanges(ranges, target)
+		}
+
+		start := time.Now()
+		for i := 0; i < iterations; i++ {
+			if _, ok := searchRanges(ranges, target); ok {
+				hits++
+			}
+		}
+		return time.Since(start), hits
 	}
-	if elapsed > 2*time.Second {
-		t.Errorf("%d lookups against a %d-entry table took %s, expected well under 2s for an O(log n) search", iterations, len(ranges), elapsed)
+
+	const small = 1_000
+	smallElapsed, smallHits := timeLookups(small)
+	largeElapsed, largeHits := timeLookups(maxTotalEntries)
+
+	if smallHits != iterations {
+		t.Fatalf("expected every lookup to match against the %d-entry table, got %d/%d", small, smallHits, iterations)
+	}
+	if largeHits != iterations {
+		t.Fatalf("expected every lookup to match against the %d-entry table, got %d/%d", maxTotalEntries, largeHits, iterations)
+	}
+
+	if smallElapsed <= 0 {
+		t.Fatalf("small-table timing was non-positive (%s), can't compute a ratio", smallElapsed)
+	}
+	ratio := float64(largeElapsed) / float64(smallElapsed)
+	const maxRatio = 10
+	if ratio > maxRatio {
+		t.Errorf("per-lookup cost grew %.1fx from a %d-entry table (%s) to a %d-entry table (%s), want under %dx -- binary search should grow log(n), not n",
+			ratio, small, smallElapsed, maxTotalEntries, largeElapsed, maxRatio)
 	}
 }
 

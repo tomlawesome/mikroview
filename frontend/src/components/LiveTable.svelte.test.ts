@@ -191,14 +191,18 @@ describe('LiveTable autoscroll-off freezing (issue #232)', () => {
     expect(container.querySelector('[title="initial-10"]')).toBeTruthy()
     expect(container.querySelector('[title="overflow-0"]')).toBeNull()
     expect(container.querySelector('[title="overflow-49"]')).toBeNull()
-    // 20s, not vitest's default 5s (#598). This renders MAX_RENDERED_ROWS + 10
-    // real rows through the real component and then pushes 50 more, which takes
-    // ~6s here and longer on a busy CI worker. The timeout is not a threshold
-    // this test is asserting against -- the assertions above are about which
-    // rows are evicted, and none of them get weaker by allowing more time. The
-    // fixture cannot shrink instead: below MAX_RENDERED_ROWS nothing evicts, so
-    // a smaller one would stop testing #232's symptom altogether.
-  }, 20000)
+    // 60s, not vitest's default 5s (#598), and higher than the 20s this
+    // used to be: this renders MAX_RENDERED_ROWS + 10 real rows (810
+    // EventRow instances) through jsdom and then pushes 50 more, which
+    // took 27.9s on a heavily contended shared runner. The timeout is
+    // not a threshold this test is asserting against -- the assertions
+    // above are about which rows are evicted, and none of them get
+    // weaker by allowing more time; the budget only covers jsdom's
+    // render cost on a slow shared runner. The fixture cannot shrink
+    // instead: below MAX_RENDERED_ROWS nothing evicts, so a smaller one
+    // would stop testing #232's symptom altogether. #728 owns bringing
+    // down the underlying per-row render cost.
+  }, 60000)
 
   it('re-derives the frozen snapshot when the filter set changes, within what was already frozen', () => {
     const matching = makeEvent('matches-filter', { action: 'accept' })
