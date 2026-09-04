@@ -148,7 +148,8 @@ check(
 await remount(page)
 
 const atRest = await rows(page)
-const heldRow = /^(\d+) days? · since .+ · \d+(\.\d+)? [GM]iB( — (filling|full))?$/
+// KiB too: a gate instance up for minutes holds a few KiB, not a MiB (#932).
+const heldRow = /^(\d+) days? · since .+ · \d+(\.\d+)? [KGM]iB( — (filling|full))?$/
 check(heldRow.test(atRest['on disk'] ?? ''), `the on-disk row reads a held window -- got "${atRest['on disk']}"`)
 check(
   (atRest['on disk'] ?? '').startsWith(`${plural(start.held.days, 'day')} ·`),
