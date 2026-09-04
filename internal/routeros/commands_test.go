@@ -171,9 +171,9 @@ func TestPushBlockRenamesIPAddressFields(t *testing.T) {
 
 func TestRuleTaggingCommandsIsFilterOnly(t *testing.T) {
 	cmd := RuleTaggingCommands("a")
-	want := "/ip firewall filter set [find !dynamic action=drop] log=yes log-prefix=\"D|drop|\"\n" +
-		"/ip firewall filter set [find !dynamic action=reject] log=yes log-prefix=\"R|reject|\"\n" +
-		"/ip firewall filter set [find !dynamic action=accept] log=yes log-prefix=\"A|accept|\"\n" +
+	want := "/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix=\"D|drop|\"\n" +
+		"/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix=\"R|reject|\"\n" +
+		"/ip firewall filter set [find where !dynamic action=accept] log=yes log-prefix=\"A|accept|\"\n" +
 		"\n" +
 		"# The established/related accept rule logs every packet, not every\n" +
 		"# connection -- that is your whole traffic volume. Turn it back off:\n" +
