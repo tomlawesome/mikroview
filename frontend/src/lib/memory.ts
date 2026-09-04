@@ -140,10 +140,13 @@ export function midLabel(min: number, max: number): number | null {
 /**
  * formatSize renders a byte figure the way round 39 writes it: whole
  * MiB below a gigabyte ("120 MiB", "480 MiB"), one decimal of GiB above
- * ("3.5 GiB").
+ * ("3.5 GiB"). Below a mebibyte, whole KiB ("2 KiB"): the disk group's
+ * "on disk" row reads a first day of a few kilobytes, and "1 day · 0 MiB"
+ * would say the day is empty when it is not (#910).
  */
 export function formatSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 MiB'
+  if (bytes < MIB) return `${Math.max(1, Math.round(bytes / 1024))} KiB`
   if (bytes >= GIB) {
     const gib = bytes / GIB
     // A whole number of GiB prints without the ".0": 2 GiB, not 2.0 GiB.

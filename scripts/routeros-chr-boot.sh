@@ -56,9 +56,50 @@ chr_image() {
   local img="$CHR_DIR/chr-$CHR_VERSION.img"
   if [ ! -f "$img" ]; then
     log "downloading CHR $CHR_VERSION"
-    if ! curl -fsS --retry 3 --retry-delay 2 -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"; then
+    # -C - and --retry-all-errors, not just --retry, because of how this
+    # actually fails. download.mikrotik.com resets the connection partway
+    # through the ~43 MB image rather than refusing it: curl exit 56,
+    # around 40 MB in, on the first real run of this job (pipeline 153)
+    # and reproducibly on a workstation too. Plain --retry does not cover
+    # exit 56 -- it retries timeouts and 5xx -- so the download failed
+    # once and stopped, and a job that has to fetch 43 MB every time it
+    # runs would keep meeting this.
+    #
+    # The server sends accept-ranges: bytes and answers a Range request
+    # with 206, so resuming is the fix rather than simply trying again
+    # from zero: -C - picks up at the byte it stopped at. Confirmed by
+    # resuming a download killed at 39.9 MB and getting a zip that
+    # unzip -t passes.
+    #
+    # Even with that, the reset has been reproduced landing inside
+    # curl's own --retry budget often enough (#929, two hosts) that one
+    # curl invocation still isn't a sure thing. So there is a second,
+    # outer retry loop here: up to three whole attempts, a short pause
+    # between them, each one resuming (-C -) from whatever the last
+    # attempt left in $zip rather than starting over. Three failures in
+    # a row is no longer "the network blipped" -- it is a real failure,
+    # and the caller (scripts/routeros-chr-exercise.sh, and the
+    # chr-exercise:run CI job on top of it) reports it as one rather
+    # than as an exercise failure, since nothing about RouterOS itself
+    # was even reached.
+    #
+    # The zip is still removed once all attempts are exhausted, so a
+    # partial file never survives the run that produced it.
+    local ok=0
+    local attempt=1
+    while [ "$attempt" -le 3 ]; do
+      if curl -fsS -C - --retry 10 --retry-delay 3 --retry-all-errors \
+        -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"; then
+        ok=1
+        break
+      fi
+      log "downloading CHR $CHR_VERSION from $BASE_URL failed (attempt $attempt/3)"
+      attempt=$((attempt + 1))
+      [ "$attempt" -le 3 ] && sleep 10
+    done
+    if [ "$ok" -ne 1 ]; then
       rm -f "$zip"
-      log "downloading CHR $CHR_VERSION from $BASE_URL failed -- this fixture needs to reach download.mikrotik.com"
+      log "downloading CHR $CHR_VERSION from $BASE_URL failed after 3 attempts -- this fixture needs to reach download.mikrotik.com"
       return 1
     fi
     if ! unzip -oq "$zip" -d "$CHR_DIR"; then

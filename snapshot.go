@@ -96,6 +96,7 @@ func usableSnapshotDir(log *slog.Logger, dir string) string {
 		log.Warn("no snapshot directory resolved, so no warm-restart snapshots will be written -- mikroview runs normally and starts cold after the next restart")
 		return ""
 	}
+	// #nosec G703 -- the snapshot directory from this deployment's own config, not from a request.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		log.Warn(fmt.Sprintf("snapshot directory %s cannot be created (%v) -- mikroview runs normally, but nothing is written and the next restart starts cold", dir, err))
 		return ""
@@ -107,6 +108,7 @@ func usableSnapshotDir(log *slog.Logger, dir string) string {
 	}
 	name := probe.Name()
 	probe.Close()
+	// #nosec G703 -- removes the probe file CreateTemp just made in that same directory.
 	os.Remove(name)
 	return dir
 }

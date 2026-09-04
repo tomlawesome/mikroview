@@ -258,6 +258,7 @@ func planMigration(cfg config.Config, dest string, force bool) (*migrationPlan, 
 		return nil, fmt.Errorf("resolving %s: %w", dest, err)
 	}
 
+	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag in backup_cli.go.
 	fi, err := os.Stat(source)
 	if err != nil {
 		return nil, fmt.Errorf("the current data directory %s cannot be read: %v -- "+
@@ -331,6 +332,7 @@ func planMigration(cfg config.Config, dest string, force bool) (*migrationPlan, 
 // root-owned host directory bind-mounted in, which mikroview at uid 65532
 // cannot write a thing to.
 func prepareDest(dest string, force bool) error {
+	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag in backup_cli.go.
 	if err := os.MkdirAll(dest, 0o700); err != nil {
 		return &storeUnusable{Store: "destination", Path: dest, Dir: dest, Err: unwrapPathErr(err)}
 	}
@@ -361,6 +363,7 @@ func prepareDest(dest string, force bool) error {
 func scanTree(root string) (int, int64, error) {
 	var files int
 	var bytes int64
+	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag in backup_cli.go.
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("reading %s: %v", path, unwrapPathErr(err))
@@ -401,6 +404,7 @@ func scanTree(root string) (int, int64, error) {
 // carrying onto a fresh volume.
 func copyTree(src, dst string) (map[string]string, error) {
 	digests := map[string]string{}
+	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag in backup_cli.go.
 	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("reading %s: %v", path, unwrapPathErr(err))
@@ -411,6 +415,7 @@ func copyTree(src, dst string) (map[string]string, error) {
 		}
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
+			// #nosec G703 -- target is dst joined with a path from WalkDir, which does not follow symlinks.
 			if err := os.MkdirAll(target, 0o700); err != nil {
 				return fmt.Errorf("creating %s: %v", target, unwrapPathErr(err))
 			}
@@ -441,6 +446,7 @@ func copyFile(src, dst string) (string, error) {
 	}
 	defer in.Close()
 
+	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag in backup_cli.go.
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
@@ -552,6 +558,7 @@ func checkDirUsable(dir string) error {
 	}
 	name := probe.Name()
 	probe.Close()
+	// #nosec G703 -- removes the probe file this function just created under the operator's own destination.
 	return os.Remove(name)
 }
 
