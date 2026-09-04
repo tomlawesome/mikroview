@@ -426,4 +426,56 @@ chr-exercise:run:
     # this line as a mapping and GitLab reject the file (pipeline 145).
     - 'command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "chr-exercise: qemu-system-x86_64 missing after installing qemu-system-x86 -- cannot boot CHR"; exit 1; }'
   script:
-    - scripts/routeros-chr-exercise.sh
+    # #929: GitHub has to hear about this run whether it passed or
+    # failed -- the failure path matters more, since that is the one a
+    # plain `script:` line would silently skip. A script section stops
+    # at the first non-zero line, and `after_script` runs afterwards in
+    # a brand new shell that only sees files left on disk, not anything
+    # this shell computed -- and the report's summary needs more than a
+    # bare exit code, so building it here (where the exercise's own log
+    # is already sitting in a file this same shell just wrote) is
+    # simpler than reconstructing it from scratch in a second shell.
+    # Capturing the status and reporting from it, then exiting with that
+    # same status at the end, keeps this one job both always-reporting
+    # and still red when the exercise itself failed.
+    - |
+      set +e
+      scripts/routeros-chr-exercise.sh >chr-exercise.log 2>&1
+      status=$?
+      set -e
+      cat chr-exercise.log
+
+      if [ "$status" -eq 0 ]; then
+        result=pass
+        summary="$(grep -m1 -E 'already covered|every starting command parsed' chr-exercise.log || true)"
+      elif grep -q 'failed after 3 attempts' chr-exercise.log; then
+        # The retry loop in routeros-chr-boot.sh's chr_image() already
+        # gave the download three tries with a pause between (#929: a
+        # reset partway through the ~43 MB image, reproduced on two
+        # hosts, must not read as an exercise failure). Exhausting all
+        # three is a real failure, but naming it here keeps it from
+        # being reported as "the exercise failed" when RouterOS itself
+        # was never even reached.
+        result=fail
+        summary="the CHR image download failed after 3 attempts (network reset before reaching RouterOS), not the exercise itself"
+      elif grep -q 'refused a command:' chr-exercise.log; then
+        result=fail
+        cmd="$(grep -A1 'refused a command:' chr-exercise.log | tail -n1 | sed 's/^ *//')"
+        summary="RouterOS refused a command: $cmd"
+      else
+        result=fail
+        summary="$(grep -m1 -E 'would not boot|could not (reach|compare|determine)' chr-exercise.log || true)"
+      fi
+      summary="$(printf '%s' "$summary" | sed 's/^routeros-chr-exercise: //')"
+      [ -n "$summary" ] || summary="CHR exercise finished with exit $status -- see the job log"
+      routeros_version="$(grep -oE '(RouterOS|CHR) [0-9]+\.[0-9]+(\.[0-9]+)?' chr-exercise.log | head -n1 | awk '{print $2}')"
+
+      # A failure to publish the report is never allowed to hide, or to
+      # stand in for, the exercise's own result -- report, then exit with
+      # the exercise's real status regardless of how reporting went.
+      if ! CHR_REPORT_RESULT="$result" CHR_REPORT_SUMMARY="$summary" \
+        CHR_REPORT_ROUTEROS_VERSION="$routeros_version" scripts/chr-report.sh; then
+        echo "chr-exercise: publishing the run report to GitHub failed -- see above"
+      fi
+
+      exit "$status"
