@@ -5,7 +5,10 @@
 # process lives. AGENTS.md, "The gate runs on `dev`, after the merge", has
 # the rule this implements; #831 is the issue.
 #
-# Each pass: fetch, move a detached worktree to origin/dev, and if that is
+# Each pass: fetch, move a detached worktree to the `gitlab` remote's dev
+# -- GitLab is where merges happen and GitHub is its mirror (#935), so
+# watching GitHub would run whatever the mirror last managed to push, and
+# a dead mirror would look like a quiet dev -- and if that is
 # a commit the loop has not run yet, run `scripts/gate-remote.sh` from it
 # (the second host, under the #822 lock). The log is kept per commit and
 # the failing-scenario set is diffed against the previous run's, because a
@@ -15,7 +18,15 @@
 #
 # Runs from this machine, not the runner, because the runner holds no
 # credential and cannot fetch (AGENTS.md: never put a token on that host);
-# gate-remote.sh pushes the tree to it. Start it detached:
+# gate-remote.sh pushes the tree to it. The fetch authenticates with a
+# GitLab deploy token -- read_repository only, this project only -- in
+# git's credential-store format at $MV_GATE_CREDENTIALS, mode 600:
+#
+#   https://<deploy-token-username>:<deploy-token>@gitlab.tomlawson.io
+#
+# The owner creates the token (GitLab: Settings > Repository > Deploy
+# tokens) and writes that file; nothing here ever prints it. Start the
+# loop detached:
 #
 #   setsid nohup scripts/gate-dev-loop.sh >>~/projects/.gate-logs/mikroview/loop.log 2>&1 </dev/null & disown
 #
@@ -29,6 +40,13 @@ set -u
 WORKTREE="${MV_GATE_WORKTREE:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.claude/worktrees/gate-dev}"
 LOGDIR="${MV_GATE_LOGDIR:-$HOME/projects/.gate-logs/mikroview}"
 POLL="${MV_GATE_POLL:-600}"
+REMOTE="${MV_GATE_REMOTE:-gitlab}"
+CREDENTIALS="${MV_GATE_CREDENTIALS:-$HOME/.config/mikroview/gitlab-credentials}"
+
+if [ ! -r "$CREDENTIALS" ]; then
+  echo "ERROR $(date -u +%Y-%m-%dT%H:%M:%SZ) no credential file at $CREDENTIALS -- see the header"
+  exit 1
+fi
 
 mkdir -p "$LOGDIR"
 
@@ -50,15 +68,15 @@ failing() {
 stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 while :; do
-  if ! git -C "$WORKTREE" fetch -q origin; then
+  if ! git -C "$WORKTREE" -c "credential.helper=store --file=$CREDENTIALS" fetch -q "$REMOTE"; then
     echo "ERROR $(stamp) fetch failed; retrying in ${POLL}s"
     sleep "$POLL"; continue
   fi
-  sha=$(git -C "$WORKTREE" rev-parse --short origin/dev)
+  sha=$(git -C "$WORKTREE" rev-parse --short "$REMOTE/dev")
   if [ -f "$LOGDIR/gate-$sha.log" ]; then
     sleep "$POLL"; continue
   fi
-  git -C "$WORKTREE" checkout -q --detach origin/dev
+  git -C "$WORKTREE" checkout -q --detach "$REMOTE/dev"
   git -C "$WORKTREE" clean -qfd -e node_modules
   git -C "$WORKTREE" submodule update --init -q 2>/dev/null || true
 
