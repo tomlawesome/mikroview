@@ -1,9 +1,18 @@
 name: CI
 
+# What is left of GitHub's CI after #935: the two jobs that need Docker on
+# the runner, the container smoke test and the Postgres integration test.
+# Everything else this file used to run -- build, vet, gofmt, the Go and
+# frontend test suites, svelte-check, the bundle budget, the notices and
+# doc-link checks, the auth race tests, the fuzz gate, govulncheck and npm
+# audit -- now runs on GitLab (.gitlab-ci.yml), where the merge happens.
+# GitHub only ever sees the merged result arrive on the mirror. These two
+# stay until they are ported too; the tracker has the issue.
+#
 # Three-lane model: dev (fast feedback) -> preview (publishes the release
 # candidate image) -> main (promotion only).
 #
-# Every job runs in every lane. It did not used to: the container smoke
+# Both jobs run in every lane. They did not used to: the container smoke
 # test and the Postgres integration job were skipped on dev to keep it
 # light, on the reasoning that preview would catch anything they would.
 # Preview did catch something -- 41 commits after it landed (#273). A
@@ -33,239 +42,6 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Go + frontend tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.0'
-      - run: go build ./...
-      - run: go vet ./...
-      - run: go test ./...
-
-      # None of the three above care about formatting, so unformatted
-      # code has reached dev green. gofmt -l prints nothing when there is
-      # nothing to fix, so the list is the whole check.
-      - name: gofmt
-        run: |
-          unformatted=$(gofmt -l $(git ls-files '*.go'))
-          if [ -n "$unformatted" ]; then
-            echo "Not gofmt-clean:"
-            echo "$unformatted"
-            gofmt -d $(git ls-files '*.go')
-            exit 1
-          fi
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-      - run: |
-          cd frontend
-          npm ci
-          npx svelte-check --tsconfig ./tsconfig.app.json
-
-      # The frontend unit suite (#684). It ran nowhere in CI until this step
-      # existed, so every one of its assertions gated nothing and a test could
-      # fail on dev indefinitely without anyone finding out -- which is exactly
-      # what #598 did. Type checking is not a substitute: svelte-check above
-      # proves the code compiles, not that it behaves.
-      - name: Frontend unit tests
-        run: |
-          cd frontend
-          npm test
-
-      # Real build, not a proxy for one -- the size budget just below
-      # measures this output, and a stale or missing dist/ would make
-      # that check either fail for the wrong reason or, worse, silently
-      # measure nothing. See check-bundle-budget.mjs for why "nothing to
-      # measure" is a failure rather than a skip.
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build
-
-      # CI size budget for the shipped JS bundle (#462). README.md
-      # quotes this figure and it went 3-5x stale (#382) before anything
-      # measured the real build to check it. Budget and rationale live
-      # in the script, not here, so there is one place to update both
-      # together.
-      - name: JS bundle size budget
-        run: node frontend/scripts/check-bundle-budget.mjs
-
-      # Licence compliance, not tidiness. Every Go module linked into the
-      # binary and every frontend package bundled into the embedded
-      # assets ships under a licence (MIT, BSD-3-Clause, ISC,
-      # Apache-2.0) requiring its copyright notice and licence text to
-      # accompany a *binary* distribution; Apache-2.0 s4(d) additionally
-      # requires passing along any NOTICE file. THIRD-PARTY-NOTICES.md is
-      # how we do that, and a generated file that nothing verifies is
-      # wrong the first time a dependency changes and silently stays
-      # wrong. Same reasoning as injection_sinks_test.go and
-      # internal/api's authzMatrix.
-      - name: Third-party notices are up to date
-        run: node tools/licenses/generate-notices.mjs --check
-
-      # Same reasoning as the notices check above, one class down: this
-      # project's documentation is detailed enough that readers trust
-      # it, so a link that goes nowhere costs more here than it would
-      # elsewhere -- and nothing complains when a heading gets reworded.
-      - name: Documentation links resolve
-        run: node tools/docs/check-anchors.mjs
-
-  # Runs on every change, deliberately.
-  #
-  # This used to be gated on a paths-filter listing the auth-related
-  # directories, so it only ran when one of them changed. That filter was
-  # wrong in three separate ways at once: it named internal/auth and
-  # internal/api/auth.go but not main.go -- where -transfer-admin,
-  # -recover-admin-account and the recovery-key handling live, the
-  # commands that hand over the admin role -- nor internal/oidc, the
-  # entire SSO implementation, nor internal/api/server.go, which carries
-  # the route table. A PR that changed who can become admin skipped this
-  # job and reported green.
-  #
-  # The filter has to be kept in sync with where auth code lives, and
-  # nothing fails when it drifts -- the job just quietly stops running,
-  # which is the worst possible failure mode for a security gate. Two
-  # and a half minutes on every PR is the cheaper side of that trade.
-  security:
-    name: Security (auth-focused)
-    runs-on: ubuntu-latest
-    # 15, not 10, because the fuzz step below is bounded by execution
-    # count rather than wall-clock (see mikroview#391 and the comment on
-    # that step): a slow runner makes the step take longer rather than
-    # failing it, so the job needs room to absorb that.
-    #
-    # Kept at 15 rather than lowered with the budgets in #523. The fuzz
-    # step still drops to 0 execs/sec for 30-60s at a stretch -- that is
-    # the runner and remains unexplained -- so the margin absorbs a
-    # stall rather than a slow machine. With the recalibrated counts the
-    # step is ~90s of work, so this is real headroom now; before it was
-    # about 1.5x, and one run was killed at the limit.
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.0'
-      - name: Race-detector tests (auth + API)
-        run: go test -race ./internal/auth/... ./internal/api/...
-
-      # Short bounded fuzz of the parsers that handle attacker-shaped
-      # input: the first two are wholly unauthenticated -- anything able
-      # to reach the syslog port controls these bytes entirely. The third
-      # (issue #186 step 2) sits behind an ingest token, but that token
-      # only proves which device is speaking, not that its bytes are
-      # well-formed -- a compromised router, a buggy router-side script,
-      # or a leaked token (any read-capable RouterOS user can read one
-      # out of a script, see docs/decisions/routeros-ingest-spike.md)
-      # all reach it with content nothing has validated yet, the same
-      # footing the other two are on. This is not a deep campaign; it's a
-      # regression gate that catches a newly-introduced crash on the seed
-      # corpus plus a little fresh exploration, without turning every PR
-      # into a fuzzing job.
-      #
-      # The seed corpus is the f.Add calls in each target's own source,
-      # not a testdata/ directory -- there is none, and that is
-      # deliberate (#526). The seeds are hand-written synthetic lines
-      # rather than captured device output, so moving them into files
-      # would add a repository artefact that grows and buy nothing.
-      #
-      # What testdata/fuzz/ is actually for here is a crasher. Go writes
-      # a failing input to testdata/fuzz/<Target>/ in the package
-      # directory, which on a runner is discarded with the workspace --
-      # hence the upload step below, which rescues it as a job artefact.
-      # If one is ever found, commit that file: plain `go test` then
-      # replays it on every run with no -fuzz flag, which is what makes
-      # a reproducer permanent.
-      #
-      # The budgets are execution counts (`Nx`), not wall-clock (`30s`),
-      # and that is load-bearing -- do not "tidy" them back to durations.
-      #
-      # They were adopted to dodge golang/go#75804, where a duration
-      # budget wraps the engine's context in context.WithTimeout and a
-      # race on deadline expiry reports `context deadline exceeded` as a
-      # failure with no crashing input and no reproducer (mikroview#391).
-      # The toolchain pinned above is now 1.27, which carries the fix
-      # (CL 774140), so that reason has expired -- durations would be
-      # safe here again.
-      #
-      # The counts stay for the reason that outlived it: an `Nx` budget
-      # makes the gate do the same amount of work on every runner,
-      # where a duration budget quietly explores less on a busy one
-      # while still reporting success. A check that gets weaker without
-      # saying so is the failure mode AGENTS.md rejects elsewhere (the
-      # svelte-check/TypeScript hold, #286).
-      #
-      # Each count is what 30 seconds of wall-clock actually buys on a
-      # GitHub-hosted runner, measured from this repository's own runs
-      # (#523): routeros ~5.3k execs/sec, syslog ~19.7k, ingest ~5.2k.
-      #
-      # Those are wall-clock rates, stalls included, which is the right
-      # basis for converting a 30s budget -- but note the underlying
-      # rates are much higher (ingest fuzzes at ~23k/sec and spends the
-      # rest of its wall-clock stalled). Recalibrate the same way if the
-      # stalls are ever fixed, or the budgets will silently shrink.
-      #
-      # The previous counts (1.4M / 900k / 480k) were nine times these,
-      # because the rate behind them had been measured on a development
-      # machine -- ~51k execs/sec against the runner's ~5.3k. That is
-      # what made a step meant to take ninety seconds take seven
-      # minutes, and once exhaust the job timeout above with no crashing
-      # input and no reproducer. The stalls to 0 execs/sec that show up
-      # in the logs are the runner, not the parsers: the same targets
-      # run flat at ~110k execs/sec locally with no stall at all.
-      #
-      # Cutting back is a restoration, not a weakening. Discovery is
-      # front-loaded -- a local 90s routeros run found 11 of its 13 new
-      # interesting inputs inside the first 30 seconds -- so the removed
-      # budget was the flat tail of the curve. This step is a regression
-      # gate, per the paragraph above; a deep campaign belongs in a
-      # scheduled run, not on every PR.
-      - name: Fuzz the attacker-shaped-input parsers
-        run: |
-          go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=160000x
-          go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=590000x
-          go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=156000x
-
-      # Without this the crashing input dies with the workspace and the
-      # only evidence is escaped bytes in the job log -- see #526. It
-      # runs on any earlier failure, not just the fuzz step's, because
-      # `failure()` cannot be narrowed to one step; the race-detector
-      # step above produces no such files, so the ignore below makes
-      # that case a no-op rather than a second red mark.
-      - name: Rescue a crashing input, if the fuzz step found one
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: fuzz-crashers-${{ github.run_id }}
-          path: internal/*/testdata/fuzz/**
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-      - name: npm audit
-        run: |
-          cd frontend
-          npm ci
-          npm audit --audit-level=high
-
   # Runs in every lane, dev included -- see the file header for why the
   # `if:` that used to skip it here is gone.
   #
