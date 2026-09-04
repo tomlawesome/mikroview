@@ -4,8 +4,8 @@
 # the CI that gates them. GitHub is a read-only mirror of those three
 # branches -- the `sync` stage pushes each one after a merge -- and keeps
 # what already works there: CodeQL, the container registry and cosign
-# signing, Pages, secret scanning and chr-watch. #935 is the migration
-# record; the general model is in the gitlab-first-migration skill.
+# signing, Pages and secret scanning. #935 is the migration record; the
+# general model is in the gitlab-first-migration skill.
 #
 # The `sync` stage is inert until the owner sets MIRROR_TO_GITHUB=true as
 # a project CI/CD variable (#935 step 4). Nothing in this file sets it.
@@ -128,9 +128,9 @@ lint:frontend:
     - if: $CI_COMMIT_BRANCH == "dev"
       exists: ["frontend/package.json"]
   script:
-    # The GitHub-side helper scripts (.github/scripts) have node:test suites
-    # that no workflow runs, so they run here.
-    - node --test .github/scripts/*.test.js
+    # The CHR watch suites (scripts/chr-watch) have node:test suites that no
+    # other job runs, so they run here.
+    - node --test scripts/chr-watch/*.test.js
     - cd frontend
     - npm ci
     - npx svelte-check --tsconfig ./tsconfig.app.json
@@ -582,8 +582,8 @@ chr-exercise:run:
     # this line as a mapping and GitLab reject the file (pipeline 145).
     - 'command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "chr-exercise: qemu-system-x86_64 missing after installing qemu-system-x86 -- cannot boot CHR"; exit 1; }'
   script:
-    # #929: GitHub has to hear about this run whether it passed or
-    # failed -- the failure path matters more, since that is the one a
+    # #929: the chr-watch job has to hear about this run whether it passed
+    # or failed -- the failure path matters more, since that is the one a
     # plain `script:` line would silently skip. A script section stops
     # at the first non-zero line, and `after_script` runs afterwards in
     # a brand new shell that only sees files left on disk, not anything
@@ -631,7 +631,40 @@ chr-exercise:run:
       # the exercise's real status regardless of how reporting went.
       if ! CHR_REPORT_RESULT="$result" CHR_REPORT_SUMMARY="$summary" \
         CHR_REPORT_ROUTEROS_VERSION="$routeros_version" scripts/chr-report.sh; then
-        echo "chr-exercise: publishing the run report to GitHub failed -- see above"
+        echo "chr-exercise: publishing the run report to GitLab failed -- see above"
       fi
 
       exit "$status"
+
+# ---------------------------------------------------------------------------
+# CHR-WATCH — #929, moved to GitLab by #943: reads chr/last-run.json off the
+# chr-reports branch that chr-exercise:run above (via scripts/chr-report.sh)
+# writes on every run, decides what it means (scripts/chr-watch/chr-watch.js,
+# tested in chr-watch.test.js), and opens, comments on or closes a single
+# tracking issue accordingly (scripts/chr-watch/run.js). Green closes a
+# stale issue if one is open and otherwise does nothing; anything else
+# (failing, stale, missing) fails this job on purpose, so the schedule
+# itself shows red.
+#
+# Inert on every pipeline source except a GitLab Pipeline Schedule that
+# itself carries a CHR_WATCH=true variable, the same pattern CHR_EXERCISE
+# uses above. The owner creates that schedule (daily, matching the old
+# GitHub workflow's cron) and it needs the same GITLAB_MR_TOKEN CI/CD
+# variable chr-exercise:run already needs, since this job reads and writes
+# issues through the same GitLab API.
+# ---------------------------------------------------------------------------
+
+chr-watch:run:
+  stage: chr-exercise
+  image: node:22-alpine
+  # This job only reads the report chr-exercise:run already wrote and talks
+  # to the GitLab API -- nothing earlier in the pipeline can invalidate
+  # that, and it must still run (and still be able to report a stale report)
+  # even if something earlier in the same pipeline failed.
+  needs: []
+  rules:
+    - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "api"'
+  script:
+    - node scripts/chr-watch/run.js

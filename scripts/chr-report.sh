@@ -1,21 +1,22 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-only
 #
-# Publishes one CHR-exercise run's result to GitHub (#929). The exercise
-# (scripts/routeros-chr-exercise.sh, via .gitlab-ci.yml's chr-exercise:run)
-# only ever runs on the GitLab runner, and GitHub has no other way to know
-# it happened -- no check, nothing in Actions, nothing but whatever a
-# person remembers to type into an issue. This writes chr/last-run.json to
-# its own branch on the GitHub mirror, chr-reports, so a GitHub workflow
-# (the other half of #929) can watch that file instead.
+# Publishes one CHR-exercise run's result to GitLab (#929, moved off GitHub
+# by #943). The exercise (scripts/routeros-chr-exercise.sh, via
+# .gitlab-ci.yml's chr-exercise:run) only ever runs on the GitLab runner,
+# and nothing else knows it happened -- no check, nothing elsewhere, nothing
+# but whatever a person remembers to type into an issue. This writes
+# chr/last-run.json to its own branch on this GitLab project, chr-reports,
+# so a scheduled GitLab job (chr-watch:run, the other half of #929 and #943)
+# can watch that file instead.
 #
-# Its own branch, not dev or main: a bot commit there triggers no CI on
-# the GitHub side and never lands in the code tree. The branch carries
-# nothing but this one file's history -- one commit per run is the run
-# history. It does not exist on first use, so this script creates it as
-# an ORPHAN commit (no parent, no code history) the first time, and adds
-# an ordinary commit on top of it every run after that. Nothing here ever
-# touches any other branch.
+# Its own branch, not dev or main: a bot commit there triggers no CI and
+# never lands in the code tree. The branch carries nothing but this one
+# file's history -- one commit per run is the run history. It does not
+# exist on first use, so this script creates it as an ORPHAN commit (no
+# parent, no code history) the first time, and adds an ordinary commit on
+# top of it every run after that. Nothing here ever touches any other
+# branch.
 #
 # Reads, all via environment (so the caller sets only what it has):
 #   CHR_REPORT_RESULT            "pass" or "fail" -- required, except that
@@ -29,22 +30,27 @@
 #   CHR_REPORT_COMMIT            Default: $CI_COMMIT_SHA.
 #   CHR_REPORT_PIPELINE_URL      Default: $CI_PIPELINE_URL.
 #   CHR_REPORT_JOB_URL           Default: $CI_JOB_URL.
-#   GITHUB_MIRROR_TOKEN          GitHub PAT, contents+issues write (the
-#                                 same CI/CD variable sync:mirror-to-github
-#                                 already uses). Required to push; not
+#   GITLAB_MR_TOKEN              GitLab project access token (`api` +
+#                                 `write_repository`) -- the same CI/CD
+#                                 variable scripts/routeros-chr-open-mr.sh
+#                                 already uses. Required to push; not
 #                                 needed for --dry-run.
+#   CI_SERVER_HOST, CI_PROJECT_PATH
+#                                 GitLab's own predefined job variables --
+#                                 nothing to configure, every job gets
+#                                 them. Required to push; not needed for
+#                                 --dry-run.
 #
 # Usage:
 #   scripts/chr-report.sh             # build the report and push it
 #   scripts/chr-report.sh --dry-run   # print the JSON to stdout, push nothing
 set -eu
 
-GITHUB_REPO_HOST_PATH="github.com/tomlawesome/mikroview.git"
 REPORT_BRANCH="chr-reports"
 
 # Overridable so the push path can be exercised against a throwaway local
 # repository. Without it the only way to find out whether the orphan
-# branch is created correctly is to run it for real against GitHub, which
+# branch is created correctly is to run it for real against GitLab, which
 # is exactly the "never tested until it matters" trap this whole job
 # exists to close (#929).
 CHR_REPORT_REMOTE="${CHR_REPORT_REMOTE:-}"
@@ -113,37 +119,23 @@ if [ "$dry_run" = 1 ]; then
   exit 0
 fi
 
-: "${GITHUB_MIRROR_TOKEN:?chr-report: GITHUB_MIRROR_TOKEN is not set -- cannot publish. See the header comment above for what it needs.}"
+: "${GITLAB_MR_TOKEN:?chr-report: GITLAB_MR_TOKEN is not set -- cannot publish. See the header comment above for what it needs.}"
+: "${CI_SERVER_HOST:?chr-report: CI_SERVER_HOST is not set -- this script must run inside a GitLab CI job}"
+: "${CI_PROJECT_PATH:?chr-report: CI_PROJECT_PATH is not set -- this script must run inside a GitLab CI job}"
 
 workdir="$(mktemp -d)"
-askpass="$(mktemp)"
-
-# GIT_ASKPASS, not a token embedded in the remote URL: git invokes this
-# script whenever it needs a password and reads the password from its
-# stdout, so the token only ever exists in this process's environment and
-# a file only this job's own filesystem can read -- never in argv (so it
-# can't show up in `ps`), never in `git remote -v`, never in a URL that
-# might get echoed or end up in an error message. The username alone
-# (x-access-token, GitHub's convention for PAT-over-HTTPS) is enough to
-# make git ask for a password at all.
-cat >"$askpass" <<'EOF'
-#!/bin/sh
-printf '%s' "$GITHUB_MIRROR_TOKEN"
-EOF
-chmod 700 "$askpass"
 
 cleanup() {
-  rm -rf "$workdir" "$askpass"
+  rm -rf "$workdir"
 }
 trap cleanup EXIT
 
-export GIT_ASKPASS="$askpass"
-export GITHUB_MIRROR_TOKEN
-# Never wait on an interactive prompt if the askpass setup above somehow
-# doesn't satisfy git -- fail loudly instead of hanging the job.
-export GIT_TERMINAL_PROMPT=0
-
-remote_url="${CHR_REPORT_REMOTE:-https://x-access-token@${GITHUB_REPO_HOST_PATH}}"
+remote_url="${CHR_REPORT_REMOTE:-https://oauth2:${GITLAB_MR_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git}"
+# GitLab redacts any job-log occurrence of a variable's value once it is
+# marked "masked" (required by scripts/routeros-chr-open-mr.sh's own
+# header) -- the same protection that script already relies on for its
+# own token, rather than this script adding a second, independent
+# mechanism.
 
 if git ls-remote --exit-code --heads "$remote_url" "$REPORT_BRANCH" >/dev/null 2>&1; then
   log "chr-report: $REPORT_BRANCH exists -- adding a commit to it"
