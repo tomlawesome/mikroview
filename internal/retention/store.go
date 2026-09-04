@@ -79,6 +79,22 @@ type Store struct {
 	pending []record
 	current *dayFile
 	closed  bool
+	// cappedPrune records that the *byte* cap, rather than the day
+	// count, has dropped a day since this store was opened. Kept
+	// because the two are indistinguishable after the fact -- a
+	// deployment holding 27 of an allowed 30 days looks the same
+	// whichever bound took the other three -- and the difference is the
+	// one an operator acts on: more days needs a bigger cap in the one
+	// case and nothing at all in the other. Never reset: "since open"
+	// is the honest claim this can make, and pretending to know more
+	// would be worse than saying less.
+	cappedPrune bool
+
+	// pruneMu serialises prune, which SetCaps calls from an HTTP
+	// goroutine while the flusher may be part-way through its own pass.
+	// Two concurrent passes would each list, total and delete against a
+	// directory the other is changing.
+	pruneMu sync.Mutex
 
 	flushEvents int
 	wake        chan struct{}
@@ -303,6 +319,13 @@ type dayEntry struct {
 // inert. An operator in that position needs a bigger cap or less
 // logging, and the receipt's window is what tells them so.
 func (s *Store) prune() error {
+	s.pruneMu.Lock()
+	defer s.pruneMu.Unlock()
+
+	s.mu.Lock()
+	days, maxBytes := s.days, s.maxBytes
+	s.mu.Unlock()
+
 	files, err := s.dayFiles()
 	if err != nil {
 		return err
@@ -316,29 +339,81 @@ func (s *Store) prune() error {
 	}
 
 	var firstErr error
-	drop := func(i int) {
+	drop := func(i int) bool {
 		if err := os.Remove(files[i].path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("retention: dropping %s: %w", files[i].path, err)
 			}
-			return
+			return false
 		}
 		total -= files[i].size
 		logger.Info("dropped a retained day", "day", files[i].day, "bytes", files[i].size)
+		return true
 	}
 
 	i := 0
-	for ; len(files)-i > s.days && i < len(files)-1; i++ {
+	for ; len(files)-i > days && i < len(files)-1; i++ {
 		drop(i)
 	}
-	for ; total > s.maxBytes && i < len(files)-1; i++ {
-		drop(i)
+	for ; total > maxBytes && i < len(files)-1; i++ {
+		if drop(i) {
+			s.mu.Lock()
+			s.cappedPrune = true
+			s.mu.Unlock()
+		}
 	}
 	// A day dropped underneath the open file leaves the writer holding a
 	// deleted path; reopening on the next flush is cheaper than tracking
 	// it, and only happens when the current day is itself pruned, which
 	// the guard above prevents.
 	return firstErr
+}
+
+// SetCaps changes the two caps on a running store and applies them at
+// once.
+//
+// At once, rather than at the next flush, because this is what an
+// operator moving the control is watching happen: a day count taken
+// from 30 to 7 that leaves 30 days on disk until the next batch of
+// events arrives has, from where they are standing, not worked. A
+// deployment with no traffic would wait indefinitely.
+//
+// Zero or negative means the default, exactly as Open's clamp reads it
+// -- the same setting cannot mean "unset" in one place and "keep
+// nothing" in another.
+func (s *Store) SetCaps(days int, maxBytes int64) error {
+	if s == nil {
+		return nil
+	}
+	days, maxBytes = clamp(days, maxBytes)
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("retention: the store is closed")
+	}
+	s.days, s.maxBytes = days, maxBytes
+	s.mu.Unlock()
+	return s.prune()
+}
+
+// Caps reports the two caps in effect.
+func (s *Store) Caps() (days int, maxBytes int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.days, s.maxBytes
+}
+
+// Capped reports whether the byte cap -- not the day count -- has
+// dropped a day since this store was opened. See cappedPrune for why
+// the distinction is worth keeping and why this never goes back to
+// false.
+func (s *Store) Capped() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cappedPrune
 }
 
 // Purge deletes every retained file.
@@ -453,6 +528,41 @@ func Days(dir string) ([]string, error) {
 
 // Days lists the days this store holds, oldest first.
 func (s *Store) Days() ([]string, error) { return Days(s.dir) }
+
+// DayFile is one retained day as a caller outside this package sees
+// it: which day, and what it costs on disk.
+type DayFile struct {
+	Day   string // YYYY-MM-DD, UTC
+	Bytes int64
+}
+
+// DaysHeld lists the days held in dir with their file sizes, oldest
+// first.
+//
+// Sizes as well as days because "what is actually held" is a figure an
+// operator is shown beside the setting, and the two are routinely
+// different -- the setting says thirty days, the disk says what it
+// says. Needs no key: a file's name and size are not its contents.
+func DaysHeld(dir string) ([]DayFile, error) {
+	s := &Store{dir: dir}
+	files, err := s.dayFiles()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DayFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, DayFile{Day: f.day, Bytes: f.size})
+	}
+	return out, nil
+}
+
+// Today is the day an event received now would be filed under.
+//
+// Exported so a caller asking "is this day still being written to?"
+// uses the same UTC day boundary the files themselves are named by,
+// rather than a second copy of the format string that can drift or be
+// computed in local time.
+func Today() string { return dayOf(time.Now()) }
 
 // ReplayDay visits one of this store's days. See the package-level
 // ReplayDay.

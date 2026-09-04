@@ -29,6 +29,7 @@ import type {
   SetupCommandsResponse,
   Stats,
   StoreMemory,
+  HistorySettings,
   SetupMark,
   SetupStatus,
   Suggestion,
@@ -1175,6 +1176,34 @@ export async function setStoreMaxMemory(bytes: number): Promise<StoreMemory | st
   const res = await putJSON('/api/settings/store', { maxMemory: bytes })
   if (res.ok) return res.json()
   return (await res.text()).trim() || `setStoreMaxMemory: ${res.status}`
+}
+
+// fetchHistorySettings reads the on-disk history's switch, window and
+// what is held right now (#910, round 42's disk group). A non-admin's
+// refusal surfaces as a thrown ApiError for the caller to swallow, the
+// same shape as fetchPersistence above.
+export async function fetchHistorySettings(): Promise<HistorySettings> {
+  const res = await fetch('/api/settings/history')
+  if (!res.ok) throw new ApiError(`fetchHistorySettings: ${res.status}`, res.status)
+  return res.json()
+}
+
+// setHistorySettings turns the on-disk history on or off and sets its
+// days and byte cap in one call: the server applies the new window at
+// once, deleting the oldest days it no longer allows, which is why the
+// control only ever calls this from a link that names the deletion.
+//
+// Admin-only server-side. Returns the server's new state on success, or
+// its own words on refusal -- setStoreMaxMemory's shape -- so the group
+// can show why rather than a status code.
+export async function setHistorySettings(body: {
+  enabled: boolean
+  days: number
+  maxBytes: number
+}): Promise<HistorySettings | string> {
+  const res = await putJSON('/api/settings/history', body)
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setHistorySettings: ${res.status}`
 }
 
 // ===========================================================================
