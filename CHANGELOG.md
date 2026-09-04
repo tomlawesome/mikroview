@@ -624,10 +624,13 @@ rewritten.
   (#935). Merge requests, CI and the `dev -> preview -> main` promotions
   happen on GitLab, and `dev`, `preview` and `main` are pushed to GitHub
   after each merge with a repository-only deploy key. GitHub keeps
-  issues, CodeQL, the container registry and signing, Pages and
-  releases. `close-issues-on-dev.yml` is gone; the GitLab
-  `sync:close-github-issues` job closes issues from the merge request
-  description with the same matching rules. Dependabot no longer opens
+  CodeQL, the container registry and signing, Pages and releases.
+  Issues moved to GitLab as well: the tracker was imported with every
+  issue and merge request number preserved, GitHub's copies are closed
+  and kept as history, and GitLab closes an issue from the merge
+  request itself, so the closing workflow and the job that replaced it
+  (`close-issues-on-dev.yml`, then `sync:close-github-issues`) are both
+  gone. Dependabot no longer opens
   pull requests (`.github/dependabot.yml` and the dependency-review
   workflow are removed); its alerts stay on as notifications, and GitHub
   pull requests into the three mirrored branches are refused by the

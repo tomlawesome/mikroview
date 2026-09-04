@@ -43,9 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checked out so the decision logic can be required from a tested,
-      # version-controlled file, same reasoning as close-issues-matcher.js.
-      # Default ref (the branch this schedule fired from) is correct here,
-      # unlike that workflow -- there is no PR-merge ref to prefer over.
+      # version-controlled file rather than inlined in this YAML. Default
+      # ref (the branch this schedule fired from) is correct here: there is
+      # no PR-merge ref to prefer over it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
