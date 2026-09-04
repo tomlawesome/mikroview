@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checked out so the decision logic can be required from a tested,
-      # version-controlled file, same reasoning as close-issues-on-dev.yml.
+      # version-controlled file, same reasoning as close-issues-matcher.js.
       # Default ref (the branch this schedule fired from) is correct here,
       # unlike that workflow -- there is no PR-merge ref to prefer over.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
