@@ -620,6 +620,14 @@ rewritten.
 
 ### Changed
 
+- **Development moved to a self-hosted GitLab; GitHub is now its mirror**
+  (#935). Merge requests, CI and the `dev -> preview -> main` promotions
+  happen on GitLab, and `dev`, `preview` and `main` are pushed to GitHub
+  after each merge with a repository-only deploy key. GitHub keeps
+  issues, CodeQL, the container registry and signing, Pages and
+  releases. `close-issues-on-dev.yml` is gone; the GitLab
+  `sync:close-github-issues` job closes issues from the merge request
+  description with the same matching rules.
 - **"Never flag this again" now records how much is normal, and comes
   back when a host outgrows it** (#640, part A: store and engine). It
   used to silence a detector on a host outright, forever, whatever the
