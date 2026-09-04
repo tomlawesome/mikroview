@@ -3,6 +3,7 @@
 package main
 
 import (
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -18,8 +19,14 @@ import (
 
 // quietLog keeps the startup lines openHistory writes out of the test
 // output: what is being asserted is what it returns, not what it says.
+//
+// io.Discard, not os.NewFile(0, os.DevNull): that wrapped descriptor 0
+// in an *os.File whose finalizer closes the descriptor once the logger
+// is collected. The next file the package opened then got number 0,
+// and the next collected logger closed that one -- os.ReadFile on an
+// unrelated source file failing with "bad file descriptor" (#939).
 func quietLog() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), &slog.HandlerOptions{Level: slog.LevelError + 1}))
+	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 }
 
 func historyConfig(t *testing.T, enabled bool, keyFile string) config.Config {

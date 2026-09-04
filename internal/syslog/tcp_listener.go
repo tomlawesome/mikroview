@@ -946,6 +946,31 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				pending = append(pending, buf[:n]...)
 			}
 
+			// The cap has to be judged before the newline split, not
+			// only after it (#944). The accumulation check further down
+			// only sees pending once every terminated line has been
+			// emitted, so when a slow reader takes the bytes that cross
+			// the cap *and* the terminator after them in one read, the
+			// split below delivered the whole over-limit line intact --
+			// the cap held only when the reader was quick enough to see
+			// it crossed before the newline landed, which is why the
+			// test for it flaked on a loaded runner rather than failing.
+			// Same outcome as the accumulation path: the first
+			// maxTCPMessageBytes delivered once, the rest of that line
+			// discarded and counted, whatever follows the terminator
+			// kept. No discard state to enter, since the terminator is
+			// already in hand.
+			for {
+				idx := bytes.IndexByte(pending, '\n')
+				if idx <= maxTCPMessageBytes {
+					break
+				}
+				emit(pending[:maxTCPMessageBytes])
+				tcpOversized.Add(1)
+				pending = pending[idx+1:]
+				headerScanned = 0
+			}
+
 			for {
 				idx := bytes.IndexByte(pending, '\n')
 				if idx < 0 {

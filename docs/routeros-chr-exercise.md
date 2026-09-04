@@ -52,6 +52,22 @@ The job then:
 covers the newest release. The job passes quietly — no merge request,
 nothing to review.
 
+## The report, and what watches it (#929, moved to GitLab by #943)
+
+Every run of this job, pass or fail, ends by writing `chr/last-run.json`
+(`scripts/chr-report.sh`) to its own branch, `chr-reports`, on this GitLab
+project -- nothing else would otherwise know the job ran at all, since
+"green with nothing to exercise" and "the job never ran" look identical
+from the outside.
+
+A second, daily-scheduled job, `chr-watch:run`, reads that file
+(`scripts/chr-watch/run.js`, decision logic in `scripts/chr-watch/chr-watch.js`,
+tested in `chr-watch.test.js`) and turns it into something actually looked
+at: a red pipeline plus a single tracking issue on this GitLab project,
+labelled `chr-watch`, opened or commented on depending on whether the last
+run passed, failed, went stale (no report in 9 days), or never arrived.
+Green closes that issue if one is open; green with none open does nothing.
+
 ## What the owner sees, and what to do with it
 
 A merge request titled `RouterOS <version>: exercised on CHR, needs a
@@ -92,6 +108,12 @@ Both already exist:
    job's environment and never written to disk, the same pattern
    `sync:mirror-to-github` already uses for its own token in
    `.gitlab-ci.yml`.
+
+The daily `chr-watch:run` job (above) needs one more, not yet created:
+
+3. A second GitLab Pipeline Schedule, daily, carrying `CHR_WATCH` = `true`.
+   It reuses the same `GITLAB_MR_TOKEN` CI/CD variable above -- that token
+   already carries the `api` scope reading and writing issues needs.
 
 No runner setup is needed: the job runs on the same untagged shared
 runner as the rest of this pipeline. It has no Docker-in-Docker to
