@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "result": "pass",
+  "finished_at": "2026-09-04T05:31:00Z",
+  "routeros_version": "7.24.2",
+  "commit": "b621df6c1a2f3e4d5c6b7a8f9e0d1c2b3a4f5e6d",
+  "pipeline_url": "https://gitlab.example.com/mikroview/chr/-/pipelines/1234",
+  "job_url": "https://gitlab.example.com/mikroview/chr/-/jobs/5678",
+  "summary": "All CHR exercise checks passed against RouterOS 7.24.2."
+}
