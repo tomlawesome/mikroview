@@ -89,3 +89,122 @@ func TestNegativeStoredFigureRefusesToOpen(t *testing.T) {
 		t.Error("a negative stored budget opened cleanly")
 	}
 }
+
+func TestFirstRunHasNoHistoryStored(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.History(); ok {
+		t.Error("a fresh store reported stored history settings -- the config file's must apply")
+	}
+}
+
+func TestSetHistorySurvivesAReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := History{Enabled: true, Days: 14, MaxBytes: 2 << 30}
+	if err := s.SetHistory(want); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reopened.History()
+	if !ok || got != want {
+		t.Errorf("after a reopen: (%+v, %v), want (%+v, true)", got, ok, want)
+	}
+}
+
+// The switch's whole point is that a stored "off" beats the config
+// file's "on" -- so "nothing stored" cannot be read off Enabled, which
+// is false in both cases. Days is what carries that distinction.
+func TestStoredOffIsDistinguishableFromNothingStored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHistory(History{Enabled: false, Days: 30, MaxBytes: 1 << 30}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reopened.History()
+	if !ok {
+		t.Fatal("a stored off reads back as nothing stored -- the config file's switch would win and turn it back on")
+	}
+	if got.Enabled {
+		t.Error("a stored off read back as on")
+	}
+}
+
+func TestSetHistoryRefusesWhatItCannotStore(t *testing.T) {
+	s, err := Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []History{
+		{Enabled: true, Days: 0, MaxBytes: 1 << 30},
+		{Enabled: true, Days: -1, MaxBytes: 1 << 30},
+		{Enabled: true, Days: 30, MaxBytes: 0},
+		{Enabled: true, Days: 30, MaxBytes: -1},
+	} {
+		if err := s.SetHistory(bad); err == nil {
+			t.Errorf("SetHistory(%+v) was accepted", bad)
+		}
+	}
+	if _, ok := s.History(); ok {
+		t.Error("a refused change was stored anyway")
+	}
+}
+
+// The memory figure and the history settings share one document, so
+// writing either must not erase the other.
+func TestTheTwoSettingsDoNotOverwriteEachOther(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMaxMemory(480 << 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHistory(History{Enabled: true, Days: 7, MaxBytes: 1 << 30}); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := reopened.MaxMemory(); !ok || got != 480<<20 {
+		t.Errorf("MaxMemory = (%d, %v) after a history change, want (%d, true)", got, ok, int64(480<<20))
+	}
+	if got, ok := reopened.History(); !ok || got.Days != 7 {
+		t.Errorf("History = (%+v, %v), want 7 days stored", got, ok)
+	}
+}
+
+func TestNegativeStoredHistoryRefusesToOpen(t *testing.T) {
+	for _, doc := range []string{
+		`{"history":{"days":-1}}`,
+		`{"history":{"maxBytes":-1}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(path); err == nil {
+			t.Errorf("%s opened cleanly", doc)
+		}
+	}
+}

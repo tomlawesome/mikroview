@@ -237,9 +237,22 @@ history:
   dir: ""
 ```
 
-- `history.enabled` — the switch. **Turning it off deletes what was
-  already retained** — off has to mean the history is actually gone, or
-  the setting is a lie.
+**Three of these five are starting figures, not the last word.**
+`history.enabled`, `history.days` and `history.maxBytes` are the values a
+fresh instance comes up on; from then on they are editable in Settings,
+beside the memory slider, and the figure set there wins on every future
+restart — mikroview names which one it took in the startup log. To go
+back to the file's figures, delete the settings document
+(`store.settingsStorePath`), exactly as for `store.maxMemory` above.
+`history.keyFile` and `history.dir` are **not** editable from the app and
+never will be: one names a mounted secret and the other a filesystem
+path, and neither belongs in the blast radius of a browser session.
+
+- `history.enabled` — the switch, and the initial position of the one in
+  Settings. **Turning it off deletes what was already retained** — off
+  has to mean the history is actually gone, or the setting is a lie.
+  That applies to the control in the app as well: the files are gone
+  before the change is confirmed on screen.
 - `history.keyFile` — path to a master key file that you generate and
   mount, e.g.:
 
@@ -258,18 +271,32 @@ history:
   **There is no unencrypted mode.** `history.enabled: true` with no key
   file set does not mean "retain, unencrypted" — it means nothing is
   retained at all, and mikroview turns the switch back off and says so
-  (see [CFG-0080](#cfg-0080)).
-- `history.days` — how many days of files to keep. Below 1 the 30-day
-  default is applied (see [CFG-0081](#cfg-0081)): zero would drop the
-  day just written on the very next flush, leaving history "on" and
-  holding nothing.
+  (see [CFG-0080](#cfg-0080)). The control in Settings refuses the same
+  request for the same reason, with a 409 and a sentence saying to mount
+  a key.
+- `history.days` — how many days of files to keep, initially. Below 1 the
+  30-day default is applied (see [CFG-0081](#cfg-0081)): zero would drop
+  the day just written on the very next flush, leaving history "on" and
+  holding nothing. Lowering it from Settings drops the surplus days
+  straight away, not at the next flush.
 - `history.maxBytes` — a second cap, applied alongside `days` — whichever
   is hit first drops the oldest day. Below 1 MiB the 1 GiB default is
   applied (see [CFG-0082](#cfg-0082)): below about a megabyte the cap is
   smaller than a single day at any realistic logging rate, so every
-  flush would drop all but the day still being written.
+  flush would drop all but the day still being written. Also editable
+  from Settings.
 - `history.dir` — where the daily files live, mode 0600 in a 0700
   directory. Left empty, mikroview puts them beside the data directory.
+  Config-file only.
+
+**The setting is not the window.** `history.days` says how many days are
+*allowed*; how many are actually on disk is whatever survived the byte
+cap, and after a restart or a fresh install it is however many have been
+collected so far. Settings states the window actually held — the days,
+the oldest date, the bytes — separately from the setting, and
+`GET /api/settings/history` reports both. Turning the history on takes
+what the event buffer already holds as well as everything after it, so
+the first day's file is not empty.
 
 **What encryption buys, and what it doesn't.** Copying the data
 directory, or restoring a backup of it, yields nothing readable without
@@ -3410,6 +3437,8 @@ exits, rather than starting the server. See
 | `GET /api/persistence` | admin-only: which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
+| `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |
+| `PUT /api/settings/history` | admin-only: turn the on-disk event history on or off and set its two caps. Body `{"enabled": <bool>, "days": <int>, "maxBytes": <bytes>}`, answering with the same shape `GET` returns. Turning it on takes what the event buffer already holds and everything after; **turning it off deletes every retained file before the response is written**. `days` below 1 or `maxBytes` below 1 MiB is refused with a 400; a request to turn it on with no key file mounted is refused with a 409. Audit-logged as `settings.history` |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
