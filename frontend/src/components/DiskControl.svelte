@@ -20,6 +20,11 @@
   // · off — loopback only` idiom. An operator still finds the feature;
   // there is no dead switch.
   //
+  // Round 43 (#921) adds the `state` row -- the state store, the other
+  // thing mikroview keeps on disk -- beside the key. The unanswered
+  // state (`dfail`, the settings GET failed) has no settings to render
+  // from, so EngineRoom draws that one row itself.
+  //
   // The section wrapper (#diskg, .stsection.wide, its state classes and
   // the <h3>) is EngineRoom's, so the card's own grid and dividers apply
   // to it; this component renders the two columns inside and publishes
@@ -53,6 +58,7 @@
     settings,
     stats,
     canEdit,
+    stateStore = null,
     phase = $bindable('rest'),
     onchanged,
   }: {
@@ -60,6 +66,12 @@
     stats: Stats | null
     /** Whether this caller may move anything -- admin only. */
     canEdit: boolean
+    /**
+     * The `state` row (round 43): which backend keeps flags, definitions,
+     * watchlist entries, entities and tokens -- the other thing on disk,
+     * beside the key. Null leaves the row out.
+     */
+    stateStore?: string | null
     /** Which of round 42's states the group is in, for the section's classes. */
     phase?: DiskPhase
     /** Called with the server's new state after it has accepted a change. */
@@ -427,6 +439,12 @@
       {/if}
     </span>
   </div>
+  {#if stateStore}
+    <div class="orow">
+      <span>state</span>
+      <span class="ov dim">{stateStore}</span>
+    </div>
+  {/if}
 </div>
 
 <style>
