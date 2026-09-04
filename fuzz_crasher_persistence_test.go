@@ -12,9 +12,10 @@ import (
 
 // A crashing input found by the fuzz gate is written by Go to
 // testdata/fuzz/<Target>/ inside the target's own package directory,
-// which on a CI runner is discarded with the workspace. ci.yml's
-// upload-artifact step rescues it, and reaches it with the glob below
-// (#526).
+// which on a CI runner is discarded with the workspace. The
+// security:fuzz job's artifacts block in .gitlab-ci.yml rescues it, and
+// reaches it with the glob below (#526; the job moved from GitHub's
+// ci.yml under #935).
 //
 // The glob is what these tests exist for. It has a single `*`, so it
 // reaches internal/<pkg> and nothing else: a fuzz target added at the
@@ -27,7 +28,7 @@ import (
 // Same shape as injection_sinks_test.go: a decision recorded as a test,
 // so moving a target or editing the glob forces a conscious argument
 // rather than a silent regression.
-const fuzzCrasherUploadGlob = "internal/*/testdata/fuzz/**"
+const fuzzCrasherUploadGlob = "internal/*/testdata/fuzz/"
 
 // Matched at line start so a mention in a comment or a string is not a
 // declaration. Crude on purpose, for the reasons injection_sinks_test.go
@@ -55,8 +56,8 @@ func TestFuzzTargetsSitWhereTheCrasherUploadReaches(t *testing.T) {
 
 			t.Errorf("%s declares %s in %q, which %q does not reach.\n"+
 				"CI would fuzz it and discard any crashing input with the runner's workspace.\n\n"+
-				"Either move the target under internal/<pkg>/, or widen the upload path in "+
-				".github/workflows/ci.yml and update fuzzCrasherUploadGlob here to match.",
+				"Either move the target under internal/<pkg>/, or widen the artifact path in "+
+				".gitlab-ci.yml's security:fuzz job and update fuzzCrasherUploadGlob here to match.",
 				rel, name, dir, fuzzCrasherUploadGlob)
 		}
 	}
@@ -66,12 +67,12 @@ func TestFuzzTargetsSitWhereTheCrasherUploadReaches(t *testing.T) {
 	// passed.
 	if targets == 0 {
 		t.Fatal("found no fuzz targets at all -- refusing to pass on an empty sweep. " +
-			"If the last target was genuinely removed, delete this file and the upload step in ci.yml.")
+			"If the last target was genuinely removed, delete this file and the security:fuzz job in .gitlab-ci.yml.")
 	}
 }
 
 func TestCIRescuesFuzzCrashers(t *testing.T) {
-	const workflow = ".github/workflows/ci.yml"
+	const workflow = ".gitlab-ci.yml"
 
 	data, err := os.ReadFile(workflow)
 	if err != nil {
@@ -79,17 +80,17 @@ func TestCIRescuesFuzzCrashers(t *testing.T) {
 	}
 	src := string(data)
 
-	// Each of these is load-bearing separately: the action does the
-	// rescuing, the glob decides what it reaches, and the condition is
-	// why a green run costs nothing. Losing any one of them loses the
-	// crasher just as completely as deleting the step.
+	// Each of these is load-bearing separately: the job runs the fuzz
+	// targets, the glob decides what its artifacts reach, and the
+	// condition is why a green run costs nothing. Losing any one of them
+	// loses the crasher just as completely as deleting the job.
 	for _, required := range []struct {
 		substring string
 		why       string
 	}{
-		{"actions/upload-artifact", "nothing carries the crashing input off the runner"},
-		{fuzzCrasherUploadGlob, "the upload no longer reaches where Go writes a crasher"},
-		{"if: failure()", "the step would run on green builds too, or not on red ones"},
+		{"security:fuzz:", "no job runs the fuzz targets"},
+		{"- " + fuzzCrasherUploadGlob, "the artifact path no longer reaches where Go writes a crasher"},
+		{"when: on_failure", "the artifact would be collected on green runs too, or not on red ones"},
 	} {
 		if !strings.Contains(src, required.substring) {
 			t.Errorf("%s no longer contains %q -- %s.\n\n"+
