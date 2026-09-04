@@ -187,19 +187,42 @@ security:semgrep:
     # Reproduced and the fix confirmed locally under the same image
     # (#912).
     - unset SEMGREP_IN_DOCKER
+    # A rule that exceeds --timeout is skipped for that file, and after
+    # --timeout-threshold of them semgrep abandons the file entirely and
+    # still exits 0. So the job got *greener* the slower the runner was,
+    # and a file could contribute no findings without saying so. Two runs
+    # over an unchanged tree disagreed: scripts/seed-demo.py reported
+    # disabled-cert-validation on one and was abandoned on the other
+    # (#918).
+    #
+    # 120s rather than the 5s default so the slow rules finish, threshold
+    # 0 so no file is ever abandoned, and the grep below so that a
+    # timeout that still happens fails the job instead of quietly
+    # shrinking the scan. An incomplete scan is not a pass.
     - |
+      set -o pipefail
+      run_semgrep() {
+        semgrep scan --config p/security-audit --config p/owasp-top-ten \
+          --timeout 120 --timeout-threshold 0 \
+          --sarif --output semgrep.sarif --error "$@" 2>&1 | tee semgrep.log
+      }
+      status=0
       if [ -n "$CI_MERGE_REQUEST_DIFF_BASE_SHA" ]; then
-        semgrep scan --config p/security-audit --config p/owasp-top-ten \
-          --baseline-commit "$CI_MERGE_REQUEST_DIFF_BASE_SHA" \
-          --sarif --output semgrep.sarif --error
+        run_semgrep --baseline-commit "$CI_MERGE_REQUEST_DIFF_BASE_SHA" || status=$?
       else
-        semgrep scan --config p/security-audit --config p/owasp-top-ten \
-          --sarif --output semgrep.sarif --error
+        run_semgrep || status=$?
       fi
+      if grep -q 'timeout error' semgrep.log; then
+        echo "A rule timed out, so this scan covered less than it reported on (#918):"
+        grep 'timeout error' semgrep.log
+        exit 1
+      fi
+      exit $status
   artifacts:
     when: always
     paths:
       - semgrep.sarif
+      - semgrep.log
 
 security:gosec:
   stage: security
