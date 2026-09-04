@@ -8,13 +8,13 @@
 # do not treat a result from this pipeline as a gate on
 # anything -- work through GitHub pull requests as normal.
 #
-# Blocker on activation: the `sync` stage below has never run
-# successfully. It needs a GITHUB_MIRROR_TOKEN CI/CD variable
-# that does not exist yet, so cutting over now would silently
-# stop GitHub issues closing on merge to `dev`.
+# The cutover is now planned as GitLab-first delivery with GitHub as a
+# read-only mirror of every branch -- #935 holds the steps and their
+# order. The `sync` stage below is the switch: it is inert until the
+# owner sets a MIRROR_TO_GITHUB=true CI/CD variable at the flip (step 4),
+# so a push to `dev` here cannot mirror or close GitHub issues by
+# accident before the branches are reconciled.
 #
-# Status and remaining work:
-# gitlab-ci-plan/07-implementation-status-and-handover.md
 # Current instruction: AGENTS.md, "Where code review happens".
 #
 # One deliberate, scoped exception to all of the above: the
@@ -318,22 +318,31 @@ security:trivy-fs:
   allow_failure: true
 
 # ---------------------------------------------------------------------------
-# SYNC — only on an actual push to dev (not MR pipelines). Mirrors dev to
-# GitHub so the existing GitHub dev->preview->main flow keeps working
-# unchanged, then closes whatever GitHub issues the merge commit references
-# (replaces close-issues-on-dev.yml, which never fires now that merges into
-# dev are GitLab MRs, not GitHub PRs).
+# SYNC — only on an actual push to dev (not MR pipelines), and only once
+# the owner has set MIRROR_TO_GITHUB=true as a project CI/CD variable.
+# Until then both jobs are skipped: GitLab's `dev` is a fork of GitHub's
+# (#935), and a push from a forked branch would either be refused
+# non-fast-forward or, worse, close GitHub issues from a commit GitHub
+# never received. The variable is the deliberate flip (#935 step 4);
+# nothing in this file sets it.
+#
+# Once on: mirrors dev to GitHub, then closes whatever GitHub issues the
+# merge commit references (replaces close-issues-on-dev.yml, which stops
+# firing once merges into dev are GitLab MRs, not GitHub PRs). Under the
+# everything-moves decision on #935 this job also has to carry `preview`
+# and `main` — that change belongs to step 4 with the flip, not here.
 #
 # Needs a GITHUB_MIRROR_TOKEN CI/CD variable (masked+protected): a
 # fine-grained GitHub PAT scoped to just this repo, contents:write +
-# issues:write. Not yet created — see gitlab-ci-plan project-settings task.
+# issues:write. It exists on the project; its scopes and expiry are the
+# owner's to check.
 # ---------------------------------------------------------------------------
 
 sync:mirror-to-github:
   stage: sync
   image: alpine/git:2.47.3
   rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true"'
   script:
     - git remote add github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git" 2>/dev/null || git remote set-url github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git"
     - git push github HEAD:dev
@@ -344,7 +353,7 @@ sync:close-github-issues:
   needs:
     - sync:mirror-to-github
   rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true"'
   allow_failure: true
   script:
     - apk add --no-cache curl git
