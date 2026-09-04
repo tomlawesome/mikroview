@@ -1073,3 +1073,62 @@ func TestTCPHeaderThatNeverArrivesIsNotWaitedForForever(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestTCPOversizedLineWithTerminatorInSameReadIsCapped is the
+// deterministic form of the flake #944 turned out to be. The paced
+// real-socket test above only exercised the cap when the reader saw
+// pending cross it *before* the terminator arrived; on a loaded runner
+// the reader fell behind, one read brought in both the cap-crossing
+// bytes and the '\n' after them, and the newline split delivered the
+// whole 85536-byte line intact -- the cap check ran only after it.
+//
+// net.Pipe makes the read boundaries exact: each Write is one Read. The
+// first leaves pending just under the cap with no newline; the second
+// carries it past the cap and the terminator and the next message in
+// the same read. That is the shape a slow reader sees, reproduced on
+// purpose rather than by luck.
+func TestTCPOversizedLineWithTerminatorInSameReadIsCapped(t *testing.T) {
+	out := make(chan RawMessage, 16)
+	serverConn, clientConn := net.Pipe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleTCPConn(ctx, serverConn, out)
+	}()
+
+	before := Stats().Oversized
+	leadUp := bytes.Repeat([]byte("A"), maxTCPMessageBytes-1000)
+	if _, err := clientConn.Write(leadUp); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rest := append(bytes.Repeat([]byte("A"), 21000), []byte("\nD|wan-in|forward: proto TCP, 192.0.2.1:1->198.51.100.1:80\n")...)
+	if _, err := clientConn.Write(rest); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < 2 {
+		select {
+		case m := <-out:
+			got = append(got, string(m.Data))
+		case <-deadline:
+			t.Fatalf("timed out; received %d messages: %q", len(got), got)
+		}
+	}
+	clientConn.Close()
+	<-done
+
+	if len(got[0]) != maxTCPMessageBytes {
+		t.Errorf("first message is %d bytes, want the %d-byte cap -- the terminator arriving in the same read must not lift the cap", len(got[0]), maxTCPMessageBytes)
+	}
+	if got[1] != "D|wan-in|forward: proto TCP, 192.0.2.1:1->198.51.100.1:80" {
+		t.Errorf("second message = %q, want the normal line that followed the terminator", got[1])
+	}
+	if Stats().Oversized == before {
+		t.Error("the discarded remainder was not counted")
+	}
+}
