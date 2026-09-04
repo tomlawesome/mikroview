@@ -338,9 +338,8 @@ security:trivy-fs:
 # ---------------------------------------------------------------------------
 # SYNC — GitHub is a mirror of dev, preview and main. After a push to any of
 # the three (a merge here lands as a push), mirror-to-github pushes that
-# branch to GitHub; after a push to dev only, close-github-issues closes the
-# GitHub issues the merged merge request said it closes. Both jobs run only
-# once the owner has set MIRROR_TO_GITHUB=true (#935 step 4).
+# branch to GitHub. It runs only once the owner has set
+# MIRROR_TO_GITHUB=true (#935 step 4).
 #
 # The mirror pushes over SSH with a GitHub deploy key -- one repository,
 # push only, no API access -- held in GITHUB_MIRROR_SSH_KEY, a protected
@@ -353,12 +352,10 @@ security:trivy-fs:
 # GitHub's SSH host keys come from api.github.com/meta over TLS rather than
 # ssh-keyscan, so the first connection is verified rather than trusted.
 #
-# The closer reads the merge request, not the merge commit: GitLab's default
-# merge commit carries only the MR title, and `Closes #N` lives in the
-# description. It uses GITHUB_ISSUES_TOKEN (issues: read and write, this
-# repository only) and GITLAB_MR_TOKEN (to read the MR). Not allow_failure:
-# a closer that fails silently is how issues stay open after the work
-# shipped (#99, #133, #134), so a red job here is the signal.
+# There was a second job here that closed GitHub issues from the merged
+# merge request. It is gone: issues live on GitLab now (owner decision on
+# #935, 2026-09-04), and GitLab closes them itself from the merge request
+# description, because dev is this project's default branch.
 # ---------------------------------------------------------------------------
 
 sync:mirror-to-github:
@@ -394,16 +391,6 @@ sync:mirror-to-github:
     # Never --force: if this is refused non-fast-forward, something wrote to
     # GitHub's copy and the branch has forked. Reconcile by merge (#935).
     - git push github "HEAD:refs/heads/$CI_COMMIT_BRANCH"
-
-sync:close-github-issues:
-  stage: sync
-  image: node:22-alpine
-  needs:
-    - sync:mirror-to-github
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true"'
-  script:
-    - node .github/scripts/close-issues-from-gitlab.js
 
 # ---------------------------------------------------------------------------
 # CHR-EXERCISE — #894: weekly, boots MikroTik's own CHR image under
