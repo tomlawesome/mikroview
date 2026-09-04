@@ -627,7 +627,11 @@ rewritten.
   issues, CodeQL, the container registry and signing, Pages and
   releases. `close-issues-on-dev.yml` is gone; the GitLab
   `sync:close-github-issues` job closes issues from the merge request
-  description with the same matching rules.
+  description with the same matching rules. Dependabot no longer opens
+  pull requests (`.github/dependabot.yml` and the dependency-review
+  workflow are removed); its alerts stay on as notifications, and GitHub
+  pull requests into the three mirrored branches are refused by the
+  `branch policy` check with a pointer to GitLab.
 - **"Never flag this again" now records how much is normal, and comes
   back when a host outgrows it** (#640, part A: store and engine). It
   used to silence a detector on a host outright, forever, whatever the

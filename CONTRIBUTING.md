@@ -43,27 +43,27 @@ see `.claude/skills/live-check/SKILL.md`.
 
 ## Branching
 
-Three lanes, same model as this project's sibling repos (`birdcage`):
+Development happens on the owner's self-hosted GitLab; this GitHub
+repository is its mirror. `dev`, `preview` and `main` are written on
+GitLab and pushed here after every merge, so a pull request into any of
+them here is refused by the `branch policy` check. Three lanes, same
+model as this project's sibling repos:
 
-- **`dev`** — unprotected, fast-moving. All issue work targets this.
-  CI here is deliberately light: build/vet/test, `svelte-check`. This is
-  where the messy stuff happens.
-- **`preview`** — protected, PR-only (from `dev`). Gets the full gate:
-  the auth-focused security job unconditionally, the container smoke
-  test, and CodeQL. A merge here builds and publishes the actual release
-  candidate image (`ghcr.io/tomlawesome/mikroview:preview`).
-- **`main`** — protected, PR-only (from `preview`). A merge here never
+- **`dev`** — the integration branch. All issue work targets this by
+  merge request on GitLab, where the lint, test and security jobs run
+  (`.gitlab-ci.yml`).
+- **`preview`** — promoted from `dev` only. A merge here builds and
+  publishes the release candidate image
+  (`ghcr.io/tomlawesome/mikroview:preview`) from GitHub, via
+  `.github/workflows/docker.yml`.
+- **`main`** — promoted from `preview` only. A merge here never
   rebuilds anything; it retags the exact digest that was already built
   and tested from `preview`. The shop window — only what's actually
   ready ends up here.
 
-A PR into `main` always gets the full security audit (`security` and
-`container` jobs unconditionally, regardless of what changed) — see
-`.github/workflows/ci.yml`. A PR into `dev`/`preview` runs the
-auth-focused security job only when it actually touches auth-related
-code (`internal/auth/**`, `internal/api/auth.go`, `internal/api/ws.go`,
-the frontend auth components), so unrelated changes don't pay for
-security-suite overhead they don't need.
+GitHub still runs CodeQL and secret scanning on what arrives, and
+`.github/workflows/ci.yml` still runs the container smoke test and the
+Postgres integration check until those move to GitLab too.
 
 ## Testing expectations
 
@@ -76,9 +76,10 @@ security-suite overhead they don't need.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md). Dependabot watches Go modules, npm
-packages, the Dockerfile's base images, and GitHub Actions versions
-weekly, opening PRs against `dev`. CodeQL scans PRs into `preview`/`main`
+See [SECURITY.md](SECURITY.md). Dependabot alerts stay on for Go
+modules, npm packages, the Dockerfile's base images and GitHub Actions
+versions, as notifications only: it opens no pull requests, because
+nothing merges here. CodeQL scans every push to `dev`/`preview`/`main`
 plus a weekly full scan.
 
 ## Code contributions
