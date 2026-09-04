@@ -506,7 +506,14 @@ func rollHourBucket(buckets *baselineSet, st *activitySpikeSourceState, key stri
 	st.hourDay[hour] = day
 	st.hourPeak[hour] = 0
 	if prevDay == "" {
-		return // first time this hour has ever been seen for this source
+		// First sight of this hour in this process -- either genuinely
+		// first-ever (resume finds nothing persisted, and is a no-op) or
+		// first-since-restart (resume brings an earlier process's
+		// persisted bucket back so it judges immediately, rather than
+		// waiting up to 24h for the next rollover to materialise it via
+		// buckets.reading -- issue #902).
+		buckets.resume(key, now)
+		return
 	}
 	if st.frozen {
 		return

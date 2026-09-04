@@ -1,0 +1,56 @@
+{
+ "description": "The RouterOS console menus mikroview drives, and the properties it sets on each. Only what mikroview uses -- not a copy of MikroTik's reference, and not their whole command list. scripts/routerosreference checks every path here still exists in MikroTik's published CLI Reference.",
+ "checkedAgainst": "https://manual.mikrotik.com/docs/cli-reference/",
+ "checkedOn": "2026-09-04",
+ "menus": [
+  {
+   "path": "tool/fetch",
+   "console": "/tool fetch",
+   "usedFor": "step 1 -- pulling mikroview's CA certificate onto the router",
+   "properties": ["url", "check-certificate", "dst-path"],
+   "verified": "parsed on CHR 7.23.3 and 7.24.2, 2026-09-04. The fetch itself fails in the exercise because the address is a placeholder with nothing listening; that is a runtime failure, not a syntax one."
+  },
+  {
+   "path": "certificate/import",
+   "console": "/certificate import",
+   "usedFor": "step 1 -- trusting the certificate fetched above",
+   "properties": ["file-name", "passphrase"],
+   "verified": "parsed on CHR 7.23.3 and 7.24.2, 2026-09-04. Reports 'input does not match any value of file-name' in the exercise because the fetch before it could not land the file."
+  },
+  {
+   "path": "system/logging/action",
+   "console": "/system logging action add",
+   "usedFor": "step 2 -- defining the remote syslog target that points at mikroview",
+   "properties": ["name", "target", "remote", "remote-port", "remote-protocol", "check-certificate"],
+   "verified": "accepted on CHR 7.23.3 and 7.24.2, 2026-09-04"
+  },
+  {
+   "path": "system/logging",
+   "console": "/system logging add",
+   "usedFor": "step 2 -- sending firewall topics to that target",
+   "properties": ["topics", "action"],
+   "verified": "accepted on CHR 7.23.3 and 7.24.2, 2026-09-04"
+  },
+  {
+   "path": "ip/firewall/filter",
+   "console": "/ip firewall filter set",
+   "usedFor": "step 3 -- tagging existing rules so mikroview can decode the action from the log prefix",
+   "properties": ["log", "log-prefix", "dynamic", "action", "connection-state"],
+   "verified": "exercised on CHR 7.23.3 and 7.24.2, 2026-09-04. The find expression must be written [find where !dynamic ...]: a bare [find !dynamic ...] is a syntax error at the '!' on both releases (#924). MikroTik's Console manual writes it with 'where' too."
+  },
+  {
+   "path": "system/script",
+   "console": "/system script add",
+   "usedFor": "the optional push step -- storing the script that posts the router's own tables to mikroview",
+   "properties": ["name", "policy", "source"],
+   "verified": "documented by MikroTik's CLI Reference, 2026-09-04. Not yet exercised: the CHR job runs the starting commands only, so nothing has run the push step on a real router."
+  },
+  {
+   "path": "system/scheduler",
+   "console": "/system scheduler add",
+   "usedFor": "the optional push step -- running that script on an interval",
+   "properties": ["name", "interval", "policy", "on-event"],
+   "verified": "documented by MikroTik's CLI Reference, 2026-09-04. Not yet exercised, for the same reason as system/script."
+  }
+ ]
+}

@@ -224,6 +224,37 @@ export interface StoreMemory {
   stored: boolean
 }
 
+// GET/PUT /api/settings/history (#910, round 42's disk group). Every
+// byte figure is in bytes; days are whole days.
+export interface HistorySettings {
+  // Whether a key file is mounted. Without one nothing is kept on disk
+  // whatever `enabled` says, and the group draws no control at all.
+  keyed: boolean
+  enabled: boolean
+  // The days allowed, 1-365.
+  days: number
+  // The byte cap applied alongside days -- whichever is reached first
+  // lets the oldest day go.
+  maxBytes: number
+  // What is actually on disk right now, or null when nothing is.
+  held: HistoryHeld | null
+  // True when the cap, not the days, is what decides the window.
+  capped: boolean
+  // Today's rate on disk, bytes per day once compressed. 0 when there is
+  // no rate to reckon from yet, in which case every "at today's rate"
+  // phrase is left off rather than invented.
+  bytesPerDay: number
+}
+
+export interface HistoryHeld {
+  // How many day files are on disk.
+  days: number
+  // The oldest and newest day files' dates, YYYY-MM-DD.
+  oldest: string
+  newest: string
+  bytes: number
+}
+
 // Mirrors internal/syslog.ListenerStats. The connection pool is finite,
 // and filling it means a router MikroView is meant to be watching gets
 // turned away with its log lines never arriving -- a silent blackout,
