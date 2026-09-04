@@ -129,8 +129,7 @@ lint:frontend:
       exists: ["frontend/package.json"]
   script:
     # The GitHub-side helper scripts (.github/scripts) have node:test suites
-    # that no workflow runs; the issue closer below depends on the matcher,
-    # so its tests run here.
+    # that no workflow runs, so they run here.
     - node --test .github/scripts/*.test.js
     - cd frontend
     - npm ci
@@ -184,6 +183,34 @@ test:frontend:
     - cd frontend
     - npm ci
     - npm test
+
+# The checks that need the frontend actually built, moved here from GitHub's
+# ci.yml `test` job (#935 step 7). Each one's reason is in the script it
+# runs: the bundle budget (frontend/scripts/check-bundle-budget.mjs, #462)
+# measures the real dist/, THIRD-PARTY-NOTICES.md is generated from what
+# that build bundled plus `go list` over the binary's modules, and the docs
+# link check (tools/docs/check-anchors.mjs) rides along because it is a
+# node one-liner with nowhere better to live.
+#
+# node plus Go in one image: the notices generator needs both. The Go
+# toolchain is the official tarball, pinned to go.mod's version; Debian's
+# packaged Go is too old to read this module.
+test:build-checks:
+  stage: test
+  image: node:22-bookworm
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+  <<: *git_safe
+  script:
+    - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
+    - export PATH="/usr/local/go/bin:$PATH" && go version
+    - (cd frontend && npm ci && npm run build)
+    - node frontend/scripts/check-bundle-budget.mjs
+    - node tools/licenses/generate-notices.mjs --check
+    - node tools/docs/check-anchors.mjs
 
 # ---------------------------------------------------------------------------
 # SECURITY — parallel jobs, diff-scoped Semgrep on MRs, full scan on dev.
@@ -274,11 +301,57 @@ security:govulncheck:
   script:
     - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
     - govulncheck -format=json ./... > govulncheck.json
-
+    # The JSON run above exits 0 whatever it finds -- that is how -format
+    # json behaves -- so on its own this job could only ever pass. The
+    # plain run is the gate: it exits non-zero on a reachable
+    # vulnerability, as GitHub's ci.yml did before #935 step 7 moved that
+    # check here.
+    - govulncheck ./...
   artifacts:
     when: always
     paths:
       - govulncheck.json
+
+# The two remaining halves of GitHub's ci.yml `security` job, moved here
+# under #935 step 7. Their long rationale is in that file's history
+# (ci.yml at 65fbc05); the short form:
+#
+# The fuzz step is a regression gate, not a campaign: it replays each
+# parser's seed corpus (the f.Add calls in its own source, #526) plus a
+# little fresh exploration, so a newly-introduced crash on attacker-shaped
+# input fails the merge request. Budgets are execution counts (`Nx`), not
+# durations, so the gate does the same work on a busy runner as an idle
+# one (#523) -- do not "tidy" them back to `30s`. A crashing input is
+# written to internal/<pkg>/testdata/fuzz/, which the artifact below
+# rescues from the discarded workspace; commit it, and plain `go test`
+# replays it forever.
+security:fuzz:
+  stage: security
+  image: golang:1.27
+  <<: [*dev_or_mr, *git_safe]
+  timeout: 15m
+  script:
+    - go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=160000x
+    - go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=590000x
+    - go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=156000x
+  artifacts:
+    when: on_failure
+    paths:
+      - internal/*/testdata/fuzz/
+    expire_in: 30 days
+
+security:npm-audit:
+  stage: security
+  image: node:22-alpine
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+  script:
+    - cd frontend
+    - npm ci
+    - npm audit --audit-level=high
 
 security:gitleaks:
   stage: security
