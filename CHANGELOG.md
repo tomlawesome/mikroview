@@ -630,7 +630,13 @@ rewritten.
   and kept as history, and GitLab closes an issue from the merge
   request itself, so the closing workflow and the job that replaced it
   (`close-issues-on-dev.yml`, then `sync:close-github-issues`) are both
-  gone. Dependabot no longer opens
+  gone. GitHub's `ci.yml` keeps only the two jobs that need Docker on
+  the runner (container smoke test, Postgres integration); everything
+  else it ran now runs on GitLab, including three checks GitLab had
+  been missing (frontend build with the bundle budget, notices and
+  doc-link checks; the fuzz regression gate; npm audit) and a
+  govulncheck run that actually fails on a finding -- the JSON-only run
+  never could. Dependabot no longer opens
   pull requests (`.github/dependabot.yml` and the dependency-review
   workflow are removed); its alerts stay on as notifications, and GitHub
   pull requests into the three mirrored branches are refused by the
