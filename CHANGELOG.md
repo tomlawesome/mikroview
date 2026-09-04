@@ -641,6 +641,13 @@ rewritten.
   workflow are removed); its alerts stay on as notifications, and GitHub
   pull requests into the three mirrored branches are refused by the
   `branch policy` check with a pointer to GitLab.
+- **The CHR exercise's report and watch moved to GitLab with it** (#943).
+  `scripts/chr-report.sh` now pushes the `chr-reports` branch to this
+  GitLab project instead of the GitHub mirror, whose token is gone; a new
+  daily-scheduled `chr-watch:run` job (`scripts/chr-watch/run.js`, decision
+  logic unchanged) reads it and opens, comments on or closes a GitLab
+  tracking issue labelled `chr-watch`, replacing the GitHub workflow of
+  the same name.
 - **"Never flag this again" now records how much is normal, and comes
   back when a host outgrows it** (#640, part A: store and engine). It
   used to silence a detector on a host outright, forever, whatever the
