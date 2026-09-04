@@ -1499,7 +1499,13 @@ flags:
   is how many observations a host needs before a flag can reach full
   confidence (see below) — a brand-new source with almost no history
   can't produce a high-confidence flag no matter how extreme its first
-  few readings look.
+  few readings look. It also keeps a separate baseline for each hour of
+  the day once a host has at least one full prior day's history at that
+  hour (the same per-hour idea off-hours activity uses, below), and that
+  per-hour baseline survives a restart — resuming from what an earlier
+  run had already learned, so the very first event at that hour
+  afterward is judged against it rather than the detector waiting up to
+  a day to notice it again.
 - **Critical-port attempts** — `criticalPortThreshold`+ attempts against
   one of `criticalPorts` within `criticalPortWindow`, from an *external*
   source only (a LAN device reaching your own router's Winbox port is
