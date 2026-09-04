@@ -42,6 +42,13 @@ set -eu
 GITHUB_REPO_HOST_PATH="github.com/tomlawesome/mikroview.git"
 REPORT_BRANCH="chr-reports"
 
+# Overridable so the push path can be exercised against a throwaway local
+# repository. Without it the only way to find out whether the orphan
+# branch is created correctly is to run it for real against GitHub, which
+# is exactly the "never tested until it matters" trap this whole job
+# exists to close (#929).
+CHR_REPORT_REMOTE="${CHR_REPORT_REMOTE:-}"
+
 log() { printf '%s\n' "$*" >&2; }
 
 dry_run=0
@@ -136,7 +143,7 @@ export GITHUB_MIRROR_TOKEN
 # doesn't satisfy git -- fail loudly instead of hanging the job.
 export GIT_TERMINAL_PROMPT=0
 
-remote_url="https://x-access-token@${GITHUB_REPO_HOST_PATH}"
+remote_url="${CHR_REPORT_REMOTE:-https://x-access-token@${GITHUB_REPO_HOST_PATH}}"
 
 if git ls-remote --exit-code --heads "$remote_url" "$REPORT_BRANCH" >/dev/null 2>&1; then
   log "chr-report: $REPORT_BRANCH exists -- adding a commit to it"
