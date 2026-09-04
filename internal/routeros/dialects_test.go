@@ -14,9 +14,10 @@ func TestRowFor(t *testing.T) {
 	}{
 		{"the floor", "7.18", true, "a", ""},
 		{"mid-range", "7.20.1", true, "a", ""},
-		{"the find-bug release", "7.24", true, "a",
-			"7.24.0 has a `find` argument-lookup bug, fixed in 7.24.1: on this release, tag rules one at a time rather than with the bulk commands."},
-		{"newest reviewed", "7.24.1", true, "a", ""},
+		{"the unexercised release", "7.24", true, "a",
+			"7.24.0 was recorded as having a `find` argument-lookup bug fixed in 7.24.1. That was a misreading of #924: the bulk tagging command was missing `where`, which is a syntax error on every release tested, not a 7.24.0 defect. Nothing about 7.24.0 has been exercised, so this row's boundary is unverified rather than known-good."},
+		{"read but not run", "7.24.1", true, "a", ""},
+		{"newest exercised", "7.24.2", true, "a", ""},
 		{"a channel suffix real routers send", "7.23.3 (stable)", true, "a", ""},
 		{"below the floor", "7.12", false, "", ""},
 		{"ahead of every row", "7.25", false, "", ""},
@@ -45,10 +46,11 @@ func TestRowFor(t *testing.T) {
 // can't drift from what the API promises without a test noticing.
 func TestRowsMatchTheContract(t *testing.T) {
 	want := []Row{
-		{From: "7.18", To: "7.23.3", Dialect: "a", VerifiedBy: "exercised on CHR 7.23.3", Note: ""},
+		{From: "7.18", To: "7.23.3", Dialect: "a", VerifiedBy: "exercised on CHR 7.23.3, 2026-09-04", Note: ""},
 		{From: "7.24", To: "7.24", Dialect: "a", VerifiedBy: "release notes read 2026-08-29",
-			Note: "7.24.0 has a `find` argument-lookup bug, fixed in 7.24.1: on this release, tag rules one at a time rather than with the bulk commands."},
+			Note: "7.24.0 was recorded as having a `find` argument-lookup bug fixed in 7.24.1. That was a misreading of #924: the bulk tagging command was missing `where`, which is a syntax error on every release tested, not a 7.24.0 defect. Nothing about 7.24.0 has been exercised, so this row's boundary is unverified rather than known-good."},
 		{From: "7.24.1", To: "7.24.1", Dialect: "a", VerifiedBy: "release notes read 2026-08-29", Note: ""},
+		{From: "7.24.2", To: "7.24.2", Dialect: "a", VerifiedBy: "exercised on CHR 7.24.2, 2026-09-04", Note: ""},
 	}
 	if len(Rows) != len(want) {
 		t.Fatalf("Rows has %d entries, want %d", len(Rows), len(want))
@@ -61,7 +63,7 @@ func TestRowsMatchTheContract(t *testing.T) {
 }
 
 func TestNewestVersion(t *testing.T) {
-	if got := NewestVersion(); got != "7.24.1" {
-		t.Errorf("NewestVersion() = %q, want %q", got, "7.24.1")
+	if got := NewestVersion(); got != "7.24.2" {
+		t.Errorf("NewestVersion() = %q, want %q", got, "7.24.2")
 	}
 }

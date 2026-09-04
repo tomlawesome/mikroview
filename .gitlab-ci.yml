@@ -397,8 +397,26 @@ sync:close-github-issues:
 chr-exercise:run:
   stage: chr-exercise
   image: golang:1.27
+  # This job gates nothing. It boots a CHR and records which of the
+  # wizard's commands RouterOS still accepts (#894); a unit test failing
+  # on this runner says nothing about that. Without `needs: []` it sits
+  # in the last stage behind lint, test and security, so any failure
+  # anywhere ahead of it skips it -- which is exactly what had happened:
+  # it had never run once, in any pipeline, because something earlier
+  # always failed first (#908, #923). A skipped job reports nothing while
+  # looking like it was considered.
+  needs: []
+  # The weekly schedule, plus an on-demand path from the web UI or the
+  # API. Without one, a change to this job can only be tested by waiting
+  # for the next Monday, which in practice means it never gets tested --
+  # the same argument the testing rules make for keeping heavy validation
+  # reachable without waiting on the trigger that normally runs it.
+  # CHR_EXERCISE stays required, so an ordinary pipeline never picks it up
+  # by accident.
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $CHR_EXERCISE == "true"'
+    - if: '$CHR_EXERCISE == "true" && $CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CHR_EXERCISE == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$CHR_EXERCISE == "true" && $CI_PIPELINE_SOURCE == "api"'
   before_script:
     # Repeated rather than merged from .git_safe: a job-level before_script
     # replaces an inherited one outright, so this job cannot have both.

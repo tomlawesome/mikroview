@@ -56,7 +56,26 @@ chr_image() {
   local img="$CHR_DIR/chr-$CHR_VERSION.img"
   if [ ! -f "$img" ]; then
     log "downloading CHR $CHR_VERSION"
-    if ! curl -fsS --retry 3 --retry-delay 2 -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"; then
+    # -C - and --retry-all-errors, not just --retry, because of how this
+    # actually fails. download.mikrotik.com resets the connection partway
+    # through the ~43 MB image rather than refusing it: curl exit 56,
+    # around 40 MB in, on the first real run of this job (pipeline 153)
+    # and reproducibly on a workstation too. Plain --retry does not cover
+    # exit 56 -- it retries timeouts and 5xx -- so the download failed
+    # once and stopped, and a job that has to fetch 43 MB every time it
+    # runs would keep meeting this.
+    #
+    # The server sends accept-ranges: bytes and answers a Range request
+    # with 206, so resuming is the fix rather than simply trying again
+    # from zero: -C - picks up at the byte it stopped at. Confirmed by
+    # resuming a download killed at 39.9 MB and getting a zip that
+    # unzip -t passes.
+    #
+    # The zip is still removed on failure below, so a partial file never
+    # survives the run that produced it -- resume happens within one
+    # curl invocation, never across two jobs.
+    if ! curl -fsS -C - --retry 10 --retry-delay 3 --retry-all-errors \
+      -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"; then
       rm -f "$zip"
       log "downloading CHR $CHR_VERSION from $BASE_URL failed -- this fixture needs to reach download.mikrotik.com"
       return 1
