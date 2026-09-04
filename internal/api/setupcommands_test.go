@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/ingest"
+	"github.com/tomlawesome/mikroview/internal/routeros"
 )
 
 func postSetupCommands(t *testing.T, base string, req setupCommandsRequest) setupCommandsResponse {
@@ -66,11 +67,19 @@ func TestHandleSetupCommandsNoVersionPicked(t *testing.T) {
 	if out.Picked != nil {
 		t.Errorf("Picked = %+v, want nil when no version was sent", out.Picked)
 	}
-	if out.RouterOS.Minimum != "7.18" || out.RouterOS.Newest != "7.24.1" {
-		t.Errorf("RouterOS bounds = %+v, want the dialect table's own bounds", out.RouterOS)
+	// Compared against the dialect table rather than against literals:
+	// what this endpoint owes the caller is the table's own bounds and
+	// its own rows, so that is the thing to assert. Literals here meant
+	// every added row broke an API test that had nothing to say about
+	// the change -- and the fix for that is always to bump the number,
+	// which tests nothing.
+	if out.RouterOS.Minimum != routeros.MinimumVersion || out.RouterOS.Newest != routeros.NewestVersion() {
+		t.Errorf("RouterOS bounds = %+v, want minimum %q and newest %q",
+			out.RouterOS, routeros.MinimumVersion, routeros.NewestVersion())
 	}
-	if len(out.RouterOS.Rows) != 3 {
-		t.Fatalf("RouterOS.Rows has %d entries, want 3", len(out.RouterOS.Rows))
+	if len(out.RouterOS.Rows) != len(routeros.Rows) {
+		t.Fatalf("RouterOS.Rows has %d entries, want %d -- the endpoint must surface every row",
+			len(out.RouterOS.Rows), len(routeros.Rows))
 	}
 	if !strings.Contains(out.Steps.CaTrust.Commands, "https://mv.example.net:8443/ca.crt") {
 		t.Errorf("caTrust commands missing the address: %s", out.Steps.CaTrust.Commands)
