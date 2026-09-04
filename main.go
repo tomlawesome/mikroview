@@ -10,6 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	// Jitter only -- spreading instances' daily blocklist fetches so they
+	// do not all arrive at 00:00 UTC. Nothing drawn from this is a
+	// secret, a token or an identifier, and an observer who predicts when
+	// an instance fetches a public list learns nothing worth having.
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -2043,7 +2048,14 @@ func runHealthcheck() int {
 		// Checking itself, from inside the same container -- there's no
 		// trust boundary being crossed by skipping verification of its
 		// own (possibly self-signed) certificate here.
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		//
+		// Trusting the certificate properly instead was considered and
+		// rejected: it would make the container's health depend on the
+		// cert naming the loopback address it is reached on, and a
+		// mismatch would fail the healthcheck and have Docker restart a
+		// process that is actually fine.
+		// #nosec G402 -- loopback to this same process, over a certificate it generated itself.
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}
 	}
 	resp, err := client.Get(scheme + "://" + addr + "/api/healthz")
 	if err != nil {
