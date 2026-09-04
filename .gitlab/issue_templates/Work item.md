@@ -1,11 +1,3 @@
----
-name: Work item
-about: A feature, fix or investigation
-title: ''
-labels: ''
-assignees: ''
----
-
 <!--
   KEEP THIS SECTION CURRENT.
 

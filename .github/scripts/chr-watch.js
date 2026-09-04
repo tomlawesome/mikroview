@@ -1,10 +1,9 @@
 'use strict';
 
-// Decision logic for chr-watch.yml (#929), pulled out of the workflow for
-// the same reason close-issues-matcher.js was: GitHub cannot dry-run a
-// schedule trigger, so this is the only place these rules can be exercised
-// before they go live. See close-issues-matcher.test.js for the sibling
-// this follows.
+// Decision logic for chr-watch.yml (#929), pulled out of the workflow
+// because GitHub cannot dry-run a schedule trigger: this module is the only
+// place these rules can be exercised before they go live, in
+// chr-watch.test.js.
 //
 // The GitLab CHR job writes chr/last-run.json to the chr-reports branch on
 // every run, pass or fail (#929's issue body has the schema). This module

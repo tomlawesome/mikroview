@@ -108,7 +108,7 @@ assuming the checkout had done the right thing.
 ## Where development happens: GitLab, with GitHub as the mirror
 
 Owner decision, 2026-09-04, tracked on #935: mikroview is developed on the
-self-hosted GitLab instance, project `ai/mikroview` (project id 43), remote
+self-hosted GitLab instance, project `ai/mikroview` (project id 53), remote
 name `gitlab`. Branches, merge requests and the `dev` → `preview` → `main`
 promotions all happen there; full CI is `.gitlab-ci.yml` at the repo root.
 GitHub (`origin`) is a read-only mirror of those three branches, and keeps
@@ -129,29 +129,27 @@ line in `-d`).
 
 Mechanics: after a merge, `sync:mirror-to-github` in `.gitlab-ci.yml` pushes
 the branch to GitHub over SSH with a deploy key (one repository, push only —
-deliberately not a token, so a leak of it cannot reach anything else).
-`sync:close-github-issues` reads the merged merge request's title and
-description and closes the GitHub issues it names, via
-`.github/scripts/close-issues-from-gitlab.js` and the shared
-`close-issues-matcher.js` rules. Both jobs run only when the
-`MIRROR_TO_GITHUB` CI/CD variable is `true`. `policy:promotion-hop` fails a
-merge request into `preview` unless it comes from `dev`, and into `main`
-unless it comes from `preview`.
+deliberately not a token, so a leak of it cannot reach anything else). It
+runs only when the `MIRROR_TO_GITHUB` CI/CD variable is `true`.
+`policy:promotion-hop` fails a merge request into `preview` unless it comes
+from `dev`, and into `main` unless it comes from `preview`.
 
-Issues, planning and decisions stay on GitHub, per the rest of this file.
-`Closes #N` goes in the merge request description — GitLab's default merge
-commit carries only the title, not the description, so it will not fire from
-there. Check the issue after every merge anyway, and close it by hand with
-evidence if the job missed it: a red `sync:close-github-issues` is the
-signal, it is not `allow_failure`.
+Issues, planning and decisions live on GitLab too (owner decision,
+2026-09-04, on #935): the whole GitHub tracker was imported here, keeping
+every issue and merge request number, and GitHub's issues are closed and
+left as the historical copy. `Closes #N` goes in the merge request
+description as well as the commit message. GitLab closes from either, but
+only on a merge into the default branch — which here is `dev`, so an
+ordinary merge closes its issue with no extra job. Check the issue after
+every merge anyway.
 
 Credentials, names only — values are never written down here. The agent's
 `glab` config lives in `~/.config/glab-claude/` (`GLAB_CONFIG_DIR`, host
 `gitlab.tomlawson.io`); git over HTTPS to `gitlab` uses that same token
 through `GIT_ASKPASS`; the gate loop uses a read-only deploy token in
 `~/.config/mikroview/gitlab-credentials`. On the GitLab side, the CI/CD
-variables are `GITHUB_MIRROR_SSH_KEY` (file, protected), `GITHUB_ISSUES_TOKEN`
-and `GITLAB_MR_TOKEN`.
+variables are `GITHUB_MIRROR_SSH_KEY` (file, protected), `MIRROR_TO_GITHUB`
+(protected) and `GITLAB_MR_TOKEN`.
 
 See
 [docs/decisions/gitlab-ci-root-in-container-test-failure.md](docs/decisions/gitlab-ci-root-in-container-test-failure.md)
@@ -396,13 +394,19 @@ plain language.
 
 ## Issues
 
-Open does not mean undone: `Closes #N` fires only on the default branch, so
-check the branch before picking an issue up. On a merge to `dev` the GitLab
-`sync:close-github-issues` job does the closing from the merge request
-description instead; see the GitLab section.
+Issues live on GitLab (`glab issue`, not `gh issue`). They were imported
+from GitHub with their numbers intact, so #97 there is #97 here; GitHub's
+copies are closed and read-only history. Merge requests kept their old pull
+request numbers too, but GitLab counts issues and merge requests separately
+where GitHub shared one sequence, so from now on an issue and a merge
+request can carry the same number and mean different things. Always write
+which — `#941` or `!941` — and never assume one implies the other.
+
+Open does not mean undone: GitLab closes an issue only on a merge into the
+default branch. Here that branch is `dev`, so a normal merge closes it.
 
 Issue-body, decision-recording and supersession rules follow the global
-agent instructions. Project-specific: `.github/ISSUE_TEMPLATE/work-item.md`
+agent instructions. Project-specific: `.gitlab/issue_templates/Work item.md`
 puts the current plan at the top for new issues; existing issues get
 fixed as they are picked up.
 
