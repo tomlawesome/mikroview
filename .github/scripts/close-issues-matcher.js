@@ -1,7 +1,8 @@
 'use strict';
 
-// Matching logic for close-issues-on-dev.yml, pulled out of the workflow so
-// it can be unit tested without a live GitHub Actions run. See
+// Matching logic for close-issues-from-gitlab.js (and, before #935, the
+// close-issues-on-dev.yml workflow), pulled out so it can be unit tested
+// without a live CI run. See
 // close-issues-matcher.test.js and fixtures/ for the real PR bodies that
 // exposed the two defects this module fixes (issue #503):
 //
