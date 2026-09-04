@@ -12,7 +12,7 @@
 // a browser -- memory.ts's own reasoning. Bytes throughout; days are
 // whole days.
 
-import type { HistoryHeld, HistorySettings } from './types'
+import type { HistoryHeld, HistorySettings, PersistenceInfo } from './types'
 import { TRACK_X0, TRACK_X1, formatHours, formatSize } from './memory'
 
 export const DAYS_MIN = 1
@@ -147,8 +147,12 @@ export function capMark(maxBytes: number, bytesPerDay: number): { days: number; 
 
 // --- proposals ---------------------------------------------------------------
 
-/** Round 42's states: the section classes disk.html switches on `#set`. */
-export type DiskPhase = 'rest' | 'dshrink' | 'dgrow' | 'dcap' | 'doff' | 'dcapped' | 'dstopped' | 'dnokey'
+/**
+ * Round 42's states: the section classes disk.html switches on `#set`,
+ * plus round 43's `dfail` -- the settings GET did not answer, so the
+ * group is one row saying so rather than absent.
+ */
+export type DiskPhase = 'rest' | 'dshrink' | 'dgrow' | 'dcap' | 'doff' | 'dcapped' | 'dstopped' | 'dnokey' | 'dfail'
 
 /** Which of those a proposal puts the group in. */
 export type ProposalKind = 'dshrink' | 'dgrow' | 'dcap' | 'doff'
@@ -385,6 +389,47 @@ export function barLabel(s: HistorySettings, locale?: string): string | null {
 export function memoryHint(reachHours: number | null): string {
   const span = reachHours !== null && reachHours > 0 ? `, ~${formatHours(reachHours)} of them at today's rate` : ''
   return `nothing on disk — events live in memory only${span}; on keeps those and every day after`
+}
+
+/**
+ * restartRow is the memory group's `on restart` row (round 43, #921):
+ * the buffer alone, and what outlives it. The buffer always clears --
+ * nothing refills the ring from disk, and the live scenes start empty
+ * after a restart whatever the disk holds -- so every reading starts
+ * the same way and the second clause is the disk group's state:
+ *
+ *   on:      "the buffer clears — the 27 days on disk stay; trying a
+ *             watcher reads them"
+ *   off:     "the buffer clears — nothing outlives it; days can be kept
+ *             on disk below"
+ *   no key:  "the buffer clears — nothing outlives it"
+ *   unknown: "the buffer clears" (null: the GET refused or failed, or
+ *             this caller may not ask)
+ *
+ * The reader is named because it is the only one: a watcher's try reads
+ * disk then memory; the Fall and the stream read the buffer only.
+ */
+export function restartRow(s: HistorySettings | null): string {
+  const clears = 'the buffer clears'
+  if (!s) return clears
+  if (!s.keyed) return `${clears} — nothing outlives it`
+  if (!s.enabled) return `${clears} — nothing outlives it; days can be kept on disk below`
+  const n = s.held?.days ?? 0
+  if (n === 1) return `${clears} — the 1 day on disk stays; trying a watcher reads it`
+  if (n > 1) return `${clears} — the ${n} days on disk stay; trying a watcher reads them`
+  return `${clears} — what is on disk stays; trying a watcher reads it`
+}
+
+/**
+ * stateRow is the disk group's `state` row: the other thing kept on
+ * disk, beside the key. Which backend the state store (flags,
+ * definitions, watchlist entries, entities, tokens) actually uses,
+ * from GET /api/persistence; null for a caller it refuses.
+ */
+export function stateRow(info: PersistenceInfo | null): string | null {
+  if (!info) return null
+  const backend = info.backend === 'postgres' ? 'Postgres' : `file store · ${info.dir ?? '—'}`
+  return `${backend} — flags, definitions, watchlist, entities, tokens`
 }
 
 /** The link to the setup guide's own section on mounting a key. */
