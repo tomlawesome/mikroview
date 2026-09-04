@@ -71,13 +71,35 @@ chr_image() {
     # resuming a download killed at 39.9 MB and getting a zip that
     # unzip -t passes.
     #
-    # The zip is still removed on failure below, so a partial file never
-    # survives the run that produced it -- resume happens within one
-    # curl invocation, never across two jobs.
-    if ! curl -fsS -C - --retry 10 --retry-delay 3 --retry-all-errors \
-      -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"; then
+    # Even with that, the reset has been reproduced landing inside
+    # curl's own --retry budget often enough (#929, two hosts) that one
+    # curl invocation still isn't a sure thing. So there is a second,
+    # outer retry loop here: up to three whole attempts, a short pause
+    # between them, each one resuming (-C -) from whatever the last
+    # attempt left in $zip rather than starting over. Three failures in
+    # a row is no longer "the network blipped" -- it is a real failure,
+    # and the caller (scripts/routeros-chr-exercise.sh, and the
+    # chr-exercise:run CI job on top of it) reports it as one rather
+    # than as an exercise failure, since nothing about RouterOS itself
+    # was even reached.
+    #
+    # The zip is still removed once all attempts are exhausted, so a
+    # partial file never survives the run that produced it.
+    local ok=0
+    local attempt=1
+    while [ "$attempt" -le 3 ]; do
+      if curl -fsS -C - --retry 10 --retry-delay 3 --retry-all-errors \
+        -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"; then
+        ok=1
+        break
+      fi
+      log "downloading CHR $CHR_VERSION from $BASE_URL failed (attempt $attempt/3)"
+      attempt=$((attempt + 1))
+      [ "$attempt" -le 3 ] && sleep 10
+    done
+    if [ "$ok" -ne 1 ]; then
       rm -f "$zip"
-      log "downloading CHR $CHR_VERSION from $BASE_URL failed -- this fixture needs to reach download.mikrotik.com"
+      log "downloading CHR $CHR_VERSION from $BASE_URL failed after 3 attempts -- this fixture needs to reach download.mikrotik.com"
       return 1
     fi
     if ! unzip -oq "$zip" -d "$CHR_DIR"; then
