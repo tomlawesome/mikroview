@@ -832,3 +832,127 @@ func TestShippedActivitySpike_BucketLearnsAcrossNights(t *testing.T) {
 		t.Fatalf("expected the flag untouched by night two (Count=11, LastSeen=night one's last burst event), got Count=%d LastSeen=%v", got.Count, got.LastSeen)
 	}
 }
+
+// newActivitySpikeWithStateAndParams is newShippedActivitySpikeDefinition
+// and newActivitySpikeWithState (shipped_export_test.go) combined: a
+// StateStore-backed definition with operator-set params, needed here so
+// two restarted definitions can share both a store and the small
+// window/threshold TestShippedActivitySpike_BucketLearnsAcrossNights
+// uses to make a bucket mature quickly.
+func newActivitySpikeWithStateAndParams(t *testing.T, fs *flags.Store, state *StateStore, params Params) *activitySpikeDefinition {
+	t.Helper()
+	full := Params{
+		"threshold":               200,
+		"window":                  (60 * time.Second).String(),
+		"baselineMultiplier":      3.0,
+		"warmupSamples":           20,
+		"vpnInterfaces":           []string{},
+		"vpnConfidenceMultiplier": 1.5,
+		"updateCadence":           "perEvent",
+		"baselineFloorDuration":   time.Duration(0).String(),
+	}
+	for k, v := range params {
+		full[k] = v
+	}
+	def := Definition{
+		ID:          "activity_spike",
+		Name:        "Activity spike",
+		Intent:      IntentDetection,
+		Kind:        KindProgrammatic,
+		Enabled:     true,
+		Params:      full,
+		ParamSchema: ActivitySpikeParamSchema,
+		Provenance:  Provenance{Origin: ProvenanceShipped},
+	}
+	built, err := BuildShippedProgrammaticDefinition(def, ShippedDeps{State: state})
+	if err != nil {
+		t.Fatalf("BuildShippedProgrammaticDefinition(activity_spike): %v", err)
+	}
+	d := built.(*activitySpikeDefinition)
+	d.SetSink(FlagsSink(fs))
+	return d
+}
+
+// TestShippedActivitySpike_BucketResumesAfterRestart is issue #902: a
+// restart used to lose a persisted, Ready hour bucket until the next
+// day's own rollover happened to touch it. rollHourBucket's prevDay==""
+// branch -- "first time this hour has ever been seen for this source"
+// -- is both the true first-ever case and every first-since-restart
+// case (a fresh process's in-memory state always starts there), but it
+// used to return without ever consulting the StateStore, so a bucket an
+// earlier process had already learned sat invisible for up to a day.
+//
+// Drives one definition against a real StateStore across a day boundary
+// until the hour-22 bucket for one source is Ready and persisted, then
+// builds a second, fresh definition against the same store (the
+// restart) and evaluates a single event for that same source and hour:
+// with the fix (buckets.resume in that branch), this first post-restart
+// event already sees the resumed bucket, rather than needing a day
+// boundary of its own.
+func TestShippedActivitySpike_BucketResumesAfterRestart(t *testing.T) {
+	withEagerBaselinePersist(t)
+	state, err := OpenStateStoreWithBackend(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := Params{"threshold": 20, "window": (5 * time.Second).String(), "warmupSamples": 50}
+
+	fs1 := newTestFlagsStore(t)
+	d1 := newActivitySpikeWithStateAndParams(t, fs1, state, params)
+	ip := "198.51.100.9"
+
+	night1 := time.Date(2024, 3, 1, 22, 0, 0, 0, time.UTC)
+	burst := func(d *activitySpikeDefinition, start time.Time) {
+		for i := 0; i < 30; i++ {
+			d.Evaluate(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 80, ConnState: "new",
+				ReceivedAt: start.Add(time.Duration(i) * 100 * time.Millisecond)})
+		}
+	}
+
+	burst(d1, night1)
+	if got := asFlagOfType(fs1); got == nil {
+		t.Fatal("expected night one's spike to fire against the fallback EMA")
+	}
+	// Thaw before the day rolls over, same as
+	// TestShippedActivitySpike_BucketLearnsAcrossNights -- otherwise
+	// rollHourBucket would see the source still frozen at the day
+	// boundary and withhold night one's fold-in.
+	d1.Evaluate(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 80, ConnState: "new",
+		ReceivedAt: night1.Add(10 * time.Second)})
+
+	// Day two: one event at hour 22 folds night one's peak (30) into the
+	// hour-22 bucket and persists it -- still on d1, the process that
+	// learned it.
+	night2 := night1.Add(24 * time.Hour)
+	d1.Evaluate(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 80, ConnState: "new", ReceivedAt: night2})
+
+	key := activityBucketKey(ip, 22)
+	snap, ok := d1.buckets.snapshot(key, night2)
+	if !ok || !snap.Ready || snap.Value != 30 {
+		t.Fatalf("test setup: expected a Ready hour-22 bucket with Value=30 before the restart, got %+v (ok=%v)", snap, ok)
+	}
+	if _, ok := state.Get("activity_spike#hourly", key); !ok {
+		t.Fatal("test setup: expected the hour-22 bucket to be persisted before the restart")
+	}
+
+	// The restart: a brand-new definition, against the same StateStore,
+	// with nothing yet in its own in-memory buckets.
+	fs2 := newTestFlagsStore(t)
+	d2 := newActivitySpikeWithStateAndParams(t, fs2, state, params)
+	if _, ok := d2.buckets.snapshot(key, night2); ok {
+		t.Fatal("test setup: expected the restarted definition to start with no in-memory bucket state")
+	}
+
+	// A single event for the same source at the same hour -- this
+	// definition's first-ever sight of hour 22, exactly the buggy branch.
+	restartAt := night2.Add(1 * time.Minute)
+	d2.Evaluate(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 80, ConnState: "new", ReceivedAt: restartAt})
+
+	resumed, ok := d2.buckets.snapshot(key, restartAt)
+	if !ok || !resumed.Ready {
+		t.Fatalf("expected the first event after a restart to resume the persisted, Ready hour-22 bucket immediately, got %+v (ok=%v)", resumed, ok)
+	}
+	if resumed.Value != 30 {
+		t.Errorf("resumed hour-22 bucket value = %.1f, want 30 (night one's peak, learned before the restart)", resumed.Value)
+	}
+}
