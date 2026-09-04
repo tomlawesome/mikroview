@@ -37,11 +37,16 @@ const (
 	// bump both together, in the same change that adds or extends a row,
 	// or that test fails.
 	//
-	// Reviewed, not exercised: 7.23.3 was verified against a real
-	// router; 7.24 and 7.24.1 were read from release notes only. See
-	// dialects.go's Rows for which, when, and what each review found --
-	// in particular the 7.24.0 find-lookup bug recorded on that row's
-	// Note.
+	// Which were exercised and which only read: 7.23.3 and 7.24.2 were
+	// run against a real CHR on 2026-09-04 by the exercise job (#894);
+	// 7.24 and 7.24.1 have only ever been read from release notes. See
+	// dialects.go's Rows for which, when, and what each found.
+	//
+	// The "7.24.0 find-lookup bug" this comment used to point at was not
+	// one. It was #924: the bulk tagging command was written
+	// [find !dynamic ...] where RouterOS wants [find where !dynamic ...],
+	// which is a syntax error on 7.23.3 as much as on 7.24.2. It was
+	// attributed to a version because nobody had run it on any version.
 	//
 	// One review finding has nowhere in a per-row Note to live, because
 	// it isn't about any one version range: 7.24 made the console
@@ -49,7 +54,7 @@ const (
 	// releases tolerated them silently. Nothing mikroview emits relies
 	// on a bad parameter being tolerated, but it raises the cost of any
 	// command that turns out to have one.
-	ReviewedVersion = "7.24.1"
+	ReviewedVersion = "7.24.2"
 )
 
 // Standing is where a router's reported version sits relative to what

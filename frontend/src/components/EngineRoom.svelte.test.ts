@@ -17,7 +17,7 @@
 // a read-only rendering of one.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/svelte'
+import { cleanup, render, screen, fireEvent, within } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
@@ -81,6 +81,16 @@ vi.mock('../lib/api', () => ({
   })),
   signOutEverywhere: vi.fn(async () => null),
   fetchPersistence: vi.fn(async () => ({ backend: 'file', dir: '/var/lib/mikroview' })),
+  fetchHistorySettings: vi.fn(async () => ({
+    keyed: true,
+    enabled: true,
+    days: 30,
+    maxBytes: 1024 * 1024 * 1024,
+    held: { days: 27, oldest: '2026-08-07', newest: '2026-09-02', bytes: 812 * 1024 * 1024 },
+    capped: false,
+    bytesPerDay: 30 * 1024 * 1024,
+  })),
+  setHistorySettings: vi.fn(),
   fetchAuthSession: vi.fn(async () => ({
     setupRequired: false,
     authenticated: true,
@@ -99,8 +109,11 @@ import { usersState } from '../lib/users.svelte'
 import { tokensState } from '../lib/tokens.svelte'
 import { deckOrderState } from '../lib/deckOrder.svelte'
 import { persistenceState } from '../lib/persistence.svelte'
+import { fetchHistorySettings as fetchHistorySettingsReal } from '../lib/api'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
+
+const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
 
 function stats(overrides: Partial<Stats> = {}): Stats {
   return {
@@ -531,19 +544,105 @@ describe('The settings shelf (#633)', () => {
     expect(screen.queryByRole('button', { name: '15 ports / 60 s' })).toBeNull()
   })
 
-  it('memory states persistence live truth: the file backend and its directory, and that the buffer is memory-only', async () => {
+  it('memory states what outlives a restart, and the disk group carries the state store (#921)', async () => {
+    // Round 43: the buffer always clears; with history on, the days on
+    // disk stay and a watcher's try reads them. The state store is the
+    // disk group's `state` row now, not memory's.
     authState.state = 'authenticated'
     authState.role = 'admin'
     persistenceState.info = { backend: 'file', dir: '/var/lib/mikroview' }
     render(EngineRoom)
     await settle()
+    await settle()
 
-    expect(screen.getByText('persistence')).toBeTruthy()
-    expect(screen.getByText(/file store · \/var\/lib\/mikroview/)).toBeTruthy()
+    expect(screen.getByText('on restart')).toBeTruthy()
+    expect(screen.getByText('the buffer clears — the 27 days on disk stay; trying a watcher reads them')).toBeTruthy()
+    expect(screen.queryByText('persistence')).toBeNull()
+    expect(screen.queryByText(/memory-only/)).toBeNull()
+
+    const disk = document.getElementById('diskg') as HTMLElement
+    expect(within(disk).getByText('state')).toBeTruthy()
     expect(
-      screen.getByText(/holds flags, definitions, watchlist entries, entities and tokens/),
+      within(disk).getByText('file store · /var/lib/mikroview — flags, definitions, watchlist, entities, tokens'),
     ).toBeTruthy()
-    expect(screen.getByText(/the event buffer above is memory-only and clears on restart/)).toBeTruthy()
+    // beside the key: the row after it
+    const labels = [...disk.querySelectorAll('.orow > span:first-child')].map((el) => el.textContent)
+    expect(labels).toEqual(['on disk', 'allowed', 'key', 'state'])
+  })
+
+  it('on restart reads per the disk state: off with a key, and no key (#921)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchHistorySettings.mockResolvedValueOnce({
+      keyed: true,
+      enabled: false,
+      days: 30,
+      maxBytes: 1024 * 1024 * 1024,
+      held: null,
+      capped: false,
+      bytesPerDay: 0,
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+    expect(screen.getByText('the buffer clears — nothing outlives it; days can be kept on disk below')).toBeTruthy()
+    cleanup()
+
+    fetchHistorySettings.mockResolvedValueOnce({
+      keyed: false,
+      enabled: false,
+      days: 30,
+      maxBytes: 1024 * 1024 * 1024,
+      held: null,
+      capped: false,
+      bytesPerDay: 0,
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+    expect(screen.getByText('the buffer clears — nothing outlives it')).toBeTruthy()
+  })
+
+  it('when the history GET fails for a reason other than role, the disk group stays and asks again (#921)', async () => {
+    // Round 42's gap 9, round 43's `dfail`: an older server or an error
+    // leaves one row saying so, with a link that asks again -- not an
+    // absent group and not a switch nothing stands behind.
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchHistorySettings.mockRejectedValueOnce(Object.assign(new Error('503'), { status: 503 }))
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const disk = document.getElementById('diskg') as HTMLElement
+    expect(disk).toBeTruthy()
+    expect(disk.classList.contains('dfail')).toBe(true)
+    expect(within(disk).getByText(/unknown — the server did not answer/)).toBeTruthy()
+    expect(within(disk).queryByRole('slider')).toBeNull()
+    // memory claims the least meanwhile
+    expect(screen.getByText('the buffer clears')).toBeTruthy()
+
+    await fireEvent.click(within(disk).getByRole('button', { name: 'ask again' }))
+    await settle()
+    await settle()
+    expect(fetchHistorySettings).toHaveBeenCalledTimes(2)
+    expect(document.getElementById('diskg')?.classList.contains('dfail')).toBe(false)
+    expect(screen.getByRole('slider', { name: 'Days kept on disk' })).toBeTruthy()
+  })
+
+  it('the disk group sits directly after memory, with its statements (#910)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const disk = document.getElementById('diskg')
+    expect(disk).toBeTruthy()
+    expect(disk?.previousElementSibling?.id).toBe('memg')
+    expect(disk?.querySelector('h3')?.textContent).toBe('disk')
+    expect(screen.getByRole('slider', { name: 'Days kept on disk' })).toBeTruthy()
+    expect(screen.getByText(/^27 days · since .* · 812 MiB — filling$/)).toBeTruthy()
   })
 
   it('states Postgres, not a file path, when that backend is live', async () => {
@@ -557,18 +656,20 @@ describe('The settings shelf (#633)', () => {
     expect(screen.queryByText(/file store/)).toBeNull()
   })
 
-  it('a viewer without access to GET /api/persistence sees only the buffer fact, not a fabricated backend', async () => {
-    // #677: the route is admin-gated (a directory is infrastructure
-    // detail, same reasoning /api/config/problems already applies), so
-    // persistenceState.info stays null for anyone else -- absent, not
-    // disabled, the same grammar the rest of Settings' admin-only facts
-    // already follow.
+  it('a viewer sees no disk group and no state store, and on restart claims only that the buffer clears', async () => {
+    // Both GETs are admin-gated (a directory is infrastructure detail,
+    // the reasoning /api/config/problems already applies), so a viewer
+    // gets absent-not-disabled: no group, no backend, and the memory
+    // row's least claim.
     authState.state = 'authenticated'
     authState.role = 'viewer'
+    fetchHistorySettings.mockRejectedValueOnce(Object.assign(new Error('403'), { status: 403 }))
     render(EngineRoom)
     await settle()
+    await settle()
 
-    expect(screen.getByText('the event buffer above is memory-only and clears on restart')).toBeTruthy()
+    expect(screen.getByText('the buffer clears')).toBeTruthy()
+    expect(document.getElementById('diskg')).toBeNull()
     expect(screen.queryByText(/file store/)).toBeNull()
     expect(screen.queryByText(/Postgres/)).toBeNull()
   })

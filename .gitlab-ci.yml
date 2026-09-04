@@ -8,13 +8,13 @@
 # do not treat a result from this pipeline as a gate on
 # anything -- work through GitHub pull requests as normal.
 #
-# Blocker on activation: the `sync` stage below has never run
-# successfully. It needs a GITHUB_MIRROR_TOKEN CI/CD variable
-# that does not exist yet, so cutting over now would silently
-# stop GitHub issues closing on merge to `dev`.
+# The cutover is now planned as GitLab-first delivery with GitHub as a
+# read-only mirror of every branch -- #935 holds the steps and their
+# order. The `sync` stage below is the switch: it is inert until the
+# owner sets a MIRROR_TO_GITHUB=true CI/CD variable at the flip (step 4),
+# so a push to `dev` here cannot mirror or close GitHub issues by
+# accident before the branches are reconciled.
 #
-# Status and remaining work:
-# gitlab-ci-plan/07-implementation-status-and-handover.md
 # Current instruction: AGENTS.md, "Where code review happens".
 #
 # One deliberate, scoped exception to all of the above: the
@@ -173,26 +173,74 @@ test:frontend:
 
 security:semgrep:
   stage: security
-  image: semgrep/semgrep:1.170.1
+  image: semgrep/semgrep:1.176.0
   <<: *dev_or_mr
   script:
+    # The image sets SEMGREP_IN_DOCKER, which makes semgrep insist the
+    # code is bind-mounted at /src and chdir there before it looks at
+    # anything (config_resolver.adjust_for_docker). GitLab's docker
+    # executor mounts the checkout at $CI_PROJECT_DIR instead and gives
+    # a job no way to add a volume, so /src is empty and every run died
+    # with "Detected Docker environment without a code volume" -- before
+    # scanning a single file. Unsetting it here leaves semgrep working
+    # from the job's own directory, which is where the code actually is.
+    # Reproduced and the fix confirmed locally under the same image
+    # (#912).
+    - unset SEMGREP_IN_DOCKER
+    # A rule that exceeds --timeout is skipped for that file, and after
+    # --timeout-threshold of them semgrep abandons the file entirely and
+    # still exits 0. So the job got *greener* the slower the runner was,
+    # and a file could contribute no findings without saying so. Two runs
+    # over an unchanged tree disagreed: scripts/seed-demo.py reported
+    # disabled-cert-validation on one and was abandoned on the other
+    # (#918).
+    #
+    # 120s rather than the 5s default so the slow rules finish, threshold
+    # 0 so no file is ever abandoned, and the grep below so that a
+    # timeout that still happens fails the job instead of quietly
+    # shrinking the scan. An incomplete scan is not a pass.
     - |
+      set -o pipefail
+      run_semgrep() {
+        semgrep scan --config p/security-audit --config p/owasp-top-ten \
+          --timeout 120 --timeout-threshold 0 \
+          --sarif --output semgrep.sarif --error "$@" 2>&1 | tee semgrep.log
+      }
+      status=0
       if [ -n "$CI_MERGE_REQUEST_DIFF_BASE_SHA" ]; then
-        semgrep scan --config p/security-audit --config p/owasp-top-ten \
-          --baseline-commit "$CI_MERGE_REQUEST_DIFF_BASE_SHA" \
-          --sarif --output semgrep.sarif --error
+        run_semgrep --baseline-commit "$CI_MERGE_REQUEST_DIFF_BASE_SHA" || status=$?
       else
-        semgrep scan --config p/security-audit --config p/owasp-top-ten \
-          --sarif --output semgrep.sarif --error
+        run_semgrep || status=$?
       fi
+      if grep -q 'timeout error' semgrep.log; then
+        echo "A rule timed out, so this scan covered less than it reported on (#918):"
+        grep 'timeout error' semgrep.log
+        exit 1
+      fi
+      exit $status
   artifacts:
     when: always
     paths:
       - semgrep.sarif
+      - semgrep.log
 
 security:gosec:
   stage: security
-  image: securego/gosec:2.28.0
+  # ghcr, not Docker Hub. gosec stopped publishing to Docker Hub after
+  # 2.24.6, so `securego/gosec:2.28.0` resolved to nothing and the job
+  # failed before it started -- an image pull failure, which reads like
+  # a registry outage rather than a tag that was never published.
+  # Bumped to the current release while here, per AGENTS.md's
+  # pin-to-latest rule (#912).
+  #
+  # entrypoint: [""] for the same reason gitleaks and trivy below carry
+  # it: this image's entrypoint is a wrapper that execs `/bin/gosec $@`,
+  # so GitLab's generated shell script would arrive as gosec's arguments
+  # rather than as a script to run. That is the failure this job would
+  # have hit next, once the pull succeeded.
+  image:
+    name: ghcr.io/securego/gosec:2.29.0
+    entrypoint: [""]
   <<: *dev_or_mr
   script:
     - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
@@ -220,8 +268,30 @@ security:gitleaks:
     name: ghcr.io/gitleaks/gitleaks:v8.30.1
     entrypoint: [""]
   <<: *dev_or_mr
+  variables:
+    # The whole history, not GitLab's shallow default. This job reported
+    # 28 leaks that are not leaks, and the depth is why: `.gitleaksignore`
+    # pins each accepted finding to commit:path:rule:line, and a shallow
+    # clone's oldest commit presents the entire tree as newly added under
+    # *its* SHA rather than the SHA that really introduced each line. So
+    # every fingerprint missed, and every fixture key in
+    # recovery_prompt_test.go came back as a finding. The byte counts say
+    # the same thing: 177MB over 102 commits shallow, against 20MB over
+    # 999 full, because a truncated history has no diffs to scan, only
+    # whole files.
+    #
+    # Reproduced with `git clone --depth 20` of this repo and the job's
+    # own command: 24 findings, all in the file `.gitleaksignore` already
+    # covers. A full clone finds none (#912).
+    GIT_DEPTH: 0
   script:
-    - gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --exit-code 1
+    # --redact for the same reason secret-scan.yml gives on the GitHub
+    # side: without it, a job that finds a real secret republishes it into
+    # the build log and into an artifact anyone with repository access can
+    # download. The finding still names the file, the rule and the commit,
+    # which is what anyone fixing it needs. This lane had no redaction at
+    # all until #912.
+    - gitleaks detect --source . --redact --report-format sarif --report-path gitleaks.sarif --exit-code 1
   artifacts:
     when: always
     paths:
@@ -248,22 +318,31 @@ security:trivy-fs:
   allow_failure: true
 
 # ---------------------------------------------------------------------------
-# SYNC — only on an actual push to dev (not MR pipelines). Mirrors dev to
-# GitHub so the existing GitHub dev->preview->main flow keeps working
-# unchanged, then closes whatever GitHub issues the merge commit references
-# (replaces close-issues-on-dev.yml, which never fires now that merges into
-# dev are GitLab MRs, not GitHub PRs).
+# SYNC — only on an actual push to dev (not MR pipelines), and only once
+# the owner has set MIRROR_TO_GITHUB=true as a project CI/CD variable.
+# Until then both jobs are skipped: GitLab's `dev` is a fork of GitHub's
+# (#935), and a push from a forked branch would either be refused
+# non-fast-forward or, worse, close GitHub issues from a commit GitHub
+# never received. The variable is the deliberate flip (#935 step 4);
+# nothing in this file sets it.
+#
+# Once on: mirrors dev to GitHub, then closes whatever GitHub issues the
+# merge commit references (replaces close-issues-on-dev.yml, which stops
+# firing once merges into dev are GitLab MRs, not GitHub PRs). Under the
+# everything-moves decision on #935 this job also has to carry `preview`
+# and `main` — that change belongs to step 4 with the flip, not here.
 #
 # Needs a GITHUB_MIRROR_TOKEN CI/CD variable (masked+protected): a
 # fine-grained GitHub PAT scoped to just this repo, contents:write +
-# issues:write. Not yet created — see gitlab-ci-plan project-settings task.
+# issues:write. It exists on the project; its scopes and expiry are the
+# owner's to check.
 # ---------------------------------------------------------------------------
 
 sync:mirror-to-github:
   stage: sync
   image: alpine/git:2.47.3
   rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true"'
   script:
     - git remote add github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git" 2>/dev/null || git remote set-url github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git"
     - git push github HEAD:dev
@@ -274,7 +353,7 @@ sync:close-github-issues:
   needs:
     - sync:mirror-to-github
   rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true"'
   allow_failure: true
   script:
     - apk add --no-cache curl git
@@ -327,8 +406,26 @@ sync:close-github-issues:
 chr-exercise:run:
   stage: chr-exercise
   image: golang:1.27
+  # This job gates nothing. It boots a CHR and records which of the
+  # wizard's commands RouterOS still accepts (#894); a unit test failing
+  # on this runner says nothing about that. Without `needs: []` it sits
+  # in the last stage behind lint, test and security, so any failure
+  # anywhere ahead of it skips it -- which is exactly what had happened:
+  # it had never run once, in any pipeline, because something earlier
+  # always failed first (#908, #923). A skipped job reports nothing while
+  # looking like it was considered.
+  needs: []
+  # The weekly schedule, plus an on-demand path from the web UI or the
+  # API. Without one, a change to this job can only be tested by waiting
+  # for the next Monday, which in practice means it never gets tested --
+  # the same argument the testing rules make for keeping heavy validation
+  # reachable without waiting on the trigger that normally runs it.
+  # CHR_EXERCISE stays required, so an ordinary pipeline never picks it up
+  # by accident.
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $CHR_EXERCISE == "true"'
+    - if: '$CHR_EXERCISE == "true" && $CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CHR_EXERCISE == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$CHR_EXERCISE == "true" && $CI_PIPELINE_SOURCE == "api"'
   before_script:
     # Repeated rather than merged from .git_safe: a job-level before_script
     # replaces an inherited one outright, so this job cannot have both.
@@ -338,4 +435,56 @@ chr-exercise:run:
     # this line as a mapping and GitLab reject the file (pipeline 145).
     - 'command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "chr-exercise: qemu-system-x86_64 missing after installing qemu-system-x86 -- cannot boot CHR"; exit 1; }'
   script:
-    - scripts/routeros-chr-exercise.sh
+    # #929: GitHub has to hear about this run whether it passed or
+    # failed -- the failure path matters more, since that is the one a
+    # plain `script:` line would silently skip. A script section stops
+    # at the first non-zero line, and `after_script` runs afterwards in
+    # a brand new shell that only sees files left on disk, not anything
+    # this shell computed -- and the report's summary needs more than a
+    # bare exit code, so building it here (where the exercise's own log
+    # is already sitting in a file this same shell just wrote) is
+    # simpler than reconstructing it from scratch in a second shell.
+    # Capturing the status and reporting from it, then exiting with that
+    # same status at the end, keeps this one job both always-reporting
+    # and still red when the exercise itself failed.
+    - |
+      set +e
+      scripts/routeros-chr-exercise.sh >chr-exercise.log 2>&1
+      status=$?
+      set -e
+      cat chr-exercise.log
+
+      if [ "$status" -eq 0 ]; then
+        result=pass
+        summary="$(grep -m1 -E 'already covered|every starting command parsed' chr-exercise.log || true)"
+      elif grep -q 'failed after 3 attempts' chr-exercise.log; then
+        # The retry loop in routeros-chr-boot.sh's chr_image() already
+        # gave the download three tries with a pause between (#929: a
+        # reset partway through the ~43 MB image, reproduced on two
+        # hosts, must not read as an exercise failure). Exhausting all
+        # three is a real failure, but naming it here keeps it from
+        # being reported as "the exercise failed" when RouterOS itself
+        # was never even reached.
+        result=fail
+        summary="the CHR image download failed after 3 attempts (network reset before reaching RouterOS), not the exercise itself"
+      elif grep -q 'refused a command:' chr-exercise.log; then
+        result=fail
+        cmd="$(grep -A1 'refused a command:' chr-exercise.log | tail -n1 | sed 's/^ *//')"
+        summary="RouterOS refused a command: $cmd"
+      else
+        result=fail
+        summary="$(grep -m1 -E 'would not boot|could not (reach|compare|determine)' chr-exercise.log || true)"
+      fi
+      summary="$(printf '%s' "$summary" | sed 's/^routeros-chr-exercise: //')"
+      [ -n "$summary" ] || summary="CHR exercise finished with exit $status -- see the job log"
+      routeros_version="$(grep -oE '(RouterOS|CHR) [0-9]+\.[0-9]+(\.[0-9]+)?' chr-exercise.log | head -n1 | awk '{print $2}')"
+
+      # A failure to publish the report is never allowed to hide, or to
+      # stand in for, the exercise's own result -- report, then exit with
+      # the exercise's real status regardless of how reporting went.
+      if ! CHR_REPORT_RESULT="$result" CHR_REPORT_SUMMARY="$summary" \
+        CHR_REPORT_ROUTEROS_VERSION="$routeros_version" scripts/chr-report.sh; then
+        echo "chr-exercise: publishing the run report to GitHub failed -- see above"
+      fi
+
+      exit "$status"

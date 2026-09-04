@@ -82,9 +82,9 @@ func SyslogCommands(address, syslogPort, dialect string) string {
 // do to someone from a "run this" box. The doc walks it per rule.
 func RuleTaggingCommands(dialect string) string {
 	return strings.Join([]string{
-		`/ip firewall filter set [find !dynamic action=drop] log=yes log-prefix="D|drop|"`,
-		`/ip firewall filter set [find !dynamic action=reject] log=yes log-prefix="R|reject|"`,
-		`/ip firewall filter set [find !dynamic action=accept] log=yes log-prefix="A|accept|"`,
+		`/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="D|drop|"`,
+		`/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix="R|reject|"`,
+		`/ip firewall filter set [find where !dynamic action=accept] log=yes log-prefix="A|accept|"`,
 		``,
 		`# The established/related accept rule logs every packet, not every`,
 		`# connection -- that is your whole traffic volume. Turn it back off:`,

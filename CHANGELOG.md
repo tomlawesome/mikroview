@@ -18,6 +18,44 @@ rewritten.
 
 ### Added
 
+- **The on-disk event history is now a setting you change while
+  mikroview is running, not one you restart for** (#910, design round
+  42 under `docs/design/concepts/round-42/`). Settings gains a `disk`
+  group directly under `memory`, the same two things one storey down:
+  a bar of the days actually held on disk (`27 days · since 7 Aug ·
+  812 MiB — filling`, `— full` when the cap is what decides), a track
+  for the days allowed with a dashed mark where the byte cap runs out
+  at today's rate, the cap as a figure that opens a field in place,
+  and `turn off` as a link. Every change that would delete something
+  is a proposal until a link that names the deletion is taken --
+  `delete 13 days · keep all 27` -- and turning on asks nothing, since
+  it deletes nothing. With no key mounted there is no control at all,
+  only two statements and a link to the guide. Below a mebibyte,
+  sizes now read in KiB, so a first day of a few kilobytes is not
+  `0 MiB`.
+
+  Underneath: `history.enabled`,
+  `history.days` and `history.maxBytes` move to the same runtime
+  settings store `store.maxMemory` already uses: the config file gives
+  the figure a fresh instance comes up on, and whatever is set from
+  inside the app wins on every restart after that. `history.keyFile`
+  and `history.dir` stay in the config file and are not editable from a
+  browser -- one names a mounted secret, the other a filesystem path.
+
+  Two admin-only, audit-logged endpoints (`settings.history`):
+  `GET /api/settings/history` reports whether a key is mounted, the two
+  caps, and the window **actually held** on disk -- days, oldest,
+  newest, bytes -- separately from the setting, plus whether the byte
+  cap rather than the day count is what last dropped a day.
+  `PUT /api/settings/history` applies a change and answers with the
+  same shape. Turning it on takes what the event buffer already holds
+  as well as every event after, so the history does not start empty;
+  turning it off deletes every retained file before the response is
+  written. Lowering either cap drops the surplus days at once rather
+  than at the next flush. With no key mounted the feature cannot run at
+  all, so the switch reads off and a request to turn it on is refused
+  with a sentence saying to mount one.
+
 - **Events can be kept on disk, encrypted, so a replay reaches further
   back than memory does** (#856,
   `docs/decisions/event-retention.md`). Off unless you mount a key and
@@ -39,8 +77,8 @@ rewritten.
   Replays now read disk then memory, and the receipt states the window
   actually held rather than the setting. Settings are in
   `docs/configuration.md`; the key file lives outside the data
-  directory. Turning it on from inside the app is #910, still to come --
-  today it is a config-file setting.
+  directory. Turning it on from inside the app came later, in #910 --
+  see the entry above.
 
 - **A weekly job exercises new RouterOS releases against a real CHR,
   and opens a merge request when they still parse** (#894, follow-on
