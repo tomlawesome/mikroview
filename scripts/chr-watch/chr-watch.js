@@ -1,16 +1,16 @@
 'use strict';
 
-// Decision logic for chr-watch.yml (#929), pulled out of the workflow
-// because GitHub cannot dry-run a schedule trigger: this module is the only
-// place these rules can be exercised before they go live, in
-// chr-watch.test.js.
+// Decision logic for scripts/chr-watch/run.js (#929, moved to GitLab by
+// #943), pulled out of the runner because a scheduled pipeline cannot
+// dry-run its own trigger: this module is the only place these rules can
+// be exercised before they go live, in chr-watch.test.js.
 //
 // The GitLab CHR job writes chr/last-run.json to the chr-reports branch on
 // every run, pass or fail (#929's issue body has the schema). This module
 // takes that file's raw text (or null if the branch/file doesn't exist yet)
 // and the current time, and decides which of four states applies. It does
-// no network I/O and no filesystem I/O -- the workflow's job is to fetch
-// the file and hand this module the bytes.
+// no network I/O and no filesystem I/O -- run.js's job is to fetch the
+// file and hand this module the bytes.
 
 const EXPECTED_SCHEMA = 1;
 
@@ -98,7 +98,7 @@ function missingBody() {
 }
 
 /**
- * Decide what chr-watch.yml should do.
+ * Decide what scripts/chr-watch/run.js should do.
  *
  * @param {string|object|null|undefined} raw - the raw text of
  *   chr/last-run.json (or an already-parsed object; either is accepted so
