@@ -363,7 +363,10 @@ security:trivy-fs:
 
 sync:mirror-to-github:
   stage: sync
-  image: alpine/git:2.54.0
+  # Plain alpine plus git, like policy:promotion-hop. alpine/git's entrypoint
+  # is git itself, so the runner's shell arrives as `git sh` and the job dies
+  # before its script (dev pipeline 193).
+  image: alpine:3.22
   # `needs: []`: the mirror reflects the branch, not the pipeline. The merge
   # request already ran lint, test and security before it merged; a flaky
   # test on the post-merge run must not leave GitHub behind, silently.
@@ -373,7 +376,7 @@ sync:mirror-to-github:
   variables:
     GIT_DEPTH: 0
   script:
-    - apk add --no-cache openssh-client curl jq >/dev/null
+    - apk add --no-cache git openssh-client curl jq >/dev/null
     - test -n "$GITHUB_MIRROR_SSH_KEY" || { echo "GITHUB_MIRROR_SSH_KEY is not set -- is $CI_COMMIT_BRANCH protected?"; exit 1; }
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
     - install -m 600 "$GITHUB_MIRROR_SSH_KEY" ~/.ssh/mirror_key
