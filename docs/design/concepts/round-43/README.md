@@ -87,3 +87,23 @@ drawn**, the gap-6 sentences as built, gap 8 as a build fix.
 
 Build: #921, on the same branch. Port the two rows and the `dfail` state
 from `restart.html`.
+
+## Built (2026-09-04)
+
+`restartRow` and `stateRow` in `frontend/src/lib/history.ts`; the rows in
+`EngineRoom.svelte`, the `state` row through `DiskControl`'s `stateStore`
+prop. Against a live instance (`scripts/live-env.sh up`): `shots/built-on.png`
+and `built-stopped.png` match `pair-on` and `pair-stopped`, with the
+instance's own figures (1 day, a `/tmp` data dir). Gap 8: after `turn on`
+the row read a held window again in under a second — the PUT's own answer
+carries it — and the build asks once more 6 s later for the writer's flush.
+
+Built differently, or not drawn:
+
+- History on with nothing filed yet (`held.days` 0) reads `the buffer
+  clears — what is on disk stays; trying a watcher reads it`. Undrawn;
+  the on-state sentence with no figure to name.
+- `dfail` also covers the GET failing on a server without a history
+  control (503). A viewer's 403 is not a failure: no group, and the
+  memory row reads the bare `the buffer clears`, dim, as drawn for
+  unanswered.
