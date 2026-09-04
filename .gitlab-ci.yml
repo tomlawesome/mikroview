@@ -1,36 +1,18 @@
 # ============================================================
-# UNDER CONSTRUCTION - NOT YET LIVE - DO NOT USE
+# GitLab is where mikroview is developed: branches, merge requests and
+# the dev -> preview -> main promotions all happen here, and this file is
+# the CI that gates them. GitHub is a read-only mirror of those three
+# branches -- the `sync` stage pushes each one after a merge -- and keeps
+# what already works there: CodeQL, the container registry and cosign
+# signing, Pages, secret scanning and chr-watch. #935 is the migration
+# record; the general model is in the gitlab-first-migration skill.
 #
-# This pipeline is real and runs green through the `security`
-# stage, but the cutover it belongs to has not been activated.
-# `dev` has not moved off GitHub. Do not push feature branches
-# to the `gitlab` remote, do not open merge requests there, and
-# do not treat a result from this pipeline as a gate on
-# anything -- work through GitHub pull requests as normal.
+# The `sync` stage is inert until the owner sets MIRROR_TO_GITHUB=true as
+# a project CI/CD variable (#935 step 4). Nothing in this file sets it.
 #
-# The cutover is now planned as GitLab-first delivery with GitHub as a
-# read-only mirror of every branch -- #935 holds the steps and their
-# order. The `sync` stage below is the switch: it is inert until the
-# owner sets a MIRROR_TO_GITHUB=true CI/CD variable at the flip (step 4),
-# so a push to `dev` here cannot mirror or close GitHub issues by
-# accident before the branches are reconciled.
-#
-# Current instruction: AGENTS.md, "Where code review happens".
-#
-# One deliberate, scoped exception to all of the above: the
-# `chr-exercise` stage at the bottom (#894). The owner ratified running
-# it here specifically, on this runner, while the rest of the cutover
-# stays parked -- it is a standalone scheduled job, not a gate on `dev`
-# or on any merge request, and it is inert until a GitLab Pipeline
-# Schedule with CHR_EXERCISE=true exists (nothing creates one
-# automatically). See that stage's own comment and
-# docs/routeros-chr-exercise.md.
+# The live-check gate is not here and never will be: it runs on the
+# second host, after the merge (AGENTS.md, "The gate runs on `dev`").
 # ============================================================
-#
-# GitLab CI for the `dev` lane. `preview`/`main` and everything they run
-# (docker.yml, codeql.yml, branch-policy.yml on GitHub) are untouched and
-# stay exactly as they are — see gitlab-ci-plan/07-mikroview-github-side-changes.md
-# for what changes there and why.
 #
 # Runner: rootless-Docker executor, single group runner, untagged jobs only.
 # Tool versions pinned below were verified current as of this session (Aug 2026)
@@ -76,6 +58,38 @@ variables:
       fi
 
 # ---------------------------------------------------------------------------
+# POLICY — the three-lane promotion order, dev -> preview -> main, with no
+# shortcuts. Replaces .github/workflows/branch-policy.yml, which cannot see
+# a merge that happens here. Only bites if the project requires a passing
+# pipeline to merge (Settings > Merge requests > "Pipelines must succeed"),
+# which is the owner's setting; without it this job is a warning, not a gate.
+# ---------------------------------------------------------------------------
+
+policy:promotion-hop:
+  stage: lint
+  image: alpine:3.22
+  needs: []
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
+  script:
+    - 'echo "MR !$CI_MERGE_REQUEST_IID: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME -> $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"'
+    - |
+      case "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" in
+        main)
+          if [ "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" != "preview" ]; then
+            echo "main only accepts merge requests from preview (got '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME') -- promote dev -> preview first, then preview -> main."
+            exit 1
+          fi
+          ;;
+        preview)
+          if [ "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" != "dev" ]; then
+            echo "preview only accepts merge requests from dev (got '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME')."
+            exit 1
+          fi
+          ;;
+      esac
+
+# ---------------------------------------------------------------------------
 # LINT — mirrors what ci.yml already does on GitHub (build+vet+gofmt, svelte-check),
 # not introducing golangci-lint since mikroview doesn't use it today.
 # ---------------------------------------------------------------------------
@@ -114,6 +128,10 @@ lint:frontend:
     - if: $CI_COMMIT_BRANCH == "dev"
       exists: ["frontend/package.json"]
   script:
+    # The GitHub-side helper scripts (.github/scripts) have node:test suites
+    # that no workflow runs; the issue closer below depends on the matcher,
+    # so its tests run here.
+    - node --test .github/scripts/*.test.js
     - cd frontend
     - npm ci
     - npx svelte-check --tsconfig ./tsconfig.app.json
@@ -318,61 +336,64 @@ security:trivy-fs:
   allow_failure: true
 
 # ---------------------------------------------------------------------------
-# SYNC — only on an actual push to dev (not MR pipelines), and only once
-# the owner has set MIRROR_TO_GITHUB=true as a project CI/CD variable.
-# Until then both jobs are skipped: GitLab's `dev` is a fork of GitHub's
-# (#935), and a push from a forked branch would either be refused
-# non-fast-forward or, worse, close GitHub issues from a commit GitHub
-# never received. The variable is the deliberate flip (#935 step 4);
-# nothing in this file sets it.
+# SYNC — GitHub is a mirror of dev, preview and main. After a push to any of
+# the three (a merge here lands as a push), mirror-to-github pushes that
+# branch to GitHub; after a push to dev only, close-github-issues closes the
+# GitHub issues the merged merge request said it closes. Both jobs run only
+# once the owner has set MIRROR_TO_GITHUB=true (#935 step 4).
 #
-# Once on: mirrors dev to GitHub, then closes whatever GitHub issues the
-# merge commit references (replaces close-issues-on-dev.yml, which stops
-# firing once merges into dev are GitLab MRs, not GitHub PRs). Under the
-# everything-moves decision on #935 this job also has to carry `preview`
-# and `main` — that change belongs to step 4 with the flip, not here.
+# The mirror pushes over SSH with a GitHub deploy key -- one repository,
+# push only, no API access -- held in GITHUB_MIRROR_SSH_KEY, a protected
+# file-type CI/CD variable. GitHub's rulesets on the three branches exempt
+# deploy keys and nothing else, so no owner token is ever able to bypass
+# them (owner decision on #935, 2026-09-04). Protected-only means the
+# variable is empty on an unprotected branch: preview and main must be
+# protected here before their first promotion.
 #
-# Needs a GITHUB_MIRROR_TOKEN CI/CD variable (masked+protected): a
-# fine-grained GitHub PAT scoped to just this repo, contents:write +
-# issues:write. It exists on the project; its scopes and expiry are the
-# owner's to check.
+# GitHub's SSH host keys come from api.github.com/meta over TLS rather than
+# ssh-keyscan, so the first connection is verified rather than trusted.
+#
+# The closer reads the merge request, not the merge commit: GitLab's default
+# merge commit carries only the MR title, and `Closes #N` lives in the
+# description. It uses GITHUB_ISSUES_TOKEN (issues: read and write, this
+# repository only) and GITLAB_MR_TOKEN (to read the MR). Not allow_failure:
+# a closer that fails silently is how issues stay open after the work
+# shipped (#99, #133, #134), so a red job here is the signal.
 # ---------------------------------------------------------------------------
 
 sync:mirror-to-github:
   stage: sync
   image: alpine/git:2.47.3
+  # `needs: []`: the mirror reflects the branch, not the pipeline. The merge
+  # request already ran lint, test and security before it merged; a flaky
+  # test on the post-merge run must not leave GitHub behind, silently.
+  needs: []
   rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true" && ($CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "preview" || $CI_COMMIT_BRANCH == "main")'
+  variables:
+    GIT_DEPTH: 0
   script:
-    - git remote add github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git" 2>/dev/null || git remote set-url github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git"
-    - git push github HEAD:dev
+    - apk add --no-cache openssh-client curl jq >/dev/null
+    - test -n "$GITHUB_MIRROR_SSH_KEY" || { echo "GITHUB_MIRROR_SSH_KEY is not set -- is $CI_COMMIT_BRANCH protected?"; exit 1; }
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - install -m 600 "$GITHUB_MIRROR_SSH_KEY" ~/.ssh/mirror_key
+    - curl -fsS https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com \(.)"' > ~/.ssh/known_hosts
+    - test -s ~/.ssh/known_hosts
+    - export GIT_SSH_COMMAND="ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+    - git remote add github git@github.com:tomlawesome/mikroview.git 2>/dev/null || git remote set-url github git@github.com:tomlawesome/mikroview.git
+    # Never --force: if this is refused non-fast-forward, something wrote to
+    # GitHub's copy and the branch has forked. Reconcile by merge (#935).
+    - git push github "HEAD:refs/heads/$CI_COMMIT_BRANCH"
 
 sync:close-github-issues:
   stage: sync
-  image: alpine:3.20
+  image: node:22-alpine
   needs:
     - sync:mirror-to-github
   rules:
     - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true"'
-  allow_failure: true
   script:
-    - apk add --no-cache curl git
-    - |
-      msg="$(git log -1 --pretty=%B)"
-      echo "$msg" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+#[0-9]+' \
-        | grep -oE '[0-9]+' | sort -u | while read -r num; do
-          echo "Closing GitHub issue #$num"
-          curl -sf -X PATCH \
-            -H "Authorization: token ${GITHUB_MIRROR_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/tomlawesome/mikroview/issues/$num" \
-            -d '{"state":"closed","state_reason":"completed"}' || echo "warn: could not close #$num"
-          curl -sf -X POST \
-            -H "Authorization: token ${GITHUB_MIRROR_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/tomlawesome/mikroview/issues/$num/comments" \
-            -d "{\"body\":\"Closed by a merge to \`dev\` (via GitLab). Merged is not released — promotion to \`preview\` and then \`main\` is a separate, deliberate step.\"}" || true
-        done
+    - node .github/scripts/close-issues-from-gitlab.js
 
 # ---------------------------------------------------------------------------
 # CHR-EXERCISE — #894: weekly, boots MikroTik's own CHR image under

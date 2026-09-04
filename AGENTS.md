@@ -105,88 +105,53 @@ shown all of that work being undone. Caught by checking `git log
 --oneline` against a freshly-fetched `origin/dev` before pushing, not by
 assuming the checkout had done the right thing.
 
-## Where code review happens: GitHub and GitLab, split by branch
+## Where development happens: GitLab, with GitHub as the mirror
 
-> **UNDER CONSTRUCTION — NOT YET LIVE. DO NOT USE.**
->
-> Everything below describes the **target state of a cutover that has not
-> been activated**, written in the present tense before it happened. The
-> project exists and `dev` is pushed there, but **no pipeline on
-> `ai/mikroview` has ever passed** — all eight, 2026-08-08 to
-> 2026-09-03, failed (#908). An earlier version of this file claimed the
-> lane ran green through the `security` stage; that was almost certainly
-> observed on `ai/mikroview-mirror`, the other project. `dev` has **not**
-> moved, and the lane is not a gate on anything yet.
->
-> **Until it goes live, work through GitHub as normal**: push feature
-> branches to `origin`, open GitHub pull requests, merge into `dev`
-> there. Do not push to the `gitlab` remote, open merge requests there,
-> or wait on a GitLab pipeline.
->
-> **Do not "fix" the GitHub side to match this section.** The retirements
-> it describes are cutover steps that have not been taken, and the things
-> it says were replaced are still live and should stay live:
-> `.github/workflows/close-issues-on-dev.yml` still fires on a PR merging
-> into `dev`, and `.github/dependabot.yml` still carries its
-> `target-branch: dev` entries. Removing either now would break working
-> automation in exchange for a lane that cannot yet replace it.
->
-> Known blocker on activation: the `sync` stage
-> (`mirror-to-github`, `close-github-issues`) has never successfully run
-> — it needs a `GITHUB_MIRROR_TOKEN` CI/CD variable that does not exist
-> yet. Until that works, cutting over would silently stop GitHub issues
-> closing on merge.
->
-> The cutover involves **two** GitLab projects for different purposes —
-> `ai/mikroview` (the eventual cutover target) and `ai/mikroview-mirror`
-> (parallel checks only, no integration) — which are not interchangeable.
+Owner decision, 2026-09-04, tracked on #935: mikroview is developed on the
+self-hosted GitLab instance, project `ai/mikroview` (project id 43), remote
+name `gitlab`. Branches, merge requests and the `dev` → `preview` → `main`
+promotions all happen there; full CI is `.gitlab-ci.yml` at the repo root.
+GitHub (`origin`) is a read-only mirror of those three branches, and keeps
+what already works there: CodeQL, the container registry and cosign signing,
+Pages, secret scanning, `chr-watch`, and release tags.
 
-Issues, planning, and decisions stay on GitHub, per the rest of this file.
-Code review does not, for one lane: `dev` (and the feature branches that
-merge into it) now lives primarily on a private, self-hosted GitLab
-instance — merges into `dev` happen as GitLab merge requests, not GitHub
-pull requests. `preview` and `main`, and everything that already runs on
-them (`ci.yml`, `docker.yml`, `codeql.yml`, `branch-policy.yml`), are
-untouched and still live entirely on GitHub.
+Why: the owner's runner hardware is faster and never queued; the project
+keeps moving on days GitHub does not; checks that need Docker on the host
+are easy to wire in here; and GitHub still serves the public repo, its
+history and registry pulls, so nothing that depends on those breaks.
 
-Why: GitHub's free tier doesn't include GHAS-equivalent SAST/dependency/
-container scanning for private repos, and GitLab CE doesn't either — but
-self-hosting GitLab means that same category of free/open-source tooling
-(Semgrep, gosec, govulncheck, gitleaks, Trivy) can run on every merge into
-`dev`, gated by `.gitlab-ci.yml` at the repo root, without paying for
-either platform's higher tier. GitHub's own strengths (CodeQL, cosign
-image signing + attestation, release tagging, `branch-policy.yml`'s
-hop-order enforcement) had no reason to move, so they didn't.
+The rule that makes this safe: **one branch has one writer.** Never push to
+`origin`'s `dev`, `preview` or `main`, and never open or merge a GitHub pull
+request into them — a merge on that side forks the branch, the mirror push
+is refused, and GitHub silently falls behind. Feature branches are pushed to
+`gitlab`; merge requests are opened there (`glab mr create`, with the `Cut:`
+line in `-d`).
 
-Mechanically:
-- A GitLab CI job mirrors `dev` to GitHub after each merge there, so the
-  existing `dev` → `preview` GitHub PR flow keeps working unchanged —
-  GitHub just sees `dev` updated by a push instead of a human PR merge.
-- `close-issues-on-dev.yml` stopped firing (its trigger was a GitHub PR
-  merging into `dev`, which no longer happens) and was replaced by an
-  equivalent job in `.gitlab-ci.yml` that closes the same GitHub issues
-  via the GitHub API on merge. **(Not done — a cutover step, not a
-  completed one. The workflow is still in `.github/workflows/` and still
-  firing; the GitLab job that would replace it has never run
-  successfully.)**
-- `dependabot.yml`'s `dev`-targeting entries were retired in favor of
-  Renovate running on GitLab against `dev`, so two bots aren't both
-  opening PRs against a branch that's now GitLab-canonical.
-  **(Not done — a cutover step. All four `target-branch: dev` entries are
-  still present and active, and `dev` is not GitLab-canonical yet.)**
-- In-flight branches from before this change finished their existing
-  GitHub PR flow normally — this was a soft cutover, not a rewrite of
-  history.
+Mechanics: after a merge, `sync:mirror-to-github` in `.gitlab-ci.yml` pushes
+the branch to GitHub over SSH with a deploy key (one repository, push only —
+deliberately not a token, so a leak of it cannot reach anything else).
+`sync:close-github-issues` reads the merged merge request's title and
+description and closes the GitHub issues it names, via
+`.github/scripts/close-issues-from-gitlab.js` and the shared
+`close-issues-matcher.js` rules. Both jobs run only when the
+`MIRROR_TO_GITHUB` CI/CD variable is `true`. `policy:promotion-hop` fails a
+merge request into `preview` unless it comes from `dev`, and into `main`
+unless it comes from `preview`.
 
-If a check ever needs to move between the two (something currently gated
-on GitHub would fit better as a fast `dev`-lane gate, or vice versa), the
-boundary to reason from is: **GitHub keeps anything about the release
-lane or an already-working platform feature (signing, CodeQL, hop-order
-enforcement); GitLab handles fast, free security/quality scanning on the
-inner dev loop.** Deliberately not documented here: which host anything
-actually runs on, network topology, or credentials — that's operational
-detail with no reason to live in a file an agent (or anyone else) might
-read.
+Issues, planning and decisions stay on GitHub, per the rest of this file.
+`Closes #N` goes in the merge request description — GitLab's default merge
+commit carries only the title, not the description, so it will not fire from
+there. Check the issue after every merge anyway, and close it by hand with
+evidence if the job missed it: a red `sync:close-github-issues` is the
+signal, it is not `allow_failure`.
+
+Credentials, names only — values are never written down here. The agent's
+`glab` config lives in `~/.config/glab-claude/` (`GLAB_CONFIG_DIR`, host
+`gitlab.tomlawson.io`); git over HTTPS to `gitlab` uses that same token
+through `GIT_ASKPASS`; the gate loop uses a read-only deploy token in
+`~/.config/mikroview/gitlab-credentials`. On the GitLab side, the CI/CD
+variables are `GITHUB_MIRROR_SSH_KEY` (file, protected), `GITHUB_ISSUES_TOKEN`
+and `GITLAB_MR_TOKEN`.
 
 See
 [docs/decisions/gitlab-ci-root-in-container-test-failure.md](docs/decisions/gitlab-ci-root-in-container-test-failure.md)
@@ -253,7 +218,7 @@ holds it (#809); wait for that run, or if it looks dead, follow the
 `ssh ... rm -r ~/gate-lock` hint the refusal prints.
 
 **The host's standing tenant is the `dev` loop.** `scripts/gate-dev-loop.sh`
-runs the gate on every new `origin/dev` commit through the same script and
+runs the gate on every new `dev` commit on the `gitlab` remote through the same script and
 lock, keeps each log as `~/projects/.gate-logs/mikroview/gate-<sha>.log`
 and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN` lines to `loop.log` there
 (#831). It takes the lock like any other run, so a manual
@@ -432,7 +397,9 @@ plain language.
 ## Issues
 
 Open does not mean undone: `Closes #N` fires only on the default branch, so
-check the branch before picking an issue up.
+check the branch before picking an issue up. On a merge to `dev` the GitLab
+`sync:close-github-issues` job does the closing from the merge request
+description instead; see the GitLab section.
 
 Issue-body, decision-recording and supersession rules follow the global
 agent instructions. Project-specific: `.github/ISSUE_TEMPLATE/work-item.md`
@@ -527,13 +494,15 @@ external identity provider), say so plainly in the PR rather than letting
 Scenarios share one instance and run in filename order, so most depend on
 state an earlier one left -- `live-flags-clearing.mjs` alone raises no
 flags at all. To tell a regression from a pre-existing failure, run the
-whole `make live-check` on both trees, a worktree at `origin/dev` and the
+whole `make live-check` on both trees, a worktree at `gitlab/dev` and the
 branch, never the one scenario twice.
 
 ### Match CI's exact commands, not the obvious equivalents
 
 Local verification is incomplete unless it used the same commands CI uses —
-check `.github/workflows/*.yml` for the precise invocation. Three known traps:
+check `.gitlab-ci.yml` (the gate on merge requests and `dev`) and
+`.github/workflows/*.yml` (what still runs on GitHub) for the precise
+invocation. Three known traps:
 
 - `npx svelte-check --tsconfig ./tsconfig.json` (the solution-level config)
   reports 0 errors even when the app has a real type error; it only checks
