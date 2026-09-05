@@ -170,13 +170,27 @@ if (!ready) {
 }
 
 async function clearFilters() {
-  // `.bar` is the strip itself, so this found nothing while the box was
-  // closed -- and cleared nothing, silently, leaving each check to inherit
-  // the last one's filter.
+  // `.bar .clear` never existed on the desktop strip this scenario
+  // drives -- that class is the *mobile drawer's* clear button
+  // (FilterBar.svelte's `.mobile-row .clear`, a sibling of `.bar`, not a
+  // descendant of it). The desktop control #697/round 30 built is
+  // `.tf-clear` inside `.bar.thin` (live-stream-interiors.mjs already
+  // uses this selector). So this silently found nothing on every call,
+  // every check after the first filter-setting one inherited whatever
+  // was still active, and that stale filter is what made the mv438-dstnat
+  // row, the https port search and the Unknown country filter each look
+  // like they excluded a row that should have shown (#663).
   await ensureFiltersOpen()
-  if (await page.isVisible('.bar .clear').catch(() => false)) {
-    await page.click('.bar .clear').catch(() => {})
+  if (await page.isVisible('.bar.thin .tf-clear').catch(() => false)) {
+    await page.click('.bar.thin .tf-clear').catch(() => {})
     await page.waitForTimeout(300)
+    // Clearing removes the only element the click landed on (the
+    // button's own `{#if hasActiveFilters}` guard unmounts it the
+    // instant the filters it cleared go empty), which the window's
+    // click-away listener reads as a click outside the box -- so the
+    // strip folds itself as a side effect of Clear, not just of Fold.
+    // Reopen for the same reason every other read in this file does.
+    await ensureFiltersOpen()
   }
 }
 
