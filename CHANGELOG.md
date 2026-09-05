@@ -1129,6 +1129,14 @@ rewritten.
   before building rather than failing confusingly partway through
   `live-check` -- and a `RECLAIM` chown failure against an existing tree
   now prints a warning instead of failing silently.
+- **A caller told to run `make live-check-remote` had no way to ask the
+  lock above to queue rather than refuse** (#811, the same collision as
+  #809 caught mid-`npm ci` on the trampled side). Refusing without
+  `--wait` now exits `75`, distinct from a gate failure, so a script can
+  tell "the host is busy" from "the gate found something" without
+  parsing the message; `scripts/gate-remote.sh --wait` (or
+  `MV_GATE_WAIT=1`) polls the lock every `MV_GATE_WAIT_INTERVAL` seconds
+  (default 30) instead of exiting.
 
 ## [0.4.0] - 2026-08-25
 
