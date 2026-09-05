@@ -18,6 +18,30 @@ rewritten.
 
 ### Added
 
+- **RouterOS config backups pushed over SFTP, kept encrypted and
+  restorable** (#394). The setup wizard's new sixth step prints a
+  script that saves the router's own binary backup (unencrypted --
+  it is the restore copy, and mikroview never holds a second password
+  to open an encrypted one) and a plain-text export (no secrets, safe
+  to read later), and pushes both nightly to a small SFTP drop box
+  mikroview runs (`backup.enabled`, off by default, port `:47022`).
+  The drop box is write-only and per-device: a login can add a pair
+  but never list, read, delete or overwrite anything, and a header
+  check refuses anything that isn't actually a RouterOS backup. Every
+  pair is encrypted under the same retention key #853's state store
+  uses -- no key, no backups -- with 10 generations kept per router,
+  oldest dropped first, and every download by an admin writing an
+  audit-log entry (a download is the router's whole configuration,
+  credentials included). Settings gains a `router backups` group
+  beside `disk`, admin-only, with a ten-slot strip per router and the
+  newest pair's download links; a router that misses its usual push
+  (the interval is learned from its own arrivals, never from the
+  scheduler line printed) shows an amber receipt and an `is it gone?`
+  link that opens the wizard's sixth step in a lost-router shape, for
+  restoring a replacement. `-backup`/`-restore` carry the vault along
+  with everything else. **RouterOS never verifies the drop box's host
+  key** (measured on 7.23.3) -- run the push only over a network path
+  you trust; see `SECURITY.md`.
 - **The same key that encrypts the on-disk event history now also
   covers most of what else mikroview writes to disk** (#853,
   `docs/decisions/event-retention.md`'s amendment and addendum): the

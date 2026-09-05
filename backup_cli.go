@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/backup"
 	"github.com/tomlawesome/mikroview/internal/config"
@@ -148,6 +150,141 @@ func unwrapFromEnvelope(name string, raw []byte) ([]byte, error) {
 	return decoded, nil
 }
 
+// vaultStoreName is the router-backup vault's (#394) envelope key.
+//
+// It is deliberately not one of backedUpStores' entries above: that
+// list assumes one name maps to one document persist.LoadDocument can
+// read, and the vault is a directory of many per-router, per-generation
+// files. It is also deliberately absent from excludedFromBackup's
+// *Path-field guard (backup_coverage_test.go) for the same reason
+// History.Dir is -- Backup.VaultDir is named Dir-style, not *Path, so
+// the reflection walk never asks a question about it that would need
+// answering there. Handled by its own bundling/restoring code instead
+// (readVaultBundle, writeVaultBundle), called directly from runBackup
+// and runRestore.
+const vaultStoreName = "router_backup_vault"
+
+// vaultBundle is the router-backup vault's envelope shape: every file
+// under the vault directory, keyed by its path relative to it (a
+// forward-slash path regardless of host OS, so a backup taken on one
+// platform restores correctly on another). Every file is already
+// encrypted -- internal/backupvault seals each one under the retention
+// key before it ever reaches disk -- so a backup carries them exactly
+// as they sit, and neither -backup nor -restore ever needs the
+// retention key to move them, only to read them back afterwards.
+type vaultBundle struct {
+	Files map[string][]byte `json:"files"`
+}
+
+// vaultPath resolves rel (a forward-slash entry name, either one
+// readVaultBundle just walked or one a restore envelope claims to carry)
+// against dir and refuses anything that would not stay under it: an
+// absolute rel, a ".." component, an empty name, or a join that
+// filepath.Rel says lands outside dir once cleaned. gosec's G703 flags
+// os.Stat/os.ReadFile/os.WriteFile on a path built from untrusted input
+// regardless of which side builds it, and on the restore side that input
+// really is untrusted -- a hostile envelope entry of "../../etc/cron.d/x"
+// would otherwise write outside the vault directory entirely. The read
+// side's path is already confined by WalkDir; routing it through the
+// same check costs nothing and makes that explicit for the analyser
+// instead of asking it to trust WalkDir's contract.
+func vaultPath(dir, rel string) (string, error) {
+	if rel == "" {
+		return "", fmt.Errorf("empty file name in the router backup vault")
+	}
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("%q is an absolute path, refusing", rel)
+	}
+	native := filepath.FromSlash(rel)
+	for _, part := range strings.Split(native, string(filepath.Separator)) {
+		if part == ".." {
+			return "", fmt.Errorf("%q escapes the vault directory, refusing", rel)
+		}
+	}
+	cleanDir := filepath.Clean(dir)
+	joined := filepath.Join(cleanDir, native)
+	if outside, err := filepath.Rel(cleanDir, joined); err != nil ||
+		outside == ".." || strings.HasPrefix(outside, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%q escapes the vault directory, refusing", rel)
+	}
+	return joined, nil
+}
+
+// readVaultBundle walks dir and reads every file it holds into a
+// vaultBundle. A vault directory that has never existed (no key ever
+// configured, or nothing pushed yet) is not an error -- it is folded
+// into the backup only when it holds something, same as every other
+// store in runBackup's own loop.
+func readVaultBundle(dir string) (vaultBundle, error) {
+	bundle := vaultBundle{Files: map[string][]byte{}}
+	// #nosec G703 -- the vault directory from this deployment's own config, not from a request.
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return bundle, nil
+		}
+		return bundle, fmt.Errorf("router backup vault: %w", err)
+	}
+	if !info.IsDir() {
+		return bundle, fmt.Errorf("router backup vault: %s is not a directory", dir)
+	}
+	// #nosec G703 -- same config-owned directory; every entry it yields is re-checked by vaultPath below.
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		slashRel := filepath.ToSlash(rel)
+		safePath, err := vaultPath(dir, slashRel)
+		if err != nil {
+			return fmt.Errorf("router backup vault: %w", err)
+		}
+		data, err := os.ReadFile(safePath)
+		if err != nil {
+			return err
+		}
+		bundle.Files[slashRel] = data
+		return nil
+	})
+	if err != nil {
+		return vaultBundle{}, fmt.Errorf("router backup vault: reading %s: %w", dir, err)
+	}
+	return bundle, nil
+}
+
+// writeVaultBundle restores bundle's files under dir. The caller
+// (runRestore) has already run the same not-force-and-already-exists
+// check every other store gets, before any file anywhere was touched --
+// this only ever writes, it never decides whether it is allowed to.
+//
+// bundle.Files' keys come straight from the restore envelope, which is
+// as untrusted as the rest of that file's contents: nothing upstream of
+// here has ever checked that an entry name stays under dir. Every entry
+// is routed through vaultPath before it touches disk, so a hostile
+// envelope entry such as "../../etc/cron.d/x" is refused instead of
+// writing outside the vault directory.
+func writeVaultBundle(dir string, bundle vaultBundle) error {
+	for rel, data := range bundle.Files {
+		path, err := vaultPath(dir, rel)
+		if err != nil {
+			return fmt.Errorf("router backup vault: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return fmt.Errorf("router backup vault: %w", err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return fmt.Errorf("router backup vault: %w", err)
+		}
+	}
+	return nil
+}
+
 // refuseBackupOnPostgres is the deployment split the owner settled when
 // the one-way migration was built: choosing Postgres is choosing its
 // backup tooling.
@@ -221,6 +358,29 @@ func runBackup(args []string) int {
 		}
 		stores[s.Name] = wrapped
 	}
+
+	// The router-backup vault (#394) is a directory of many per-router,
+	// per-generation files, not a single JSON document backedUpStores'
+	// loop above can read through persist.LoadDocument -- see
+	// vaultStoreName's own doc comment for why it is bundled separately
+	// rather than added to that list. Folded in only when it holds
+	// something, same "nothing to carry" reasoning the loop above
+	// applies to every other store.
+	vaultDir := backupVaultDirectory(cfg)
+	bundle, err := readVaultBundle(vaultDir)
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	if len(bundle.Files) > 0 {
+		encoded, err := json.Marshal(bundle)
+		if err != nil {
+			logger.Error(fmt.Sprintf("encoding the router backup vault for the backup: %v", err))
+			return 1
+		}
+		stores[vaultStoreName] = encoded
+	}
+
 	if len(stores) == 0 {
 		logger.Error("no store files exist yet -- nothing to back up")
 		return 1
@@ -325,8 +485,23 @@ func runRestore(args []string) int {
 	// touched pass as the known-store checks below, so a corrupt
 	// jsonLinesStore entry is refused before any file is touched rather
 	// than after some other store has already been restored.
+	//
+	// vaultStoreName is checked and decoded here too, but never added to
+	// decoded/known: it is a directory of many files, not one -- see its
+	// own doc comment. vaultBundleToRestore carries it through this same
+	// validate-everything-first pass instead.
 	decoded := map[string][]byte{}
+	var vaultBundleToRestore *vaultBundle
 	for name, raw := range env.Stores {
+		if name == vaultStoreName {
+			var b vaultBundle
+			if err := json.Unmarshal(raw, &b); err != nil {
+				logger.Error(fmt.Sprintf("backup's router backup vault does not parse: %v -- nothing has been changed", err))
+				return 1
+			}
+			vaultBundleToRestore = &b
+			continue
+		}
 		if _, ok := known[name]; !ok {
 			logger.Error(fmt.Sprintf("backup carries an unknown store %q -- refusing rather than "+
 				"guessing where it belongs. Nothing has been changed", name))
@@ -345,11 +520,22 @@ func runRestore(args []string) int {
 		decoded[name] = data
 	}
 
+	vaultDir := backupVaultDirectory(cfg)
 	if !hasFlag(args, "--force") {
 		for name := range env.Stores {
+			if name == vaultStoreName {
+				continue
+			}
 			if _, err := os.Stat(known[name]); err == nil {
 				logger.Error(fmt.Sprintf("%s already exists (store %q) -- refusing to overwrite live "+
 					"state. Re-run with --force once you are sure", known[name], name))
+				return 1
+			}
+		}
+		if vaultBundleToRestore != nil {
+			if entries, err := os.ReadDir(vaultDir); err == nil && len(entries) > 0 {
+				logger.Error(fmt.Sprintf("%s already exists and is not empty (store %q) -- refusing to "+
+					"overwrite live state. Re-run with --force once you are sure", vaultDir, vaultStoreName))
 				return 1
 			}
 		}
@@ -385,6 +571,12 @@ func runRestore(args []string) int {
 		}
 		if _, err := backend.Save(ctx, data, expect); err != nil {
 			logger.Error(fmt.Sprintf("writing %s (store %q): %v", path, name, err))
+			return 1
+		}
+	}
+	if vaultBundleToRestore != nil {
+		if err := writeVaultBundle(vaultDir, *vaultBundleToRestore); err != nil {
+			logger.Error(err.Error())
 			return 1
 		}
 	}

@@ -47,16 +47,18 @@
   import { versionState } from '../lib/version.svelte'
   import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
-  import { fetchSetupStatus, fetchDevices, fetchSetupCommands, fetchHistorySettings } from '../lib/api'
+  import { fetchSetupStatus, fetchDevices, fetchSetupCommands, fetchHistorySettings, fetchRouterBackups } from '../lib/api'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
   import { restartRow, stateRow, type DiskPhase } from '../lib/history'
   import MemoryControl from './MemoryControl.svelte'
   import DiskControl from './DiskControl.svelte'
+  import RouterBackups from './RouterBackups.svelte'
   import { usersState } from '../lib/users.svelte'
   import { tokensState } from '../lib/tokens.svelte'
+  import { wizardState } from '../lib/wizard.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
-  import type { SetupStatus, FlagType, Device, HistorySettings } from '../lib/types'
+  import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -97,6 +99,16 @@
     // rather than a switch nothing stands behind (see refreshHistory).
     refreshHistory()
     const historyTimer = setInterval(refreshHistory, 60_000)
+    // The router-backups group (#394, round 44) is admin-only end to
+    // end -- GET /api/router-backups 403s anyone else (see
+    // handleRouterBackupsList) -- so, like keys/people above, it is
+    // simply never fetched below admin rather than shown an error it
+    // has no way to act on.
+    let routerBackupsTimer: ReturnType<typeof setInterval> | undefined
+    if (isAdmin) {
+      refreshRouterBackups()
+      routerBackupsTimer = setInterval(refreshRouterBackups, 60_000)
+    }
     fetchDevices()
       .then((all) => {
         // Same de-dup/order rule the former tokens door applied -- an
@@ -116,6 +128,7 @@
     return () => {
       clearInterval(historyTimer)
       if (historyRetry) clearTimeout(historyRetry)
+      if (routerBackupsTimer) clearInterval(routerBackupsTimer)
     }
   })
 
@@ -127,6 +140,31 @@
   // offers to ask again, rather than vanishing (round 42's gap 9).
   let historyUnanswered = $state(false)
   let historyRetry: ReturnType<typeof setTimeout> | null = null
+
+  // --- router backups (#394, round 44) -----------------------------------
+  let routerBackups = $state<RouterBackupsResponse | null>(null)
+  // Round 44's `bfail`: the GET did not answer for a reason other than
+  // role -- the disk group's `dfail` idiom, drawn directly by this
+  // block since there is no settings object to render a control from.
+  let routerBackupsUnanswered = $state(false)
+
+  function refreshRouterBackups() {
+    fetchRouterBackups()
+      .then((r) => {
+        routerBackups = r
+        routerBackupsUnanswered = false
+      })
+      .catch(() => {
+        routerBackupsUnanswered = true
+      })
+  }
+
+  // openLostRouter is round 44's "is it gone?" link: opens the setup
+  // wizard straight on step 6 in its lost-router shape (round 45),
+  // reached only from here (owner decision, issue note 10572).
+  function openLostRouter(device: string) {
+    wizardState.openLostRouter(device)
+  }
 
   function refreshHistory() {
     fetchHistorySettings()
@@ -1065,6 +1103,35 @@
             </div>
           </div>
         </div>
+      {/if}
+
+      <!-- Round 44's "router backups" group (#394), straight after disk:
+           memory, disk, router backups -- the three things mikroview
+           holds, in the order they outlive a restart. Admin-only, like
+           `key`/`state` above -- never fetched below admin (see
+           onMount), so absent rather than shown a 403 it cannot act on. -->
+      {#if isAdmin}
+        {#if routerBackups}
+          <div id="bakg" class="stsection wide">
+            <h3>router backups</h3>
+            <RouterBackups resp={routerBackups} onopenlost={openLostRouter} />
+          </div>
+        {:else if routerBackupsUnanswered}
+          <!-- The disk group's own `dfail` idiom: one row, no control,
+               and a link that asks again. -->
+          <div id="bakg" class="stsection wide dfail">
+            <h3>router backups</h3>
+            <div class="wrows">
+              <div class="orow">
+                <span>kept</span>
+                <span class="ov">
+                  unknown — the server did not answer ·
+                  <button class="olink" onclick={refreshRouterBackups}>ask again</button>
+                </span>
+              </div>
+            </div>
+          </div>
+        {/if}
       {/if}
 
       <div class="stsection">

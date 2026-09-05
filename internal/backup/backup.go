@@ -50,7 +50,35 @@ const FormatVersion = 1
 // transient smaller would start refusing legitimate backups on the only
 // axis that is hard to predict. The claim being corrected here rather
 // than acted on is the point: the mechanism was already right.
-const MaxDecompressed = 256 << 20
+//
+// #394 raised this from the original 256 MiB: the router-backup vault's
+// own generations (10 per router, 16 MiB per file, two files a
+// generation -- backupvault.MaxGenerations/MaxFileBytes) can legitimately
+// need far more than every other store here combined once several
+// routers are pushing. baseMaxDecompressed keeps the original figure's
+// own reasoning for everything that isn't the vault; maxVaultRoutersHeadroom
+// is a generous, arbitrary ceiling on how many routers' worth of vault
+// this cap plans for -- raised if that ever proves too small, the same
+// way the original 256 MiB was itself just a number picked "far above
+// any real deployment". This still bounds an outcome, not a threat: a
+// hostile envelope claiming more routers than this refuses cleanly
+// rather than growing the cap to match whatever it claims.
+const (
+	baseMaxDecompressed = 256 << 20
+	// maxVaultRoutersHeadroom is deliberately generous for a self-hosted
+	// firewall-log tool watching a handful of routers, not a fleet.
+	maxVaultRoutersHeadroom = 20
+	// maxVaultBytesPerRouter mirrors backupvault.MaxGenerations (10) *
+	// backupvault.MaxFileBytes (16 MiB) * 2 files a generation. Not an
+	// import of those constants -- internal/backup is a dependency-free
+	// leaf package other packages build on, the same reasoning
+	// config.defaults() gives for duplicating internal/detect's figures
+	// rather than importing it -- but TestMaxDecompressedCoversTenVaultGenerationsPerRouter
+	// in backup_test.go pins the two together so they cannot drift apart.
+	maxVaultBytesPerRouter = 10 * 16 << 20 * 2
+)
+
+const MaxDecompressed = baseMaxDecompressed + maxVaultRoutersHeadroom*maxVaultBytesPerRouter
 
 // Envelope is the document. Stores are held as raw JSON so backup never
 // has to understand, and therefore never has to keep up with, the shape
@@ -96,17 +124,37 @@ func Write(w io.Writer, appVersion string, stores map[string][]byte) error {
 	return zw.Close()
 }
 
+// readCapped reads r to completion, refusing anything past max bytes. It is
+// the decompression-bomb check itself, factored out of Read so a test can
+// exercise the mechanism -- the +1-byte overread, the post-read comparison
+// -- against a small cap instead of the real MaxDecompressed: gzip-bombing
+// and then decompressing gigabytes of 'A' to prove the constant works is
+// what timed out pipeline 456's 10-minute CI budget once #394 raised
+// MaxDecompressed off its original 256 MiB.
+func readCapped(r io.Reader, max int64) ([]byte, error) {
+	limited := io.LimitReader(r, max+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("backup: reading: %w", err)
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("backup: refusing a backup larger than %d bytes decompressed -- "+
+			"a small file that expands without bound is a decompression bomb, not a backup", max)
+	}
+	return data, nil
+}
+
 // Read parses a document produced by Write, refusing anything that looks
 // like an attack on the reader rather than a backup.
 //
 // Restore consumes a file an operator may have been handed, so this is a
 // parser facing hostile input. Four specific refusals:
 //
-//   - A decompression bomb. io.LimitReader is set to MaxDecompressed+1 on
-//     the *decompressed* side, and the extra byte is what makes the check
-//     work: without it, hitting the limit is indistinguishable from a
-//     clean end of stream, and a bomb truncated exactly at the cap reads
-//     as a valid short backup.
+//   - A decompression bomb. readCapped's io.LimitReader is set to
+//     MaxDecompressed+1 on the *decompressed* side, and the extra byte is
+//     what makes the check work: without it, hitting the limit is
+//     indistinguishable from a clean end of stream, and a bomb truncated
+//     exactly at the cap reads as a valid short backup.
 //   - Concatenated gzip members. Multistream(false) stops the reader at
 //     the first member, so a second one appended to a legitimate backup
 //     is not silently included.
@@ -126,14 +174,9 @@ func Read(r io.Reader) (Envelope, error) {
 	defer zr.Close()
 	zr.Multistream(false)
 
-	limited := io.LimitReader(zr, MaxDecompressed+1)
-	data, err := io.ReadAll(limited)
+	data, err := readCapped(zr, MaxDecompressed)
 	if err != nil {
-		return env, fmt.Errorf("backup: reading: %w", err)
-	}
-	if len(data) > MaxDecompressed {
-		return env, fmt.Errorf("backup: refusing a backup larger than %d bytes decompressed -- "+
-			"a small file that expands without bound is a decompression bomb, not a backup", MaxDecompressed)
+		return env, err
 	}
 
 	dec := json.NewDecoder(newByteReader(data))

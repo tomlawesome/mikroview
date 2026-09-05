@@ -125,3 +125,82 @@ func TestRestoreWithoutForceRefusesToOverwriteAnExistingCorruptFile(t *testing.T
 		t.Error("the existing file was modified despite the refusal")
 	}
 }
+
+// TestWriteVaultBundleRefusesPathTraversal pins gosec G703's finding on
+// pipeline 458: writeVaultBundle used to filepath.Join(dir, rel) with rel
+// taken straight from the restore envelope, so a hostile envelope entry
+// named "../escape" would land one directory above the vault instead of
+// inside it. vaultPath is the fix -- this confirms the entry is refused,
+// by name, and that refusing it never touches disk outside dir.
+func TestWriteVaultBundleRefusesPathTraversal(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "vault")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := vaultBundle{Files: map[string][]byte{
+		"../escape": []byte("hostile"),
+	}}
+	err := writeVaultBundle(dir, bundle)
+	if err == nil {
+		t.Fatal("writeVaultBundle with a \"../escape\" entry succeeded, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "../escape") {
+		t.Errorf("error %q does not name the offending entry", err.Error())
+	}
+
+	if _, statErr := os.Stat(filepath.Join(parent, "escape")); !os.IsNotExist(statErr) {
+		t.Error("the traversal entry was written outside the vault directory")
+	}
+}
+
+// TestWriteVaultBundleRefusesAbsolutePath is
+// TestWriteVaultBundleRefusesPathTraversal's companion: an envelope entry
+// naming an absolute path is refused the same way, rather than being
+// joined (filepath.Join treats a second absolute-looking argument as
+// just another path component, but there is no reason to trust an
+// envelope entry that claims to be one).
+func TestWriteVaultBundleRefusesAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "planted")
+
+	bundle := vaultBundle{Files: map[string][]byte{
+		target: []byte("hostile"),
+	}}
+	if err := writeVaultBundle(dir, bundle); err == nil {
+		t.Fatal("writeVaultBundle with an absolute entry succeeded, want a refusal")
+	}
+
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Error("the absolute-path entry was written to the path it named")
+	}
+}
+
+// TestVaultBundleRoundTrip is the ordinary case
+// TestWriteVaultBundleRefusesPathTraversal and
+// TestWriteVaultBundleRefusesAbsolutePath must not have broken: a normal,
+// nested entry name still writes under dir and reads back byte for byte.
+func TestVaultBundleRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	const rel = "router/gen-1.backup"
+	want := []byte("sealed router backup bytes")
+
+	if err := writeVaultBundle(dir, vaultBundle{Files: map[string][]byte{rel: want}}); err != nil {
+		t.Fatalf("writeVaultBundle: %v", err)
+	}
+
+	if got, err := os.ReadFile(filepath.Join(dir, "router", "gen-1.backup")); err != nil {
+		t.Fatalf("reading written file: %v", err)
+	} else if string(got) != string(want) {
+		t.Errorf("written file = %q, want %q", got, want)
+	}
+
+	bundle, err := readVaultBundle(dir)
+	if err != nil {
+		t.Fatalf("readVaultBundle: %v", err)
+	}
+	if got := bundle.Files[rel]; string(got) != string(want) {
+		t.Errorf("readVaultBundle()[%q] = %q, want %q", rel, got, want)
+	}
+}

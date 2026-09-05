@@ -31,13 +31,15 @@ vi.mock('../lib/api', () => ({
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
   createToken: vi.fn(),
+  fetchRouterBackups: vi.fn(),
+  routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
 }))
 
-import { fetchDevices, fetchSetupCommands, fetchSetupStatus, markSetupStep } from '../lib/api'
+import { createToken, fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { wizardState } from '../lib/wizard.svelte'
-import type { SetupCommandsResponse, SetupStatus } from '../lib/types'
+import type { Device, SetupCommandsResponse, SetupStatus } from '../lib/types'
 import SetupWizard from './SetupWizard.svelte'
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
@@ -82,7 +84,23 @@ function commandsFixture(over: Partial<SetupCommandsResponse> = {}): SetupComman
       ruleTagging: { commands: 'RULE_TAGGING_COMMANDS', note: '' },
       push: { commands: '', note: '' },
       schedule: { commands: '', note: '' },
+      backup: { commands: '', note: '' },
+      backupSchedule: { commands: '', note: '' },
     },
+    ...over,
+  }
+}
+
+// backupsFixture is GET /api/router-backups' shape (#394), step 6's own
+// read -- empty by default (no key mounted), the same "off" reading the
+// group's own component tests use.
+function backupsFixture(over: Partial<import('../lib/types').RouterBackupsResponse> = {}) {
+  return {
+    enabled: false,
+    routers: [],
+    totalGenerations: 0,
+    totalRouters: 0,
+    totalBytes: 0,
     ...over,
   }
 }
@@ -92,6 +110,7 @@ beforeEach(async () => {
   vi.mocked(fetchSetupStatus).mockResolvedValue(status())
   vi.mocked(fetchDevices).mockResolvedValue([])
   vi.mocked(fetchSetupCommands).mockResolvedValue(commandsFixture())
+  vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture())
   authState.state = 'authenticated'
   authState.role = 'admin'
   authState.username = 'tom'
@@ -104,6 +123,8 @@ beforeEach(async () => {
   wizardState.open = true
   wizardState.commands = null
   wizardState.pickedVersion = ''
+  wizardState.backups = null
+  wizardState.lostRouterDevice = null
 })
 
 describe('SetupWizard', () => {
@@ -138,11 +159,11 @@ describe('SetupWizard', () => {
     expect(screen.getByLabelText(/Run setup…/)).toBeTruthy()
   })
 
-  it('always shows five steps, whatever state they are in', () => {
+  it('always shows six steps, whatever state they are in', () => {
     const { container } = render(SetupWizard)
     const rows = container.querySelectorAll('.steps .step-row')
-    // Five steps plus the read-back row.
-    expect(rows.length).toBe(6)
+    // Six steps plus the read-back row.
+    expect(rows.length).toBe(7)
   })
 
   // Next runs the check where one exists. Waiting does not proceed: it
@@ -318,22 +339,50 @@ describe('SetupWizard', () => {
     expect(wizardState.pane).toBe(4)
   })
 
+  // Step 6 (#394) has a waiting check too, same as step 4's -- give it
+  // real evidence so Finish behaves the way every other satisfied step
+  // does, rather than exercising its own heavy-warning path here (that
+  // is "raises the heavy warning instead of proceeding on a waiting
+  // step" above's job, not this one's).
+  function backupsArrived() {
+    return backupsFixture({
+      enabled: true,
+      routers: [
+        {
+          device: 'rb5009',
+          generations: [
+            { id: 'g0', backupArrivedAt: '2026-09-02T03:00:00Z', rscArrivedAt: '2026-09-02T03:00:05Z', backupBytes: 412000, rscBytes: 38000, header: 'plain' },
+          ],
+          intervalKnown: false,
+          missed: 0,
+        },
+      ],
+      totalGenerations: 1,
+      totalRouters: 1,
+      totalBytes: 450000,
+    })
+  }
+
   it('offers Finish on the last step, and reads the ledger back after it', async () => {
-    wizardState.pane = 5
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsArrived())
+    wizardState.pane = 6
     const { container } = render(SetupWizard)
+    await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
     await fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
 
     expect(container.querySelector('.headline')).toBeTruthy()
-    expect(container.querySelectorAll('.readback li').length).toBe(5)
+    expect(container.querySelectorAll('.readback li').length).toBe(6)
   })
 
   // #646: the wizard ends by taking the operator back to the fall,
   // mikroview's real landing page (#616) -- whichever path opened the
   // wizard, the journey's own hand-off included.
   it('the finish leads back to the fall', async () => {
-    wizardState.pane = 5
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsArrived())
+    wizardState.pane = 6
     appState.view = 'engineroom'
     render(SetupWizard)
+    await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
     await fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
 
     await fireEvent.click(screen.getByRole('button', { name: 'Take me to the fall' }))
@@ -358,7 +407,7 @@ describe('SetupWizard', () => {
   it('announces the step it moved to, not just that it moved', () => {
     const { container } = render(SetupWizard)
     const live = container.querySelector('[role="status"]')?.textContent ?? ''
-    expect(live).toContain('Step 1 of 5')
+    expect(live).toContain('Step 1 of 6')
     expect(live).toContain('Trust the certificate')
   })
 })
@@ -466,6 +515,8 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
           },
           push: { commands: '', note: '' },
           schedule: { commands: '', note: '' },
+          backup: { commands: '', note: '' },
+          backupSchedule: { commands: '', note: '' },
         },
       }),
     )
@@ -474,5 +525,129 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
 
     await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('TAG'))
     expect(container.textContent).toContain('on this release, tag rules one at a time')
+  })
+})
+
+// #394, round 45: the wizard's sixth step, "Back up the router".
+describe('SetupWizard -- step 6, back up the router (#394)', () => {
+  function rb5009(): Device {
+    return {
+      id: 'rb5009',
+      name: 'rb5009',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  it('reads the no-key state as the disabled-step voice, with no script and no mint form', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: false }))
+    wizardState.pane = 6
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
+    expect(container.querySelector('.wzpre-dim')).toBeTruthy()
+    expect(container.querySelector('.mint')).toBeNull()
+    expect(screen.getByRole('link', { name: 'how to mount one' })).toBeTruthy()
+  })
+
+  // With exactly one router known, the same auto-mint convenience step
+  // 4 already offers fires here too (the shared mint effect): the
+  // operator never sees the picker at all, and the script prints with
+  // the token that action created.
+  it('mints a token and prints the script once a router is known, the same credential step 4 would use', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    // wizardState.devices is set directly here (not just via
+    // fetchDevices) because wizardState.refresh() -- fired on mount for
+    // any signed-in user -- would otherwise overwrite it moments later
+    // with the mocked fetchDevices' default (empty) list, racing the
+    // assertions below.
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = 6
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-rb5009', 'ingest', 'rb5009'))
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    expect(container.textContent).toContain('scoped to that one router and to this drop box')
+  })
+
+  // With more than one router known, the picker stands in for "entry"
+  // (mintToken's own reasoning): the operator picks which router this
+  // token speaks for before anything is minted.
+  it('offers the picker with more than one router known, and mints for the one chosen', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-hap-ax2',
+      kind: 'ingest',
+      device: 'hap-ax2',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    const twoDevices = [rb5009(), { ...rb5009(), id: 'hap-ax2', name: 'hap-ax2' }]
+    vi.mocked(fetchDevices).mockResolvedValue(twoDevices)
+    wizardState.pane = 6
+    wizardState.devices = twoDevices
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelectorAll('.mint select option').length).toBe(3))
+    const select = container.querySelector('.mint select') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'hap-ax2' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Create token & script' }))
+
+    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-hap-ax2', 'ingest', 'hap-ax2'))
+  })
+
+  it('reaches the lost-router shape only through wizardState.openLostRouter, never on its own', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(
+      backupsFixture({
+        enabled: true,
+        routers: [
+          {
+            device: 'rb5009',
+            generations: [
+              { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z', backupBytes: 412000, rscBytes: 38000 },
+            ],
+            intervalKnown: false,
+            missed: 0,
+          },
+        ],
+      }),
+    )
+    wizardState.openLostRouter('rb5009')
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.textContent).toContain('rb5009 is gone'))
+    expect(screen.getByRole('link', { name: /download the newest \.backup/ })).toHaveProperty(
+      'href',
+      expect.stringContaining('/api/router-backups/rb5009/g0/backup'),
+    )
+    expect(screen.getByRole('button', { name: 'done — the replacement is pushing' })).toBeTruthy()
+    // No skip on this footer -- there is nothing to skip past.
+    expect(screen.queryByRole('button', { name: 'Skip this step' })).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'done — the replacement is pushing' }))
+    expect(wizardState.lostRouterDevice).toBeNull()
   })
 })

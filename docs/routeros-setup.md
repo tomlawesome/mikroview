@@ -12,8 +12,9 @@
 
 MikroView never talks to RouterOS's API and needs no credentials on the
 router. Instead, RouterOS pushes to MikroView: firewall log lines over
-syslog (steps 1–3, required), and optionally a copy of its own
-config for host names and rule lookups (step 4). Either way, the
+syslog (steps 1–3, required), optionally a copy of its own config for
+host names and rule lookups (step 4), and optionally a nightly config
+backup MikroView keeps encrypted (step 7, issue #394). Either way, the
 router always initiates; MikroView never connects to it. This is a
 one-time configuration on each router you want to monitor.
 
@@ -720,3 +721,84 @@ logs: give each logging rule a distinct `log-prefix`, and MikroView's
 per-rule counts will tell you — in numbers, within a day — whether any
 single rule is dominating your volume and deserves the same scrutiny
 the established-accept rules got above.
+
+## 7. Back up the router's configuration (optional)
+
+Issue #394. A router can push a copy of its own configuration to
+MikroView every night — the binary `.backup` that restores it whole on
+a replacement, and the plain-text `.rsc` export kept for reading.
+**MikroView is the place you turn to when the router is gone**, so this
+is worth setting up before that day, not after. See
+[configuration.md](configuration.md#router-backups-over-sftp-optional-off-by-default)
+for the server side (`backup.enabled`, the retention and quota rules,
+the missed-push receipt in Settings) and [SECURITY.md](../SECURITY.md)
+for the trust caveat below.
+
+### 7a. Turn the drop box on
+
+Set `backup.enabled: true` in `config.yaml` and restart — this opens a
+second listening port (`backup.listen`, default `:47022`), only once
+you have decided to use it. Nothing here needs the wizard, but the
+wizard's step 6 is what actually prints the script below with your own
+values filled in, which is the easier path for most people.
+
+### 7b. The token
+
+The same ingest token that pushes syslog/state (step 4b) authenticates
+this too — `internal/backupsftp` checks the SFTP login against the same
+token store, not a second credential. If you have already minted one
+for this router, reuse it; nothing here needs a token of its own kind.
+
+### 7c. The script
+
+```
+/system script add name=mv-backup policy=read,write,test,sensitive source="
+  /system backup save name=mv-backup dont-encrypt=yes
+  /export file=mv-backup
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.rsc dst-path=<device>.rsc
+  /file remove mv-backup.backup
+  /file remove mv-backup.rsc
+"
+/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup"
+/system script run mv-backup
+```
+
+`<device>` is both the SFTP username and the destination file stem —
+it must be the router's own device id, the same identity the token is
+scoped to. The binary save is asked for `dont-encrypt=yes` on purpose:
+that copy is the true restore copy and MikroView never holds a second
+password to open an encrypted one; the export is taken without
+`show-sensitive`, so it carries no secrets and is safe to read or scan
+later. The last line runs the script once immediately, so the first
+pair does not wait for 03:00.
+
+`policy=read,write,test,sensitive` is wider than the push script's
+`read,test` (4e): `write` and `sensitive` are what `/system backup
+save` and `/file remove` need, `test` is what `/tool fetch` needs, and
+`sensitive` on the script itself is also what stops a `read`-only
+RouterOS user printing the token back out of the saved source — the
+same caveat step 4b's own token warning describes.
+
+### Only on a network you trust
+
+RouterOS's SFTP client never verifies MikroView's host key (measured on
+RouterOS 7.23.3) — an attacker on the path between the router and
+MikroView could pose as MikroView and receive the pair and the token in
+plain sight. Run this over a LAN or a VPN you control, never across the
+open internet. See [SECURITY.md](../SECURITY.md) and issue #955, which
+tracks an HTTPS-based path that does verify.
+
+### 7d. Verify
+
+Settings' `router backups` group (admin-only) lists what has arrived
+per router, with `download .backup` / `.rsc` and a note of when each
+was last seen. A router that has pushed at least twice and then misses
+its usual interval shows an amber receipt there — mikroview learns the
+interval from the pushes themselves, never from this scheduler line,
+since an operator could change that on the router without mikroview
+knowing.
+
+Restoring is your own act on the replacement router
+(`/system backup load`) — MikroView never connects to a router to apply
+one; it only ever reads the header to confirm what arrived.

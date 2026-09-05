@@ -1232,6 +1232,50 @@ export interface PersistenceInfo {
   dir?: string
 }
 
+// GET /api/router-backups (#394, round 44's "router backups" group).
+// Mirrors internal/api's routerBackupsResponse.
+export interface RouterBackupsResponse {
+  // False when no retention key is configured at all -- #394's "no key,
+  // no backups": the drop box refuses every login and routers is always
+  // empty.
+  enabled: boolean
+  routers: RouterBackupRouter[]
+  totalGenerations: number
+  totalRouters: number
+  totalBytes: number
+  // The SFTP drop box's own listening port ("arrive by"), absent when
+  // backup.enabled is false.
+  port?: string
+}
+
+// One router's block (round 44's per-router strip). IntervalSeconds/
+// LastArrival/Missed together carry the owner's 2026-09-05 decision:
+// the interval is learned from arrivals, not the scheduler line the
+// wizard printed, and a router with one push has neither.
+export interface RouterBackupRouter {
+  device: string
+  generations: RouterBackupGeneration[] // oldest first
+  intervalKnown: boolean
+  intervalSeconds?: number
+  lastArrival?: string
+  missed: number
+}
+
+// One kept generation -- the shape round 44's strip and newest-pair
+// line are drawn from. The size/arrival fields are absent for whichever
+// half of the pair has not arrived yet, so "not here" reads differently
+// from "zero bytes".
+export interface RouterBackupGeneration {
+  id: string
+  backupArrivedAt?: string
+  rscArrivedAt?: string
+  backupBytes?: number
+  rscBytes?: number
+  // The .backup's header label ("plain" or "encrypted"), absent until
+  // that half of this generation has arrived.
+  header?: string
+}
+
 // Mirrors internal/api's setupStatus (#320). Everything here is an
 // observation mikroview made on its own side -- it never connects to a
 // router, so "did that step work" is answered by what arrived, not by
@@ -1358,19 +1402,30 @@ export interface SetupCommandsResponse {
     ruleTagging: CommandStep
     push: CommandStep
     schedule: CommandStep
+    // backup/backupSchedule are step 6's two blocks (#394, round 45),
+    // rendered only once a device, a token, the drop box's port and a
+    // configured retention key are all present -- see
+    // internal/api/setupcommands.go's handleSetupCommands. Blank
+    // (commands: '') is how the wizard reads "cannot be printed yet",
+    // the same convention every other step's blank block already uses.
+    backup: CommandStep
+    backupSchedule: CommandStep
   }
 }
 
 // SetupCommandsRequest is the POST /api/setup/commands body. Every field
 // but address is optional -- kinds/token are omitted before step 4 has
-// anything to embed, and version is omitted until the operator has
-// picked one or a router has reported.
+// anything to embed, version is omitted until the operator has picked
+// one or a router has reported, and device is omitted until step 4 or
+// 6 has a router chosen (it names step 6's backup script is being
+// rendered for; the push script needs no such field).
 export interface SetupCommandsRequest {
   address: string
   syslogPort?: string
   token?: string
   kinds?: string[]
   version?: string
+  device?: string
 }
 
 // --- Tune logging (#435) ----------------------------------------------

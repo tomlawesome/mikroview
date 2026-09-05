@@ -135,6 +135,13 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/persistence", accessAdmin,
 		"reports which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses (#677's settings persistence row) -- a filesystem path is the same infrastructure-map disclosure /api/config/problems above is admin-gated for, so this follows it rather than defaulting to viewer the way most of Settings' other reads do"},
 
+	{http.MethodGet, "/api/router-backups", accessAdmin,
+		"lists every router's kept generations and missed-push count (#394) -- admin-only like the disk group's " +
+			"own state/key rows beside it in Settings; a viewer never sees this group at all"},
+	{http.MethodGet, "/api/router-backups/{device}/{generation}/{kind}", accessAdmin,
+		"downloads one generation's .backup or .rsc -- a router's whole configuration, credentials included, so " +
+			"this is admin-only and every call writes an audit entry with the admin's name (#394)"},
+
 	{http.MethodPut, "/api/settings/store", accessAdmin,
 		"sets the event buffer's size on the running instance (#796). Admin rather than user tier for two " +
 			"separate reasons, either sufficient: it spends the host's memory, which is an instance-wide cost " +

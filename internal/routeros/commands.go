@@ -193,6 +193,63 @@ func ScheduleCommands(dialect string) string {
 	}, "\n")
 }
 
+// BackupScriptPolicy is the RouterOS script/scheduler policy list the
+// wizard's step 6 script is printed with -- round 45's drawn
+// read,write,test,sensitive, run end to end against a real CHR (7.23.3,
+// #394's build note H) as both an ad-hoc `/system script run` and a
+// scheduler entry with the matching policy: `/system backup save`,
+// `/export`, both `/tool fetch mode=sftp` uploads and both `/file
+// remove` steps all completed, and a generation landed in the vault
+// each time.
+//
+// It is not, in the sense the build note asked, a *minimum* --
+// measurement on the same CHR found the script's own declared policy is
+// not enforced against its own actions at all while it is owned by an
+// admin (the wizard's only realistic operator): dropping it to `test`
+// alone still ran the whole script successfully. What the declared
+// value actually gates is `/system script add` itself, checked against
+// the *adding* user's own group, and RouterOS's own group-based check on
+// whoever later runs it -- for a user genuinely restricted to this
+// policy list (tested with a purpose-built RouterOS group), `/system
+// backup save`/`/export` additionally refused until `policy` and `ftp`
+// were added to that group, which this script does not declare. Kept at
+// round 45's drawn value rather than narrowed (there is no functional
+// reason to prefer a shorter string an admin owner ignores anyway) or
+// widened to cover a restricted-owner scenario this issue does not ask
+// for; recorded on the issue rather than silently assumed.
+const BackupScriptPolicy = "read,write,test,sensitive"
+
+// BackupScript is the wizard's step 6 script (round 45): one
+// `/system script add` whose source saves the binary backup unencrypted
+// (the restore copy), exports the plain config (no secrets, per #394's
+// reversed decision 38), pushes both to the drop box over SFTP with the
+// router's own name and ingest token, and removes both local files.
+// address is mikroview's own host (no port); port is the drop box's own
+// port (config's backup.listen, NOT the ingest/syslog ports the other
+// wizard steps use) -- device is both the SFTP username and the
+// destination file stem, matching internal/backupsftp's
+// kindForFilename.
+func BackupScript(address, port, device, token, dialect string) string {
+	return fmt.Sprintf(`/system script add name=mv-backup policy=%s source="
+  /system backup save name=mv-backup dont-encrypt=yes
+  /export file=mv-backup
+  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-backup.backup dst-path=%s.backup
+  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-backup.rsc dst-path=%s.rsc
+  /file remove mv-backup.backup
+  /file remove mv-backup.rsc
+"`, BackupScriptPolicy, address, port, device, token, device, address, port, device, token, device)
+}
+
+// BackupScheduleCommands is step 6's scheduler entry: nightly at 03:00,
+// then one run now so the first pair does not wait for the interval to
+// pass -- same "run once immediately" idiom as ScheduleCommands.
+func BackupScheduleCommands(dialect string) string {
+	return strings.Join([]string{
+		fmt.Sprintf(`/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup"`, BackupScriptPolicy),
+		`/system script run mv-backup`,
+	}, "\n")
+}
+
 // LogPrefixForAction is the log-prefix convention RuleTaggingCommands'
 // bulk `[find action=...]` commands give a rule, applied to a single
 // action rather than to every rule of that action at once: D|drop|,

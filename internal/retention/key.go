@@ -156,3 +156,23 @@ func (k *Key) Derive(salt []byte, info string) ([]byte, error) {
 // Derive's doc comment for why every user of the master key -- this
 // package included -- needs its own prefix.
 const keyInfoPrefix = "mikroview/event-retention/v1/"
+
+// SealDocument encrypts plaintext as a single self-contained document
+// for a caller that already has the whole thing in memory and writes it
+// once (#394's router-backup vault is the first of these). It is
+// Seal (seal.go, #853) with the document's info string doubling as its
+// additional authenticated data, so a document sealed under one info
+// string fails to open under another -- moving a sealed file to a
+// different logical slot (a different router's backup, say) is detected
+// rather than silently accepted as ciphertext that happens to decrypt.
+// One AEAD scheme in this codebase, not two: #394 and #853 each arrived
+// with their own whole-document seal and this is what the merge kept.
+func (k *Key) SealDocument(info string, plaintext []byte) ([]byte, error) {
+	return k.Seal(keyInfoPrefix+"seal/"+info, []byte(info), plaintext)
+}
+
+// OpenDocument reverses SealDocument. info must match what SealDocument
+// was called with -- see its doc comment.
+func (k *Key) OpenDocument(info string, sealed []byte) ([]byte, error) {
+	return k.Open(keyInfoPrefix+"seal/"+info, []byte(info), sealed)
+}
