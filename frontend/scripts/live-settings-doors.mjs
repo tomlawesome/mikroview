@@ -74,8 +74,19 @@ check(
 // The clipboard actually holds the raw value, and the RouterOS lines
 // actually embed it -- not just that a button with the right label
 // exists.
+//
+// copyRouterLines (EngineRoom.svelte) is async and fetches
+// POST /api/setup/commands before it ever calls
+// navigator.clipboard.writeText -- Playwright's click() resolves once
+// the click is dispatched, not once that chain finishes, so reading the
+// clipboard immediately after the click reads it before the write has
+// happened. The button's own label is the observable signal that the
+// write landed (`routerCopied ? 'copied for RouterOS' : ...`), so wait
+// for that before reading -- not a arbitrary pause, the same evidence
+// the UI itself shows the operator.
 await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
 await page.click(`${KEYS} .reveal button:has-text("copy for RouterOS")`)
+await page.waitForSelector(`${KEYS} .reveal button:has-text("copied for RouterOS")`)
 const routerScript = await page.evaluate(() => navigator.clipboard.readText())
 check(
   routerScript.includes(mintedValue),
