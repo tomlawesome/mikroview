@@ -223,7 +223,12 @@ and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN` lines to `loop.log` there
 (#831). It takes the lock like any other run, so a manual
 `make live-check-remote` simply waits its turn -- or refuses, if the loop
 is mid-run; check `loop.log` for a `START` without an `END` before
-clearing a lock that looks stale.
+clearing a lock that looks stale. A run that dies before producing a
+result (a build failure, e.g. #861's IPv6 Docker Hub token fetch) prints
+`LOST` instead of `END`, is retried next tick, and leaves a
+`gate-<sha>.lost` file so the loss stays on record even if that commit is
+superseded before the retry lands; a later success for the same commit
+also prints `RECOVERED`.
 
 `git push` rather than rsync or a clone, because authentication then
 happens from this side: nothing has to live over there. Only new objects
