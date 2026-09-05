@@ -28,8 +28,9 @@ stages:
 
 # Runner lanes (#949, ai/agent-infra#3). Every job names its lane: `big`
 # is gitlab-runners-01 (8 CPU / 18 GB, two at a time) and `light` is the
-# 2 CPU / 2 GB runner (three at a time). A job with no matching tag does
-# not run at all, so a new job must pick one.
+# 4 CPU / 6 GB runner (four at a time). A job with no matching tag does
+# not run at all, so a new job must pick one. Measured peaks per job are
+# on ai/agent-infra#3; anything under about 3 GB belongs on light.
 default:
   tags: [big]
   # #952: a new push to the same branch cancels the still-running previous
