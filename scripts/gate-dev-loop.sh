@@ -42,9 +42,10 @@
 
 set -u
 
-# --git-common-dir, not --show-toplevel: started from a worktree, the
-# toplevel is that worktree, and the gate worktree hangs off the main one.
-WORKTREE="${MV_GATE_WORKTREE:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.claude/worktrees/gate-dev}"
+# Fixed under ~/projects/.worktrees, not derived from --git-common-dir: a
+# default under .claude/worktrees was pruned by worktree clean-up on
+# 2026-09-05 and the loop died for four hours before anyone noticed (#831).
+WORKTREE="${MV_GATE_WORKTREE:-$HOME/projects/.worktrees/mikroview/gate-dev}"
 LOGDIR="${MV_GATE_LOGDIR:-$HOME/projects/.gate-logs/mikroview}"
 POLL="${MV_GATE_POLL:-600}"
 REMOTE="${MV_GATE_REMOTE:-gitlab}"

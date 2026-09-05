@@ -51,6 +51,16 @@ class TopologyNavState {
   pendingNewWatch = $state<object | null>(null)
   pendingWatchDraft = $state<PendingWatchDraft | null>(null)
 
+  // #961: set the instant Watchlist's closeDraft (save or discard alike)
+  // sends the operator back to the flags tab, so Flags.svelte's own
+  // mount can tell that arrival apart from a fresh visit to the tab --
+  // see flagsState.pinnedIds' doc comment for why the distinction
+  // matters. One-shot like every slot above: Flags.svelte reads and
+  // clears it on arrival, since Docket.svelte recreates the component on
+  // every tab switch and a slot left set would wrongly survive into a
+  // later, unrelated visit.
+  pendingFlagsReturn = $state(false)
+
   requestHost(zoneId: string, host: string, ip: string) {
     this.pendingDescend = { zoneId, host, ip }
   }
@@ -69,6 +79,10 @@ class TopologyNavState {
 
   requestWatchDraft(fill: PendingWatchDraft) {
     this.pendingWatchDraft = fill
+  }
+
+  signalFlagsReturn() {
+    this.pendingFlagsReturn = true
   }
 }
 
