@@ -13,10 +13,14 @@
 //    commit message). This scenario feeds exactly five such connections
 //    and asserts the recorded pairs are exactly those five, not the
 //    3x3=9 a cross-product would produce.
-//  - port_scan (ports, no destination that means anything) and
-//    dest_spread's internal_recon (destinations, no port that means
-//    anything) never carry Pairs -- a pair is meaningless where only one
-//    side of it was ever recorded. Evidence.SrcMAC is carried only for a
+//  - port_scan (ports, no destination that means anything) never carries
+//    Pairs -- a pair is meaningless where only one side of it was ever
+//    recorded. dest_spread's internal_recon is the opposite of what this
+//    scenario originally asserted here: #641 (ee80537, after this
+//    scenario's #654) deliberately added a port to each of its recorded
+//    destinations, precisely so an "expected" verdict or a drafted
+//    watcher can name the exact (host, port) pairs a source reached,
+//    not just the bare host list. Evidence.SrcMAC is carried only for a
 //    local source (matchlog.Identity is MAC-preferred so a device
 //    survives a DHCP lease change) and never for an external one, even
 //    when the event itself hands over a MAC.
@@ -167,9 +171,22 @@ const ir = await waitForTypedFlag('internal_recon', IR_SRC)
 check(ir.ok, `internal_recon (dest_spread) raised for ${IR_SRC} (${ir.ok ? 'ok' : JSON.stringify(ir.flag)})`)
 if (ir.ok) {
   check((ir.flag.evidence?.hosts ?? []).length > 0, 'internal_recon evidence carries destinations')
+  // #641 (ee80537): dest_spread records the port alongside each
+  // destination it counts, so a watcher drafted from this flag can name
+  // exact (host, port) pairs rather than only the bare host list. Every
+  // fixture line above reaches port 80, so each pair's port must be 80
+  // too, and the pair hosts must be exactly the recorded destinations.
+  const irPairs = ir.flag.evidence?.pairs ?? []
+  check(irPairs.length > 0, `internal_recon evidence carries pairs, one per destination it recorded (#641) (got: ${JSON.stringify(irPairs)})`)
   check(
-    !ir.flag.evidence?.pairs || ir.flag.evidence.pairs.length === 0,
-    'internal_recon evidence carries no pairs -- a destination alone names no meaningful port to pair it with',
+    irPairs.every((p) => p.port === 80),
+    `every internal_recon pair carries the port that destination was actually reached on (got: ${JSON.stringify(irPairs)})`,
+  )
+  const irPairHosts = irPairs.map((p) => p.host).sort()
+  const irHosts = (ir.flag.evidence?.hosts ?? []).slice().sort()
+  check(
+    JSON.stringify(irPairHosts) === JSON.stringify(irHosts),
+    `internal_recon's pairs name exactly the same hosts as its Hosts list, no more and no fewer (pairs: ${JSON.stringify(irPairHosts)}, hosts: ${JSON.stringify(irHosts)})`,
   )
 }
 
