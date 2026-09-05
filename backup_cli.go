@@ -663,6 +663,7 @@ func runRestore(args []string) int {
 	// this was already true before retainedEventsStore existed.
 	if haveRetainedEvents {
 		dir := historyDirectory(cfg)
+		// #nosec G703 -- history.dir from this deployment's own config, not from a request.
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			logger.Error(fmt.Sprintf("creating %s for the retained corpus: %v", dir, err))
 			return 1
