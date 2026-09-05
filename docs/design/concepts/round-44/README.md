@@ -77,3 +77,5 @@ the issue (notes 10466, 10489, 10495, 10510).
 Amended after ratification the same day: the missed-push receipt and the
 `is it gone?` link, from the owner's note that mikroview should watch for
 the next push at its usual interval and say when it does not come.
+The amendment was shown and ratified the same day (*"yeah good"* on the
+receipt and the link, *"good"* on the lost-router step it opens).
