@@ -44,7 +44,7 @@
 // none of them log -- otherwise 'unknown', which the UI renders as
 // silence rather than a guess.
 
-import { fetchDevices, fetchRouterRules, type RouterFilterRule } from './api'
+import { fetchDevices, fetchRouterNat, fetchRouterRules, type RouterFilterRule, type RouterNatRule } from './api'
 import { appState } from './state.svelte'
 
 export type BoundaryCoverage = 'unknown' | 'dark' | 'observed'
@@ -98,14 +98,32 @@ function bandClass(chain: string, coverage: BoundaryCoverage): 0 | 1 | 2 {
   return 2
 }
 
+// BoundaryRule is the shape boundariesFromRules groups by -- both
+// RouterFilterRule and RouterNatRule satisfy it as-is. #695: a live
+// srcnat/dstnat event carries the same chain/in/out fields as a filter
+// event (internal/routeros/parser.go ~200-239), so a NAT rule buckets
+// into the same boundaryKeyOf key a filter rule would, no separate
+// scheme. RouterNatRule carries neither `log` (only an operator-set
+// logPrefix, #445) nor `srcAddressList` -- both read as absent here,
+// which is the honest answer: NAT rules alone on a boundary can only
+// ever make it 'dark', never 'observed', and never rename its label.
+interface BoundaryRule {
+  chain: string
+  inInterface?: string
+  outInterface?: string
+  comment?: string
+  log?: boolean
+  srcAddressList?: string
+}
+
 /**
- * boundariesFromRules groups pushed filter rules by the (chain,
+ * boundariesFromRules groups pushed filter and NAT rules by the (chain,
  * inInterface, outInterface) they actually carry, and answers coverage
  * per group with the same "only a definite answer" rule
  * internal/engine/coverage.go uses for a watchlist entry. Exported (not
  * just used internally) so it is unit-testable without a DOM.
  */
-export function boundariesFromRules(rules: RouterFilterRule[], anyRulesPushed: boolean): FallBoundary[] {
+export function boundariesFromRules(rules: BoundaryRule[], anyRulesPushed: boolean): FallBoundary[] {
   const byKey = new Map<
     string,
     {
@@ -214,16 +232,32 @@ class FallState {
   async refresh() {
     try {
       const devices = await fetchDevices()
-      const tables = await Promise.all(
-        devices.map((d) =>
-          fetchRouterRules(d.id).catch(
-            () => ({ available: false, rules: [] as RouterFilterRule[] }) as const,
+      // #695: NAT rules feed the same grouping filter rules do, so a
+      // pushed srcnat/dstnat table gets a band too instead of every NAT
+      // event falling through to "not in a pushed rule table".
+      const [filterTables, natTables] = await Promise.all([
+        Promise.all(
+          devices.map((d) =>
+            fetchRouterRules(d.id).catch(
+              () => ({ available: false, rules: [] as RouterFilterRule[] }) as const,
+            ),
           ),
         ),
-      )
-      const rules: RouterFilterRule[] = []
+        Promise.all(
+          devices.map((d) =>
+            fetchRouterNat(d.id).catch(
+              () => ({ available: false, rules: [] as RouterNatRule[] }) as const,
+            ),
+          ),
+        ),
+      ])
+      const rules: (RouterFilterRule | RouterNatRule)[] = []
       let anyAvailable = false
-      for (const table of tables) {
+      for (const table of filterTables) {
+        if (table.available) anyAvailable = true
+        rules.push(...table.rules)
+      }
+      for (const table of natTables) {
         if (table.available) anyAvailable = true
         rules.push(...table.rules)
       }
