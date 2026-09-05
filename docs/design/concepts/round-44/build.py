@@ -89,10 +89,12 @@ RB_QUOTA = router('rb5009', '10 of 10 kept · nightly at 03:00 · the last push 
                   strip(9, '25 Aug — the oldest pair kept',
                         'Ten backups kept for rb5009; the newest was refused', refused=True),
                   '<span class="brwarn">refused today 03:00 — rb5009.backup was 17.2 MiB, over the 16 MiB a file can be · nothing kept, the 10 pairs before it stay</span> · <a class="olink">why 16 MiB</a>')
-HAP_REST = router('hap-ax2', '4 kept · newest 30 Aug 03:00 — quiet since',
+# the overdue router: mikroview learned the interval from the pushes
+# themselves, so a missed one is a fact it can state (owner, 2026-09-05)
+HAP_REST = router('hap-ax2', '4 kept · nightly at 03:00 · <span class="brwarn">none since 30 Aug — 3 missed</span>',
                   strip(4, 'the first pair arrived 27 Aug',
-                        'Four backups kept for hap-ax2, the newest 30 Aug', newest='30 Aug'),
-                  f'30 Aug 03:00 · hap-ax2.backup 96 KiB · hap-ax2.rsc 11 KiB · {DL}', cls='brquiet')
+                        'Four backups kept for hap-ax2, the newest 30 Aug; three nightly pushes have not arrived', newest='30 Aug'),
+                  f'30 Aug 03:00 · hap-ax2.backup 96 KiB · hap-ax2.rsc 11 KiB · {DL} · <a class="olink">is it gone?</a>', cls='brquiet')
 HAP_REFUSED = router('hap-ax2', '4 kept · the last push refused',
                      strip(4, 'the first pair arrived 27 Aug',
                            'Four backups kept for hap-ax2; the newest was refused', refused=True),
@@ -160,7 +162,7 @@ css += [
     '  .brhead span { color: var(--ink-3); }',
     '  .brquiet .brhead span { color: var(--ink-3); }',
     '  #set .brnewest { color: var(--ink-2); margin-top: 0; }',
-    '  .brwarn { color: var(--now); }',
+    '  .brwarn, .brhead span .brwarn { color: var(--now); }',
     '  .brpulse { animation: brpulse 1.6s ease-in-out infinite; }',
     '  @keyframes brpulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }',
 ]
