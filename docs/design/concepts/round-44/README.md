@@ -62,6 +62,6 @@ password-only auth and the router never verifies the host key; a
 `.backup` starts `88 ac a1 b1` unencrypted. The measurement notes are on
 the issue (notes 10466, 10489, 10495, 10510).
 
-## Verdicts
+## Verdicts (owner, 2026-09-05)
 
-Awaiting the owner.
+*"Good."* **Ratified as drawn.** Build: #394.
