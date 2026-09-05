@@ -948,6 +948,38 @@ const (
 	MinRetentionBytes = 1 << 20
 )
 
+// Backup configures the SFTP drop box that receives RouterOS
+// configuration backups pushed on a schedule (#394) -- named to match
+// the wizard/Settings copy ("router backups"), distinct from the
+// `-backup`/`-restore` CLI flags which back up mikroview's own state
+// (and, per #394, this vault along with it).
+type Backup struct {
+	// Enabled turns the SFTP listener on. Off by default: this is a
+	// second listening port, opened only once an operator has actually
+	// decided to use it -- the wizard's step 6 is what flips it on in
+	// practice.
+	Enabled bool `yaml:"enabled"`
+	// Listen is the drop box's bind address. Fixed default port 47022
+	// (owner decision, #394, deliberately not a conventional SFTP port
+	// like 22 or 2222 -- "rejected as scanner bait" per the issue's own
+	// record), configurable for a deployment that needs a different
+	// port mapped through.
+	Listen string `yaml:"listen"`
+	// VaultDir is where encrypted generations live on disk. Left empty,
+	// mikroview puts them beside its other state -- see
+	// main.backupVaultDirectory -- the same "resolved from the data
+	// directory unless overridden" contract Snapshot.Dir and
+	// History.Dir already use. Deliberately named Dir-style rather than
+	// *Path: it is a directory of many per-router, per-generation files,
+	// not a single JSON document, so it is out of scope for
+	// backup_cli.go's generic backedUpStores loop the same way
+	// History.Dir is -- see that file's excludedFromBackup comment. The
+	// vault's own contents are still carried by -backup/-restore, just
+	// through bespoke code that understands its shape (backup_cli.go's
+	// vaultBundle), not through that generic path.
+	VaultDir string `yaml:"vaultDir"`
+}
+
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
@@ -972,6 +1004,7 @@ type Config struct {
 	Engine     Engine     `yaml:"engine"`
 	Snapshot   Snapshot   `yaml:"snapshot"`
 	History    History    `yaml:"history"`
+	Backup     Backup     `yaml:"backup"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -1163,6 +1196,13 @@ func defaults() Config {
 			// at startup, same as Snapshot.Dir.
 			Days:     defaultRetentionDays,
 			MaxBytes: defaultRetentionMaxBytes,
+		},
+		Backup: Backup{
+			// Enabled stays false on purpose, same reasoning as
+			// History.Enabled above. Listen is set even though the
+			// listener does not start until Enabled is true, so turning
+			// it on needs no second decision about the port.
+			Listen: ":47022",
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -1675,6 +1715,17 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_HISTORY_DIR"); v != "" {
 		cfg.History.Dir = v
+	}
+	if v := os.Getenv("MIKROVIEW_BACKUP_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Backup.Enabled = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_BACKUP_LISTEN"); v != "" {
+		cfg.Backup.Listen = v
+	}
+	if v := os.Getenv("MIKROVIEW_BACKUP_VAULT_DIR"); v != "" {
+		cfg.Backup.VaultDir = v
 	}
 }
 

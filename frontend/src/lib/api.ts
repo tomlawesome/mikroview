@@ -24,6 +24,7 @@ import type {
   PersistenceInfo,
   ReplayResult,
   ReputationResult,
+  RouterBackupsResponse,
   RuleUsage,
   SetupCommandsRequest,
   SetupCommandsResponse,
@@ -1204,6 +1205,28 @@ export async function setHistorySettings(body: {
   const res = await putJSON('/api/settings/history', body)
   if (res.ok) return res.json()
   return (await res.text()).trim() || `setHistorySettings: ${res.status}`
+}
+
+// fetchRouterBackups reads Settings' "router backups" group (#394,
+// round 44): what has arrived per router, and the missed-push
+// arithmetic (internal/api's handleRouterBackupsList). Admin-only
+// server-side -- a non-admin's 403 surfaces as a thrown ApiError for
+// the caller to swallow, same shape as fetchPersistence/
+// fetchHistorySettings above.
+export async function fetchRouterBackups(): Promise<RouterBackupsResponse> {
+  const res = await fetch('/api/router-backups')
+  if (!res.ok) throw new ApiError(`fetchRouterBackups: ${res.status}`, res.status)
+  return res.json()
+}
+
+// routerBackupDownloadUrl is the admin download link for one half of a
+// generation's pair -- a plain same-origin GET the browser navigates
+// to, session cookie included automatically, so there is no need to
+// pull the file through this module just to trigger a save. The server
+// (internal/api's handleRouterBackupDownload) writes the audit entry
+// when the request actually lands, not when the link is merely drawn.
+export function routerBackupDownloadUrl(device: string, generation: string, kind: 'backup' | 'rsc'): string {
+  return `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/${kind}`
 }
 
 // ===========================================================================

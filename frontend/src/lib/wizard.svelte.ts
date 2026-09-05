@@ -14,9 +14,9 @@
 // the modal fetches while open belongs to the component and stops with
 // it.
 
-import { fetchDevices, fetchSetupCommands, fetchSetupStatus, markSetupStep } from './api'
+import { fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep } from './api'
 import { buildLedger, firstOpenStep, silenceExplanation, STEP_COUNT } from './setupsteps'
-import type { Device, SetupCommandsResponse, SetupMark, SetupStatus } from './types'
+import type { Device, RouterBackupsResponse, SetupCommandsResponse, SetupMark, SetupStatus } from './types'
 
 // FINISH_PANE is the pane after the last step -- the ledger read back.
 // One past the count rather than a separate flag, so "which pane" stays
@@ -35,6 +35,13 @@ class WizardState {
   // "Show setup steps" a place you can stay rather than a peek.
   showStepList = $state(false)
 
+  // lostRouterDevice names the router step 6 (#394, round 45) should
+  // treat as lost, once it can -- set only by openLostRouter below, the
+  // Settings backups group's "is it gone?" link (owner decision, issue
+  // note 10572: this is the only door into that shape; the wizard never
+  // offers it on its own). Null in every ordinary launch.
+  lostRouterDevice = $state<string | null>(null)
+
   // pickedVersion (#436) is the operator's choice from the "Your
   // RouterOS version" pick-list -- '' means the first option, "Not
   // sure", which omits `version` from the request entirely rather than
@@ -49,6 +56,15 @@ class WizardState {
   commands = $state<SetupCommandsResponse | null>(null)
   commandsError = $state<string | null>(null)
 
+  // backups is step 6's own read (#394, round 45): what has arrived per
+  // router, from the same admin-only GET /api/router-backups the
+  // Settings group reads (fetchRouterBackups). Null until the first
+  // fetch lands or on a non-admin session -- see refreshBackups, which
+  // this deliberately does not fold into refresh() above: that call
+  // runs for any signed-in user (so surfaces outside the wizard can
+  // explain their own silence), and this endpoint 403s below admin.
+  backups = $state<RouterBackupsResponse | null>(null)
+
   // autoLaunched guards the record's "auto-launch, once". Deliberately a
   // module-lifetime flag and not persisted anywhere: the record says the
   // wizard is stateless beyond the evidence and that "finished" is not
@@ -61,12 +77,27 @@ class WizardState {
     return window.location.host
   }
 
-  // ledger is the five steps as they currently stand. Empty until the
+  // ledger is the six steps as they currently stand. Empty until the
   // first status arrives, so callers can render a loading state without
   // a second flag.
   get ledger() {
     if (!this.status) return []
-    return buildLedger(this.status, this.devices, this.address)
+    return buildLedger(this.status, this.devices, this.address, this.backups)
+  }
+
+  // refreshBackups reads step 6's own evidence (#394): admin-only, so
+  // called only while the modal is open (SetupWizard's own effect,
+  // mirroring the poll it already runs for refresh()) rather than
+  // alongside every ordinary refresh() above.
+  async refreshBackups(): Promise<void> {
+    try {
+      this.backups = await fetchRouterBackups()
+    } catch {
+      // A non-admin session, or the server not answering: step 6 reads
+      // this the same way it reads "nothing has arrived yet" -- never a
+      // page-wide error for a group this modal does not itself gate on.
+      this.backups = null
+    }
   }
 
   get marks(): SetupMark[] {
@@ -101,13 +132,14 @@ class WizardState {
   // token. Callers pass the token explicitly rather than this holding
   // it, since it lives in the component (created on step 4 entry, never
   // stored here).
-  async refreshCommands(opts: { token?: string } = {}): Promise<void> {
+  async refreshCommands(opts: { token?: string; device?: string } = {}): Promise<void> {
     if (!this.status) return
     const result = await fetchSetupCommands({
       address: this.address,
       syslogPort: this.status.instance.syslogPort,
       kinds: this.status.pushKinds,
       token: opts.token || undefined,
+      device: opts.device || undefined,
       version: this.pickedVersion || undefined,
     })
     if (typeof result === 'string') {
@@ -124,11 +156,32 @@ class WizardState {
   launch() {
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
+    this.lostRouterDevice = null
+    this.open = true
+  }
+
+  // openLostRouter is the Settings backups group's "is it gone?" link
+  // (#394, round 44's amended receipt): it jumps straight to step 6,
+  // marked for device, rather than the ordinary "first step still
+  // waiting" the ledger would otherwise pick -- an admin who has just
+  // asked "is it gone?" already knows steps 1-5 are done; showing them
+  // the ledger again would bury the one thing they came for.
+  //
+  // Pane 6 is written literally rather than derived from STEP_COUNT:
+  // setupsteps.ts does not have a sixth step yet (#394's build is still
+  // landing it), so this is future-facing -- it lands on the finish
+  // pane until that step exists, and on the step itself once it does,
+  // without this call needing to change either way.
+  openLostRouter(device: string) {
+    this.lostRouterDevice = device
+    this.pane = 6
+    this.showStepList = false
     this.open = true
   }
 
   close() {
     this.open = false
+    this.lostRouterDevice = null
   }
 
   // maybeAutoLaunch is the record's first-run rule: first admin sign-in

@@ -206,6 +206,11 @@ type SetupInstance struct {
 	TLSEnabled bool
 	Hosts      []string
 	SyslogPort string
+	// BackupPort is the router-backup SFTP drop box's own port (#394,
+	// config's backup.listen) -- separate from SyslogPort, since it is
+	// a different listener entirely. Empty when backup.enabled is
+	// false: step 6 has no address to render a script for.
+	BackupPort string
 }
 
 func nonNilStrings(v []string) []string {

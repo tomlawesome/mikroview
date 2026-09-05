@@ -12,6 +12,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
@@ -227,6 +228,12 @@ type Server struct {
 	// usable, empty, unpersisted store), same nil-never convention as
 	// Auth above.
 	Tokens *auth.TokenStore
+	// Vault is the router-backup store (#394) -- nil in tests that do
+	// not exercise it and on any instance built without one, same
+	// nil-means-disabled convention as History/NetClass above. The SFTP
+	// drop box (internal/backupsftp) writes to it directly; the HTTP
+	// handlers here only ever read it back and download from it.
+	Vault *backupvault.Vault
 	// IngestLimiter bounds how often one ingest token may call POST
 	// /api/ingest/routeros (issue #186 step 3). Reuses auth.LoginLimiter
 	// rather than a second rate-limiting primitive -- see handleIngest
@@ -467,6 +474,11 @@ func (s *Server) routes() []route {
 
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 		{http.MethodGet, "/api/persistence", s.handlePersistence},
+
+		// Router-backup vault (#394): the Settings group's list and the
+		// download an admin uses to actually restore a dead router.
+		{http.MethodGet, "/api/router-backups", s.handleRouterBackupsList},
+		{http.MethodGet, "/api/router-backups/{device}/{generation}/{kind}", s.handleRouterBackupDownload},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},

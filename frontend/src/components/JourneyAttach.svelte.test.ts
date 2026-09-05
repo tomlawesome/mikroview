@@ -12,6 +12,8 @@ vi.mock('../lib/api', () => ({
   fetchSetupCommands: vi.fn(),
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
+  fetchRouterBackups: vi.fn(async () => ({ enabled: false, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0 })),
+  routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
 }))
 
 import { fetchSetupStatus, fetchSetupCommands, fetchDevices } from '../lib/api'
@@ -32,6 +34,8 @@ beforeEach(() => {
       ruleTagging: { commands: '', note: '' },
       push: { commands: '', note: '' },
       schedule: { commands: '', note: '' },
+      backup: { commands: '', note: '' },
+      backupSchedule: { commands: '', note: '' },
     },
   })
   authState.username = 'tom'

@@ -16,15 +16,18 @@
   // inside the rail that opens it: the rail unmounts when it is docked
   // and does not exist at all on a phone, and the modal outlives both.
 
-  import { createToken } from '../lib/api'
+  import { createToken, routerBackupDownloadUrl } from '../lib/api'
   import { authState } from '../lib/auth.svelte'
   import { appState } from '../lib/state.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import { wizardState, FINISH_PANE } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
+  import { newestGeneration } from '../lib/backups'
+  import { HOW_TO_MOUNT_URL } from '../lib/history'
   import {
     announceStep,
+    backupReceiptForDevice,
     deviceStanza,
     finishHeadline,
     forcedPastRecord,
@@ -81,6 +84,24 @@
     return () => clearInterval(timer)
   })
 
+  // Step 6's own evidence (#394): the same admin-only endpoint the
+  // Settings backups group reads, polled the same way status/devices
+  // above are -- and, like them, only while the modal is actually open.
+  $effect(() => {
+    if (!wizardState.open) return
+    wizardState.refreshBackups()
+    const timer = setInterval(() => wizardState.refreshBackups(), POLL_MS)
+    return () => clearInterval(timer)
+  })
+
+  // openLostRouter (#394) always names the router step 6 is about, so
+  // the token picker below is pre-set to it rather than left on
+  // whichever device step 4 last touched.
+  $effect(() => {
+    const device = wizardState.lostRouterDevice
+    if (device) tokenDevice = device
+  })
+
   const ledger = $derived(wizardState.ledger)
   const step = $derived<LedgerStep | undefined>(
     wizardState.pane <= STEP_COUNT ? ledger[wizardState.pane - 1] : undefined,
@@ -127,7 +148,7 @@
   })
 
   $effect(() => {
-    if (wizardState.pane !== 4 || !wizardState.open) return
+    if ((wizardState.pane !== 4 && wizardState.pane !== 6) || !wizardState.open) return
     if (token || minting || mintAttempted) return
     const known = wizardState.devices
     if (known.length === 1) {
@@ -137,6 +158,12 @@
     }
   })
 
+  // Step 4 and step 6 share this one token: the ingest token step 4
+  // mints is the same credential internal/backupsftp checks against
+  // (#394 -- "no new credential type"), so a router that has already
+  // been pushed to has everything step 6's script needs, and minting
+  // again here is only ever a fresh one for a router that skipped step
+  // 4 or is being replaced (mintNewBackupToken below).
   async function mintToken() {
     tokenError = null
     if (!tokenDevice) {
@@ -153,6 +180,16 @@
     token = result.value ?? ''
   }
 
+  // mintNewBackupToken is round 45's "mint a new one", offered only in
+  // the lost-router shape: the old token still opens the drop box (it
+  // is never revoked here -- Settings ▸ keys already offers that,
+  // deliberately not duplicated), this just gives the replacement a
+  // fresh one of its own to use instead.
+  function mintNewBackupToken() {
+    token = ''
+    mintToken()
+  }
+
   // The RouterOS command blocks (#436) come from the server now, keyed
   // to a plain string rather than to wizardState.status directly -- the
   // status poll (POLL_MS above) reassigns that object every 5s whether
@@ -166,6 +203,7 @@
           wizardState.status.instance.syslogPort,
           wizardState.status.pushKinds,
           token,
+          tokenDevice,
           wizardState.pickedVersion,
         ])
       : '',
@@ -173,7 +211,7 @@
 
   $effect(() => {
     if (!commandsKey) return
-    wizardState.refreshCommands({ token })
+    wizardState.refreshCommands({ token, device: tokenDevice })
   })
 
   // The router-standing warning (#436): one line per router outside the
@@ -208,6 +246,48 @@
     }
     return entries
   })
+
+  // Step 6's own three departures from every other step's fixed
+  // lead/header (#394, round 45): the title gains "<router> is gone" in
+  // the lost-router shape, the lead reads one of three ways depending
+  // on state (rest/warrived share one, blocked and lost each have their
+  // own), and the observation line reads this one router's own kept
+  // count rather than the ledger's fleet-wide receipt.
+  const lostRouterTitle = $derived(
+    step && step.n === 6 && wizardState.lostRouterDevice ? `${step.title} — ${wizardState.lostRouterDevice} is gone` : null,
+  )
+
+  const leadText = $derived.by(() => {
+    if (!step) return ''
+    if (step.n === 6) {
+      if (wizardState.lostRouterDevice) {
+        return (
+          'The router that pushed these is not answering. Everything a replacement needs from this ' +
+          'side is here, in the order it needs it: trust the certificate, send logs, then run the ' +
+          'backup script again so the new router keeps pushing. Its backups are under Settings.'
+        )
+      }
+      if (step.status.state === 'blocked') {
+        return (
+          'Mikroview keeps a backup only under a key it does not hold, and none is mounted. Mount ' +
+          'one and this step prints the script; until then the drop box is closed and a push would ' +
+          'be refused.'
+        )
+      }
+    }
+    return step.lead
+  })
+
+  const lostGeneration = $derived.by(() => {
+    const device = wizardState.lostRouterDevice
+    if (!device) return null
+    const router = wizardState.backups?.routers.find((r) => r.device === device)
+    return router ? newestGeneration(router) : null
+  })
+
+  const lostObservationText = $derived(
+    wizardState.lostRouterDevice ? backupReceiptForDevice(wizardState.backups, wizardState.lostRouterDevice) : '',
+  )
 
   async function copy(text: string, label: string) {
     try {
@@ -275,6 +355,25 @@
   function openTuneLogging() {
     appState.view = 'tune-logging'
     wizardState.close()
+  }
+
+  // "see it in Settings" (round 45's observation line): the same door,
+  // for the same reason -- the backups group this observation is a
+  // preview of lives there, not in a second copy of it here.
+  function openBackupsInSettings() {
+    appState.view = 'engineroom'
+    wizardState.close()
+  }
+
+  // "done — the replacement is pushing" (round 45's lost-router
+  // footer): the operator's own word that the repair is finished. It
+  // only ever clears the flag this step's whole shape is keyed on --
+  // mikroview has no way to confirm a replacement is pushing other than
+  // waiting for the next arrival, so this is the same "your act, your
+  // word" pattern the wizard's other decisions already use.
+  function finishLostRouter() {
+    wizardState.lostRouterDevice = null
+    wizardState.next()
   }
 
   function dismiss() {
@@ -360,7 +459,13 @@
         <span class="crumb">
           {#if step}Step {step.n} of {STEP_COUNT}{:else}Setup{/if}
         </span>
-        <h2 id="setup-wizard-title">{step ? step.title : 'Where setup stands'}</h2>
+        <h2 id="setup-wizard-title">
+          {#if lostRouterTitle && step}
+            {step.title} — <span class="lost">{wizardState.lostRouterDevice} is gone</span>
+          {:else}
+            {step ? step.title : 'Where setup stands'}
+          {/if}
+        </h2>
         <button type="button" class="close" onclick={dismiss} aria-label={closeLabel}>✕</button>
       </header>
 
@@ -386,7 +491,14 @@
                     <span class="step-n">{s.n}</span>
                     <span class="step-text">
                       <span class="step-title">{s.title}</span>
-                      {#if s.receipt}
+                      {#if s.n === 6 && wizardState.lostRouterDevice}
+                        <!-- Round 45's lost-router receipt: this one
+                             router's own kept count, not the ledger's
+                             fleet-wide "arrived ..." line. -->
+                        <span class="step-receipt">
+                          {lostObservationText || 'nothing kept for this router yet'}
+                        </span>
+                      {:else if s.receipt}
                         <span class="step-receipt">{s.receipt}</span>
                       {:else if s.outcome === 'open'}
                         <span class="step-receipt gap">nothing has arrived yet</span>
@@ -444,9 +556,23 @@
                 </div>
               </div>
             {:else if step}
-              <p class="lead">{step.lead}</p>
+              <p class="lead">{leadText}</p>
 
-              {#if step.n <= 4}
+              {#if step.n === 6 && step.status.state !== 'blocked'}
+                <!-- Round 45's caveat, in the amber the heavy warning
+                     above already uses, before the script rather than
+                     after: RouterOS never verifies who it is sending a
+                     backup to (#394's measured finding), so this is
+                     said before the operator copies anything. -->
+                <div class="wzcaveat">
+                  <b>Only on a network you trust.</b> RouterOS never checks who it is sending a backup to
+                  — anyone on the path between the router and {wizardState.address} could read the pair, and
+                  the token with it. On a LAN you control that is fine; across the internet it is not, and
+                  mikroview cannot tell the difference from here.
+                </div>
+              {/if}
+
+              {#if step.n <= 4 || step.n === 6}
                 {@render commandsHead()}
               {/if}
 
@@ -553,6 +679,78 @@
                 {#each undeclared as d (d.id)}
                   <pre>{deviceStanza(d.sourceIp, d.name)}</pre>
                 {/each}
+              {:else if step.n === 6}
+                {#if step.status.state === 'blocked'}
+                  <pre class="wzpre-dim">   — the script prints here once a key is mounted —</pre>
+                  <p class="note">
+                    <a class="olink" href={HOW_TO_MOUNT_URL} target="_blank" rel="noopener noreferrer">
+                      how to mount one
+                    </a>
+                    · the same key keeps the event history and the state store.
+                  </p>
+                {:else if !token}
+                  <!-- Round 45 draws no mint form here at all: it
+                       assumes step 4 already minted the token this
+                       script needs (the same credential, #394 -- see
+                       mintToken's comment). This is only reached when
+                       that has not happened yet -- step 4 skipped, or a
+                       fresh session -- and without it there is nothing
+                       to print, which the "done when" bar does not
+                       allow. -->
+                  <div class="mint">
+                    <select bind:value={tokenDevice} aria-label="Router this token is for">
+                      <option value="" disabled>Which router is this for?…</option>
+                      {#each wizardState.devices as d (d.id)}
+                        <option value={d.id}>
+                          {d.name && d.name !== d.id ? `${d.name} (${d.id})` : d.id}
+                        </option>
+                      {/each}
+                    </select>
+                    <button type="button" class="primary" onclick={mintToken} disabled={minting}>
+                      {minting ? 'Creating…' : 'Create token & script'}
+                    </button>
+                  </div>
+                  {#if wizardState.devices.length === 0}
+                    <p class="note">
+                      No routers known yet — finish step 2 first, and this list fills in on its own.
+                    </p>
+                  {/if}
+                  {#if tokenError}<p class="load-error">{tokenError}</p>{/if}
+                {:else}
+                  {#if wizardState.lostRouterDevice}
+                    <p class="note token-note">
+                      The old router's token still opens the drop box, so a replacement can use this
+                      script as it stands;
+                      <button type="button" class="link" onclick={mintNewBackupToken}>mint a new one</button>
+                      retires the old.
+                    </p>
+                  {:else}
+                    <p class="note token-note">
+                      The token is shown once. Anyone who can read the script on the router can read it,
+                      so it is scoped to that one router and to this drop box.
+                    </p>
+                  {/if}
+                  <pre class="script">{wizardState.commands?.steps.backup.commands ?? ''}</pre>
+                  <button
+                    type="button"
+                    class="copy"
+                    onclick={() => copy(wizardState.commands?.steps.backup.commands ?? '', 'backup')}
+                  >
+                    {copied === 'backup' ? 'Copied' : 'Copy script'}
+                  </button>
+                  {#if wizardState.commands?.steps.backup.note}
+                    <p class="note">{wizardState.commands.steps.backup.note}</p>
+                  {/if}
+                  <p class="note">Then have it run nightly, and once now to test it:</p>
+                  <pre>{wizardState.commands?.steps.backupSchedule.commands ?? ''}</pre>
+                  <button
+                    type="button"
+                    class="copy"
+                    onclick={() => copy(wizardState.commands?.steps.backupSchedule.commands ?? '', 'backupsched')}
+                  >
+                    {copied === 'backupsched' ? 'Copied' : 'Copy'}
+                  </button>
+                {/if}
               {/if}
 
               <!-- The observation line. Four flavours and no more:
@@ -561,10 +759,31 @@
                    sourced, counting only counts upward, quiet has
                    nothing to wait for. `attention` is the inherited
                    mikroview-side check logic (#371/#374), not an
-                   observation -- see setupsteps.ts. -->
-              <p class="observation {step.flavour}">
-                {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
-                {step.status.detail}
+                   observation -- see setupsteps.ts. Step 6's lost-router
+                   shape reads this one router's own kept count instead
+                   of the ledger's fleet-wide receipt (lostObservationText). -->
+              <p class="observation {step.n === 6 && wizardState.lostRouterDevice ? (lostGeneration ? 'arrived' : 'waiting') : step.flavour}">
+                {#if step.n === 6 && wizardState.lostRouterDevice}
+                  {#if step.flavour !== 'arrived' && !lostGeneration}<span class="dot" aria-hidden="true"></span>{/if}
+                  {lostObservationText || 'nothing kept for this router yet'}
+                  {#if lostGeneration}
+                    ·
+                    <a
+                      class="olink"
+                      href={routerBackupDownloadUrl(wizardState.lostRouterDevice ?? '', lostGeneration.id, 'backup')}
+                    >
+                      download the newest .backup
+                    </a>
+                    to restore the replacement, then run the script above
+                  {/if}
+                {:else}
+                  {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
+                  {step.status.detail}
+                  {#if step.n === 6 && step.status.state === 'done'}
+                    ·
+                    <button type="button" class="link" onclick={openBackupsInSettings}>see it in Settings</button>
+                  {/if}
+                {/if}
               </p>
               {#if step.n === 2 && step.status.state === 'partial' && splits.length > 0}
                 <!-- The source-address split (#442), under the
@@ -682,7 +901,16 @@
           {#if step && step.hasCheck && step.outcome === 'open' && !warning}
             <span class="hint">Next checks what has arrived</span>
           {/if}
-          {#if step}
+          {#if step && step.n === 6 && wizardState.lostRouterDevice}
+            <!-- Round 45's lost-router footer: no skip (there is
+                 nothing to skip past -- the router this step is about
+                 is already gone), and the primary button is the
+                 operator's own word that the repair is done rather
+                 than a check on evidence mikroview cannot see. -->
+            <button type="button" class="primary" onclick={finishLostRouter}>
+              done — the replacement is pushing
+            </button>
+          {:else if step}
             <button type="button" class="ghost" onclick={onSkip} disabled={busy}>Skip this step</button>
             <button type="button" class="primary" onclick={onNext} disabled={busy}>
               {step.n === STEP_COUNT ? 'Finish' : 'Next'}
@@ -933,6 +1161,34 @@
     padding-left: 10px;
   }
 
+  /* Step 6's caveat (#394, round 45): the same amber the heavy warning
+     above already uses, ahead of the script rather than after it. */
+  .wzcaveat {
+    align-self: stretch;
+    border-left: 2px solid var(--log);
+    padding: 6px 12px;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--fg-muted);
+  }
+
+  .wzcaveat b {
+    color: var(--log);
+    font-weight: 600;
+  }
+
+  .wzpre-dim {
+    color: var(--fg-dim);
+  }
+
+  /* The lost-router title (#394, round 45): "<router> is gone" in the
+     same amber. */
+  .lost {
+    color: var(--log);
+    font-weight: 600;
+  }
+
   .routeros-version {
     align-self: stretch;
     display: flex;
@@ -1032,8 +1288,12 @@
 
   /* Tune logging's own door on the finish pane (#435): reads as a link
      inline with the sentence beside it, not a second boxed button next
-     to "Run setup… reopens this". */
-  button.link {
+     to "Run setup… reopens this". Step 6's "see it in Settings", "mint
+     a new one" and "how to mount one"/"download the newest .backup"
+     (#394, round 45) read the same way, the last two as real <a>
+     elements rather than buttons since they navigate. */
+  button.link,
+  a.olink {
     display: inline;
     border: none;
     padding: 0;
@@ -1041,6 +1301,7 @@
     color: var(--accent);
     text-decoration: underline;
     font-size: inherit;
+    cursor: pointer;
   }
 
   button:disabled {
