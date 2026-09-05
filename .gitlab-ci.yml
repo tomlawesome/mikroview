@@ -25,6 +25,13 @@ stages:
   - sync
   - chr-exercise
 
+# Runner lanes (#949, ai/agent-infra#3). Every job names its lane: `big`
+# is gitlab-runners-01 (8 CPU / 18 GB, two at a time) and `light` is the
+# 2 CPU / 2 GB runner (three at a time). A job with no matching tag does
+# not run at all, so a new job must pick one.
+default:
+  tags: [big]
+
 variables:
   GOFLAGS: "-mod=readonly"
 
@@ -73,6 +80,8 @@ variables:
 
 policy:promotion-hop:
   stage: lint
+  # Light lane (#949): a shell script, no build.
+  tags: [light]
   image: alpine:3.22
   needs: []
   rules:
@@ -127,6 +136,8 @@ lint:go:
 
 lint:frontend:
   stage: lint
+  # Light lane (#949): svelte-check and a few node:test files fit in 2 GB.
+  tags: [light]
   image: node:22-alpine
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
@@ -619,6 +630,8 @@ security:trivy-fs:
 
 sync:mirror-to-github:
   stage: sync
+  # Light lane (#949): a git push, no build.
+  tags: [light]
   # Plain alpine plus git, like policy:promotion-hop. alpine/git's entrypoint
   # is git itself, so the runner's shell arrives as `git sh` and the job dies
   # before its script (dev pipeline 193).
@@ -786,6 +799,8 @@ chr-exercise:run:
 
 chr-watch:run:
   stage: chr-exercise
+  # Light lane (#949): reads one report and calls the API.
+  tags: [light]
   image: node:22-alpine
   # This job only reads the report chr-exercise:run already wrote and talks
   # to the GitLab API -- nothing earlier in the pipeline can invalidate
