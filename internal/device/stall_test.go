@@ -150,8 +150,18 @@ func TestSustainedFailuresCostOneAttemptPerBackoffWindow(t *testing.T) {
 		r.Seen("33:33:33:33:33:33", now)
 	}
 
+	// time.Sleep only guarantees a floor: a starved runner sleeps longer
+	// than asked, fitting more 200ms windows into the same wait, and one
+	// attempt per window is still the property under test. Bound saves by
+	// the windows that actually elapsed, not the requested duration, the
+	// same shape as flags' copy of this test (#941).
+	sleepStart := time.Now()
 	time.Sleep(3 * macRegistryPersistMinInterval)
-	if saves := b.count(); saves > 6 {
-		t.Errorf("500 Seen calls over ~3 back-off windows against a permanently failing backend produced %d attempts, want roughly one per window, not one per event", saves)
+	elapsed := time.Since(sleepStart)
+
+	const slack = 2
+	maxSaves := int(elapsed/macRegistryPersistMinInterval) + slack
+	if saves := b.count(); saves > maxSaves {
+		t.Errorf("500 Seen calls over %s (~%d back-off windows) against a permanently failing backend produced %d attempts, want at most one per window plus slack (%d)", elapsed, int(elapsed/macRegistryPersistMinInterval), saves, maxSaves)
 	}
 }
