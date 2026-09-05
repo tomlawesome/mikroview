@@ -315,9 +315,9 @@ describe('the disk group’s state row', () => {
     expect(stateRow(null)).toBeNull()
   })
 
-  it('says memory-only when #853 has no key to persist any of it under', () => {
+  it('says memory-only when #853 has no key to persist any of it under, except the hashed stores', () => {
     expect(stateRow({ backend: 'memory' })).toBe(
-      'memory only — no key configured, so flags, definitions, watchlist, entities, tokens and accounts do not survive a restart',
+      'memory only — no key configured, so flags, definitions, watchlist and entities do not survive a restart (accounts and tokens still do, as one-way hashes)',
     )
   })
 })
