@@ -50,7 +50,35 @@ const FormatVersion = 1
 // transient smaller would start refusing legitimate backups on the only
 // axis that is hard to predict. The claim being corrected here rather
 // than acted on is the point: the mechanism was already right.
-const MaxDecompressed = 256 << 20
+//
+// #394 raised this from the original 256 MiB: the router-backup vault's
+// own generations (10 per router, 16 MiB per file, two files a
+// generation -- backupvault.MaxGenerations/MaxFileBytes) can legitimately
+// need far more than every other store here combined once several
+// routers are pushing. baseMaxDecompressed keeps the original figure's
+// own reasoning for everything that isn't the vault; maxVaultRoutersHeadroom
+// is a generous, arbitrary ceiling on how many routers' worth of vault
+// this cap plans for -- raised if that ever proves too small, the same
+// way the original 256 MiB was itself just a number picked "far above
+// any real deployment". This still bounds an outcome, not a threat: a
+// hostile envelope claiming more routers than this refuses cleanly
+// rather than growing the cap to match whatever it claims.
+const (
+	baseMaxDecompressed = 256 << 20
+	// maxVaultRoutersHeadroom is deliberately generous for a self-hosted
+	// firewall-log tool watching a handful of routers, not a fleet.
+	maxVaultRoutersHeadroom = 20
+	// maxVaultBytesPerRouter mirrors backupvault.MaxGenerations (10) *
+	// backupvault.MaxFileBytes (16 MiB) * 2 files a generation. Not an
+	// import of those constants -- internal/backup is a dependency-free
+	// leaf package other packages build on, the same reasoning
+	// config.defaults() gives for duplicating internal/detect's figures
+	// rather than importing it -- but TestMaxDecompressedCoversTenVaultGenerationsPerRouter
+	// in backup_test.go pins the two together so they cannot drift apart.
+	maxVaultBytesPerRouter = 10 * 16 << 20 * 2
+)
+
+const MaxDecompressed = baseMaxDecompressed + maxVaultRoutersHeadroom*maxVaultBytesPerRouter
 
 // Envelope is the document. Stores are held as raw JSON so backup never
 // has to understand, and therefore never has to keep up with, the shape
