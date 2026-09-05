@@ -268,6 +268,73 @@ test:postgres:
     # table and needs the same real-database coverage.
     - go test -race -count=1 ./internal/persist/... ./internal/matchlog/...
 
+# Container smoke test, ported from GitHub's ci.yml (#942, the second
+# half). Builds the production image and runs it the way
+# deploy/docker-compose.yml runs it -- read-only root, tmpfs for /tmp and
+# the data directory, every capability dropped, no-new-privileges, pid,
+# memory and CPU limits -- and asks /api/healthz whether it came up.
+#
+# This is the one job that needs a Docker daemon from inside a job. The
+# runner is a rootless-Docker executor with no privileged mode, so the
+# owner binds the runner's own rootless daemon socket into every job
+# (`volumes = [".../docker.sock:/var/run/docker.sock"]` in the runner's
+# config.toml; owner decision 137a on #942, 2026-09-05). Consequences
+# this job is written around:
+#
+# - The daemon is the runner host's, not this container's. `docker build`
+#   ships the checkout over the socket as its context, so paths inside
+#   this job container do not matter; `--publish` would bind a port on
+#   the runner host, which this container cannot reach, so nothing is
+#   published. The health check instead runs in a throwaway container
+#   joined to the app container's network namespace, where 127.0.0.1 is
+#   the app.
+# - Two pipelines can run at once on the one daemon, so every name here
+#   carries $CI_JOB_ID, and after_script removes the container and the
+#   image tag whatever happened. The layer cache stays on the daemon,
+#   which is what keeps the build quick when the Dockerfile inputs have
+#   not changed.
+# - The image runs as uid 65532 (Dockerfile), so the tmpfs at the data
+#   directory is created with that owner: without a writable data
+#   directory the container has nowhere to persist its CA, and the app
+#   once carried a "persistence is optional" contract purely to keep this
+#   test green (#535). Same flags as ci.yml had.
+#
+# `-k` on the health check: TLS is on by default (self-signed, generated
+# on first start -- internal/servertls), and this only asks whether the
+# server answers, not whether the chain verifies.
+test:container:
+  stage: test
+  image: docker:28-cli
+  <<: *dev_or_mr
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    APP: mikroview-test-$CI_JOB_ID
+  script:
+    - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
+    - docker build --tag "$APP" .
+    - >-
+      docker run --detach --name "$APP"
+      --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m
+      --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=65532,gid=65532
+      --cap-drop ALL --security-opt no-new-privileges
+      --pids-limit 64 --memory 128m --cpus 0.5
+      "$APP"
+    - |
+      for attempt in $(seq 1 20); do
+        if docker run --rm --network "container:$APP" alpine:3.22 \
+             wget -q -O /dev/null --no-check-certificate https://127.0.0.1:8080/api/healthz; then
+          echo "healthz answered on attempt $attempt"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "healthz never answered; container log follows"
+      docker logs "$APP"
+      exit 1
+  after_script:
+    - docker rm --force "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
+    - docker image rm "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
+
 # ---------------------------------------------------------------------------
 # SECURITY — parallel jobs, diff-scoped Semgrep on MRs, full scan on dev.
 # ---------------------------------------------------------------------------
