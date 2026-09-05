@@ -4149,9 +4149,14 @@
     line-height: 0;
   }
 
+  /* 68px, not the 56px #699 shipped: every round from 20 through 39's
+     the-whole.html agrees on this figure (`.dial svg`), so 56px was a
+     fidelity defect against the mockup's own long-standing value, not a
+     judgement call (#743). The geometry is a 56-unit viewBox either way;
+     this is presentation size only. */
   .dial svg {
-    width: 56px;
-    height: 56px;
+    width: 68px;
+    height: 68px;
     display: block;
   }
 

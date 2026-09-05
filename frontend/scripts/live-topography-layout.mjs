@@ -283,7 +283,10 @@ for (const width of WIDTHS) {
   // 9. the dials, top-right and full size.
   const stageMid = m.stage.x + m.stage.w / 2
   check(!!m.dials && m.dials.x > stageMid, `${at}: the dials hang in the right half of the card`)
-  check(!!m.dialSvg && Math.abs(m.dialSvg.w - 56) < 1, `${at}: each dial draws at 56px (${m.dialSvg?.w.toFixed(1)})`)
+  // 68px, not the 56px #699 shipped: every round from 20 through 39's
+  // the-whole.html agrees on this figure, so 56px was itself the fault
+  // this scenario should have caught (#743).
+  check(!!m.dialSvg && Math.abs(m.dialSvg.w - 68) < 1, `${at}: each dial draws at 68px (${m.dialSvg?.w.toFixed(1)})`)
 
   // 10. the internet island carries an aggregate bar.
   check(m.internetBars.length > 0, `${at}: the internet island carries an aggregate bar (${m.internetBars.length} halves)`)
