@@ -206,6 +206,19 @@ func (c *Config) validateListen(fatal problemFunc) {
 		fatal("CFG-0003", "listen.trustedProxies", err.Error(),
 			"list each proxy as an IP or CIDR, or use \"private\" for a proxy on your LAN or docker network")
 	}
+
+	// backup.listen only has to parse once the drop box is actually
+	// turned on -- same reasoning validateHistory gives for checking
+	// history.keyFile only when history.enabled is true: an address
+	// sitting unused in a disabled block is not yet a problem.
+	if c.Backup.Enabled {
+		if c.Backup.Listen == "" {
+			fatal("CFG-0001", "backup.listen", "is empty", "set an address such as \":47022\"")
+		} else if _, _, err := net.SplitHostPort(c.Backup.Listen); err != nil {
+			fatal("CFG-0002", "backup.listen", fmt.Sprintf("%q is not a valid listen address", c.Backup.Listen),
+				"use host:port, or :port to listen on every interface")
+		}
+	}
 }
 
 // highMaxMemoryWarnThreshold is where store.maxMemory stops being a
