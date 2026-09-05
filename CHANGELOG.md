@@ -20,6 +20,9 @@ rewritten.
 
 - **Renovate now proposes dependency updates as merge requests on
   GitLab, replacing Dependabot** (#945).
+- An on-demand CHR exercise, CHR watch or Renovate run (web UI or API
+  with the job's variable) no longer also runs the full lint, test and
+  security set, as a schedule already did not (#951).
 - GitHub's `branch-policy.yml` is gone: it guarded pull requests on
   GitHub, which takes none now; `policy:promotion-hop` on GitLab does
   that job (#935).

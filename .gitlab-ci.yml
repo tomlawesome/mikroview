@@ -36,13 +36,20 @@ default:
 variables:
   GOFLAGS: "-mod=readonly"
 
-# Scheduled pipelines exist only to carry the CHR exercise and CHR watch jobs,
-# which select themselves on $CHR_EXERCISE / $CHR_WATCH. Without the `never`
-# line every schedule on dev also ran the full lint, test and security set --
-# a daily CI run for a job that reads one JSON file.
+# Scheduled pipelines exist only to carry the CHR exercise, CHR watch and
+# Renovate jobs, which select themselves on $CHR_EXERCISE / $CHR_WATCH /
+# $RENOVATE. Without the `never` line every schedule on dev also ran the full
+# lint, test and security set -- a daily CI run for a job that reads one JSON
+# file. The same jobs' on-demand path (web UI or API, same variable) was
+# doing it too (#951: pipelines 358 and 362 each re-ran all of dev 357), so
+# a web/API run carrying one of those variables is treated like a schedule.
+# A web/API run of dev with no variable still runs everything: that is what
+# "run pipeline" should mean.
 .dev_or_mr: &dev_or_mr
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
