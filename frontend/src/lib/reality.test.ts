@@ -91,6 +91,24 @@ describe('realityEdges', () => {
     expect(unnamed.refusedBy).toBeUndefined()
   })
 
+  it('a rule table edit does not leave a stale rule name behind (#966)', () => {
+    // A rule named "old-drop" refused this pair once; the table was
+    // then edited so nothing names it any more, and newer drops on the
+    // same pair carry no rule label at all. The most recent event is
+    // what is true now, so it must win over the older, no-longer-live
+    // name -- never the reverse.
+    const [r] = realityEdges(
+      [
+        ev({ action: 'drop', ruleLabel: 'old-drop' }),
+        ev({ action: 'drop', ruleLabel: '' }),
+      ],
+      [],
+      true,
+    )
+    expect(r.refusedBy).toBeUndefined()
+    expect(r.drops).toBe(2)
+  })
+
   it('busiest pair sorts first, drops counted apart from accepts', () => {
     const rs = realityEdges(
       [

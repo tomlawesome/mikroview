@@ -39,11 +39,15 @@ await goTo(page, 'Settings')
 
 // --- The page is the groups, with keys and people mounted in place ------
 
+// #394 (round 44) added the router-backups group straight after disk --
+// memory, disk, router backups is the order EngineRoom.svelte's own
+// comment states, and this list is a copy of the DOM order, not an
+// independent decision, so it has to keep up with what the page mounts.
+const GROUP_ORDER = ['ingest', 'keys', 'detection', 'memory', 'disk', 'router backups', 'account', 'people']
 const groupNames = await page.$$eval('.stsection h3', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(groupNames) ===
-    JSON.stringify(['ingest', 'keys', 'detection', 'memory', 'disk', 'account', 'people']),
-  `the groups render in order -- ingest, keys, detection, memory, disk, account, people -- got ${JSON.stringify(groupNames)}`,
+  JSON.stringify(groupNames) === JSON.stringify(GROUP_ORDER),
+  `the groups render in order -- ${GROUP_ORDER.join(', ')} -- got ${JSON.stringify(groupNames)}`,
 )
 check(
   await page.locator(`${MACHINES} h3`).isVisible(),
@@ -131,14 +135,27 @@ check(
 
 // The detection group's "N of M on" has to agree with the server's own
 // definitions list, whatever an earlier scenario left toggled.
+//
+// /api/definitions answers every definition mikroview holds, not just
+// detectors -- a watchlist entry is stored as an intent=expectation
+// definition (definitions_convert.go's convertNonInvertedEntry et al),
+// and one can easily still be sitting there from an earlier scenario in
+// this run (live-city-importance.mjs creates one and does not delete
+// it). detectorSettingsState.refresh() (detectorSettings.svelte.ts)
+// deliberately narrows to intent === 'detection' && available before
+// this page ever sees the list, because those are the only rows the
+// bench can toggle -- so the comparison here has to apply the same
+// narrowing, or it is comparing the bench's count against a bigger,
+// unrelated total.
 const detectorsRow = (await page.textContent('.stsection:has(h3:text-is("detection")) .orow:has-text("detectors")'))?.trim() ?? ''
 const defs = await page.request
   .get(`${URL_BASE}/api/definitions`)
   .then(async (r) => (await r.json()).definitions ?? [])
-const running = defs.filter((d) => d.enabled).length
+const detectors = defs.filter((d) => d.intent === 'detection' && d.available)
+const running = detectors.filter((d) => d.enabled).length
 check(
-  detectorsRow.includes(`${running} of ${defs.length} on`),
-  `detection counts what the server actually runs (ui "${detectorsRow}", api ${running} of ${defs.length})`,
+  detectorsRow.includes(`${running} of ${detectors.length} on`),
+  `detection counts what the server actually runs (ui "${detectorsRow}", api ${running} of ${detectors.length})`,
 )
 
 // --- Claim 2: tuning unfolds in place, it does not navigate -------------
