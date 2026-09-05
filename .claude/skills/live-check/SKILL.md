@@ -170,6 +170,24 @@ process by hand. The `live-check` recipe now traps INT and TERM. If you
 drive `live-env.sh up` yourself rather than through `make live-check`,
 that trap is yours to set.
 
+That trap alone only covered a terminal Ctrl-C, which the kernel delivers
+to the whole foreground process group. Killing `make live-check` from
+outside a terminal — an agent's own wrapper, a session ending — used to
+reach nothing at all: the recipe was blocked in a plain foreground call
+to `scripts/run-scenarios.sh`, not the interruptible `wait`, so its trap
+sat deferred while the scenario's node process, several process
+generations down, kept driving Chromium against an instance whose owner
+was gone (#671). A `kill` on the run returned success immediately, so it
+looked stopped; only checking the port afterwards showed otherwise.
+
+Fixed the same way, one layer at a time: the recipe backgrounds
+`run-scenarios.sh` and `wait`s on it, and its trap now forwards the
+signal to it; `run-scenarios.sh` itself backgrounds each scenario's node
+process and `wait`s on that, forwarding in turn. So killing `make
+live-check`'s own process now stops the scenario in front of it and lets
+`down` run straight away, at whichever of the three levels you actually
+target.
+
 ### The standing lanes (owner, 2026-08-30)
 
 Use up to three lanes, one worktree each, and never share a worktree
