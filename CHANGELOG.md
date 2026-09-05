@@ -669,6 +669,10 @@ rewritten.
   looked at. Saying it is expected again raises the recorded size to
   the new firing; the size only ever goes up.
 
+- Scheduled pipelines (the weekly CHR exercise, the daily CHR watch) now
+  run only the job they were created for, not the full lint, test and
+  security set as well (#947).
+
   Every shipped detector now states what its size is, or states that it
   has none. Detectors with no size -- device silence, known bad IP,
   unexpected mail sender, stale rule, and the two that judge a rate
