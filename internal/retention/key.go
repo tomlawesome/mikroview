@@ -22,7 +22,10 @@
 package retention
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hkdf"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -145,3 +148,109 @@ func (k *Key) fileKey(salt []byte, day string) ([]byte, error) {
 // through its own info string, so no two of them ever seal different
 // kinds of data with the same bytes.
 const keyInfoPrefix = "mikroview/event-retention/v1/"
+
+// The on-disk shape SealDocument produces for one whole document:
+//
+//	magic     5 bytes   "MVSEL"
+//	version   1 byte    sealFormatVersion
+//	salt     16 bytes   random, per document
+//	nonce    12 bytes   random, per document (AES-256-GCM's size)
+//	sealed  variable    the AEAD ciphertext + 16-byte tag
+//
+// This is the whole-document counterpart to the per-day event-file
+// framing above: one seal, not a sequence of appended frames, for a
+// caller that already has the entire document in memory and writes it
+// once (#394's router-backup vault is the first of these). Reusing this
+// package's key derivation and AEAD choice rather than each caller
+// rolling its own, per keyInfoPrefix's own doc comment.
+const (
+	sealMagic         = "MVSEL"
+	sealFormatVersion = 1
+	sealSaltBytes     = 16
+)
+
+// ErrSealedDocumentInvalid reports that OpenDocument was given something
+// that is not one of this package's sealed documents at all -- too
+// short, wrong magic, or an unsupported format version. Distinct from an
+// AEAD authentication failure (wrong key, or genuine tampering), which
+// OpenDocument reports separately so a caller can tell "this was never
+// one of ours" from "this was ours and something is wrong with it".
+var ErrSealedDocumentInvalid = errors.New("retention: not a sealed document")
+
+// SealDocument encrypts plaintext as a single self-contained document,
+// binding it to info the way frameAAD binds an event frame to its file
+// and position -- a document sealed under one info string fails to open
+// under another, so moving a sealed file to a different logical slot
+// (a different router's backup, say) is detected rather than silently
+// accepted as ciphertext that happens to decrypt.
+func (k *Key) SealDocument(info string, plaintext []byte) ([]byte, error) {
+	salt := make([]byte, sealSaltBytes)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("retention: generating salt: %w", err)
+	}
+	derived, err := hkdf.Key(sha256.New, k.material, salt, keyInfoPrefix+"seal/"+info, 32)
+	if err != nil {
+		return nil, fmt.Errorf("retention: deriving document key: %w", err)
+	}
+	block, err := aes.NewCipher(derived)
+	if err != nil {
+		return nil, fmt.Errorf("retention: cipher: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("retention: gcm: %w", err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("retention: generating nonce: %w", err)
+	}
+	sealed := aead.Seal(nil, nonce, plaintext, []byte(info))
+
+	out := make([]byte, 0, len(sealMagic)+1+len(salt)+len(nonce)+len(sealed))
+	out = append(out, sealMagic...)
+	out = append(out, sealFormatVersion)
+	out = append(out, salt...)
+	out = append(out, nonce...)
+	out = append(out, sealed...)
+	return out, nil
+}
+
+// OpenDocument reverses SealDocument. info must match what SealDocument
+// was called with -- see its doc comment.
+func (k *Key) OpenDocument(info string, sealed []byte) ([]byte, error) {
+	headerLen := len(sealMagic) + 1 + sealSaltBytes
+	if len(sealed) < headerLen {
+		return nil, ErrSealedDocumentInvalid
+	}
+	if string(sealed[:len(sealMagic)]) != sealMagic {
+		return nil, ErrSealedDocumentInvalid
+	}
+	if sealed[len(sealMagic)] != sealFormatVersion {
+		return nil, fmt.Errorf("%w: unsupported format version %d", ErrSealedDocumentInvalid, sealed[len(sealMagic)])
+	}
+	salt := sealed[len(sealMagic)+1 : headerLen]
+
+	derived, err := hkdf.Key(sha256.New, k.material, salt, keyInfoPrefix+"seal/"+info, 32)
+	if err != nil {
+		return nil, fmt.Errorf("retention: deriving document key: %w", err)
+	}
+	block, err := aes.NewCipher(derived)
+	if err != nil {
+		return nil, fmt.Errorf("retention: cipher: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("retention: gcm: %w", err)
+	}
+	if len(sealed) < headerLen+aead.NonceSize() {
+		return nil, ErrSealedDocumentInvalid
+	}
+	nonce := sealed[headerLen : headerLen+aead.NonceSize()]
+	ciphertext := sealed[headerLen+aead.NonceSize():]
+
+	plain, err := aead.Open(nil, nonce, ciphertext, []byte(info))
+	if err != nil {
+		return nil, fmt.Errorf("retention: document did not open -- wrong key, or the file has been altered: %w", err)
+	}
+	return plain, nil
+}
