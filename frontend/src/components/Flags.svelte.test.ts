@@ -1116,3 +1116,91 @@ describe("the resolved row's offer of a watcher (#641)", () => {
     expect(screen.queryByRole('button', { name: 'watch for this' })).toBeNull()
   })
 })
+
+// #961: the watch-for-this round trip must not cost the operator the row
+// they just judged. flagsState.pinnedIds (moved out of this component's
+// own $state for exactly this) survives Docket.svelte tearing Flags.svelte
+// down on the tab switch to watchlist and back; onMount decides whether to
+// keep it, using topologyNavState.pendingFlagsReturn -- the signal
+// Watchlist's closeDraft sets right before it flips appState.view back to
+// 'flags' (see that state's own doc comment).
+describe('a pinned row across the watch-for-this detour (#961)', () => {
+  const paired = { pairs: [{ host: '192.168.1.10', port: 445 }], pairsTotal: 1 }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.view = 'flags'
+    topologyNavState.pendingWatchDraft = null
+    topologyNavState.pendingFlagsReturn = false
+    flagsState.clearPins()
+  })
+
+  // Resolves the flag (pinning it, same as callVerdict always does),
+  // takes the "watch for this" offer, and tears the component down --
+  // simulating Docket's `{#if tab === 'watchlist'}...{:else}<Flags/>` on
+  // the switch to the watchlist tab, the same way the #724 "does not
+  // reopen ... on a later visit" test above simulates the deck's own
+  // keep-alive teardown.
+  async function resolveAndDetour() {
+    flagsState.list = [
+      testFlag({
+        id: 's1',
+        type: 'internal_recon',
+        target: '192.168.1.50',
+        evidence: paired,
+        verdict: 'investigate',
+        verdictBy: 'tom',
+        verdictAt: '2026-09-02T09:00:00Z',
+      }),
+    ]
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({
+        id: 's1',
+        type: 'internal_recon',
+        target: '192.168.1.50',
+        evidence: paired,
+        cleared: true,
+        verdict: 'resolved',
+        verdictBy: 'tom',
+        verdictAt: '2026-09-02T09:01:00Z',
+      }) as never,
+    )
+    const view = render(Flags)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /resolved/ }))
+    await Promise.resolve()
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: 'watch for this' }))
+    flushSync()
+    view.unmount()
+  }
+
+  it('survives the detour when Watchlist signals the return', async () => {
+    await resolveAndDetour()
+    // What Watchlist's closeDraft does (save or discard alike) right
+    // before sending the operator back to this tab.
+    topologyNavState.signalFlagsReturn()
+
+    render(Flags)
+    flushSync()
+
+    const row = document.querySelector('tr.frow') as HTMLElement
+    expect(row).toBeTruthy()
+    expect(row.querySelector('.stamp.resolved')?.textContent).toBe('resolved')
+    // Consumed on arrival, like every other slot in topologyNav.svelte.ts.
+    expect(topologyNavState.pendingFlagsReturn).toBe(false)
+  })
+
+  it('does not survive a plain fresh mount of the tab', async () => {
+    await resolveAndDetour()
+    // No detour signal this time: an ordinary, unrelated later visit.
+
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.frow')).toBeNull()
+    expect(screen.getByText('Nothing open.')).toBeTruthy()
+  })
+})

@@ -53,6 +53,37 @@ class FlagsState {
   // nothing is flagged.
   loaded = $state(false)
 
+  // Ids Flags.svelte's current visit judged, kept in the settled/shelf
+  // tables in place -- dimmed, carrying their stamp -- rather than
+  // dropped the instant the server marks them cleared (#780 item 2: "the
+  // recently-cleared list, in place", staying until the tab is left).
+  //
+  // Lives here rather than as Flags.svelte's own component-local $state
+  // (#961): "watch for this" (#641) sends the operator to the watchlist
+  // tab and back, and Docket.svelte destroys and recreates Flags.svelte
+  // on every switch between its own tabs
+  // (`{#if tab === 'watchlist'}...{:else}<Flags/>`), so a component-local
+  // list reset on that remount too, dropping the very row the operator
+  // just judged before the round trip could bring them back to it. A
+  // singleton survives the remount; Flags.svelte's own mount logic
+  // decides whether to keep or clear it -- see its doc comment there for
+  // how it tells that return apart from a genuinely fresh visit. Nothing
+  // else about how long a pinned row stays changes: a plain tab switch
+  // away and back (to `live`, say) still starts the list over.
+  pinnedIds = $state<string[]>([])
+
+  pin(id: string) {
+    if (!this.pinnedIds.includes(id)) this.pinnedIds = [...this.pinnedIds, id]
+  }
+
+  unpin(id: string) {
+    this.pinnedIds = this.pinnedIds.filter((pid) => pid !== id)
+  }
+
+  clearPins() {
+    this.pinnedIds = []
+  }
+
   // The open-flags count is the *settled* ledger's count (#642): a
   // provisional flag -- raised while its baseline was still warming, so
   // a judgement mikroview does not yet trust -- is visible on the

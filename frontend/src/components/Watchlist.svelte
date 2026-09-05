@@ -568,7 +568,14 @@
     const back = draftReturnTo
     draftProvenance = null
     draftReturnTo = undefined
-    if (back) appState.view = back
+    if (back) {
+      // #961: tells Flags.svelte's next mount that this is the
+      // watch-for-this round trip landing back on the inbox, not a
+      // fresh visit -- see topologyNavState.pendingFlagsReturn's own
+      // doc comment.
+      topologyNavState.signalFlagsReturn()
+      appState.view = back
+    }
   }
 
   function discardDraft() {
