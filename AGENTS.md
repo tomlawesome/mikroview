@@ -222,8 +222,12 @@ frees instead of refusing (#811). If the holder looks dead, follow the
 **The host's standing tenant is the `dev` loop.** `scripts/gate-dev-loop.sh`
 runs the gate on every new `dev` commit on the `gitlab` remote through the same script and
 lock, keeps each log as `~/projects/.gate-logs/mikroview/gate-<sha>.log`
-and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN` lines to `loop.log` there
-(#831). It takes the lock like any other run, so a manual
+and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN` lines to `loop.log` there.
+It checks the loop's own commit out into `~/projects/.worktrees/mikroview/gate-dev`
+by default (`MV_GATE_WORKTREE`) -- a path under `~/projects/.worktrees` survives
+worktree clean-up; the previous default under `.claude/worktrees` did not, and
+the loop died silently for four hours before anyone noticed (#831). It
+takes the lock like any other run, so a manual
 `make live-check-remote` simply waits its turn -- or refuses, if the loop
 is mid-run; check `loop.log` for a `START` without an `END` before
 clearing a lock that looks stale. A run that dies before producing a
