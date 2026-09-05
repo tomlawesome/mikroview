@@ -13,7 +13,8 @@
 // exists to prevent, and "the wizard said step 3 was done when it
 // wasn't" would be worse than no wizard at all.
 
-import type { Device, SetupMark, SetupStatus } from './types'
+import { formatSize } from './memory'
+import type { Device, RouterBackupsResponse, SetupMark, SetupStatus } from './types'
 
 // 'quiet' is #487's fifth reading, and the only one that is not a claim
 // about a router: a step with nothing to wait for (step 5's naming is
@@ -178,6 +179,80 @@ export function pushStep(status: SetupStatus): StepStatus {
   return { state: 'done', detail: 'Every table has been pushed.' }
 }
 
+// backupStep is step 6 (#394, round 45): whether any router's config
+// backup has ever arrived. Aggregate across every router, the same
+// "any evidence at all" reading pushStep gives step 4's tables, rather
+// than tied to whichever single router the operator happens to be
+// minting a token for here -- the step is answering "does this feature
+// work at all", not "has this one router done it yet".
+//
+// backups is null before the first read of GET /api/router-backups (or
+// on a session this modal would not otherwise be open on) -- read the
+// same way as "nothing has arrived", never as a claim about the key,
+// so this never states "no key" without having actually asked.
+export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
+  if (backups && !backups.enabled) {
+    return {
+      state: 'blocked',
+      detail:
+        'Mikroview keeps a backup only under a key it does not hold, and none is mounted. Mount one ' +
+        'and this step prints the script; until then the drop box is closed and a push would be refused.',
+    }
+  }
+  const routers = backups?.routers ?? []
+  if (routers.length === 0) {
+    return { state: 'waiting', detail: 'Waiting for the first push — the script below runs once at the end; give it a minute.' }
+  }
+  const receipt = backupReceipt(backups)
+  return { state: 'done', detail: receipt ? `arrived ${receipt}` : 'A router has pushed a backup.' }
+}
+
+// backupReceipt is the newest pair to have arrived, across every
+// router -- "today 03:00 · rb5009.backup 412 KiB + rb5009.rsc 38 KiB ·
+// kept under the key" (round 45's observation line). Empty when
+// nothing has arrived yet.
+export function backupReceipt(backups: RouterBackupsResponse | null): string {
+  const routers = backups?.routers ?? []
+  let newestAt = ''
+  let newestDevice = ''
+  let newestBackup: number | undefined
+  let newestRsc: number | undefined
+  let newestHasBackup = false
+  let newestHasRsc = false
+  for (const r of routers) {
+    const g = r.generations[r.generations.length - 1]
+    if (!g) continue
+    const at = g.backupArrivedAt && g.rscArrivedAt
+      ? g.backupArrivedAt > g.rscArrivedAt ? g.backupArrivedAt : g.rscArrivedAt
+      : g.backupArrivedAt || g.rscArrivedAt || ''
+    if (!at || at <= newestAt) continue
+    newestAt = at
+    newestDevice = r.device
+    newestBackup = g.backupBytes
+    newestRsc = g.rscBytes
+    newestHasBackup = !!g.backupArrivedAt
+    newestHasRsc = !!g.rscArrivedAt
+  }
+  if (!newestAt) return ''
+  const parts: string[] = []
+  if (newestHasBackup) parts.push(`${newestDevice}.backup ${formatSize(newestBackup ?? 0)}`)
+  if (newestHasRsc) parts.push(`${newestDevice}.rsc ${formatSize(newestRsc ?? 0)}`)
+  return `${when(newestAt)} · ${parts.join(' + ')} · kept under the key`
+}
+
+// backupReceiptForDevice is round 45's lost-router receipt: not the
+// newest across every router, but how much this one router's own
+// history holds -- "10 pairs kept · the newest today 03:00" -- since a
+// replacement's own step is about what it inherits, not the fleet.
+export function backupReceiptForDevice(backups: RouterBackupsResponse | null, device: string): string {
+  const router = backups?.routers.find((r) => r.device === device)
+  if (!router || router.generations.length === 0) return ''
+  const newest = router.generations[router.generations.length - 1]
+  const at = newest.backupArrivedAt || newest.rscArrivedAt
+  const n = router.generations.length
+  return `${n} ${n === 1 ? 'pair' : 'pairs'} kept · the newest ${at ? when(at) : 'unknown'}`
+}
+
 // undeclaredDevices are routers sending syslog that config.yaml does not
 // name. They work as they are; declaring one only swaps its address for
 // a name of the operator's choosing.
@@ -307,15 +382,17 @@ export interface LedgerStep {
   hasCheck: boolean
 }
 
-// STEP_TITLES is the ratified five, in order. Exported because the step
-// list, the header and the spoken announcement all name the same step
-// and must not drift.
+// STEP_TITLES is the ratified six, in order -- round 45 (#394) adds the
+// sixth, "Back up the router", after the original five. Exported
+// because the step list, the header and the spoken announcement all
+// name the same step and must not drift.
 export const STEP_TITLES = [
   'Trust the certificate',
   'Send logs',
   'Tag firewall rules',
   'Push router state',
   'Name your router',
+  'Back up the router',
 ] as const
 
 export const STEP_COUNT = STEP_TITLES.length
@@ -418,6 +495,7 @@ const LEADS = [
   'The letter in the log-prefix is how mikroview knows what a rule did. This tags every existing filter rule by its action, in one pass.',
   'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. The token below is minted for one router and is already in the script.',
   'Mikroview does not edit config.yaml itself: the sourceIp mapping decides who an event stream is attributed to, so it stays under your control.',
+  'Every night the router saves itself twice — the binary backup that restores it whole, and the plain export you can read — and drops both into mikroview. Nothing is sent back, and nothing is left on the router. The token below is minted for this one router and is already in the script.',
 ] as const
 
 // stepMarks indexes marks by step, so building the ledger stays one pass.
@@ -451,13 +529,19 @@ function flavourFor(step: number, state: StepState): Flavour {
 // green and stops explaining anybody's silence, while the audit entry
 // stays as history rather than as a scar the interface keeps pointing
 // at.
-export function buildLedger(status: SetupStatus, devices: Device[], address: string): LedgerStep[] {
+export function buildLedger(
+  status: SetupStatus,
+  devices: Device[],
+  address: string,
+  backups: RouterBackupsResponse | null = null,
+): LedgerStep[] {
   const checks: StepStatus[] = [
     caStep(status, address),
     syslogStep(status, devices),
     rulesStep(status),
     pushStep(status),
     nameStep(devices),
+    backupStep(backups),
   ]
   const receipts = [
     caReceipt(status),
@@ -465,11 +549,12 @@ export function buildLedger(status: SetupStatus, devices: Device[], address: str
     rulesReceipt(status),
     pushReceipt(status),
     '',
+    backupReceipt(backups),
   ]
   // Steps 3 and 5 have no waiting check to force past: step 3 counts
   // upward and step 5 has nothing to wait for, so Next is always free
-  // on both.
-  const checked = [true, true, false, true, false]
+  // on both. Step 6 does have one, the same shape as step 4's.
+  const checked = [true, true, false, true, false, true]
 
   return checks.map((check, i) => {
     const n = i + 1
@@ -528,6 +613,8 @@ export function notObserved(step: LedgerStep): string {
       return 'no events carrying a decoded action have arrived'
     case 4:
       return 'no pushed table has arrived'
+    case 6:
+      return 'no pushed backup has arrived'
     default:
       return 'nothing has arrived'
   }
@@ -560,7 +647,7 @@ export function finishHeadline(ledger: LedgerStep[]): string {
 // count words small numbers, because "Four steps stand on evidence"
 // reads as a sentence and "4 steps" reads as a readout.
 function count(n: number): string {
-  return ['zero', 'one', 'two', 'three', 'four', 'five'][n] ?? String(n)
+  return ['zero', 'one', 'two', 'three', 'four', 'five', 'six'][n] ?? String(n)
 }
 
 // silenceExplanation is what a surface with nothing to show says about
@@ -591,6 +678,7 @@ export const SKIP_CONSEQUENCES = [
   'events arrive without an action, so rows read "unknown"',
   'the stream stays address-only — no names, no rule lookups, nothing to suggest from',
   'routers stay identified by their address rather than a name',
+  'no backups are kept until the script runs',
 ] as const
 
 // announceStep is what a screen reader is told when the step changes:
