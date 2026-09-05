@@ -194,14 +194,29 @@ func ScheduleCommands(dialect string) string {
 }
 
 // BackupScriptPolicy is the RouterOS script/scheduler policy list the
-// wizard's step 6 script needs (#394, round 45). read,write,test,sensitive
-// is round 45's drawn minimum; `write` and `sensitive` are for
-// `/system backup save` and `/file remove`, `test` is what RouterOS
-// gates `/tool fetch` behind, and `sensitive` on the script itself is
-// also what stops a `read`-only router user from printing the token
-// straight back out of the saved script's source (the #186 leak this
-// scheme already has to live with for the state-push script). Proven on
-// a real CHR before being printed -- see the issue's build note H.
+// wizard's step 6 script is printed with -- round 45's drawn
+// read,write,test,sensitive, run end to end against a real CHR (7.23.3,
+// #394's build note H) as both an ad-hoc `/system script run` and a
+// scheduler entry with the matching policy: `/system backup save`,
+// `/export`, both `/tool fetch mode=sftp` uploads and both `/file
+// remove` steps all completed, and a generation landed in the vault
+// each time.
+//
+// It is not, in the sense the build note asked, a *minimum* --
+// measurement on the same CHR found the script's own declared policy is
+// not enforced against its own actions at all while it is owned by an
+// admin (the wizard's only realistic operator): dropping it to `test`
+// alone still ran the whole script successfully. What the declared
+// value actually gates is `/system script add` itself, checked against
+// the *adding* user's own group, and RouterOS's own group-based check on
+// whoever later runs it -- for a user genuinely restricted to this
+// policy list (tested with a purpose-built RouterOS group), `/system
+// backup save`/`/export` additionally refused until `policy` and `ftp`
+// were added to that group, which this script does not declare. Kept at
+// round 45's drawn value rather than narrowed (there is no functional
+// reason to prefer a shorter string an admin owner ignores anyway) or
+// widened to cover a restricted-owner scenario this issue does not ask
+// for; recorded on the issue rather than silently assumed.
 const BackupScriptPolicy = "read,write,test,sensitive"
 
 // BackupScript is the wizard's step 6 script (round 45): one
