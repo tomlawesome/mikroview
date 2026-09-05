@@ -11,23 +11,56 @@ import (
 	"time"
 )
 
+// Sealer is the encryption capability Writer and Load need: the same
+// master key and AES-256-GCM/HKDF cipher internal/retention uses for the
+// on-disk event history (#853), taken as a small interface rather than
+// the concrete *retention.Key so this package does not have to import
+// internal/retention -- which imports internal/store, which imports this
+// package for the Part interface, and a direct import back would be a
+// cycle. *retention.Key satisfies this interface as-is; main.go passes
+// one straight through (see storage.go's key field).
+type Sealer interface {
+	// Seal and Open have exactly retention.Key's signatures -- see that
+	// type's doc comments for the envelope shape and what info and aad
+	// are for.
+	Seal(info string, aad, plaintext []byte) ([]byte, error)
+	Open(info string, aad, envelope []byte) ([]byte, error)
+}
+
+// warmRestartKeyInfo namespaces the keys Sealer derives for these
+// documents, distinct from every other purpose the same master key is
+// used for (#853: the persisted state store, the event history). Local
+// to this package for the reason Sealer's doc comment gives.
+const warmRestartKeyInfo = "mikroview/warm-restart/v1/"
+
 // Writer holds the directory, the retention and the parts to ask on each
 // write. It is created once at startup and Write is called on a ticker.
 type Writer struct {
 	dir   string
 	keep  int
 	parts []Part
+	// key seals every document under the operator's retention key (#853).
+	// Required: New refuses to build a Writer without one, because there
+	// is no unencrypted mode for these documents any more than there is
+	// for the state store or the event history -- see
+	// docs/decisions/event-retention.md's amendment.
+	key Sealer
 }
 
 // New returns a Writer that writes into dir, keeping the newest keep
-// generations. keep is floored at 1: a snapshot series that keeps
-// nothing would delete the file it just wrote, which is a rotation
-// setting that silently disables the feature.
-func New(dir string, keep int, parts ...Part) *Writer {
+// generations, sealed under key. keep is floored at 1: a snapshot series
+// that keeps nothing would delete the file it just wrote, which is a
+// rotation setting that silently disables the feature.
+//
+// key must not be nil. Callers decide whether warm-restart snapshots run
+// at all by whether they have a key -- see main.go/snapshot.go, which
+// mirrors the same "no key, no snapshots" gate history.go applies to the
+// event history -- and never call New without one.
+func New(dir string, keep int, key Sealer, parts ...Part) *Writer {
 	if keep < 1 {
 		keep = 1
 	}
-	return &Writer{dir: dir, keep: keep, parts: parts}
+	return &Writer{dir: dir, keep: keep, parts: parts, key: key}
 }
 
 // Write asks every part for its bytes, writes one document, and rotates
@@ -76,12 +109,19 @@ func (w *Writer) writeDocument(doc Document) (string, error) {
 	if err := os.MkdirAll(w.dir, 0o700); err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(doc)
+	plain, err := json.Marshal(doc)
 	if err != nil {
 		return "", err
 	}
-
 	path := filepath.Join(w.dir, fileName(doc.Taken))
+	// Sealed under the same key and cipher internal/retention uses for
+	// the event history (#853), with the file's own name as additional
+	// data: an envelope moved to another snapshot's name fails to open
+	// there rather than silently being accepted as it.
+	payload, err := w.key.Seal(warmRestartKeyInfo, []byte(filepath.Base(path)), plain)
+	if err != nil {
+		return "", fmt.Errorf("snapshot: encrypting document: %w", err)
+	}
 
 	// The temp file gets a unique name (CreateTemp's O_EXCL), not a fixed
 	// one: internal/persist measured a shared ".tmp" name publishing a

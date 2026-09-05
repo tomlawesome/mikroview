@@ -423,13 +423,23 @@ export function restartRow(s: HistorySettings | null): string {
 /**
  * stateRow is the disk group's `state` row: the other thing kept on
  * disk, beside the key. Which backend the state store (flags,
- * definitions, watchlist entries, entities, tokens) actually uses,
- * from GET /api/persistence; null for a caller it refuses.
+ * definitions, watchlist entries, entities, tokens, accounts) actually
+ * uses, from GET /api/persistence; null for a caller it refuses.
+ *
+ * 'memory' (#853) is what a JSON deployment with no key mounted reports:
+ * flags, definitions, watchlist and entities refuse to persist rather
+ * than write unencrypted, so those don't survive a restart. Accounts and
+ * tokens are the exception (#853 rule 6): they hold only one-way hashes,
+ * so they keep persisting to a plain file with no key, exactly as before
+ * #853.
  */
 export function stateRow(info: PersistenceInfo | null): string | null {
   if (!info) return null
-  const backend = info.backend === 'postgres' ? 'Postgres' : `file store · ${info.dir ?? '—'}`
-  return `${backend} — flags, definitions, watchlist, entities, tokens`
+  if (info.backend === 'postgres') return 'Postgres — flags, definitions, watchlist, entities, tokens'
+  if (info.backend === 'memory') {
+    return 'memory only — no key configured, so flags, definitions, watchlist and entities do not survive a restart (accounts and tokens still do, as one-way hashes)'
+  }
+  return `encrypted file store · ${info.dir ?? '—'} — flags, definitions, watchlist, entities, tokens`
 }
 
 /** The link to the setup guide's own section on mounting a key. */

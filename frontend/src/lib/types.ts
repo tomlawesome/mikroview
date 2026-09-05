@@ -1216,10 +1216,19 @@ export type WatchlistCoverage = 'unknown' | 'covered' | 'no-logging' | 'out-of-s
 // row) -- which backend this deployment's persisted stores (flags,
 // definitions, watchlist entries, entities, tokens/accounts) actually
 // use right now.
+//
+// 'memory' is #853's third state: on the JSON path with no
+// history.keyFile configured, flags, definitions, watchlist entries and
+// entities don't persist at all -- there is no unencrypted mode to fall
+// back to -- so calling it 'file' would overclaim what is actually
+// happening. Accounts and tokens are the exception (#853 rule 6): they
+// hold only one-way hashes, so they keep persisting to a plain file
+// regardless of 'backend' here.
 export interface PersistenceInfo {
-  backend: 'file' | 'postgres'
-  // The directory the JSON documents live under -- absent for postgres,
-  // which has no filesystem path to report.
+  backend: 'file' | 'postgres' | 'memory'
+  // The directory the JSON documents live under -- present only for
+  // 'file'. Absent for 'postgres' (no filesystem path to report) and for
+  // 'memory' (nothing but accounts and tokens is actually written there).
   dir?: string
 }
 
