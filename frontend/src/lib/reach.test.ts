@@ -98,6 +98,32 @@ describe('the busiest pathway is weighted toward now (#701)', () => {
   })
 })
 
+describe('refusedBy names the latest rule, not the first (#967)', () => {
+  it('a rule table edit does not leave a stale rule name behind', () => {
+    // "old-drop" refused this pair once; a later table push replaced it
+    // with "new-drop". Events arrive oldest first (appState.events
+    // appends), so the strand must carry the most recent table's name,
+    // never the first one it happened to see.
+    const events = [
+      event({ id: 1, action: 'drop', ruleLabel: 'old-drop', outInterface: 'ether1' }),
+      event({ id: 2, action: 'drop', ruleLabel: 'new-drop', outInterface: 'ether1' }),
+    ]
+
+    const { strands } = reachFor(HOST, null, events, NOW)
+    expect(strands[0].refusedBy).toBe('new-drop')
+  })
+
+  it('reverts to unnamed when the newest drop carries no label', () => {
+    const events = [
+      event({ id: 1, action: 'drop', ruleLabel: 'old-drop', outInterface: 'ether1' }),
+      event({ id: 2, action: 'drop', ruleLabel: '', outInterface: 'ether1' }),
+    ]
+
+    const { strands } = reachFor(HOST, null, events, NOW)
+    expect(strands[0].refusedBy).toBeUndefined()
+  })
+})
+
 describe('portsLine (#868: shared with the city so neither view invents its own wording)', () => {
   it('joins up to three ports with a leading colon', () => {
     expect(portsLine([445, 22, 80, 9999])).toBe(':445 :22 :80')
