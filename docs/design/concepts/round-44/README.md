@@ -21,6 +21,14 @@ things mikroview holds: memory, disk, router backups.
   in v1); `key` (mounted; every pair encrypted under it, admins read,
   each read audited); `path` — the caveat in amber: the router never
   checks who it is sending to, so only on a network you trust.
+- **A missed push is said** (owner, 2026-09-05: once a router has been
+  pushing, watch for the next one at its usual interval and say when it
+  does not come). The interval is learned from the pushes themselves, so
+  hap-ax2's receipt reads `nightly at 03:00 · none since 30 Aug —
+  3 missed` in amber, and its newest line ends `is it gone?`, which
+  opens the wizard's lost-router step (round 45). This is the one place
+  mikroview can tell an admin something is wrong on the backup path: it
+  cannot see the path, but it can see the silence.
 - The group is admin-only, like `key` and `state`: a viewer never sees it.
 
 ## Scenes (`backups.html`)
@@ -30,7 +38,7 @@ applies one, and `?d=` still applies the disk states.
 
 | Scene | URL | What it shows |
 |---|---|---|
-| Two routers | `backups.html#set` | rb5009 with its ten, hap-ax2 with four and quiet since 30 Aug |
+| Two routers | `backups.html#set` | rb5009 with its ten; hap-ax2 with four, three nightly pushes missed, `is it gone?` |
 | Receiving | `?b=brecv#set` | rb5009's newest slot outlined and pulsing; the pair before it stays until this one is whole |
 | Refused, not a backup | `?b=brefused#set` | hap-ax2's newest slot crossed; the first bytes were wrong, nothing kept, the four before it stay |
 | Refused, over the cap | `?b=bquota#set` | rb5009 sent 17.2 MiB; nothing kept, the ten before it stay |
@@ -65,3 +73,7 @@ the issue (notes 10466, 10489, 10495, 10510).
 ## Verdicts (owner, 2026-09-05)
 
 *"Good."* **Ratified as drawn.** Build: #394.
+
+Amended after ratification the same day: the missed-push receipt and the
+`is it gone?` link, from the owner's note that mikroview should watch for
+the next push at its usual interval and say when it does not come.
