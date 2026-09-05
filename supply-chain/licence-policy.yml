@@ -19,17 +19,17 @@
 # `glob` chain, browserslist's `caniuse-lite` data) failing a rebuild of the
 # old GitHub scope by mistake. Narrowed to the shipped set per owner
 # decision (#945 item 3, #948).
+#
+# Only the licences a shipped dependency actually uses (THIRD-PARTY-NOTICES.md
+# is the inventory), not a general list of acceptable ones: a dependency
+# arriving under a licence not yet here fails the job, and adding the entry
+# is a reviewed change rather than a silent pass (owner decision, #948).
 allow-licenses:
-  - 0BSD
   - Apache-2.0
   - BSD-2-Clause
   - BSD-3-Clause
-  - CC0-1.0
   - ISC
   - MIT
-  - MIT-0
-  - MPL-2.0
-  - Unlicense
 # Exact-version exceptions for one npm package, `pkg:npm/<name>@<version>`.
 # Empty until something needs one. A blanket allow-licenses entry above is
 # never the right fix for a single problem package -- it would silently
