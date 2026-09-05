@@ -16,9 +16,22 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/snapshot"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
+
+// testSnapshotKey is the retention key these tests seal and load
+// snapshots under (#853): warm restart has no unencrypted mode any more
+// than the state store does, so every New/restoreSnapshot call in this
+// file needs one.
+var testSnapshotKey = func() *retention.Key {
+	k, err := retention.NewKeyFromMaterial(bytes.Repeat([]byte{0x37}, retention.MinKeyBytes))
+	if err != nil {
+		panic(err)
+	}
+	return k
+}()
 
 // captureLog gives a test the lines a seam actually wrote, which is the
 // whole observable behaviour of "log once and carry on".
@@ -67,7 +80,7 @@ func TestUnwritableSnapshotDirLogsAndCarriesOn(t *testing.T) {
 // to be a no-op in that state, because main wires them unconditionally.
 func TestSnapshotSeamsAreNoOpsWithoutADirectory(t *testing.T) {
 	log, buf := captureLog(t)
-	restoreSnapshot(log, "", time.Now())
+	restoreSnapshot(log, "", testSnapshotKey, time.Now())
 	writeFinalSnapshot(log, nil, snapshotShutdownBudget)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -125,7 +138,7 @@ func TestSnapshotDirectoryResolution(t *testing.T) {
 // "why did it not use the snapshot" is the question that follows.
 func TestRestoreSnapshotOnAnEmptyDirectoryReportsAColdStart(t *testing.T) {
 	log, buf := captureLog(t)
-	restoreSnapshot(log, t.TempDir(), time.Now(), store.New(16, time.Hour).SnapshotPart())
+	restoreSnapshot(log, t.TempDir(), testSnapshotKey, time.Now(), store.New(16, time.Hour).SnapshotPart())
 	if !strings.Contains(buf.String(), "cold start") {
 		t.Errorf("an empty snapshot directory did not report a cold start:\n%s", buf.String())
 	}
@@ -145,14 +158,14 @@ func TestSnapshotRoundTripThroughTheWiredParts(t *testing.T) {
 	eng := engine.New()
 
 	parts := []snapshot.Part{written.SnapshotPart(), writtenDevices.SnapshotPart(), engineSnapshotPart{eng: eng}}
-	writeSnapshot(log, snapshot.New(dir, 6, parts...))
+	writeSnapshot(log, snapshot.New(dir, 6, testSnapshotKey, parts...))
 	if buf.Len() != 0 {
 		t.Fatalf("writing a snapshot logged a problem:\n%s", buf.String())
 	}
 
 	restored := store.New(64, time.Hour)
 	restoredDevices := device.NewRegistry(nil)
-	restoreSnapshot(log, dir, time.Now(),
+	restoreSnapshot(log, dir, testSnapshotKey, time.Now(),
 		restored.SnapshotPart(), restoredDevices.SnapshotPart(), engineSnapshotPart{eng: engine.New()})
 
 	line := buf.String()
@@ -192,7 +205,7 @@ func TestWriteFinalSnapshotReturnsEvenWhenAPartHangs(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		writeFinalSnapshot(log, snapshot.New(dir, 6, blockingPart{release: make(chan struct{})}), 50*time.Millisecond)
+		writeFinalSnapshot(log, snapshot.New(dir, 6, testSnapshotKey, blockingPart{release: make(chan struct{})}), 50*time.Millisecond)
 	}()
 	select {
 	case <-done:

@@ -136,12 +136,23 @@ func NewKeyFromMaterial(material []byte) (*Key, error) {
 // yesterday's events as today's by moving a file, which matters because
 // the whole point of a replay is that its window is trustworthy.
 func (k *Key) fileKey(salt []byte, day string) ([]byte, error) {
-	return hkdf.Key(sha256.New, k.material, salt, keyInfoPrefix+day, 32)
+	return k.Derive(salt, keyInfoPrefix+day)
 }
 
-// keyInfoPrefix namespaces this package's derived keys. If the same key
-// file is ever reused for another purpose -- #853 puts the state store
-// and the warm-restart snapshots under this same key -- each derives
-// through its own info string, so no two of them ever seal different
-// kinds of data with the same bytes.
+// Derive returns a 32-byte AES-256 key for one purpose, from salt and an
+// info string that namespaces the caller.
+//
+// Exported so other packages that hold the same master key -- #853 puts
+// internal/persist's file-backed stores and internal/snapshot's
+// warm-restart documents under it -- derive through this one function
+// rather than growing their own copy of the HKDF call. See keyInfoPrefix
+// for why every caller must use its own info string: two callers sharing
+// one would seal different kinds of data with the same derived key.
+func (k *Key) Derive(salt []byte, info string) ([]byte, error) {
+	return hkdf.Key(sha256.New, k.material, salt, info, 32)
+}
+
+// keyInfoPrefix namespaces this package's own per-day file keys. See
+// Derive's doc comment for why every user of the master key -- this
+// package included -- needs its own prefix.
 const keyInfoPrefix = "mikroview/event-retention/v1/"

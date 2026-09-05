@@ -309,9 +309,15 @@ describe('the memory group’s on-restart row (round 43, #921)', () => {
 describe('the disk group’s state row', () => {
   it('names the backend and what it keeps, or nothing for a caller the GET refuses', () => {
     expect(stateRow({ backend: 'file', dir: '/var/lib/mikroview' })).toBe(
-      'file store · /var/lib/mikroview — flags, definitions, watchlist, entities, tokens',
+      'encrypted file store · /var/lib/mikroview — flags, definitions, watchlist, entities, tokens',
     )
     expect(stateRow({ backend: 'postgres' })).toBe('Postgres — flags, definitions, watchlist, entities, tokens')
     expect(stateRow(null)).toBeNull()
+  })
+
+  it('says memory-only when #853 has no key to persist any of it under, except the hashed stores', () => {
+    expect(stateRow({ backend: 'memory' })).toBe(
+      'memory only — no key configured, so flags, definitions, watchlist and entities do not survive a restart (accounts and tokens still do, as one-way hashes)',
+    )
   })
 })
