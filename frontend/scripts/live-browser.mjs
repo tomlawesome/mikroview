@@ -74,7 +74,24 @@ if (!(BROWSER_NAME in ENGINES)) {
  */
 export async function launchBrowser() {
   try {
-    return await ENGINES[BROWSER_NAME].launch()
+    // Chromium only, and not optional there: session()'s newPage sets
+    // the per-context ignoreHTTPSErrors, which covers navigation and
+    // page.request against the self-signed certificate the container
+    // image serves HTTPS with -- but a service worker's own script
+    // fetch is checked earlier, at the network stack Chromium launches
+    // with, which that per-context override never reaches (the same
+    // "Chromium refuses to register one over a certificate outside its
+    // trust store regardless" isUntrustedCertServiceWorkerError already
+    // documents). Without this flag, registration fails with a
+    // SecurityError before it ever reaches 'activated', which is why
+    // live-sw-navigation's `navigator.serviceWorker.ready` hung until
+    // its own timeout in the container gate: not a slow activation to
+    // wait longer for, but one that Chromium had already refused.
+    // Verified this is Chromium-specific, not a gap in every engine:
+    // Firefox activates the same worker over the same certificate with
+    // no equivalent flag at all.
+    const args = BROWSER_NAME === 'chromium' ? ['--ignore-certificate-errors'] : []
+    return await ENGINES[BROWSER_NAME].launch({ args })
   } catch (e) {
     const message = String(e?.message ?? e)
     if (/Executable doesn't exist/.test(message)) {
