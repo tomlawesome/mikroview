@@ -476,6 +476,24 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 | HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
 | Syslog TLS | None | Always (mikroview's only syslog listener) | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS buys confidentiality on the wire and mikroview authenticating itself to the router, but not the reverse: RouterOS's logging action has no client-certificate option, so anything able to reach the port can still connect and inject log lines. |
 | WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; blocked entirely while undecided (not in the choice-screen exemption list); open, no origin check, once skipped | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` (undecided or skipped) — moot for "undecided", since `requireAuth` never lets the request reach this handler in that state. See `internal/api/ws.go`. |
+| Router-backup SFTP drop box (`internal/backupsftp`, issue #394) | Username = device name, password = that device's ingest token, checked against the same token store the syslog push uses; write-only, per-device, no listing/reading/deleting/renaming | SSH transport (host key generated on first start), but see the caveat below — **the router never verifies it** | Off by default (`backup.enabled: false`); opens a second listening port only once turned on. Login isolation, write-only scope and header/quota checks are enforced in `internal/backupvault`/`internal/backupsftp`, not by the transport. |
+
+**RouterOS never verifies this server's host key.** Measured on RouterOS
+7.23.3: `/tool fetch mode=sftp` connects to any host key without warning
+or a way to pin one, so an on-path attacker between the router and
+MikroView can pose as MikroView, complete the SSH handshake, and receive
+the router's whole configuration — binary backup, plain-text export, and
+the ingest token used to authenticate — in the clear from the router's
+point of view. This is not a bug to fix in this listener: RouterOS's
+`/tool fetch` simply offers no host-key-pinning option to fix it with.
+**Run the push only over a network path you trust** — a LAN or a VPN,
+never across the open internet — and treat the port the same way you
+would treat an unauthenticated one, because from the router's side it
+effectively is. Issue #955 tracks an HTTPS-based alternative path that
+does verify (via the CA certificate the wizard already installs) for
+deployments that cannot guarantee a trusted path. See
+[configuration.md](docs/configuration.md#router-backups-over-sftp-optional-off-by-default)
+and [routeros-setup.md](docs/routeros-setup.md#7-back-up-the-routers-configuration-optional).
 
 ## Hardening already in place
 
