@@ -211,12 +211,17 @@ build() {
   # succeeds too -- "> vite build" read as a redirection into a command
   # named "build" is how this was actually caught, as "eval: build: not
   # found" once npm's own text stopped going to /dev/null with the error.
-  # MV_DEMO_BUILD=1: ship a self-destroying service worker, so a browser
+  # MV_DEMO_BUILD=1 ships a self-destroying service worker, so a browser
   # holding an earlier build's precached shell drops it instead of
-  # serving it back (#713). Without this a fix can be in the tree, in the
+  # serving it back (#713). Without it a fix can be in the tree, in the
   # bundle and served correctly, and still be invisible to whoever is
   # reviewing the demo.
-  if ! ( cd frontend && MV_DEMO_BUILD=1 npm run build ) 1>&2; then
+  #
+  # Not set here: the live-check gate needs a real worker so
+  # live-sw-navigation.mjs can prove a typed /api/* navigation reaches the
+  # server (#753); a demo sets MV_DEMO_BUILD=1 itself (AGENTS.md, "Demos
+  # the owner reviews").
+  if ! ( cd frontend && npm run build ) 1>&2; then
     echo "live-env: npm run build failed in frontend/ -- see the output above." >&2
     if [ ! -d frontend/node_modules ]; then
       echo "live-env: frontend/node_modules is missing -- run 'npm ci' in frontend/ first." >&2
