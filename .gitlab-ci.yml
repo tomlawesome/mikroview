@@ -32,6 +32,11 @@ stages:
 # not run at all, so a new job must pick one.
 default:
   tags: [big]
+  # #952: a new push to the same branch cancels the still-running previous
+  # pipeline instead of letting it hold a big-lane slot to the end. Jobs
+  # that push, publish or post externally override this back to false
+  # below, so they are never cut mid-write.
+  interruptible: true
 
 variables:
   GOFLAGS: "-mod=readonly"
@@ -92,6 +97,9 @@ policy:promotion-hop:
   tags: [light]
   image: alpine:3.22
   needs: []
+  # #952: a gate for the dev -> preview -> main hop; a cancelled-mid-run
+  # result must never be read as a pass.
+  interruptible: false
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
   script:
@@ -197,6 +205,7 @@ test:go:
   artifacts:
     paths:
       - coverage.out
+    expire_in: 1 week
 
 test:frontend:
   stage: test
@@ -434,6 +443,7 @@ security:semgrep:
     paths:
       - semgrep.sarif
       - semgrep.log
+    expire_in: 1 week
 
 security:gosec:
   stage: security
@@ -459,6 +469,7 @@ security:gosec:
     when: always
     paths:
       - gosec.sarif
+    expire_in: 1 week
 
 security:govulncheck:
   stage: security
@@ -477,6 +488,7 @@ security:govulncheck:
     when: always
     paths:
       - govulncheck.json
+    expire_in: 1 week
 
 # The two remaining halves of GitHub's ci.yml `security` job, moved here
 # under #935 step 7. Their long rationale is in that file's history
@@ -608,6 +620,7 @@ security:gitleaks:
     when: always
     paths:
       - gitleaks.sarif
+    expire_in: 1 week
 
 security:trivy-fs:
   stage: security
@@ -627,6 +640,7 @@ security:trivy-fs:
     when: always
     paths:
       - trivy-fs.sarif
+    expire_in: 1 week
   allow_failure: true
 
 # ---------------------------------------------------------------------------
@@ -664,6 +678,8 @@ sync:mirror-to-github:
   # request already ran lint, test and security before it merged; a flaky
   # test on the post-merge run must not leave GitHub behind, silently.
   needs: []
+  # #952: pushes to GitHub -- never cut mid-write.
+  interruptible: false
   rules:
     - if: '$CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true" && ($CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "preview" || $CI_COMMIT_BRANCH == "main")'
   variables:
@@ -720,6 +736,11 @@ sync:mirror-to-github:
 chr-exercise:run:
   stage: chr-exercise
   image: golang:1.27
+  # #952: this job pushes chr/last-run.json to the chr-reports branch on
+  # every run (scripts/chr-report.sh) and, on a fully clean exercise, also
+  # pushes a branch and opens a merge request
+  # (scripts/routeros-chr-open-mr.sh) -- never cut mid-write.
+  interruptible: false
   # This job gates nothing. It boots a CHR and records which of the
   # wizard's commands RouterOS still accepts (#894); a unit test failing
   # on this runner says nothing about that. Without `needs: []` it sits
@@ -826,6 +847,9 @@ chr-watch:run:
   # Light lane (#949): reads one report and calls the API.
   tags: [light]
   image: node:22-alpine
+  # #952: opens, comments on or closes a tracking issue via the GitLab API
+  # -- never cut mid-write.
+  interruptible: false
   # This job only reads the report chr-exercise:run already wrote and talks
   # to the GitLab API -- nothing earlier in the pipeline can invalidate
   # that, and it must still run (and still be able to report a stale report)
@@ -858,6 +882,9 @@ renovate:run:
   stage: renovate
   image: renovate/renovate:44
   needs: []
+  # #952: opens and updates merge requests via the GitLab API -- never cut
+  # mid-write.
+  interruptible: false
   rules:
     - if: '$RENOVATE == "true" && $CI_PIPELINE_SOURCE == "schedule"'
     - if: '$RENOVATE == "true" && $CI_PIPELINE_SOURCE == "web"'
