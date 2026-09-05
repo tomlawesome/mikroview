@@ -46,7 +46,12 @@ export interface ReachStrand {
    * "busiest over the whole buffer", and the two are different questions.
    * Not a number to show anyone -- it has no unit. */
   weight: number
-  /** The rule that refused a blocked strand, from the events themselves. */
+  /** The rule that refused a blocked strand, from the events themselves.
+   * Taken from the most recent blocked event on the strand, not the
+   * first: a rule table can be edited (a named rule removed, replaced by
+   * nothing or by a different one), and naming a rule the current table
+   * no longer has would be exactly the guessing this field exists to
+   * refuse (#967). */
   refusedBy?: string
 }
 
@@ -127,7 +132,12 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
       g.portCounts.set(e.dstPort, (g.portCounts.get(e.dstPort) ?? 0) + 1)
       if (e.protocol && !g.portProto.has(e.dstPort)) g.portProto.set(e.dstPort, e.protocol.toLowerCase())
     }
-    if (outcome === 'blocked' && e.ruleLabel && !g.refusedBy) g.refusedBy = e.ruleLabel
+    // The latest drop wins, not the first: events arrive oldest-first, so
+    // this is "what the most recent refusal said", including reverting
+    // to unnamed when the newest drop carries no label even though an
+    // older one did -- the same stale-name defect #966 fixed in
+    // reality.ts (#967).
+    if (outcome === 'blocked') g.refusedBy = e.ruleLabel || undefined
   }
 
   const strands = [...groups.values()]
