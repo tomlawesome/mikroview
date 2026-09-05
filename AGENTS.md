@@ -137,8 +137,9 @@ from `dev`, and into `main` unless it comes from `preview`.
 
 Issues, planning and decisions live on GitLab too (owner decision,
 2026-09-04, on #935): the whole GitHub tracker was imported here, keeping
-every issue and merge request number, and GitHub's issues are closed and
-left as the historical copy. `Closes #N` goes in the merge request
+every issue and merge request number, and Issues is switched off on the
+GitHub mirror (owner, 2026-09-05, #935) — the mirror takes no pull requests
+either, so nobody should raise issues there. `Closes #N` goes in the merge request
 description as well as the commit message. GitLab closes from either, but
 only on a merge into the default branch — which here is `dev`, so an
 ordinary merge closes its issue with no extra job. Check the issue after
