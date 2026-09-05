@@ -173,9 +173,18 @@ func openDayFile(dir, day string, key *Key) (*dayFile, error) {
 
 // aeadFor builds the AES-256-GCM cipher for one file.
 func aeadFor(key *Key, salt []byte, day string) (cipher.AEAD, error) {
-	derived, err := key.fileKey(salt, day)
+	return aeadFromInfo(key, salt, keyInfoPrefix+day)
+}
+
+// aeadFromInfo builds the AES-256-GCM cipher for a key derived under one
+// info string. Shared by aeadFor (this package's per-day event files) and
+// Seal/Open (seal.go's whole-document envelope for other packages holding
+// the same master key), so there is exactly one place that turns derived
+// key material into a cipher.AEAD.
+func aeadFromInfo(key *Key, salt []byte, info string) (cipher.AEAD, error) {
+	derived, err := key.Derive(salt, info)
 	if err != nil {
-		return nil, fmt.Errorf("retention: deriving file key: %w", err)
+		return nil, fmt.Errorf("retention: deriving key: %w", err)
 	}
 	block, err := aes.NewCipher(derived)
 	if err != nil {

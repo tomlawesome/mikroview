@@ -424,38 +424,60 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   holds event lines, packet payloads, or the rule/NAT/DHCP tables your
   routers push -- those three stay in memory for the life of the
   process, which is what the bullet above promises and this feature does
-  not change. Snapshot files are **not encrypted at rest**: they are
-  covered by the same open decision as the other state files, issue
-  #853, and until that lands they need the same filesystem care as
-  `config.yaml`. Losing the directory costs nothing but a cold start, so
-  there is no reason to include it in a backup.
-- **Deliberate exceptions: behavioral flags, accounts, API tokens, the
-  stale-rule usage record, and the new-device MAC registry.** Raised
-  flags (port scans, activity spikes, critical-port attempts, volume
-  spikes -- see [docs/configuration.md](docs/configuration.md)),
-  accounts (plus the create/skip decision), API tokens, the per-rule
-  first/last-seen usage record backing the stale-rule detector, and the
-  new-device detector's per-MAC first/last-seen history are each
-  persisted to small JSON files under `/var/lib/mikroview` by default
-  (`flags.storePath` / `auth.storePath` / `auth.tokensStorePath` /
-  `flags.ruleUsageStorePath` / `deviceMac.storePath`), which the
-  container creates and owns -- no configuration needed for any of them
-  to survive a process restart. The flags file contains the IP addresses
-  that triggered a flag and a short human-readable description; the
-  accounts file contains usernames and Argon2id password hashes (never
-  plaintext passwords); the tokens file contains token names and
-  SHA-256 hashes (never the raw bearer values); the rule-usage file
-  contains rule labels and timestamps only; the MAC registry file
-  contains LAN client MAC addresses and timestamps only. Treat all of
-  these with the same care as `config.yaml` (see "Recommended
-  deployment hardening" below). None survive *container recreation* (as
-  opposed to a simple restart) unless you mount a volume over
-  `/var/lib/mikroview` -- for accounts specifically, that means the
-  create/skip decision itself reverts to undecided on recreation
-  without a volume, which re-shows the first-run choice screen rather
-  than silently reopening or silently re-gating the deployment; for the
-  MAC registry, it means every MAC looks "new" again after a recreation
-  without a volume.
+  not change. **Snapshot files are encrypted under `history.keyFile`
+  when one is mounted, and are not written at all otherwise** (#853): the
+  same key and cipher the on-disk event history uses, so there is one key
+  to manage, not two. With no key, a restart simply starts cold, exactly
+  as it did before warm restart existed. Losing the directory costs
+  nothing but a cold start, so there is no reason to include it in a
+  backup.
+- **The state store: encrypted under the same key, or memory-only.**
+  Behavioral flags (port scans, activity spikes, critical-port attempts,
+  volume spikes -- see [docs/configuration.md](docs/configuration.md)),
+  accounts (plus the create/skip decision), API tokens, recovery-key
+  digests, the per-rule first/last-seen usage record backing the
+  stale-rule detector, the new-device detector's per-MAC first/last-seen
+  history, entities, watchlist entries and definitions, and detector
+  settings each persist to a small JSON file under `/var/lib/mikroview`
+  by default (`flags.storePath` / `auth.storePath` /
+  `auth.tokensStorePath` / `auth.recoveryKeysPath` /
+  `flags.ruleUsageStorePath` / `deviceMac.storePath` and the rest --
+  see `docs/configuration.md` for the full list). **Every one of these
+  files is sealed under `history.keyFile` -- the same key the event
+  history and warm-restart snapshots use -- and every one is
+  memory-only, not plaintext, when no key is configured** (#853). There
+  is no unencrypted mode, and no migration path from a plaintext file
+  written before this amendment to an encrypted one after: a document
+  that fails to decrypt is refused outright, the same way a corrupted
+  one always was, rather than silently treated as a fresh install.
+
+  This is a significant change from earlier releases: before #853, none
+  of the above needed any configuration to survive a process restart.
+  From this build, with no `history.keyFile` mounted, accounts, tokens
+  and every other store in this list are held in memory only and are
+  lost on every restart -- for accounts specifically, that means the
+  create/skip decision reverts to undecided and the first-run choice
+  screen reappears. Mount a key (see
+  [docs/configuration.md](docs/configuration.md), "On-disk event
+  history") to keep the previous behaviour, even with `history.enabled`
+  left off.
+
+  With a key, the flags file contains the IP addresses that triggered a
+  flag and a short human-readable description (encrypted); the accounts
+  file contains usernames and Argon2id password hashes, never plaintext
+  passwords (encrypted); the tokens file contains token names and
+  SHA-256 hashes, never the raw bearer values (encrypted); the rule-usage
+  and MAC-registry files contain labels/addresses and timestamps only
+  (encrypted). None of these survive *container recreation* (as opposed
+  to a simple restart) unless you mount a volume over
+  `/var/lib/mikroview`, whichever persistence mode is in effect.
+
+  Postgres-backed deployments are unaffected by any of this: that backend
+  keeps whatever protection Postgres itself provides at rest, plus the
+  `sslmode=verify-full` connection mikroview already requires -- see
+  `docs/decisions/event-retention.md`'s amendment for why a second
+  encryption layer there was not judged to add real value for this
+  build.
 - **No secrets reach the browser.** The optional AbuseIPDB API key
   (`reputation.abuseIPDBKey` / `MIKROVIEW_ABUSEIPDB_KEY`) is read
   server-side only and used solely to call AbuseIPDB's API from the
