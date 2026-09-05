@@ -212,8 +212,10 @@ runs the gate, brings the log back as `gate-run.log`, and removes the
 work tree afterwards. `MV_BROWSER=firefox make live-check-remote` picks
 the engine. `scripts/gate-remote.sh` carries the reasoning. The host is
 single-tenant -- one branch, one work tree -- so the script takes a lock
-(`~/gate-lock`) before it pushes and refuses if another run already
-holds it (#809); wait for that run, or if it looks dead, follow the
+(`~/gate-lock`) before it pushes and refuses (exit 75, distinct from a
+gate failure) if another run already holds it (#809); run
+`scripts/gate-remote.sh --wait` (or `MV_GATE_WAIT=1`) to poll until it
+frees instead of refusing (#811). If the holder looks dead, follow the
 `ssh ... rm -r ~/gate-lock` hint the refusal prints.
 
 **The host's standing tenant is the `dev` loop.** `scripts/gate-dev-loop.sh`
