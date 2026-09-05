@@ -551,7 +551,14 @@ addresses, the registry invents a discovered device per source IP and the
 pushed tables sit under ids no device has. Both halves report success and
 never meet (#709).
 
-    MV_DEMO_DEVICES=1 MV_BIND=<addr> scripts/live-env.sh up
+`MV_DEMO_BUILD=1` matters here too: it ships the self-destroying service
+worker (#713) that stops a browser serving back a stale precached build
+across the many rebuilds a demo goes through. `live-env.sh up` no longer
+sets it by default -- the live-check gate needs a real, non-self-destroying
+worker to prove its own navigation scenario (#753) -- so a demo has to ask
+for it explicitly.
+
+    MV_DEMO_DEVICES=1 MV_DEMO_BUILD=1 MV_BIND=<addr> scripts/live-env.sh up
 
     export MV_URL=... MV_USER=... MV_PASS=...
     export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_PORT=<tls port>
