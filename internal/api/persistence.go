@@ -16,19 +16,24 @@ import "net/http"
 // states on its own without needing this endpoint.
 type PersistenceInfo struct {
 	// Backend is "file", "postgres", or "memory" -- whichever main.go's
-	// storage.backendFor actually resolved to. "memory" is #853's third
-	// state: no history.keyFile configured, so the file-backed stores
-	// this endpoint describes refuse to persist at all rather than
-	// writing in the clear -- see storage.go's backendFor and
-	// docs/decisions/event-retention.md's amendment. Never guessed
-	// independently of that decision.
+	// storage.backendFor actually resolved to for flags, definitions,
+	// watchlist entries and entities. "memory" is #853's third state: no
+	// history.keyFile configured, so those file-backed stores refuse to
+	// persist at all rather than writing in the clear -- see storage.go's
+	// backendFor and docs/decisions/event-retention.md's amendment. Never
+	// guessed independently of that decision.
+	//
+	// Accounts and tokens are not covered by this value (#853 rule 6):
+	// both hold only one-way hashes, so they keep persisting to a plain
+	// file even when Backend reports "memory", and to an encrypted one
+	// when Backend reports "file".
 	Backend string `json:"backend"`
 	// Dir is the directory the JSON documents live under, for the file
 	// backend -- one representative store's own configured path
-	// (internal/auth's, since accounts are the one store mikroview
-	// insists on persisting -- see main.go), directory-only rather than
-	// a specific filename since several documents share it. Absent for
-	// postgres (no filesystem path to report) and for memory (nothing is
+	// (internal/auth's, since accounts persist in every backend state --
+	// see main.go), directory-only rather than a specific filename since
+	// several documents share it. Absent for postgres (no filesystem path
+	// to report) and for memory (nothing but accounts and tokens is
 	// actually written there).
 	Dir string `json:"dir,omitempty"`
 }

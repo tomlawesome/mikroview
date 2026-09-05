@@ -151,6 +151,39 @@ Whether accounts, tokens and recovery-key digests specifically should have
 kept an unencrypted fallback when no key is configured -- given how central
 login is to using the product at all -- was considered during the build and
 decided against in favour of the literal "every file the file backend
-writes" rule already quoted above, but the owner has not explicitly
-ratified that specific consequence (as opposed to the general rule). Worth
-revisiting if it turns out to be a worse default than intended.
+writes" rule already quoted above, but the owner had not explicitly
+ratified that specific consequence (as opposed to the general rule).
+Resolved the same day; see the addendum below.
+
+## Addendum, 2026-09-05: rule 6 -- accounts, tokens and recovery keys are exempt (#853)
+
+**Status:** Decided (owner, 2026-09-05).
+
+Rule 2 above ("no key, no storage ... no exception carved out for any one
+store") is amended. The question left open in "Not settled" was put to the
+owner and answered the other way: three stores keep persisting to a plain
+JSON file with no key configured, exactly as every mikroview release
+before this issue --
+
+- `auth` (accounts, `cfg.Auth.StorePath`)
+- `tokens` (`cfg.Auth.TokensStorePath`)
+- `recovery_keys` (`cfg.Auth.RecoveryKeysPath`)
+
+The reasoning: all three hold only one-way hashes -- Argon2id password
+hashes, SHA-256 token hashes, hashed recovery keys -- so encrypting them
+protects nothing that a plaintext copy would actually expose. What a
+plaintext copy discloses instead (usernames and roles for accounts, token
+names for tokens) is accepted, the same trade every earlier mikroview
+release made by default. With a key configured, all three are still
+encrypted like every other store -- this only changes what happens with no
+key.
+
+Every other store keeps rule 2 unchanged: flags, entities, the MAC
+registry, rule usage, detector settings, watchlist suggestions and
+definitions remain memory-only with no key, no exceptions.
+
+`storage.go`'s `backendFor` implements the exemption with a small
+`hashedStores` set checked before the `s.key == nil` return.
+`openAuthStoreForCLI`/`openRecoveryStoreForCLI` (main.go) keep their nil
+check -- an empty configured path still yields `nil` -- but no longer word
+the refusal as needing a key, since that can no longer be the reason.
