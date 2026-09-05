@@ -56,6 +56,8 @@ Screenshots: `shots/step6-{rest,arrived,nokey,lost}.png`.
   step 6 for a router that has stopped pushing; the build may reach it
   from the backups group instead.
 
-## Verdicts
+## Verdicts (owner, 2026-09-05)
 
-Awaiting the owner.
+*"Good, and the sixth wizard step is right."* **Ratified as drawn**,
+the sixth step included. Build: #394. Where the lost-router state is
+reached from is still open (question 42 on the issue).
