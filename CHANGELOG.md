@@ -19,22 +19,29 @@ rewritten.
 ### Added
 
 - **The same key that encrypts the on-disk event history now also
-  covers everything else mikroview writes to disk** (#853,
-  `docs/decisions/event-retention.md`'s amendment): the JSON-file state
-  store (flags, entities, the MAC registry, rule usage, detector
-  settings, accounts, tokens, recovery-key digests -- every document
-  `internal/persist`'s file backend writes) and the warm-restart
+  covers most of what else mikroview writes to disk** (#853,
+  `docs/decisions/event-retention.md`'s amendment and addendum): the
+  JSON-file state store (flags, entities, the MAC registry, rule usage,
+  detector settings -- every document `internal/persist`'s file backend
+  writes, other than the three named below) and the warm-restart
   snapshots (#795) are sealed under `history.keyFile` with the same
   AES-256-GCM/HKDF scheme the event history already uses. **No key, no
   storage**: with none configured, every one of these stores is
   memory-only and is lost on every restart -- there is no unencrypted
-  mode to fall back to, matching the event history's own rule. This is
-  a severe change from every earlier release for a default install,
-  where none of this needed a key at all: with no `history.keyFile`
-  mounted, mikroview now forgets accounts, tokens and every other
-  persisted store across a restart, not just the optional ones.
+  mode to fall back to, matching the event history's own rule.
   `history.enabled` still only switches the event *log* on top of this
   same key; the state store and snapshots follow the key alone.
+
+  **Accounts, API tokens and recovery-key digests are exempt** (rule 6,
+  decided the same day): all three hold only one-way hashes, so they
+  keep persisting to a plain JSON file with no key configured, exactly
+  as every earlier mikroview release -- `docker compose up` alone is
+  still enough to keep your admin login across a restart. With a key,
+  they are encrypted like everything else. Every other store is a
+  severe change from earlier releases, where none of it needed a key at
+  all: with no `history.keyFile` mounted, mikroview now forgets flags,
+  entities and the rest of the list above across a restart, not just
+  the optional ones.
 
   `-backup`/`-restore` still work with a key mounted: the backup
   envelope stays plain, readable JSON either way, and `-restore` writes
@@ -44,7 +51,8 @@ rewritten.
   database's own at-rest custody and required TLS.
 
   Settings' persistence row now has a third state, `memory only`,
-  alongside `file` and `postgres`.
+  alongside `file` and `postgres` -- reported for flags, entities and
+  the rest; accounts, tokens and recovery keys persist regardless.
 
 - **Renovate now proposes dependency updates as merge requests on
   GitLab, replacing Dependabot** (#945).

@@ -1326,9 +1326,14 @@ func main() {
 	// directory, used only in the "file" case.
 	//
 	// #853 adds a third state: on the JSON path with no history.keyFile
-	// configured, backendFor refuses every store rather than handing back
+	// configured, backendFor refuses most stores rather than handing back
 	// a working file backend (see storage.go), so "file" would overclaim
-	// what is actually happening -- nothing is being written anywhere.
+	// what is actually happening for those -- nothing is being written
+	// anywhere. Accounts and tokens are the exception (rule 6): they
+	// persist in every one of these three states, encrypted or plain, so
+	// api.PersistenceInfo's own doc comment carries that caveat rather
+	// than this switch, which still only describes the stores "memory"
+	// can truthfully apply to.
 	persistenceInfo := api.PersistenceInfo{Backend: "postgres"}
 	switch {
 	case persistence.pool != nil:
@@ -1341,6 +1346,9 @@ func main() {
 		}
 	default:
 		persistenceInfo.Backend = "memory"
+		if cfg.Auth.StorePath != "" {
+			persistenceInfo.Dir = filepath.Dir(cfg.Auth.StorePath)
+		}
 	}
 
 	srv := &api.Server{
@@ -1792,14 +1800,16 @@ func openRecoveryStoreForCLI() (*auth.RecoveryStore, func(), error) {
 		st.Close()
 		return nil, nil, err
 	}
-	// #853: with no history.keyFile configured, backendFor refuses this
-	// store rather than handing back a plain FileBackend -- see its doc
-	// comment. Refusing here, loudly, is the point: silently proceeding
-	// would hand this recovery command an empty in-memory store, which
-	// looks like a successful recovery while touching nothing on disk.
+	// #853 rule 6: recovery_keys is one of the hashed stores backendFor
+	// keeps persisting to a plain JSON file even with no history.keyFile
+	// configured, so a nil backend here only means the path itself is
+	// unset (already checked above) or Postgres rejected it. Checked
+	// anyway, loudly, because silently proceeding would hand this
+	// recovery command an empty in-memory store, which looks like a
+	// successful recovery while touching nothing on disk.
 	if backend == nil && cfg.Auth.RecoveryKeysPath != "" {
 		st.Close()
-		return nil, nil, fmt.Errorf("no history.keyFile is configured -- without one, mikroview never persists the recovery-key store (#853), so there is nothing on disk for this command to work with. Mount the key and try again")
+		return nil, nil, fmt.Errorf("the recovery-key store has no working backend -- check auth.recoveryKeysPath and the Postgres configuration")
 	}
 	store, err := auth.OpenRecoveryWithBackend(backend, cfg.Auth.RecoveryPepperPath)
 	if err != nil {
@@ -2131,15 +2141,17 @@ func openAuthStoreForCLI(cmd string) (*auth.Store, func(), error) {
 		st.Close()
 		return nil, nil, err
 	}
-	// #853: no history.keyFile means backendFor refuses this store rather
-	// than a plain FileBackend -- see its doc comment. Refusing here,
+	// #853 rule 6: auth is one of the hashed stores backendFor keeps
+	// persisting to a plain JSON file even with no history.keyFile
+	// configured, so a nil backend here means auth.storePath is empty
+	// (already checked above) or Postgres rejected it. Checked anyway,
 	// loudly, matters more for this command than almost any other: silent
 	// proceeding would hand it an empty in-memory accounts store, which
 	// looks like a working recovery/transfer while touching nothing that
 	// survives the next restart.
 	if backend == nil {
 		st.Close()
-		return nil, nil, fmt.Errorf("no history.keyFile is configured -- without one, mikroview never persists the accounts store (#853), so there is nothing on disk for %s to work with. Mount the key and try again", cmd)
+		return nil, nil, fmt.Errorf("the accounts store has no working backend -- check auth.storePath and the Postgres configuration for %s", cmd)
 	}
 	store, err := auth.OpenWithBackend(backend)
 	if err != nil {

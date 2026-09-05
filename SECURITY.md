@@ -431,36 +431,49 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   as it did before warm restart existed. Losing the directory costs
   nothing but a cold start, so there is no reason to include it in a
   backup.
-- **The state store: encrypted under the same key, or memory-only.**
-  Behavioral flags (port scans, activity spikes, critical-port attempts,
-  volume spikes -- see [docs/configuration.md](docs/configuration.md)),
-  accounts (plus the create/skip decision), API tokens, recovery-key
-  digests, the per-rule first/last-seen usage record backing the
-  stale-rule detector, the new-device detector's per-MAC first/last-seen
-  history, entities, watchlist entries and definitions, and detector
-  settings each persist to a small JSON file under `/var/lib/mikroview`
-  by default (`flags.storePath` / `auth.storePath` /
-  `auth.tokensStorePath` / `auth.recoveryKeysPath` /
-  `flags.ruleUsageStorePath` / `deviceMac.storePath` and the rest --
-  see `docs/configuration.md` for the full list). **Every one of these
-  files is sealed under `history.keyFile` -- the same key the event
-  history and warm-restart snapshots use -- and every one is
-  memory-only, not plaintext, when no key is configured** (#853). There
-  is no unencrypted mode, and no migration path from a plaintext file
-  written before this amendment to an encrypted one after: a document
-  that fails to decrypt is refused outright, the same way a corrupted
-  one always was, rather than silently treated as a fresh install.
+- **The state store: encrypted under the same key, memory-only, or (for
+  the three hashed stores) plain JSON regardless.** Behavioral flags
+  (port scans, activity spikes, critical-port attempts, volume spikes --
+  see [docs/configuration.md](docs/configuration.md)), the per-rule
+  first/last-seen usage record backing the stale-rule detector, the
+  new-device detector's per-MAC first/last-seen history, entities,
+  watchlist entries and definitions, and detector settings each persist
+  to a small JSON file under `/var/lib/mikroview` by default
+  (`flags.storePath` / `flags.ruleUsageStorePath` /
+  `deviceMac.storePath` and the rest -- see `docs/configuration.md` for
+  the full list). Accounts (plus the create/skip decision), API tokens
+  and recovery-key digests persist the same way, to their own files
+  (`auth.storePath` / `auth.tokensStorePath` / `auth.recoveryKeysPath`).
+
+  **Every file in the first group is sealed under `history.keyFile` --
+  the same key the event history and warm-restart snapshots use -- and
+  is memory-only, not plaintext, when no key is configured** (#853).
+  There is no unencrypted mode for these, and no migration path from a
+  plaintext file written before this amendment to an encrypted one
+  after: a document that fails to decrypt is refused outright, the same
+  way a corrupted one always was, rather than silently treated as a
+  fresh install.
+
+  The accounts, tokens and recovery-key files are the one exception
+  (owner decision, #853 rule 6, 2026-09-05): they hold only one-way
+  hashes -- Argon2id password hashes, SHA-256 token hashes, hashed
+  recovery keys -- so encryption adds nothing a plaintext copy could
+  expose beyond usernames and roles. They keep persisting to a plain
+  JSON file with no key configured, exactly as every mikroview release
+  before #853, and are sealed like everything else once a key is
+  mounted.
 
   This is a significant change from earlier releases: before #853, none
   of the above needed any configuration to survive a process restart.
-  From this build, with no `history.keyFile` mounted, accounts, tokens
-  and every other store in this list are held in memory only and are
-  lost on every restart -- for accounts specifically, that means the
-  create/skip decision reverts to undecided and the first-run choice
-  screen reappears. Mount a key (see
+  From this build, with no `history.keyFile` mounted, flags, entities,
+  watchlist entries, definitions and the rule-usage/MAC-registry records
+  are held in memory only and are lost on every restart. Accounts,
+  tokens and recovery keys are unaffected -- they, and the create/skip
+  decision, keep surviving a restart with or without a key, exactly as
+  before this build. Mount a key (see
   [docs/configuration.md](docs/configuration.md), "On-disk event
-  history") to keep the previous behaviour, even with `history.enabled`
-  left off.
+  history") to also keep the previous behaviour for the memory-only
+  stores, even with `history.enabled` left off.
 
   With a key, the flags file contains the IP addresses that triggered a
   flag and a short human-readable description (encrypted); the accounts
@@ -468,8 +481,11 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   passwords (encrypted); the tokens file contains token names and
   SHA-256 hashes, never the raw bearer values (encrypted); the rule-usage
   and MAC-registry files contain labels/addresses and timestamps only
-  (encrypted). None of these survive *container recreation* (as opposed
-  to a simple restart) unless you mount a volume over
+  (encrypted). Without a key, the accounts, tokens and recovery-key
+  files hold that same content in plain JSON instead -- still no
+  passwords, raw tokens or usable recovery keys, only usernames, roles,
+  token names and hashes. None of these survive *container recreation*
+  (as opposed to a simple restart) unless you mount a volume over
   `/var/lib/mikroview`, whichever persistence mode is in effect.
 
   Postgres-backed deployments are unaffected by any of this: that backend
