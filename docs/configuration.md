@@ -186,9 +186,15 @@ labels, device ids and names with their first and last seen, and each
 detector's per-source window counts keyed by address. **What it never
 holds:** event lines, packet payloads, or the rule/NAT/DHCP tables your
 routers push. Those stay in memory for the life of the process, which is
-the promise SECURITY.md makes and this feature does not change. The file
-is **not encrypted at rest** — treat it as you would the rest of
-`/var/lib/mikroview`.
+the promise SECURITY.md makes and this feature does not change.
+
+**Encrypted when `history.keyFile` is mounted, memory-only otherwise
+(#853).** Snapshots are sealed under the same key and cipher as the
+on-disk event history below — one key, not two. With no key configured,
+snapshots are not written at all: a restart starts cold, exactly as it
+did before warm restart existed. There is no unencrypted mode: this is
+not a separate setting, only a consequence of whether `history.keyFile`
+is mounted.
 
 **Snapshots are files even on Postgres.** A deployment that has moved
 its stores to Postgres still writes snapshots to `snapshot.dir` on the
@@ -307,6 +313,55 @@ mikroview process itself can, because the process holds the key to do
 its own reads and writes. The only way to avoid that is not retaining
 history at all, which is why staying off is a real, supported choice
 rather than a lesser one.
+
+### The state store: encrypted when a key is mounted, memory-only otherwise (#853)
+
+`history.keyFile` does double duty. Everything above is about the event
+*log* specifically, switched on by `history.enabled`. Separately, and
+regardless of that switch, the same key file also decides what happens to
+everything else mikroview persists to a JSON file: flags, entities, the
+MAC registry, rule usage, detector settings, watchlist suggestions,
+definitions, accounts, API tokens and recovery-key digests — every
+document the file-backed state store writes.
+
+**No key, no storage.** With no `history.keyFile` mounted, none of that
+persists. It stays in memory for as long as the process runs and is lost
+on every restart, exactly like the event log with no key. There is no
+unencrypted mode: this build never writes any of it to disk in the clear.
+
+**This is a significant change from earlier releases.** Before this, none
+of the state store needed a key at all — accounts, flags and everything
+else in the list above persisted to plain JSON with no configuration,
+which is why `docker compose up` alone used to be enough to keep your
+admin login across a restart. From this build, that survives a restart
+only if `history.keyFile` is mounted. If you are upgrading and want the
+state store to keep persisting, mount a key (see
+[On-disk event history](#on-disk-event-history-optional-off-by-default)
+above for how to generate one) even if you have no interest in the event
+log itself and leave `history.enabled` off.
+
+**No migration path.** Pre-1.0, there is no installed base to protect: a
+JSON file written before a key was mounted is not decrypted back if you
+add one later, and a document that fails to decrypt (the wrong key, or
+one written with no key at all) is refused the same way a corrupt
+document is — not silently treated as a fresh install.
+
+**`-backup`/`-restore` still work.** Both run with the key available, so
+the backup file itself carries plain, readable JSON either way; `-restore`
+writes each store back encrypted when the deployment it restores into has
+a key configured. Neither the key nor the retained event history travels
+inside a backup — see the note under `history.keyFile` above.
+
+**Postgres is unaffected.** A deployment on Postgres keeps whatever
+protection Postgres itself provides at rest, plus the `sslmode=verify-full`
+connection this project already requires (see [Postgres](#postgres-optional))
+— encrypting a second time on top was not judged to add real value for
+this build. See `docs/decisions/event-retention.md`'s amendment for the
+reasoning.
+
+`GET /api/persistence` (admin-only) reports which of `file`, `postgres` or
+`memory` this deployment's state store actually resolved to; Settings'
+persistence row shows the same thing in plain words.
 
 ### Running behind a reverse proxy
 
@@ -2185,6 +2240,13 @@ auth:
   zero-config case. Mount a volume over `/var/lib/mikroview` if you want
   the decision (and any accounts) to survive container recreation, not
   just process restarts -- see `deploy/docker-compose.yml`.
+
+  **Needs `history.keyFile` mounted to persist at all (#853).** Without
+  one, accounts (and every other file-backed store) are memory-only and
+  the choice screen above reappears on every restart -- see
+  [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-853).
+  With one mounted, this file is encrypted the same way the event history
+  is.
 - **`secureCookie`** — sets the session cookie's `Secure` flag. On by
   default, matching [TLS](#tls) being on by default -- there's no other
   kind of connection to have a session on. Only turn this off if you've
@@ -3141,7 +3203,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_SNAPSHOT_INTERVAL` | `snapshot.interval` -- how often a warm-restart snapshot is written (see [Warm restart](#warm-restart-what-survives-a-restart)); anything under 30s falls back to the default |
 | `MIKROVIEW_SNAPSHOT_KEEP` | `snapshot.keep` -- how many snapshot generations to keep; anything under 1 falls back to the default |
 | `MIKROVIEW_SNAPSHOT_DIR` | `snapshot.dir` -- where the snapshot files live. A file path even on a Postgres deployment: a snapshot is derived counters, not custody data |
-| `MIKROVIEW_HISTORY_KEY_FILE` | `history.keyFile` -- path to the master key file, mounted outside the data directory (see [On-disk event history](#on-disk-event-history-optional-off-by-default)); no variable carries the key itself |
+| `MIKROVIEW_HISTORY_KEY_FILE` | `history.keyFile` -- path to the master key file, mounted outside the data directory (see [On-disk event history](#on-disk-event-history-optional-off-by-default)); no variable carries the key itself. Also gates the state store and warm-restart snapshots (#853) regardless of `history.enabled` — see [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-853) below |
 | `MIKROVIEW_HISTORY_ENABLED` | `history.enabled` |
 | `MIKROVIEW_HISTORY_DAYS` | `history.days` -- below 1 the 30-day default is applied |
 | `MIKROVIEW_HISTORY_MAX_BYTES` | `history.maxBytes` -- below 1 MiB the 1 GiB default is applied |
@@ -3440,7 +3502,7 @@ exits, rather than starting the server. See
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
 | `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435, "Tune logging"). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
-| `GET /api/persistence` | admin-only: which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
+| `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 | `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |
