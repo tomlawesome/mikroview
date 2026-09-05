@@ -1,0 +1,45 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "baseBranches": ["dev"],
+  "platformAutomerge": false,
+  "automerge": false,
+  "minimumReleaseAge": "7 days",
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 0,
+  "labels": ["type: chore", "area: governance"],
+  "commitMessagePrefix": "deps:",
+  "branchPrefix": "renovate/",
+  "enabledManagers": ["gomod", "npm", "dockerfile", "gitlabci"],
+  "ignorePaths": ["**/node_modules/**", "tools/screenshots/**"],
+  "gomod": {
+    "postUpdateOptions": ["gomodTidy"]
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "go minor and patch"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm minor and patch"
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "docker minor and patch"
+    },
+    {
+      "matchManagers": ["gitlabci"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "ci images minor and patch"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7.0.0"
+    }
+  ]
+}
