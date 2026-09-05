@@ -28,8 +28,14 @@ stages:
 variables:
   GOFLAGS: "-mod=readonly"
 
+# Scheduled pipelines exist only to carry the CHR exercise and CHR watch jobs,
+# which select themselves on $CHR_EXERCISE / $CHR_WATCH. Without the `never`
+# line every schedule on dev also ran the full lint, test and security set --
+# a daily CI run for a job that reads one JSON file.
 .dev_or_mr: &dev_or_mr
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
 
@@ -123,6 +129,8 @@ lint:frontend:
   stage: lint
   image: node:22-alpine
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -171,6 +179,8 @@ test:frontend:
   stage: test
   image: node:22-alpine
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -199,6 +209,8 @@ test:build-checks:
   stage: test
   image: node:22-bookworm
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -467,6 +479,8 @@ security:npm-audit:
   stage: security
   image: node:22-alpine
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
     - if: $CI_COMMIT_BRANCH == "dev"
