@@ -23,7 +23,7 @@
 // clear of every existing ordering assumption instead of adding a new one
 // nothing else knows to avoid.
 
-import { session, feedSyslog, feedRaw, check, responsive, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, feedRaw, check, responsive, done, goTo, unfoldStreamFilter } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -333,7 +333,16 @@ if (await otherBand.count()) {
 }
 
 // --- Click-through: a boundary or a carrier hands off to Stream, filtered -
+// The band/carrier/quieter handlers (Fall.svelte/fall.svelte.ts) set
+// appState.view = 'live' directly rather than going through goTo(), so
+// unlike a rail navigation this never opens the stream's own filter
+// drawer (#697's `.fbox`) -- it lands on the always-present type-ahead,
+// with the named fields (Interface, Chain, Port, ...) folded behind a
+// click, same as any other arrival at Stream. Open it explicitly before
+// reading them.
 await observedBand.locator('.band-head').click()
+await page.waitForSelector('.filterline .fbox', { timeout: 5000 })
+await unfoldStreamFilter(page)
 await page.waitForSelector('input.rule', { timeout: 5000 })
 const ifaceFilter = await page.inputValue('input[aria-label="Interface"]')
 check(
@@ -352,8 +361,13 @@ await page
   .filter({ has: page.locator('.band-label:text-is("ether1 → bridge1")') })
   .locator('.carrier-hit[data-port="443"]')
   .click()
+await page.waitForSelector('.filterline .fbox', { timeout: 5000 })
+await unfoldStreamFilter(page)
 await page.waitForSelector('input.rule', { timeout: 5000 })
-const portFilter = await page.inputValue('input[placeholder="Port — number or service"]')
+// The placeholder this used to match is desktop-empty now (FilterBar.svelte's
+// Port field only carries it at phone width); aria-label is present at
+// every width, same as the Interface field above.
+const portFilter = await page.inputValue('input[aria-label="Port — number or service"]')
 check(portFilter === '443', `clicking a carrier also fills Stream's port filter -- got "${portFilter}"`)
 
 // --- ...and so does the quieter count, from the band's foot ----------------
@@ -375,6 +389,8 @@ const quieterLink = page
   .locator('.quieter')
 await quieterLink.scrollIntoViewIfNeeded()
 await quieterLink.click()
+await page.waitForSelector('.filterline .fbox', { timeout: 15000 })
+await unfoldStreamFilter(page)
 await page.waitForSelector('input.rule', { timeout: 15000 })
 const quieterIface = await page.inputValue('input[aria-label="Interface"]')
 check(

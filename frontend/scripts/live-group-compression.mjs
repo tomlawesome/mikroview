@@ -30,7 +30,7 @@
 // combined, so the write-up can report the real range rather than one
 // number that hides which end of it any given deployment lands on.
 
-import { session, feedRaw, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedRaw, feedSyslog, check, done, unfoldStreamFilter } from './live-browser.mjs'
 
 const { page, consoleErrors } = await session({ waitForEvents: 50 })
 
@@ -39,12 +39,21 @@ const rowCount = () => page.$$eval('.grid .row', (els) => els.length)
 async function setGroupMode(desired) {
   const current = await page.evaluate(() => localStorage.getItem('mikroview:group') === '1')
   if (current !== desired) {
-    await page.click('button:text-is("Group")')
+    // Round 30 retired the scene-bar toolbar's "Group" button; rounds
+    // 36-38 put it on the whisper's own hand as a lowercase `group` pill
+    // (Whisper.svelte's `.spans.hand`), alongside `following`/`pause`.
+    await page.click('.spans.hand button:text-is("group")')
     await page.waitForTimeout(400)
   }
 }
 
 async function filterTo(label) {
+  // The rule field lives behind the click-to-open drawer (#697's
+  // `.fbox`), which a click anywhere outside it -- setGroupMode's own
+  // Group pill included, since that lives on the whisper's line, not in
+  // the box or its strip -- closes again. Reopen it before every fill
+  // rather than once up front.
+  await unfoldStreamFilter(page)
   await page.fill('input.rule', label)
   await page.waitForTimeout(400)
 }
@@ -150,6 +159,7 @@ for (const [name, m] of [['hammer', hammer], ['sweep', sweep], ['background', ba
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 
 // Leave the view as most scenarios expect to find it.
+await unfoldStreamFilter(page)
 await page.fill('input.rule', '')
 await setGroupMode(false)
 
