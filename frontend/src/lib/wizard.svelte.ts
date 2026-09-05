@@ -35,6 +35,13 @@ class WizardState {
   // "Show setup steps" a place you can stay rather than a peek.
   showStepList = $state(false)
 
+  // lostRouterDevice names the router step 6 (#394, round 45) should
+  // treat as lost, once it can -- set only by openLostRouter below, the
+  // Settings backups group's "is it gone?" link (owner decision, issue
+  // note 10572: this is the only door into that shape; the wizard never
+  // offers it on its own). Null in every ordinary launch.
+  lostRouterDevice = $state<string | null>(null)
+
   // pickedVersion (#436) is the operator's choice from the "Your
   // RouterOS version" pick-list -- '' means the first option, "Not
   // sure", which omits `version` from the request entirely rather than
@@ -124,11 +131,32 @@ class WizardState {
   launch() {
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
+    this.lostRouterDevice = null
+    this.open = true
+  }
+
+  // openLostRouter is the Settings backups group's "is it gone?" link
+  // (#394, round 44's amended receipt): it jumps straight to step 6,
+  // marked for device, rather than the ordinary "first step still
+  // waiting" the ledger would otherwise pick -- an admin who has just
+  // asked "is it gone?" already knows steps 1-5 are done; showing them
+  // the ledger again would bury the one thing they came for.
+  //
+  // Pane 6 is written literally rather than derived from STEP_COUNT:
+  // setupsteps.ts does not have a sixth step yet (#394's build is still
+  // landing it), so this is future-facing -- it lands on the finish
+  // pane until that step exists, and on the step itself once it does,
+  // without this call needing to change either way.
+  openLostRouter(device: string) {
+    this.lostRouterDevice = device
+    this.pane = 6
+    this.showStepList = false
     this.open = true
   }
 
   close() {
     this.open = false
+    this.lostRouterDevice = null
   }
 
   // maybeAutoLaunch is the record's first-run rule: first admin sign-in
