@@ -291,17 +291,19 @@ var shippedDetectors = []shippedDetector{
 	}},
 }
 
-// convertDetectSettings builds every shipped detector definition (always
-// all 12, regardless of what settingsDoc contains -- see shippedDetector's
-// own doc comment) plus a preserved-but-unavailable placeholder for any
-// settingsDoc entry keyed by a name this binary's detect.AllDetectorNames
-// does not include. That second case is deliberately not an error: a
-// detector name settingsDoc doesn't recognize is well-formed data, not
-// corruption, and nothing operator-authored is dropped for it either --
-// its enabled/scope survives inside the placeholder's Params, and
-// decodeStored's availability check (definitions_store.go) marks the
-// placeholder unavailable via an empty Kind, so it is preserved
-// byte-for-byte on every future write without ever being evaluated.
+// convertDetectSettings builds every shipped detector definition -- always
+// all 12, regardless of what settingsDoc contains (see shippedDetector's
+// own doc comment) -- reading each one's enabled/scope from settingsDoc
+// when present and falling back to DefaultDetectorSettings()'s enabled,
+// unscoped default otherwise.
+//
+// A settingsDoc entry keyed by a name outside that 12 (IsShippedDefinitionID)
+// is not read at all: nothing here builds anything for it. Issue #887
+// removed the placeholder definition this function used to build for that
+// case -- SeedShippedDefinitions (its only caller) only ever reads out[sd.id]
+// for the 12 known ids, so the placeholder was built into this function's
+// local map, then discarded with it: never reached DefinitionsStore.Upsert,
+// never persisted. Removing it changes no deployment's on-disk state.
 func convertDetectSettings(settingsDoc map[string]DetectorSettings, cfg ShippedDefaults, out map[string]Definition) error {
 	for _, sd := range shippedDetectors {
 		settings, ok := settingsDoc[sd.id]
@@ -325,35 +327,6 @@ func convertDetectSettings(settingsDoc map[string]DetectorSettings, cfg ShippedD
 			Params:      params,
 			ParamSchema: sd.schema,
 			Provenance:  Provenance{Origin: ProvenanceShipped, ShippedParams: params},
-		}
-	}
-
-	for name, settings := range settingsDoc {
-		if IsShippedDefinitionID(name) {
-			continue // handled above, with its real shipped schema/defaults
-		}
-		id := "legacy-detector:" + name
-		scopeJSON, err := json.Marshal(settings.Scope)
-		if err != nil {
-			return fmt.Errorf("unrecognized detector %q: encoding its scope: %w", name, err)
-		}
-		out[id] = Definition{
-			ID:          id,
-			Name:        name + " (unrecognized detector)",
-			Description: "Preserved from a detector settings entry this binary's shipped catalogue does not recognize -- see StoredDefinition.Available. Not evaluated, never dropped.",
-			Intent:      IntentDetection,
-			// Kind is deliberately left as the zero value (not
-			// KindProgrammatic/KindDeclarative): decodeStored
-			// (definitions_store.go) treats an unrecognized Kind as
-			// Available == false, which is exactly what an entry this
-			// binary cannot identify at all should be.
-			Enabled: settings.Enabled,
-			Params: Params{
-				"legacyDetectorName": name,
-				"legacyEnabled":      settings.Enabled,
-				"legacyScopeJSON":    string(scopeJSON),
-			},
-			Provenance: Provenance{Origin: ProvenanceShipped},
 		}
 	}
 	return nil

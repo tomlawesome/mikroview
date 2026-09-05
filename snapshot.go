@@ -125,11 +125,11 @@ func usableSnapshotDir(log *slog.Logger, dir string) string {
 //
 // Every rejected file has already cost its own line inside
 // snapshot.Load, which is where the reason lives.
-func restoreSnapshot(log *slog.Logger, dir string, now time.Time, parts ...snapshot.Part) {
+func restoreSnapshot(log *slog.Logger, dir string, key snapshot.Sealer, now time.Time, parts ...snapshot.Part) {
 	if dir == "" {
 		return
 	}
-	report, err := snapshot.Load(dir, now, parts...)
+	report, err := snapshot.Load(dir, key, now, parts...)
 	switch {
 	case errors.Is(err, snapshot.ErrNoSnapshot):
 		log.Info(fmt.Sprintf("no snapshot -- cold start: counters, detector windows and device first-seen dates all begin now (looked in %s)", dir))

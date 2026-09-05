@@ -571,7 +571,9 @@ describe('The settings shelf (#633)', () => {
     const disk = document.getElementById('diskg') as HTMLElement
     expect(within(disk).getByText('state')).toBeTruthy()
     expect(
-      within(disk).getByText('file store · /var/lib/mikroview — flags, definitions, watchlist, entities, tokens'),
+      within(disk).getByText(
+        'encrypted file store · /var/lib/mikroview — flags, definitions, watchlist, entities, tokens',
+      ),
     ).toBeTruthy()
     // beside the key: the row after it
     const labels = [...disk.querySelectorAll('.orow > span:first-child')].map((el) => el.textContent)
