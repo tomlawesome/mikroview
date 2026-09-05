@@ -179,6 +179,19 @@ lint:frontend:
     - npm ci
     - npx svelte-check --tsconfig ./tsconfig.app.json
 
+lint:supply-chain-pins:
+  stage: lint
+  # Light lane (#949): reads two files and a policy, no install.
+  tags: [light]
+  image: node:22-alpine
+  <<: *dev_or_mr
+  script:
+    # #711: every action SHA and image tag CI uses must be in
+    # supply-chain/pins-policy.json with its review date. Fails on a pin the
+    # policy does not record, or a recorded pin CI no longer uses.
+    - node --test tools/supply-chain/pins-policy.test.mjs
+    - node tools/supply-chain/pins-policy.mjs
+
 # ---------------------------------------------------------------------------
 # TEST
 # ---------------------------------------------------------------------------
@@ -455,6 +468,11 @@ security:semgrep:
       - semgrep.sarif
       - semgrep.log
     expire_in: 1 week
+  # See security:gosec's retry comment below (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 security:gosec:
   stage: security
@@ -483,6 +501,20 @@ security:gosec:
     paths:
       - gosec.sarif
     expire_in: 1 week
+  # #950: this job's scan finished clean three times in a row on MR !944
+  # and still failed the merge, because GitLab's coordinator returned 502
+  # to the runner's artifact upload each time and the runner gave up
+  # rather than retrying that class of failure -- a red job for a green
+  # scan. runner_system_failure covers the runner exhausting its own
+  # upload attempts; api_failure covers the coordinator-side error a 502
+  # is. Confirmed accepted by the CI lint API (`glab api -X POST
+  # projects/53/ci/lint`), including a warning that the deprecated
+  # stuck_or_timeout_failure/job_execution_timeout pair (not used here)
+  # should not be added. Never add script_failure: that would retry past
+  # a real gosec finding instead of just past the upload flake.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 security:govulncheck:
   stage: security
@@ -503,6 +535,11 @@ security:govulncheck:
     paths:
       - govulncheck.json
     expire_in: 1 week
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 # The two remaining halves of GitHub's ci.yml `security` job, moved here
 # under #935 step 7. Their long rationale is in that file's history
@@ -550,6 +587,23 @@ security:npm-audit:
       exists: ["frontend/package.json"]
   script:
     - cd frontend
+    # node:22-alpine's bundled npm tries the fast bulk advisory endpoint
+    # first, and only on a failure there falls back to
+    # /-/npm/v1/security/audits/quick -- the endpoint the registry is
+    # retiring, and the one that actually 400'd on #931 (npm's own
+    # @npmcli/arborist, lib/audit-report.js: bulk POST wrapped in a
+    # try/catch whose catch calls quick). The bulk call passes cleanly
+    # against this lockfile every time it was tried; the intermittent
+    # trigger was whatever made it fail once and fall through to the
+    # endpoint being shut down. npm 12.0.2 -- the current `latest`, checked
+    # 2026-09-05 -- removed that fallback outright and only calls bulk, so
+    # pin to it rather than trust whatever patch of the image's bundled
+    # npm a given runner has cached. Verified in a throwaway node:22-alpine
+    # container against this frontend/: `npm install -g npm@12.0.2 && npm
+    # ci && npm audit --audit-level=high` -> "found 0 vulnerabilities",
+    # with `--loglevel verbose` showing only a POST to
+    # .../security/advisories/bulk, never to .../audits/quick.
+    - npm install -g npm@12.0.2
     - npm ci
     - npm audit --audit-level=high
 
@@ -639,6 +693,11 @@ security:gitleaks:
     paths:
       - gitleaks.sarif
     expire_in: 1 week
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 security:trivy-fs:
   stage: security
@@ -661,6 +720,11 @@ security:trivy-fs:
       - trivy-fs.sarif
     expire_in: 1 week
   allow_failure: true
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 # ---------------------------------------------------------------------------
 # SYNC — GitHub is a mirror of dev, preview and main. After a push to any of
