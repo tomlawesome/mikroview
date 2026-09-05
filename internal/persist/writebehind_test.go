@@ -534,3 +534,70 @@ func TestOpenWriteBehindWithNilBackendIsInMemoryOnly(t *testing.T) {
 		t.Error("expected a nil *WriteBehind for a nil backend")
 	}
 }
+
+// TestWriteBehindFlushSatisfiedByInFlightAttemptDoesNotArmTheNextWrite
+// is #941's reproduction. Flush arms forceNow and then waits for dirty to
+// clear -- but if the writer goroutine was already inside Save when
+// Flush was called, that attempt clears dirty and Flush returns without
+// the writer ever having read forceNow. The flag then sat armed until
+// the next MarkDirty, which skipped MinInterval entirely. In
+// rules.TestPersistenceRateLimited that showed up as a third save where
+// two were expected, only on a loaded runner where the first Save was
+// slow enough for flushForTest to catch it in flight.
+func TestWriteBehindFlushSatisfiedByInFlightAttemptDoesNotArmTheNextWrite(t *testing.T) {
+	b := newCountingBackend()
+	wb, _, err := OpenWriteBehind(context.Background(), b, "test store", WriteBehindOptions{MinInterval: time.Hour}, func([]byte) error { return nil })
+	if err != nil {
+		t.Fatalf("OpenWriteBehind: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		wb.Close(ctx)
+	}()
+
+	// Park the first-ever attempt inside Save, then Flush while it is
+	// in flight: Flush sees dirty, arms forceNow, and is satisfied by
+	// the attempt that was already running.
+	b.setBlocking(true)
+	wb.MarkDirty([]byte(`{"n":1}`))
+	b.waitUntilBlocked(t)
+	flushDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		flushDone <- wb.Flush(ctx)
+	}()
+	// Same package, so the test can wait for Flush to have armed the
+	// flag before releasing Save -- otherwise the release can land before
+	// Flush even looks, and Flush sees nothing dirty at all.
+	armedBy := time.Now().Add(3 * time.Second)
+	for {
+		wb.mu.Lock()
+		armed := wb.forceNow
+		wb.mu.Unlock()
+		if armed {
+			break
+		}
+		if time.Now().After(armedBy) {
+			t.Fatal("Flush never armed forceNow")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	b.setBlocking(false)
+	b.release <- struct{}{}
+	if err := <-flushDone; err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if saves, _, _, _ := b.stats(); saves != 1 {
+		t.Fatalf("saves after Flush = %d, want 1", saves)
+	}
+
+	// The next write is an ordinary one and must wait out MinInterval
+	// (an hour here); a stale forceNow would persist it at once.
+	wb.MarkDirty([]byte(`{"n":2}`))
+	time.Sleep(50 * time.Millisecond)
+	if saves, _, _, _ := b.stats(); saves != 1 {
+		t.Errorf("saves shortly after the next MarkDirty = %d, want still 1 -- a Flush satisfied by an in-flight attempt left forceNow armed", saves)
+	}
+}
