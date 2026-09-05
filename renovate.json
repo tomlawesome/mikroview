@@ -17,26 +17,31 @@
   },
   "packageRules": [
     {
+      "minimumReleaseAge": "7 days",
       "matchManagers": ["gomod"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "go minor and patch"
     },
     {
+      "minimumReleaseAge": "7 days",
       "matchManagers": ["npm"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "npm minor and patch"
     },
     {
+      "minimumReleaseAge": "7 days",
       "matchManagers": ["dockerfile"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "docker minor and patch"
     },
     {
+      "minimumReleaseAge": "7 days",
       "matchManagers": ["gitlabci"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "ci images minor and patch"
     },
     {
+      "minimumReleaseAge": "7 days",
       "matchManagers": ["npm"],
       "matchPackageNames": ["typescript"],
       "allowedVersions": "<7.0.0"
