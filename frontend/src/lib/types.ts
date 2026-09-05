@@ -1393,19 +1393,30 @@ export interface SetupCommandsResponse {
     ruleTagging: CommandStep
     push: CommandStep
     schedule: CommandStep
+    // backup/backupSchedule are step 6's two blocks (#394, round 45),
+    // rendered only once a device, a token, the drop box's port and a
+    // configured retention key are all present -- see
+    // internal/api/setupcommands.go's handleSetupCommands. Blank
+    // (commands: '') is how the wizard reads "cannot be printed yet",
+    // the same convention every other step's blank block already uses.
+    backup: CommandStep
+    backupSchedule: CommandStep
   }
 }
 
 // SetupCommandsRequest is the POST /api/setup/commands body. Every field
 // but address is optional -- kinds/token are omitted before step 4 has
-// anything to embed, and version is omitted until the operator has
-// picked one or a router has reported.
+// anything to embed, version is omitted until the operator has picked
+// one or a router has reported, and device is omitted until step 4 or
+// 6 has a router chosen (it names step 6's backup script is being
+// rendered for; the push script needs no such field).
 export interface SetupCommandsRequest {
   address: string
   syslogPort?: string
   token?: string
   kinds?: string[]
   version?: string
+  device?: string
 }
 
 // --- Tune logging (#435) ----------------------------------------------
