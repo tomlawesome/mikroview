@@ -6,6 +6,13 @@
 // got the frontend instead of JSON -- reported by the owner against a
 // real deployment, 2026-08-15. The UI's own fetch() calls never hit
 // this path, which is exactly why no other scenario could catch it.
+//
+// This needs a real, non-self-destroying worker to have anything to
+// register, activate and take control with. scripts/live-env.sh no
+// longer sets MV_DEMO_BUILD=1 for the gate build, precisely so this
+// scenario can run (#753) -- a self-destroying build (MV_DEMO_BUILD=1,
+// #713) unregisters itself instead, and `serviceWorker.ready` never
+// resolves.
 
 import { session, check, done } from './live-browser.mjs'
 
