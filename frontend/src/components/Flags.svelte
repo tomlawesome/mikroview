@@ -36,6 +36,7 @@
   // reputation/evidence panels are still deliberately absent -- see
   // #691 for what remains. The ledger of recorded expectations is #640
   // part C.
+  import { onMount } from 'svelte'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { anyBaselineWarming } from '../lib/learningShelf'
@@ -294,36 +295,39 @@
   // honest label, not a key the sixteen-entry table above could know.
   const labelFor = (t: FlagType) => TYPE_LABELS[t] ?? t
 
-  // Ids this visit judged, kept in the settled or shelf table --
-  // dimmed, carrying their stamp -- rather than dropped the instant the
-  // server marks them cleared (#780 item 2: "the recently-cleared list,
-  // in place", staying until the tab is left). An investigate verdict
-  // needs no entry here: it never sets `cleared`, so that row stays in
-  // `active`/`provisionalActive` on its own. Reset only by remounting
-  // the component -- there is no other "leaving the tab" hook available
-  // to a page that stays mounted underneath a deck card (see
-  // App.svelte), so a fresh visit's own actions start the list over,
-  // same as `episodes`/`expandedId` above already do.
-  let pinnedIds = $state<string[]>([])
-
-  function pin(id: string) {
-    if (!pinnedIds.includes(id)) pinnedIds = [...pinnedIds, id]
-  }
-
-  function unpin(id: string) {
-    pinnedIds = pinnedIds.filter((pid) => pid !== id)
-  }
+  // Ids this visit judged, kept in the settled or shelf table -- dimmed,
+  // carrying their stamp -- rather than dropped the instant the server
+  // marks them cleared (#780 item 2: "the recently-cleared list, in
+  // place", staying until the tab is left). An investigate verdict needs
+  // no entry here: it never sets `cleared`, so that row stays in
+  // `active`/`provisionalActive` on its own.
+  //
+  // The list itself lives in flagsState (#961), not as this component's
+  // own $state -- see flagsState.pinnedIds' doc comment for why a
+  // component-local list does not survive the "watch for this" round
+  // trip through the watchlist tab. onMount below clears it on a
+  // genuinely fresh visit to this tab and leaves it alone on a return
+  // from that detour, so a plain tab switch away and back still starts
+  // the list over, same as #780 always meant.
+  onMount(() => {
+    if (topologyNavState.pendingFlagsReturn) {
+      topologyNavState.pendingFlagsReturn = false
+    } else {
+      flagsState.clearPins()
+    }
+  })
 
   // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
   // see internal/flags.Store.List()) so a flag's position is fixed the
   // moment it first appears. lastSeen updates on every re-fire, not just
   // creation, so sorting by it made an already-visible row you're
   // reading jump to the top of the list the instant it (or anything
-  // else) re-fired on the next 5s poll. `pinnedIds` keeps a just-called
-  // row exactly here rather than letting `!f.cleared` drop it (#780).
+  // else) re-fired on the next 5s poll. `flagsState.pinnedIds` keeps a
+  // just-called row exactly here rather than letting `!f.cleared` drop
+  // it (#780).
   const active = $derived(
     flagsState.list
-      .filter((f) => !f.provisional && (!f.cleared || pinnedIds.includes(f.id)))
+      .filter((f) => !f.provisional && (!f.cleared || flagsState.pinnedIds.includes(f.id)))
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
   const cleared = $derived(flagsState.list.filter((f) => f.cleared))
@@ -338,7 +342,7 @@
   // as `active` above once a shelf row is judged/cleared.
   const provisionalActive = $derived(
     flagsState.list
-      .filter((f) => f.provisional && (!f.cleared || pinnedIds.includes(f.id)))
+      .filter((f) => f.provisional && (!f.cleared || flagsState.pinnedIds.includes(f.id)))
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
 
@@ -419,12 +423,12 @@
     // row (and the whole shelf section, if this was its last one)
     // vanished for the round trip and reappeared as a fresh element
     // once the response landed, rather than staying put for the flash.
-    pin(f.id)
+    flagsState.pin(f.id)
     if (expandedId === f.id) expandedId = null
     try {
       await flagsState.judgeAndClear(f.id, verdict)
     } catch (err) {
-      unpin(f.id)
+      flagsState.unpin(f.id)
       reportFailure('Could not record the verdict', err)
     }
   }
@@ -442,7 +446,7 @@
     error = null
     try {
       await flagsState.undoVerdict(f.id)
-      unpin(f.id)
+      flagsState.unpin(f.id)
     } catch (err) {
       // Left pinned: flagsState.undoVerdict reverts its own optimistic
       // reopen on failure, so the flag is still exactly as done as it

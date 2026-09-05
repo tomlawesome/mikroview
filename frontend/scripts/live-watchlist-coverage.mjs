@@ -183,12 +183,30 @@ await page.reload({ waitUntil: 'networkidle' })
 await openMenuView('Watchlist')
 await page.waitForSelector('.card', { timeout: 15000 })
 
+// The round-31 rebuild replaced the old .coverage-warning banner with two
+// things: the row's own chip (Watchlist.svelte's watchState, "ring broken
+// — no logging visible") and the fuller story in the row's drawer
+// (watchStory) -- see #871.
+const row = page.locator('.wt-row', { hasText: 'coverage ssh' })
+await row.waitFor({ timeout: 10000 })
 check(
-  await page.isVisible('.coverage-warning'),
+  await row.locator('.wchip2.broken').isVisible(),
   'the entry carries a visible warning that nothing can match it',
 )
 check(
-  await page.isVisible('.coverage-warning:has-text("logging turned on")'),
+  /no logging visible/.test(await row.locator('.wchip2.broken').innerText()),
+  'the chip names the reason: no logging is visible',
+)
+
+await row.locator('td.k').click()
+const drawerStory = page.locator('.wt-drawer .story')
+await drawerStory.waitFor({ timeout: 5000 })
+check(
+  (await drawerStory.locator('b').innerText()) === 'The ring is broken.',
+  'the opened drawer leads with the same headline',
+)
+check(
+  /turns logging on/.test(await drawerStory.innerText()),
   'the warning says what to actually do about it, not just that something is wrong',
 )
 

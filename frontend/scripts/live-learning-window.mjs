@@ -42,56 +42,7 @@ async function fetchDefinitions() {
     .then((b) => b.definitions ?? [])
 }
 
-const defs = await fetchDefinitions()
-check(defs.length > 0, `the definitions list is non-empty (${defs.length})`)
-
 const BASELINE_BACKED = ['activity_spike', 'global_spike', 'rule_spike', 'off_hours_activity', 'low_slow_scan']
-
-// --- the wire contract ---------------------------------------------------
-
-for (const d of defs) {
-  const hasLearning = Object.prototype.hasOwnProperty.call(d, 'learning')
-  if (BASELINE_BACKED.includes(d.id)) {
-    check(hasLearning, `${d.id} (baseline-backed) carries a learning object`)
-  } else {
-    check(!hasLearning, `${d.id} (no warm-up concept) omits learning entirely rather than a null/empty one`)
-  }
-}
-
-for (const id of BASELINE_BACKED) {
-  const d = defs.find((x) => x.id === id)
-  const l = d?.learning
-  if (!l) continue // already failed above
-
-  // Each floor dimension carries omitempty server-side (baselineFloorView),
-  // so a dimension that does not bind is absent entirely, not sent as 0 --
-  // present-and-number or absent are the only honest shapes.
-  check(
-    (l.floor?.minDurationSeconds === undefined || typeof l.floor.minDurationSeconds === 'number') &&
-      (l.floor?.minSamples === undefined || typeof l.floor.minSamples === 'number'),
-    `${id}'s floor dimensions, where present, are numbers (${JSON.stringify(l.floor)})`,
-  )
-  // Not asserted: that every floor binds at least one dimension.
-  // global_spike ships with an all-zero BaselineFloor by default (no
-  // baselineFloorDuration param set -- see shipped_global_spike.go), so
-  // {} is a real, reachable shape here, not a bug in this scenario.
-  check(
-    Number.isInteger(l.keys) && l.keys >= 0 && Number.isInteger(l.ready) && l.ready >= 0 && l.ready <= l.keys,
-    `${id}'s keys/ready are sane integers (keys ${l.keys}, ready ${l.ready})`,
-  )
-
-  const wantNearest = l.keys > 0 && l.ready < l.keys
-  check(
-    wantNearest ? l.nearest !== undefined : l.nearest === undefined,
-    `${id}'s nearest is present only while something observed is short of ready -- keys ${l.keys}, ready ${l.ready}, nearest ${JSON.stringify(l.nearest)}`,
-  )
-  if (l.nearest) {
-    check(
-      typeof l.nearest.observedForSeconds === 'number' && typeof l.nearest.samples === 'number',
-      `${id}'s nearest carries observedForSeconds/samples as numbers (${JSON.stringify(l.nearest)})`,
-    )
-  }
-}
 
 // --- the presentation: recompute the expected sentence, compare to the DOM
 
@@ -169,6 +120,69 @@ await goTo(page, 'Settings')
 // branch that changed the page and dev itself.
 await page.click('.olink:has-text("tune")')
 await page.waitForSelector('.bench .row')
+
+// #797: read the definitions list once, here, rather than before
+// navigating. The bench's own numbers come from EngineRoomWatchers'
+// backing store (detectorSettings.svelte.ts), refreshed exactly once --
+// on EngineRoom's onMount, when this card mounts -- and never polled
+// after, so `.bench .row` appearing is proof that fetch has already
+// landed and rendered. Fetching separately before navigating, as this
+// used to, put a full page transition between the two reads; on the
+// gate's shared instance, which keeps ingesting throughout, that was
+// long enough for new sources to be discovered in between (359 rendered
+// against 311 fetched, observed on this issue). One read, taken as soon
+// as the bench is known to have rendered from its own, gives both the
+// wire-contract checks below and the presentation checks after them the
+// same sample the DOM used, instead of two independent samples of a
+// number that was still moving.
+const defs = await fetchDefinitions()
+check(defs.length > 0, `the definitions list is non-empty (${defs.length})`)
+
+// --- the wire contract ---------------------------------------------------
+
+for (const d of defs) {
+  const hasLearning = Object.prototype.hasOwnProperty.call(d, 'learning')
+  if (BASELINE_BACKED.includes(d.id)) {
+    check(hasLearning, `${d.id} (baseline-backed) carries a learning object`)
+  } else {
+    check(!hasLearning, `${d.id} (no warm-up concept) omits learning entirely rather than a null/empty one`)
+  }
+}
+
+for (const id of BASELINE_BACKED) {
+  const d = defs.find((x) => x.id === id)
+  const l = d?.learning
+  if (!l) continue // already failed above
+
+  // Each floor dimension carries omitempty server-side (baselineFloorView),
+  // so a dimension that does not bind is absent entirely, not sent as 0 --
+  // present-and-number or absent are the only honest shapes.
+  check(
+    (l.floor?.minDurationSeconds === undefined || typeof l.floor.minDurationSeconds === 'number') &&
+      (l.floor?.minSamples === undefined || typeof l.floor.minSamples === 'number'),
+    `${id}'s floor dimensions, where present, are numbers (${JSON.stringify(l.floor)})`,
+  )
+  // Not asserted: that every floor binds at least one dimension.
+  // global_spike ships with an all-zero BaselineFloor by default (no
+  // baselineFloorDuration param set -- see shipped_global_spike.go), so
+  // {} is a real, reachable shape here, not a bug in this scenario.
+  check(
+    Number.isInteger(l.keys) && l.keys >= 0 && Number.isInteger(l.ready) && l.ready >= 0 && l.ready <= l.keys,
+    `${id}'s keys/ready are sane integers (keys ${l.keys}, ready ${l.ready})`,
+  )
+
+  const wantNearest = l.keys > 0 && l.ready < l.keys
+  check(
+    wantNearest ? l.nearest !== undefined : l.nearest === undefined,
+    `${id}'s nearest is present only while something observed is short of ready -- keys ${l.keys}, ready ${l.ready}, nearest ${JSON.stringify(l.nearest)}`,
+  )
+  if (l.nearest) {
+    check(
+      typeof l.nearest.observedForSeconds === 'number' && typeof l.nearest.samples === 'number',
+      `${id}'s nearest carries observedForSeconds/samples as numbers (${JSON.stringify(l.nearest)})`,
+    )
+  }
+}
 
 // The bench only lists detection definitions this binary can build --
 // the same filter detectorSettings.svelte.ts applies -- so that is the
