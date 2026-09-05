@@ -49,7 +49,12 @@ type Report struct {
 // ErrNoSnapshot means nothing was usable, including the first-run case
 // where dir does not exist. It is a normal cold start, not a failure --
 // see ErrNoSnapshot.
-func Load(dir string, now time.Time, parts ...Part) (Report, error) {
+//
+// key must not be nil: every document on disk is sealed under it (#853),
+// and there is no unencrypted mode to fall back to. A caller with no key
+// configured does not call Load at all -- see main.go/snapshot.go, which
+// treats no key exactly like no directory: cold start, logged once.
+func Load(dir string, key Sealer, now time.Time, parts ...Part) (Report, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -71,7 +76,7 @@ func Load(dir string, now time.Time, parts ...Part) (Report, error) {
 
 	for _, name := range names {
 		path := filepath.Join(dir, name)
-		doc, ok := readDocument(path, now)
+		doc, ok := readDocument(path, key, now)
 		if !ok {
 			continue
 		}
@@ -80,12 +85,17 @@ func Load(dir string, now time.Time, parts ...Part) (Report, error) {
 	return Report{}, ErrNoSnapshot
 }
 
-// readDocument reads and vets one file. Every rejection costs exactly
-// one log line saying which file and why, because the operator's
+// readDocument reads, decrypts and vets one file. Every rejection costs
+// exactly one log line saying which file and why, because the operator's
 // question after a cold start is always "why did it not use the
 // snapshot".
-func readDocument(path string, now time.Time) (Document, bool) {
-	data, err := os.ReadFile(path)
+func readDocument(path string, key Sealer, now time.Time) (Document, bool) {
+	sealed, err := os.ReadFile(path)
+	if err != nil {
+		logger.Warn(fmt.Sprintf("skipping snapshot %s: %v", filepath.Base(path), err))
+		return Document{}, false
+	}
+	data, err := key.Open(warmRestartKeyInfo, []byte(filepath.Base(path)), sealed)
 	if err != nil {
 		logger.Warn(fmt.Sprintf("skipping snapshot %s: %v", filepath.Base(path), err))
 		return Document{}, false

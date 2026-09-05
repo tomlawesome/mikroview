@@ -85,6 +85,7 @@ check((await page.locator('.load-error').count()) === 0, 'the fixture export is 
 // secret-rejection gate hold at the wire, not only as the component
 // happens to render them.
 const analyseRes = await page.request.post(`${URL_BASE}/api/tune-logging/analyse`, {
+  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
   data: { device: 'edge-1', export: fixtureExport, darkBoundaries: [] },
 })
 check(analyseRes.status() === 200, `POST analyse with the fixture export answers 200 (${analyseRes.status()})`)
@@ -105,6 +106,7 @@ const secretExport = [
   '',
 ].join('\n')
 const rejectRes = await page.request.post(`${URL_BASE}/api/tune-logging/analyse`, {
+  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
   data: { device: 'edge-1', export: secretExport, darkBoundaries: [] },
 })
 check(rejectRes.status() === 400, `POST analyse with a live password is refused (${rejectRes.status()})`)

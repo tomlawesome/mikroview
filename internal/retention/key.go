@@ -22,10 +22,7 @@
 package retention
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hkdf"
-	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -139,118 +136,43 @@ func NewKeyFromMaterial(material []byte) (*Key, error) {
 // yesterday's events as today's by moving a file, which matters because
 // the whole point of a replay is that its window is trustworthy.
 func (k *Key) fileKey(salt []byte, day string) ([]byte, error) {
-	return hkdf.Key(sha256.New, k.material, salt, keyInfoPrefix+day, 32)
+	return k.Derive(salt, keyInfoPrefix+day)
 }
 
-// keyInfoPrefix namespaces this package's derived keys. If the same key
-// file is ever reused for another purpose -- #853 puts the state store
-// and the warm-restart snapshots under this same key -- each derives
-// through its own info string, so no two of them ever seal different
-// kinds of data with the same bytes.
+// Derive returns a 32-byte AES-256 key for one purpose, from salt and an
+// info string that namespaces the caller.
+//
+// Exported so other packages that hold the same master key -- #853 puts
+// internal/persist's file-backed stores and internal/snapshot's
+// warm-restart documents under it -- derive through this one function
+// rather than growing their own copy of the HKDF call. See keyInfoPrefix
+// for why every caller must use its own info string: two callers sharing
+// one would seal different kinds of data with the same derived key.
+func (k *Key) Derive(salt []byte, info string) ([]byte, error) {
+	return hkdf.Key(sha256.New, k.material, salt, info, 32)
+}
+
+// keyInfoPrefix namespaces this package's own per-day file keys. See
+// Derive's doc comment for why every user of the master key -- this
+// package included -- needs its own prefix.
 const keyInfoPrefix = "mikroview/event-retention/v1/"
 
-// The on-disk shape SealDocument produces for one whole document:
-//
-//	magic     5 bytes   "MVSEL"
-//	version   1 byte    sealFormatVersion
-//	salt     16 bytes   random, per document
-//	nonce    12 bytes   random, per document (AES-256-GCM's size)
-//	sealed  variable    the AEAD ciphertext + 16-byte tag
-//
-// This is the whole-document counterpart to the per-day event-file
-// framing above: one seal, not a sequence of appended frames, for a
-// caller that already has the entire document in memory and writes it
-// once (#394's router-backup vault is the first of these). Reusing this
-// package's key derivation and AEAD choice rather than each caller
-// rolling its own, per keyInfoPrefix's own doc comment.
-const (
-	sealMagic         = "MVSEL"
-	sealFormatVersion = 1
-	sealSaltBytes     = 16
-)
-
-// ErrSealedDocumentInvalid reports that OpenDocument was given something
-// that is not one of this package's sealed documents at all -- too
-// short, wrong magic, or an unsupported format version. Distinct from an
-// AEAD authentication failure (wrong key, or genuine tampering), which
-// OpenDocument reports separately so a caller can tell "this was never
-// one of ours" from "this was ours and something is wrong with it".
-var ErrSealedDocumentInvalid = errors.New("retention: not a sealed document")
-
-// SealDocument encrypts plaintext as a single self-contained document,
-// binding it to info the way frameAAD binds an event frame to its file
-// and position -- a document sealed under one info string fails to open
-// under another, so moving a sealed file to a different logical slot
-// (a different router's backup, say) is detected rather than silently
-// accepted as ciphertext that happens to decrypt.
+// SealDocument encrypts plaintext as a single self-contained document
+// for a caller that already has the whole thing in memory and writes it
+// once (#394's router-backup vault is the first of these). It is
+// Seal (seal.go, #853) with the document's info string doubling as its
+// additional authenticated data, so a document sealed under one info
+// string fails to open under another -- moving a sealed file to a
+// different logical slot (a different router's backup, say) is detected
+// rather than silently accepted as ciphertext that happens to decrypt.
+// One AEAD scheme in this codebase, not two: #394 and #853 each arrived
+// with their own whole-document seal and this is what the merge kept.
 func (k *Key) SealDocument(info string, plaintext []byte) ([]byte, error) {
-	salt := make([]byte, sealSaltBytes)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("retention: generating salt: %w", err)
-	}
-	derived, err := hkdf.Key(sha256.New, k.material, salt, keyInfoPrefix+"seal/"+info, 32)
-	if err != nil {
-		return nil, fmt.Errorf("retention: deriving document key: %w", err)
-	}
-	block, err := aes.NewCipher(derived)
-	if err != nil {
-		return nil, fmt.Errorf("retention: cipher: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("retention: gcm: %w", err)
-	}
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("retention: generating nonce: %w", err)
-	}
-	sealed := aead.Seal(nil, nonce, plaintext, []byte(info))
-
-	out := make([]byte, 0, len(sealMagic)+1+len(salt)+len(nonce)+len(sealed))
-	out = append(out, sealMagic...)
-	out = append(out, sealFormatVersion)
-	out = append(out, salt...)
-	out = append(out, nonce...)
-	out = append(out, sealed...)
-	return out, nil
+	return k.Seal(keyInfoPrefix+"seal/"+info, []byte(info), plaintext)
 }
 
 // OpenDocument reverses SealDocument. info must match what SealDocument
 // was called with -- see its doc comment.
 func (k *Key) OpenDocument(info string, sealed []byte) ([]byte, error) {
-	headerLen := len(sealMagic) + 1 + sealSaltBytes
-	if len(sealed) < headerLen {
-		return nil, ErrSealedDocumentInvalid
-	}
-	if string(sealed[:len(sealMagic)]) != sealMagic {
-		return nil, ErrSealedDocumentInvalid
-	}
-	if sealed[len(sealMagic)] != sealFormatVersion {
-		return nil, fmt.Errorf("%w: unsupported format version %d", ErrSealedDocumentInvalid, sealed[len(sealMagic)])
-	}
-	salt := sealed[len(sealMagic)+1 : headerLen]
-
-	derived, err := hkdf.Key(sha256.New, k.material, salt, keyInfoPrefix+"seal/"+info, 32)
-	if err != nil {
-		return nil, fmt.Errorf("retention: deriving document key: %w", err)
-	}
-	block, err := aes.NewCipher(derived)
-	if err != nil {
-		return nil, fmt.Errorf("retention: cipher: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("retention: gcm: %w", err)
-	}
-	if len(sealed) < headerLen+aead.NonceSize() {
-		return nil, ErrSealedDocumentInvalid
-	}
-	nonce := sealed[headerLen : headerLen+aead.NonceSize()]
-	ciphertext := sealed[headerLen+aead.NonceSize():]
-
-	plain, err := aead.Open(nil, nonce, ciphertext, []byte(info))
-	if err != nil {
-		return nil, fmt.Errorf("retention: document did not open -- wrong key, or the file has been altered: %w", err)
-	}
-	return plain, nil
+	return k.Open(keyInfoPrefix+"seal/"+info, []byte(info), sealed)
 }
