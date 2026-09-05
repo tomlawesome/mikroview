@@ -45,6 +45,32 @@ feedPortScan(20, SCAN_IP)
 
 const { page, consoleErrors } = await session()
 
+// #871: the two alphabetically earlier watchlist scenarios
+// (live-watchlist-broken-ring.mjs, live-watchlist-coverage.mjs) each
+// deliberately leave the shared instance's filter table non-logging as
+// part of their own cleanup. coverage.go's "nothing anywhere logs"
+// answer applies to every entry regardless of scope, so left alone that
+// would paint this scenario's own entry as a broken ring -- which
+// outranks "learning" in Watchlist.svelte's watchState precedence --
+// before item 4 ever gets a chance to show it. Push one logging rule
+// first so this scenario does not depend on what an earlier one left
+// behind, rather than assuming a clean slate.
+const device = (await api(page, 'GET', '/api/devices')).body?.devices?.[0]?.id
+check(!!device, `the instance reports a device (${device})`)
+const coverageToken = await api(page, 'POST', '/api/tokens', { name: 'manage-coverage', kind: 'ingest', device })
+check(coverageToken.status === 201, `an ingest token is issued (${coverageToken.status})`)
+const pushedCoverage = await fetch(`${URL_BASE}/api/ingest/routeros`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${coverageToken.body.value}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    kind: 'filter-rule',
+    page: 1,
+    pages: 1,
+    records: [{ ordinal: 0, chain: 'forward', action: 'drop', log: true }],
+  }),
+})
+check(pushedCoverage.status === 200, "a filter table with a logging rule is accepted, so this scenario's own entry is not painted broken")
+
 // --- Item 3: a flag writes the draft for you ------------------------
 //
 // Clicks land on a cell with no click handler of its own (the flag

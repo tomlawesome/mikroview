@@ -14,11 +14,14 @@
 //   can make either pass. (The #583 leg below does open Watchlist once,
 //   deliberately and only after the ring has already appeared, to prove
 //   the group ring's claim is resolved by the next tap.)
-// - Since #616 the desktop chrome is each card's scene bar: the ring is
-//   SceneBar.svelte's .ring button, rendered only while something is
-//   actually broken (absent, never dimmed), and it has to appear on
-//   every mounted card's bar at once -- a claim about the deck's real
-//   DOM, not about one component's props.
+// - Since #683 (round 29's scene bar) the desktop chrome is each card's
+//   scene bar: the broken marker is AlarmCluster.svelte's watch button
+//   (`.wmk`, shared by every scene bar), whose `<b>○N</b>` renders only
+//   while something is actually broken (absent, never dimmed), and it
+//   has to appear on every mounted card's bar at once -- a claim about
+//   the deck's real DOM, not about one component's props. (#546's
+//   original `SceneBar.svelte .ring` button was deleted in round 29's
+//   rebuild, 1c0f85d -- see #871.)
 // - #583 put the same ring on the small-screen bottom bar, on the
 //   *group*. The breakpoint is a live matchMedia listener jsdom does not
 //   implement, so no unit test in this repo can tell a phone viewport
@@ -93,8 +96,11 @@ check(entry.status === 201, `an entry is created (${entry.status})`)
 const id = entry.body?.id
 
 // The active card's own scene bar -- the deck mounts the neighbouring
-// cards too, each with a bar (and, while broken, a ring) of its own.
-const RING = '.card[aria-hidden="false"] .scene-bar .ring'
+// cards too, each with a bar (and, while broken, a marker) of its own.
+// AlarmCluster's watch button (.wmk) always renders; its <b>○N</b> is
+// the part that appears only while something is broken (#871).
+const WMK = '.card[aria-hidden="false"] .scene-bar .wmk'
+const RING = `${WMK} b`
 const ring = page.locator(RING)
 
 /**
@@ -140,11 +146,20 @@ check(
 let settled = await settledRing()
 check(settled?.coverage === 'no-logging', `the server now says no-logging (got ${settled?.coverage})`)
 check(settled?.broken === true, 'the ring follows the server into no-logging')
-
-const spokenBroken = await ring.getAttribute('aria-label')
 check(
-  spokenBroken === 'A watch is broken — open the watchlist',
-  `the ring says what is wrong and where to go, in plain operator language -- got ${JSON.stringify(spokenBroken)}`,
+  (await ring.innerText()) === '○1',
+  `the marker names exactly the one broken watch this scenario made -- got ${JSON.stringify(await ring.innerText())}`,
+)
+
+// AlarmCluster carries no aria-label of its own -- the button's
+// accessible name comes from its visible "{heldCount} ○{brokenCount}"
+// text -- so the plain-language reading the operator gets on hover is
+// the button's `title` (#871: the old .ring's aria-label was deleted
+// along with it in round 29's rebuild).
+const spokenBroken = await page.locator(WMK).getAttribute('title')
+check(
+  /\b1 broken\b/.test(spokenBroken ?? ''),
+  `the marker says what is wrong and how many, in plain operator language -- got ${JSON.stringify(spokenBroken)}`,
 )
 check(
   !/coverage|no-logging/i.test(spokenBroken ?? ''),
@@ -152,15 +167,16 @@ check(
 )
 
 // Chrome, not page content: the neighbouring Metrics card's bar carries
-// the same ring at the same moment, so no scene is blind to the alarm.
+// the same marker at the same moment, so no scene is blind to the alarm.
 check(
-  (await page.locator('.card[data-card="metrics"] .scene-bar .ring').count()) === 1,
+  (await page.locator('.card[data-card="metrics"] .scene-bar .wmk b').count()) === 1,
   "the Metrics card's bar rings too -- the alarm travels with the chrome",
 )
 
-// The ring's claim is resolved by the next tap: clicking it rolls the
-// Watchlist card -- the page that carries the break -- to centre.
-await page.click(RING)
+// The ring's claim is resolved by the next tap: clicking the marker's
+// own button rolls the Watchlist card -- the page that carries the
+// break -- to centre.
+await page.click(WMK)
 await page.waitForFunction(
   () => {
     const deck = document.querySelector('.deck')
