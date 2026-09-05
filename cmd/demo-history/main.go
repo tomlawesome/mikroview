@@ -33,6 +33,9 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	// Demo traffic shape only: nothing here is a secret or a token, and
+	// the seed comes from crypto/rand so two runs still differ.
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used
 	mathrand "math/rand"
 	"os"
 	"time"
