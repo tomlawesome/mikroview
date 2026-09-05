@@ -381,6 +381,11 @@ HOSTS += [
     # rb5009 -- Guest: named, never heard from (no logging rule).
     ("rb5009", "guest", 50, "aa:bb:cc:40:04:50", "guest-e8b2", 0),
     ("rb5009", "guest", 51, "aa:bb:cc:40:04:51", None, 0),
+    # A guest that appears once and never returns -- #738 item 3's "guest
+    # device that appears once", distinct from a plain newcomer (which
+    # joins once and then stays for the rest of the run). See
+    # HOST_PRESENCE above: this mac is active for one bounded window only.
+    ("rb5009", "guest", 53, "aa:bb:cc:40:04:53", None, 0),
     # hap-ax3 -- Workshop.
     ("hap-ax3", "workshop", 10, "aa:bb:cc:40:05:10", "cnc", 0),
     ("hap-ax3", "workshop", 11, "aa:bb:cc:40:05:11", "printer-3d", 0),
@@ -714,6 +719,72 @@ def full_ip(h):
 
 
 # ---------------------------------------------------------------------------
+# #738 item 3: "hosts with characters" -- a laptop that comes and goes, a
+# guest device that appears once. Every host not named here keeps the
+# plain rule active_hosts always used: present from its own
+# introduce-after-seconds (HOSTS' last field) onward, forever. Overriding
+# by mac rather than growing the HOSTS tuple keeps the estate table above
+# readable, and the two forms below are the only stories that table's
+# plain "present since" field cannot already express:
+#
+#   ("cyclic", period, on_fraction, phase) -- on for on_fraction*period out
+#       of every period seconds (a laptop being closed and opened again),
+#       counted from its own intro time.
+#   ("once", start, duration)              -- active only during
+#       [start, start+duration), then gone for the rest of the run --
+#       unlike a plain newcomer (HOSTS' intro-after-seconds), which joins
+#       once and then stays.
+# ---------------------------------------------------------------------------
+
+HOST_PRESENCE = {
+    "aa:bb:cc:01:02:01": ("cyclic", 1800, 0.4, 0),   # tom-laptop: ~12 min on, ~18 off
+    "aa:bb:cc:40:04:53": ("once", 300, 600),         # a guest seen once, then never again
+}
+
+
+def host_active(h, elapsed):
+    """Whether host tuple h (see HOSTS) is transmitting at elapsed seconds
+    into the run."""
+    mac, intro = h[3], h[5]
+    spec = HOST_PRESENCE.get(mac)
+    if spec is None:
+        return elapsed >= intro
+    kind = spec[0]
+    if kind == "cyclic":
+        _, period, on_fraction, phase = spec
+        if elapsed < intro:
+            return False
+        return ((elapsed - intro + phase) % period) < period * on_fraction
+    if kind == "once":
+        _, start, duration = spec
+        return start <= elapsed < start + duration
+    raise ValueError(f"host {mac}: unknown presence kind {kind!r}")
+
+
+# #738 item 3's other half: "uniform random talkers are what make the map
+# read as noise". A handful of round-40's hosts talk more or less than
+# their zone's baseline; everything not listed here gets the baseline
+# weight of 1.0 -- most hosts, deliberately, since "a few characters and a
+# quiet majority" is the shape the issue asks for, not a tuned number for
+# every host.
+HOST_WEIGHT = {
+    "aa:bb:cc:40:01:20": 3.0,   # tom-desktop: the LAN's heaviest talker
+    "aa:bb:cc:40:01:23": 0.3,   # tv-lounge: mostly idle
+    "aa:bb:cc:40:02:10": 2.0,   # nas: busy as both source and destination
+}
+
+
+def weighted_pick(hosts):
+    """Pick one host from hosts, favouring the ones HOST_WEIGHT marks as
+    chattier. None for an empty list, same contract random.choice would
+    refuse outright."""
+    if not hosts:
+        return None
+    weights = [HOST_WEIGHT.get(h[3], 1.0) for h in hosts]
+    return random.choices(hosts, weights=weights, k=1)[0]
+
+
+# ---------------------------------------------------------------------------
 # Syslog TLS delivery -- same shape as scripts/live-env.sh's send_tls and
 # the old /tmp feeder: raw RouterOS-style lines, one write per message,
 # paced every 25 lines (the listener drops on a full channel otherwise).
@@ -738,7 +809,28 @@ def send_tls(host, port, src_ip, lines):
 
 
 def active_hosts(router, elapsed):
-    return [h for h in HOSTS if h[0] == router and elapsed >= h[5]]
+    return [h for h in HOSTS if h[0] == router and host_active(h, elapsed)]
+
+
+# #738 item 2: "traffic that follows a day". Keyed off the real wall-clock
+# hour a demo is actually running in, not a fabricated simulated day: a
+# review that runs across an afternoon sees real daytime volume, and one
+# left running overnight actually goes quiet -- honestly, rather than
+# pretending to have lived through a day it has not (see the module
+# docstring and #738's own "not in scope: a network simulator").
+HOURLY_FACTOR = [
+    0.15, 0.15, 0.15, 0.15, 0.15, 0.20,   # 00-05: small hours
+    0.35, 0.60, 0.85, 1.00, 1.00, 1.00,   # 06-11: ramp into the day
+    0.95, 1.00, 1.00, 1.00, 1.00, 0.90,   # 12-17: the busy day
+    0.75, 0.60, 0.45, 0.35, 0.25, 0.20,   # 18-23: evening wind-down
+]
+
+
+def diurnal_factor(ts=None):
+    """0.15 (quiet, small hours) .. 1.0 (business day) activity multiplier
+    for the local hour at ts (default: now)."""
+    hour = time.localtime(ts if ts is not None else time.time()).tm_hour
+    return HOURLY_FACTOR[hour]
 
 
 def lines_for_router(router, elapsed, tick):
@@ -915,7 +1007,11 @@ def lines_for_router(router, elapsed, tick):
 # burst -- the two episode shapes #687 already draws elsewhere.
 UNPLANNED_WAVE_SECONDS = 600
 UNPLANNED_PER_WAVE = 14
-_r40_state = {"last_unplanned_wave": -1}
+# cam-porch's own DNS beacon -- #738 item 3's "camera that beacons on a
+# schedule", fired on a fixed cadence rather than left to the same random
+# per-tick draw every other IoT host gets.
+CAM_BEACON_SECONDS = 90
+_r40_state = {"last_unplanned_wave": -1, "last_cam_beacon": -1}
 
 
 def _fw(action, prefix, chain, in_iface, out_iface, src, sport, dst, dport,
@@ -945,7 +1041,7 @@ def lines_for_round40(router, elapsed, tick):
         by_zone[h[1]].append(h)
 
     def one(zone):
-        return random.choice(by_zone[zone]) if by_zone[zone] else None
+        return weighted_pick(by_zone[zone])
 
     if router == "hap-ax3":
         # The second borough. Workshop is lamped both ways; Cams is not
@@ -1040,6 +1136,16 @@ def lines_for_round40(router, elapsed, tick):
             prefix, port = random.choice([("r40-iot-srv-dns", 53), ("r40-iot-srv-ntp", 123)])
             out.append(_fw("A", prefix, "forward", "vlan-iot", "vlan-srv",
                            full_ip(h), _eph(), pihole, port, proto="UDP", mac=h[3]))
+
+    # cam-porch's beacon: fixed cadence, not a coin flip -- see
+    # CAM_BEACON_SECONDS' own comment above.
+    beacon_tick = int(elapsed // CAM_BEACON_SECONDS)
+    if beacon_tick != _r40_state["last_cam_beacon"]:
+        _r40_state["last_cam_beacon"] = beacon_tick
+        cam = next((x for x in hosts if x[4] == "cam-porch"), None)
+        if cam:
+            out.append(_fw("A", "r40-iot-srv-dns", "forward", "vlan-iot", "vlan-srv",
+                           full_ip(cam), _eph(), pihole, 53, proto="UDP", mac=cam[3]))
     if random.random() < 0.4:
         h = one("lan")
         if h:
@@ -1125,7 +1231,10 @@ def cmd_feed(args):
         tick += 1
         if args.once:
             break
-        time.sleep(random.uniform(3, 6))
+        # #738 item 2: quieter hours get a longer gap between ticks
+        # instead of a smaller one each -- the same per-tick composition
+        # (busy pathways vs. quiet ones), just less of it overnight.
+        time.sleep(random.uniform(3, 6) / diurnal_factor())
 
 
 # ---------------------------------------------------------------------------
