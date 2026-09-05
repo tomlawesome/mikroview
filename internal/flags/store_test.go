@@ -335,6 +335,27 @@ func TestListOrdersMostRecentlyActiveFirst(t *testing.T) {
 // through a fake persist.Backend instead, which is a claim about
 // behaviour rather than about timing either way.
 func TestPersistLockedRateLimitsWrites(t *testing.T) {
+	// #837: writebehind.go's run() only waits out the remainder of
+	// MinInterval -- see its own doc comment, "stamped after an attempt
+	// completes" -- so it correctly attempts immediately once that much
+	// *wall-clock* time has already passed, coalescing or not. This test's
+	// own goroutine getting scheduled out for over a second between the
+	// baseline flush below and the two Adds that follow (observed under
+	// `-race -count=300`, ~10% of runs) is exactly that: real time no
+	// human would notice, but enough to blow through the real 1s
+	// persistMinInterval default and make the second Add fire its own
+	// uncoalesced save before the third arrives. That is the writer
+	// honouring its documented contract, not breaking it -- confirmed by
+	// forcing the same gap deliberately (a fixed sleep past a shortened
+	// interval reproduces the extra save every time). So the fix widens
+	// the window rather than the assertion: persistMinInterval set far
+	// past any scheduling delay this test could plausibly hit, so only a
+	// genuine coalescing failure -- never machine load -- can still
+	// produce a third save.
+	orig := persistMinInterval
+	persistMinInterval = time.Hour
+	defer func() { persistMinInterval = orig }()
+
 	b := newCountingSaveBackend()
 	s, err := OpenWithBackend(b)
 	if err != nil {
