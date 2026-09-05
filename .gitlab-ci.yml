@@ -452,7 +452,8 @@ security:semgrep:
 
 security:gosec:
   stage: security
-  tags: [light]
+  # Stays on big: gosec loads the whole module graph and was killed at the
+  # light lane's 2 GB (job 2972, exit 137, 2026-09-05).
   # ghcr, not Docker Hub. gosec stopped publishing to Docker Hub after
   # 2.24.6, so `securego/gosec:2.28.0` resolved to nothing and the job
   # failed before it started -- an image pull failure, which reads like
