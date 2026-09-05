@@ -511,6 +511,10 @@ security:licence-policy:
     - node --test tools/licenses/licence-policy.test.mjs
     - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
     - export PATH="/usr/local/go/bin:$PATH" && go version
+    # `go install` drops the binary in $(go env GOPATH)/bin, which the node
+    # image does not have on PATH; pipeline 287 failed with "command not
+    # found" for exactly that reason.
+    - export PATH="$(go env GOPATH)/bin:$PATH"
     - go install github.com/google/go-licenses/v2@v2.0.1
     - go-licenses check ./... --ignore github.com/tomlawesome/mikroview --allowed_licenses="$(node tools/licenses/licence-policy.mjs --print-allowed)"
     # --ignore-scripts: this install only needs to feed the Vite build
