@@ -205,6 +205,10 @@ for (const width of WIDTHS) {
   await page.setViewportSize({ width, height: 900 })
   await page.reload()
   await page.click('.rail-name >> text=Topography')
+  // #869: off the city default and onto zones before waiting on anything
+  // the 2D map draws -- see the coverage scenario for the full note.
+  await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
+  await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
   await page.waitForSelector('[data-card="topography"] .zone .isl', { timeout: 15000 })
   await new Promise((r) => setTimeout(r, 900))
   const m = await measure()
@@ -286,26 +290,16 @@ for (const width of WIDTHS) {
 
   await page.screenshot({ path: `${OUT}/zones-${width}.png` })
 
-  // 5. survey: cards out, zone dots in.
   const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
-  await slider.fill('3')
-  await new Promise((r) => setTimeout(r, 900))
-  const survey = await page.evaluate(() => {
-    const card = document.querySelector('[data-card="topography"]')
-    const vis = (sel) =>
-      [...card.querySelectorAll(sel)].filter((e) => Number(getComputedStyle(e).opacity) > 0.05).length
-    return {
-      cardsVisible: vis('.zone .isl-card'),
-      dotsVisible: vis('.zone .g-dot'),
-      aggMarks: vis('.zone .g-dot .gd-agg'),
-      detailVisible: vis('.detail'),
-    }
-  })
-  check(survey.cardsVisible === 0, `${at}: survey hides the lane cards (${survey.cardsVisible} still shown)`)
-  check(survey.dotsVisible === 5, `${at}: survey reveals a zone dot per lane (${survey.dotsVisible})`)
-  check(survey.aggMarks > 0, `${at}: the survey dots carry their gd-agg marks (${survey.aggMarks})`)
-  check(survey.detailVisible === 0, `${at}: survey drops the edge callouts (${survey.detailVisible} shown)`)
-  await page.screenshot({ path: `${OUT}/survey-${width}.png` })
+
+  // 5. survey: retired (#852, #869). The old fade-to-dots view inside
+  // this same 2D map is gone -- slider position 3 is now the city, an
+  // entirely different component (Topography.svelte hides the whole
+  // `.stage` with `hidden={cityStop !== null}` and swaps in `<City>`
+  // instead of animating this map's own cards into dots). Its
+  // replacement, one district per lane, is covered by
+  // live-city-stops.mjs; there is nothing left here to assert against a
+  // feature this map no longer has.
 
   // 6. clients: layers added, nothing clipped off the stage.
   await slider.fill('0')

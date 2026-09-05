@@ -147,6 +147,11 @@ check(
 async function openLens(name) {
   await page.reload()
   await page.click('.rail-name >> text=Topography')
+  // #869: off the city default and onto zones before touching lenses or
+  // waiting on anything the 2D map draws -- see the coverage scenario
+  // for the full note.
+  await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
+  await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
   await page.waitForSelector('[data-card="topography"] [aria-label="Map lenses"]', { timeout: 10000 })
   await page.click(`[data-card="topography"] [aria-label="Map lenses"] >> text=${name}`)
   await page.waitForTimeout(600)

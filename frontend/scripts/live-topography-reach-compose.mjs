@@ -19,10 +19,19 @@ await new Promise((r) => setTimeout(r, 1200))
 await page.reload()
 
 await page.click('.rail-name >> text=Topography')
+// #869: off the city default and onto zones before waiting on anything
+// the 2D map draws -- see the coverage scenario for the full note.
+await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
 // Descend on the host, then open the composer through the blocked
 // strand's own label.
+// #852/#869: the per-host name lives in `.isl-card`, hidden at zones the
+// same way `.detail` is -- see the coverage scenario for the full note.
+// Off zones and onto services before touching it.
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
+await new Promise((r) => setTimeout(r, 700))
 await page.click('[data-card="topography"] .host-link >> text=192.168.1.77')
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
 await page.click('[data-card="topography"] .strand-door >> nth=0')
