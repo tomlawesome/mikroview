@@ -124,17 +124,37 @@ func Write(w io.Writer, appVersion string, stores map[string][]byte) error {
 	return zw.Close()
 }
 
+// readCapped reads r to completion, refusing anything past max bytes. It is
+// the decompression-bomb check itself, factored out of Read so a test can
+// exercise the mechanism -- the +1-byte overread, the post-read comparison
+// -- against a small cap instead of the real MaxDecompressed: gzip-bombing
+// and then decompressing gigabytes of 'A' to prove the constant works is
+// what timed out pipeline 456's 10-minute CI budget once #394 raised
+// MaxDecompressed off its original 256 MiB.
+func readCapped(r io.Reader, max int64) ([]byte, error) {
+	limited := io.LimitReader(r, max+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("backup: reading: %w", err)
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("backup: refusing a backup larger than %d bytes decompressed -- "+
+			"a small file that expands without bound is a decompression bomb, not a backup", max)
+	}
+	return data, nil
+}
+
 // Read parses a document produced by Write, refusing anything that looks
 // like an attack on the reader rather than a backup.
 //
 // Restore consumes a file an operator may have been handed, so this is a
 // parser facing hostile input. Four specific refusals:
 //
-//   - A decompression bomb. io.LimitReader is set to MaxDecompressed+1 on
-//     the *decompressed* side, and the extra byte is what makes the check
-//     work: without it, hitting the limit is indistinguishable from a
-//     clean end of stream, and a bomb truncated exactly at the cap reads
-//     as a valid short backup.
+//   - A decompression bomb. readCapped's io.LimitReader is set to
+//     MaxDecompressed+1 on the *decompressed* side, and the extra byte is
+//     what makes the check work: without it, hitting the limit is
+//     indistinguishable from a clean end of stream, and a bomb truncated
+//     exactly at the cap reads as a valid short backup.
 //   - Concatenated gzip members. Multistream(false) stops the reader at
 //     the first member, so a second one appended to a legitimate backup
 //     is not silently included.
@@ -154,14 +174,9 @@ func Read(r io.Reader) (Envelope, error) {
 	defer zr.Close()
 	zr.Multistream(false)
 
-	limited := io.LimitReader(zr, MaxDecompressed+1)
-	data, err := io.ReadAll(limited)
+	data, err := readCapped(zr, MaxDecompressed)
 	if err != nil {
-		return env, fmt.Errorf("backup: reading: %w", err)
-	}
-	if len(data) > MaxDecompressed {
-		return env, fmt.Errorf("backup: refusing a backup larger than %d bytes decompressed -- "+
-			"a small file that expands without bound is a decompression bomb, not a backup", MaxDecompressed)
+		return env, err
 	}
 
 	dec := json.NewDecoder(newByteReader(data))
