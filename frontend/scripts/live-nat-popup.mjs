@@ -29,7 +29,7 @@
 // Every line and address below is synthetic, using documentation address
 // space (RFC 5737 / RFC 1918). Nothing here comes from a real deployment.
 
-import { session, check, done, feedRaw, feedSyslog } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedSyslog, unfoldStreamFilter } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -57,12 +57,27 @@ const { page, consoleErrors } = await session()
 
 // Which device the events arrive from is discovered, never assumed --
 // see live-before-router-lookup.mjs for the incident that lesson came from.
+//
+// Its id and its configured display name are not the same string here
+// (live-env.sh's own devices block: id "live-router", name "Live
+// Router") and the two are used in different places: the sheet/popover
+// body's own copy (RouterNatLookup.svelte) reports routerLookupState's
+// device, which EventDetailSheet.svelte's openNatLookup sets from
+// event.deviceId -- the raw id -- while the header title
+// (natTitle(deviceName, ...)) is given LiveTable.svelte's deviceName(),
+// the friendly name. Both are captured so each check below reads the
+// one the component it targets actually renders.
 feedSyslog(2, 'mv445-device-probe')
 let DEVICE
+let DEVICE_NAME
 for (let i = 0; i < 40 && !DEVICE; i++) {
   await new Promise((r) => setTimeout(r, 250))
   const res = await page.request.get(`${URL_BASE}/api/devices`)
-  if (res.ok()) DEVICE = (await res.json()).devices?.[0]?.id
+  if (res.ok()) {
+    const d = (await res.json()).devices?.[0]
+    DEVICE = d?.id
+    DEVICE_NAME = d?.name
+  }
 }
 check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`)
 
@@ -85,6 +100,12 @@ async function push(payload) {
 /** Narrows the live view to one address and opens that row's detail
  * sheet, where the untagged lookup's trigger lives (#644). */
 async function openRowSheet(query) {
+  // Round 30's click-to-open drawer (#697's `.fbox`) closes on Escape
+  // and on any click outside it and its strip -- both of which every
+  // sheet/popover close below does -- so the Source field this fills is
+  // not reliably mounted by the time a later call gets here. Reopen
+  // rather than assume.
+  await unfoldStreamFilter(page)
   await page.fill(SOURCE_BOX, query)
   const row = `.grid .row:has-text("${query}")`
   await page.waitForSelector(`${row} .time-btn`, { timeout: 20000 })
@@ -277,7 +298,7 @@ await openRowSheet(UNLOGGED_SRC)
   const text = await openSheetLookup()
 
   check(
-    text.includes(`NAT table — ${DEVICE}`),
+    text.includes(`NAT table — ${DEVICE_NAME}`),
     'the unlogged mode is announced in the header, not left to be inferred',
   )
   check(
@@ -347,6 +368,9 @@ await closeSheet()
 
 // --- Mode 2: logged, so the rule is named -------------------------------
 
+// closeSheet() above pressed Escape, which also folds the drawer these
+// two fields live in (see openRowSheet's own comment).
+await unfoldStreamFilter(page)
 await page.fill(SOURCE_BOX, '')
 await page.fill('input.rule', LOGGED_SLUG)
 await page.waitForSelector(LOGGED_TRIGGER, { timeout: 20000 })
@@ -377,6 +401,8 @@ await closePopover()
 // Newest-at-top pushes rows down as events arrive, so a popover anchored
 // to a row it is about would slide away from under itself.
 
+// closePopover() above pressed Escape, folding the drawer again.
+await unfoldStreamFilter(page)
 await page.fill('input.rule', '')
 await page.fill(SOURCE_BOX, '')
 // The hold belongs to the anchored popover (#413) -- the sheet is modal
