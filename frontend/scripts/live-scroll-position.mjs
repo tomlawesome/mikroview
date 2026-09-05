@@ -139,8 +139,17 @@ await page.setViewportSize({ width: 1280, height: 720 })
 // --- #384: naming an entity leaves the operator where they were ---------
 // The workflow the defect punished is the one the view exists for:
 // working down a long discovered list naming things one after another.
+//
+// Entities was rebuilt into one sorted `hosts` table (#675/#681): a
+// discovered-but-unnamed host is no longer its own `.row.discovered` in
+// a separate "Discovered" section, it is a row of `.etable` whose name
+// cell reads "— click to name —" (Entities.svelte:713), and the rename
+// itself is an inline `<input class="rename-input">` in that same cell
+// rather than a `.row .inline-input`. `.page` is still the one
+// scrollable ancestor (Entities.svelte:576), so the scroll assertion
+// itself is unchanged -- only how a row is found and named moves.
 await goTo(page, 'Entities')
-await page.waitForSelector('.page .row.discovered')
+await page.waitForSelector('.etable tbody tr')
 
 const entities = await page.$eval('.page', (el) => ({
   scrollHeight: el.scrollHeight,
@@ -158,40 +167,55 @@ const before = await page.$eval('.page', (el) => el.scrollTop)
 check(before > entities.clientHeight * 2, `the view is scrolled well down before the add (scrollTop ${before})`)
 
 // Pick a row that is actually on screen at this position, so the click
-// itself cannot be what moves the viewport.
+// itself cannot be what moves the viewport. The address is column 3
+// (name · lane · address · mac · first seen · last seen · marks) and is
+// stable across the rename, unlike the name cell this is about to change.
 const target = await page.evaluate(() => {
   const pageEl = document.querySelector('.page')
   const pr = pageEl.getBoundingClientRect()
-  for (const row of document.querySelectorAll('.row.discovered')) {
+  for (const row of document.querySelectorAll('.etable tbody tr')) {
+    const btn = row.querySelector('.rename-btn')
+    if (!btn || !/click to name/.test(btn.textContent ?? '')) continue
     const r = row.getBoundingClientRect()
-    if (r.top > pr.top + 60 && r.bottom < pr.bottom - 60) return row.querySelector('.key')?.textContent ?? null
+    if (r.top > pr.top + 60 && r.bottom < pr.bottom - 60) return row.querySelector('td:nth-child(3)')?.textContent ?? null
   }
   return null
 })
 check(target !== null, 'a discovered row is on screen at this scroll position to name')
 
-await page.click(`.row.discovered:has(.key:text-is("${target}")) button.name-it`)
-await page.fill('.row.discovered .inline-input', 'live-scroll-check')
+const targetRow = `.etable tbody tr:has(td:nth-child(3):text-is("${target}"))`
+await page.click(`${targetRow} .rename-btn`)
+await page.fill(`${targetRow} .rename-input`, 'live-scroll-check')
 
 // Saved with Enter, not by clicking Save: Playwright scrolls a click
 // target into view first, which would hide exactly the defect under
 // test if the button ever sat off screen.
-await page.focus('.row.discovered .inline-input')
+await page.focus(`${targetRow} .rename-input`)
 await page.keyboard.press('Enter')
+// Native querySelector inside the browser has no :has()/:text-is() --
+// those are Playwright-only extensions -- so the row is found here by
+// plain DOM matching on the same stable address column instead.
 await page.waitForFunction(
-  (k) => !document.querySelector(`.row.discovered .key[data-probe="${k}"]`) &&
-    Array.from(document.querySelectorAll('.section')).some((s) =>
-      /Named entities/.test(s.querySelector('h3')?.textContent ?? '') &&
-      /live-scroll-check/.test(s.textContent ?? '')),
+  (key) => {
+    const rows = document.querySelectorAll('.etable tbody tr')
+    for (const row of rows) {
+      if (row.querySelector('td:nth-child(3)')?.textContent !== key) continue
+      return !row.querySelector('.rename-input') && /live-scroll-check/.test(row.textContent ?? '')
+    }
+    return false
+  },
   target,
   { timeout: 15000 },
 )
 
 const after = await page.$eval('.page', (el) => el.scrollTop)
-// One row's worth of tolerance, and no more. A row is inserted into
-// "Named entities" above the viewport and one leaves "Discovered"
-// below, so the compensated position legitimately shifts by about a row
-// height -- the defect moved it by seventeen thousand pixels.
+// The table re-sorts by the new label (Entities.svelte:305-318), which
+// can move the row far from where it was -- but scrollTop is a raw
+// pixel offset into the same scroll container, unaffected by content
+// reordering below or above the fold, so it must not have moved at all
+// once the DOM settles from a same-height row swap. Kept as a tolerance
+// rather than an exact-zero check for that settling, and because the
+// old defect moved it by seventeen thousand pixels, not a handful.
 const drift = Math.abs(after - before)
 check(
   drift <= 120,

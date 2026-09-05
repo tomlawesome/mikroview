@@ -138,7 +138,13 @@ check(
 function entryNames() {
   // Not `.wt-draft`: an unsaved draft watch renders as a row of this
   // same table (Watchlist.svelte:833) but is not an entry yet.
-  return page.$$eval(`${WATCHES} tbody tr.wt-row:not(.wt-draft) td.k`, (els) =>
+  // Not `tbody#sugg` either: round 33 (Watchlist.svelte:375-505) hung
+  // suggestions off a second `<tbody>` of this same table, and by design
+  // "a suggested row sorts and filters with nothing: it is not a watch"
+  // (docs/design/concepts/round-33/README.md) -- a suggestion for an
+  // unrelated host (e.g. "desk") always renders here regardless of
+  // wtFilters, so it must not be counted as a watch entry.
+  return page.$$eval(`${WATCHES} tbody:not(#sugg) tr.wt-row:not(.wt-draft) td.k`, (els) =>
     els.map((el) => el.textContent?.trim()),
   )
 }
