@@ -94,10 +94,20 @@
   // from the open strip too, not just the box itself. Bound via
   // <svelte:window> below, which Svelte itself adds on mount and
   // removes on destroy, so there is nothing here to tear down by hand.
+  //
+  // composedPath(), not e.target -- a click on a control that removes
+  // *itself* from the DOM as part of its own handler (the strip's own
+  // "× clear", once resetFilters() makes hasActiveFilters false) leaves
+  // e.target detached by the time this runs on the bubble, so
+  // `barEl.contains(e.target)` reads false for a click that never left
+  // the strip and folds it as a side effect of clearing. composedPath()
+  // is captured at dispatch, before any handler had a chance to mutate
+  // the tree, so it still names the strip regardless of what that click
+  // going on to unmount.
   function onWindowClick(e: MouseEvent) {
     if (viewportState.isMobile || !expanded) return
-    const target = e.target as Node
-    if (fboxEl?.contains(target) || barEl?.contains(target)) return
+    const path = e.composedPath()
+    if ((fboxEl && path.includes(fboxEl)) || (barEl && path.includes(barEl))) return
     expanded = false
   }
 

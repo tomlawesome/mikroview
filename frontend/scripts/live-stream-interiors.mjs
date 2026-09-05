@@ -1,18 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // #644: the whisper (a quiet rate curve above the live table that can
-// seek and fence the stream) and the filter bar's new folded thin row.
+// seek and fence the stream) and the filter bar's folded strip.
 // Companion to live-smoke.mjs, which already covers the live view's
 // plain substring filter and its row count -- this covers what #644
 // added on top.
 //
-// Note on the filter row: #644 (round 8, "The whisper commands the
-// stream, and the filter box folds to a thin bar") made the desktop
-// filter row start folded behind a "Filters ▸" trigger rather than
-// always on screen. Every field here is therefore scoped under
-// `.bar.thin` rather than the bare `input.rule` selector live-smoke.mjs
-// still uses -- that selector only resolves once this scenario's own
-// first section (below) has unfolded the row.
+// Both sections were rewritten under #963 to follow the current UI:
+//
+// - The whisper (#717, "the elegant-fence redraw"): the old per-minute
+//   `.wtick` marks and the "arm with a `.wfence` button, then two
+//   clicks" gesture are gone. The curve is one polyline now
+//   (Whisper.svelte's `.wline`, one vertex per bucket); a plain click on
+//   it seeks, and a real drag sets the fence to the range dragged. See
+//   that component's own top-of-file comment.
+// - The filter row: round 30 (#697, owner 2026-08-31) retired the
+//   standalone "Filters ▸" trigger this scenario used to click --
+//   FilterBar.svelte gates it on `FILTERS_TRIGGER_ENABLED = false`, so
+//   `button.fold-trigger` renders nowhere any more. The always-on-screen
+//   `.fbox` (FilterBar.svelte's own disclosure) is the way in now: a
+//   click anywhere inside it opens the same strip (`#filterbar-strip`,
+//   still `.bar.thin` at desktop width) this scenario already asserts
+//   the fields of.
 //
 // Both the whisper's click state (seek/fence) and the filter bar's own
 // fields are plain in-memory Svelte state, not persisted -- each
@@ -28,6 +37,12 @@
 import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'
 
 const CARD = '.card[data-card="live"]'
+
+// lib/whisperStats.ts's own constant: Stats.TimeSeries always carries 60
+// one-minute buckets, and the whisper shows the last 15 of them
+// (recentBuckets), so the curve always draws exactly this many vertices
+// regardless of how many are actually populated with traffic.
+const WHISPER_WINDOW_MINUTES = 15
 
 /** apiUrl resolves a path against the page's own origin, for page.request. */
 function apiUrl(page, path) {
@@ -50,6 +65,14 @@ async function populatedMinutes(page) {
   return (body.timeSeries ?? [])
     .filter((b) => Object.values(b.byAction ?? {}).some((v) => v > 0))
     .map((b) => b.time)
+}
+
+/** The whisper's own last-15 slice of the server's 60-bucket series (whisperStats.ts's recentBuckets, mirrored here since the scenario has no access to the component's reactive state). */
+async function visibleBuckets(page) {
+  const res = await page.request.get(apiUrl(page, '/api/stats'))
+  const body = await res.json()
+  const series = body.timeSeries ?? []
+  return series.slice(Math.max(0, series.length - WHISPER_WINDOW_MINUTES))
 }
 
 feedSyslog(120, 'stream-interiors')
@@ -76,8 +99,40 @@ if (!(await isFollowing())) await followBtn.click()
 // ============================================================
 
 const wstat = page.locator(`${CARD} .whisper .wstat`)
-const wfence = page.locator(`${CARD} .wfence`)
-const ticks = page.locator(`${CARD} .wbar .wtick`)
+const wsvg = page.locator(`${CARD} .whisper .wsvg`)
+const wline = page.locator(`${CARD} .whisper .wline`)
+const wband = page.locator(`${CARD} .whisper .wband`)
+
+// Kept a hair inside both edges: page.mouse's raw x,y (unlike a
+// locator's own .click()) does no actionability check, so a coordinate
+// landing exactly on (or a rounding error past) the svg's own boundary
+// silently clicks whatever is next to it instead -- observed missing
+// the seek entirely at frac=1 (the rightmost bucket) before this clamp.
+function svgX(box, frac) {
+  const clamped = Math.min(0.99, Math.max(0.01, frac))
+  return box.x + clamped * box.width
+}
+
+/** Clicks (no drag) the curve at bucket `index` of `total` -- a plain seek. */
+async function clickBucket(index, total) {
+  const box = await wsvg.boundingBox()
+  const frac = total > 1 ? index / (total - 1) : 0.5
+  await page.mouse.click(svgX(box, frac), box.y + box.height / 2)
+}
+
+/** Drags a short distance around bucket `index`, closing a fence over exactly that one minute -- both ends resolve to the same bucket since the offset stays well inside one bucket's own pixel span. */
+async function dragBucket(index, total) {
+  const box = await wsvg.boundingBox()
+  const frac = total > 1 ? index / (total - 1) : 0.5
+  const x = svgX(box, frac)
+  const y = box.y + box.height / 2
+  const bucketPx = total > 1 ? box.width / (total - 1) : box.width
+  const offset = Math.min(10, bucketPx / 3)
+  await page.mouse.move(x - offset, y)
+  await page.mouse.down()
+  await page.mouse.move(x + offset, y, { steps: 4 })
+  await page.mouse.up()
+}
 
 // --- Rendered above the live table, carrying a rate figure ----------------
 const whisperAboveTable = await page.evaluate((sel) => {
@@ -94,11 +149,18 @@ await wstat.waitFor({ state: 'visible', timeout: 10000 })
 const rollingStat = (await wstat.textContent()).trim()
 check(/\d[\d.]*\/s/.test(rollingStat), `the whisper carries a rate figure -- got "${rollingStat}"`)
 
-const tickCount = await ticks.count()
-check(tickCount > 0, `the whisper draws a tick per minute of its window -- got ${tickCount}`)
+// #717 draws one continuous curve rather than a discrete tick per
+// minute -- the per-minute fact now is one polyline vertex per bucket.
+await wline.waitFor({ state: 'attached', timeout: 10000 })
+const pointsAttr = ((await wline.getAttribute('points')) ?? '').trim()
+const vertexCount = pointsAttr ? pointsAttr.split(/\s+/).length : 0
+check(
+  vertexCount === WHISPER_WINDOW_MINUTES,
+  `the whisper draws one point per minute of its ${WHISPER_WINDOW_MINUTES}-minute window -- got ${vertexCount}`,
+)
 
 // --- Clicking the curve seeks -----------------------------------------------
-await ticks.nth(tickCount - 1).click()
+await clickBucket(vertexCount - 1, vertexCount) // the rightmost point -- "now"
 check(!(await isFollowing()), 'seeking the whisper stops the stream following (the pill on its own line is the one source of truth for it)')
 check(
   (await followBtn.textContent())?.trim() === 'follow',
@@ -114,7 +176,7 @@ check(!/now\b/.test(seekStat), `the stat line no longer reads "now" once seeked 
 await followBtn.click()
 check(await isFollowing(), 'following turns back on')
 
-// --- The fence toggle plus two clicks dims, and clearing restores ---------
+// --- A real drag dims, and clearing restores -------------------------------
 //
 // Fencing needs something outside its range to dim, which needs real
 // traffic in at least two distinct wall-clock minutes -- not guaranteed
@@ -132,22 +194,18 @@ if (populated.length < 2) {
 }
 check(populated.length >= 2, `at least two minutes carry real traffic before fencing -- got ${populated.length}`)
 
+// The target minute's position within the whisper's own visible window
+// (its last WHISPER_WINDOW_MINUTES buckets), not within the server's
+// full 60-bucket series -- mirrors whisperStats.ts's recentBuckets.
+const visible = await visibleBuckets(page)
 const targetLabel = hmLabel(populated[0])
-const tickLabels = await ticks.evaluateAll((els) => els.map((el) => el.getAttribute('aria-label') ?? ''))
-const targetIdx = tickLabels.findIndex((l) => l.includes(targetLabel))
-check(targetIdx >= 0, `the whisper has a tick for the populated minute ${targetLabel}`)
-
-await wfence.click()
-check((await wfence.getAttribute('aria-pressed')) === 'true', 'the fence toggle turns on')
+const targetIdx = visible.findIndex((b) => b.time === populated[0])
+check(targetIdx >= 0, `the whisper's own window includes the populated minute ${targetLabel}`)
 
 if (targetIdx >= 0) {
-  // Same tick twice: the first click opens the fence at that minute, the
-  // second closes a one-minute-wide range there -- narrow enough that
-  // real traffic in any other populated minute is guaranteed to fall
-  // outside it.
-  await ticks.nth(targetIdx).click()
-  await ticks.nth(targetIdx).click()
+  await dragBucket(targetIdx, visible.length)
 }
+check(await wband.count() > 0, 'a drag draws the fence band')
 
 await page
   .waitForFunction((sel) => document.querySelectorAll(`${sel} .row.dimmed`).length > 0, CARD, { timeout: 8000 })
@@ -158,30 +216,43 @@ check(dimmedCount > 0, `the fence dims rows outside its range -- ${dimmedCount} 
 const fenceStat = (await wstat.textContent()).trim()
 check(/fenced/.test(fenceStat), `the stat line reports the fenced range -- got "${fenceStat}"`)
 
-// Clearing (the fence toggle itself, per whisper.svelte.ts's toggleFence)
-// restores every row -- this is also this scenario's own cleanup for the
-// fence, not just an assertion.
-await wfence.click()
-check((await wfence.getAttribute('aria-pressed')) === 'false', 'the fence toggle turns off')
+// Escape clears the fence (Whisper.svelte's onKeyDown) -- the curve still
+// holds keyboard focus from the drag's own pointerdown, same as a real
+// user tabbing back to it. This is also this scenario's own cleanup for
+// the fence, not just an assertion.
+await page.keyboard.press('Escape')
+check((await wband.count()) === 0, 'clearing the fence removes the band')
 await page
   .waitForFunction((sel) => document.querySelectorAll(`${sel} .row.dimmed`).length === 0, CARD, { timeout: 8000 })
   .catch(() => {})
 const dimmedAfter = await page.locator(`${CARD} .row.dimmed`).count()
 check(dimmedAfter === 0, `clearing the fence restores every row -- ${dimmedAfter} still dimmed`)
 
+// clearFence() only drops the range -- following (appState.autoscroll)
+// stays off from the drag's own setFenceRange, same as a seek. Left off,
+// LiveTable stays frozen on the pool it held when following stopped
+// (state.svelte.ts's frozenPool, #232/#381), so the filter section below
+// would fill a field against a table that can never show what it feeds
+// next. Only resumeFollowing (the pill itself) un-freezes it.
+await followBtn.click()
+check(await isFollowing(), 'following turns back on once the fence is cleared, unfreezing the table for what comes next')
+
 // ============================================================
-// The thin filter bar
+// The filter box's own folding strip
 // ============================================================
 
-const foldTrigger = page.locator(`${CARD} button.fold-trigger`)
-await foldTrigger.waitFor({ state: 'visible', timeout: 10000 })
+// #697 retired the standalone "Filters ▸" trigger (FilterBar.svelte's
+// FILTERS_TRIGGER_ENABLED = false); the always-on-screen `.fbox` is the
+// disclosure now -- a click anywhere inside it opens the same strip.
+const fbox = page.locator(`${CARD} .filterline .fbox`)
+await fbox.waitFor({ state: 'visible', timeout: 10000 })
 check(
-  (await foldTrigger.textContent()).trim().startsWith('Filters'),
-  'the folded "Filters ▸" trigger is on screen by default on desktop',
+  (await fbox.getAttribute('class'))?.includes('empty'),
+  'the always-on-screen filter box carries no filter yet, by default',
 )
 check((await page.locator(`${CARD} .bar.thin`).count()) === 0, 'the filter row starts folded')
 
-await foldTrigger.click()
+await fbox.click()
 const thinBar = page.locator(`${CARD} .bar.thin`)
 await thinBar.waitFor({ state: 'visible', timeout: 5000 })
 const microLabels = await page.$$eval(`${CARD} .bar.thin .fb-label`, (els) => els.map((e) => e.textContent.trim()))
@@ -228,8 +299,8 @@ check(
 
 await page.locator(`${CARD} .bar.thin button.tf-fold`).click()
 await thinBar.waitFor({ state: 'detached', timeout: 5000 })
-check((await foldTrigger.count()) > 0, 'the row folds back to the "Filters ▸" trigger')
-check((await page.locator(`${CARD} .fold-trigger .dot`).count()) === 0, 'no active-filter dot remains once cleared')
+check((await fbox.count()) > 0, 'the row folds back into the filter box')
+check((await page.locator(`${CARD} .filterline .fbox .chip`).count()) === 0, 'no filter chip remains once cleared')
 
 check(await responsive(page), 'main thread responsive')
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)
