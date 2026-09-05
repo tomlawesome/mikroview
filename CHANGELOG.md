@@ -930,6 +930,15 @@ rewritten.
 
 ### Fixed
 
+- **A `Flush` satisfied by a save already in flight no longer leaves the
+  write-behind writer armed to skip the next debounce window.** The next
+  unrelated write went to disk at once instead of waiting
+  `persistMinInterval`; in CI it showed up as `TestPersistenceRateLimited`
+  counting three saves where two were expected, only on a loaded runner.
+  The sustained-failure back-off tests in `rules` and `device` now bound
+  attempts by the windows that actually elapsed, as `flags`' copy already
+  did (#941).
+
 - **`docs/configuration.md`'s API reference table had drifted from the
   authorization matrix** (#847). Several rows still said `admin-only`
   for routes #653's "watchers" bench ruling had widened to user tier
