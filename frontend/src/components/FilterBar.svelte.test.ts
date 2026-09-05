@@ -202,6 +202,26 @@ describe('FilterBar, the filter line (#697, ratified round 30)', () => {
     expect(screen.getByLabelText('Device')).toBeTruthy()
   })
 
+  it('the strip stays open when its own "clear" button empties the last active filter (#963)', async () => {
+    // A click that removes its own target from the DOM as part of its
+    // handler (resetFilters() makes hasActiveFilters false, which is
+    // what tf-clear itself is gated on) used to read as a click outside
+    // the strip once e.target was detached -- onWindowClick's own
+    // barEl.contains(e.target) check went false for a click that never
+    // left the strip, and folded it as a side effect of clearing.
+    appState.filters = { ...emptyFilters(), action: 'drop' }
+    render(FilterBar)
+    const box = getBox()
+    await expandRow()
+    expect(screen.getByLabelText('Device')).toBeTruthy()
+
+    await fireEvent.click(screen.getByLabelText('Clear all filters'))
+    flushSync()
+    expect(appState.hasActiveFilters).toBe(false)
+    expect(box.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByLabelText('Device')).toBeTruthy()
+  })
+
   it('does not open (or close) when removing a chip -- that click stops at the chip', async () => {
     appState.filters = { ...emptyFilters(), action: 'drop' }
     render(FilterBar)

@@ -55,6 +55,17 @@ class WizardState {
   // the router-standing warning data. null until the first fetch lands.
   commands = $state<SetupCommandsResponse | null>(null)
   commandsError = $state<string | null>(null)
+  // commandsRequestSeq guards refreshCommands against an out-of-order
+  // response: the effect that calls it re-fires on the operator's own
+  // pick (commandsKey in SetupWizard.svelte), and nothing stops a
+  // still-in-flight earlier request's response landing after a later
+  // one's, which would overwrite the freshly-picked version's commands
+  // with the previous pick's. Not hypothetical: this is what "picking a
+  // version re-requests the commands, and today's single dialect
+  // renders the same text back" saw fail intermittently on a loaded gate
+  // host, where request latency varies enough for responses to arrive
+  // out of the order they were sent.
+  private commandsRequestSeq = 0
 
   // backups is step 6's own read (#394, round 45): what has arrived per
   // router, from the same admin-only GET /api/router-backups the
@@ -134,6 +145,7 @@ class WizardState {
   // stored here).
   async refreshCommands(opts: { token?: string; device?: string } = {}): Promise<void> {
     if (!this.status) return
+    const seq = ++this.commandsRequestSeq
     const result = await fetchSetupCommands({
       address: this.address,
       syslogPort: this.status.instance.syslogPort,
@@ -142,6 +154,10 @@ class WizardState {
       device: opts.device || undefined,
       version: this.pickedVersion || undefined,
     })
+    // A newer call started (and may already have answered) while this
+    // one was in flight -- its result is the stale one now, whichever
+    // order the two responses actually arrived in.
+    if (seq !== this.commandsRequestSeq) return
     if (typeof result === 'string') {
       this.commandsError = result
       return
