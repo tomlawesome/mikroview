@@ -246,6 +246,27 @@ store:
 #   maxBytes: 1073741824   # 1 GiB
 #   dir: /var/lib/mikroview/history   # default: beside the data directory
 
+# RouterOS config backups over SFTP (issue #394, optional): a small
+# write-only SFTP drop box a router's own scheduled script pushes its
+# `/system backup save` and `/export` into. Off by default -- a second
+# listening port, opened only once you turn it on. Login is the device
+# name and that device's ingest token (no separate credential to
+# invent); a login can only write into its own folder and cannot list,
+# read, delete, rename or overwrite anything. Every pair is encrypted
+# under history.keyFile above -- the same "no key, no storage" rule:
+# with no key configured the drop box refuses every login rather than
+# keeping anything unencrypted. 10 generations kept per router, 16 MiB
+# per file, oldest dropped first. Port 47022 is a fixed, deliberately
+# unconventional default (not 22 or 2222, which draw scanner traffic).
+# The setup wizard's step 6 prints the exact router-side script once a
+# key is mounted and this is turned on. See docs/configuration.md's
+# "Router backups" section and SECURITY.md for the on-path caveat:
+# RouterOS never verifies this server's host key.
+# backup:
+#   enabled: false
+#   listen: ":47022"
+#   vaultDir: /var/lib/mikroview/router-backups   # default: beside the data directory
+
 # Local IP/CIDR blocklist matching (issue #113 Part B): raises a
 # known_bad_ip flag directly when a source IP falls inside a CIDR range
 # from one of the vetted feeds below -- independent of any behavioral
