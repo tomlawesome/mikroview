@@ -150,6 +150,10 @@ lint:frontend:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
+    # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
+    # keeps these rules inline rather than merged from the anchor.
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -200,6 +204,10 @@ test:frontend:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
+    # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
+    # keeps these rules inline rather than merged from the anchor.
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -229,6 +237,10 @@ test:build-checks:
   image: node:22-bookworm
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
+    # keeps these rules inline rather than merged from the anchor.
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
@@ -499,6 +511,10 @@ security:npm-audit:
   image: node:22-alpine
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
+    # keeps these rules inline rather than merged from the anchor.
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
