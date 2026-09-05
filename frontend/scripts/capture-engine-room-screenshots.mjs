@@ -54,7 +54,11 @@ fs.mkdirSync(BUILT, { recursive: true })
 const EXTRA_USER = 'jenny'
 const EXTRA_PASS = 'screenshot-only-account-pw'
 
-const PEOPLE = '.door:has-text("Who may look in")'
+// #767 (round 32) moved "who may look in" out of the retired
+// EngineRoomDoors door and into the account group's own row grammar --
+// it is now the account panel's #people section (EngineRoom.svelte),
+// not a .door.
+const PEOPLE = '#people'
 
 const browser = await chromium.launch()
 
@@ -99,14 +103,14 @@ async function signedInPage(scheme) {
 // --- The extra account, created once through the door itself ------------
 {
   const { context, page } = await signedInPage('dark')
-  const present = await page.locator(`${PEOPLE} .row:has-text("${EXTRA_USER}")`).count()
+  const present = await page.locator(`${PEOPLE} .prow:has-text("${EXTRA_USER}")`).count()
   if (present === 0) {
-    await page.click(`${PEOPLE} .footer-action`)
-    await page.waitForSelector(`${PEOPLE} .inline-form`)
-    await page.fill(`${PEOPLE} .inline-form input[type="text"]`, EXTRA_USER)
-    await page.fill(`${PEOPLE} .inline-form input[type="password"]`, EXTRA_PASS)
-    await page.click(`${PEOPLE} .inline-form .save`)
-    await page.waitForSelector(`${PEOPLE} .row:has-text("${EXTRA_USER}")`)
+    await page.click(`${PEOPLE} .ogfoot button:has-text("let someone in")`)
+    await page.waitForSelector(`${PEOPLE} .pform`)
+    await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, EXTRA_USER)
+    await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, EXTRA_PASS)
+    await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
+    await page.waitForSelector(`${PEOPLE} .prow:has-text("${EXTRA_USER}")`)
     console.log(`created "${EXTRA_USER}" for the capture`)
   }
   await context.close()
@@ -139,10 +143,14 @@ for (const scheme of ['light', 'dark']) {
 // --- Tidy up: the capture account does not outlive the capture ----------
 {
   const { context, page } = await signedInPage('dark')
-  page.on('dialog', (d) => d.accept())
-  if ((await page.locator(`${PEOPLE} .row:has-text("${EXTRA_USER}")`).count()) > 0) {
-    await page.click(`${PEOPLE} .row:has-text("${EXTRA_USER}") .verb`)
-    await page.waitForSelector(`${PEOPLE} .row:has-text("${EXTRA_USER}")`, { state: 'detached' })
+  const row = page.locator(`${PEOPLE} .prow:has-text("${EXTRA_USER}")`)
+  if ((await row.count()) > 0) {
+    // Round 32's arm-then-confirm gesture (EngineRoom.svelte's
+    // onRemoveClick), not a native confirm() dialog -- the first click
+    // arms the button, the second (now reading "confirm...") removes.
+    await row.locator('button.remove').click()
+    await row.locator('button.remove').click()
+    await row.waitFor({ state: 'detached' })
     console.log(`removed "${EXTRA_USER}"`)
   }
   await context.close()
