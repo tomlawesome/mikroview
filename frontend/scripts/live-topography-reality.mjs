@@ -103,7 +103,18 @@ for (let i = 0; i < 4; i++) {
 await new Promise((r) => setTimeout(r, 1200))
 await page.reload()
 await page.click('.rail-name >> text=Topography')
+// #869: off the city default and onto zones before waiting on anything
+// the 2D map draws -- see the coverage scenario for the full note.
+await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
 await page.waitForSelector('[data-card="topography"] .redge', { timeout: 10000 })
+// The first `.redge` paints as soon as `appState.events` has landed;
+// `ghostIntents` also needs `policyState.edges` from its own separate
+// fetch, which was seen to still be in flight at this exact point once
+// (0 ghosts where the pushed table always draws one) -- a settle here,
+// the same margin the lens switches elsewhere in this file already
+// take, rather than a re-read of an assertion that already failed once.
+await new Promise((r) => setTimeout(r, 600))
 
 // SVG geometry-box visibility lies for lines (live-check skill), so
 // presence and text carry the assertions.
@@ -131,6 +142,12 @@ check(
 // worst unplanned pair -- the internet-side one this check is about --
 // draws as the escalated card and no longer as a pill (#897 item 2), so
 // click the card when it is there; the first alarm pill otherwise.
+//
+// #852/#869: whichever shape wins, both live in `.detail`, hidden at
+// zones the same way the badges above are -- see the coverage scenario
+// for the full note. Off zones and onto services before touching either.
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
+await new Promise((r) => setTimeout(r, 700))
 const escalated = page.locator('[data-card="topography"] .unplanned-card')
 if ((await escalated.count()) > 0) {
   await escalated.first().click()
