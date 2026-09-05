@@ -626,6 +626,14 @@ rewritten.
 
 ### Changed
 
+- **Every CI job names its runner lane** (#949). `default: tags: [big]`
+  puts builds, tests and security scans on the 8-CPU / 18 GB
+  `gitlab-runners-01` runner, two at a time; the policy check, frontend
+  lint, GitHub mirror push and CHR watch override it with `tags: [light]`
+  and run on the 2-CPU / 2 GB `light` runner, three at a time. Once the
+  big runner stops taking untagged jobs (ai/agent-infra#3) a job with no
+  lane will not run at all, which is the point: nothing lands on the big
+  lane by accident.
 - **Development moved to a self-hosted GitLab; GitHub is now its mirror**
   (#935). Merge requests, CI and the `dev -> preview -> main` promotions
   happen on GitLab, and `dev`, `preview` and `main` are pushed to GitHub
@@ -927,6 +935,15 @@ rewritten.
   picker (Signal/Pulse/Nebula/Frequency/Mono) is unaffected.
 
 ### Fixed
+
+- **A `Flush` satisfied by a save already in flight no longer leaves the
+  write-behind writer armed to skip the next debounce window.** The next
+  unrelated write went to disk at once instead of waiting
+  `persistMinInterval`; in CI it showed up as `TestPersistenceRateLimited`
+  counting three saves where two were expected, only on a loaded runner.
+  The sustained-failure back-off tests in `rules` and `device` now bound
+  attempts by the windows that actually elapsed, as `flags`' copy already
+  did (#941).
 
 - **`docs/configuration.md`'s API reference table had drifted from the
   authorization matrix** (#847). Several rows still said `admin-only`
