@@ -41,46 +41,18 @@ For the real thing rather than fixtures, `make live-routeros-container`
 boots a genuine RouterOS CHR and points it at the shipped container --
 see `.claude/skills/live-check/SKILL.md`.
 
-## Branching
-
-Development happens on the owner's self-hosted GitLab; this GitHub
-repository is its mirror. `dev`, `preview` and `main` are written on
-GitLab and pushed here after every merge, so a pull request into any of
-them here is refused by the `branch policy` check. Three lanes, same
-model as this project's sibling repos:
-
-- **`dev`** — the integration branch. All issue work targets this by
-  merge request on GitLab, where the lint, test and security jobs run
-  (`.gitlab-ci.yml`).
-- **`preview`** — promoted from `dev` only. A merge here builds and
-  publishes the release candidate image
-  (`ghcr.io/tomlawesome/mikroview:preview`) from GitHub, via
-  `.github/workflows/docker.yml`.
-- **`main`** — promoted from `preview` only. A merge here never
-  rebuilds anything; it retags the exact digest that was already built
-  and tested from `preview`. The shop window — only what's actually
-  ready ends up here.
-
-GitHub still runs CodeQL and secret scanning on what arrives, and
-`.github/workflows/ci.yml` still runs the container smoke test and the
-Postgres integration check until those move to GitLab too.
-
 ## Testing expectations
 
 - New behavior needs a test that would fail without it.
 - A bug fix should include a regression test reproducing the bug where
   practical.
 - Anything touching `internal/auth` or `internal/api/auth.go` should be
-  run with `-race` locally before opening a PR — the CI security job
-  does this too, but catching it locally is faster.
+  run with `-race` locally — the CI security job does this too, but
+  catching it locally is faster.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md). Dependabot alerts stay on for Go
-modules, npm packages, the Dockerfile's base images and GitHub Actions
-versions, as notifications only: it opens no pull requests, because
-nothing merges here. CodeQL scans every push to `dev`/`preview`/`main`
-plus a weekly full scan.
+See [SECURITY.md](SECURITY.md).
 
 ## Code contributions
 
@@ -89,8 +61,11 @@ or a comment on anyone's code — it's simply that reviewing contributions
 properly takes time this project doesn't have, and reviewing them badly
 would be worse than not reviewing them at all.
 
-**Issues are genuinely welcome**, and they're the right channel for
-everything:
+**Issues are genuinely welcome** — open one on
+[GitHub](https://github.com/tomlawesome/mikroview/issues). Development
+itself happens on a private GitLab and this repository is its mirror, so
+an issue here is picked up and tracked there. Issues are the right
+channel for everything:
 
 - bug reports, including ones you've already diagnosed
 - feature requests and ideas
