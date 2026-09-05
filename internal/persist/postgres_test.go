@@ -10,9 +10,42 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// setupRetryAttempts and setupRetryBackoff bound the retry this harness
+// allows on the *first* connection of a test, the "setup" step in
+// newTestPool below. A Postgres service container can still be finishing
+// its own startup when that first attempt runs, surfacing as a reset or
+// "the database system is starting up" (SQLSTATE 57P03) -- see #702,
+// observed twice on CI. The bound keeps a genuinely dead database
+// failing within a second rather than hanging the job.
+const (
+	setupRetryAttempts = 5
+	setupRetryBackoff  = 200 * time.Millisecond
+)
+
+// openPoolWithRetry calls connect up to attempts times, sleeping backoff
+// between failures, and returns the first success or the last error.
+//
+// This wraps only the connect-and-verify step. It must never wrap a
+// test's assertions: retrying there would turn a real regression into an
+// intermittent pass instead of absorbing a slow-starting dependency.
+func openPoolWithRetry(attempts int, backoff time.Duration, connect func() (*Pool, error)) (*Pool, error) {
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		var p *Pool
+		if p, err = connect(); err == nil {
+			return p, nil
+		}
+		if attempt < attempts {
+			time.Sleep(backoff)
+		}
+	}
+	return nil, err
+}
 
 // These run against a real Postgres, not a mock. The properties worth
 // testing here -- that a compare-and-swap actually rejects a stale
@@ -46,7 +79,10 @@ func newTestPool(t *testing.T) *Pool {
 	ctx := t.Context()
 
 	schema := "test_" + strings.ReplaceAll(strings.ToLower(t.Name()), "/", "_")
-	setup, err := OpenPool(ctx, testDSN(t))
+	dsn := testDSN(t)
+	setup, err := openPoolWithRetry(setupRetryAttempts, setupRetryBackoff, func() (*Pool, error) {
+		return OpenPool(ctx, dsn)
+	})
 	if err != nil {
 		t.Fatalf("OpenPool (setup): %v", err)
 	}
