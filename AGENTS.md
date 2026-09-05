@@ -137,8 +137,9 @@ from `dev`, and into `main` unless it comes from `preview`.
 
 Issues, planning and decisions live on GitLab too (owner decision,
 2026-09-04, on #935): the whole GitHub tracker was imported here, keeping
-every issue and merge request number, and GitHub's issues are closed and
-left as the historical copy. `Closes #N` goes in the merge request
+every issue and merge request number, and Issues is switched off on the
+GitHub mirror (owner, 2026-09-05, #935) — the mirror takes no pull requests
+either, so nobody should raise issues there. `Closes #N` goes in the merge request
 description as well as the commit message. GitLab closes from either, but
 only on a merge into the default branch — which here is `dev`, so an
 ordinary merge closes its issue with no extra job. Check the issue after
@@ -541,6 +542,32 @@ The first two were found on PR #257 (Watchlist frontend), the third on
 
 ## Demos the owner reviews
 
+### History it: seven nights from a restored envelope, not a week of waiting
+
+The demo cannot wait seven nights for real watchlist streaks and a week of
+retained corpus, and faking them by ingesting back-dated events would break
+what mikroview promises: a night is only ever claimed once this process
+watched it end to end, or it was already recorded (`internal/engine/
+definitions_nights.go`). Owner decision on #959: **restore it, don't ingest
+it**. `-restore` writes a store straight to disk -- it is not the live
+ingest path the honesty check guards, so history arriving that way breaks
+nothing.
+
+`cmd/demo-history` builds the envelope: a `definitions` store with seven
+nights of streaks for the same six watchlist entries `scripts/seed-demo.py`
+seeds (#738's feeder characters, so the story continues into today once the
+feed starts), and a `retained_events` store of matching back-dated traffic
+-- both ending yesterday, so today is genuinely the live feed's. `-restore`
+seals `retained_events` into `history.dir` under this deployment's own key,
+the same encrypted per-day files a live process writes; it never travels as
+ciphertext in the envelope itself.
+
+Generate it before seeding, and restore it into the instance
+`live-env.sh` just brought up, stopping the server for the write -- the
+full sequence, folded into "Seed it" below, is: generate the envelope,
+bring the instance up, restore the envelope, then seed everything else and
+start the feeder.
+
 ### Seed it: a demo on bare syslog is not a demo
 
 `scripts/seed-demo.py` (#687) gives a running instance a whole story
@@ -565,13 +592,26 @@ sets it by default -- the live-check gate needs a real, non-self-destroying
 worker to prove its own navigation scenario (#753) -- so a demo has to ask
 for it explicitly.
 
-    MV_DEMO_DEVICES=1 MV_DEMO_BUILD=1 MV_BIND=<addr> scripts/live-env.sh up
+    go run ./cmd/demo-history -out /tmp/demo-history.backup -force
 
-    export MV_URL=... MV_USER=... MV_PASS=...
+    MV_DEMO_DEVICES=1 MV_DEMO_BUILD=1 MV_BIND=<addr> scripts/live-env.sh up
+    export MV_URL=... MV_USER=... MV_PASS=... MV_DIR=...
+
+    kill "$(cat "$MV_DIR/pid")"
+    MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" -restore /tmp/demo-history.backup --force
+    MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
+    echo $! > "$MV_DIR/pid"
+
     export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_PORT=<tls port>
-    scripts/seed-demo.py all      # push, entities, accounts, watchlist
+    scripts/seed-demo.py push
+    scripts/seed-demo.py entities
+    scripts/seed-demo.py accounts
     scripts/seed-demo.py feed &   # long-running; leave it running
     scripts/seed-demo.py mutate   # once the feed has produced real flags
+
+Push/entities/accounts, not `all`: `all` also runs `watchlist`, which would
+create six more, blank watchlist entries beside the six the restored
+envelope already carries with their seven nights of history.
 
 `feed` is the piece that takes time: the metrics hourline, the register
 and the fall's memory stay flat until real time has passed under them.
