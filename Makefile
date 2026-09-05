@@ -88,6 +88,20 @@ clean:
 # holds the port precisely so it does not trample a stranger's instance
 # -- arming the trap first would have this recipe do exactly that on the
 # way out of the refusal it just respected.
+#
+# The INT/TERM trap here only ever ran when a signal reached *this*
+# shell -- a terminal Ctrl-C, which goes to the whole foreground process
+# group. A kill aimed at one process further up (an agent's own wrapper,
+# or `make` itself) sends nothing to this shell at all, so the trap above
+# never fired, and scripts/run-scenarios.sh -- called as a plain
+# foreground command, not `wait` -- kept driving Chromium against an
+# instance whose owner was long gone (#671). `scripts/run-scenarios.sh`
+# is backgrounded and `wait`-ed on for the same reason node is inside
+# it: `wait` is the one blocking construct a trapped signal interrupts
+# immediately rather than deferring until the foreground command
+# finishes, and the trap forwards the same signal to it, which is what
+# actually stops the scenario in front of it and lets `down` below run
+# straight away instead of waiting out the rest of the browser phase.
 # The same gate, on the second host, so it does not hold this machine for
 # the better part of an hour. scripts/gate-remote.sh has the reasoning;
 # AGENTS.md's "The second host live-check runs on" has the account.
@@ -97,9 +111,12 @@ live-check-remote:
 live-check:
 	@eval "$$(scripts/live-env.sh up)"; \
 	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT; \
-	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true; exit 130' INT TERM; \
+	  runner_pid=""; \
+	  trap '[ -n "$$runner_pid" ] && kill "$$runner_pid" 2>/dev/null; scripts/live-env.sh down >/dev/null 2>&1 || true; exit 130' INT TERM; \
 	  status=0; \
-	  scripts/run-scenarios.sh || status=1; \
+	  scripts/run-scenarios.sh & runner_pid=$$!; \
+	  wait "$$runner_pid" || status=1; \
+	  runner_pid=""; \
 	  scripts/live-env.sh down; \
 	  scripts/run-live-scripts.sh || status=1; \
 	  exit $$status

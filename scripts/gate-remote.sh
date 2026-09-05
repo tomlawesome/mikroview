@@ -30,6 +30,9 @@ set -euo pipefail
 HOST="${MV_GATE_HOST:-mikroview-runner}"
 BROWSER="${MV_BROWSER:-chromium}"
 KEEP=0
+# --wait / MV_GATE_WAIT: poll for the lock instead of refusing (#811).
+WAIT="${MV_GATE_WAIT:-0}"
+WAIT_INTERVAL="${MV_GATE_WAIT_INTERVAL:-30}"
 REF="$(git rev-parse --abbrev-ref HEAD)"
 
 while [ $# -gt 0 ]; do
@@ -37,8 +40,9 @@ while [ $# -gt 0 ]; do
     --browser) BROWSER="$2"; shift 2 ;;
     --host)    HOST="$2"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
+    --wait)    WAIT=1; shift ;;
     -h|--help)
-      echo "usage: scripts/gate-remote.sh [--browser chromium|firefox|webkit] [--host NAME] [--keep]"
+      echo "usage: scripts/gate-remote.sh [--browser chromium|firefox|webkit] [--host NAME] [--keep] [--wait]"
       exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -63,8 +67,12 @@ fi
 # second run used to force-push over the first run's branch and rm -rf the
 # tree the first run was still standing in -- destroying both runs instead
 # of running one after the other. The lock below makes that single-tenancy
-# explicit: a run that cannot take the lock refuses immediately, which is
-# cheaper than two runs that both fail an hour in. See #809.
+# explicit: a run that cannot take the lock refuses immediately (exit 75,
+# distinct from a gate failure so a caller can tell "try later" from "the
+# gate found something"), which is cheaper than two runs that both fail an
+# hour in. See #809. #811 corroborated the same collision from the
+# npm-ci-mid-extract side and added `--wait`/`MV_GATE_WAIT` for a caller
+# that would rather queue than be told to retry by hand.
 # shellcheck disable=SC2317  # only invoked indirectly, via 'trap release_lock EXIT' below
 release_lock() {
   local status=$?
@@ -99,7 +107,14 @@ LOCK_ACQUIRE="${LOCK_ACQUIRE//HOST_PLACEHOLDER/$HOST}"
 
 echo "==> taking the gate lock on $HOST"
 if ! ssh "$HOST" "$LOCK_ACQUIRE" <<<"$OWNER_INFO"; then
-  exit 1
+  if [ "$WAIT" -ne 1 ]; then
+    echo "==> exiting 75 (lock held) -- pass --wait or set MV_GATE_WAIT=1 to queue instead" >&2
+    exit 75
+  fi
+  echo "==> --wait set: polling every ${WAIT_INTERVAL}s until the lock is free (Ctrl-C to give up)" >&2
+  until ssh "$HOST" "$LOCK_ACQUIRE" <<<"$OWNER_INFO"; do
+    sleep "$WAIT_INTERVAL"
+  done
 fi
 trap release_lock EXIT
 

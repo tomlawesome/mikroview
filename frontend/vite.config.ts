@@ -9,6 +9,9 @@ export default defineConfig({
     VitePWA({
       // MV_DEMO_BUILD=1 turns the service worker into one that
       // unregisters itself and drops its caches on first load (#713).
+      // Set by whoever brings an instance up for a demo, not by
+      // scripts/live-env.sh itself -- the live-check gate needs a real
+      // worker (frontend/scripts/live-sw-navigation.mjs, #753).
       //
       // A demo instance is rebuilt many times at one origin, and a
       // browser that has seen any earlier build keeps being served that
