@@ -629,6 +629,11 @@ rewritten.
 
 ### Changed
 
+- `CONTRIBUTING.md` now says where to report things: GitHub issues are
+  the public intake again, with the work tracked on GitLab (#953). Its
+  branching, CI and Dependabot passages, all describing the GitHub-first
+  setup that #935 replaced, are gone (#954); `AGENTS.md` carries the
+  current delivery model.
 - **Every CI job names its runner lane** (#949). `default: tags: [big]`
   puts builds, tests and security scans on the 8-CPU / 18 GB
   `gitlab-runners-01` runner, two at a time; the policy check, frontend
