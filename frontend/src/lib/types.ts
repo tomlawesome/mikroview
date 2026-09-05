@@ -1223,6 +1223,50 @@ export interface PersistenceInfo {
   dir?: string
 }
 
+// GET /api/router-backups (#394, round 44's "router backups" group).
+// Mirrors internal/api's routerBackupsResponse.
+export interface RouterBackupsResponse {
+  // False when no retention key is configured at all -- #394's "no key,
+  // no backups": the drop box refuses every login and routers is always
+  // empty.
+  enabled: boolean
+  routers: RouterBackupRouter[]
+  totalGenerations: number
+  totalRouters: number
+  totalBytes: number
+  // The SFTP drop box's own listening port ("arrive by"), absent when
+  // backup.enabled is false.
+  port?: string
+}
+
+// One router's block (round 44's per-router strip). IntervalSeconds/
+// LastArrival/Missed together carry the owner's 2026-09-05 decision:
+// the interval is learned from arrivals, not the scheduler line the
+// wizard printed, and a router with one push has neither.
+export interface RouterBackupRouter {
+  device: string
+  generations: RouterBackupGeneration[] // oldest first
+  intervalKnown: boolean
+  intervalSeconds?: number
+  lastArrival?: string
+  missed: number
+}
+
+// One kept generation -- the shape round 44's strip and newest-pair
+// line are drawn from. The size/arrival fields are absent for whichever
+// half of the pair has not arrived yet, so "not here" reads differently
+// from "zero bytes".
+export interface RouterBackupGeneration {
+  id: string
+  backupArrivedAt?: string
+  rscArrivedAt?: string
+  backupBytes?: number
+  rscBytes?: number
+  // The .backup's header label ("plain" or "encrypted"), absent until
+  // that half of this generation has arrived.
+  header?: string
+}
+
 // Mirrors internal/api's setupStatus (#320). Everything here is an
 // observation mikroview made on its own side -- it never connects to a
 // router, so "did that step work" is answered by what arrived, not by
