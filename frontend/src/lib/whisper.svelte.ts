@@ -54,8 +54,13 @@ class WhisperState {
     appState.autoscroll = false
   }
 
+  // #968: setFenceRange only turned autoscroll off because the fence is
+  // a window on the past -- once the window is gone, the reason to hold
+  // the stream is gone with it, so clearing hands the reader back a
+  // table that follows new rows again.
   clearFence() {
     this.fenceRange = null
+    appState.autoscroll = true
   }
 
   // The way back, and the whole of #749: unmounting the only writer of
