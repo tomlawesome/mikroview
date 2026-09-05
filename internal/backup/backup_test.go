@@ -185,3 +185,26 @@ func TestRefusesPlainJSONThatIsNotGzipped(t *testing.T) {
 		t.Error("an ungzipped document was accepted")
 	}
 }
+
+// TestMaxDecompressedCoversTenVaultGenerationsPerRouter pins
+// maxVaultBytesPerRouter against backupvault's own retention constants
+// (#394) -- 10 generations, two 16 MiB files each -- so a change to
+// either side's numbers is caught here rather than silently letting
+// -backup refuse a vault that is actually within the documented limits.
+// Not an import of internal/backupvault (see MaxDecompressed's own doc
+// comment for why this package stays a dependency-free leaf): the
+// figures are asserted directly instead.
+func TestMaxDecompressedCoversTenVaultGenerationsPerRouter(t *testing.T) {
+	const (
+		generationsPerRouter = 10
+		filesPerGeneration   = 2
+		maxFileBytes         = 16 << 20
+	)
+	want := generationsPerRouter * filesPerGeneration * maxFileBytes
+	if maxVaultBytesPerRouter != want {
+		t.Errorf("maxVaultBytesPerRouter = %d, want %d (10 generations x 2 files x 16 MiB)", maxVaultBytesPerRouter, want)
+	}
+	if MaxDecompressed < baseMaxDecompressed+maxVaultBytesPerRouter {
+		t.Error("MaxDecompressed does not even cover one router's full vault on top of every other store")
+	}
+}
