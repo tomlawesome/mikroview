@@ -24,6 +24,7 @@ stages:
   - security
   - sync
   - chr-exercise
+  - renovate
 
 variables:
   GOFLAGS: "-mod=readonly"
@@ -749,3 +750,35 @@ chr-watch:run:
     - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "api"'
   script:
     - node scripts/chr-watch/run.js
+
+# ---------------------------------------------------------------------------
+# RENOVATE — #945: self-hosted Renovate, replacing the Dependabot config retired
+# in d3c152a now that dependency work happens on GitLab. renovate.json at the
+# repo root carries the policy (dev as base branch, 7-day cooldown, minor and
+# patch grouped per ecosystem, majors separate, ten open MRs); this job only
+# executes it. The github-actions manager is deliberately off: the remaining
+# .github/workflows/*.yml are the mirror side and are updated by hand.
+#
+# Inert on every pipeline source except a Pipeline Schedule carrying
+# RENOVATE=true (schedule 10, Mondays 05:00 London) and the web/API paths, the
+# same pattern as CHR_EXERCISE and CHR_WATCH above. RENOVATE_TOKEN is an
+# impersonation token of mikroview-bot held as a masked, protected CI/CD
+# variable; never echo it. GITHUB_COM_TOKEN, if set the same way, lets Renovate
+# fetch release notes from github.com without hitting the anonymous rate limit.
+# ---------------------------------------------------------------------------
+
+renovate:run:
+  stage: renovate
+  image: renovate/renovate:44
+  needs: []
+  rules:
+    - if: '$RENOVATE == "true" && $CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$RENOVATE == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$RENOVATE == "true" && $CI_PIPELINE_SOURCE == "api"'
+  variables:
+    RENOVATE_GIT_AUTHOR: "mikroview-bot <mikroview-bot@noreply.gitlab.tomlawson.io>"
+    RENOVATE_ONBOARDING: "false"
+    RENOVATE_REQUIRE_CONFIG: "required"
+    LOG_LEVEL: info
+  script:
+    - renovate --platform gitlab --endpoint "$CI_API_V4_URL" "$CI_PROJECT_PATH"

@@ -18,6 +18,12 @@ rewritten.
 
 ### Added
 
+- **Renovate now proposes dependency updates as merge requests on
+  GitLab, replacing Dependabot** (#945).
+- GitHub's `branch-policy.yml` is gone: it guarded pull requests on
+  GitHub, which takes none now; `policy:promotion-hop` on GitLab does
+  that job (#935).
+
 - **The on-disk event history is now a setting you change while
   mikroview is running, not one you restart for** (#910, design round
   42 under `docs/design/concepts/round-42/`). Settings gains a `disk`
