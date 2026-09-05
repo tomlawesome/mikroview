@@ -199,6 +199,7 @@ func vaultPath(dir, rel string) (string, error) {
 // store in runBackup's own loop.
 func readVaultBundle(dir string) (vaultBundle, error) {
 	bundle := vaultBundle{Files: map[string][]byte{}}
+	// #nosec G703 -- the vault directory from this deployment's own config, not from a request.
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -209,6 +210,7 @@ func readVaultBundle(dir string) (vaultBundle, error) {
 	if !info.IsDir() {
 		return bundle, fmt.Errorf("router backup vault: %s is not a directory", dir)
 	}
+	// #nosec G703 -- same config-owned directory; every entry it yields is re-checked by vaultPath below.
 	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
