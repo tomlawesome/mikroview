@@ -490,6 +490,55 @@ security:npm-audit:
     - npm ci
     - npm audit --audit-level=high
 
+# Checks the licence of every dependency mikroview actually ships -- Go
+# modules and the frontend's bundled npm packages, the same inventory
+# tools/licenses/generate-notices.mjs attributes -- against
+# supply-chain/licence-policy.yml. Replaces
+# .github/dependency-review-config.yml, which actions/dependency-review-action
+# read on a pull-request diff and stopped running when GitHub became a
+# push-mirror with no pull requests (#935); deliberately scoped to what ships
+# rather than the whole installed tree, since an earlier version of this job
+# walking node_modules wholesale failed on twelve build/test-tooling packages
+# that never reach the binary (#945 item 3, #948).
+#
+# tools/licenses/licence-policy.mjs is the npm half and the one place the
+# allow-list lives (supply-chain/licence-policy.yml); its --print-allowed
+# feeds the same list into go-licenses' --allowed_licenses for the Go half,
+# so the two checks cannot drift apart into disagreeing about what is
+# allowed.
+#
+# mikroview itself is AGPL-3.0-only (LICENSE) -- go-licenses' --ignore flag
+# below excludes mikroview's own module, so this never flags the project
+# shipping under its own licence. That is not the same as allowing AGPL: it
+# is not in allow-licenses, so an actual dependency under AGPL still fails,
+# exactly like any other disallowed licence.
+#
+# node:22-bookworm plus the Go tarball, the same combination
+# test:build-checks uses: this job needs both toolchains in one image, and
+# the Go toolchain is the official tarball pinned to go.mod's version, since
+# Debian's packaged Go is too old to read this module.
+security:licence-policy:
+  stage: security
+  image: node:22-bookworm
+  <<: [*dev_or_mr, *git_safe]
+  script:
+    - node --test tools/licenses/licence-policy.test.mjs
+    - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
+    - export PATH="/usr/local/go/bin:$PATH" && go version
+    # `go install` drops the binary in $(go env GOPATH)/bin, which the node
+    # image does not have on PATH; pipeline 287 failed with "command not
+    # found" for exactly that reason.
+    - export PATH="$(go env GOPATH)/bin:$PATH"
+    - go install github.com/google/go-licenses/v2@v2.0.1
+    - go-licenses check ./... --ignore github.com/tomlawesome/mikroview --allowed_licenses="$(node tools/licenses/licence-policy.mjs --print-allowed)"
+    # --ignore-scripts: this install only needs to feed the Vite build
+    # licence-policy.mjs runs internally (via npmPackages()) to see which
+    # packages' source actually reached the bundle; no postinstall step
+    # changes that set (sharp's platform binaries arrive as ordinary
+    # optionalDependencies, not through a lifecycle script).
+    - (cd frontend && npm ci --ignore-scripts)
+    - node tools/licenses/licence-policy.mjs
+
 security:gitleaks:
   stage: security
   image:
