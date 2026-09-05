@@ -550,6 +550,23 @@ security:npm-audit:
       exists: ["frontend/package.json"]
   script:
     - cd frontend
+    # node:22-alpine's bundled npm tries the fast bulk advisory endpoint
+    # first, and only on a failure there falls back to
+    # /-/npm/v1/security/audits/quick -- the endpoint the registry is
+    # retiring, and the one that actually 400'd on #931 (npm's own
+    # @npmcli/arborist, lib/audit-report.js: bulk POST wrapped in a
+    # try/catch whose catch calls quick). The bulk call passes cleanly
+    # against this lockfile every time it was tried; the intermittent
+    # trigger was whatever made it fail once and fall through to the
+    # endpoint being shut down. npm 12.0.2 -- the current `latest`, checked
+    # 2026-09-05 -- removed that fallback outright and only calls bulk, so
+    # pin to it rather than trust whatever patch of the image's bundled
+    # npm a given runner has cached. Verified in a throwaway node:22-alpine
+    # container against this frontend/: `npm install -g npm@12.0.2 && npm
+    # ci && npm audit --audit-level=high` -> "found 0 vulnerabilities",
+    # with `--loglevel verbose` showing only a POST to
+    # .../security/advisories/bulk, never to .../audits/quick.
+    - npm install -g npm@12.0.2
     - npm ci
     - npm audit --audit-level=high
 
