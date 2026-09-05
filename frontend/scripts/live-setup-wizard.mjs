@@ -50,12 +50,15 @@ check(await modal.isVisible(), 'clicking outside does not dismiss the modal')
 check((await veil.count()) === 1, 'the veil is present but inert')
 
 // --- The step list is the ledger --------------------------------------
+// Six steps plus the read-back, since #394 (round 44/45) added "Back up
+// the router" as the ledger's sixth entry, straight after "Name your
+// router" -- see setupsteps.ts's buildLedger and its STEP_TITLES.
 const stepTitles = await page.$$eval('.setup-wizard .steps .step-title', (els) =>
   els.map((e) => e.textContent?.trim() ?? ''),
 )
 check(
-  stepTitles.length === 6,
-  `five steps and the read-back, always the same count (${JSON.stringify(stepTitles)})`,
+  stepTitles.length === 7,
+  `six steps and the read-back, always the same count (${JSON.stringify(stepTitles)})`,
 )
 
 // --- Commands carry real values, never placeholders --------------------
@@ -151,22 +154,6 @@ check(
   "picking a version re-requests the commands, and today's single dialect renders the same text back",
 )
 
-// --- The version hint never breaks the CA fetch (#436 item 3) -----------
-// Step 1's CA fetch gains a `?ros=` query string so mikroview learns the
-// version from the very first request, before any push. The value is
-// untrusted operator-controlled text, so the one thing that must always
-// be true is that the fetch still works and still returns the
-// certificate -- not that a warning follows, since whether the browser's
-// own source address maps to a device the gate has declared is not
-// something this scenario controls.
-const caResponse = await page.request.get(`${URL_BASE}/ca.crt?ros=7.16`)
-check(caResponse.status() === 200, `the CA fetch with a version hint still succeeds (${caResponse.status()})`)
-const caBody = await caResponse.text()
-check(
-  caBody.startsWith('-----BEGIN CERTIFICATE-----'),
-  'and the hint never breaks the certificate it returns',
-)
-
 // --- Observation lines reflect what the server observed ----------------
 // The harness has already fed events, so events-arriving must be true,
 // and those events carry log-prefixes, so actions decode.
@@ -259,6 +246,32 @@ if (stepOneObservation.includes('waiting')) {
   check(true, `step 1 already has its evidence on this instance (${stepOneObservation}) — nothing to force`)
 }
 
+// --- The version hint never breaks the CA fetch (#436 item 3) -----------
+// Step 1's CA fetch gains a `?ros=` query string so mikroview learns the
+// version from the very first request, before any push. The value is
+// untrusted operator-controlled text, so the one thing that must always
+// be true is that the fetch still works and still returns the
+// certificate -- not that a warning follows, since whether the browser's
+// own source address maps to a device the gate has declared is not
+// something this scenario controls.
+//
+// Run after the forcing-past block above, deliberately: this is a GET to
+// the same /ca.crt endpoint a real router fetches, and the server cannot
+// tell this scenario's own probe apart from one -- caStep
+// (setupsteps.ts) marks step 1 "done" the moment *anything* fetches it.
+// Doing this earlier used to satisfy step 1's evidence as a side effect,
+// so by the time the forcing-past block ran, "evidence outranks a mark"
+// (buildLedger's own rule) correctly showed the row as done from a real
+// CA fetch instead of forced -- which read as a forced-past rendering
+// bug but was this ordering.
+const caResponse = await page.request.get(`${URL_BASE}/ca.crt?ros=7.16`)
+check(caResponse.status() === 200, `the CA fetch with a version hint still succeeds (${caResponse.status()})`)
+const caBody = await caResponse.text()
+check(
+  caBody.startsWith('-----BEGIN CERTIFICATE-----'),
+  'and the hint never breaks the certificate it returns',
+)
+
 // --- Skip is quiet, and states its consequence -------------------------
 await page.locator('.setup-wizard .steps li:nth-child(5) .step-row').click()
 await page.click('.setup-wizard footer button:has-text("Skip this step")')
@@ -324,11 +337,14 @@ const pushReceipt =
 check(true, `the push step records this push on its own once the table arrives (${pushReceipt})`)
 
 // --- The finish reads the ledger back ---------------------------------
-await page.locator('.setup-wizard .steps li:nth-child(6) .step-row').click()
+// The finish row is the li *after* the ledger's six steps -- #394 made
+// that nth-child(7), not nth-child(6) -- and the readback lists all six
+// of them (SetupWizard.svelte's `{#each ledger as s}` under onFinish).
+await page.locator('.setup-wizard .steps li:nth-child(7) .step-row').click()
 const headline = ((await page.textContent('.setup-wizard .headline')) ?? '').trim()
 check(headline.length > 0, `the finish reads the ledger back in a sentence (${headline})`)
 check(
-  (await page.locator('.setup-wizard .readback li').count()) === 5,
+  (await page.locator('.setup-wizard .readback li').count()) === 6,
   'one row per step — receipt or honest gap',
 )
 
