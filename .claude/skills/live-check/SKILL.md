@@ -24,6 +24,14 @@ run never does -- which is how #659 shipped a static style attribute Chromium
 tolerates and Firefox refuses. Peer sessions share this workstation, so prefer
 the remote form when someone else may want the machine.
 
+**The remote gate serializes: one run on the second host at a time.**
+`scripts/gate-remote.sh` takes a lock on the host before it pushes and
+refuses (exit 75) if another run already holds it, naming that run's host,
+ref and start time (#809, #811). Pass `--wait` to poll until it frees
+instead of refusing. Do not start a second `make live-check-remote` against
+the same host expecting it to queue on its own -- without `--wait` it exits
+immediately.
+
 ## Why this exists
 
 Nearly every defect worth finding in this project was found by running it.
