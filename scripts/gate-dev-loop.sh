@@ -31,7 +31,14 @@
 #   setsid nohup scripts/gate-dev-loop.sh >>~/projects/.gate-logs/mikroview/loop.log 2>&1 </dev/null & disown
 #
 # and watch loop.log: one line per event, `NEWFAIL`, `FIXED`, `CLEAN`,
-# `SAME` or `ERROR`, each with the commit it is about.
+# `SAME`, `ERROR` or `LOST`, each with the commit it is about. `LOST` is a
+# run that died before producing a result (#861) -- distinct from a `FAIL`
+# scenario inside a completed run -- and is retried next tick like any
+# other unfinished commit; it also leaves a `gate-<sha>.lost` file in
+# $LOGDIR so the loss is on record even if that commit is superseded
+# before the retry lands. A commit that recovers on a later attempt gets
+# a `RECOVERED` line alongside its normal result, so it never reads as a
+# plain healthy run.
 
 set -u
 
@@ -88,13 +95,29 @@ while :; do
   (cd "$WORKTREE" && scripts/gate-remote.sh >"$LOGDIR/gate-$sha.run" 2>&1)
   if [ ! -s "$WORKTREE/gate-run.log" ]; then
     # Nothing came back: the lock was held, the host is down, or the push
-    # failed. The .run file says which. Retry without marking the commit
-    # done, so the commit still gets its run.
-    echo "ERROR $(stamp) $sha no gate-run.log -- $(tail -1 "$LOGDIR/gate-$sha.run")"
+    # failed -- most often (#861) a transient build failure, such as an
+    # IPv6 Docker Hub token fetch the host cannot source an address for.
+    # The .run file says which. Retry without marking the commit done, so
+    # the commit still gets its run -- but record the loss first, durably:
+    # a build failure here previously left only a scrolling ERROR line
+    # among fetch-retry ERRORs of the same word, so a run that never came
+    # back (dev moved on before the retry landed) was indistinguishable
+    # from a commit the loop simply had not reached yet. `gate-<sha>.lost`
+    # persists in $LOGDIR regardless of what happens next, so that window
+    # going unwatched stays visible even after the loop moves on.
+    errline=$(tail -1 "$LOGDIR/gate-$sha.run")
+    echo "$(stamp) $errline" >>"$LOGDIR/gate-$sha.lost"
+    echo "LOST $(stamp) $sha no gate-run.log -- $errline"
     sleep "$POLL"; continue
   fi
   mv "$WORKTREE/gate-run.log" "$LOGDIR/gate-$sha.log"
   rm -f "$LOGDIR/gate-$sha.run"
+  if [ -f "$LOGDIR/gate-$sha.lost" ]; then
+    # This sha did eventually get a result, but not on the first attempt:
+    # say so in the stream too, so a later CLEAN/SAME/NEWFAIL line for it
+    # never reads as though nothing went wrong.
+    echo "RECOVERED $(stamp) $sha: $(wc -l <"$LOGDIR/gate-$sha.lost") lost attempt(s) first -- see gate-$sha.lost"
+  fi
 
   failing "$LOGDIR/gate-$sha.log" >"$LOGDIR/gate-$sha.failing"
   started=$(grep -cE '^== (frontend/)?scripts/' "$LOGDIR/gate-$sha.log" || true)
