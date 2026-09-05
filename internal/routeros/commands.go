@@ -193,6 +193,48 @@ func ScheduleCommands(dialect string) string {
 	}, "\n")
 }
 
+// BackupScriptPolicy is the RouterOS script/scheduler policy list the
+// wizard's step 6 script needs (#394, round 45). read,write,test,sensitive
+// is round 45's drawn minimum; `write` and `sensitive` are for
+// `/system backup save` and `/file remove`, `test` is what RouterOS
+// gates `/tool fetch` behind, and `sensitive` on the script itself is
+// also what stops a `read`-only router user from printing the token
+// straight back out of the saved script's source (the #186 leak this
+// scheme already has to live with for the state-push script). Proven on
+// a real CHR before being printed -- see the issue's build note H.
+const BackupScriptPolicy = "read,write,test,sensitive"
+
+// BackupScript is the wizard's step 6 script (round 45): one
+// `/system script add` whose source saves the binary backup unencrypted
+// (the restore copy), exports the plain config (no secrets, per #394's
+// reversed decision 38), pushes both to the drop box over SFTP with the
+// router's own name and ingest token, and removes both local files.
+// address is mikroview's own host (no port); port is the drop box's own
+// port (config's backup.listen, NOT the ingest/syslog ports the other
+// wizard steps use) -- device is both the SFTP username and the
+// destination file stem, matching internal/backupsftp's
+// kindForFilename.
+func BackupScript(address, port, device, token, dialect string) string {
+	return fmt.Sprintf(`/system script add name=mv-backup policy=%s source="
+  /system backup save name=mv-backup dont-encrypt=yes
+  /export file=mv-backup
+  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-backup.backup dst-path=%s.backup
+  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-backup.rsc dst-path=%s.rsc
+  /file remove mv-backup.backup
+  /file remove mv-backup.rsc
+"`, BackupScriptPolicy, address, port, device, token, device, address, port, device, token, device)
+}
+
+// BackupScheduleCommands is step 6's scheduler entry: nightly at 03:00,
+// then one run now so the first pair does not wait for the interval to
+// pass -- same "run once immediately" idiom as ScheduleCommands.
+func BackupScheduleCommands(dialect string) string {
+	return strings.Join([]string{
+		fmt.Sprintf(`/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup"`, BackupScriptPolicy),
+		`/system script run mv-backup`,
+	}, "\n")
+}
+
 // LogPrefixForAction is the log-prefix convention RuleTaggingCommands'
 // bulk `[find action=...]` commands give a rule, applied to a single
 // action rather than to every rule of that action at once: D|drop|,
