@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/backup"
 	"github.com/tomlawesome/mikroview/internal/config"
@@ -157,6 +158,40 @@ type vaultBundle struct {
 	Files map[string][]byte `json:"files"`
 }
 
+// vaultPath resolves rel (a forward-slash entry name, either one
+// readVaultBundle just walked or one a restore envelope claims to carry)
+// against dir and refuses anything that would not stay under it: an
+// absolute rel, a ".." component, an empty name, or a join that
+// filepath.Rel says lands outside dir once cleaned. gosec's G703 flags
+// os.Stat/os.ReadFile/os.WriteFile on a path built from untrusted input
+// regardless of which side builds it, and on the restore side that input
+// really is untrusted -- a hostile envelope entry of "../../etc/cron.d/x"
+// would otherwise write outside the vault directory entirely. The read
+// side's path is already confined by WalkDir; routing it through the
+// same check costs nothing and makes that explicit for the analyser
+// instead of asking it to trust WalkDir's contract.
+func vaultPath(dir, rel string) (string, error) {
+	if rel == "" {
+		return "", fmt.Errorf("empty file name in the router backup vault")
+	}
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("%q is an absolute path, refusing", rel)
+	}
+	native := filepath.FromSlash(rel)
+	for _, part := range strings.Split(native, string(filepath.Separator)) {
+		if part == ".." {
+			return "", fmt.Errorf("%q escapes the vault directory, refusing", rel)
+		}
+	}
+	cleanDir := filepath.Clean(dir)
+	joined := filepath.Join(cleanDir, native)
+	if outside, err := filepath.Rel(cleanDir, joined); err != nil ||
+		outside == ".." || strings.HasPrefix(outside, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%q escapes the vault directory, refusing", rel)
+	}
+	return joined, nil
+}
+
 // readVaultBundle walks dir and reads every file it holds into a
 // vaultBundle. A vault directory that has never existed (no key ever
 // configured, or nothing pushed yet) is not an error -- it is folded
@@ -185,11 +220,16 @@ func readVaultBundle(dir string) (vaultBundle, error) {
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
+		slashRel := filepath.ToSlash(rel)
+		safePath, err := vaultPath(dir, slashRel)
+		if err != nil {
+			return fmt.Errorf("router backup vault: %w", err)
+		}
+		data, err := os.ReadFile(safePath)
 		if err != nil {
 			return err
 		}
-		bundle.Files[filepath.ToSlash(rel)] = data
+		bundle.Files[slashRel] = data
 		return nil
 	})
 	if err != nil {
@@ -202,9 +242,19 @@ func readVaultBundle(dir string) (vaultBundle, error) {
 // (runRestore) has already run the same not-force-and-already-exists
 // check every other store gets, before any file anywhere was touched --
 // this only ever writes, it never decides whether it is allowed to.
+//
+// bundle.Files' keys come straight from the restore envelope, which is
+// as untrusted as the rest of that file's contents: nothing upstream of
+// here has ever checked that an entry name stays under dir. Every entry
+// is routed through vaultPath before it touches disk, so a hostile
+// envelope entry such as "../../etc/cron.d/x" is refused instead of
+// writing outside the vault directory.
 func writeVaultBundle(dir string, bundle vaultBundle) error {
 	for rel, data := range bundle.Files {
-		path := filepath.Join(dir, filepath.FromSlash(rel))
+		path, err := vaultPath(dir, rel)
+		if err != nil {
+			return fmt.Errorf("router backup vault: %w", err)
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return fmt.Errorf("router backup vault: %w", err)
 		}
