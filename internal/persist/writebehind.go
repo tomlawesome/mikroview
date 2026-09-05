@@ -364,6 +364,12 @@ func (w *WriteBehind) attempt(parent context.Context) {
 	w.version = version
 	if w.generation == gen {
 		w.dirty = false
+		// A Flush that arrived while this attempt was in flight is
+		// satisfied by it: nothing newer is dirty, so Flush returns as
+		// soon as it sees dirty clear. Disarm forceNow here too --
+		// otherwise it stays armed for the next unrelated MarkDirty,
+		// which then skips MinInterval (#941).
+		w.forceNow = false
 	}
 	w.mu.Unlock()
 }
