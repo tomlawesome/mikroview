@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { describe, expect, it } from 'vitest'
-import { boundariesFromRules, boundaryKeyOf } from './fall.svelte'
-import type { RouterFilterRule } from './api'
+import { describe, expect, it, vi } from 'vitest'
+import type { RouterFilterRule, RouterNatRule } from './api'
+import type { Device } from './types'
+
+// FallState.refresh() (below) fetches devices and both rule tables --
+// mocked so the refresh test does not reach the network. The pure
+// boundariesFromRules/boundaryKeyOf tests below never call refresh(), so
+// this mock does not touch them.
+vi.mock('./api', () => ({
+  fetchDevices: vi.fn(),
+  fetchRouterRules: vi.fn(),
+  fetchRouterNat: vi.fn(),
+}))
+
+import { fetchDevices, fetchRouterNat, fetchRouterRules } from './api'
+import { boundariesFromRules, boundaryKeyOf, fallState } from './fall.svelte'
 
 function rule(over: Partial<RouterFilterRule> = {}): RouterFilterRule {
   return {
@@ -16,6 +29,32 @@ function rule(over: Partial<RouterFilterRule> = {}): RouterFilterRule {
     ...over,
   }
 }
+
+function natRule(over: Partial<RouterNatRule> = {}): RouterNatRule {
+  return {
+    ordinal: 0,
+    comment: '',
+    chain: 'srcnat',
+    action: 'masquerade',
+    ...over,
+  }
+}
+
+describe('FallState.refresh (#695)', () => {
+  it('feeds pushed NAT rules into the boundaries it builds, not just filter rules', async () => {
+    vi.mocked(fetchDevices).mockResolvedValue([{ id: 'router1' } as Device])
+    vi.mocked(fetchRouterRules).mockResolvedValue({ available: true, rules: [] })
+    vi.mocked(fetchRouterNat).mockResolvedValue({
+      available: true,
+      rules: [natRule({ chain: 'srcnat', outInterface: 'ether1' })],
+    })
+    await fallState.refresh()
+    // Before #695's fix, refresh() never called fetchRouterNat at all,
+    // so a pushed masquerade rule produced no boundary and every live
+    // NAT event fell through to __unmatched__ regardless.
+    expect(fallState.boundaries.map((b) => b.key)).toContain(boundaryKeyOf('srcnat', undefined, 'ether1'))
+  })
+})
 
 describe('boundaryKeyOf', () => {
   it('treats an absent interface as the empty string, not undefined', () => {
@@ -123,6 +162,21 @@ describe('boundariesFromRules', () => {
       true,
     )
     expect(bands.map((b) => b.label)).toEqual(['zzz-wan · input', 'a-observed → bridge1', 'z-dark → bridge1'])
+  })
+
+  // #695: NAT rules never reached this grouping at all, so every NAT
+  // event fell through to __unmatched__ regardless of what was pushed.
+  // A NAT rule carries chain/inInterface/outInterface exactly like a
+  // filter rule, so it must key and band the same way -- no second key
+  // scheme (the decision on #695).
+  it('bands a pushed srcnat rule under the same key a live NAT event resolves to', () => {
+    const bands = boundariesFromRules([natRule({ chain: 'srcnat', outInterface: 'ether1' })], true)
+    expect(bands).toHaveLength(1)
+    expect(bands[0].key).toBe('srcnat||ether1')
+    // The key a live srcnat/masquerade event on this interface would
+    // resolve to (Fall.svelte buckets events by this same call) --
+    // matching, not falling through to __unmatched__.
+    expect(boundaryKeyOf('srcnat', undefined, 'ether1')).toBe(bands[0].key)
   })
 
   it('keeps alphabetical order within a class', () => {
