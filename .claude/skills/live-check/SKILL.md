@@ -24,6 +24,14 @@ run never does -- which is how #659 shipped a static style attribute Chromium
 tolerates and Firefox refuses. Peer sessions share this workstation, so prefer
 the remote form when someone else may want the machine.
 
+**The remote gate serializes: one run on the second host at a time.**
+`scripts/gate-remote.sh` takes a lock on the host before it pushes and
+refuses (exit 75) if another run already holds it, naming that run's host,
+ref and start time (#809, #811). Pass `--wait` to poll until it frees
+instead of refusing. Do not start a second `make live-check-remote` against
+the same host expecting it to queue on its own -- without `--wait` it exits
+immediately.
+
 ## Why this exists
 
 Nearly every defect worth finding in this project was found by running it.
@@ -169,6 +177,24 @@ run killed mid-scenario held its slot's port until someone found the
 process by hand. The `live-check` recipe now traps INT and TERM. If you
 drive `live-env.sh up` yourself rather than through `make live-check`,
 that trap is yours to set.
+
+That trap alone only covered a terminal Ctrl-C, which the kernel delivers
+to the whole foreground process group. Killing `make live-check` from
+outside a terminal — an agent's own wrapper, a session ending — used to
+reach nothing at all: the recipe was blocked in a plain foreground call
+to `scripts/run-scenarios.sh`, not the interruptible `wait`, so its trap
+sat deferred while the scenario's node process, several process
+generations down, kept driving Chromium against an instance whose owner
+was gone (#671). A `kill` on the run returned success immediately, so it
+looked stopped; only checking the port afterwards showed otherwise.
+
+Fixed the same way, one layer at a time: the recipe backgrounds
+`run-scenarios.sh` and `wait`s on it, and its trap now forwards the
+signal to it; `run-scenarios.sh` itself backgrounds each scenario's node
+process and `wait`s on that, forwarding in turn. So killing `make
+live-check`'s own process now stops the scenario in front of it and lets
+`down` run straight away, at whichever of the three levels you actually
+target.
 
 ### The standing lanes (owner, 2026-08-30)
 
