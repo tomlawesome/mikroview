@@ -77,6 +77,13 @@ check(
 await page.reload()
 
 await page.click('.rail-name >> text=Topography')
+// #869: the altitude now defaults to the city, its centre, which hides
+// the 2D map stage this lens draws into (`hidden={cityStop !== null}`
+// in Topography.svelte). Off the default and onto zones -- the 2D
+// map's own top stop -- before touching lenses or waiting on anything
+// the map draws.
+await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
 await page.waitForSelector('[data-card="topography"] [aria-label="Map lenses"]', { timeout: 10000 })
 await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Coverage')
 await page.waitForSelector('[data-card="topography"] .cedge', { timeout: 10000 })
@@ -104,6 +111,16 @@ check(
 
 await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Coverage')
 await new Promise((r) => setTimeout(r, 400))
+
+// #852/#869: zones deliberately retired the per-edge badge -- at that
+// stop `.detail` (the badge and its plate) is `opacity: 0;
+// pointer-events: none;` in Topography.svelte, and the click lands on
+// `.cov-g`'s own hit-path underneath instead, which Playwright refuses
+// to treat as hitting the badge. Off zones and onto services, which
+// still draws the flat cards but keeps the badges themselves visible
+// and clickable, before touching one.
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
+await new Promise((r) => setTimeout(r, 700))
 
 // An admin clicks a dark edge and the panel opens.
 await page.click('[data-card="topography"] .edge-badge.dark-t >> nth=0')

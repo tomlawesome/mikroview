@@ -112,6 +112,10 @@ check(
 // fresh push arrives today, same as the map's own first load.
 await page.reload()
 await page.click('.rail-name >> text=Topography')
+// #869: off the city default and onto zones before waiting on anything
+// the 2D map draws -- see the coverage scenario for the full note.
+await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
 await page.waitForSelector('[data-card="topography"] [aria-label="Map lenses"]', { timeout: 10000 })
 await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Policy')
 await page.waitForSelector('[data-card="topography"] .edge-g', { timeout: 10000 })
@@ -132,11 +136,30 @@ check((await page.locator('[data-card="topography"] .edge-bar').count()) >= 1, '
 
 // --- Click-through: the pair, said in the stream's own filters -----------
 
-// The busiest pair sorts first: bridge1→ether1, the accepting edge.
-// Clicked via its badge: a Playwright click aims at the bounding-box
-// centre, which for a curved path is empty air the svg soaks up; the
-// badge text paints where it sits.
-await page.click('[data-card="topography"] .edge-g >> nth=0 >> .edge-badge')
+// #852/#869: zones deliberately retired the per-edge badge -- at that
+// stop `.detail` (the badge and its plate) is `opacity: 0;
+// pointer-events: none;` in Topography.svelte, so a click aimed at it
+// lands on the edge path underneath instead. Off zones and onto
+// services, which keeps the badges visible and clickable, before
+// touching one -- see the coverage scenario for the full note.
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
+await new Promise((r) => setTimeout(r, 700))
+
+// The busiest pair sorts first: bridge1→ether1, the accepting edge, and
+// it is the only pair with a badge at all here -- the refused pair is a
+// portless drop, so `{#if d.edge.accepted || d.edge.refusePorts.length
+// > 0}` draws it no `.detail` group. Clicked via the badge: a
+// Playwright click aims at the bounding-box centre, which for a curved
+// path is empty air the svg soaks up; the badge text paints where it
+// sits.
+//
+// The badge is not a descendant of its `.edge-g` -- #723's two-pass
+// split (lines first, labels last, so a label never paints under a
+// line) draws it in a second, sibling `{#each}` as its own `<g
+// class="detail">`. `.edge-g >> .edge-badge` therefore always resolved
+// to nothing; masked until now by the altitude bug this scenario died
+// on before ever reaching this click.
+await page.click('[data-card="topography"] .edge-badge >> nth=0')
 // Filters sync to the URL (App.svelte's shareable-link effect), so the
 // URL is the honest witness of what the click-through set.
 await page.waitForFunction(() => location.search.includes('srcQuery='), null, { timeout: 5000 })
