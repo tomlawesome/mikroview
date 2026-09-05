@@ -42,7 +42,10 @@ await goTo(page, 'Run setup…')
 const modal = page.locator('.setup-wizard')
 await modal.waitFor({ state: 'visible' })
 
-await page.locator('.setup-wizard .steps li:nth-child(6) .step-row').click()
+// The finish row ("Where setup stands") is nth-child(7): #394 added
+// "Back up the router" as the ledger's sixth step, so the finish row --
+// rendered after the six-item ledger loop -- shifted from position 6.
+await page.locator('.setup-wizard .steps li:nth-child(7) .step-row').click()
 const tuneLink = page.locator('.setup-wizard button.link:text-is("Tune logging…")')
 await tuneLink.waitFor({ state: 'visible' })
 await tuneLink.click()
