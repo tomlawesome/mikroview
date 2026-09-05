@@ -20,6 +20,12 @@ type setupCommandsRequest struct {
 	Token      string   `json:"token"`
 	Kinds      []string `json:"kinds"`
 	Version    string   `json:"version"`
+	// Device names the router step 6's backup script is being rendered
+	// for -- the SFTP username and the destination file stem
+	// (routeros.BackupScript). The push script above needs no such
+	// field: PushBlock's payload carries no destination filename, only
+	// the token.
+	Device string `json:"device"`
 }
 
 // routerosTable is the dialect table itself, so the wizard can quote its
@@ -66,6 +72,13 @@ type setupCommandsSteps struct {
 	RuleTagging commandStep `json:"ruleTagging"`
 	Push        commandStep `json:"push"`
 	Schedule    commandStep `json:"schedule"`
+	// Backup/BackupSchedule are step 6's two blocks (#394, round 45):
+	// the script that saves, exports and pushes both files, and the
+	// nightly scheduler entry. Both stay blank when the drop box is not
+	// ready -- see backupReady below -- exactly as Push stays blank
+	// with no token or kinds.
+	Backup         commandStep `json:"backup"`
+	BackupSchedule commandStep `json:"backupSchedule"`
 }
 
 type setupCommandsResponse struct {
@@ -164,6 +177,24 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		pushCommands = routeros.PushScript(req.Address, req.Token, req.Kinds, dialect)
 	}
 
+	// The backup script only means something with a device to name, a
+	// token to authenticate it, and somewhere for it to land: a
+	// retention key configured (s.Vault.Enabled()) and the drop box
+	// actually turned on (SetupInstance.BackupPort set at startup from
+	// cfg.Backup.Enabled -- see main.go). Any missing piece leaves both
+	// blocks blank, same "blank rather than half-formed" contract Push
+	// already has above; the wizard reads a blank Backup block as its
+	// wnokey state (round 45).
+	backupCommands, backupScheduleCommands := "", ""
+	if req.Token != "" && req.Device != "" && s.SetupInstance.BackupPort != "" && s.Vault.Enabled() {
+		// The drop box listens on its own port, not the HTTPS port
+		// req.Address carries -- same reasoning SyslogCommands' Hostname
+		// call gives for stripping the web port off before pairing it
+		// with the syslog port.
+		backupCommands = routeros.BackupScript(routeros.Hostname(req.Address), s.SetupInstance.BackupPort, req.Device, req.Token, dialect)
+		backupScheduleCommands = routeros.BackupScheduleCommands(dialect)
+	}
+
 	writeJSON(w, http.StatusOK, setupCommandsResponse{
 		RouterOS: routerosTable{
 			Minimum: routeros.MinimumVersion,
@@ -173,11 +204,13 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		Picked:  picked,
 		Routers: routers,
 		Steps: setupCommandsSteps{
-			CaTrust:     commandStep{Commands: routeros.CaTrustCommands(req.Address, dialect)},
-			Syslog:      commandStep{Commands: routeros.SyslogCommands(req.Address, syslogPort, dialect)},
-			RuleTagging: commandStep{Commands: routeros.RuleTaggingCommands(dialect), Note: ruleTaggingNote},
-			Push:        commandStep{Commands: pushCommands},
-			Schedule:    commandStep{Commands: routeros.ScheduleCommands(dialect)},
+			CaTrust:        commandStep{Commands: routeros.CaTrustCommands(req.Address, dialect)},
+			Syslog:         commandStep{Commands: routeros.SyslogCommands(req.Address, syslogPort, dialect)},
+			RuleTagging:    commandStep{Commands: routeros.RuleTaggingCommands(dialect), Note: ruleTaggingNote},
+			Push:           commandStep{Commands: pushCommands},
+			Schedule:       commandStep{Commands: routeros.ScheduleCommands(dialect)},
+			Backup:         commandStep{Commands: backupCommands},
+			BackupSchedule: commandStep{Commands: backupScheduleCommands},
 		},
 	})
 }

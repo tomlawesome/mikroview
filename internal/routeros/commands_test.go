@@ -197,3 +197,42 @@ func TestScheduleCommands(t *testing.T) {
 		t.Errorf("scheduleCommands =\n%s\nwant\n%s", cmd, want)
 	}
 }
+
+// TestBackupScriptMatchesRound45 pins the wizard's step 6 script
+// (docs/design/concepts/round-45/build.py's SCRIPT constant) byte for
+// byte -- the copy is drawn, not invented, and a builder must match it
+// word for word (AGENTS.md, "Building a ratified design").
+func TestBackupScriptMatchesRound45(t *testing.T) {
+	got := BackupScript("10.0.40.5", "47022", "rb5009", `mvt-8f3a2c…c21e`, "a")
+	want := "/system script add name=mv-backup policy=read,write,test,sensitive source=\"\n" +
+		"  /system backup save name=mv-backup dont-encrypt=yes\n" +
+		"  /export file=mv-backup\n" +
+		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n" +
+		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.rsc dst-path=rb5009.rsc\n" +
+		"  /file remove mv-backup.backup\n" +
+		"  /file remove mv-backup.rsc\n" +
+		"\""
+	if got != want {
+		t.Errorf("BackupScript =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestBackupScheduleCommandsMatchesRound45(t *testing.T) {
+	got := BackupScheduleCommands("a")
+	want := "/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\"\n" +
+		"/system script run mv-backup"
+	if got != want {
+		t.Errorf("BackupScheduleCommands =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestBackupScriptEmbedsTheRealDevicePerFile guards the round-45 detail
+// that the destination file names are the device's own name, not a
+// fixed literal -- a second router must not collide with the first's
+// generations in the vault.
+func TestBackupScriptEmbedsTheRealDevicePerFile(t *testing.T) {
+	got := BackupScript("10.0.40.5", "47022", "hap-ax2", "tok", "a")
+	if !strings.Contains(got, "dst-path=hap-ax2.backup") || !strings.Contains(got, "dst-path=hap-ax2.rsc") {
+		t.Errorf("BackupScript did not use the device name in both destination paths:\n%s", got)
+	}
+}

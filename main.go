@@ -673,6 +673,13 @@ func main() {
 	tokenStore, err := auth.OpenTokenStoreWithBackend(tokensBackend)
 	mustOpenStore(tokensLog, err)
 
+	// Router-backup vault (#394): the SFTP drop box (started further
+	// below, once the listen address is finalised) writes into this,
+	// and the admin API reads it back. Needs tokenStore above (a login's
+	// password is checked against it) so it is opened here, not
+	// earlier.
+	routerBackupVault := openRouterBackupVault(logging.New("backupvault"), cfg)
+
 	// Audit (issue #112): the persisted admin-action accountability log.
 	// Persistence itself is optional -- a missing/unconfigured path just
 	// means entries don't survive a restart -- but a document that
@@ -1383,10 +1390,12 @@ func main() {
 		Tokens:            tokenStore,
 		IngestLimiter:     auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
 		RouterState:       routerState,
+		Vault:             routerBackupVault,
 		SetupInstance: api.SetupInstance{
 			TLSEnabled: cfg.TLS.Enabled,
 			Hosts:      cfg.TLS.Hosts,
 			SyslogPort: cfg.Listen.SyslogTLS,
+			BackupPort: routerBackupPort(cfg),
 		},
 		OIDC:              oidcClient,
 		OIDCState:         oidcState,
@@ -1600,6 +1609,12 @@ func main() {
 			}
 		}()
 	}
+
+	// Router-backup SFTP drop box (#394): its own listener, its own
+	// generated host key, started independently of the TLS block above
+	// -- it is not an HTTPS/syslog concern, and off entirely unless
+	// backup.enabled is true.
+	startRouterBackupServer(ctx, cfg, routerBackupVault, tokenStore)
 
 	joinOnShutdown(&shutdownWG, ctx, httpServer.Shutdown)
 

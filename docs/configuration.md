@@ -314,6 +314,98 @@ its own reads and writes. The only way to avoid that is not retaining
 history at all, which is why staying off is a real, supported choice
 rather than a lesser one.
 
+### Router backups over SFTP (optional, off by default)
+
+Issue #394: a router's own scheduled script (the setup wizard's step 6
+prints it) pushes two files a night -- the binary `.backup` that
+restores the router whole, and the plain-text `.rsc` export kept for
+reading -- into a small SFTP server mikroview runs for exactly this.
+**Mikroview is the place you turn to when the router is gone**, so the
+copies have to be usable with nothing else in hand.
+
+```yaml
+backup:
+  enabled: false
+  listen: ":47022"
+  vaultDir: ""
+```
+
+- `backup.enabled` — the switch. Off by default: this opens a second
+  listening port, only once you have decided to use it. The wizard's
+  step 6 is what an operator actually flips this from in practice.
+- `backup.listen` — the drop box's bind address. Defaults to `:47022`,
+  a fixed, deliberately unconventional port (not 22 or 2222, which draw
+  scanner traffic) — change it only if you need a different port
+  mapped through a firewall or a container network.
+- `backup.vaultDir` — where encrypted generations live on disk. Left
+  empty, mikroview puts them beside the data directory. Config-file
+  only, same as `history.dir`.
+
+**No key, no backups.** Every pair is encrypted under `history.keyFile`
+(above) — the same key, the same "no key, no storage" rule #853 applies
+to the rest of mikroview's state. With no key configured, the drop box
+refuses every login outright rather than accepting a push it has
+nowhere safe to keep; Settings' `router backups` group says so plainly.
+There is no separate key for this feature and no unencrypted fallback.
+
+**Login is the device, not a new credential.** Username is the router's
+device name, password is that device's ingest token — the very token
+already minted for pushing rule/NAT/address tables (see "Friendly
+names" and the setup wizard). A login can only write into its own
+folder, and cannot list, read, delete, rename or overwrite anything —
+the vault (`internal/backupvault`) commits a generation only when the
+SFTP client's own transfer finishes; an interrupted push commits
+nothing and the router's script sees a failure, exactly as with any
+other push.
+
+**What arrives is checked, not merely stored.** The first bytes of a
+`.backup` upload are checked against RouterOS's own header: `88 ac a1
+b1` (`dont-encrypt=yes`, the restore copy the wizard's script asks for)
+or `ef a8 91 xx` (encrypted with the router's own password — accepted,
+but the app can never open it without that password). Anything else is
+refused and logged, not silently accepted. `.rsc` uploads are read as
+text with no such check. A file over 16 MiB is refused the same way,
+logged rather than silent.
+
+**Retention: 10 generations a router, oldest dropped first.** A
+generation is one script run's pair. The eleventh push does not grow
+the history — it retires the oldest and takes its place. There is no
+undo.
+
+**A missed push is said, not guessed.** Once a router has pushed at
+least twice, mikroview learns its interval from the arrivals
+themselves — not from the scheduler line the wizard printed, which an
+operator could change on the router without mikroview knowing. One
+missed interval is enough for the router's line in Settings to go
+amber with a count of how many pushes have been missed since the last
+one arrived. A router with a single push has no interval yet and shows
+nothing.
+
+**Reading a backup back is audited.** Downloading either file is
+admin-only and session-gated, and every download writes an audit-log
+entry with the admin's name — a download is the router's whole
+configuration, credentials included. Mikroview reads only the header,
+for the label above; it never claims a backup restores, and it never
+connects to a router to apply one. Restoring is the operator's own act
+on the replacement router (`/system backup load`).
+
+**Only on a network you trust.** RouterOS's SFTP client never verifies
+this server's host key (measured on RouterOS 7.23.3) — an attacker on
+the path between the router and mikroview could pose as mikroview and
+receive the pair and the ingest token in plain sight. Run this push
+over a LAN or a VPN you control, never across the open internet. See
+[SECURITY.md](../SECURITY.md) for the full caveat and #955, which tracks
+an HTTPS-based path that does verify, for deployments that cannot
+guarantee a trusted path. The host key itself is generated on first
+start and kept beside the TLS material (`tls.storePath`) — excluded
+from `-backup` for the same reason that directory already is (see
+["Backing up and restoring"](#backing-up-and-restoring)); a restore
+re-presents the CA-trust step ready to paste, and the SFTP host key
+regenerates the same way.
+
+`-backup`/`-restore` carry the vault along with everything else — see
+["Backing up and restoring"](#backing-up-and-restoring).
+
 ### The state store: encrypted when a key is mounted, memory-only otherwise, except the hashed stores (#853)
 
 `history.keyFile` does double duty. Everything above is about the event
@@ -2308,7 +2400,9 @@ One gzipped file holding every store: accounts, API tokens, recovery-key
 digests, flags, rule usage, detector settings, entities, the MAC
 registry, the audit log, the event-buffer size an admin set from
 Settings (`store.settingsStorePath`), the watchlist, watchlist
-suggestions, and the watchlist match log.
+suggestions, the watchlist match log, and the router-backup vault
+(`backup.vaultDir`, #394) — every generation still encrypted exactly as
+it sits on disk, so a restore never needs the retention key to move it.
 
 Three things are deliberately left out, and always have been:
 
@@ -3224,6 +3318,9 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_HISTORY_DAYS` | `history.days` -- below 1 the 30-day default is applied |
 | `MIKROVIEW_HISTORY_MAX_BYTES` | `history.maxBytes` -- below 1 MiB the 1 GiB default is applied |
 | `MIKROVIEW_HISTORY_DIR` | `history.dir` -- where the daily history files live. Left empty, they sit beside the data directory |
+| `MIKROVIEW_BACKUP_ENABLED` | `backup.enabled` -- turns the router-backup SFTP drop box on (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
+| `MIKROVIEW_BACKUP_LISTEN` | `backup.listen` -- the drop box's bind address, default `:47022` |
+| `MIKROVIEW_BACKUP_VAULT_DIR` | `backup.vaultDir` -- where encrypted generations live. Left empty, they sit beside the data directory |
 
 ## Checking your version
 
