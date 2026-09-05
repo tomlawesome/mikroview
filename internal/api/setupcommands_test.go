@@ -11,9 +11,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/ingest"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 )
+
+// testRetentionKey builds a usable retention key for tests that need
+// one -- mirrors internal/retention's and internal/backupvault's own
+// test helpers of the same name and shape, kept local here since this
+// package cannot import a _test.go file from another package.
+func testRetentionKey(t *testing.T) *retention.Key {
+	t.Helper()
+	k, err := retention.NewKeyFromMaterial([]byte(strings.Repeat("k", retention.MinKeyBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
 
 func postSetupCommands(t *testing.T, base string, req setupCommandsRequest) setupCommandsResponse {
 	t.Helper()
@@ -186,5 +201,50 @@ func TestHandleSetupCommandsPushRendersOnlyWithTokenAndKinds(t *testing.T) {
 	both := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "h", Token: "tok-123", Kinds: []string{"filter-rule"}})
 	if !strings.Contains(both.Steps.Push.Commands, "Bearer tok-123") {
 		t.Errorf("push commands = %q, want the token embedded", both.Steps.Push.Commands)
+	}
+}
+
+// TestHandleSetupCommandsBackupRendersOnlyWhenReady covers #394's
+// step 6: the script needs a device, a token, the drop box turned on
+// (BackupPort set) and a retention key (Vault.Enabled()) all at once --
+// any one missing leaves it blank, which is what the wizard reads as
+// its "no key" state.
+func TestHandleSetupCommandsBackupRendersOnlyWhenReady(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.SetupInstance.BackupPort = "47022"
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// No vault at all (nil): the zero-value newTestServer fixture,
+	// same as a build with no retention key configured.
+	noKey := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "10.0.40.5", Token: "tok-123", Device: "rb5009",
+	})
+	if noKey.Steps.Backup.Commands != "" || noKey.Steps.BackupSchedule.Commands != "" {
+		t.Errorf("backup commands rendered with no retention key: %+v", noKey.Steps)
+	}
+
+	key := testRetentionKey(t)
+	v, err := backupvault.Open(t.TempDir(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Vault = v
+
+	noDevice := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
+	if noDevice.Steps.Backup.Commands != "" {
+		t.Errorf("backup commands rendered with no device name: %q", noDevice.Steps.Backup.Commands)
+	}
+
+	ready := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "10.0.40.5:8443", Token: "tok-123", Device: "rb5009",
+	})
+	if !strings.Contains(ready.Steps.Backup.Commands, "user=rb5009") ||
+		!strings.Contains(ready.Steps.Backup.Commands, "port=47022") ||
+		!strings.Contains(ready.Steps.Backup.Commands, "address=10.0.40.5 ") {
+		t.Errorf("backup commands = %q, want the device, port and host embedded", ready.Steps.Backup.Commands)
+	}
+	if !strings.Contains(ready.Steps.BackupSchedule.Commands, "mv-backup") {
+		t.Errorf("backup schedule commands = %q, want the scheduler entry", ready.Steps.BackupSchedule.Commands)
 	}
 }
