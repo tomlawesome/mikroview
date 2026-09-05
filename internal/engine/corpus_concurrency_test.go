@@ -18,65 +18,58 @@ import (
 // mikroview's measured burst rate (~3,900 events/sec -- the same figure
 // internal/detect/dispatch_bench_test.go and declarative_bench_test.go
 // already cite as the ingest budget's basis) while MemoryCorpus.Replay
-// runs repeatedly on another, and asserts that no single Insert call
-// was ever blocked for anywhere near as long as one full Replay pass
-// over the whole corpus takes -- see corpus.go's own doc comment for
-// why that is the right claim: Insert and Query still share one
-// sync.RWMutex, so a concurrent Query legitimately delays an Insert by
-// however long that one Query call takes; what must never happen is a
-// single lock hold spanning the *whole* replay pass, which is exactly
-// what a snapshot-the-whole-ring design would cost instead of the
-// iterate-in-bounded-pages design MemoryCorpus.Replay actually uses.
+// runs repeatedly on another, and asserts the structural property that
+// rules out an ingest stall: a single Replay pass makes more than one
+// store.Query round trip, so no single lock hold (Insert and Query
+// share one sync.RWMutex) can span the *whole* pass -- see corpus.go's
+// own doc comment for why that is the right claim, and why it rejects
+// the "Snapshot" alternative (one lock held for the entire ring).
 //
-// The bound is deliberately relative (a fraction of one full Replay
-// pass's own measured duration), not a fixed absolute duration: an
-// absolute millisecond figure is exactly the kind of thing that is fast
-// on a quiet workstation and flakes under go test -race's
-// instrumentation overhead (measured: a fixed 10ms bound held
-// comfortably without -race but failed at ~23ms under it) or a loaded
-// CI runner. Comparing against a duration measured in the same run,
-// under the same instrumentation, self-calibrates away that variance
-// while still proving the structural claim: a page read costs a small
-// fraction of the whole pass, not something approaching it.
+// This is the test's third run at deciding pass/fail. The first two
+// (#501, then this same test before this change) compared two
+// wall-clock measurements taken on the same contended CI runner: max
+// single-Insert latency during the concurrent phase against a bound
+// derived from the median Replay pass duration measured in that same
+// phase. #501 failed by 31 microseconds (0.07%) on a 42.9ms bound;
+// after #501 widened the reference sample to a median of several
+// passes, it failed again by 0.219ms (1.0%) on a ~21.8ms bound (issue
+// #744). Both failures were the same defect: a same-run comparison
+// still compares two noisy measurements, and widening the sample
+// narrows the noise without ever removing it.
 //
-// Which "one full pass" duration the bound is a fraction of is the part
-// issue #501 fixed. It used to be a single Replay pass measured
-// *before* the concurrent phase started -- uncontended, run alone. That
-// number was then compared against the *maximum* single-Insert latency
-// measured *during* the concurrent phase -- contended, competing with a
-// continuously-running Replay for the same lock and the same CPU. Both
-// sides are wall-clock measurements on a shared CI runner, but only one
-// of them experiences the runner's actual load during the window that
-// matters: #501's own CI failure was a 42.938ms max Insert latency
-// against a 42.907ms bound (derived from an 85.8ms uncontended
-// pass measured moments earlier, on a PR that touched no Go code) --
-// missed by 31 microseconds, 0.07%, because the reference sample and
-// the measurement it was compared against were not equally loaded.
+// Percentiles were tried and rejected along the way: this test drives
+// Insert from one goroutine, strictly sequentially, so a genuine
+// full-pass stall (Replay holding one lock across its entire pass)
+// blocks whichever single Insert call happens to be in flight, not a
+// bulk share of the run's samples -- a p99 cutoff discards exactly that
+// sample along with genuine scheduler noise. Proven by deliberately
+// reintroducing the stall (corpus.go temporarily snapshotting the whole
+// ring instead of paging): max Insert latency hit 107.9ms against a
+// 51ms bound, a clear catch -- but p99 stayed at 15.57µs, which would
+// have silently passed.
 //
-// Percentiles were tried first (discard the top ~1% of Insert samples
-// rather than asserting on the raw max) and rejected after being
-// disproved directly: this test drives Insert from one goroutine,
-// strictly sequentially -- the same "sole ingest writer" model
-// MemoryCorpus's own doc comment describes production as using -- so a
-// genuine full-pass stall (Replay holding one lock across its entire
-// pass, the "Snapshot" design corpus.go's own doc comment rejects)
-// blocks whichever single Insert call happens to be in flight when the
-// lock is taken, not a bulk share of the ~1,150 samples in the run. A
-// p99 cutoff discards exactly that one sample along with genuine
-// scheduler noise. Proven by deliberately reintroducing that stall
-// (corpus.go temporarily calling a snapshot-the-whole-ring helper
-// instead of paging): max Insert latency hit 107.9ms against a 51ms
-// bound, a clear catch -- but p99 stayed at 15.57µs, which would have
-// silently passed. So the assertion stays on the max; what changed is
-// only where the reference duration comes from.
+// #744's resolution (see the issue's own notes) is to stop comparing
+// timings altogether and assert on something deterministic instead:
+// MemoryCorpus.Replay's own afterReplayPageForTest hook (corpus.go)
+// already lets a test count Query round trips per pass without
+// depending on wall-clock timing -- the same technique
+// internal/store's queryScanHook and
+// TestQueryBeforeIDScanCostDoesNotGrowWithDepth already use for the
+// identical reason. With a 20,000+ event seeded corpus and the
+// production corpusPageSize (5000), every completed pass makes at
+// least 4 round trips if Replay pages as designed, and exactly 1 if it
+// ever regresses to a Snapshot-style single Query/lock covering the
+// whole ring -- so "more than one round trip per pass" is a
+// deterministic, runner-load-independent stand-in for "no single lock
+// hold spans the whole pass," which is the property that actually rules
+// out an ingest stall.
 //
-// The fix: the "one full pass" reference is now the median of the
-// Replay passes the background goroutine actually completes *during*
-// the same contended window the Insert measurements come from, not a
-// single sample taken before it. Both sides of the comparison now see
-// the same runner load in the same few hundred milliseconds, which is
-// what a same-run comparison was always supposed to buy -- #501's
-// defect was that only one side of it actually did.
+// The latency measurements this test used to fail on are kept and
+// logged -- they're still useful evidence if a change makes ingest
+// meaningfully slower under replay contention -- but they no longer
+// decide pass/fail, per the issue's "do not fix it by widening the
+// bound" instruction: the bound wasn't wrong, comparing two
+// same-run measurements to each other was.
 func TestMemoryCorpusReplayDoesNotStallIngest(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping concurrency timing test in -short mode")
@@ -85,25 +78,7 @@ func TestMemoryCorpusReplayDoesNotStallIngest(t *testing.T) {
 	const (
 		burstRate = 3900 // events/sec, see this test's own doc comment
 		testDur   = 300 * time.Millisecond
-		// stallFraction bounds max single Insert latency to at most this
-		// fraction of one full, concurrently-run Replay pass (median of
-		// the passes completed during the test -- see the doc comment
-		// above for why it's no longer an uncontended pre-measurement).
-		// The failure mode this test exists to catch is a single lock
-		// spanning the entire corpus -- an Insert stalled for ~100% of a
-		// pass -- so the bound only needs to sit far below that, not
-		// close to the noise floor. It started life at 0.25 and failed
-		// on a starved CI runner at 30% (15.0ms against a 12.4ms bound,
-		// on a 49.6ms pass): one scheduler hiccup on a shared runner
-		// costs ~10ms by itself, which is measurement noise at this
-		// scale, not a stall. Half a pass still fails a whole-pass lock
-		// by 2x.
-		stallFraction = 0.5
 	)
-	// stallFloor absorbs absolute scheduler noise on starved runners: a
-	// preempted goroutine can lose ~15ms without any lock being held at
-	// all, so bounds below that measure the runner, not the code.
-	const stallFloor = 20 * time.Millisecond
 	insertInterval := time.Second / time.Duration(burstRate)
 
 	s := store.New(50_000, time.Hour)
@@ -118,10 +93,22 @@ func TestMemoryCorpusReplayDoesNotStallIngest(t *testing.T) {
 
 	corpus := NewMemoryCorpus(s)
 
+	// pagesThisPass is only ever touched by the replay goroutine below:
+	// afterReplayPageForTest runs synchronously inside corpus.Replay,
+	// which that same goroutine calls and drains (reads + resets the
+	// counter) between calls, so no additional synchronization is needed
+	// for this counter specifically (contrast replayPassDurations/
+	// replayPassPages below, which the main goroutine also reads after
+	// close(stop) and so do need passMu).
+	var pagesThisPass int
+	afterReplayPageForTest = func() { pagesThisPass++ }
+	defer func() { afterReplayPageForTest = nil }()
+
 	stop := make(chan struct{})
 	replayDone := make(chan struct{})
 	var passMu sync.Mutex
-	var replayPassDurations []time.Duration // filled only from *contended* passes -- see doc comment above
+	var replayPassDurations []time.Duration // filled only from *contended* passes -- kept for logging, see doc comment above
+	var replayPassPages []int               // Query round trips per completed pass -- this is what decides pass/fail now
 	go func() {
 		defer close(replayDone)
 		for {
@@ -130,10 +117,12 @@ func TestMemoryCorpusReplayDoesNotStallIngest(t *testing.T) {
 				return
 			default:
 				passStart := time.Now()
+				pagesThisPass = 0
 				corpus.Replay(func(store.Event) {})
 				elapsed := time.Since(passStart)
 				passMu.Lock()
 				replayPassDurations = append(replayPassDurations, elapsed)
+				replayPassPages = append(replayPassPages, pagesThisPass)
 				passMu.Unlock()
 			}
 		}
@@ -162,29 +151,41 @@ func TestMemoryCorpusReplayDoesNotStallIngest(t *testing.T) {
 
 	passMu.Lock()
 	passes := replayPassDurations
+	pageCounts := replayPassPages
 	passMu.Unlock()
 	if len(passes) == 0 {
 		// Only reachable if a single contended Replay pass took longer
 		// than the whole testDur -- would mean the corpus/testDur sizing
 		// is wrong for this environment, not that the property held or
-		// failed to hold. Fail loudly rather than silently skip the
-		// assertion below with a zero-value bound.
-		t.Fatalf("no full Replay pass completed during the %s concurrent-ingest window -- can't compute a same-contention bound; corpus or testDur needs adjusting for this environment", testDur)
+		// failed to hold. Fail loudly rather than silently pass with no
+		// pass to check pageCounts against.
+		t.Fatalf("no full Replay pass completed during the %s concurrent-ingest window -- corpus or testDur needs adjusting for this environment", testDur)
 	}
 	sort.Slice(passes, func(i, j int) bool { return passes[i] < passes[j] })
 	medianReplayDuration := passes[len(passes)/2]
 
-	stallBound := time.Duration(float64(medianReplayDuration) * stallFraction)
-	if stallBound < stallFloor {
-		stallBound = stallFloor
-	}
+	// Informational only, per #744: kept and logged because it's still
+	// useful evidence of a regression, but it no longer decides pass/fail
+	// -- see this test's own doc comment for why comparing it to a bound
+	// derived from another same-run measurement was the defect, not the
+	// bound's value.
+	t.Logf("%d full Replay passes completed under the same contention as ingest; median pass = %s; inserted %d events over %s (target rate %d/s); max single Insert latency = %s (%.1f%% of median pass)",
+		len(passes), medianReplayDuration, insertCount, testDur, burstRate, maxInsertLatency, 100*float64(maxInsertLatency)/float64(medianReplayDuration))
 
-	t.Logf("%d full Replay passes completed under the same contention as ingest; median pass = %s; inserted %d events over %s (target rate %d/s); max single Insert latency = %s (bound = %s)",
-		len(passes), medianReplayDuration, insertCount, testDur, burstRate, maxInsertLatency, stallBound)
-
-	if maxInsertLatency > stallBound {
-		t.Fatalf("max single Insert latency = %s, want <= %s (%.0f%% of one full, concurrently-run Replay pass = %s, the median of %d passes) -- a concurrent replay stalled ingest for longer than one bounded page read should ever cost",
-			maxInsertLatency, stallBound, stallFraction*100, medianReplayDuration, len(passes))
+	// The deciding assertion: every completed pass made more than one
+	// Query round trip. The seeded corpus (20,000+ events) is well over
+	// 4x corpusPageSize (5000), so a Replay that pages as designed always
+	// makes at least 4 round trips; a Replay that regressed to holding
+	// one lock over the whole ring (the "Snapshot" design corpus.go's own
+	// doc comment rejects) would make exactly 1. This is deterministic --
+	// it depends on corpus size and page size, not on runner load -- so
+	// it fails for the actual reason this test exists instead of a
+	// margin against another timing sample.
+	for i, pages := range pageCounts {
+		if pages <= 1 {
+			t.Fatalf("pass %d made %d store.Query round trip(s), want >1 -- a single round trip means Replay read (and held its lock over) the whole corpus in one call, the single-lock-spans-the-pass failure mode this test exists to rule out (see corpus.go's Snapshot-vs-iterate doc comment)",
+				i, pages)
+		}
 	}
 }
 
