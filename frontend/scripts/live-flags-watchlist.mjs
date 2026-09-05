@@ -55,8 +55,18 @@ async function openFlags() {
   await page.waitForSelector('table.ftable', { timeout: 10000 })
 }
 
+// #849: feedInternalRecon's 12 drops at one port to 12 distinct
+// destinations clears both internal_recon's own threshold (10 distinct
+// destinations/60s) *and* repeated_drops' (10 attempts/15m,
+// shipped_defaults.go:248), since both read the same feed independently
+// and correctly. Once both flags are open, `tr.frow:has-text(ip)` alone
+// resolves to two rows -- "Repeated drops on a port" (target
+// "<ip> -> port <n>") and "Internal reconnaissance" (target "<ip>") --
+// and Playwright's strict mode throws. This scenario is about
+// internal_recon specifically, so scope to that row; not a product bug,
+// both flags are correctly raised.
 function rowFor(ip) {
-  return page.locator(`tr.frow:has-text("${ip}")`)
+  return page.locator(`tr.frow:has-text("${ip}")`).filter({ hasText: 'Internal reconnaissance' })
 }
 
 async function api(path) {
