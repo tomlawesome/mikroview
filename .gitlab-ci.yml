@@ -28,8 +28,9 @@ stages:
 
 # Runner lanes (#949, ai/agent-infra#3). Every job names its lane: `big`
 # is gitlab-runners-01 (8 CPU / 18 GB, two at a time) and `light` is the
-# 2 CPU / 2 GB runner (three at a time). A job with no matching tag does
-# not run at all, so a new job must pick one.
+# 4 CPU / 6 GB runner (four at a time). A job with no matching tag does
+# not run at all, so a new job must pick one. Measured peaks per job are
+# on ai/agent-infra#3; anything under about 3 GB belongs on light.
 default:
   tags: [big]
   # #952: a new push to the same branch cancels the still-running previous
@@ -184,6 +185,7 @@ lint:frontend:
 
 test:go:
   stage: test
+  # Stays on big: peaks at ~7.2 GB, over the light lane's 6 GB cap.
   image: golang:1.27
   <<: *dev_or_mr
   # GitLab's docker executor runs this container as root by default; GitHub's
@@ -213,6 +215,7 @@ test:go:
 
 test:frontend:
   stage: test
+  tags: [light]
   image: node:22-alpine
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
@@ -247,6 +250,7 @@ test:frontend:
 # packaged Go is too old to read this module.
 test:build-checks:
   stage: test
+  tags: [light]
   image: node:22-bookworm
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
@@ -282,6 +286,7 @@ test:build-checks:
 # sit for 41 commits (#273).
 test:postgres:
   stage: test
+  tags: [light]
   image: golang:1.27
   <<: *dev_or_mr
   services:
@@ -360,6 +365,7 @@ test:postgres:
 # server answers, not whether the chain verifies.
 test:container:
   stage: test
+  tags: [light]
   image: docker:28-cli
   <<: *dev_or_mr
   variables:
@@ -452,8 +458,8 @@ security:semgrep:
 
 security:gosec:
   stage: security
-  # Stays on big: gosec loads the whole module graph and was killed at the
-  # light lane's 2 GB (job 2972, exit 137, 2026-09-05).
+  # Stays on big: gosec loads the whole module graph and peaks at ~6.7 GB,
+  # over the light lane's 6 GB cap.
   # ghcr, not Docker Hub. gosec stopped publishing to Docker Hub after
   # 2.24.6, so `securego/gosec:2.28.0` resolved to nothing and the job
   # failed before it started -- an image pull failure, which reads like
@@ -513,6 +519,7 @@ security:govulncheck:
 # replays it forever.
 security:fuzz:
   stage: security
+  tags: [light]
   image: golang:1.27
   <<: [*dev_or_mr, *git_safe]
   timeout: 15m
