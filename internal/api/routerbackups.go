@@ -47,6 +47,11 @@ type routerBackupsResponse struct {
 	TotalGenerations int                  `json:"totalGenerations"`
 	TotalRouters     int                  `json:"totalRouters"`
 	TotalBytes       int64                `json:"totalBytes"`
+	// Port is the SFTP drop box's own listening port (round 44's "arrive
+	// by" row), empty when backup.enabled is false -- the same
+	// SetupInstance.BackupPort the wizard's step 6 already reads, not a
+	// second copy of the configured value.
+	Port string `json:"port,omitempty"`
 }
 
 func toRouterBackupGeneration(g backupvault.Generation) routerBackupGeneration {
@@ -73,7 +78,7 @@ func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp := routerBackupsResponse{Enabled: s.Vault.Enabled(), Routers: []routerBackupRouter{}}
+	resp := routerBackupsResponse{Enabled: s.Vault.Enabled(), Routers: []routerBackupRouter{}, Port: s.SetupInstance.BackupPort}
 	if !s.Vault.Enabled() {
 		writeJSON(w, http.StatusOK, resp)
 		return

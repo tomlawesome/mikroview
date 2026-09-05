@@ -91,6 +91,14 @@ vi.mock('../lib/api', () => ({
     bytesPerDay: 30 * 1024 * 1024,
   })),
   setHistorySettings: vi.fn(),
+  fetchRouterBackups: vi.fn(async () => ({
+    enabled: false,
+    routers: [],
+    totalGenerations: 0,
+    totalRouters: 0,
+    totalBytes: 0,
+  })),
+  routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
   fetchAuthSession: vi.fn(async () => ({
     setupRequired: false,
     authenticated: true,

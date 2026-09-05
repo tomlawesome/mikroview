@@ -55,6 +55,28 @@ func TestRouterBackupsListReportsDisabledWithNoKey(t *testing.T) {
 	}
 }
 
+func TestRouterBackupsListReportsTheDropBoxPort(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Vault = vaultWithOnePush(t)
+	s.SetupInstance.BackupPort = ":47022"
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := setUpAdmin(t, ts)
+
+	resp, err := client.Get(ts.URL + "/api/router-backups")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out routerBackupsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Port != ":47022" {
+		t.Errorf("Port = %q, want the configured drop-box port", out.Port)
+	}
+}
+
 func TestRouterBackupsListNonAdminForbidden(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
