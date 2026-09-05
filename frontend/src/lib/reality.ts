@@ -37,7 +37,13 @@ export interface RealityEdge {
   /** The rule that refused traffic on this pair, from the events
    * themselves -- round 30's "caught by default drop" needs to name the
    * catcher. Same shape and same provenance as reach.ts's `refusedBy`:
-   * what the router said it did, never what we inferred it meant. */
+   * what the router said it did, never what we inferred it meant.
+   * Taken from the most recent drop/reject on the pair, not the first:
+   * a rule table can be edited (a named rule removed, replaced by
+   * nothing or by a different one), and the events already ingested
+   * under the old table still carry its rule's name -- naming that
+   * rule for a pair the *current* table no longer explains would be
+   * exactly the guessing this field exists to refuse (#966). */
   refusedBy?: string
   /** Every port asked for on this pair, busiest first, whatever the
    * answer was. `topPorts` counts accepted ports only, which cannot
@@ -88,7 +94,11 @@ export function realityEdges(events: FirewallEvent[], intents: PolicyEdge[], any
       }
     } else if (e.action === 'drop' || e.action === 'reject') {
       r.drops++
-      if (!r.refusedBy && e.ruleLabel) r.refusedBy = e.ruleLabel
+      // The latest drop wins, not the first: events arrive oldest-first
+      // (appState.events appends), so this is genuinely "what the most
+      // recent refusal said", including reverting to unnamed when the
+      // newest drop carries no label even though an older one did.
+      r.refusedBy = e.ruleLabel || undefined
     }
   }
   const intentByKey = new Map(intents.map((i) => [i.key, i]))
