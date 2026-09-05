@@ -155,6 +155,15 @@ SCANNER_ONE_OFF = "89.248.165.100"     # fires once, never again -- "stopped"
 # engine/coverage.go) means something: a rule with no port restriction
 # covers everything trivially, which would make a genuine "broken ring"
 # entry impossible to construct.
+#
+# `fires=True` is only honest on a `log=True` rule: RouterOS never writes
+# a syslog line for a rule that isn't logging, no matter how much traffic
+# matches it, so `log=False` rules stay `fires=False` here on principle,
+# not because the feed happens not to emit one (#738 measurement found
+# two, `icmp-out` and `invalid-drop`, marked `fires=True` with `log=False`
+# -- the same "claims to fire but never does" defect #696 named, just not
+# caught by that sweep because these two were never observably wrong in
+# the UI: a log=False rule never shows a hit either way).
 # Every rule below carries the inInterface/outInterface pair the fall's
 # boundary bands (#616) group by -- see frontend/src/lib/fall.svelte.ts's
 # boundaryKeyOf, which keys a pushed rule and a live event on the exact
@@ -177,10 +186,10 @@ FILTER_RULES = {
              logPrefix="guest-isolate", log=True, dstPort=445, protocol="tcp", fires=True,
              inInterface="vlan30", outInterface="bridge1"),
         dict(ordinal=4, comment="Allow outbound ICMP", chain="forward", action="accept",
-             logPrefix="icmp-out", log=False, protocol="icmp", fires=True,
+             logPrefix="icmp-out", log=False, protocol="icmp", fires=False,
              inInterface="bridge1", outInterface="ether1"),
         dict(ordinal=5, comment="Reject invalid state", chain="forward", action="reject",
-             logPrefix="invalid-drop", log=False, connectionState=["invalid"], fires=True,
+             logPrefix="invalid-drop", log=False, connectionState=["invalid"], fires=False,
              inInterface="bridge1", outInterface="ether1"),
         dict(ordinal=6, comment="Legacy PPTP VPN allow (pending removal)", chain="input", action="accept",
              logPrefix="legacy-vpn-allow", log=True, dstPort=1723, protocol="tcp", fires=False,
@@ -956,6 +965,15 @@ def lines_for_router(router, elapsed, tick):
             out.append(f"firewall,info A|voip-priority| forward: in:{zone_iface(router, 'voip')} out:{wan}, "
                         f"connection-state:new src-mac {h[3]}, proto UDP, "
                         f"{full_ip(h)}:{random.randint(1024, 65000)}->{random.choice(PUBLIC)}:5060, len 200")
+    # smb-block was declared fires=True with no emission at all (#738
+    # measurement, the same defect #696 named for three other rules): an
+    # office host occasionally tries SMB off-net and the rule drops it.
+    if router == "office-hex" and "smb-block" in rules and random.random() < 0.3:
+        h = next((x for x in hosts if x[1] == "office"), None)
+        if h:
+            out.append(f"firewall,info D|smb-block| forward: in:{zone_iface(router, 'office')} out:{wan}, "
+                        f"connection-state:new src-mac {h[3]}, proto TCP (SYN), "
+                        f"{full_ip(h)}:{random.randint(1024, 65000)}->{random.choice(PUBLIC)}:445, len 60")
     if router == "lab-crs" and "mgmt-ssh-in" in rules and random.random() < 0.2:
         h = next((x for x in hosts if x[1] == "mgmt"), None)
         if h:

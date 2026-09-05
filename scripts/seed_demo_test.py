@@ -180,5 +180,52 @@ class CamBeaconTests(unittest.TestCase):
         self.assertEqual(len(cam_beacon_lines), 1)
 
 
+class RuleFiresConsistencyTests(unittest.TestCase):
+    """#738 measurement found three rules declared `fires=True` with no
+    emitting code path at all (`icmp-out`, `invalid-drop`, `smb-block`) --
+    the same defect #696 fixed for three other rules, undetected because
+    that fix never became a standing check. This drives every router's
+    generator over a long, seeded run and asserts the declared `fires`
+    flag matches what the generator actually produces, so a rule cannot
+    silently drift out of sync with its own declaration again."""
+
+    def setUp(self):
+        seed_demo._r40_state["last_cam_beacon"] = -1
+        seed_demo._r40_state["last_unplanned_wave"] = -1
+        random.seed(738)
+
+    def test_every_rules_fires_flag_matches_what_the_generator_emits(self):
+        import re
+
+        prefix_re = re.compile(r"\|([^|]+)\|")
+        fired = set()
+        # Elapsed sweeps past every host's intro time and through several
+        # full periods of the cyclic laptop and the one-off guest, so
+        # both get a real chance to be active.
+        elapsed = 0.0
+        for tick in range(1500):
+            for router in seed_demo.ROUTERS:
+                for line in seed_demo.lines_for_router(router, elapsed, tick):
+                    m = prefix_re.search(line)
+                    if m:
+                        fired.add(m.group(1))
+            elapsed += 4.5
+
+        declared_true, declared_false = set(), set()
+        for rules in seed_demo.FILTER_RULES.values():
+            for r in rules:
+                (declared_true if r["fires"] else declared_false).add(r["logPrefix"])
+
+        never_fired = declared_true - fired
+        self.assertEqual(
+            never_fired, set(),
+            f"declared fires=True but the generator never emits them: {never_fired}")
+
+        wrongly_fired = declared_false & fired
+        self.assertEqual(
+            wrongly_fired, set(),
+            f"declared fires=False but the generator emits them anyway: {wrongly_fired}")
+
+
 if __name__ == "__main__":
     unittest.main()
