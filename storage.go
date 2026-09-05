@@ -13,6 +13,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
 // storage decides where each persisted store lives, and is the one place
@@ -32,6 +33,15 @@ type storage struct {
 	// Postgres when this process started. Only a first move is allowed
 	// to adopt the JSON files; see backendFor.
 	adoptedBefore bool
+	// key is the same master key internal/retention derives the event
+	// history's per-file keys from, loaded once from history.keyFile
+	// (#853: one key, not two -- see docs/decisions/event-retention.md's
+	// amendment). nil means no key is configured, which is the default
+	// install: backendFor then refuses to persist most JSON-file stores
+	// at all rather than writing them in the clear. It has nothing to do
+	// with history.enabled, which only switches the *event log* on top
+	// of this same key.
+	key *retention.Key
 }
 
 // openStorage connects to Postgres if configured, and applies the schema.
@@ -45,6 +55,26 @@ type storage struct {
 func openStorage(ctx context.Context, cfg config.Config) (*storage, error) {
 	log := logging.New("storage")
 	s := &storage{log: log}
+
+	// #853: the same key event history is encrypted under also covers the
+	// file-backed state store and (see main.go) the warm-restart
+	// snapshots. Loaded here, once, rather than by each caller, since
+	// openStorage is the one chokepoint every persisted store and every
+	// storage-touching CLI command goes through (run(), -backup/-restore,
+	// -recover-admin-account and friends).
+	key, keyErr := retention.LoadKey(cfg.History.KeyFile)
+	switch {
+	case keyErr == retention.ErrNoKey:
+		log.Info("no history.keyFile configured -- every JSON-file-backed store except accounts, tokens and recovery keys (flags, entities, watchlist, definitions and the rest), and the warm-restart snapshots, are memory-only and are lost on every restart; there is no unencrypted mode to fall back to for those (#853). Accounts, tokens and recovery keys keep persisting in plain JSON because they hold only one-way hashes (#853 rule 6)")
+	case keyErr != nil:
+		log.Warn("history.keyFile is set but could not be used -- the state store and warm-restart snapshots run exactly as if no key were configured (memory-only)", "keyFile", cfg.History.KeyFile, "err", keyErr)
+	default:
+		s.key = key
+		if key.GroupOrWorldReadable {
+			log.Warn("the retention key file is readable by more than its owner -- tighten it to 0600 if you can", "keyFile", cfg.History.KeyFile)
+		}
+		log.Info("history.keyFile is configured -- the file-backed state store and warm-restart snapshots are encrypted under it (#853)")
+	}
 
 	if cfg.Postgres.DSNFile == "" {
 		if err := refuseIfPostgresAdopted(cfg); err != nil {
@@ -113,18 +143,52 @@ func readDSNFile(path string) (string, error) {
 	return dsn, nil
 }
 
+// hashedStores lists the JSON-file stores exempt from "no key, no
+// storage" (see backendFor): they hold only one-way hashes -- argon2id
+// password hashes (auth), hashed API/ingest tokens (tokens) and hashed
+// recovery keys (recovery_keys) -- so nothing in them can be decrypted
+// even if the plain file leaked. Owner decision, #853 rule 6,
+// 2026-09-05: keep persisting these without a key, exactly as before
+// this issue's change, accepting that the plain file still discloses
+// usernames and roles.
+var hashedStores = map[string]bool{
+	"auth":          true,
+	"tokens":        true,
+	"recovery_keys": true,
+}
+
 // backendFor returns where the named store should persist, and adopts
 // any existing JSON file into an empty Postgres store on the way.
 //
 // filePath is still passed when Postgres is configured, because it is
 // the migration source -- and because turning Postgres off again has to
 // come back on that file (see persist.AdoptFile, which never deletes it).
+//
+// #853: on the JSON-file path, whether name gets a working backend at all
+// now also depends on s.key -- "every file the file backend writes" is
+// the rule the issue settled on, with one exception decided afterwards
+// (rule 6, 2026-09-05): hashedStores above keep persisting in the clear
+// with no key, because a one-way hash gains nothing from encryption.
+// Every other store returns (nil, nil) with no key, the same
+// "persistence not configured" signal already used for memory-only
+// stores (an empty filePath does the same today).
+//
+// openAuthStoreForCLI and openRecoveryStoreForCLI (main.go) both check
+// for a nil backend here -- now only possible for auth and recovery_keys
+// when filePath itself is empty -- and refuse loudly rather than
+// silently handing a recovery command an empty in-memory store.
 func (s *storage) backendFor(ctx context.Context, name, filePath string) (persist.Backend, error) {
 	if s.pool == nil {
 		if filePath == "" {
 			return nil, nil // this store's persistence is switched off
 		}
-		return persist.NewFileBackend(filePath), nil
+		if s.key == nil {
+			if hashedStores[name] {
+				return persist.NewFileBackend(filePath), nil // #853 rule 6: one-way hashes, no key needed
+			}
+			return nil, nil // #853: no key, no storage -- this store is memory-only
+		}
+		return persist.NewEncryptedFileBackend(filePath, s.key), nil
 	}
 
 	b := persist.NewPostgresBackend(s.pool, name)

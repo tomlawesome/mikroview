@@ -42,6 +42,42 @@ rewritten.
   with everything else. **RouterOS never verifies the drop box's host
   key** (measured on 7.23.3) -- run the push only over a network path
   you trust; see `SECURITY.md`.
+- **The same key that encrypts the on-disk event history now also
+  covers most of what else mikroview writes to disk** (#853,
+  `docs/decisions/event-retention.md`'s amendment and addendum): the
+  JSON-file state store (flags, entities, the MAC registry, rule usage,
+  detector settings -- every document `internal/persist`'s file backend
+  writes, other than the three named below) and the warm-restart
+  snapshots (#795) are sealed under `history.keyFile` with the same
+  AES-256-GCM/HKDF scheme the event history already uses. **No key, no
+  storage**: with none configured, every one of these stores is
+  memory-only and is lost on every restart -- there is no unencrypted
+  mode to fall back to, matching the event history's own rule.
+  `history.enabled` still only switches the event *log* on top of this
+  same key; the state store and snapshots follow the key alone.
+
+  **Accounts, API tokens and recovery-key digests are exempt** (rule 6,
+  decided the same day): all three hold only one-way hashes, so they
+  keep persisting to a plain JSON file with no key configured, exactly
+  as every earlier mikroview release -- `docker compose up` alone is
+  still enough to keep your admin login across a restart. With a key,
+  they are encrypted like everything else. Every other store is a
+  severe change from earlier releases, where none of it needed a key at
+  all: with no `history.keyFile` mounted, mikroview now forgets flags,
+  entities and the rest of the list above across a restart, not just
+  the optional ones.
+
+  `-backup`/`-restore` still work with a key mounted: the backup
+  envelope stays plain, readable JSON either way, and `-restore` writes
+  each store back encrypted when a key is configured for the deployment
+  it is restoring into. Postgres is unaffected -- see the ADR amendment
+  for why encrypting there was not judged to add real value over the
+  database's own at-rest custody and required TLS.
+
+  Settings' persistence row now has a third state, `memory only`,
+  alongside `file` and `postgres` -- reported for flags, entities and
+  the rest; accounts, tokens and recovery keys persist regardless.
+
 - **Renovate now proposes dependency updates as merge requests on
   GitLab, replacing Dependabot** (#945).
 - An on-demand CHR exercise, CHR watch or Renovate run (web UI or API
@@ -155,11 +191,12 @@ rewritten.
   minute stamps, rule and log-prefix labels, device ids/names with their
   first and last seen, and per-source window counts keyed by address. It
   holds no event lines, no payloads and none of the rule/NAT/DHCP tables
-  routers push; SECURITY.md now says so beside the "no persistence for
-  events" promise, including that the files are not encrypted at rest
-  (#853). Snapshots stay files even on a Postgres deployment: they are
-  derived, disposable counters, not custody data, and losing the whole
-  directory costs one cold start.
+  routers push; SECURITY.md says so beside the "no persistence for
+  events" promise. (Encrypted under `history.keyFile` since #853, below --
+  at the time this landed the files were not yet encrypted.) Snapshots
+  stay files even on a Postgres deployment: they are derived, disposable
+  counters, not custody data, and losing the whole directory costs one
+  cold start.
   `GET /api/stats` gained `liveSince` (when this process started
   observing) and, after a warm restart only, `restoredTo` (when the
   snapshot it loaded was taken) -- absent rather than null on a cold
@@ -1116,6 +1153,14 @@ rewritten.
   before building rather than failing confusingly partway through
   `live-check` -- and a `RECLAIM` chown failure against an existing tree
   now prints a warning instead of failing silently.
+- **A caller told to run `make live-check-remote` had no way to ask the
+  lock above to queue rather than refuse** (#811, the same collision as
+  #809 caught mid-`npm ci` on the trampled side). Refusing without
+  `--wait` now exits `75`, distinct from a gate failure, so a script can
+  tell "the host is busy" from "the gate found something" without
+  parsing the message; `scripts/gate-remote.sh --wait` (or
+  `MV_GATE_WAIT=1`) polls the lock every `MV_GATE_WAIT_INTERVAL` seconds
+  (default 30) instead of exiting.
 
 ## [0.4.0] - 2026-08-25
 

@@ -15,7 +15,25 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
+
+// backupBackendFor is the backend runBackup reads a store through and
+// runRestore writes one back through -- deliberately not
+// storage.backendFor's own policy, which also decides whether the *live
+// server* persists a store at all with no key configured (#853). A
+// backup's job is fidelity with whatever is actually on this disk: with a
+// key, every store round-trips through the same encryption the server
+// would apply to it; with none, every store is read and written as plain
+// JSON, exactly as every mikroview release before #853 did -- including a
+// file that predates the key, or one from a deployment that has since
+// removed it.
+func backupBackendFor(path string, key *retention.Key) persist.Backend {
+	if key == nil {
+		return persist.NewFileBackend(path)
+	}
+	return persist.NewEncryptedFileBackend(path, key)
+}
 
 // backedUpStores is every store the envelope carries, paired with where
 // it lives on a JSON deployment.
@@ -303,12 +321,29 @@ func runBackup(args []string) int {
 		return 1
 	}
 
+	// #853: decrypt under history.keyFile when one is configured, so the
+	// envelope this produces stays plain, readable JSON either way -- the
+	// backup runs with the key available, same as the server. This is
+	// deliberately its own key load rather than persistence.backendFor's
+	// (storage.go's) policy: that policy also decides whether the *live
+	// server* persists a store at all with no key configured, which is a
+	// different question from "read whatever is actually on this disk",
+	// the one -backup answers. A file predating #853, or written by a
+	// deployment that has since removed its key, is still backed up as
+	// the plain JSON it actually is.
+	ctx := context.Background()
+	ourKey, keyErr := retention.LoadKey(cfg.History.KeyFile)
+	if keyErr != nil && keyErr != retention.ErrNoKey {
+		logger.Error(fmt.Sprintf("history.keyFile is set but could not be used: %v -- refusing rather than guessing whether stores are encrypted", keyErr))
+		return 1
+	}
+
 	stores := map[string][]byte{}
 	for _, s := range backedUpStores(cfg) {
 		if s.Path == "" {
 			continue
 		}
-		data, _, err := persist.LoadDocument(context.Background(), persist.NewFileBackend(s.Path))
+		data, _, err := persist.LoadDocument(ctx, backupBackendFor(s.Path, ourKey))
 		if err != nil {
 			logger.Error(fmt.Sprintf("reading %s (%s): %v", s.Name, s.Path, err))
 			return 1
@@ -415,6 +450,17 @@ func runRestore(args []string) int {
 		return 1
 	}
 
+	// #853: the same key runBackup would have decrypted under, so a store
+	// gets written back encrypted exactly when the deployment restoring
+	// it has a key configured -- matching what the running server would
+	// then expect to find there.
+	ctx := context.Background()
+	ourKey, keyErr := retention.LoadKey(cfg.History.KeyFile)
+	if keyErr != nil && keyErr != retention.ErrNoKey {
+		logger.Error(fmt.Sprintf("history.keyFile is set but could not be used: %v -- nothing has been changed", keyErr))
+		return 1
+	}
+
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
 	f, err := os.Open(src)
 	if err != nil {
@@ -495,24 +541,36 @@ func runRestore(args []string) int {
 		}
 	}
 
-	// Write every store to a temp file first, then rename. A rename is
-	// atomic, so a failure part-way leaves each original file whole --
-	// which matters most for the accounts store, where the alternative to
-	// "unchanged" is "locked out".
+	// Write every store through its backend -- persist.Backend.Save
+	// already does the atomic temp-file/fsync/rename dance, encrypting on
+	// the way when the store is one #853 covers. This never goes through
+	// OpenWithBackend/persist.Open (issue #378's read-and-decode path):
+	// Save only ever writes the bytes it is given, so a document that
+	// would make a normal boot refuse to start (an unreadable accounts
+	// file, say) is still one --restore can overwrite.
 	for name, data := range decoded {
 		path := known[name]
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			logger.Error(err.Error())
+		backend := backupBackendFor(path, ourKey)
+		// The version to overwrite with, read without needing the
+		// existing document to actually decrypt -- see
+		// persist.EncryptedFileBackend.Version's doc comment. Backends
+		// that do not implement VersionReader (plain FileBackend) fall
+		// back to Load, which never fails on an undecryptable document
+		// either, since it never attempts to decrypt anything.
+		var expect int64
+		if vr, ok := backend.(persist.VersionReader); ok {
+			expect, _, err = vr.Version(ctx)
+		} else {
+			var snap persist.Snapshot
+			snap, err = backend.Load(ctx)
+			expect = snap.Version
+		}
+		if err != nil {
+			logger.Error(fmt.Sprintf("reading the current version of %s (store %q): %v", path, name, err))
 			return 1
 		}
-		tmp := path + ".restore-tmp"
-		if err := os.WriteFile(tmp, data, 0o600); err != nil {
-			logger.Error(err.Error())
-			return 1
-		}
-		if err := os.Rename(tmp, path); err != nil {
-			os.Remove(tmp)
-			logger.Error(err.Error())
+		if _, err := backend.Save(ctx, data, expect); err != nil {
+			logger.Error(fmt.Sprintf("writing %s (store %q): %v", path, name, err))
 			return 1
 		}
 	}

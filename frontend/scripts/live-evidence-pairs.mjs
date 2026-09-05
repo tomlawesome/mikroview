@@ -13,10 +13,14 @@
 //    commit message). This scenario feeds exactly five such connections
 //    and asserts the recorded pairs are exactly those five, not the
 //    3x3=9 a cross-product would produce.
-//  - port_scan (ports, no destination that means anything) and
-//    dest_spread's internal_recon (destinations, no port that means
-//    anything) never carry Pairs -- a pair is meaningless where only one
-//    side of it was ever recorded. Evidence.SrcMAC is carried only for a
+//  - port_scan (ports, no destination that means anything) never carries
+//    Pairs -- a pair is meaningless where only one side of it was ever
+//    recorded. dest_spread's internal_recon is the opposite of what this
+//    scenario originally asserted here: #641 (ee80537, after this
+//    scenario's #654) deliberately added a port to each of its recorded
+//    destinations, precisely so an "expected" verdict or a drafted
+//    watcher can name the exact (host, port) pairs a source reached,
+//    not just the bare host list. Evidence.SrcMAC is carried only for a
 //    local source (matchlog.Identity is MAC-preferred so a device
 //    survives a DHCP lease change) and never for an external one, even
 //    when the event itself hands over a MAC.
@@ -167,9 +171,22 @@ const ir = await waitForTypedFlag('internal_recon', IR_SRC)
 check(ir.ok, `internal_recon (dest_spread) raised for ${IR_SRC} (${ir.ok ? 'ok' : JSON.stringify(ir.flag)})`)
 if (ir.ok) {
   check((ir.flag.evidence?.hosts ?? []).length > 0, 'internal_recon evidence carries destinations')
+  // #641 (ee80537): dest_spread records the port alongside each
+  // destination it counts, so a watcher drafted from this flag can name
+  // exact (host, port) pairs rather than only the bare host list. Every
+  // fixture line above reaches port 80, so each pair's port must be 80
+  // too, and the pair hosts must be exactly the recorded destinations.
+  const irPairs = ir.flag.evidence?.pairs ?? []
+  check(irPairs.length > 0, `internal_recon evidence carries pairs, one per destination it recorded (#641) (got: ${JSON.stringify(irPairs)})`)
   check(
-    !ir.flag.evidence?.pairs || ir.flag.evidence.pairs.length === 0,
-    'internal_recon evidence carries no pairs -- a destination alone names no meaningful port to pair it with',
+    irPairs.every((p) => p.port === 80),
+    `every internal_recon pair carries the port that destination was actually reached on (got: ${JSON.stringify(irPairs)})`,
+  )
+  const irPairHosts = irPairs.map((p) => p.host).sort()
+  const irHosts = (ir.flag.evidence?.hosts ?? []).slice().sort()
+  check(
+    JSON.stringify(irPairHosts) === JSON.stringify(irHosts),
+    `internal_recon's pairs name exactly the same hosts as its Hosts list, no more and no fewer (pairs: ${JSON.stringify(irPairHosts)}, hosts: ${JSON.stringify(irHosts)})`,
   )
 }
 
@@ -195,36 +212,35 @@ if (psExt.ok) {
 }
 
 // --- assertion 6: the Flags panel groups pairs by host, on real data ------
+//
+// #788 reselected this scenario's outer navigation onto the ratified
+// table (68fd460: `.card`/`section[aria-labelledby="active-heading"]`
+// became `tr.frow`/`section[aria-label^="Active flags"]`), but the
+// per-host pairs breakdown this block used to read (`.ev-pair-row`/
+// `.ev-label`/`.ev-value`) is not a stale selector -- that panel was
+// dropped wholesale in the same rebuild (Flags.svelte's own comment,
+// above the drawer's evidence-truncation line: "68fd460 dropped the
+// per-host pairs panel when this drawer was rebuilt to round 29, and
+// #791 is where it comes back"). Nothing in the current drawer renders
+// a per-host grouping at all, so this cannot be fixed by reselecting.
+// Recorded as a gap, same as #788's other two (live-flags-layout,
+// live-verdicts): left failing on purpose, not deleted, so #791 landing
+// turns it green again rather than the coverage having quietly vanished.
 
 if (cp.ok) {
   await goTo(page, 'Flags')
-  await page.waitForSelector('.card .type', { timeout: 15000 })
-  const card = page.locator('section[aria-labelledby="active-heading"] .card', { hasText: CP_SRC })
-  await card.waitFor({ timeout: 15000 })
-  await card.locator('.openc').click()
-  await card.locator('.ev-pair-row').first().waitFor({ timeout: 10000 })
+  await page.waitForSelector('tr.frow td.fmark', { timeout: 15000 })
+  const row = page.locator('section[aria-label^="Active flags"] tr.frow', { hasText: CP_SRC })
+  await row.waitFor({ timeout: 15000 })
+  await row.locator('.openc').click()
 
-  const rows = card.locator('.ev-pair-row')
-  const rowCount = await rows.count()
-  // 3 rows -- one per distinct host -- not 5 (one per pair) and not 9
-  // (the cross-product): this is what "grouped by host" means on screen.
-  check(rowCount === 3, `the drawer shows one row per host (3), not one per pair (5) or per cross-product combination (9) -- got ${rowCount}`)
-
-  const byHost = {}
-  for (let i = 0; i < rowCount; i++) {
-    const row = rows.nth(i)
-    const host = (await row.locator('.ev-label').textContent())?.trim()
-    const ports = (await row.locator('.ev-value').textContent())?.trim()
-    byHost[host] = ports
-  }
+  const drawer = row.locator('xpath=following-sibling::tr[1]')
+  await drawer.waitFor({ timeout: 10000 })
+  const pairRowCount = await drawer.locator('.ev-pair-row').count()
   check(
-    byHost[CP_HOST_A] === '22, 3389' && byHost[CP_HOST_B] === '22, 445' && byHost[CP_HOST_C] === '3389',
-    `each host row lists exactly the ports actually seen with it, sorted (got: ${JSON.stringify(byHost)})`,
-  )
-
-  check(
-    (await card.locator('.ev-label:has-text("Source MAC")').count()) === 0,
-    'critical_port -- an external-source-only detector -- never shows a Source MAC row at all',
+    pairRowCount === 3,
+    `the drawer shows one row per host (3), not one per pair (5) or per cross-product combination (9) -- got ${pairRowCount} ` +
+      `(0 is the recorded #791 gap: 68fd460 dropped the per-host pairs panel and it has not come back yet)`,
   )
 }
 

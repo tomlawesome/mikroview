@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
 // The point of this package is that a store can be moved from a file to
@@ -16,12 +18,23 @@ import (
 // and run against each -- rather than two test files that drift.
 //
 // The Postgres case skips itself when MIKROVIEW_TEST_POSTGRES is unset;
-// the file case always runs.
+// the file and encrypted-file cases always run. encrypted-file (#853)
+// pins that wrapping a key around FileBackend does not change the
+// contract it presents to a store -- same compare-and-swap behaviour,
+// same conflict handling -- only what ends up on disk.
 func eachBackend(t *testing.T, run func(t *testing.T, b Backend)) {
 	t.Helper()
 
 	t.Run("file", func(t *testing.T) {
 		run(t, NewFileBackend(filepath.Join(t.TempDir(), "store.json")))
+	})
+
+	t.Run("encrypted-file", func(t *testing.T) {
+		key, err := retention.NewKeyFromMaterial([]byte(strings.Repeat("k", retention.MinKeyBytes)))
+		if err != nil {
+			t.Fatalf("test key: %v", err)
+		}
+		run(t, NewEncryptedFileBackend(filepath.Join(t.TempDir(), "store.json"), key))
 	})
 
 	t.Run("postgres", func(t *testing.T) {
