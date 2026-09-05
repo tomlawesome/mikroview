@@ -25,6 +25,13 @@ stages:
   - sync
   - chr-exercise
 
+# Runner lanes (#949, ai/agent-infra#3). Every job names its lane: `big`
+# is gitlab-runners-01 (8 CPU / 18 GB, two at a time) and `light` is the
+# 2 CPU / 2 GB runner (three at a time). A job with no matching tag does
+# not run at all, so a new job must pick one.
+default:
+  tags: [big]
+
 variables:
   GOFLAGS: "-mod=readonly"
 
