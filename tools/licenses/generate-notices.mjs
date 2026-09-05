@@ -35,7 +35,7 @@ const OUT = path.join(REPO, 'THIRD-PARTY-NOTICES.md')
 
 const LICENCE_FILE = /^(LICEN[CS]E|COPYING|NOTICE)(\.(md|txt))?$/i
 
-function goModules() {
+export function goModules() {
   // -deps against the main package, not `go list -m all`: the latter
   // includes modules that are only needed to build tests or that got
   // pulled into the graph without a single line of their code reaching
@@ -78,7 +78,7 @@ function goModules() {
  * about the shipped bytes rather than a guess about them, and it
  * self-corrects when the build config changes.
  */
-function npmPackages() {
+export function npmPackages() {
   const outDir = path.join(tmpdir(), 'mikroview-licence-build')
   rmSync(outDir, { recursive: true, force: true })
   execFileSync('npx', ['vite', 'build', '--sourcemap', '--outDir', outDir, '--emptyOutDir'], {
@@ -235,23 +235,31 @@ function render() {
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n'
 }
 
-const rendered = render()
-const check = process.argv.includes('--check')
+function main() {
+  const rendered = render()
+  const check = process.argv.includes('--check')
 
-if (check) {
-  const current = existsSync(OUT) ? readFileSync(OUT, 'utf8') : ''
-  if (current !== rendered) {
-    console.error(
-      'THIRD-PARTY-NOTICES.md is out of date.\n' +
-        'A dependency was added, removed or upgraded without regenerating it.\n' +
-        'Run: node tools/licenses/generate-notices.mjs\n\n' +
-        'This is a licence-compliance requirement, not a formatting preference: MIT,\n' +
-        'BSD, ISC and Apache-2.0 all require their notices to accompany the binary we ship.',
-    )
-    process.exit(1)
+  if (check) {
+    const current = existsSync(OUT) ? readFileSync(OUT, 'utf8') : ''
+    if (current !== rendered) {
+      console.error(
+        'THIRD-PARTY-NOTICES.md is out of date.\n' +
+          'A dependency was added, removed or upgraded without regenerating it.\n' +
+          'Run: node tools/licenses/generate-notices.mjs\n\n' +
+          'This is a licence-compliance requirement, not a formatting preference: MIT,\n' +
+          'BSD, ISC and Apache-2.0 all require their notices to accompany the binary we ship.',
+      )
+      process.exit(1)
+    }
+    console.log('THIRD-PARTY-NOTICES.md is up to date.')
+  } else {
+    writeFileSync(OUT, rendered)
+    console.log(`wrote ${OUT}`)
   }
-  console.log('THIRD-PARTY-NOTICES.md is up to date.')
-} else {
-  writeFileSync(OUT, rendered)
-  console.log(`wrote ${OUT}`)
 }
+
+// tools/licenses/licence-policy.mjs imports goModules() and npmPackages()
+// from this file to check the same shipped inventory this file attributes
+// notices for -- so this only runs as a generator/checker when invoked
+// directly, not on import.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main()
