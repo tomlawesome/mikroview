@@ -687,6 +687,7 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 
 	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the flags store", persist.WriteBehindOptions{
 		MinInterval: persistMinInterval,
+		Clock:       persistClock,
 		OnSaveError: func(msg string) { persistLog.Error(msg) },
 		OnConflict:  func(msg string) { persistLog.Warn(msg) },
 	}, func(data []byte) error {
@@ -1742,6 +1743,18 @@ func (s *Store) pruneLocked() {
 // here, and its #377 stall-under-load defect, both moved to that type
 // (issue #400).
 var persistMinInterval = time.Second
+
+// persistClock is a test seam for the write-behind back-off's own clock
+// (persist.WriteBehind's run loop reads it and waits on it), nil meaning
+// persist's real one -- the same "package var a test overrides, real by
+// default" convention persistMinInterval above already uses. #941: the
+// sustained-failure back-off test used to measure real elapsed wall-clock
+// time around a real sleep and infer how many windows "must" have
+// passed, which flaked under a loaded runner exactly because that
+// inference is itself scheduling-dependent. A test setting this to a
+// fake persist.Clock drives the back-off window forward itself instead
+// of guessing at it from elapsed time.
+var persistClock persist.Clock
 
 // persistLocked encodes the current state -- flags and exclusions alike,
 // see persistedState -- and hands it to the write-behind writer (see
