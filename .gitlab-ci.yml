@@ -455,6 +455,11 @@ security:semgrep:
       - semgrep.sarif
       - semgrep.log
     expire_in: 1 week
+  # See security:gosec's retry comment below (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 security:gosec:
   stage: security
@@ -483,6 +488,20 @@ security:gosec:
     paths:
       - gosec.sarif
     expire_in: 1 week
+  # #950: this job's scan finished clean three times in a row on MR !944
+  # and still failed the merge, because GitLab's coordinator returned 502
+  # to the runner's artifact upload each time and the runner gave up
+  # rather than retrying that class of failure -- a red job for a green
+  # scan. runner_system_failure covers the runner exhausting its own
+  # upload attempts; api_failure covers the coordinator-side error a 502
+  # is. Confirmed accepted by the CI lint API (`glab api -X POST
+  # projects/53/ci/lint`), including a warning that the deprecated
+  # stuck_or_timeout_failure/job_execution_timeout pair (not used here)
+  # should not be added. Never add script_failure: that would retry past
+  # a real gosec finding instead of just past the upload flake.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 security:govulncheck:
   stage: security
@@ -503,6 +522,11 @@ security:govulncheck:
     paths:
       - govulncheck.json
     expire_in: 1 week
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 # The two remaining halves of GitHub's ci.yml `security` job, moved here
 # under #935 step 7. Their long rationale is in that file's history
@@ -656,6 +680,11 @@ security:gitleaks:
     paths:
       - gitleaks.sarif
     expire_in: 1 week
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 security:trivy-fs:
   stage: security
@@ -678,6 +707,11 @@ security:trivy-fs:
       - trivy-fs.sarif
     expire_in: 1 week
   allow_failure: true
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 # ---------------------------------------------------------------------------
 # SYNC — GitHub is a mirror of dev, preview and main. After a push to any of
