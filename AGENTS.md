@@ -212,8 +212,10 @@ runs the gate, brings the log back as `gate-run.log`, and removes the
 work tree afterwards. `MV_BROWSER=firefox make live-check-remote` picks
 the engine. `scripts/gate-remote.sh` carries the reasoning. The host is
 single-tenant -- one branch, one work tree -- so the script takes a lock
-(`~/gate-lock`) before it pushes and refuses if another run already
-holds it (#809); wait for that run, or if it looks dead, follow the
+(`~/gate-lock`) before it pushes and refuses (exit 75, distinct from a
+gate failure) if another run already holds it (#809); run
+`scripts/gate-remote.sh --wait` (or `MV_GATE_WAIT=1`) to poll until it
+frees instead of refusing (#811). If the holder looks dead, follow the
 `ssh ... rm -r ~/gate-lock` hint the refusal prints.
 
 **The host's standing tenant is the `dev` loop.** `scripts/gate-dev-loop.sh`
@@ -223,7 +225,12 @@ and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN` lines to `loop.log` there
 (#831). It takes the lock like any other run, so a manual
 `make live-check-remote` simply waits its turn -- or refuses, if the loop
 is mid-run; check `loop.log` for a `START` without an `END` before
-clearing a lock that looks stale.
+clearing a lock that looks stale. A run that dies before producing a
+result (a build failure, e.g. #861's IPv6 Docker Hub token fetch) prints
+`LOST` instead of `END`, is retried next tick, and leaves a
+`gate-<sha>.lost` file so the loss stays on record even if that commit is
+superseded before the retry lands; a later success for the same commit
+also prints `RECOVERED`.
 
 `git push` rather than rsync or a clone, because authentication then
 happens from this side: nothing has to live over there. Only new objects
@@ -551,7 +558,14 @@ addresses, the registry invents a discovered device per source IP and the
 pushed tables sit under ids no device has. Both halves report success and
 never meet (#709).
 
-    MV_DEMO_DEVICES=1 MV_BIND=<addr> scripts/live-env.sh up
+`MV_DEMO_BUILD=1` matters here too: it ships the self-destroying service
+worker (#713) that stops a browser serving back a stale precached build
+across the many rebuilds a demo goes through. `live-env.sh up` no longer
+sets it by default -- the live-check gate needs a real, non-self-destroying
+worker to prove its own navigation scenario (#753) -- so a demo has to ask
+for it explicitly.
+
+    MV_DEMO_DEVICES=1 MV_DEMO_BUILD=1 MV_BIND=<addr> scripts/live-env.sh up
 
     export MV_URL=... MV_USER=... MV_PASS=...
     export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_PORT=<tls port>
