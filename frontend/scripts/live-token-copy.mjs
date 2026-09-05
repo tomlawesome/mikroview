@@ -15,7 +15,7 @@
 // changing, and the clipboard actually holding the raw IP -- not the
 // "nas-live-check" label the row displays -- after clicking it.
 
-import { session, feedRaw, check, done } from './live-browser.mjs'
+import { session, feedRaw, check, done, unfoldStreamFilter } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const RULE = 'live-token-copy'
@@ -143,7 +143,14 @@ const row = page.locator('.row', { hasText: HOST_LABEL }).first()
 // this one, and a plain `.first()` silently grabbed that instead.
 const addrCell = row.locator('.cell.addr', { hasText: HOST_LABEL })
 check((await addrCell.locator('.addr-btn', { hasText: HOST_LABEL }).count()) > 0, 'the row shows the resolved host label, not the raw IP')
-check(!(await row.textContent())?.includes(HOST_IP), 'the raw IP is not the row\'s visible text')
+// #644 ("columns squared", the ratified nine-column table) gave Source
+// its own neighbouring Address column (EventRow.svelte's `.cell.ip`),
+// which shows the raw IP in plain text specifically whenever the name
+// column is showing a resolved name -- exactly this row's case. So the
+// raw IP is legitimately part of the row's visible text now, in its own
+// cell; what still has to hold is that the *name* cell itself never
+// shows it, which is what the copy/drag/click checks below are about.
+check(!(await addrCell.textContent())?.includes(HOST_IP), 'the resolved name cell does not itself carry the raw IP as its shown text')
 
 // --- Native selection: a real drag actually selects the row's text ------
 const addrBtn = addrCell.locator('.addr-btn').first()
@@ -162,6 +169,10 @@ if (box) {
   // #438 split the old single "IP or CIDR" box into side-scoped Source/
   // Destination boxes; this is the source address token, so it's the
   // Source box now.
+  // The drag's mouseup fires a native click too, and that lands outside
+  // both the filter box and its strip (#697's `.fbox`), which closes the
+  // drawer the Source field lives in -- reopen before reading it.
+  await unfoldStreamFilter(page)
   const ipDuringSelection = await page.inputValue('input[aria-label="Source — name, IP or CIDR"]')
   check(
     ipDuringSelection === '',
@@ -215,11 +226,15 @@ await page.waitForSelector('.toast', { state: 'detached', timeout: 4000 })
 check(true, 'the "copied" toast auto-dismisses')
 
 // Clicking the copy glyph must not also have applied the filter.
+await unfoldStreamFilter(page)
 const ipAfterCopy = await page.inputValue('input[aria-label="Source — name, IP or CIDR"]')
 check(ipAfterCopy === '', `clicking the copy glyph does not apply the IP filter (got "${ipAfterCopy}")`)
 
 // --- A plain click (no drag) still filters, unchanged from before -------
 await addrBtn.click()
+// Same as the drag above: this click's own native-click bubble closes
+// the drawer, so reopen before reading the field it just set.
+await unfoldStreamFilter(page)
 const ipAfterClick = await waitForInputValue('input[aria-label="Source — name, IP or CIDR"]', HOST_IP)
 check(ipAfterClick === HOST_IP, `a plain click still applies the IP filter (got "${ipAfterClick}")`)
 
