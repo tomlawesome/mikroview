@@ -1078,10 +1078,23 @@ func main() {
 	snapshotLog := logging.New("snapshot")
 	snapshotDir := usableSnapshotDir(snapshotLog, snapshotDirectory(cfg))
 	snapshotParts := []snapshot.Part{st.SnapshotPart(), devices.SnapshotPart(), engineSnapshotPart{eng: eng}}
-	restoreSnapshot(snapshotLog, snapshotDir, time.Now(), snapshotParts...)
+	// #853: same key as the state store and the event history. No key
+	// means no warm restart, exactly like no key means no state store --
+	// see storage.go's backendFor and docs/decisions/event-retention.md's
+	// amendment. usableSnapshotDir above already explains an unusable
+	// directory; this is the parallel explanation for the other way
+	// snapshots can be off.
+	switch {
+	case snapshotDir == "":
+		// Already explained above.
+	case persistence.key == nil:
+		snapshotLog.Info("warm-restart snapshots are off: no history.keyFile configured -- counters, detector windows and device first-seen dates all start cold after every restart")
+	default:
+		restoreSnapshot(snapshotLog, snapshotDir, persistence.key, time.Now(), snapshotParts...)
+	}
 	var snapshotWriter *snapshot.Writer
-	if snapshotDir != "" {
-		snapshotWriter = snapshot.New(snapshotDir, cfg.Snapshot.Keep, snapshotParts...)
+	if snapshotDir != "" && persistence.key != nil {
+		snapshotWriter = snapshot.New(snapshotDir, cfg.Snapshot.Keep, persistence.key, snapshotParts...)
 	}
 
 	// On-disk event history (#856). Unlike a snapshot this holds custody
@@ -1310,16 +1323,24 @@ func main() {
 	// which backend the storage decision above (persistence.pool) actually
 	// resolved to, rather than re-deriving a guess from cfg.Postgres.DSNFile
 	// independently. Dir is internal/auth's own configured StorePath's
-	// directory: accounts are the one store mikroview insists on
-	// persisting (see cfg.Auth.StorePath's validation above), so it is
-	// non-empty whenever the file backend is actually in use, unlike
-	// e.g. Flags.StorePath, which is deliberately optional.
+	// directory, used only in the "file" case.
+	//
+	// #853 adds a third state: on the JSON path with no history.keyFile
+	// configured, backendFor refuses every store rather than handing back
+	// a working file backend (see storage.go), so "file" would overclaim
+	// what is actually happening -- nothing is being written anywhere.
 	persistenceInfo := api.PersistenceInfo{Backend: "postgres"}
-	if persistence.pool == nil {
+	switch {
+	case persistence.pool != nil:
+		// Backend stays "postgres" -- #853 leaves that backend as-is; see
+		// docs/decisions/event-retention.md's amendment for why.
+	case persistence.key != nil:
 		persistenceInfo.Backend = "file"
 		if cfg.Auth.StorePath != "" {
 			persistenceInfo.Dir = filepath.Dir(cfg.Auth.StorePath)
 		}
+	default:
+		persistenceInfo.Backend = "memory"
 	}
 
 	srv := &api.Server{
@@ -1771,6 +1792,15 @@ func openRecoveryStoreForCLI() (*auth.RecoveryStore, func(), error) {
 		st.Close()
 		return nil, nil, err
 	}
+	// #853: with no history.keyFile configured, backendFor refuses this
+	// store rather than handing back a plain FileBackend -- see its doc
+	// comment. Refusing here, loudly, is the point: silently proceeding
+	// would hand this recovery command an empty in-memory store, which
+	// looks like a successful recovery while touching nothing on disk.
+	if backend == nil && cfg.Auth.RecoveryKeysPath != "" {
+		st.Close()
+		return nil, nil, fmt.Errorf("no history.keyFile is configured -- without one, mikroview never persists the recovery-key store (#853), so there is nothing on disk for this command to work with. Mount the key and try again")
+	}
 	store, err := auth.OpenRecoveryWithBackend(backend, cfg.Auth.RecoveryPepperPath)
 	if err != nil {
 		st.Close()
@@ -2100,6 +2130,16 @@ func openAuthStoreForCLI(cmd string) (*auth.Store, func(), error) {
 	if err != nil {
 		st.Close()
 		return nil, nil, err
+	}
+	// #853: no history.keyFile means backendFor refuses this store rather
+	// than a plain FileBackend -- see its doc comment. Refusing here,
+	// loudly, matters more for this command than almost any other: silent
+	// proceeding would hand it an empty in-memory accounts store, which
+	// looks like a working recovery/transfer while touching nothing that
+	// survives the next restart.
+	if backend == nil {
+		st.Close()
+		return nil, nil, fmt.Errorf("no history.keyFile is configured -- without one, mikroview never persists the accounts store (#853), so there is nothing on disk for %s to work with. Mount the key and try again", cmd)
 	}
 	store, err := auth.OpenWithBackend(backend)
 	if err != nil {

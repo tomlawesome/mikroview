@@ -18,6 +18,34 @@ rewritten.
 
 ### Added
 
+- **The same key that encrypts the on-disk event history now also
+  covers everything else mikroview writes to disk** (#853,
+  `docs/decisions/event-retention.md`'s amendment): the JSON-file state
+  store (flags, entities, the MAC registry, rule usage, detector
+  settings, accounts, tokens, recovery-key digests -- every document
+  `internal/persist`'s file backend writes) and the warm-restart
+  snapshots (#795) are sealed under `history.keyFile` with the same
+  AES-256-GCM/HKDF scheme the event history already uses. **No key, no
+  storage**: with none configured, every one of these stores is
+  memory-only and is lost on every restart -- there is no unencrypted
+  mode to fall back to, matching the event history's own rule. This is
+  a severe change from every earlier release for a default install,
+  where none of this needed a key at all: with no `history.keyFile`
+  mounted, mikroview now forgets accounts, tokens and every other
+  persisted store across a restart, not just the optional ones.
+  `history.enabled` still only switches the event *log* on top of this
+  same key; the state store and snapshots follow the key alone.
+
+  `-backup`/`-restore` still work with a key mounted: the backup
+  envelope stays plain, readable JSON either way, and `-restore` writes
+  each store back encrypted when a key is configured for the deployment
+  it is restoring into. Postgres is unaffected -- see the ADR amendment
+  for why encrypting there was not judged to add real value over the
+  database's own at-rest custody and required TLS.
+
+  Settings' persistence row now has a third state, `memory only`,
+  alongside `file` and `postgres`.
+
 - **Renovate now proposes dependency updates as merge requests on
   GitLab, replacing Dependabot** (#945).
 - An on-demand CHR exercise, CHR watch or Renovate run (web UI or API
@@ -131,11 +159,12 @@ rewritten.
   minute stamps, rule and log-prefix labels, device ids/names with their
   first and last seen, and per-source window counts keyed by address. It
   holds no event lines, no payloads and none of the rule/NAT/DHCP tables
-  routers push; SECURITY.md now says so beside the "no persistence for
-  events" promise, including that the files are not encrypted at rest
-  (#853). Snapshots stay files even on a Postgres deployment: they are
-  derived, disposable counters, not custody data, and losing the whole
-  directory costs one cold start.
+  routers push; SECURITY.md says so beside the "no persistence for
+  events" promise. (Encrypted under `history.keyFile` since #853, below --
+  at the time this landed the files were not yet encrypted.) Snapshots
+  stay files even on a Postgres deployment: they are derived, disposable
+  counters, not custody data, and losing the whole directory costs one
+  cold start.
   `GET /api/stats` gained `liveSince` (when this process started
   observing) and, after a warm restart only, `restoredTo` (when the
   snapshot it loaded was taken) -- absent rather than null on a cold
