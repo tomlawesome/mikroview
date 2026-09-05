@@ -51,13 +51,13 @@ Screenshots: `shots/step6-{rest,arrived,nokey,lost}.png`.
   the build proves the minimum on CHR before printing it.
 - Whether a skipped step 6 gets a `SKIP_CONSEQUENCES` line like the
   other five (`no backups are kept until the script runs`).
-- The lost-router state needs a trigger: the wizard does not know a
-  router is gone. Drawn as the shape of the page when an admin opens
-  step 6 for a router that has stopped pushing; the build may reach it
-  from the backups group instead.
+- The lost-router state is reached from the backups group in Settings:
+  a router that has missed its usual push shows `is it gone?` on its
+  newest line (round 44, amended 2026-09-05), and that opens step 6 in
+  this shape. The wizard itself never decides a router is gone.
 
 ## Verdicts (owner, 2026-09-05)
 
 *"Good, and the sixth wizard step is right."* **Ratified as drawn**,
-the sixth step included. Build: #394. Where the lost-router state is
-reached from is still open (question 42 on the issue).
+the sixth step included. Build: #394. The lost-router state is reached
+from the missed-push line in Settings (question 42; see round 44).

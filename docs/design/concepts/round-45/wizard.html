@@ -2383,9 +2383,9 @@
       </div>
 </div>
       <div data-b="rest brecv bquota">      <div class="brtr brquiet">
-        <div class="brhead"><b>hap-ax2</b><span>4 kept · newest 30 Aug 03:00 — quiet since</span></div>
-        <svg class="stmem brstrip" viewBox="0 0 520 58" role="img" aria-label="Four backups kept for hap-ax2, the newest 30 Aug"><rect x="8" y="20" width="500" height="10" rx="5" fill="rgba(157,184,232,0.10)"/><rect x="311.6" y="20" width="46.0" height="10" rx="3" fill="var(--accent)" opacity="0.10"/><rect x="362.2" y="20" width="46.0" height="10" rx="3" fill="var(--accent)" opacity="0.12"/><rect x="412.8" y="20" width="46.0" height="10" rx="3" fill="var(--accent)" opacity="0.13"/><rect x="463.4" y="20" width="46.0" height="10" rx="3" fill="var(--accent)" opacity="0.15"/><rect x="504" y="15" width="3" height="20" rx="1.5" fill="var(--now)"/><text x="8" y="50" class="sp-n">the first pair arrived 27 Aug</text><text x="508" y="50" text-anchor="end" class="sp-k">30 Aug</text></svg>
-        <p class="oghint brnewest">30 Aug 03:00 · hap-ax2.backup 96 KiB · hap-ax2.rsc 11 KiB · <a class="olink">download .backup</a> · <a class="olink">.rsc</a></p>
+        <div class="brhead"><b>hap-ax2</b><span>4 kept · nightly at 03:00 · <span class="brwarn">none since 30 Aug — 3 missed</span></span></div>
+        <svg class="stmem brstrip" viewBox="0 0 520 58" role="img" aria-label="Four backups kept for hap-ax2, the newest 30 Aug; three nightly pushes have not arrived"><rect x="8" y="20" width="500" height="10" rx="5" fill="rgba(157,184,232,0.10)"/><rect x="311.6" y="20" width="46.0" height="10" rx="3" fill="var(--accent)" opacity="0.10"/><rect x="362.2" y="20" width="46.0" height="10" rx="3" fill="var(--accent)" opacity="0.12"/><rect x="412.8" y="20" width="46.0" height="10" rx="3" fill="var(--accent)" opacity="0.13"/><rect x="463.4" y="20" width="46.0" height="10" rx="3" fill="var(--accent)" opacity="0.15"/><rect x="504" y="15" width="3" height="20" rx="1.5" fill="var(--now)"/><text x="8" y="50" class="sp-n">the first pair arrived 27 Aug</text><text x="508" y="50" text-anchor="end" class="sp-k">30 Aug</text></svg>
+        <p class="oghint brnewest">30 Aug 03:00 · hap-ax2.backup 96 KiB · hap-ax2.rsc 11 KiB · <a class="olink">download .backup</a> · <a class="olink">.rsc</a> · <a class="olink">is it gone?</a></p>
       </div>
 </div>
       <div data-b="brefused">      <div class="brtr">
@@ -2796,7 +2796,7 @@
   .brhead span { color: var(--ink-3); }
   .brquiet .brhead span { color: var(--ink-3); }
   #set .brnewest { color: var(--ink-2); margin-top: 0; }
-  .brwarn { color: var(--now); }
+  .brwarn, .brhead span .brwarn { color: var(--now); }
   .brpulse { animation: brpulse 1.6s ease-in-out infinite; }
   @keyframes brpulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 
