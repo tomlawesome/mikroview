@@ -179,6 +179,19 @@ lint:frontend:
     - npm ci
     - npx svelte-check --tsconfig ./tsconfig.app.json
 
+lint:supply-chain-pins:
+  stage: lint
+  # Light lane (#949): reads two files and a policy, no install.
+  tags: [light]
+  image: node:22-alpine
+  <<: *dev_or_mr
+  script:
+    # #711: every action SHA and image tag CI uses must be in
+    # supply-chain/pins-policy.json with its review date. Fails on a pin the
+    # policy does not record, or a recorded pin CI no longer uses.
+    - node --test tools/supply-chain/pins-policy.test.mjs
+    - node tools/supply-chain/pins-policy.mjs
+
 # ---------------------------------------------------------------------------
 # TEST
 # ---------------------------------------------------------------------------
