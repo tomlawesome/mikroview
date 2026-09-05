@@ -620,11 +620,14 @@ rewritten.
 
 ### Changed
 
-- **Small CI jobs run on the runner's light lane** (#949). The policy
-  check, frontend lint, GitHub mirror push and CHR watch carry
-  `tags: [light]` and run on the 2-CPU `light` runner, three at a time,
-  instead of taking one of the two 8-CPU build slots. Builds, tests and
-  security scans are untagged and keep the big lane.
+- **Every CI job names its runner lane** (#949). `default: tags: [big]`
+  puts builds, tests and security scans on the 8-CPU / 18 GB
+  `gitlab-runners-01` runner, two at a time; the policy check, frontend
+  lint, GitHub mirror push and CHR watch override it with `tags: [light]`
+  and run on the 2-CPU / 2 GB `light` runner, three at a time. Once the
+  big runner stops taking untagged jobs (ai/agent-infra#3) a job with no
+  lane will not run at all, which is the point: nothing lands on the big
+  lane by accident.
 - **Development moved to a self-hosted GitLab; GitHub is now its mirror**
   (#935). Merge requests, CI and the `dev -> preview -> main` promotions
   happen on GitLab, and `dev`, `preview` and `main` are pushed to GitHub
