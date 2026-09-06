@@ -172,15 +172,26 @@ describe('the grid the build added is gone (#700 fault 1)', () => {
   })
 })
 
-describe('the (i) button replaces "key ▸" (#700 fault 2)', () => {
-  it('renders a small (i) button and no key toggle or legend', async () => {
+describe('the (i) replaces "key ▸" (#700 fault 2)', () => {
+  it('renders a small (i) and no key toggle or legend', async () => {
     const { container } = await renderFall({ boundaries: [boundary()] })
-    const ibtn = container.querySelector('button.ibtn')
+    const ibtn = container.querySelector('.ibtn')
     expect(ibtn).toBeTruthy()
     expect(ibtn?.textContent?.trim()).toBe('i')
     expect(container.querySelector('.key-toggle')).toBeNull()
     expect(container.querySelector('.legend')).toBeNull()
     expect(container.textContent).not.toContain('key ▸')
+  })
+})
+
+describe('the (i) opens "How to read the fall" in the docs (#994)', () => {
+  it('renders the (i) as a link to docs/reading-the-fall.md, opened in a new tab', async () => {
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    const ibtn = container.querySelector('a.ibtn')
+    expect(ibtn).toBeTruthy()
+    expect(ibtn?.getAttribute('href')).toMatch(/\/docs\/reading-the-fall\.md$/)
+    expect(ibtn?.getAttribute('target')).toBe('_blank')
+    expect(ibtn?.getAttribute('rel') ?? '').toContain('noopener')
   })
 })
 
