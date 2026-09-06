@@ -169,6 +169,7 @@
   let S = $state(STOP_HEIGHT.city)
   let centre = $state<Pt>([0, 0])
   let started = false
+  let lastStop: Stop | null = null
   let anim: number | null = null
   let svgEl: SVGSVGElement | undefined = $state()
 
@@ -228,19 +229,32 @@
     const s = stop
     const g = ground
     untrack(() => {
+      // ground is read here only so the first real layout (devices
+      // arriving after mount) reaches the `!started` branch below with
+      // real bounds rather than an empty stub -- it must not, by itself,
+      // re-centre an already-started view. Every live event redraws
+      // ground (#975: layoutGround returns a fresh object on every
+      // appState.events change), so treating ground as a re-centre
+      // trigger snapped a released drag straight back to the stop's
+      // default the moment the next event arrived. Only a genuine stop
+      // change re-centres; lastStop is updated unconditionally, even
+      // while standing, so a stop change that happens while standing
+      // does not surface as a stale mismatch once standSurface runs.
+      const stopChanged = s !== lastStop
+      lastStop = s
       // While standing, the camera belongs to standOn/standSurface --
       // the slider's own stop keeps changing under it unread, so
       // surfacing lands on the position it actually saved rather than
       // wherever the prop drifted to meanwhile.
       if (stand) return
-      const to = centreFor(s, focus)
       if (!started) {
         started = true
         S = initialS ?? STOP_HEIGHT[s]
-        centre = clampCentre(initialCentre ?? to, g.bounds)
+        centre = clampCentre(initialCentre ?? centreFor(s, focus), g.bounds)
         return
       }
-      moveCamera(STOP_HEIGHT[s], to)
+      if (!stopChanged) return
+      moveCamera(STOP_HEIGHT[s], centreFor(s, focus))
     })
   })
 
@@ -429,14 +443,30 @@
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return
     drag = { x: e.clientX, y: e.clientY, c: centre, moved: false }
-    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+    // Capture is taken lazily in onPointerMove, once a real drag is
+    // under way -- not here. See the comment there for why (#977).
   }
   function onPointerMove(e: PointerEvent) {
     if (!drag) return
     const k = stageScale()
     const dx = (e.clientX - drag.x) * k
     const dy = (e.clientY - drag.y) * k
-    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true
+    if (Math.abs(dx) + Math.abs(dy) > 3 && !drag.moved) {
+      drag.moved = true
+      // #977: setPointerCapture keeps a drag tracking the pointer past
+      // the svg's own edge, which a plain click never needs -- and
+      // capturing unconditionally on pointerdown broke every click,
+      // drag or not. Chromium decides a click's target from the
+      // capture state at pointerdown/pointerup, not at click-dispatch
+      // time, so releasing it in onPointerUp (tried first) was already
+      // too late: the click still landed on the capturing svg instead
+      // of bubbling through the building or plate under the pointer,
+      // and standing on a host or focusing a district did nothing.
+      // Taking capture only once a drag is confirmed leaves a plain
+      // click never captured at all, so its own click reaches the
+      // element it was aimed at exactly as before this existed.
+      ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+    }
     if (!drag.moved) return
     if (anim !== null) cancelAnimationFrame(anim)
     anim = null
@@ -1115,17 +1145,6 @@
     const y = Y(mc, vp.v0)
     return { x: R2(x), y: R2(y), w: R2(X(mc, vp.u1) - x), h: R2(Y(mc, vp.v1) - y) }
   })
-  const fr = (a: number, lo: number, hi: number) => Math.max(0, Math.min(100, ((a - lo) / (hi - lo || 1)) * 100))
-  const bars = $derived.by(() => {
-    const b = ground.bounds
-    const vp = viewport
-    return {
-      left: R2(fr(vp.u0, b.u0, b.u1)),
-      right: R2(100 - fr(vp.u1, b.u0, b.u1)),
-      top: R2(fr(vp.v0, b.v0, b.v1)),
-      bottom: R2(100 - fr(vp.v1, b.v0, b.v1)),
-    }
-  })
   const viewShare = $derived.by(() => {
     const b = ground.bounds
     const vp = viewport
@@ -1388,8 +1407,6 @@
     </button>
     <div class="mk"><span>viewport ≈ {viewShare}%</span><span>drag · arrows to walk</span></div>
   </div>
-  <div class="sbar h" aria-hidden="true"><i style:left="{bars.left}%" style:right="{bars.right}%"></i></div>
-  <div class="sbar v" aria-hidden="true"><i style:top="{bars.top}%" style:bottom="{bars.bottom}%"></i></div>
 </div>
 
 <style>
@@ -1693,8 +1710,12 @@
     border: 1px solid var(--hair);
     border-radius: 7px;
     padding: 7px 9px;
-    white-space: pre;
-    overflow-x: auto;
+    /* Wraps within the composer's fixed 300px width, the same as the 2D
+     * composer's own .cmd (Topography.svelte) -- a printed command line
+     * routinely runs past 300px, and overflow-x:auto here (the previous
+     * rule) showed a horizontal scroll bar rather than fitting it (#974). */
+    white-space: pre-wrap;
+    word-break: break-all;
     margin: 0;
   }
 
@@ -1744,44 +1765,6 @@
     font: 9px var(--font-mono);
     color: var(--fg-dim);
     margin: 6px 0 0;
-  }
-
-  .sbar {
-    position: absolute;
-    z-index: 7;
-    background: rgba(160, 185, 230, 0.06);
-    border-radius: 3px;
-  }
-
-  .sbar.h {
-    left: 16px;
-    right: 16px;
-    bottom: 5px;
-    height: 5px;
-  }
-
-  .sbar.v {
-    top: 66px;
-    bottom: 66px;
-    right: 6px;
-    width: 5px;
-  }
-
-  .sbar i {
-    position: absolute;
-    background: rgba(157, 184, 232, 0.5);
-    border-radius: 3px;
-    display: block;
-  }
-
-  .sbar.h i {
-    top: 0;
-    bottom: 0;
-  }
-
-  .sbar.v i {
-    left: 0;
-    right: 0;
   }
 
   @media (prefers-reduced-motion: reduce) {
