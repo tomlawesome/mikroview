@@ -8,10 +8,11 @@
   // so a drag never rebuilds a path. Round 40's isometric.html is the
   // drawing; the model behind it lives in lib/city and is tested there.
   //
-  // What stands on a plinth comes from one place, symbolFor (#864
-  // replaces the plain blocks). Rule gates and walls are #865's; the
-  // river and bridges are #866's; importance is #867's; standing on a
-  // building (#868) is this file's own "the reach" section below.
+  // What stands on the district plate comes from one place, symbolFor
+  // (#864 replaces the plain blocks). Rule gates and walls are #865's;
+  // the river and bridges are #866's; standing on a building (#868) is
+  // this file's own "the reach" section below. #986 dropped height and
+  // the plinth (#867): devices sit flat on their district plate.
   import { tick, untrack } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { zonesState } from '../lib/zones.svelte'
@@ -44,7 +45,6 @@
     minimapCam,
     reducedMotion,
     viewportRect,
-    wallFace,
     type BoxFaces,
     type Cam,
     type Pt,
@@ -59,17 +59,6 @@
   import { deviceKindFor } from '../lib/city/deviceKind'
   import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
   import { faceOf, wallPiece, wallSegments, type WallBreak } from '../lib/city/walls'
-  import {
-    IMPORTANCE_FLOOR_H,
-    IMPORTANCE_READINGS,
-    dependedOnImportance,
-    tweenHeights,
-    watchedImportance,
-    watchedNotice,
-    type Importance,
-    type ImportanceReading,
-  } from '../lib/city/importance'
-  import { cityImportanceState } from '../lib/cityImportance.svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
@@ -371,59 +360,6 @@
       topologyNavState.pendingDescend = null
     }
   })
-
-  /* ---------------- importance: the plinth's height (#867) ---------------- */
-
-  // Reading in, per-building normalised height out -- allBuildings is
-  // every building this ground has, whichever stop is showing, so the
-  // reading never has to know about districts vs nodes.
-  const importance = $derived.by((): Map<string, Importance> => {
-    const buildings = allBuildings.map((b) => ({ id: b.id, ip: b.ip }))
-    return cityImportanceState.reading === 'watched'
-      ? watchedImportance(buildings, flagsState.list, watchlistState.entries)
-      : dependedOnImportance(buildings, appState.events)
-  })
-
-  const importanceNotice = $derived(cityImportanceState.reading === 'watched' ? watchedNotice(flagsState.loaded, watchlistState.loaded) : null)
-
-  // The plinth heights actually drawn: tweened toward `importance`'s
-  // target on every change (a toggle flip, new traffic, a flag raised),
-  // snapped instantly under reduced motion -- the same shape moveCamera
-  // above uses for the camera, via the same reducedMotion() and the
-  // reading's own tweenHeights (city/importance.ts).
-  let plinthHeights = $state<Map<string, number>>(new Map())
-  let heightAnim: number | null = null
-
-  $effect(() => {
-    const target = importance
-    untrack(() => {
-      if (heightAnim !== null) cancelAnimationFrame(heightAnim)
-      heightAnim = null
-      if (reducedMotion() || typeof requestAnimationFrame !== 'function') {
-        plinthHeights = tweenHeights(plinthHeights, target, 1, true)
-        return
-      }
-      const from = plinthHeights
-      const t0 = performance.now()
-      const step = (now: number) => {
-        const t = ease((now - t0) / MOVE_MS)
-        plinthHeights = tweenHeights(from, target, t, false)
-        heightAnim = t < 1 ? requestAnimationFrame(step) : null
-      }
-      heightAnim = requestAnimationFrame(step)
-    })
-  })
-
-  $effect(() => () => {
-    if (heightAnim !== null) cancelAnimationFrame(heightAnim)
-  })
-
-  /** The plinth height actually drawn for a building: its tweened
-   * importance, or the floor before the first tween has run. */
-  const heightOf = (b: Building): number => plinthHeights.get(b.id) ?? IMPORTANCE_FLOOR_H
-
-  const importanceLabel = (id: ImportanceReading) => IMPORTANCE_READINGS.find((r) => r.id === id)!.label
-  const otherReading = $derived<ImportanceReading>(cityImportanceState.reading === 'watched' ? 'depended-on' : 'watched')
 
   /* ---------------- pan: drag, keys, minimap ---------------- */
 
@@ -976,11 +912,11 @@
     }
     if (reachOverlay) for (const dm2 of reachOverlay.dropMarks) dropMarkAt(dm2.p, false, dm2.refusedBy ? 'caught by ' + dm2.refusedBy : 'caught, no rule named')
 
-    // Buildings on their plinths. The plinth's own height is the
-    // current importance reading (#867), never b.h -- the device
-    // symbol stamped on top keeps deviceScale's footprint-only size
-    // regardless, so importance never redraws what a building looks
-    // like, only how tall its base stands.
+    // Buildings flat on the district plate (#986 dropped height and the
+    // plinth, #867's own concept): the device symbol stamped on top
+    // keeps deviceScale's footprint-only size, and the plate below it
+    // is the one diamond at ground level, tinted by district ink --
+    // never a raised wall or roof face.
     const building = (b: Building, d: District | null) => {
       // The same dim styling a dark district already draws its
       // buildings in also carries standing on a building (#868): every
@@ -990,16 +926,11 @@
       const dim = (d?.dark ?? false) || (reachOverlay ? !reachOverlay.litBuildingIds.has(b.id) : false)
       const ink = dim ? 'var(--fg-dim)' : d ? inkOf(d) : 'var(--accent)'
       const R = b.R
-      const h = heightOf(b)
+      const h = 0
       const pin = (hh: number) => diamond(c, b.u, b.v, R, hh)
       const paints: Paint[] = [
-        { d: pin(0), fill: '#000', fo: dim ? 0.22 : 0.4 },
-        { d: wallFace(c, b.u, b.v, R, h, 'l'), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
-        { d: wallFace(c, b.u, b.v, R, h, 'l'), fill: ink, fo: dim ? 0.1 : 0.2 },
-        { d: wallFace(c, b.u, b.v, R, h, 'r'), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
-        { d: wallFace(c, b.u, b.v, R, h, 'r'), fill: ink, fo: dim ? 0.16 : 0.34 },
-        { d: pin(h), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
-        { d: pin(h), fill: ink, fo: dim ? 0.12 : 0.26, stroke: ink, so: dim ? 0.55 : 0.95, sw: 1, dash: dim ? '3 3' : undefined },
+        { d: pin(0), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
+        { d: pin(0), fill: ink, fo: dim ? 0.12 : 0.26, stroke: ink, so: dim ? 0.55 : 0.95, sw: 1, dash: dim ? '3 3' : undefined },
       ]
       const what = b.kind === 'router' ? 'router' : b.kind === 'router-ant' ? 'router with antennas' : b.kind === 'post' ? 'bridge post' : 'host'
       const aria = b.name + (b.ip ? ' at ' + b.ip : '') + ', ' + what + (d ? ' in ' + d.name : '')
@@ -1114,7 +1045,7 @@
       if (b.u < vp.u0 || b.u > vp.u1 || b.v < vp.v0 || b.v > vp.v1) continue
       const k = (b.R * 0.74 * c.S) / SREF
       const x = R2(X(c, b.u))
-      const y = R2(Y(c, b.v, heightOf(b)) - symbolFor(b.kind).top * k - 10)
+      const y = R2(Y(c, b.v, 0) - symbolFor(b.kind).top * k - 10)
       const w = Math.max(b.name.length, b.ip.length) * 6.6 + 22
       const r: [number, number, number, number] = [x - w / 2, y - 28, x + w / 2, y + 8]
       if (placed.some((p) => r[0] < p[2] - 4 && r[2] > p[0] + 4 && r[1] < p[3] - 4 && r[3] > p[1] + 4)) continue
@@ -1365,28 +1296,6 @@
         <p class="cm-b">nothing to draft from yet -- no destination port observed on this strand.</p>
       {/if}
       <div class="cm-f"><span>drafted · never run</span></div>
-    </div>
-  {/if}
-
-  {#if stop === 'city'}
-    <!-- Height = importance (#867): which reading sets a building's
-         plinth height, at the one stop that shows the whole skyline.
-         The button's own text states the current reading outright,
-         never only a pressed style, so it reads the same to a screen
-         reader as it does by eye. -->
-    <div class="importance">
-      <button
-        type="button"
-        class="reading"
-        aria-pressed={cityImportanceState.reading === 'watched'}
-        aria-label="Plinth height reads {importanceLabel(cityImportanceState.reading)}. Activate to switch to {otherReading}."
-        onclick={() => cityImportanceState.toggle()}
-      >
-        height: {importanceLabel(cityImportanceState.reading)}
-      </button>
-      {#if importanceNotice}
-        <p class="notice">{importanceNotice}</p>
-      {/if}
     </div>
   {/if}
 
@@ -1724,47 +1633,6 @@
     color: var(--fg-dim);
     margin-top: 7px;
     letter-spacing: 0.06em;
-  }
-
-  .importance {
-    position: absolute;
-    z-index: 8;
-    left: 20px;
-    top: 58px;
-    max-width: 220px;
-    padding: 8px 9px;
-    background: var(--glass);
-    border: 1px solid var(--hair-2);
-    border-radius: 9px;
-    backdrop-filter: blur(7px);
-    box-sizing: border-box;
-  }
-
-  .importance .reading {
-    font: 600 11px var(--font-mono);
-    letter-spacing: 0.02em;
-    color: var(--fg);
-    background: rgba(157, 184, 232, 0.08);
-    border: 1px solid var(--hair-2);
-    border-radius: 6px;
-    padding: 5px 9px;
-    cursor: pointer;
-  }
-
-  .importance .reading[aria-pressed='true'] {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .importance .reading:focus-visible {
-    outline: 1px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  .importance .notice {
-    font: 9px var(--font-mono);
-    color: var(--fg-dim);
-    margin: 6px 0 0;
   }
 
   @media (prefers-reduced-motion: reduce) {
