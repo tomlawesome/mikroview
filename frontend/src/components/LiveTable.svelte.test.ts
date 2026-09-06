@@ -257,6 +257,70 @@ describe('LiveTable autoscroll-off freezing (issue #232)', () => {
   })
 })
 
+// #728: the eviction test above can only prove the render cost is *within
+// budget*, not that it stays healthy over time -- the budget itself was
+// widened once already (#923, to 60s) precisely because absolute wall
+// time on a shared runner says nothing about whether the underlying cost
+// regressed. This is the test #728 asks for instead: not "did it finish
+// in time" but "does the cost still scale the way it should".
+//
+// Measured directly for this issue (three runs each, isolated, on this
+// same class of shared box): mounting MAX_RENDERED_ROWS+10 (810) rows
+// costs ~3.6-4.0ms/row at nine columns (the tree as it stood just before
+// #717 restored the six retired ones) and ~5.6-9.4ms/row at fifteen
+// columns (today, #717+#729's raw/default path) -- consistent with #717
+// roughly doubling the work, not a runaway regression. Turning columns
+// back off with #729's chooser does NOT recover nine-column-era cost: the
+// snippet-gated path it falls back to (see EventRow.svelte's own comment)
+// costs more per remaining cell than the raw path costs per *all* fifteen,
+// so a reader who hides columns pays roughly the same total as one who
+// doesn't. Fifteen columns is the owner's ratified default (#729: "the
+// shipped default stays the full fifteen") and the measured cost, while
+// real, is not the kind of runaway growth that would call that back into
+// question -- so nothing here changes the shipped column set or the
+// #232 test's 60s budget. What was missing was a test that would actually
+// catch the failure mode #728 was filed to watch for: a future change
+// that makes per-row cost stop scaling with row count at all (e.g. a
+// per-row pass over the *whole* rendered set, rather than over that row's
+// own fields).
+//
+// Asserted as a growth ratio, not a wall-clock ceiling, for the same
+// reason #923 rewrote TestSearchRangesIsFastAtCap the same way: a
+// contended runner inflates every measurement here together, so the
+// *ratio* between a small and a large mount survives contention that an
+// absolute-millisecond assertion would not. Linear cost mounting 8x the
+// rows should cost about 8x as much; quadratic cost would cost about 64x
+// as much. The threshold (24x) sits well clear of both, so it tolerates
+// real linear noise (GC, jsdom variance) without being anywhere near
+// loose enough to pass a genuine quadratic regression.
+describe('LiveTable row-render cost scales with row count, not worse (#728)', () => {
+  function mountRows(n: number): number {
+    appState.events = Array.from({ length: n }, (_, i) => makeEvent(`scale-${i}`))
+    const t0 = performance.now()
+    const { unmount } = render(LiveTable)
+    flushSync()
+    const elapsed = performance.now() - t0
+    unmount()
+    return elapsed
+  }
+
+  it('does not cost dramatically more than linearly per row as the mounted set grows 8x', () => {
+    // Unmeasured warm-up: the first mount in this file pays one-off
+    // module/compile costs that would otherwise swamp the small-N sample
+    // below and turn the ratio into warm-up noise rather than signal.
+    mountRows(20)
+
+    const small = MAX_RENDERED_ROWS / 8 // 100
+    const large = MAX_RENDERED_ROWS // 800, the real worst case in view
+    const smallCost = mountRows(small)
+    const largeCost = mountRows(large)
+
+    const rowRatio = large / small // 8
+    const costRatio = largeCost / smallCost
+    expect(costRatio).toBeLessThan(rowRatio * 3) // fails past 24x -- linear is ~8x, quadratic ~64x
+  }, 30000) // generous for the same shared-runner reason as the #232 test above; not the property under test
+})
+
 describe('Group mode drawer consistency (issue #381)', () => {
   // Two events that share a group key but differ in rule label, so a rule
   // filter can narrow the group to one member while its drawer is open.

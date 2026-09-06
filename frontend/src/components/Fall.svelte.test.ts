@@ -18,9 +18,10 @@ import { flushSync } from 'svelte'
 import type { ClientEvent, Flag, FlagType } from '../lib/types'
 
 // Fall.svelte reaches the network in three ways: fallState.refresh()
-// (fetchDevices/fetchRouterRules) on mount, and its own loadWindow()
-// poll (fetchEventsWindow/fetchFlags). AccountMenu (mounted inside the
-// bar) needs fetchAuthSession/login/logout/register mocked the same way
+// (fetchDevices/fetchRouterRules/fetchRouterNat, #695) on mount, and its
+// own loadWindow() poll (fetchEventsWindow/fetchFlags). AccountMenu
+// (mounted inside the bar) needs
+// fetchAuthSession/login/logout/register mocked the same way
 // AccountMenu.svelte.test.ts already does, or its own mount reaches for
 // the network too.
 vi.mock('../lib/api', () => ({
@@ -30,6 +31,7 @@ vi.mock('../lib/api', () => ({
   register: vi.fn(),
   fetchDevices: vi.fn(async () => []),
   fetchRouterRules: vi.fn(async () => ({ available: false, rules: [] })),
+  fetchRouterNat: vi.fn(async () => ({ available: false, rules: [] })),
   fetchEventsWindow: vi.fn(async () => ({ events: [], hasMore: false })),
   fetchFlags: vi.fn(async () => ({ flags: [], timeSeries: [] })),
 }))

@@ -589,12 +589,30 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     expect(card?.textContent).toContain('its lines are kept; it has no name and no zones until it is registered')
   })
 
-  it('gives way from the berth rather than sitting beside it -- the slot says one thing or the other', async () => {
+  it('keeps the berth alongside it, collapsed, rather than giving way (#828)', async () => {
     appState.devices = unregistered
     const { container } = render(Entities)
     await settle()
 
-    expect(container.querySelector('.fcard.berth')).toBeNull()
+    const cards = [...container.querySelectorAll('.fcards > .fcard')]
+    expect(cards.some((c) => c.className.includes('unreg'))).toBe(true)
+    const berth = container.querySelector('.fcard.berth')
+    expect(berth).not.toBeNull()
+    expect(berth?.className).not.toContain('open')
+    // it's the last card in the row, after the unregistered one
+    expect(cards.at(-1)?.className).toContain('berth')
+  })
+
+  it('still opens into the add-router instructions with an unregistered router already pushing (#828)', async () => {
+    appState.devices = unregistered
+    const { container, getByRole } = render(Entities)
+    await settle()
+
+    await fireEvent.click(getByRole('button', { name: 'Add a router' }))
+    await settle()
+
+    expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
+    expect(container.querySelector('.berth-panel')).toBeTruthy()
   })
 
   it('leaves the berth in place when every router is registered', async () => {
