@@ -68,7 +68,15 @@ fi
 
 if [ "$held" -eq 1 ]; then
   if [ -f "$ORIG" ]; then
-    echo "hold already applied for job=$flag_job (expires $flag_expires) -- nothing to do"
+    # A fresh flag can land right after an expired one was released but
+    # before this run: keep the marker naming the job that holds now, so
+    # the job side's wait for "job=<its id>" sees it.
+    if ! grep -q "job=${flag_job}\$" "$APPLIED" 2>/dev/null; then
+      printf 'concurrent=1 at %s for job=%s\n' "$now" "$flag_job" >"$APPLIED"
+      echo "HOLD re-marked for job=$flag_job (concurrent already 1)"
+    else
+      echo "hold already applied for job=$flag_job (expires $flag_expires) -- nothing to do"
+    fi
   else
     apply_hold "$flag_job"
   fi
