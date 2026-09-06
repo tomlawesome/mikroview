@@ -1233,6 +1233,32 @@
     }
     return out
   }
+  // #989: every card sits beside the router that serves it. The ground
+  // plan already puts each district on a slot around its own router
+  // (PRIMARY_SLOTS/BOROUGH_SLOTS, lib/city/layout.ts), but those slots
+  // are ground units while the cards have a screen-space size floor, so
+  // at this stop a card could cover the very router it belongs to -- and
+  // the push-apart pass below then moved it wherever there happened to
+  // be room, which is how the association was lost (owner on #976's
+  // final shot: "there's no lines to the blocks"). Keep the slot's
+  // direction, which is the arrangement the owner ratified, and slide
+  // the card straight out along it until its near edge clears the
+  // router dot.
+  const ROUTER_CLEARANCE = 16
+  interface FlatHome {
+    x: number
+    y: number
+    r: number
+  }
+  const flatHomes = $derived.by(() => {
+    const homes = new Map<string, FlatHome>()
+    for (const n of ground.nodes) {
+      if (n.kind !== 'router' && n.kind !== 'router-ant') continue
+      // Same radius the node's own circle is drawn with, below.
+      homes.set(n.id, { x: FX(flatCam, n.u), y: FY(flatCam, n.v), r: Math.max(4, n.R * flatCam.S * 0.6) })
+    }
+    return homes
+  })
   const flatCards = $derived.by(() =>
     pushCardsApart(
       ground.districts.map((d) => {
@@ -1249,9 +1275,62 @@
         // stop against past its bottom edge). The push-apart pass above
         // absorbs the size increase by spacing cards further apart, so
         // growing this floor no longer risks two cards colliding.
-        return { d, x: FX(flatCam, d.u), y: FY(flatCam, d.v), gr, gh: Math.max(56, gr * 0.84) }
+        const gh = Math.max(56, gr * 0.84)
+        let x = FX(flatCam, d.u)
+        let y = FY(flatCam, d.v)
+        const home = flatHomes.get(d.routerId)
+        if (home) {
+          const dx = x - home.x
+          // A district whose slot projects straight onto its own router
+          // has no direction to keep, so it goes south, where the ground
+          // plan puts a borough's own row.
+          const dy = dx === 0 && y === home.y ? 1 : y - home.y
+          const len = Math.hypot(dx, dy)
+          const ux = dx / len
+          const uy = dy / len
+          // How far the card reaches back towards the router along that
+          // direction -- the rectangle's own support radius, so a wide
+          // card approached from the side clears by its width and a
+          // tall one from above clears by its height.
+          const reach = Math.abs(ux) * gr + Math.abs(uy) * (gh / 2)
+          const want = home.r + ROUTER_CLEARANCE + reach
+          if (len < want) {
+            x = home.x + ux * want
+            y = home.y + uy * want
+          }
+        }
+        return { d, x, y, gr, gh }
       }),
     ),
+  )
+
+  // The "belongs to" line (#989): router dot to the nearest edge of the
+  // card, saying only that this subnet lives on that router. Deliberately
+  // not a road -- roads are seen traffic, coloured by verdict and drawn
+  // over the top of these; a district with no traffic yet has its grey
+  // line and nothing else. Computed from the pushed positions, so a card
+  // the push-apart pass moved keeps its line attached.
+  const flatBelongs = $derived.by(() =>
+    flatCards.flatMap((fc) => {
+      const home = flatHomes.get(fc.d.routerId)
+      if (!home) return []
+      const dx = fc.x - home.x
+      const dy = fc.y - home.y
+      const len = Math.hypot(dx, dy)
+      if (len === 0) return []
+      // Where the line meets the card: scale the direction back until it
+      // reaches whichever of the card's own edges comes first.
+      const t = Math.min(dx === 0 ? Infinity : fc.gr / Math.abs(dx), dy === 0 ? Infinity : fc.gh / 2 / Math.abs(dy))
+      return [
+        {
+          id: fc.d.id,
+          x1: home.x + (dx / len) * home.r,
+          y1: home.y + (dy / len) * home.r,
+          x2: fc.x - dx * t,
+          y2: fc.y - dy * t,
+        },
+      ]
+    }),
   )
 
   // Crossing the centre swaps which side draws. The lens is one piece
@@ -2906,6 +2985,12 @@
               ' Z'}
           />
         {/if}
+        <!-- Under every road and every card, on purpose (#989): the tie
+             between a subnet and its router is background, and traffic
+             is the thing being read. -->
+        {#each flatBelongs as b (b.id)}
+          <line class="gf-belong" x1={R2(b.x1)} y1={R2(b.y1)} x2={R2(b.x2)} y2={R2(b.y2)} />
+        {/each}
         {#each ground.roads as r (r.id)}
           <path class="gf-road gf-road-{r.k}" d={'M' + r.pts.map((p) => `${R2(FX(flatCam, p[0]))} ${R2(FY(flatCam, p[1]))}`).join(' L')} />
         {/each}
@@ -4719,6 +4804,15 @@
     fill-opacity: 0.08;
     stroke: var(--fg-dim);
     stroke-opacity: 0.3;
+  }
+
+  /* #989: a hairline in the dim ink, no arrow -- it means "this subnet
+     lives on that router" and nothing else, so it must not read as one
+     of the roads above it. */
+  .gf-belong {
+    stroke: var(--fg-dim);
+    stroke-width: 1;
+    opacity: 0.45;
   }
 
   .gf-road {
