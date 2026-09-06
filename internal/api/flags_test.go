@@ -48,9 +48,19 @@ func TestHandleFlagsList(t *testing.T) {
 	if len(body.TimeSeries) != 60 {
 		t.Fatalf("expected 60 time series buckets, got %d", len(body.TimeSeries))
 	}
+	// The window ends at whichever minute the *read* happens in
+	// (flags.Store.timeSeriesLocked takes its own time.Now), while the
+	// episode above was counted into the minute it was *raised* in. Those
+	// are the same minute unless the clock ticks over between the two, and
+	// then the episode is in the second-to-last bucket instead. Accepting
+	// either keeps the assertion honest without loosening it: exactly one
+	// episode, in the current minute or the one before it, nowhere else.
+	// #1021 -- this asserted only the last bucket and went red roughly once
+	// in N runs, failing test:go and skipping the rest of the pipeline.
 	last := body.TimeSeries[len(body.TimeSeries)-1]
-	if last.ByType[flags.TypePortScan] != 1 {
-		t.Errorf("expected the just-raised port_scan episode in the latest bucket, got %+v", last.ByType)
+	prev := body.TimeSeries[len(body.TimeSeries)-2]
+	if last.ByType[flags.TypePortScan]+prev.ByType[flags.TypePortScan] != 1 {
+		t.Errorf("expected the just-raised port_scan episode in the current minute's bucket or the one before it, got %+v then %+v", prev.ByType, last.ByType)
 	}
 }
 

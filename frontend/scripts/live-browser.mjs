@@ -346,7 +346,21 @@ export async function unfoldStreamFilter(page) {
   const box = page.locator('.filterline .fbox')
   if (!(await box.count())) return
   if (await box.evaluate((el) => el.classList.contains('open'))) return
-  await box.click()
+  // Click the always-present hint input, not the box's own bounding-box
+  // centre. `.fbox` is a flex-wrap row (FilterBar.svelte) whose content
+  // shifts with the active filter chips, and FilterPresetsMenu's `.saved`
+  // root -- pinned to the box's right end -- calls stopPropagation() on
+  // every click inside it, so reaching for a saved filter doesn't also
+  // unfold the strip (same reasoning as each chip's own `.chip-x`). Once
+  // enough chips are active the row can wrap or shift far enough that a
+  // plain box.click() lands in that dead zone: the click is swallowed,
+  // the box never opens, and whatever comes next times out waiting for
+  // input.rule -- live-waterfall's third boundary/carrier handoff (three
+  // chips: interface, chain, port) is exactly the shape that moves the
+  // centre point onto `.saved`. `.fbtype` (flex:1, min-width 60px) is the
+  // one part of the box that never stops that propagation -- the
+  // "genuine control" FilterBar.svelte's own comment names it as.
+  await box.locator('input.fbtype').click()
 }
 
 /**
@@ -380,7 +394,39 @@ export async function goTo(page, label, { unfold = true } = {}) {
       },
       scene.card,
       { timeout: 10000 },
-    )
+    ).catch(async (err) => {
+      // #1011: seven scenarios died here in one run and every one of
+      // them reported only "Timeout 10000ms exceeded", which cannot tell
+      // the two possible causes apart -- the rail click never changed
+      // the view, or the view changed and the roll never settled. Both
+      // look identical in the log, and the scenario dies before printing
+      // anything of its own, so the failing set names scenarios rather
+      // than the one helper they share. Report the page's actual state
+      // and then rethrow: behaviour on success is unchanged.
+      // page.evaluate has no timeout of its own, so on a page that has
+      // stopped answering it would hang and turn this 10s failure into a
+      // stuck run. Race it.
+      const seen = await Promise.race([
+        // unref so a resolved evaluate does not leave a live timer
+        // holding the process open for another five seconds.
+        new Promise((r) => setTimeout(() => r({ evaluateTimedOut: true }), 5000).unref()),
+        page
+        .evaluate((c) => {
+          const deck = document.querySelector('.deck')
+          const el = deck?.querySelector(`.card[data-card="${c}"]`)
+          return {
+            deckPresent: !!deck,
+            cardPresent: !!el,
+            cards: [...(deck?.querySelectorAll('.card') ?? [])].map((n) => n.dataset.card),
+            offsetFromDeckTop:
+              el && deck ? el.getBoundingClientRect().top - deck.getBoundingClientRect().top : null,
+          }
+        }, scene.card)
+        .catch((e) => ({ evaluateFailed: String(e) })),
+      ])
+      console.log(`  goTo("${label}") timed out waiting for card "${scene.card}": ${JSON.stringify(seen)}`)
+      throw err
+    })
     if (scene.tab) {
       // Round 30 (#697/#700) moved the docket's tabs into SceneBar's own
       // switcher (.switch[role="tablist"] .sw). They are still
