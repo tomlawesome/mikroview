@@ -2488,12 +2488,15 @@
               {@render aggregateBar(tunnelAggregate, -84, 188, 32, 16, { id: tunnelIface, name: tunnelIface })}
             {/if}
           </g>
-          <g class="g-dot">
-            <!-- Mirrored: the node sits at the right of the stage, so
-                 its survey label runs leftward off the dot. -->
-            <circle r="8" class="zone-dot" stroke="var(--accent)" />
-            <text x="-16" y="4" text-anchor="end" class="zone-label">WireGuard</text>
-          </g>
+          <!-- The removed survey stop used to draw every node as a plain
+               dot-plus-label (#869); this was that dot for the tunnel
+               node specifically, left behind when the stop went. It sat
+               unconditioned by any camera class -- unlike every other
+               tiered element on this map -- so it stayed on screen at
+               every altitude, its own "WireGuard" printed over the
+               card's (#976 item 1/2: "both renderings show at once").
+               The card above already names the tunnel; nothing here was
+               a second fact. -->
         </g>
       {/if}
 
@@ -2785,10 +2788,16 @@
            no dots, no per-host labels (those are `clients`'s job).
            Present at every altitude like every other camera layer;
            `.camera.cam-zones` is what shows it, the same convention the
-           removed survey dot used to follow. Left alongside the lens's
-           own edge lines above rather than reconciling the two
-           coordinate systems -- that reconciliation is #726's, still
-           open. -->
+           removed survey dot used to follow. It used to be left showing
+           alongside the lens's own edge lines above rather than
+           reconciling the two coordinate systems -- #726 bundled the
+           edges' own overlap but never touched this -- so both
+           renderings painted at once: this card's river and roads
+           together with the lane-based rib/edge lines, neither drawn to
+           the other's positions (#976 item 1). The stylesheet now hides
+           `.rib`/`.rib-ghost`/`.mote`/`.edge-g`/`.gedge` at cam-zones
+           alongside `.isl-card`/`.detail`, so zones draws this ground
+           plan alone. -->
       <g class="ground-flat">
         {#if ground.river}
           <path
@@ -4324,7 +4333,12 @@
   .camera .ground-flat,
   .camera .detail,
   .camera .svc,
-  .camera .cli {
+  .camera .cli,
+  .camera .rib,
+  .camera .rib-ghost,
+  .camera .mote,
+  .camera .edge-g,
+  .camera .gedge {
     transition: opacity 0.55s ease;
   }
 
@@ -4368,8 +4382,19 @@
     pointer-events: auto;
   }
 
+  /* #976 item 1: the trunk, the tunnel's own rib, the travelling mote
+     and every lens's edges/badges are the lane-based drawing zones
+     replaced -- left visible here, they painted across the ground
+     plan's river and roads at the same stop, unreconciled with its
+     coordinates. Still shown at clients/services, where the old
+     lane-card drawing they belong to is what's on screen. */
   .camera.cam-zones .isl-card,
-  .camera.cam-zones .detail {
+  .camera.cam-zones .detail,
+  .camera.cam-zones .rib,
+  .camera.cam-zones .rib-ghost,
+  .camera.cam-zones .mote,
+  .camera.cam-zones .edge-g,
+  .camera.cam-zones .gedge {
     opacity: 0;
     pointer-events: none;
   }
