@@ -475,7 +475,10 @@ gate:image:
         echo "live-check image for this Dockerfile is already in the registry: $IMAGE:$TAG"
       else
         docker pull "$IMAGE:latest" || true
-        docker build --cache-from "$IMAGE:latest" --tag "$IMAGE:$TAG" --tag "$IMAGE:latest" -f live-check.Dockerfile .
+        # A plain single manifest, no provenance/SBOM attestations: the
+        # registry refused the attestation index BuildKit attaches by
+        # default ("blob unknown to registry", pipeline 539).
+        docker build --provenance=false --sbom=false --cache-from "$IMAGE:latest" --tag "$IMAGE:$TAG" --tag "$IMAGE:latest" -f live-check.Dockerfile .
         docker push "$IMAGE:$TAG"
         docker push "$IMAGE:latest"
       fi
