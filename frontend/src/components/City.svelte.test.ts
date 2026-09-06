@@ -13,7 +13,11 @@ import { cityImportanceState } from '../lib/cityImportance.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { appState } from '../lib/state.svelte'
-import type { ClientEvent } from '../lib/types'
+import { zonesState } from '../lib/zones.svelte'
+import { policyState } from '../lib/policy.svelte'
+import { topologyNavState } from '../lib/topologyNav.svelte'
+import type { ClientEvent, Device } from '../lib/types'
+import { emptyFilters } from '../lib/types'
 import City from './City.svelte'
 
 // #915: twelve of these tests timed out on the GitLab runner against
@@ -418,5 +422,86 @@ describe('the importance toggle (#867)', () => {
     watchlistState.loaded = true
     await tick()
     expect(container.querySelector('.importance .notice')).toBeNull()
+  })
+})
+
+describe('a released drag stays put (#975)', () => {
+  // Deriving `ground` from the live stores, not the fixed `ground` const
+  // above -- the bug only shows up when `ground` is City's own $derived
+  // over appState.events (layoutGround(cityInputFrom(...))), which hands
+  // back a fresh object on every event batch, not when a stable `ground`
+  // prop is passed straight through.
+  function router(over: Partial<Device> = {}): Device {
+    return {
+      id: 'router1',
+      name: 'lab-crs',
+      sourceIp: '10.0.0.1',
+      configured: true,
+      firstSeen: '2026-01-01T00:00:00Z',
+      lastSeen: '2026-09-03T00:00:00Z',
+      eventCount: 1,
+      status: 'live',
+      ...over,
+    }
+  }
+  let nextId = 1
+  function event(over: Partial<ClientEvent> = {}): ClientEvent {
+    return {
+      id: nextId++,
+      time: '2026-09-03T12:00:00Z',
+      receivedAt: Date.now(),
+      deviceId: 'router1',
+      sourceIp: '10.10.0.10',
+      action: 'accept',
+      ruleLabel: '',
+      chain: 'forward',
+      raw: '',
+      ...over,
+    }
+  }
+
+  beforeEach(() => {
+    matchMedia(true) // reduced motion: every camera move lands at once
+    appState.devices = [router()]
+    appState.filters = emptyFilters()
+    zonesState.pushed = []
+    policyState.byDevice = {}
+    policyState.pushed = []
+    topologyNavState.pendingDescend = null
+    appState.events = [event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge1', outInterface: 'vlan-iot' })]
+    if (!('setPointerCapture' in Element.prototype)) {
+      // jsdom has no pointer-capture model; City only calls it to keep
+      // receiving move/up events off the same target, which this
+      // dispatch-directly-on-the-svg test does not need.
+      Element.prototype.setPointerCapture = function () {}
+    }
+  })
+
+  afterEach(() => {
+    appState.events = []
+    appState.devices = []
+  })
+
+  it('does not snap back to the stop default when new traffic redraws the ground under a finished drag', () => {
+    const { container } = render(City, { props: { stop: 'district' } })
+    const svg = container.querySelector('svg') as unknown as EventTarget
+    const viewportX = () => container.querySelector('.mini rect.viewport')?.getAttribute('x')
+    const before = viewportX()
+
+    // bubbles: true is load-bearing -- Svelte 5 delegates pointer events
+    // to a listener up the tree rather than binding one on the svg
+    // itself, so a non-bubbling synthetic event never reaches onPointerDown.
+    svg.dispatchEvent(new PointerEvent('pointerdown', { clientX: 0, clientY: 0, button: 0, pointerId: 1, bubbles: true }))
+    svg.dispatchEvent(new PointerEvent('pointermove', { clientX: 80, clientY: 50, pointerId: 1, bubbles: true }))
+    svg.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }))
+    flushSync()
+    const afterDrag = viewportX()
+    expect(afterDrag).not.toBe(before) // sanity: the drag actually panned
+
+    // A new event batch is exactly what a live instance's traffic feed
+    // does continuously -- it must not be read as a request to re-centre.
+    appState.events = [...appState.events, event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge1', outInterface: 'vlan-iot' })]
+    flushSync()
+    expect(viewportX()).toBe(afterDrag)
   })
 })
