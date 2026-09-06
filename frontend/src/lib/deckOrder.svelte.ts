@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // The deck's card order (#633, rounds 23-25: "the order you keep them —
-// drag to reorder; sign-in lands on the first"). Same
-// small-module-per-preference shape as flagLayout.svelte.ts -- persisted
+// drag to reorder; sign-in lands on the first"). One small module per
+// preference (theme, colorway, retention each have theirs) -- persisted
 // per browser, not synced anywhere.
 
 const STORAGE_KEY = 'mikroview-deck-order'
