@@ -24,7 +24,15 @@
 //
 //   source /tmp/mikroview-atlas-demo/credentials.txt
 //   node scripts/probe-perf.mjs
+//
+// --json <path> additionally writes a machine-readable summary (schema
+// 1: commit, per-deck wallAvgMs, per-phase long-task totalMs, and the
+// docket-scroll frame p95) for perf-compare.mjs to diff against a
+// baseline. It is derived from the same numbers this prints -- nothing
+// is re-measured, only reshaped once the run is over. Console output is
+// unchanged whether or not --json is given.
 
+import fs from 'node:fs'
 import { chromium } from 'playwright'
 import { dismissSetupWizard } from './live-browser.mjs'
 
@@ -82,6 +90,14 @@ if (!URL_BASE || !USER || !PASS) {
   process.exit(2)
 }
 
+const argv = process.argv.slice(2)
+const jsonFlagIdx = argv.indexOf('--json')
+const JSON_PATH = jsonFlagIdx === -1 ? null : argv[jsonFlagIdx + 1]
+if (jsonFlagIdx !== -1 && !JSON_PATH) {
+  console.error('--json needs a path')
+  process.exit(2)
+}
+
 const ROLL_LABELS = ['The fall', 'Topography', 'Metrics', 'Stream', 'Flags', 'Entities', 'Settings']
 const ROUNDS = 3
 const SCROLL_MS = 3000
@@ -125,13 +141,16 @@ function percentile(sorted, p) {
   return sorted[idx]
 }
 
+// Returns the computed stats (used to feed --json) as well as printing
+// the same line as before; callers that only want the console output
+// can ignore the return value.
 function summarizeFrames(samples, label) {
   // Drop the first sample: it is the delta from the sampler's own start
   // timestamp to the first rAF, not a rendered frame's duration.
   const frames = samples.slice(1)
   if (frames.length === 0) {
     console.log(`  ${label}: no frames captured`)
-    return
+    return null
   }
   const sorted = [...frames].sort((a, b) => a - b)
   const avg = frames.reduce((s, v) => s + v, 0) / frames.length
@@ -144,6 +163,7 @@ function summarizeFrames(samples, label) {
     `  ${label}: ${frames.length} frames, avg ${fmt(avg)}ms, p50 ${fmt(p50)}ms, p95 ${fmt(p95)}ms, ` +
       `max ${fmt(max)}ms, >16.7ms ${dropped} (${fmt((100 * dropped) / frames.length)}%), >50ms ${janky}`,
   )
+  return { avg, p50, p95, max }
 }
 
 async function metricsMap(cdp) {
@@ -196,9 +216,11 @@ async function drainLongTasks(page) {
   return page.evaluate(() => window.__mvDrainLongTasks())
 }
 
+// Returns { total } alongside printing, same reasoning as summarizeFrames.
 function summarizeLongTasks(tasks, label) {
   const total = tasks.reduce((s, t) => s + t.duration, 0)
   console.log(`  ${label}: ${tasks.length} long tasks, ${fmt(total)}ms total` + (tasks.length ? `, longest ${fmt(Math.max(...tasks.map((t) => t.duration)))}ms` : ''))
+  return { total }
 }
 
 async function main() {
@@ -212,6 +234,19 @@ async function main() {
 
   console.log(`probe-perf against ${URL_BASE}`)
   console.log('')
+
+  // GET /api/healthz needs no auth or session (server.go's Version doc
+  // comment), so this is safe before login. Falls back to CI_COMMIT_SHA
+  // -- set on every GitLab CI job -- so a target that cannot be reached
+  // for some reason still tags the JSON with the commit under test
+  // rather than leaving it blank.
+  let mvCommit = process.env.CI_COMMIT_SHA || null
+  try {
+    const healthz = await page.request.get(`${URL_BASE}/api/healthz`).then((r) => r.json())
+    if (healthz?.version) mvCommit = healthz.version
+  } catch {
+    /* left as CI_COMMIT_SHA/null above */
+  }
 
   await page.goto(URL_BASE, { waitUntil: 'networkidle' })
   await page.fill('input[autocomplete="username"]', USER)
@@ -265,15 +300,17 @@ async function main() {
 
   const rollProfile = (await cdp.send('Profiler.stop')).profile
 
+  const deckAvgMs = {}
   for (const label of ROLL_LABELS) {
     const times = rollTimes.get(label)
     const numeric = times.filter((t) => typeof t === 'number')
     const avg = numeric.length ? numeric.reduce((s, v) => s + v, 0) / numeric.length : NaN
+    deckAvgMs[label] = avg
     const sums = rollMetricSums.get(label)
     const perRoll = DURATION_METRICS.map((m) => `${m} ${fmt(sums[m] / ROUNDS)}ms`).join(', ')
     console.log(`  ${label.padEnd(12)}: wall ${times.map((t) => t + 'ms').join(', ')} (avg ${fmt(avg)}ms) | ${perRoll}`)
   }
-  summarizeLongTasks(rollLongTasks, 'long tasks across all rolls')
+  const rollLongTaskStats = summarizeLongTasks(rollLongTasks, 'long tasks across all rolls')
   printTopFunctions(topFunctions(rollProfile, 10), 'top self-time functions during deck switching')
   console.log('')
 
@@ -300,8 +337,8 @@ async function main() {
   const scrollFrames = await page.evaluate(() => window.__mvFrameSamples)
   const scrollProfile = (await cdp.send('Profiler.stop')).profile
   const scrollLongTasks = await drainLongTasks(page)
-  summarizeFrames(scrollFrames, 'scroll frame durations')
-  summarizeLongTasks(scrollLongTasks, 'long tasks while scrolling')
+  const scrollFrameStats = summarizeFrames(scrollFrames, 'scroll frame durations')
+  const scrollLongTaskStats = summarizeLongTasks(scrollLongTasks, 'long tasks while scrolling')
   printTopFunctions(topFunctions(scrollProfile, 10), 'top self-time functions while scrolling')
   console.log('')
 
@@ -321,10 +358,25 @@ async function main() {
   const rowsAfter = await page.evaluate(() => document.querySelectorAll('.card[data-card="live"] .row').length)
   console.log(`  rows in DOM: ${rowsBefore} -> ${rowsAfter} over ${IDLE_MS}ms`)
   summarizeFrames(idleFrames, 'idle-with-live-arrivals frame durations')
-  summarizeLongTasks(idleLongTasks, 'long tasks while idling')
+  const idleLongTaskStats = summarizeLongTasks(idleLongTasks, 'long tasks while idling')
   printTopFunctions(topFunctions(idleProfile, 10), 'top self-time functions while idling on the live stream')
 
   await browser.close()
+
+  if (JSON_PATH) {
+    const summary = {
+      schema: 1,
+      commit: mvCommit,
+      decks: Object.fromEntries(ROLL_LABELS.map((label) => [label, { wallAvgMs: deckAvgMs[label] }])),
+      longTasks: {
+        rolls: { totalMs: rollLongTaskStats.total },
+        scroll: { totalMs: scrollLongTaskStats.total },
+        idle: { totalMs: idleLongTaskStats.total },
+      },
+      docketScroll: { frameP95Ms: scrollFrameStats ? scrollFrameStats.p95 : null },
+    }
+    fs.writeFileSync(JSON_PATH, JSON.stringify(summary, null, 2) + '\n')
+  }
 }
 
 main().catch((err) => {

@@ -528,6 +528,62 @@ gate:scripts:
       - gate-scripts.log
     expire_in: 1 week
 
+# perf:promotion (#1003) -- the dev -> preview promotion gate refuses a
+# regression rather than merely recording one. It runs probe-perf.mjs
+# (frontend/scripts/probe-perf.mjs -- deck-to-deck roll times, long-task
+# totals per phase, docket-scroll frame p95) against a fresh instance
+# from scripts/live-env.sh, exactly as `make live-check` starts one, then
+# diffs the result against the committed frontend/perf-baseline.json with
+# perf-compare.mjs. No baseline yet: the run records one as an artifact
+# and passes, printing what to commit. Baseline present: a metric worse
+# than it by more than 30% *and* more than 300ms (frame p95: 30% and
+# 8ms) fails the job -- both conditions, so noise on a small number can't
+# trip it. Accepting a regression means committing the new numbers in the
+# same MR, so the change is reviewed rather than silently overwritten.
+#
+# resource_group serialises this against any other promotion MR
+# measuring at the same time -- two at once would each see the other's
+# CPU as noise in its own numbers. wait-quiet-host.sh (scripts/) is the
+# other half of that: it polls the host idle before measuring rather
+# than assuming it, since GitLab itself has no "wait for idle". A host
+# that never quiets down fails the job loudly instead of measuring
+# nonsense.
+#
+# On the `big` lane for now -- the quietest lane that exists, not a
+# guarantee of quiet. Known limit: a fresh instance is empty, so this
+# baselines the app, not the app under a large docket (seeding is a
+# follow-up, filed separately). Owner follow-up recorded on #1003: create
+# a runner tagged `quiet` with `concurrent = 1` in
+# /etc/gitlab-runner/config.toml (root-only, so it's not done here), then
+# change `tags: [big]` below to `tags: [quiet]`.
+perf:promotion:
+  stage: gate
+  tags: [big]
+  image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
+  <<: *git_safe
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
+  resource_group: perf-promotion
+  timeout: 30m
+  script:
+    - set -o pipefail
+    - (cd frontend && npm ci)
+    - scripts/wait-quiet-host.sh
+    - eval "$(scripts/live-env.sh up)"
+    - trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT
+    - node frontend/scripts/probe-perf.mjs --json perf-current.json
+    - |
+      if [ -f frontend/perf-baseline.json ]; then
+        node frontend/scripts/perf-compare.mjs frontend/perf-baseline.json perf-current.json
+      else
+        echo "no baseline -- commit perf-current.json as frontend/perf-baseline.json"
+      fi
+  artifacts:
+    when: always
+    paths:
+      - perf-current.json
+    expire_in: 4 weeks
+
 # ---------------------------------------------------------------------------
 # SECURITY — parallel jobs, diff-scoped Semgrep on MRs, full scan on dev.
 # ---------------------------------------------------------------------------
