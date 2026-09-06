@@ -1067,7 +1067,14 @@
     const g = ground
     const bank = (a: Pt[]) => a.map((p, i) => (i ? 'L' : 'M') + R2(X(mc, p[0])) + ' ' + R2(Y(mc, p[1]))).join('')
     const river = g.river ? bank(g.river.bankN) + bank(g.river.bankF.slice().reverse()).replace('M', 'L') + 'Z' : ''
-    const plates = g.districts.map((d) => ({ d: diamond(mc, d.u, d.v, d.r, 0), ink: inkOf(d), fo: d.dark ? 0.22 : 0.5 }))
+    const plates = g.districts.map((d) => ({
+      d: diamond(mc, d.u, d.v, d.r, 0),
+      ink: inkOf(d),
+      fo: d.dark ? 0.22 : 0.5,
+      name: d.name,
+      x: R2(X(mc, d.u)),
+      y: R2(Y(mc, d.v)),
+    }))
     const nodes = g.nodes.filter((n) => n.kind !== 'post').map((n) => ({ x: R2(X(mc, n.u)), y: R2(Y(mc, n.v)) }))
     return { river, plates, nodes }
   })
@@ -1310,6 +1317,9 @@
       {#each mini.plates as p, i (i)}
         <path d={p.d} fill={p.ink} fill-opacity={p.fo} />
       {/each}
+      {#each mini.plates as p, i (i)}
+        <text x={p.x} y={p.y} text-anchor="middle" class="mini-name">{p.name}</text>
+      {/each}
       {#each mini.nodes as n, i (i)}
         <circle cx={n.x} cy={n.y} r="2" fill="var(--accent)" />
       {/each}
@@ -1484,7 +1494,7 @@
   .mini {
     position: absolute;
     z-index: 8;
-    right: 20px;
+    left: 20px;
     top: 58px;
     width: 232px;
     padding: 8px 9px 7px;
@@ -1527,6 +1537,15 @@
     margin-top: 5px;
     display: flex;
     justify-content: space-between;
+  }
+
+  /* District names on the minimap (#978): the smallest legible mono,
+     since the plate itself is already tiny -- otherwise the plates
+     are meaningless colour without a legend. */
+  .mini-name {
+    font: 6px var(--font-mono);
+    fill: var(--fg-dim);
+    pointer-events: none;
   }
 
   /* The crumb (#868), round-40's own layout: a pill centred at the top. */
