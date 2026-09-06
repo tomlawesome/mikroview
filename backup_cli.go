@@ -63,6 +63,7 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"rule_usage", cfg.Flags.RuleUsageStorePath},
 		{"entities", cfg.Entities.StorePath},
 		{"coverage", cfg.Coverage.StorePath},
+		{"hosts", cfg.Hosts.StorePath},
 		{"mac_registry", cfg.DeviceMAC.StorePath},
 		{"engine_state", cfg.Engine.StorePath},
 		{"definitions", cfg.Engine.DefinitionsStorePath},

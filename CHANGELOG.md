@@ -18,6 +18,32 @@ rewritten.
 
 ### Added
 
+- **A host that stops talking is no longer forgotten** (#1016, data
+  model only). The map used to work out its hosts from the last few
+  thousand events in the browser, so a host that went silent scrolled
+  out of that buffer and simply vanished, with nothing left to say it
+  had ever been there. A new server-side **host presence register**
+  (`internal/hosts`, `hosts.storePath`) keeps the record instead: every
+  event arriving on an internal interface from a private address
+  registers that host, with when it was first and last seen and how many
+  events it accounts for. What counts as a host is exactly what the map
+  already drew -- the same rule, ported rather than reinvented, so the
+  two halves cannot disagree. A quiet host can be marked **intended**
+  (quiet on purpose, with a reason that stays said and survives the host
+  reappearing, the same promise a coverage-gap declaration makes) or
+  **dismissed** (taken off the map, and cleared automatically the next
+  time that host appears in the feed -- a host that is back is not
+  dismissed). Nothing is probed to find any of this out: the register
+  records what arrived, never anything elicited. Read it with `GET
+  /api/hosts` (any signed-in user) and write it with `PUT`/`DELETE
+  /api/hosts/{key}/mark` (user tier, audit-logged as `hosts.mark` /
+  `hosts.unmark`). Bounded at 10,000 hosts, evicting the least recently
+  seen entry that carries no mark, because a source address is
+  attacker-forgeable and an unbounded list keyed by it would be a way to
+  grow mikroview's memory from outside; persistence is optional and
+  written behind the ingest path, never on it. **The map does not draw
+  any of this yet** -- the greying-out is a separate, in-flight design
+  round; this release adds the data and the API it will read.
 - **RouterOS config backups pushed over SFTP, kept encrypted and
   restorable** (#394). The setup wizard's new sixth step prints a
   script that saves the router's own binary backup (unencrypted --

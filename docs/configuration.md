@@ -1314,6 +1314,62 @@ does not parse or validate the shape of; `PUT`'s JSON body carries just
 `declaredAt` set server-side from the session and the clock rather than
 the request.
 
+## Host presence register (issue #1016, optional)
+
+The map draws the hosts your router's log has actually shown. On its own
+that makes a host's presence a property of the last few thousand events:
+a host that stops talking scrolls out of the buffer and disappears, with
+nothing left to say it was ever there.
+
+The **host presence register** keeps that record. Every event arriving on
+an internal interface from a private address registers that host, with
+when it was first and last seen and how many events it accounts for. A
+host that stops talking is not removed -- it goes quiet, and you can say
+which kind of quiet it is:
+
+- **intended** -- quiet on purpose (a machine powered on twice a month, a
+  spare printer). Needs a reason, and the reason stays said: it survives
+  the host reappearing, the same promise a coverage-gap declaration makes
+  about a quiet boundary.
+- **dismissed** -- take it off the map. No reason needed. Cleared
+  automatically the next time an event from that host arrives, because a
+  host that is back is not dismissed.
+
+mikroview learns all of this from the feed alone. It never probes a host
+to find out whether it is still there -- see the "observes, never scans"
+rule in [AGENTS.md](../AGENTS.md).
+
+```yaml
+hosts:
+  # Where the register is persisted, as a small JSON file. Same
+  # optional-persistence contract as coverage.storePath above: left
+  # unset, the register still works, it just rebuilds itself from the
+  # feed after a restart and your marks are not kept. If you set this in
+  # the container, mount a volume for its parent directory -- see
+  # deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/hosts.json"
+```
+
+The register is bounded at **10,000 hosts**. A source address is
+something an attacker can forge one field at a time, so an unbounded
+list keyed by it would be a way to grow mikroview's memory from the
+outside. At the cap, the host with the oldest last-seen time *that
+carries no mark* is dropped -- your own decisions are the one thing here
+that cannot be rebuilt from the feed, so they are the last thing to go.
+
+Writes go to disk behind the scenes and at most once a second, never on
+the path an event takes through the app: this is updated on every single
+ingested event, unlike the coverage declarations above, which are written
+straight through because they are rare and interactive.
+
+Hosts are read and marked via `GET /api/hosts` and
+`PUT`/`DELETE /api/hosts/{key}/mark` (see [API
+reference](#api-reference)). `key` is the interface and address joined
+with a pipe, e.g. `bridge-lan|10.0.10.5` -- the same key style as a
+coverage declaration. `GET` is open to any signed-in user; the two writes
+are user tier and audit-logged, since saying a silence is deliberate
+carries the same weight as any other authored explanation.
+
 ## Audit log: admin action accountability (optional)
 
 Every admin-privileged mutation -- creating a user, changing a detector's
@@ -3272,6 +3328,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_COVERAGE_STORE_PATH` | `coverage.storePath` (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)) |
+| `MIKROVIEW_HOSTS_STORE_PATH` | `hosts.storePath` (see [Host presence register](#host-presence-register-issue-1016-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
@@ -3586,6 +3643,9 @@ exits, rather than starting the server. See
 | `GET /api/coverage/declarations` | open to any signed-in user (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)): every persisted coverage-gap declaration |
 | `PUT /api/coverage/declarations/{key}` | user tier: create or replace (upsert) the declaration at `key`, taking `{"reason": "..."}` in the JSON body. `declaredBy`/`declaredAt` are set server-side. 400 on an empty/oversized key or reason. Widened from admin by #653, following the entity labels it reasons alongside |
 | `DELETE /api/coverage/declarations/{key}` | user tier: remove the declaration at `key`. 404 if none exists there. Widened from admin by #653 |
+| `GET /api/hosts` | open to any signed-in user (see [Host presence register](#host-presence-register-issue-1016-optional)): every host the feed has shown, each with its interface, address, last-seen hostname, first/last seen times, event count and any mark on it. Not reachable with a read-only API token: it is a partial inventory of your private address space |
+| `PUT /api/hosts/{key}/mark` | user tier: say what a quiet host is, taking `{"kind": "intended"\|"dismissed", "reason": "..."}` in the JSON body. `reason` is required for `intended` and optional for `dismissed`; `by`/`at` are set server-side. 400 on an unknown kind or an empty/oversized/control-character key or reason, 404 if no event has ever registered that key. Audit-logged as `hosts.mark` |
+| `DELETE /api/hosts/{key}/mark` | user tier: take the mark off the host at `key`, putting it back to whatever its own last-seen time says it is. 404 if there is no mark there. Audit-logged as `hosts.unmark` |
 | `GET /api/naming/provenance` | user tier: where the name currently shown for one token comes from, given `type` (`host`/`rule`/`port`), `key` (the raw value) and, for a host, `device`. Answers `source` (`none`, `entity`, `config`, or one of `router-dns-static`/`router-dhcp-lease`/`router-wireguard-peer`), the `name` in use, your own saved `label` if any, and `editable` -- false when a router-pushed name would shadow anything saved here, which is what the live view's inline editor checks before offering a field. Widened from admin to user tier by #653, alongside `GET /api/entities` it serves |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/matches` | a windowed query over the persisted match log, in one of two modes -- by device, with `mac` and/or `ip` (at least one required), or across every watchlist entry with `entries=all`, which returns the most recent matches anywhere in the log, newest first. `entries=all` may not be combined with `mac`/`ip`. Both modes take `since`/`until` (RFC 3339) and `limit`, and both are bounded: `limit` defaults to 100 and is capped at 5000 whatever the caller asks for. Open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |

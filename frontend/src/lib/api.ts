@@ -1170,6 +1170,69 @@ export async function deleteCoverageDeclaration(key: string): Promise<string | n
   return (await res.text()) || `deleteCoverageDeclaration: ${res.status}`
 }
 
+// HostMarkKind: what an operator said about a quiet host (#1016).
+// 'intended' means quiet on purpose and stays said; 'dismissed' means
+// take it off the map, and the server clears it by itself the next time
+// that host appears in the feed.
+export type HostMarkKind = 'intended' | 'dismissed'
+
+// HostMark mirrors internal/hosts.Mark. `by`/`at` are always server-set,
+// never sent by the client, same convention as CoverageDeclaration's
+// `declaredBy`/`declaredAt` above.
+export interface HostMark {
+  kind: HostMarkKind
+  reason?: string
+  by: string
+  at: string
+}
+
+// Host mirrors internal/hosts.Host -- one host the syslog feed has
+// shown, keyed `"<iface>|<ip>"`. `lastSeen` is what tells the map how
+// long a host has been quiet; `label` is the last hostname seen for the
+// address and may be absent, because a host nothing names is still a
+// host.
+export interface Host {
+  key: string
+  iface: string
+  ip: string
+  label?: string
+  firstSeen: string
+  lastSeen: string
+  events: number
+  mark?: HostMark
+}
+
+// fetchHosts/putHostMark/deleteHostMark: the host presence register
+// (#1016). Reading is open to any signed-in user, same tier as
+// fetchCoverageDeclarations above; both writes are user tier
+// server-side and audit-logged.
+export async function fetchHosts(): Promise<Host[]> {
+  const res = await fetch('/api/hosts')
+  if (!res.ok) throw new ApiError(`fetchHosts: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.hosts ?? []
+}
+
+// putHostMark creates or replaces the mark on one host, identified by
+// key -- the server's own single PUT-as-upsert primitive (see
+// internal/api's handleHostMarkPut). `reason` is required for
+// 'intended' and optional for 'dismissed'.
+export async function putHostMark(
+  key: string,
+  kind: HostMarkKind,
+  reason = '',
+): Promise<Host | string> {
+  const res = await putJSON(`/api/hosts/${encodeURIComponent(key)}/mark`, { kind, reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `putHostMark: ${res.status}`
+}
+
+export async function deleteHostMark(key: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/hosts/${encodeURIComponent(key)}/mark`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteHostMark: ${res.status}`
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Settings (#796)
 //

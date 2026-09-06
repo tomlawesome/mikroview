@@ -391,6 +391,18 @@ type Coverage struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Hosts configures internal/hosts' host presence register (issue
+// #1016): every host the syslog feed has shown, so the map can grey out
+// one that has gone quiet instead of silently dropping it, plus the
+// marks an operator has put on quiet hosts. StorePath left empty is a
+// fully supported, deliberate choice, same optional-persistence
+// contract as Coverage.StorePath above: the register still works, it
+// just rebuilds from the feed after a restart and the marks do not
+// survive.
+type Hosts struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // Audit configures internal/audit's persisted admin-action accountability
 // log (issue #112) -- who created a user, changed a detector setting,
 // upserted/deleted an entity, created or revoked an API token, or removed
@@ -990,6 +1002,7 @@ type Config struct {
 	Auth       Auth       `yaml:"auth"`
 	Entities   Entities   `yaml:"entities"`
 	Coverage   Coverage   `yaml:"coverage"`
+	Hosts      Hosts      `yaml:"hosts"`
 	Audit      Audit      `yaml:"audit"`
 	Setup      Setup      `yaml:"setup"`
 	Watchlist  Watchlist  `yaml:"watchlist"`
@@ -1133,6 +1146,9 @@ func defaults() Config {
 		},
 		Coverage: Coverage{
 			StorePath: DefaultDataDir + "/coverage.json",
+		},
+		Hosts: Hosts{
+			StorePath: DefaultDataDir + "/hosts.json",
 		},
 		Audit: Audit{
 			StorePath: DefaultDataDir + "/audit.json",
@@ -1539,6 +1555,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_COVERAGE_STORE_PATH"); v != "" {
 		cfg.Coverage.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_HOSTS_STORE_PATH"); v != "" {
+		cfg.Hosts.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
 		cfg.Audit.StorePath = v

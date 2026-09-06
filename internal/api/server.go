@@ -18,6 +18,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/hosts"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/naming"
@@ -155,6 +156,14 @@ type Server struct {
 	// empty, unpersisted store), same always-usable convention as
 	// Entities/Flags/Definitions above.
 	Coverage *coverage.Store
+	// Hosts is the host presence register (issue #1016): every host the
+	// syslog feed has shown, so the map can grey out one that has gone
+	// quiet instead of silently dropping it, plus whatever an operator
+	// has said about a quiet host. Backs GET /api/hosts and the mark
+	// endpoints (see hosts.go). Always non-nil (internal/hosts.Open("")
+	// returns a usable, empty, unpersisted register), same
+	// always-usable convention as Coverage above.
+	Hosts *hosts.Register
 	// Audit is the persisted, admin-only accountability log of every
 	// admin-privileged mutation (issue #112) -- who created a user,
 	// changed a detector setting, upserted/deleted an entity, created or
@@ -436,6 +445,11 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/coverage/declarations", s.handleCoverageList},
 		{http.MethodPut, "/api/coverage/declarations/{key}", s.handleCoveragePut},
 		{http.MethodDelete, "/api/coverage/declarations/{key}", s.handleCoverageDelete},
+
+		// The host presence register (issue #1016) -- see hosts.go.
+		{http.MethodGet, "/api/hosts", s.handleHostsList},
+		{http.MethodPut, "/api/hosts/{key}/mark", s.handleHostMarkPut},
+		{http.MethodDelete, "/api/hosts/{key}/mark", s.handleHostMarkDelete},
 
 		// The match log query -- a read over evidence already collected,
 		// and the one thing on the retired /api/watchlist prefix the
