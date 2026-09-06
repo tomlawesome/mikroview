@@ -1,6 +1,6 @@
 # How to read the fall
 
-The fall is Mikroview's landing page: a live picture of every traffic
+The fall is MikroView's landing page: a live picture of every traffic
 boundary your router is watching, drawn as columns of falling marks —
 newest at the top, oldest at the bottom.
 
@@ -35,12 +35,12 @@ what's true right now:
   none of them log traffic, so nothing can be shown. This means the
   logging is switched off here, not that the boundary is quiet.
 - **COVERAGE UNKNOWN** — no rule has been pushed for this boundary yet,
-  so Mikroview can't say either way.
+  so MikroView can't say either way.
 - **✱ <FLAG NAME>** — something on this boundary tripped a flag (see
   "Flagged minutes" below); the flag's name replaces the normal status
   while it's active.
 - **NOT IN A PUSHED TABLE** — a catch-all column for traffic that
-  doesn't match any boundary your router has told Mikroview about.
+  doesn't match any boundary your router has told MikroView about.
 
 A dark or unknown column is drawn as an unbroken black stripe rather
 than an empty one — on purpose, so a lack of data never looks the same
@@ -78,7 +78,7 @@ column of falling marks itself.
 
 A small label sits above each needle's peak, and another sits under the
 floor of each column: both name the port (and its common name, if
-Mikroview recognises it — e.g. `:443 https`) or say `no port` when there
+MikroView recognises it — e.g. `:443 https`) or say `no port` when there
 isn't one. When more carriers are active on a boundary than fit
 legibly, the quietest of them fold into a single **"+n quieter ▸"**
 label beneath the port names — click or activate it to see all of them
@@ -86,7 +86,7 @@ in the Stream view.
 
 ## Flagged minutes
 
-When something Mikroview's detectors raised a flag about happened on a
+When something MikroView's detectors raised a flag about happened on a
 boundary, that exact moment gets a small ring mark beside the fall with
 the flag's name and time next to it (for example `◉ new_device ·
 14:07`), and a dotted line — a "flag horizon" — runs sideways through
