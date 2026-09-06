@@ -41,9 +41,10 @@ REPEATED DROPS (13:28 → still arriving) fold into one row:
   campaign never moves WHERE or EVIDENCE.
 
 **2. The scored number.** Beside the type, only where a detector
-scored the flag: `▲ DROP SURGE 71`, `▲ ACTIVITY SPIKE 72` — bold, full
-ink, in a hairline pill (first cut was dimmed; owner, 2026-09-06: "the
-number needs to be much more visible"). The
+scored the flag: `▲ DROP SURGE 71`, `▲ ACTIVITY SPIKE 72` — bold, pure
+white, a size up from the type, nothing round it (first cut was dimmed,
+then pilled; owner, 2026-09-06: "the number needs to be much more
+visible", then "just the number"). The
 other five carry nothing — no dash, no band, no word. In the drawer one
 line under the story says where it came from: *Scored 71. How far this
 hour sits from the wan boundary's usual, and how much history backs
