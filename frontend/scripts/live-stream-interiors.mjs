@@ -120,7 +120,24 @@ async function clickBucket(index, total) {
   await page.mouse.click(svgX(box, frac), box.y + box.height / 2)
 }
 
-/** Drags a short distance around bucket `index`, closing a fence over exactly that one minute -- both ends resolve to the same bucket since the offset stays well inside one bucket's own pixel span. */
+/**
+ * Drags a short distance around bucket `index`, closing a fence over
+ * exactly that one minute -- both ends resolve to the same bucket since
+ * the offset stays well inside one bucket's own pixel span.
+ *
+ * #999: at either edge bucket (index 0 or total-1), svgX's own 1%
+ * clamp leaves less than the offset's own width of margin -- x-offset
+ * (or x+offset at the far edge) then lands outside the svg's bounding
+ * box entirely, on whatever sits next to it, so the pointerdown that
+ * should arm the drag never reaches the whisper at all and the whole
+ * gesture is silently a no-op (no band, no dimmed rows, the stat line
+ * stays on its pre-drag rolling text). Clamping both endpoints to stay
+ * inside the box -- as clickBucket's own actionability note above
+ * already warns is necessary for a bare mouse coordinate -- keeps the
+ * gesture over the element throughout while still moving the >=6px
+ * DRAG_THRESHOLD_PX Whisper.svelte needs to treat it as a drag rather
+ * than a click.
+ */
 async function dragBucket(index, total) {
   const box = await wsvg.boundingBox()
   const frac = total > 1 ? index / (total - 1) : 0.5
@@ -128,9 +145,10 @@ async function dragBucket(index, total) {
   const y = box.y + box.height / 2
   const bucketPx = total > 1 ? box.width / (total - 1) : box.width
   const offset = Math.min(10, bucketPx / 3)
-  await page.mouse.move(x - offset, y)
+  const clampToBox = (px) => Math.min(box.x + box.width - 1, Math.max(box.x + 1, px))
+  await page.mouse.move(clampToBox(x - offset), y)
   await page.mouse.down()
-  await page.mouse.move(x + offset, y, { steps: 4 })
+  await page.mouse.move(clampToBox(x + offset), y, { steps: 4 })
   await page.mouse.up()
 }
 
