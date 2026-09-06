@@ -153,7 +153,10 @@ for (let p = 6000; p < 6012; p++) {
 // raced this exact check to a false-positive pass before the real push
 // had landed.
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.fall .band .band-label')].some((e) => e.textContent.includes('ether1')),
+  () =>
+    [...document.querySelectorAll('.fall .band .band-label')].some(
+      (e) => e.textContent.includes('ether1') && e.textContent.includes('bridge1'),
+    ),
   null,
   { timeout: 25000 },
 )
