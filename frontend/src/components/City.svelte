@@ -36,6 +36,7 @@
     X,
     Y,
     cam,
+    cityFitS,
     clampCentre,
     clearDropLabels,
     diamond,
@@ -163,6 +164,11 @@
   let anim: number | null = null
   let svgEl: SVGSVGElement | undefined = $state()
 
+  /** The height a stop's camera moves to: the city stop opens wide
+   * enough to take in the whole estate (#979, cityFitS -- capped so it
+   * never zooms in), every other stop keeps its fixed height. */
+  const stopS = (s: Stop): number => (s === 'city' ? cityFitS(ground.bounds) : STOP_HEIGHT[s])
+
   const viewCam = $derived(cam(centre[0], centre[1], S))
   const viewTransform = $derived('translate(' + R2(viewCam.ox) + ' ' + R2(viewCam.oy) + ') scale(' + R2(S / Sgeom) + ')')
   const viewport = $derived(viewportRect(viewCam))
@@ -239,12 +245,12 @@
       if (stand) return
       if (!started) {
         started = true
-        S = initialS ?? STOP_HEIGHT[s]
+        S = initialS ?? (s === 'city' ? cityFitS(g.bounds) : STOP_HEIGHT[s])
         centre = clampCentre(initialCentre ?? centreFor(s, focus), g.bounds)
         return
       }
       if (!stopChanged) return
-      moveCamera(STOP_HEIGHT[s], centreFor(s, focus))
+      moveCamera(stopS(s), centreFor(s, focus))
     })
   })
 
