@@ -1016,6 +1016,103 @@ describe('the round-30 layout (#699)', () => {
     expect(container.querySelectorAll('.zone .n-hosts').length).toBe(3)
   })
 
+  it("stacks a district card's name above its CIDR rather than printing them over each other (#976 item 2: \"10.0.10.1/24 shows through LAN\")", () => {
+    // One lane with one host gives the smallest plateRadius (lib/city/
+    // layout.ts), so the card sits at its floor -- the size the owner's
+    // report was actually seeing.
+    pushLanes(1)
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = container.querySelector('.ground-flat .gf-card')!
+    const name = card.querySelector('.n-name')!
+    const cidr = card.querySelector('.n-cidr')!
+    // Same left edge, different row -- stacked, not the name and CIDR
+    // racing each other in from opposite sides of one shared line.
+    expect(cidr.getAttribute('x')).toBe(name.getAttribute('x'))
+    expect(Number(cidr.getAttribute('y'))).toBeGreaterThan(Number(name.getAttribute('y')))
+  })
+
+  it('never lets two district cards on the ground plan overlap, even at the smallest size (#976 item 2)', () => {
+    // Five lanes on one router is PRIMARY_SLOTS' own length (lib/city/
+    // layout.ts) -- the estate this map actually draws its fullest.
+    pushLanes(5)
+    const { container } = render(Topography)
+    flushSync()
+
+    function absoluteBox(card: Element) {
+      const plate = card.querySelector('.gf-plate')!
+      const tf = card.getAttribute('transform') ?? 'translate(0 0)'
+      const [tx, ty] = tf
+        .replace('translate(', '')
+        .replace(')', '')
+        .split(' ')
+        .map(Number)
+      return {
+        x: tx + Number(plate.getAttribute('x')),
+        y: ty + Number(plate.getAttribute('y')),
+        w: Number(plate.getAttribute('width')),
+        h: Number(plate.getAttribute('height')),
+      }
+    }
+
+    const boxes = [...container.querySelectorAll('.ground-flat .gf-card')].map(absoluteBox)
+    expect(boxes.length).toBe(5)
+    for (let a = 0; a < boxes.length; a++) {
+      for (let b = a + 1; b < boxes.length; b++) {
+        const p1 = boxes[a]
+        const p2 = boxes[b]
+        const overlaps = p1.x < p2.x + p2.w && p2.x < p1.x + p1.w && p1.y < p2.y + p2.h && p2.y < p1.y + p1.h
+        expect(overlaps).toBe(false)
+      }
+    }
+  })
+
+  it("keeps every line of a district card's own text inside its plate, so the roads behind it have something solid to stop against (#976 follow-up)", () => {
+    // A road passing under a card is only ever hidden by the plate's
+    // own opaque fill -- there is no other mechanism. If a text line
+    // sits below the plate's own bottom edge, whatever is behind it
+    // (a road, in a real estate) shows straight through that line
+    // instead of stopping at the card, which read as "lines painted
+    // through the card" even though the roads were always drawn first.
+    pushLanes(1)
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = container.querySelector('.ground-flat .gf-card')!
+    const plate = card.querySelector('.gf-plate')!
+    const plateTop = Number(plate.getAttribute('y'))
+    const plateBottom = plateTop + Number(plate.getAttribute('height'))
+    const texts = [...card.querySelectorAll('text')]
+    expect(texts.length).toBeGreaterThan(0)
+    for (const t of texts) {
+      const y = Number(t.getAttribute('y'))
+      expect(y).toBeGreaterThan(plateTop)
+      expect(y).toBeLessThan(plateBottom)
+    }
+  })
+
+  it("never lets a dark district's DARK state collide with its own host count (#976 follow-up)", () => {
+    // DARK used to sit right-anchored on the count's own row -- the
+    // same side-by-side layout that put the name on top of the CIDR --
+    // so a card with a host count wide enough to reach it printed
+    // "hostsARK" (found rendering a denser estate for #976's own
+    // follow-up). It now flows as a trailing tspan on the count's own
+    // text instead, so there is only ever one piece of text on the row.
+    pushLanes(1)
+    policyState.anyPushed = true
+    policyState.edges = [] // nothing logs this lane, so it reads dark
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = container.querySelector('.ground-flat .gf-card.dark')!
+    expect(card).not.toBeNull()
+    expect(card.querySelectorAll('.gf-count').length).toBe(1)
+    const count = card.querySelector('.gf-count')!
+    expect(count.textContent?.replace(/\s+/g, ' ').trim()).toMatch(/host.* · DARK$/)
+    expect(count.querySelector('.zone-state.bad')).not.toBeNull()
+  })
+
   it('adds a services layer and a client tier rather than scaling the map up', () => {
     zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
     appState.events = [
@@ -1886,6 +1983,48 @@ describe('#701: the reach names its busiest pathway, and says the ranking is wei
     expect(busiestLine(container)).toBeNull()
     expect(container.textContent).toContain('nothing observed this window')
   })
+
+  it('stacks a counterpart\'s own pills rather than letting them land on each other (#976 item 3: "port pills overlap each other")', () => {
+    // All four combinations of direction and outcome toward the one
+    // counterpart -- out/accepted, out/blocked, in/accepted, in/blocked
+    // -- put four labels near the same membrane point (#976 item 3).
+    const container = openReach([
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 443, protocol: 'tcp', action: 'accept' }),
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 445, protocol: 'tcp', action: 'drop' }),
+      talk({
+        srcIp: '10.0.2.9',
+        srcHostName: 'nas',
+        dstIp: '10.0.1.20',
+        dstHostName: 'cam-porch',
+        inInterface: 'bridge2',
+        outInterface: 'bridge1',
+        dstPort: 22,
+        protocol: 'tcp',
+        action: 'accept',
+      }),
+      talk({
+        srcIp: '10.0.2.9',
+        srcHostName: 'nas',
+        dstIp: '10.0.1.20',
+        dstHostName: 'cam-porch',
+        inInterface: 'bridge2',
+        outInterface: 'bridge1',
+        dstPort: 3389,
+        protocol: 'tcp',
+        action: 'drop',
+      }),
+    ])
+
+    const pills = [...container.querySelectorAll('.membrane-layer .chip-t')]
+    expect(pills.length).toBe(4)
+    const ys = pills.map((p) => Number(p.getAttribute('y'))).sort((a, b) => a - b)
+    // Never mind their exact position -- no two of one counterpart's own
+    // pills may be closer than a line's height, or their text overlaps
+    // regardless of how far apart the lines they label are drawn.
+    for (let i = 1; i < ys.length; i++) {
+      expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(18)
+    }
+  })
 })
 
 describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () => {
@@ -2223,6 +2362,22 @@ describe('the tunnel node (#877)', () => {
     // Ported from the-whole.html:935, ending at the waist card's edge.
     const ribs = [...container.querySelectorAll('path.rib')].map((p) => p.getAttribute('d'))
     expect(ribs).toContain('M1080 186 C 990 215, 880 240, 830 252')
+  })
+
+  it('draws the tunnel node once, not a second time as a leftover survey dot (#976 items 1/2)', () => {
+    // The removed survey stop (#869) used to draw every node as a plain
+    // dot plus label; the tunnel's own copy of that (`.g-dot`,
+    // `.zone-label`) was never wired to any camera class, so it stayed
+    // on screen at every altitude, its own "WireGuard" printed straight
+    // over the card's -- the owner's "both renderings show at once".
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.g-dot')).toBeNull()
+    expect(container.querySelector('.zone-dot')).toBeNull()
+    expect(container.querySelector('.zone-label')).toBeNull()
+    expect([...container.querySelectorAll('.n-name')].filter((n) => n.textContent?.trim() === 'WireGuard').length).toBe(1)
   })
 
   it('draws the ghost reference line only once traffic has reached a lane', () => {
