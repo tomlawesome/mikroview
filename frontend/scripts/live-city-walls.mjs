@@ -4,19 +4,16 @@
 // The unit tests prove the derivations on fixtures (gates.ts, walls.ts,
 // escalate.ts); this walks the real thing: before any rule table is
 // pushed the walls carry no gates and say why, then a real filter-rule
-// push opens real gates, the policy lens lights every one with a plain
-// label naming its far end while the traffic lens leaves the wall quiet,
-// and a drop road ends at the wall with its own plain mark.
+// push opens real gates, and a drop road ends at the wall with its own
+// plain mark.
 //
-// #991 (city.svelte, 5d90918) made the gate and drop pills bigger and
-// plainer: the gate pill now names its far end rather than a rule
-// number, and a drop mark reads one plain word, "dropped", rather than
-// the refusing rule's name. Both moves were ratified and are covered by
-// City.svelte.test.ts's own updated expectations. The rule number's new
-// home (the gate's click card) and the aggregate drop's new home (a
-// click-through per-rule breakdown) are both recorded, un-built gaps --
-// #1017 for the gate, #1002 for the drop -- not defects for this
-// scenario to route around by reaching for the old text.
+// #991 (city.svelte, 5d90918) made the drop pill plainer: the mark now
+// reads one plain word, "dropped", rather than the refusing rule's
+// name. That move was ratified and is covered by City.svelte.test.ts's
+// own updated expectations. The aggregate drop's new home -- a
+// click-through per-rule breakdown, #1002 -- is a recorded, un-built
+// gap, not a defect for this scenario to route around by reaching for
+// the old text.
 //
 // The no-rule-label pair (#969) is read by standing on its own host
 // rather than off the city-wide escalated wall: `worstUnplannedOf`
@@ -56,10 +53,6 @@ async function toDistrictStop() {
   const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
   await slider.fill('5') // the district stop; the seven-stop axis is clients 0 .. street 6 (#869)
   await new Promise((r) => setTimeout(r, 900))
-}
-
-function clickLens(name) {
-  return page.click(`[data-card="topography"] [aria-label="Map lenses"] >> text=${name}`)
 }
 
 // --- Before any push: a boundary-derived district, no gates, and said why --
@@ -159,28 +152,6 @@ for (let i = 0; i < 9; i++) {
 }
 
 await toDistrictStop()
-
-// --- Traffic lens: the wall stays quiet, no gate pills ----------------------
-
-await clickLens('Traffic')
-await new Promise((r) => setTimeout(r, 400))
-check((await page.locator('[data-card="topography"] .city [data-gate]').count()) === 0, 'the traffic lens leaves every gate quiet -- no gate pills lit')
-
-// --- Policy lens: every gate lights with a plain far-end label -------------
-//
-// #991 moved the rule number off this pill onto the gate's click card,
-// which is not built yet (#1017 records that as a gap, not a defect).
-// What the live pill still promises, and what this proves against a
-// real push, is one plain label per gate naming its far end.
-
-await clickLens('Policy')
-await new Promise((r) => setTimeout(r, 400))
-const gateLabels = await page.locator('[data-card="topography"] .city [data-gate]').allTextContents()
-check(gateLabels.length > 0, `the policy lens lights every gate with a far-end label (${JSON.stringify(gateLabels)})`)
-check(
-  gateLabels.every((t) => ['vlan-srv', 'bridge-lan'].includes(t)),
-  `every lit gate names one of the boundary's own two interfaces, not an invented number (${JSON.stringify(gateLabels)})`,
-)
 
 // --- The no-rule-label pair, read off its own host (#969) ------------------
 //

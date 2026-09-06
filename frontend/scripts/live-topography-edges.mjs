@@ -157,14 +157,14 @@ async function openLens(name) {
   await page.waitForTimeout(600)
 }
 
-await openLens('Policy')
-await page.waitForSelector('[data-card="topography"] .edge-g', { timeout: 10000 })
+await openLens('Coverage')
+await page.waitForSelector('[data-card="topography"] .cedge', { timeout: 10000 })
 
 // Walk each rendered path in the browser: 61 points apiece, in the
 // SVG's own user units, which is the space the map's geometry is
 // written in.
 const runs = await page.evaluate(() => {
-  const paths = [...document.querySelectorAll('[data-card="topography"] path.edge')]
+  const paths = [...document.querySelectorAll('[data-card="topography"] path.cedge')]
   const sample = (p) => {
     const len = p.getTotalLength()
     return Array.from({ length: 61 }, (_, i) => {
@@ -198,7 +198,7 @@ check(
 
 // The corridor carries one trunk, in every lens -- the ratified answer
 // to "several lanes heading for the internet" (#726).
-for (const lens of ['Policy', 'Traffic', 'Coverage']) {
+for (const lens of ['Traffic', 'Coverage']) {
   await openLens(lens)
   const trunks = await page.evaluate(() =>
     [...document.querySelectorAll('[data-card="topography"] path.rib')].filter((p) => (p.getAttribute('d') ?? '').replace(/\s+/g, ' ').trim() === 'M700 104 V 232').length,
@@ -216,7 +216,7 @@ for (const lens of ['Policy', 'Traffic', 'Coverage']) {
 // when the card is actually showing the router this scenario pushed to.
 // Asserting the string outright would fail on a neighbour's device and
 // report a defect that is not there.
-await openLens('Policy')
+await openLens('Coverage')
 const waist = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"] .isl.waist')?.parentElement
   return {
@@ -245,11 +245,11 @@ if (mine && waist.name === mine.name) {
   console.log(`  - waist count skipped: the map's primary device is "${waist.name}", not this scenario's "${mine?.name}"`)
 }
 
-// The lens row in a real browser (#715 item 3): three exclusive base
+// The lens row in a real browser (#715 item 3): two exclusive base
 // tabs and two independent overlay toggles, both latched on. Asserted
 // here rather than in a scenario of its own because the row is on every
 // screen this file already drives.
-await openLens('Policy')
+await openLens('Coverage')
 const row = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
   const tabs = [...(card?.querySelectorAll('[aria-label="Map lenses"] button') ?? [])].map((b) => b.textContent.trim())
@@ -259,7 +259,7 @@ const row = await page.evaluate(() => {
   }))
   return { tabs, ovs }
 })
-check(row.tabs.length === 3, `three base lenses (${row.tabs.join(' · ')})`)
+check(row.tabs.length === 2, `two base lenses (${row.tabs.join(' · ')})`)
 check(row.ovs.length === 2, `two overlay toggles (${row.ovs.map((o) => o.text).join(' · ')})`)
 check(
   row.ovs.every((o) => o.pressed === 'true'),
@@ -284,7 +284,7 @@ const afterToggle = await page.evaluate(() => {
   return { pressed: btn.getAttribute('aria-pressed'), lens: on?.textContent.trim() ?? '' }
 })
 check(afterToggle.pressed === 'false', `an overlay latches off when clicked (${afterToggle.pressed})`)
-check(afterToggle.lens === 'policy', `toggling an overlay leaves the base lens where it was (${afterToggle.lens})`)
+check(afterToggle.lens === 'coverage', `toggling an overlay leaves the base lens where it was (${afterToggle.lens})`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()

@@ -332,9 +332,9 @@ for (const width of WIDTHS) {
   await slider.fill('2')
   await new Promise((r) => setTimeout(r, 600))
 
-  // The other two lenses draw their own labels, and their own plates
-  // have to clear each other the same way.
-  for (const lensName of ['policy', 'coverage']) {
+  // The coverage lens draws its own labels, and its own plates have to
+  // clear each other the same way.
+  for (const lensName of ['coverage']) {
     await page.click(`[data-card="topography"] .wlens2 >> text=${lensName}`)
     await new Promise((r) => setTimeout(r, 700))
     const lm = await measure()

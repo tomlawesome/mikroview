@@ -124,10 +124,10 @@ export interface Road {
   label: string
 }
 
-/** The lens tabs the ratified record gives both views (only the two
- * that change how the city itself draws are city-aware today; the
- * others default to the traffic reading until their own issues land). */
-export type CityLens = 'traffic' | 'policy' | 'coverage'
+/** The lens tabs the ratified record gives both views. The city draws
+ * the traffic reading for both today; coverage becomes city-aware when
+ * its own issue lands. */
+export type CityLens = 'traffic' | 'coverage'
 
 /** A tunnel's peer, drawn as the far-bank hamlet (#866): a WireGuard
  * peer (by allowedAddress/comment) or a ppp-active session (by

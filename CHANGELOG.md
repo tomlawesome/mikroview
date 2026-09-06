@@ -909,6 +909,17 @@ rewritten.
 
 ### Removed
 
+- **The map's Policy lens is gone, from both the flat map and the city**
+  (#1016). Nobody asked for it: it redrew the same pushed rule table the
+  Coverage lens already reads, as one line per rule, and in the city it
+  faded every road so it could light each gate with a rule number. Both
+  map surfaces now carry two base lenses, Traffic and Coverage, and the
+  city draws its roads and gates the same way in each. Nothing is lost
+  that the rest of the app does not already say: the pushed rules
+  themselves are unchanged, and Coverage still paints every
+  boundary-direction by what it logs. A reader who had Policy selected
+  gets Traffic, silently -- the choice was never saved between visits.
+
 - **An account with no `role` in the accounts file no longer defaults to
   `user`** (#873). The default existed for accounts persisted before
   roles existed (#653); every account mikroview writes has carried a role

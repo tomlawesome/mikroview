@@ -15,14 +15,14 @@
   // card carrying the one statement that names the missing push and
   // every address slot saying what it truly holds (#802, round 36 --
   // nothing floats over the map). The lens row carries round 30's and
-  // round 39's five: three base lenses that repaint the pair lines, and
-  // two overlays -- flags and watch -- that place ledger objects on top
+  // round 39's: two base lenses that repaint the pair lines, and two
+  // overlays -- flags and watch -- that place ledger objects on top
   // of whichever base is showing (#715 item 3). The two families split
   // by data source, which is why one is exclusive and the other is not:
   // a base lens is a different reading of the same edges, an overlay is
   // a different kind of thing marked on them. One fixed picture, tabs
-  // repaint it: the Policy lens keeps every island where Traffic put it
-  // and swaps the observed ribs for what the pushed rule table intends.
+  // repaint it: the Coverage lens keeps every island where Traffic put
+  // it and swaps the observed ribs for what the pushed table logs.
   //
   // Deviation from #627's letter, declared on the issue: "the Map page
   // in the Live group's reserved slot" predates the deck -- topography
@@ -89,7 +89,7 @@
 
   // Which lens repaints the fixed picture. Reach layers on top of
   // any of them (#626: a mode, not a place).
-  let lens = $state<'traffic' | 'policy' | 'coverage'>('traffic')
+  let lens = $state<'traffic' | 'coverage'>('traffic')
   // The two overlays (#715 item 3). Independent of `lens` and of each
   // other, both on by default, and session state like `lens` -- nothing
   // here is persisted.
@@ -216,11 +216,11 @@
     appState.view = 'live'
   }
 
-  // --- the policy lens (#628: layer 2, intended-policy edges) --------------
+  // --- the edge geometry (#628: layer 2) -----------------------------------
   // Every crossing passes the router, so every edge routes through the
-  // waist -- and an intended refusal dies there, ⊣, the same grammar the
-  // reach's membrane already taught. Calm ink throughout: an intended
-  // block is policy, not the alarm.
+  // waist -- and a refusal dies there, ⊣, the same grammar the reach's
+  // membrane already taught. Calm ink throughout: a refusal by the
+  // pushed table is intent, not the alarm.
   const WAIST = { x: 700, y: 312 }
   const EDGE_CAP = 12
 
@@ -248,10 +248,10 @@
     return { x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }
   }
 
-  // A line between two anchors, shared by both lenses: the Policy lens
-  // draws intent along it, the Traffic lens draws what actually
-  // happened (#629). `crosses` is whether it arrives or dies at the
-  // waist.
+  // A line between two anchors, shared by both lenses: the Traffic lens
+  // draws what actually happened along it, the Coverage lens draws what
+  // the pushed table logs (#629). `crosses` is whether it arrives or
+  // dies at the waist.
   interface Line {
     from: EdgeAnchor
     to: EdgeAnchor
@@ -295,21 +295,6 @@
     edge: PolicyEdge
     line: Line
   }
-
-  const drawnEdges = $derived.by((): { drawn: DrawnEdge[]; undrawn: number } => {
-    const drawn: DrawnEdge[] = []
-    let undrawn = 0
-    for (const e of policyState.edges) {
-      const line = drawn.length < EDGE_CAP ? lineFor(e.from, e.to, e.accepted) : null
-      // Counted and said, never silently dropped.
-      if (!line) {
-        undrawn++
-        continue
-      }
-      drawn.push({ edge: e, line })
-    }
-    return { drawn, undrawn }
-  })
 
   // #726 ("bundle the corridor, fan at the waist"): an edge whose far
   // end is the internet no longer runs through the single WAIST point --
@@ -563,22 +548,6 @@
     return raw
   }
 
-  function badgeLine(e: PolicyEdge): string {
-    const ports = e.accepted ? e.acceptPorts : e.refusePorts
-    const shown = ports.slice(0, 3).join(' ')
-    const more = ports.length > 3 ? ` +${ports.length - 3}` : ''
-    const mark = e.accepted ? (e.refused ? '→ ⊣' : '→') : '⊣'
-    return ports.length > 0 ? `${mark} ${shown}${more}` : mark
-  }
-
-  function edgeLabel(e: PolicyEdge): string {
-    const name = (i: string, kind: string) => (kind === 'internet' ? 'the internet' : i === '' ? 'any lane' : i)
-    const from = anchorOf(e.from)
-    const to = anchorOf(e.to)
-    const what = e.accepted ? 'may reach' : 'is refused toward'
-    return `${name(e.from, from?.kind ?? 'zone')} ${what} ${name(e.to, to?.kind ?? 'zone')}${e.comment ? ` — ${e.comment}` : ''}`
-  }
-
   // Click-through per the shaped surface: the pair and its direction,
   // said in the filters the live view already speaks -- the zones' own
   // CIDRs where the address push named them, scope for the internet
@@ -599,10 +568,6 @@
     else if (toIface && !appState.filters.interface) appState.setFilter('interface', toIface)
     if (ports.length === 1 && /^:\d+$/.test(ports[0])) appState.setFilter('port', ports[0].slice(1))
     appState.view = 'live'
-  }
-
-  function openEdge(e: PolicyEdge) {
-    openPair(e.from, e.to, e.accepted ? e.acceptPorts : e.refusePorts)
   }
 
   // --- the reality overlay (#629: layer 3, observed on intended) -----------
@@ -722,7 +687,7 @@
   // caption anywhere. The fact is not lost -- it rides the map's own
   // accessible name instead, so nothing on the drawing carries it and
   // nothing about the map's incompleteness goes unsaid.
-  const undrawnPairs = $derived(lens === 'traffic' ? drawnReality.undrawn : lens === 'coverage' ? drawnCoverage.undrawn : drawnEdges.undrawn)
+  const undrawnPairs = $derived(lens === 'traffic' ? drawnReality.undrawn : drawnCoverage.undrawn)
   const undrawnNote = $derived(
     undrawnPairs > 0
       ? `. ${undrawnPairs} further pair${undrawnPairs === 1 ? '' : 's'} are not drawn — off this map's islands, or beyond its ${EDGE_CAP}-edge calm`
@@ -814,17 +779,6 @@
   }
 
   const coverageBadges = $derived(placeBadges(drawnCoverage.drawn.map((d) => ({ line: d.line, text: coverageBadgeText(d.edge) }))))
-
-  const policyBadges = $derived(
-    placeBadges(
-      drawnEdges.drawn.map((d) => ({
-        line: d.line,
-        // A port-less refusal's badge would only repeat the bar, so it
-        // draws none -- and takes no room in the layout either.
-        text: d.edge.accepted || d.edge.refusePorts.length > 0 ? badgeLine(d.edge) : '',
-      })),
-    ),
-  )
 
   function openCoverage(e: PolicyEdge) {
     if (!isAdmin || coverageOf(e) === 'logged') return
@@ -2218,13 +2172,10 @@
     <div class="wl-tabs" role="tablist" aria-label="Map lenses">
       {#if reach}
         <span class="on" role="tab" aria-selected="true">reach</span>
-        <span role="tab" aria-selected="false">{lens === 'policy' ? 'policy' : 'traffic'}</span>
+        <span role="tab" aria-selected="false">traffic</span>
       {:else}
         <button class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
           traffic
-        </button>
-        <button class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
-          policy
         </button>
         <button class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
           coverage
@@ -2400,8 +2351,7 @@
                text and so is sized for none: its pill would be a label
                at full width over a plate 12 wide, saying a second time
                what the card below already says (#897 item 2). The
-               coverage and policy lenses skip their empty labels the
-               same way. -->
+               coverage lens skips its empty labels the same way. -->
           {#if d !== worstUnplanned}
             {@const badge = trafficBadges[di]}
             <g
@@ -2533,77 +2483,6 @@
           </g>
         {:else if drawnCoverage.drawn.length === 0}
           <text x="700" y="400" text-anchor="middle" class="n-sub">the pushed table has no forward rules — no boundary-direction to paint</text>
-        {/if}
-      {:else}
-        <!-- Intended-policy edges (#628): what the pushed table says
-             may cross, refused where it says it may not. Drawn beneath
-             the islands, like the ribs they replace. Lines first, labels
-             last -- same two-pass split as the two lenses above (#723). -->
-        {#each drawnEdges.drawn as d, di (d.edge.key)}
-          {@const bar = edgeBarAt(d.line)}
-          <g
-            class="edge-g"
-            role="button"
-            tabindex="0"
-            aria-label="Open the stream filtered to this pair: {edgeLabel(d.edge)}"
-            onclick={() => openEdge(d.edge)}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                openEdge(d.edge)
-              }
-            }}
-          >
-            <title>{edgeLabel(d.edge)}</title>
-            <path class="edge-hit" d={edgePath(d.line)} />
-            <path class="edge" class:refused={!d.edge.accepted} d={edgePath(d.line)} />
-            {#if !d.edge.accepted}
-              <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
-                <line class="edge-bar" x1="-7" y1="0" x2="7" y2="0" />
-              </g>
-            {:else if d.edge.refused}
-              <!-- The pair also carries refusals: the crossing line
-                   stands, and the ⊣ tick beside the waist says some of
-                   it is turned away. -->
-              <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
-                <line class="edge-bar dim" x1="-5" y1="0" x2="5" y2="0" />
-              </g>
-            {/if}
-          </g>
-        {/each}
-
-        {#each drawnEdges.drawn as d, di (d.edge.key)}
-          {#if d.edge.accepted || d.edge.refusePorts.length > 0}
-            <!-- A port-less refusal's badge would only repeat the bar. -->
-            {@const badge = policyBadges[di]}
-            <g
-              class="detail"
-              role="button"
-              tabindex="0"
-              aria-label="Open the stream filtered to this pair: {edgeLabel(d.edge)}"
-              onclick={() => openEdge(d.edge)}
-              onkeydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  openEdge(d.edge)
-                }
-              }}
-            >
-              <title>{edgeLabel(d.edge)}</title>
-              <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-              <text class="edge-badge" x={badge.x} y={badge.y} text-anchor="middle">{badgeLine(d.edge)}</text>
-            </g>
-          {/if}
-        {/each}
-
-        {#if !policyState.anyPushed}
-          <!-- Waiting for data is a state, not a fault -- say so. -->
-          <g transform="translate(700 400)">
-            <text y="0" text-anchor="middle" class="n-sub">no rule table has been pushed yet — nothing is broken, this lens is waiting for data</text>
-            <text y="20" text-anchor="middle" class="n-sub">the policy layer draws what your router intends; Settings → Run setup… prints the push script</text>
-          </g>
-        {:else if drawnEdges.drawn.length === 0}
-          <text x="700" y="400" text-anchor="middle" class="n-sub">the pushed table has no forward rules — nothing crosses between lanes by intent</text>
         {/if}
       {/if}
 
@@ -3658,19 +3537,7 @@
     opacity: 0.55;
   }
 
-  /* --- the policy lens (#628) -------------------------------------------- */
-  .edge {
-    fill: none;
-    stroke: var(--fg-muted);
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    opacity: 0.6;
-  }
-
-  .edge.refused {
-    stroke-dasharray: 5 5;
-  }
-
+  /* --- the shared edge chrome (#628) ------------------------------------- */
   /* The invisible hit area a 1.8px line cannot be. */
   .edge-hit {
     fill: none;
@@ -3680,12 +3547,6 @@
 
   .edge-g {
     cursor: pointer;
-  }
-
-  .edge-g:hover .edge,
-  .edge-g:focus-visible .edge {
-    stroke: var(--fg);
-    opacity: 0.95;
   }
 
   .edge-g:focus-visible {
@@ -4108,10 +3969,6 @@
 
   .composer-close:hover {
     color: var(--fg);
-  }
-
-  .edge-bar.dim {
-    opacity: 0.55;
   }
 
   /* The plate every edge label sits on (#699, round 30's ratified rule:

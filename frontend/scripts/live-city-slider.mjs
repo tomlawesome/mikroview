@@ -92,10 +92,10 @@ await page.waitForSelector('[data-card="topography"] .altitude input[type="range
 const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
 check((await slider.getAttribute('max')) === '6', 'seven stops on one axis (max 6, #869)')
 
-// The lens is one piece of shared state; pick policy before walking so
+// The lens is one piece of shared state; pick coverage before walking so
 // crossing the centre (twice: out, then back) has something to prove
 // it carried.
-await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Policy')
+await page.click('[data-card="topography"] [aria-label="Map lenses"] >> text=Coverage')
 
 const measure = () =>
   page.evaluate(() => {
@@ -128,7 +128,7 @@ for (let i = 0; i < STOP_LABELS.length; i++) {
   const label = STOP_LABELS[i]
   const m = await measure()
   check(m.value === String(i), `stop ${i} (${label}): the slider reports it (value ${m.value})`)
-  check(m.onLens === 'policy', `${label}: the policy lens is still selected`)
+  check(m.onLens === 'coverage', `${label}: the coverage lens is still selected`)
 
   if (i < 3) {
     check(!m.stageHidden, `${label}: the 2D stage is showing`)
@@ -154,7 +154,7 @@ for (let i = 0; i < STOP_LABELS.length; i++) {
 for (let i = STOP_LABELS.length - 1; i >= 0; i--) {
   const m = await measure()
   check(m.value === String(i), `walking back, stop ${i} (${STOP_LABELS[i]}): the slider reports it (value ${m.value})`)
-  check(m.onLens === 'policy', `${STOP_LABELS[i]}: the policy lens survived the round trip`)
+  check(m.onLens === 'coverage', `${STOP_LABELS[i]}: the coverage lens survived the round trip`)
   if (i > 0) {
     await page.keyboard.press('ArrowLeft')
     await new Promise((r) => setTimeout(r, 700))
