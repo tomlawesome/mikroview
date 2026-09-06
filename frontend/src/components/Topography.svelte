@@ -59,7 +59,7 @@
   import { STOPS, R2, flatFit, FX, FY } from '../lib/city/project'
   import { layoutGround } from '../lib/city/layout'
   import { cityInputFrom } from '../lib/city/input'
-  import type { Ground } from '../lib/city/types'
+  import type { District, Ground } from '../lib/city/types'
   import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
   import { altitudeStopState } from '../lib/altitudeStop.svelte'
 
@@ -1183,6 +1183,64 @@
   // A flat (non-isometric) fit of that same ground into the 2D stage,
   // for the zones stop below.
   const flatCam = $derived(flatFit(ground.bounds, 1400, 720))
+
+  // District cards must never overlap (#976 follow-up): districts sit
+  // on fixed slots (PRIMARY_SLOTS/BOROUGH_SLOTS, lib/city/layout.ts)
+  // that can be close enough together to collide even at a conservative
+  // size floor, and a floor alone only lowers the odds rather than
+  // ruling it out. After each card's own size and position are
+  // computed, this pairwise pass nudges any pair still closer than an
+  // 8px gutter apart along whichever axis needs the smaller move, a
+  // few iterations -- the same idea #726 used to separate edge labels,
+  // applied here to boxes instead of points.
+  interface FlatCard {
+    d: District
+    x: number
+    y: number
+    gr: number
+    gh: number
+  }
+  const CARD_GUTTER = 8
+  const CARD_PUSH_ITERATIONS = 6
+  function pushCardsApart(cards: FlatCard[]): FlatCard[] {
+    const out = cards.map((c) => ({ ...c }))
+    for (let iter = 0; iter < CARD_PUSH_ITERATIONS; iter++) {
+      let moved = false
+      for (let a = 0; a < out.length; a++) {
+        for (let b = a + 1; b < out.length; b++) {
+          const c1 = out[a]
+          const c2 = out[b]
+          const dx = c2.x - c1.x
+          const dy = c2.y - c1.y
+          const overlapX = c1.gr + c2.gr + CARD_GUTTER - Math.abs(dx)
+          const overlapY = c1.gh / 2 + c2.gh / 2 + CARD_GUTTER - Math.abs(dy)
+          if (overlapX <= 0 || overlapY <= 0) continue // clear on at least one axis
+          moved = true
+          if (overlapX < overlapY) {
+            const push = overlapX / 2
+            const dir = dx === 0 ? 1 : Math.sign(dx)
+            c1.x -= push * dir
+            c2.x += push * dir
+          } else {
+            const push = overlapY / 2
+            const dir = dy === 0 ? 1 : Math.sign(dy)
+            c1.y -= push * dir
+            c2.y += push * dir
+          }
+        }
+      }
+      if (!moved) break
+    }
+    return out
+  }
+  const flatCards = $derived.by(() =>
+    pushCardsApart(
+      ground.districts.map((d) => {
+        const gr = Math.max(38, d.r * flatCam.S * 0.9)
+        return { d, x: FX(flatCam, d.u), y: FY(flatCam, d.v), gr, gh: Math.max(44, gr * 0.84) }
+      }),
+    ),
+  )
 
   // Crossing the centre swaps which side draws. The lens is one piece
   // of state already shared by both (`lens`, threaded straight into
@@ -2845,46 +2903,46 @@
           <circle class="gf-node" cx={nx} cy={ny} r={Math.max(4, n.R * flatCam.S * 0.6)} />
           <text class="gf-node-label" x={nx} y={ny - n.R * flatCam.S * 0.6 - 4} text-anchor="middle">{n.name}</text>
         {/each}
-        {#each ground.districts as d (d.id)}
-          {@const gx = FX(flatCam, d.u)}
-          {@const gy = FY(flatCam, d.v)}
+        {#each flatCards as fc (fc.d.id)}
           <!-- The name and CIDR used to sit either side of the card's
                own centre line, so the smallest districts (`gr` at its
                30 floor, a 60-wide card) printed them on top of each
                other -- "10.0.10.1/24 shows through LAN" (#976 item 2).
                They now stack instead, which is the actual fix: it holds
-               regardless of card width. The floors below only widen the
-               margin a little, kept modest on purpose -- `gr` sizes a
-               card from the district's own radius, and the districts
-               around one router sit on fixed slots (`PRIMARY_SLOTS`,
-               `BOROUGH_SLOTS` in layout.ts) close enough together that
-               a much bigger floor made neighbouring cards overlap each
-               other instead, which is a worse defect than a long CIDR
-               narrowly overrunning its own card. -->
-          {@const gr = Math.max(38, d.r * flatCam.S * 0.9)}
-          {@const gh = Math.max(44, gr * 0.84)}
-          {@const total = d.buildings.length + d.more}
+               regardless of card width. `gr`/`gh`'s floors and the
+               push-apart pass computing `flatCards` (above) are what
+               keep two cards clear of each other -- see that comment
+               for why a floor alone was not enough. -->
+          {@const total = fc.d.buildings.length + fc.d.more}
           <g
             class="gf-card"
-            class:dark={d.dark}
-            transform="translate({R2(gx)} {R2(gy)})"
+            class:dark={fc.d.dark}
+            transform="translate({R2(fc.x)} {R2(fc.y)})"
             role="button"
             tabindex="0"
-            aria-label="Open the stream filtered to {d.name}"
-            onclick={() => openZone(d.id)}
+            aria-label="Open the stream filtered to {fc.d.name}"
+            onclick={() => openZone(fc.d.id)}
             onkeydown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
-                openZone(d.id)
+                openZone(fc.d.id)
               }
             }}
           >
-            <rect class="gf-plate" x={-gr} y={-gh / 2} width={gr * 2} height={gh} rx="10" stroke={LANE_INKS[d.ink % LANE_INKS.length]} />
-            <text class="n-name" x={-gr + 12} y={-gh / 2 + 18}>{d.name}</text>
-            <text class="n-cidr" x={-gr + 12} y={-gh / 2 + 32}>{d.cidr ?? 'from boundaries'}</text>
-            <text class="gf-count" x={-gr + 12} y={-gh / 2 + 48}>{total} host{total === 1 ? '' : 's'}</text>
-            {#if d.dark}
-              <text class="zone-state bad" x={gr - 12} y={-gh / 2 + 48} text-anchor="end">DARK</text>
+            <rect
+              class="gf-plate"
+              x={-fc.gr}
+              y={-fc.gh / 2}
+              width={fc.gr * 2}
+              height={fc.gh}
+              rx="10"
+              stroke={LANE_INKS[fc.d.ink % LANE_INKS.length]}
+            />
+            <text class="n-name" x={-fc.gr + 12} y={-fc.gh / 2 + 18}>{fc.d.name}</text>
+            <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? 'from boundaries'}</text>
+            <text class="gf-count" x={-fc.gr + 12} y={-fc.gh / 2 + 48}>{total} host{total === 1 ? '' : 's'}</text>
+            {#if fc.d.dark}
+              <text class="zone-state bad" x={fc.gr - 12} y={-fc.gh / 2 + 48} text-anchor="end">DARK</text>
             {/if}
           </g>
         {/each}
