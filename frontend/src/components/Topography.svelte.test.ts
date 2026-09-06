@@ -1016,6 +1016,58 @@ describe('the round-30 layout (#699)', () => {
     expect(container.querySelectorAll('.zone .n-hosts').length).toBe(3)
   })
 
+  it("stacks a district card's name above its CIDR rather than printing them over each other (#976 item 2: \"10.0.10.1/24 shows through LAN\")", () => {
+    // One lane with one host gives the smallest plateRadius (lib/city/
+    // layout.ts), so the card sits at its floor -- the size the owner's
+    // report was actually seeing.
+    pushLanes(1)
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = container.querySelector('.ground-flat .gf-card')!
+    const name = card.querySelector('.n-name')!
+    const cidr = card.querySelector('.n-cidr')!
+    // Same left edge, different row -- stacked, not the name and CIDR
+    // racing each other in from opposite sides of one shared line.
+    expect(cidr.getAttribute('x')).toBe(name.getAttribute('x'))
+    expect(Number(cidr.getAttribute('y'))).toBeGreaterThan(Number(name.getAttribute('y')))
+  })
+
+  it('never lets two district cards on the ground plan overlap, even at the smallest size (#976 item 2)', () => {
+    // Five lanes on one router is PRIMARY_SLOTS' own length (lib/city/
+    // layout.ts) -- the estate this map actually draws its fullest.
+    pushLanes(5)
+    const { container } = render(Topography)
+    flushSync()
+
+    function absoluteBox(card: Element) {
+      const plate = card.querySelector('.gf-plate')!
+      const tf = card.getAttribute('transform') ?? 'translate(0 0)'
+      const [tx, ty] = tf
+        .replace('translate(', '')
+        .replace(')', '')
+        .split(' ')
+        .map(Number)
+      return {
+        x: tx + Number(plate.getAttribute('x')),
+        y: ty + Number(plate.getAttribute('y')),
+        w: Number(plate.getAttribute('width')),
+        h: Number(plate.getAttribute('height')),
+      }
+    }
+
+    const boxes = [...container.querySelectorAll('.ground-flat .gf-card')].map(absoluteBox)
+    expect(boxes.length).toBe(5)
+    for (let a = 0; a < boxes.length; a++) {
+      for (let b = a + 1; b < boxes.length; b++) {
+        const p1 = boxes[a]
+        const p2 = boxes[b]
+        const overlaps = p1.x < p2.x + p2.w && p2.x < p1.x + p1.w && p1.y < p2.y + p2.h && p2.y < p1.y + p1.h
+        expect(overlaps).toBe(false)
+      }
+    }
+  })
+
   it('adds a services layer and a client tier rather than scaling the map up', () => {
     zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
     appState.events = [

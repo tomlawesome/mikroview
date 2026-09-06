@@ -2824,7 +2824,21 @@
         {#each ground.districts as d (d.id)}
           {@const gx = FX(flatCam, d.u)}
           {@const gy = FY(flatCam, d.v)}
-          {@const gr = Math.max(30, d.r * flatCam.S * 0.9)}
+          <!-- The name and CIDR used to sit either side of the card's
+               own centre line, so the smallest districts (`gr` at its
+               30 floor, a 60-wide card) printed them on top of each
+               other -- "10.0.10.1/24 shows through LAN" (#976 item 2).
+               They now stack instead, which is the actual fix: it holds
+               regardless of card width. The floors below only widen the
+               margin a little, kept modest on purpose -- `gr` sizes a
+               card from the district's own radius, and the districts
+               around one router sit on fixed slots (`PRIMARY_SLOTS`,
+               `BOROUGH_SLOTS` in layout.ts) close enough together that
+               a much bigger floor made neighbouring cards overlap each
+               other instead, which is a worse defect than a long CIDR
+               narrowly overrunning its own card. -->
+          {@const gr = Math.max(38, d.r * flatCam.S * 0.9)}
+          {@const gh = Math.max(44, gr * 0.84)}
           {@const total = d.buildings.length + d.more}
           <g
             class="gf-card"
@@ -2841,12 +2855,12 @@
               }
             }}
           >
-            <rect class="gf-plate" x={-gr} y={-gr * 0.42} width={gr * 2} height={gr * 0.84} rx="10" stroke={LANE_INKS[d.ink % LANE_INKS.length]} />
-            <text class="n-name" x={-gr + 12} y={-gr * 0.42 + 20}>{d.name}</text>
-            <text class="n-cidr" x={gr - 12} y={-gr * 0.42 + 20} text-anchor="end">{d.cidr ?? 'from boundaries'}</text>
-            <text class="gf-count" x={-gr + 12} y={-gr * 0.42 + 42}>{total} host{total === 1 ? '' : 's'}</text>
+            <rect class="gf-plate" x={-gr} y={-gh / 2} width={gr * 2} height={gh} rx="10" stroke={LANE_INKS[d.ink % LANE_INKS.length]} />
+            <text class="n-name" x={-gr + 12} y={-gh / 2 + 18}>{d.name}</text>
+            <text class="n-cidr" x={-gr + 12} y={-gh / 2 + 32}>{d.cidr ?? 'from boundaries'}</text>
+            <text class="gf-count" x={-gr + 12} y={-gh / 2 + 48}>{total} host{total === 1 ? '' : 's'}</text>
             {#if d.dark}
-              <text class="zone-state bad" x={gr - 12} y={-gr * 0.42 + 42} text-anchor="end">DARK</text>
+              <text class="zone-state bad" x={gr - 12} y={-gh / 2 + 48} text-anchor="end">DARK</text>
             {/if}
           </g>
         {/each}
@@ -4636,6 +4650,15 @@
 
   .gf-card.dark .gf-plate {
     opacity: 0.55;
+  }
+
+  /* A size down from the default `.n-cidr` (#976 item 2): this card is
+     the smallest thing on the map that prints a full CIDR, and it now
+     stacks under the name rather than racing it across one line, so
+     the narrower glyphs buy back some of the margin a modest card-width
+     floor did not. */
+  .gf-card .n-cidr {
+    font-size: 9px;
   }
 
   .gf-count {
