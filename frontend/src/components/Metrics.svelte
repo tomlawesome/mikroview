@@ -246,6 +246,11 @@
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
+    /* The scroll track sits inside this box, so without a right inset the
+       content runs under it -- the register's own scroll and the table's
+       right-hand column both did (#743). Padding lives on the scrolling
+       element itself, so it holds whether or not the track is showing. */
+    padding-right: 14px;
     padding-bottom: 10px;
   }
 

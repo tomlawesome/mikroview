@@ -107,11 +107,17 @@
 
   // A router that pushes but is not in the devices config is drawn as a
   // state of the dashed third slot (rounds 37-38, `#ent.unreg`), not as
-  // one more card in the fleet: the empty berth advertises an address,
-  // and this is that address answering. So the berth gives way to it
-  // rather than sitting alongside -- the slot says either "point a
-  // router here" or "something is pointed here and has no name yet",
-  // never both.
+  // one more card in the fleet: it gets its own card, in `.fcard.unreg`
+  // form, ahead of the berth in `.fcards`.
+  //
+  // The berth used to give way to that card -- one dashed slot saying
+  // either "point a router here" or "something is pointed here and has
+  // no name yet", never both. #828 overturned that (owner, 2026-09-03):
+  // an operator with one unregistered router already pushing still needs
+  // to see how to connect a second one, and those instructions live only
+  // in the berth. The berth is now always the last card in the row,
+  // collapsed once anything is pushing, alongside any unregistered
+  // card(s) rather than replaced by them.
   //
   // This is the one fact the round-30 device-status strip carried that
   // had no home once that strip became the router cards (round-37
@@ -626,33 +632,31 @@
               {/if}
             </div>
           {/each}
-          {#if unregisteredRouters.length === 0}
-            <div class="fcard berth" class:open={berthOpen}>
-            {#if berthOpen}
-              <div class="berth-panel" role="group" aria-label="Add a router">
-                <button type="button" class="berth-close" use:focusOnOpen onclick={closeBerth} aria-label="Close">✕</button>
-                <p>
-                  Point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'mikroview’s syslog port'} and
-                  it appears here.
-                </p>
-                <p>Routers push to mikroview — it never connects to them.</p>
-                {#if berthSyslogCommands}
-                  <pre class="paste">{berthSyslogCommands}</pre>
-                {:else}
-                  <p class="dim">Loading the commands to paste…</p>
-                {/if}
-              </div>
-            {:else}
-              <button
-                type="button"
-                class="berth-trigger"
-                bind:this={berthTrigger}
-                onclick={openBerth}
-                aria-label="Add a router"
-              ></button>
-            {/if}
+          <div class="fcard berth" class:open={berthOpen}>
+          {#if berthOpen}
+            <div class="berth-panel" role="group" aria-label="Add a router">
+              <button type="button" class="berth-close" use:focusOnOpen onclick={closeBerth} aria-label="Close">✕</button>
+              <p>
+                Point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'mikroview’s syslog port'} and
+                it appears here.
+              </p>
+              <p>Routers push to mikroview — it never connects to them.</p>
+              {#if berthSyslogCommands}
+                <pre class="paste">{berthSyslogCommands}</pre>
+              {:else}
+                <p class="dim">Loading the commands to paste…</p>
+              {/if}
             </div>
+          {:else}
+            <button
+              type="button"
+              class="berth-trigger"
+              bind:this={berthTrigger}
+              onclick={openBerth}
+              aria-label="Add a router"
+            ></button>
           {/if}
+          </div>
         </div>
     </div>
 
