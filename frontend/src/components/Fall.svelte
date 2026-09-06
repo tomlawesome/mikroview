@@ -26,14 +26,16 @@
   import {
     fallState,
     boundaryKeyOf,
+    brokenWatchesByKey,
     laneColors,
     openBoundaryInStream as openInStream,
     type FallBoundary,
   } from '../lib/fall.svelte'
   import { fetchEventsWindow, fetchFlags } from '../lib/api'
-  import { formatHM } from '../lib/format'
+  import { formatHM, formatRelative } from '../lib/format'
   import { lookupPort } from '../lib/commonPorts'
-  import type { ClientEvent, Flag } from '../lib/types'
+  import { nightlySummary } from '../lib/watchWindow'
+  import type { ClientEvent, Flag, WatchlistEntry } from '../lib/types'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import AlarmCluster from './AlarmCluster.svelte'
 
@@ -267,6 +269,10 @@
     dropShare: number // 0-1 over the window, for the red ramp wash
     deepestActive: number // deepest bucket with traffic -- below it the band is black
     flagMarks: FlagMark[]
+    // #806: enabled, scoped watchlist entries whose ring broke on this
+    // exact boundary -- empty on every band until an entry both names
+    // this boundary and its ring actually breaks.
+    brokenWatches: WatchlistEntry[]
   }
 
   // portX maps carriers onto [10, 90] linearly by port number.
@@ -425,6 +431,10 @@
       flagsByKey.set(key, list)
     }
 
+    // #806: the fall's own join of watchlist entries by the boundary
+    // they name, computed once per bandsData pass alongside flagsByKey.
+    const brokenByKey = brokenWatchesByKey(fallState.entries)
+
     function toView(b: FallBoundary, ports: PortMap, total: number): BandView {
       const { carriers, quieterCount } = carriersFor(ports)
       const nowMax = Math.max(1, ...carriers.map((c) => c.buckets[0]?.total ?? 0))
@@ -448,6 +458,7 @@
         dropShare: tot > 0 ? drops / tot : 0,
         deepestActive,
         flagMarks: flagsByKey.get(b.key) ?? [],
+        brokenWatches: brokenByKey.get(b.key) ?? [],
       }
     }
 
@@ -881,11 +892,23 @@
     }
   }
 
+  // #806: names the watch and the break, the same "no invented
+  // specifics" discipline Watchlist.svelte's own watchStory() follows --
+  // the since clause is dropped rather than guessed when the record
+  // carries none, and the nightly count comes from nightlySummary's own
+  // real tally rather than a made-up streak.
+  function watchBrokenSummary(e: WatchlistEntry): string {
+    const since = e.ring?.since ? ` since ${formatRelative(e.ring.since, appState.now)}` : ''
+    const nights = nightlySummary(e.nights)
+    return `watch broken -- ${e.name || 'unnamed watch'}: nothing has matched inside its window${since}${nights ? ` (${nights})` : ''}`
+  }
+
   function bandHeadSummary(b: BandView): string {
     const parts: string[] = [b.label]
     if (b.key === '__unmatched__') parts.push('events whose boundary is not in a pushed rule table yet')
     else if (b.coverage === 'dark') parts.push('dark -- blank because nothing is logged, not because nothing is sent')
     else if (b.coverage === 'unknown') parts.push('coverage unknown -- no router has pushed its rule table yet')
+    else if (b.brokenWatches.length > 0) parts.push(watchBrokenSummary(b.brokenWatches[0]))
     if (b.total === 0) parts.push('no traffic in this window')
     else parts.push(`${b.total} events this window`)
     parts.push('activate to open in Stream, filtered to this boundary')
@@ -1098,6 +1121,18 @@
                 <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">DARK — NO LOG RULE</text>
               {:else if b.coverage === 'unknown'}
                 <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">COVERAGE UNKNOWN</text>
+              {:else if b.brokenWatches.length > 0}
+                <!-- #806: a scoped, enabled watcher whose ring broke on
+                     this exact boundary -- entry.ring.broken, never the
+                     estate-wide coverage[entry] === 'no-logging' (that
+                     stays on the header's ○1 chip and the Watchlist row;
+                     no band prints it). Outranks the flag caption below:
+                     "dark > WATCH BROKEN > flag caption > WATCHED"
+                     (#806's ratified order) -- a ring nobody can see is
+                     the deeper fact, and the flag keeps its ✱ mark at
+                     its own moment regardless of which caption wins this
+                     line. -->
+                <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">WATCH BROKEN</text>
               {:else if b.flagMarks.length > 0}
                 {@const fired = b.flagMarks.reduce((a, m) => (m.idx > a.idx ? m : a), b.flagMarks[0])}
                 <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50"
@@ -1113,23 +1148,8 @@
                      in green says everything we need". No tick -- the
                      ink carries the verdict, and every sibling caption
                      on this line ("✱ NEW CARRIER", "DARK — NO LOG RULE",
-                     "NOT IN A PUSHED TABLE") is a plain statement too.
-
-                     The drawing's other half of this pair, "WATCH
-                     BROKEN" in the alarm ink, is deliberately NOT built
-                     here, and #790 asked for exactly that answer rather
-                     than an invented one. Nothing in mikroview can say
-                     which *boundary* a broken watcher belongs to: a
-                     watchlist entry scopes to a source identity (MAC or
-                     IP), a destination, ports and an address list --
-                     it carries no chain/inInterface/outInterface, and
-                     internal/engine/coverage.go never reads those off a
-                     rule either, so 'no-logging' coverage is a statement
-                     about the whole estate rather than about one band.
-                     Printing it on a band would attribute an estate-wide
-                     fact to one boundary that may be logging perfectly
-                     well -- the same class of dishonesty #737 fixed. The
-                     capability gap is tracked; see the PR body. -->
+                     "NOT IN A PUSHED TABLE", "WATCH BROKEN") is a plain
+                     statement too. -->
                 <text class="chip ch-ok band-caption ok" x={slot.bx + 6} y="50">WATCHED</text>
               {/if}
               <rect x={slot.bx} y="56" width={bandW} height="3" rx="1.5" fill={slot.laneColor} />

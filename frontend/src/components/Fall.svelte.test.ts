@@ -34,12 +34,14 @@ vi.mock('../lib/api', () => ({
   fetchRouterNat: vi.fn(async () => ({ available: false, rules: [] })),
   fetchEventsWindow: vi.fn(async () => ({ events: [], hasMore: false })),
   fetchFlags: vi.fn(async () => ({ flags: [], timeSeries: [] })),
+  fetchWatchlistEntries: vi.fn(async () => ({ entries: [], coverage: {} })),
 }))
 
 import { fetchEventsWindow, fetchFlags } from '../lib/api'
 import { fallState, type FallBoundary } from '../lib/fall.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { appState } from '../lib/state.svelte'
+import type { WatchlistEntry } from '../lib/types'
 
 // jsdom has no window.matchMedia -- AccountMenu mounts ThemeMenu, which
 // pulls in lib/viewport.svelte.ts; its ViewportState singleton calls
@@ -133,12 +135,30 @@ function makeBoundaries(n: number): FallBoundary[] {
   )
 }
 
-// Renders Fall with the given boundaries/events/flags already resolved,
-// bypassing fallState's own fetchDevices/fetchRouterRules pipeline
-// (mocked to resolve empty) the same way LiveTable.svelte.test.ts seeds
-// fallState.boundaries directly -- the reactive read is what these
+// #806: a scoped, enabled, ring-broken watchlist entry -- overrides
+// build a specific band's claim; boundary/ring absent by default so a
+// bare watchEntry() makes no claim on any band.
+function watchEntry(overrides: Partial<WatchlistEntry> = {}): WatchlistEntry {
+  return {
+    id: `w${nextId++}`,
+    name: 'cam-porch quiet hours',
+    enabled: true,
+    createdAt: '',
+    ...overrides,
+  }
+}
+
+// Renders Fall with the given boundaries/events/flags/entries already
+// resolved, bypassing fallState's own fetchDevices/fetchRouterRules
+// pipeline (mocked to resolve empty) the same way LiveTable.svelte.test.ts
+// seeds fallState.boundaries directly -- the reactive read is what these
 // tests are about, not the rule-table fetch.
-async function renderFall(opts: { boundaries: FallBoundary[]; events?: ClientEvent[]; flags?: Flag[] }) {
+async function renderFall(opts: {
+  boundaries: FallBoundary[]
+  events?: ClientEvent[]
+  flags?: Flag[]
+  entries?: WatchlistEntry[]
+}) {
   vi.mocked(fetchEventsWindow).mockResolvedValue({
     events: opts.events ?? [],
     hasMore: false,
@@ -149,6 +169,7 @@ async function renderFall(opts: { boundaries: FallBoundary[]; events?: ClientEve
   const result = render(Fall)
   await waitFor(() => expect(fallState.loading).toBe(false))
   fallState.boundaries = opts.boundaries
+  fallState.entries = opts.entries ?? []
   flushSync()
   await waitFor(() => {
     expect(result.container.querySelector('.rig svg')).toBeTruthy()
@@ -159,6 +180,7 @@ async function renderFall(opts: { boundaries: FallBoundary[]; events?: ClientEve
 beforeEach(() => {
   vi.clearAllMocks()
   fallState.boundaries = []
+  fallState.entries = []
   fallState.loading = true
   fallState.error = null
   flagsState.list = []
@@ -363,6 +385,99 @@ describe('band status vocabulary matches the mockup (#700 fault 9, reworded by #
     const { container } = await renderFall({ boundaries: [boundary()], events, flags })
     expect(container.textContent).toContain('✱ NEW DEVICE')
     expect(container.textContent).not.toContain('ALARM FIRED')
+  })
+})
+
+describe('WATCH BROKEN: a per-boundary broken watch (#806)', () => {
+  it('reads WATCH BROKEN in the alarm ink for a scoped, enabled entry whose ring broke on this boundary', async () => {
+    const entries = [
+      watchEntry({
+        boundary: { chain: 'forward', inInterface: 'iot', outInterface: 'bridge1' },
+        ring: { broken: true },
+      }),
+    ]
+    const { container } = await renderFall({ boundaries: [boundary()], events: [], entries })
+    const caption = container.querySelector('.band-caption')
+    expect(caption?.textContent?.trim()).toBe('WATCH BROKEN')
+    expect(caption?.classList.contains('ch-bad')).toBe(true)
+  })
+
+  it('makes no per-band claim for an entry with no boundary -- estate-wide facts stay off the band', async () => {
+    // Ring genuinely broken, but the entry carries no boundary at all:
+    // nothing in mikroview can say which band it belongs to, so the
+    // band must read WATCHED, not WATCH BROKEN.
+    const entries = [watchEntry({ ring: { broken: true } })]
+    const { container } = await renderFall({ boundaries: [boundary()], events: [], entries })
+    const caption = container.querySelector('.band-caption')
+    expect(caption?.textContent?.trim()).toBe('WATCHED')
+  })
+
+  it('never reads WATCH BROKEN for a paused entry', async () => {
+    const entries = [
+      watchEntry({
+        enabled: false,
+        boundary: { chain: 'forward', inInterface: 'iot', outInterface: 'bridge1' },
+        ring: { broken: true },
+      }),
+    ]
+    const { container } = await renderFall({ boundaries: [boundary()], events: [], entries })
+    const caption = container.querySelector('.band-caption')
+    expect(caption?.textContent?.trim()).toBe('WATCHED')
+  })
+
+  it('never reads WATCH BROKEN for a scoped entry whose ring is intact', async () => {
+    const entries = [watchEntry({ boundary: { chain: 'forward', inInterface: 'iot', outInterface: 'bridge1' } })]
+    const { container } = await renderFall({ boundaries: [boundary()], events: [], entries })
+    const caption = container.querySelector('.band-caption')
+    expect(caption?.textContent?.trim()).toBe('WATCHED')
+  })
+
+  it('stays DARK on a dark boundary even with a broken watcher scoped to it -- dark outranks WATCH BROKEN', async () => {
+    const entries = [
+      watchEntry({
+        boundary: { chain: 'forward', inInterface: 'iot', outInterface: 'bridge1' },
+        ring: { broken: true },
+      }),
+    ]
+    const { container } = await renderFall({
+      boundaries: [boundary({ coverage: 'dark' })],
+      events: [],
+      entries,
+    })
+    const caption = container.querySelector('.band-caption')
+    expect(caption?.textContent?.trim()).toBe('DARK — NO LOG RULE')
+    expect(container.textContent).not.toContain('WATCH BROKEN')
+  })
+
+  it('outranks the flag caption on the same band', async () => {
+    const target = '198.51.100.50'
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', srcIp: target, dstPort: 445 })]
+    const flags = [makeFlag('new_device', target)]
+    const entries = [
+      watchEntry({
+        boundary: { chain: 'forward', inInterface: 'iot', outInterface: 'bridge1' },
+        ring: { broken: true },
+      }),
+    ]
+    const { container } = await renderFall({ boundaries: [boundary()], events, flags, entries })
+    const caption = container.querySelector('.band-caption')
+    expect(caption?.textContent?.trim()).toBe('WATCH BROKEN')
+    // The flag itself is not lost -- it still fires its own attention
+    // chip in the fall's head, just not this band's caption line.
+    expect(container.textContent).toContain('NEW DEVICE')
+  })
+
+  it('names the watch and the break in the band-head summary', async () => {
+    const entries = [
+      watchEntry({
+        name: 'cam-porch quiet hours',
+        boundary: { chain: 'forward', inInterface: 'iot', outInterface: 'bridge1' },
+        ring: { broken: true },
+      }),
+    ]
+    const { container } = await renderFall({ boundaries: [boundary()], events: [], entries })
+    const head = container.querySelector('.band-head')
+    expect(head?.getAttribute('aria-label')).toContain('watch broken -- cam-porch quiet hours')
   })
 })
 

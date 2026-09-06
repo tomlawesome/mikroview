@@ -4,18 +4,21 @@ import { describe, expect, it, vi } from 'vitest'
 import type { RouterFilterRule, RouterNatRule } from './api'
 import type { Device } from './types'
 
-// FallState.refresh() (below) fetches devices and both rule tables --
-// mocked so the refresh test does not reach the network. The pure
-// boundariesFromRules/boundaryKeyOf tests below never call refresh(), so
-// this mock does not touch them.
+// FallState.refresh() (below) fetches devices, both rule tables and the
+// watchlist entries (#806) -- mocked so the refresh test does not reach
+// the network. The pure boundariesFromRules/boundaryKeyOf/
+// brokenWatchesByKey tests below never call refresh(), so this mock does
+// not touch them.
 vi.mock('./api', () => ({
   fetchDevices: vi.fn(),
   fetchRouterRules: vi.fn(),
   fetchRouterNat: vi.fn(),
+  fetchWatchlistEntries: vi.fn(),
 }))
 
-import { fetchDevices, fetchRouterNat, fetchRouterRules } from './api'
-import { boundariesFromRules, boundaryKeyOf, fallState } from './fall.svelte'
+import { fetchDevices, fetchRouterNat, fetchRouterRules, fetchWatchlistEntries } from './api'
+import { boundariesFromRules, boundaryKeyOf, brokenWatchesByKey, fallState } from './fall.svelte'
+import type { WatchlistEntry } from './types'
 
 function rule(over: Partial<RouterFilterRule> = {}): RouterFilterRule {
   return {
@@ -48,11 +51,27 @@ describe('FallState.refresh (#695)', () => {
       available: true,
       rules: [natRule({ chain: 'srcnat', outInterface: 'ether1' })],
     })
+    vi.mocked(fetchWatchlistEntries).mockResolvedValue({ entries: [], coverage: {} })
     await fallState.refresh()
     // Before #695's fix, refresh() never called fetchRouterNat at all,
     // so a pushed masquerade rule produced no boundary and every live
     // NAT event fell through to __unmatched__ regardless.
     expect(fallState.boundaries.map((b) => b.key)).toContain(boundaryKeyOf('srcnat', undefined, 'ether1'))
+  })
+})
+
+describe('FallState.refresh loads watchlist entries alongside rules (#806)', () => {
+  it('is populated on entries, non-fatally if the watchlist read fails', async () => {
+    vi.mocked(fetchDevices).mockResolvedValue([])
+    vi.mocked(fetchRouterRules).mockResolvedValue({ available: true, rules: [] })
+    vi.mocked(fetchRouterNat).mockResolvedValue({ available: true, rules: [] })
+    vi.mocked(fetchWatchlistEntries).mockRejectedValue(new Error('boom'))
+    await fallState.refresh()
+    // A watchlist read failing must never take the fall's own boundaries
+    // down with it -- the same non-fatal contract fetchRouterRules/
+    // fetchRouterNat already have above.
+    expect(fallState.error).toBeNull()
+    expect(fallState.entries).toEqual([])
   })
 })
 
@@ -188,5 +207,58 @@ describe('boundariesFromRules', () => {
       true,
     )
     expect(bands.map((b) => b.label)).toEqual(['a-wan · input', 'z-wan · input'])
+  })
+})
+
+function entry(over: Partial<WatchlistEntry> = {}): WatchlistEntry {
+  return {
+    id: 'e1',
+    name: 'cam-porch quiet hours',
+    enabled: true,
+    createdAt: '',
+    ...over,
+  }
+}
+
+// #806: the fall's own join of watchlist entries onto the boundary they
+// name. See fall.svelte.ts's own doc comment for why an unscoped or
+// disabled entry, or one whose ring holds, makes no appearance -- each
+// case here pins one of those refusals plus the one case that should
+// actually produce a claim.
+describe('brokenWatchesByKey (#806)', () => {
+  it('keys a scoped, enabled, ring-broken entry by boundaryKeyOf', () => {
+    const e = entry({ boundary: { chain: 'forward', inInterface: 'iot', outInterface: 'ether1' }, ring: { broken: true } })
+    const m = brokenWatchesByKey([e])
+    expect(m.get(boundaryKeyOf('forward', 'iot', 'ether1'))).toEqual([e])
+  })
+
+  it('makes no per-band claim for an entry with no boundary at all', () => {
+    const e = entry({ ring: { broken: true } })
+    const m = brokenWatchesByKey([e])
+    expect(m.size).toBe(0)
+  })
+
+  it('never places a watcher whose ring is intact', () => {
+    const e = entry({ boundary: { chain: 'forward', inInterface: 'iot', outInterface: 'ether1' } })
+    const m = brokenWatchesByKey([e])
+    expect(m.size).toBe(0)
+  })
+
+  it('never places a paused entry, even a scoped, ring-broken one', () => {
+    const e = entry({
+      enabled: false,
+      boundary: { chain: 'forward', inInterface: 'iot', outInterface: 'ether1' },
+      ring: { broken: true },
+    })
+    const m = brokenWatchesByKey([e])
+    expect(m.size).toBe(0)
+  })
+
+  it('groups more than one broken watcher naming the same boundary', () => {
+    const boundary = { chain: 'forward', inInterface: 'iot', outInterface: 'ether1' }
+    const a = entry({ id: 'a', boundary, ring: { broken: true } })
+    const b = entry({ id: 'b', boundary, ring: { broken: true } })
+    const m = brokenWatchesByKey([a, b])
+    expect(m.get(boundaryKeyOf('forward', 'iot', 'ether1'))).toEqual([a, b])
   })
 })
