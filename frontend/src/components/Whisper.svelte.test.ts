@@ -380,4 +380,21 @@ describe("the stream's hand (rounds 36-38)", () => {
     // the figure on the control and the rows in the file are one thing.
     expect(csv.title).toContain('2 rows, every column')
   })
+
+  // Round 36 (#1005): "ring holds 41 m" replaced the old buffer-%
+  // reading with how far back the held buffer's own oldest line goes --
+  // the same set csv ↓'s title counts above.
+  it('says how far back the held buffer reaches, after top port', () => {
+    appState.events = [event({ id: 1, receivedAt: BASE }), event({ id: 2, receivedAt: BASE + 41 * MIN })]
+    const { stat } = renderHand()
+
+    expect(stat()).toContain('ring holds 41 m')
+  })
+
+  it('says nothing of the reach with an empty buffer, rather than "ring holds 0 m"', () => {
+    appState.events = []
+    const { stat } = renderHand()
+
+    expect(stat()).not.toContain('ring holds')
+  })
 })
