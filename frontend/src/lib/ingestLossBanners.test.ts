@@ -40,11 +40,16 @@ describe('buildIngestLossBanners', () => {
     )
 
     const byId = Object.fromEntries(banners.map((b) => [b.id, b]))
-    expect(byId.dropped.text).toBe('Ingest queue full: 812 log lines lost')
-    expect(byId.rejectedConfigured.text).toBe('Syslog slots full: 43 refused (branch-e4a1 locked out)')
-    expect(byId.rejectedUndeclared.text).toBe('Undeclared sources: 2,867 connections refused')
-    expect(byId.oversized.text).toBe('Non-RouterOS sender: 7 oversized messages received from 10.20.3.9 were truncated')
-    expect(byId.wsDropped.text).toBe('Slow browser tab: 156 events not shown (but still logged)')
+    expect(byId.dropped.label).toBe('Ingest queue full')
+    expect(byId.dropped.detail).toBe('812 log lines lost')
+    expect(byId.rejectedConfigured.label).toBe('Syslog slots full')
+    expect(byId.rejectedConfigured.detail).toBe('43 refused (branch-e4a1 locked out)')
+    expect(byId.rejectedUndeclared.label).toBe('Undeclared sources')
+    expect(byId.rejectedUndeclared.detail).toBe('2,867 connections refused')
+    expect(byId.oversized.label).toBe('Non-RouterOS sender')
+    expect(byId.oversized.detail).toBe('7 oversized messages received from 10.20.3.9 were truncated')
+    expect(byId.wsDropped.label).toBe('Slow browser tab')
+    expect(byId.wsDropped.detail).toBe('156 events not shown (but still logged)')
   })
 
   it('uses the singular form and verb when a count is exactly 1', () => {
@@ -58,20 +63,22 @@ describe('buildIngestLossBanners', () => {
       }),
     )
     const byId = Object.fromEntries(banners.map((b) => [b.id, b]))
-    expect(byId.dropped.text).toBe('Ingest queue full: 1 log line lost')
-    expect(byId.rejectedUndeclared.text).toBe('Undeclared sources: 1 connection refused')
-    expect(byId.oversized.text).toBe('Non-RouterOS sender: 1 oversized message received from 10.20.3.9 was truncated')
-    expect(byId.wsDropped.text).toBe('Slow browser tab: 1 event not shown (but still logged)')
+    expect(byId.dropped.detail).toBe('1 log line lost')
+    expect(byId.rejectedUndeclared.detail).toBe('1 connection refused')
+    expect(byId.oversized.detail).toBe('1 oversized message received from 10.20.3.9 was truncated')
+    expect(byId.wsDropped.detail).toBe('1 event not shown (but still logged)')
   })
 
   it('omits the locked-out router name when no host is retained', () => {
     const [banner] = buildIngestLossBanners(inputs({ rejectedConfigured: 43, rejectedConfiguredHosts: [] }))
-    expect(banner.text).toBe('Syslog slots full: 43 refused')
+    expect(banner.label).toBe('Syslog slots full')
+    expect(banner.detail).toBe('43 refused')
   })
 
   it('omits "received from" when no oversized sender host is known yet', () => {
     const [banner] = buildIngestLossBanners(inputs({ oversized: 7, oversizedHost: '' }))
-    expect(banner.text).toBe('Non-RouterOS sender: 7 oversized messages received were truncated')
+    expect(banner.label).toBe('Non-RouterOS sender')
+    expect(banner.detail).toBe('7 oversized messages received were truncated')
   })
 
   it('assigns the owner-ratified severity per signal', () => {

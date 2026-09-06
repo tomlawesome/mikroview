@@ -62,6 +62,24 @@ describe('ConnectionBanner', () => {
     expect(banner.textContent).toContain('Slow browser tab: 156 events not shown (but still logged)')
   })
 
+  it('sets the label as its own bold element, not part of a flat string (owner ruling, 2026-09-06)', () => {
+    // The two-tier hierarchy the owner asked for: the label is the
+    // heading, bold and read first; the detail is subordinate, at text
+    // weight. Ported from docs/design/concepts/ingest-loss-995's
+    // <strong>/<span class="dt"> markup, so this proves the label is a
+    // distinct emphasised element rather than a substring of one flat
+    // banner line.
+    appState.wsDropped = 156
+    render(ConnectionBanner)
+    flushSync()
+
+    const banner = screen.getByRole('status')
+    const strong = banner.querySelector('strong')
+    expect(strong).not.toBeNull()
+    expect(strong?.textContent).toBe('Slow browser tab:')
+    expect(banner.textContent).toContain('156 events not shown (but still logged)')
+  })
+
   it('renders the single firing signal alone, with no "+more" chip', () => {
     appState.stats = { syslog: syslogStats({ rejected: 2867 }) } as never
     render(ConnectionBanner)

@@ -24,9 +24,14 @@ export interface IngestLossBanner {
   id: IngestLossBannerId
   severity: IngestLossSeverity
   // The owner's ratified copy, verbatim, with numbers and the
-  // router/IP already substituted -- nothing downstream reformats this
-  // further.
-  text: string
+  // router/IP already substituted -- nothing downstream reformats
+  // either half further. Split in two so the component can set them
+  // as the ratified two-tier hierarchy (label bold and dominant,
+  // detail at text weight) instead of one flat string -- see
+  // docs/design/concepts/ingest-loss-995's <strong>/<span class="dt">
+  // markup, which this mirrors field-for-field.
+  label: string
+  detail: string
 }
 
 // The five raw counters the banners are built from. rejectedUndeclared
@@ -83,7 +88,8 @@ export function buildIngestLossBanners(input: IngestLossInputs): IngestLossBanne
     banners.push({
       id: 'dropped',
       severity: 'critical',
-      text: `Ingest queue full: ${input.dropped.toLocaleString()} log ${noun(input.dropped, 'line')} lost`,
+      label: 'Ingest queue full',
+      detail: `${input.dropped.toLocaleString()} log ${noun(input.dropped, 'line')} lost`,
     })
   }
 
@@ -93,7 +99,8 @@ export function buildIngestLossBanners(input: IngestLossInputs): IngestLossBanne
     banners.push({
       id: 'rejectedConfigured',
       severity: 'warn',
-      text: `Syslog slots full: ${input.rejectedConfigured.toLocaleString()} refused${lockout}`,
+      label: 'Syslog slots full',
+      detail: `${input.rejectedConfigured.toLocaleString()} refused${lockout}`,
     })
   }
 
@@ -101,7 +108,8 @@ export function buildIngestLossBanners(input: IngestLossInputs): IngestLossBanne
     banners.push({
       id: 'rejectedUndeclared',
       severity: 'caution',
-      text: `Undeclared sources: ${input.rejectedUndeclared.toLocaleString()} ${noun(input.rejectedUndeclared, 'connection')} refused`,
+      label: 'Undeclared sources',
+      detail: `${input.rejectedUndeclared.toLocaleString()} ${noun(input.rejectedUndeclared, 'connection')} refused`,
     })
   }
 
@@ -111,7 +119,8 @@ export function buildIngestLossBanners(input: IngestLossInputs): IngestLossBanne
     banners.push({
       id: 'oversized',
       severity: 'caution',
-      text: `Non-RouterOS sender: ${input.oversized.toLocaleString()} oversized ${noun(input.oversized, 'message')}${from} ${verb} truncated`,
+      label: 'Non-RouterOS sender',
+      detail: `${input.oversized.toLocaleString()} oversized ${noun(input.oversized, 'message')}${from} ${verb} truncated`,
     })
   }
 
@@ -119,7 +128,8 @@ export function buildIngestLossBanners(input: IngestLossInputs): IngestLossBanne
     banners.push({
       id: 'wsDropped',
       severity: 'info',
-      text: `Slow browser tab: ${input.wsDropped.toLocaleString()} ${noun(input.wsDropped, 'event')} not shown (but still logged)`,
+      label: 'Slow browser tab',
+      detail: `${input.wsDropped.toLocaleString()} ${noun(input.wsDropped, 'event')} not shown (but still logged)`,
     })
   }
 
