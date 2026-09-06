@@ -32,23 +32,32 @@
   // is what records an expectation now -- bounded by the size of the
   // firing being judged, not "never again" outright. A flag that has
   // been here before says so on its own row (see returningNoteFor).
-  // Confidence, campaign grouping, the density picker and the
-  // reputation/evidence panels are still deliberately absent -- see
-  // #691 for what remains. The ledger of recorded expectations is #640
-  // part C.
+  // #988 (round 47) gave three more of those gaps a home: the flags one
+  // source raised inside one 30-minute window fold into a campaign row
+  // that opens to its members (`tr.camp`/`tr.mem`/`tr.crule`), a
+  // detector's confidence sits beside the type as a bare number only
+  // where a detector scored the flag (`.conf`, and the drawer's own
+  // `.scored` line), and a by-type strip above the column heads counts
+  // what the table holds and filters it on a click (`.bytype`). The
+  // density picker and the reputation snapshot stay absent: the
+  // snapshot is one click away through the IP popover (owner,
+  // 2026-09-06), and #691 has what else remains. The ledger of recorded
+  // expectations is #640 part C.
   import { onMount } from 'svelte'
-  import { flagsState, extractSourceIp } from '../lib/flags.svelte'
+  import { flagsState, extractSourceIp, buildCampaigns } from '../lib/flags.svelte'
+  import type { Campaign } from '../lib/flags.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { anyBaselineWarming } from '../lib/learningShelf'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { fetchFlagEpisode, fetchExpectations } from '../lib/api'
-  import { familyOf } from '../lib/flagPalette'
+  import { familyOf, worstFamilyOf } from '../lib/flagPalette'
+  import { FLAG_TYPE_ORDER } from '../lib/metricsSeries'
   import { formatHM, formatTime } from '../lib/format'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
   import { headlineFor, returningNoteFor, storyFor } from '../lib/flagNarrative'
-  import { episodeShapeFor } from '../lib/episodeShape'
+  import { episodeShapeFor, RECENT_MS } from '../lib/episodeShape'
   import { zonesState } from '../lib/zones.svelte'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
   import { topologyNavState } from '../lib/topologyNav.svelte'
@@ -236,7 +245,13 @@
     // at a provisional flag as readily as a settled one.
     const f = active.find((x) => x.id === id) ?? provisionalActive.find((x) => x.id === id)
     expandedId = f?.id ?? null
-    if (f) loadEpisode(f)
+    if (f) {
+      // A member's drawer sits inside its campaign (#988), so the
+      // campaign opens with it; nothing to do for a flag on its own.
+      const c = grouped.campaigns.find((x) => x.flags.some((m) => m.id === f.id))
+      if (c && !openCampaigns.includes(c.id)) openCampaigns = [...openCampaigns, c.id]
+      loadEpisode(f)
+    }
   })
 
   // Tick positions for the episode strip, one per event, normalised
@@ -510,6 +525,53 @@
   let sortDir = $state<SortDir>('asc')
   let filters = $state({ type: '', where: '', evidence: '', count: '', age: '' })
 
+  // The by-type strip (#988, round 47): one cell per type with something
+  // open, its count, and a bar of that count against the largest. It
+  // counts what the table holds -- open, settled flags, not the engine
+  // room's hourly episodes -- because a click on a cell filters this
+  // table, and the two must agree. A judged row leaves the count the
+  // moment its stamp lands; the strip is gone at zero.
+  const byType = $derived.by(() => {
+    const counts = new Map<FlagType, number>()
+    for (const f of active) if (!isDone(verdictKind(f))) counts.set(f.type, (counts.get(f.type) ?? 0) + 1)
+    const rank = (t: FlagType) => {
+      const i = FLAG_TYPE_ORDER.indexOf(t)
+      return i === -1 ? FLAG_TYPE_ORDER.length : i
+    }
+    const cells = [...counts].map(([type, n]) => ({ type, n }))
+    cells.sort((a, b) => b.n - a.n || rank(a.type) - rank(b.type))
+    return {
+      cells,
+      total: cells.reduce((n, c) => n + c.n, 0),
+      max: Math.max(1, ...cells.map((c) => c.n)),
+    }
+  })
+
+  // The picked cell: the FLAG filter reads the type's label so the
+  // filter row says what the table is narrowed to, and typing anything
+  // else there unpicks the cell (the effect below). A pick matches the
+  // type exactly rather than by the label's substring, so "Port scan"
+  // never also keeps "Low-and-slow port scan".
+  let pickedType = $state<FlagType | null>(null)
+
+  function pickType(t: FlagType) {
+    pickedType = pickedType === t ? null : t
+    filters.type = pickedType ? labelFor(pickedType) : ''
+  }
+
+  $effect(() => {
+    if (pickedType && filters.type !== labelFor(pickedType)) pickedType = null
+  })
+
+  // The last of a picked type judged away: nothing left to show, so the
+  // pick clears rather than leaving an empty table under a dimmed strip.
+  $effect(() => {
+    if (pickedType && !byType.cells.some((c) => c.type === pickedType)) {
+      pickedType = null
+      filters.type = ''
+    }
+  })
+
   function toggleSort(key: FlagSortKey) {
     if (sortKey === key) {
       sortDir = sortDir === 'asc' ? 'desc' : 'asc'
@@ -524,41 +586,194 @@
     return sortDir === 'asc' ? '▲' : '▼'
   }
 
-  const filteredActive = $derived(
-    active.filter(
-      (f) =>
-        matchesFilter(labelFor(f.type), filters.type) &&
-        matchesFilter(f.target, filters.where) &&
-        matchesFilter(f.detail, filters.evidence) &&
-        matchesFilter(String(f.count), filters.count) &&
-        matchesFilter(formatFlagAge(f.lastSeen, appState.now), filters.age),
-    ),
-  )
+  function flagMatches(f: Flag): boolean {
+    return (
+      (pickedType ? f.type === pickedType : matchesFilter(labelFor(f.type), filters.type)) &&
+      matchesFilter(f.target, filters.where) &&
+      matchesFilter(f.detail, filters.evidence) &&
+      matchesFilter(String(f.count), filters.count) &&
+      matchesFilter(formatFlagAge(f.lastSeen, appState.now), filters.age)
+    )
+  }
 
-  const sortedActive = $derived.by((): Flag[] => {
-    const list = [...filteredActive]
-    list.sort((a, b) => {
-      switch (sortKey) {
-        case 'type':
-          return compareText(labelFor(a.type), labelFor(b.type), sortDir)
-        case 'where':
-          return compareText(a.target, b.target, sortDir)
-        case 'evidence':
-          return compareText(a.detail, b.detail, sortDir)
-        case 'count':
-          return compareNumeric(a.count, b.count, sortDir)
-        case 'age': {
-          // Elapsed time since firstSeen -- ascending means smallest
-          // elapsed (newest) first, the default that reproduces today's
-          // fixed order.
-          const ageA = appState.now - new Date(a.firstSeen).getTime()
-          const ageB = appState.now - new Date(b.firstSeen).getTime()
-          return compareNumeric(ageA, ageB, sortDir)
-        }
-      }
-    })
-    return list
+  // Campaigns (#988, round 47): the flags one source IP raised inside one
+  // 30-minute window, whatever their types, fold into one row -- see
+  // buildCampaigns for the rule. Built from `active` rather than the
+  // filtered list so a filter can find a member inside a campaign whose
+  // own row says nothing matching.
+  const grouped = $derived(buildCampaigns(active))
+
+  // The campaign row's own cells, as the filters and sorts read them: the
+  // FLAG cell says campaign and how many, WHERE is the source, EVIDENCE
+  // is one word per type inside then the span, COUNT the sum, AGE from
+  // the oldest flag.
+  const campaignTypes = (c: Campaign): FlagType[] => [...new Set(c.flags.map((f) => f.type))]
+  const campaignLabel = (c: Campaign) => `campaign ${c.flags.length} flags`
+  const campaignEvidence = (c: Campaign) =>
+    `${campaignTypes(c)
+      .map((t) => labelFor(t))
+      .join(' ')} ${campaignSpan(c)}`
+
+  // "13:28 → still arriving", or "13:28 → 13:50" once the last flag has
+  // been quiet for RECENT_MS -- the same ten-minute clock the drawer's
+  // episode shape keeps.
+  function campaignSpan(c: Campaign): string {
+    const end = new Date(c.lastSeen).getTime()
+    const arriving = appState.now - end < RECENT_MS
+    return `${formatHM(c.firstSeen)} → ${arriving ? 'still arriving' : formatHM(c.lastSeen)}`
+  }
+
+  function campaignMatches(c: Campaign): boolean {
+    return (
+      (pickedType ? false : matchesFilter(campaignLabel(c), filters.type)) &&
+      matchesFilter(c.ip, filters.where) &&
+      matchesFilter(campaignEvidence(c), filters.evidence) &&
+      matchesFilter(String(c.count), filters.count) &&
+      matchesFilter(formatFlagAge(c.firstSeen, appState.now), filters.age)
+    )
+  }
+
+  // Which campaigns the operator has opened to their members. A click
+  // toggles; a filter that matches only members opens the campaign to
+  // just those regardless (see `rows`), and closing it again is the
+  // filter's to clear.
+  let openCampaigns = $state<string[]>([])
+
+  function toggleCampaign(c: Campaign) {
+    openCampaigns = openCampaigns.includes(c.id) ? openCampaigns.filter((id) => id !== c.id) : [...openCampaigns, c.id]
+  }
+
+  type Row = { kind: 'flag'; flag: Flag } | { kind: 'campaign'; campaign: Campaign; members: Flag[]; open: boolean }
+
+  // The sort reads a campaign by its own cells, except age: a campaign
+  // sits where its newest flag would, so it is as current as its last
+  // flag even though the AGE column counts from its first.
+  function compareFlags(a: Flag, b: Flag): number {
+    switch (sortKey) {
+      case 'type':
+        return compareText(labelFor(a.type), labelFor(b.type), sortDir)
+      case 'where':
+        return compareText(a.target, b.target, sortDir)
+      case 'evidence':
+        return compareText(a.detail, b.detail, sortDir)
+      case 'count':
+        return compareNumeric(a.count, b.count, sortDir)
+      case 'age':
+        return compareAge(new Date(a.firstSeen).getTime(), new Date(b.firstSeen).getTime())
+    }
+  }
+
+  // Elapsed time since firstSeen -- ascending means smallest elapsed
+  // (newest) first, the default that reproduces the fixed order `active`
+  // used to be stuck with.
+  function compareAge(aMs: number, bMs: number): number {
+    return compareNumeric(appState.now - aMs, appState.now - bMs, sortDir)
+  }
+
+  const newestMs = (c: Campaign) => Math.max(...c.flags.map((f) => new Date(f.firstSeen).getTime()))
+
+  function rowSortText(r: Row): string {
+    if (r.kind === 'flag') {
+      const f = r.flag
+      return sortKey === 'type' ? labelFor(f.type) : sortKey === 'where' ? f.target : f.detail
+    }
+    const c = r.campaign
+    return sortKey === 'type' ? campaignLabel(c) : sortKey === 'where' ? c.ip : campaignEvidence(c)
+  }
+
+  function compareRows(a: Row, b: Row): number {
+    switch (sortKey) {
+      case 'count':
+        return compareNumeric(a.kind === 'flag' ? a.flag.count : a.campaign.count, b.kind === 'flag' ? b.flag.count : b.campaign.count, sortDir)
+      case 'age':
+        return compareAge(
+          a.kind === 'flag' ? new Date(a.flag.firstSeen).getTime() : newestMs(a.campaign),
+          b.kind === 'flag' ? new Date(b.flag.firstSeen).getTime() : newestMs(b.campaign),
+        )
+      default:
+        return compareText(rowSortText(a), rowSortText(b), sortDir)
+    }
+  }
+
+  // A campaign shows when its own row matches, or when any flag inside
+  // it does -- and when only members match, it opens to just those. A
+  // flag on its own shows when it matches, as before.
+  const rows = $derived.by((): Row[] => {
+    const out: Row[] = []
+    for (const f of grouped.singles) if (flagMatches(f)) out.push({ kind: 'flag', flag: f })
+    for (const c of grouped.campaigns) {
+      const own = campaignMatches(c)
+      const hits = c.flags.filter(flagMatches)
+      if (!own && hits.length === 0) continue
+      const members = own ? [...c.flags] : hits
+      members.sort(compareFlags)
+      out.push({ kind: 'campaign', campaign: c, members, open: own ? openCampaigns.includes(c.id) : true })
+    }
+    out.sort(compareRows)
+    return out
   })
+
+  // The number of flags the filters leave, campaign members included --
+  // what "no flags match" is deciding on.
+  const shownCount = $derived(rows.reduce((n, r) => n + (r.kind === 'flag' ? 1 : r.members.length), 0))
+
+  // Why these are one campaign, in a sentence under the row: the rule,
+  // then -- when the same source has a flag outside the window -- the
+  // nearest such flag and how far off it sits, so the other half of the
+  // rule is visible on the same screen.
+  function campaignRule(c: Campaign): { rule: string; outsider: string | null } {
+    const n = c.flags.length
+    const rule = `one source, ${spellCount(n)} ${n === 1 ? 'flag' : 'flags'}, each inside 30 minutes of the last`
+    const start = new Date(c.firstSeen).getTime()
+    const end = new Date(c.lastSeen).getTime()
+    let nearest: { flag: Flag; gapMs: number } | null = null
+    for (const f of active) {
+      if (extractSourceIp(f.target) !== c.ip || c.flags.includes(f)) continue
+      const fs = new Date(f.firstSeen).getTime()
+      const fe = new Date(f.lastSeen).getTime()
+      const gapMs = fs > end ? fs - end : start - fe
+      if (!nearest || gapMs < nearest.gapMs) nearest = { flag: f, gapMs }
+    }
+    if (!nearest) return { rule, outsider: null }
+    const f = nearest.flag
+    return {
+      rule,
+      outsider: `${c.ip}'s ${labelFor(f.type).toUpperCase()} at ${formatHM(f.firstSeen)} is ${formatFlagAge(new Date(appState.now - nearest.gapMs).toISOString(), appState.now)} from these, so it keeps its own row.`,
+    }
+  }
+
+  // Small counts in words, the way the rule line reads ("three flags").
+  function spellCount(n: number): string {
+    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
+    return words[n] ?? String(n)
+  }
+
+  // The campaign's CALL IT (#988): a call on the row calls every flag
+  // inside it, each through its own path, so each dims or stamps exactly
+  // as it would alone. The row reads for the set only while every member
+  // says the same thing -- undo one member on its own and the campaign
+  // is back to offering chips for what is still open.
+  function campaignKind(members: Flag[]): Verdict | null {
+    const first = verdictKind(members[0])
+    return first !== null && members.every((m) => verdictKind(m) === first) ? first : null
+  }
+
+  function campaignDone(members: Flag[]): boolean {
+    return members.every((m) => isDone(verdictKind(m)))
+  }
+
+  async function callCampaign(c: Campaign, verdict: 'expected' | 'checked' | 'resolved') {
+    for (const m of c.flags) if (!isDone(verdictKind(m))) await callVerdict(m, verdict)
+    openCampaigns = openCampaigns.filter((id) => id !== c.id)
+  }
+
+  async function investigateCampaign(c: Campaign) {
+    for (const m of c.flags) if (verdictKind(m) === null) await callInvestigate(m)
+  }
+
+  async function undoCampaign(c: Campaign) {
+    for (const m of c.flags) if (isDone(verdictKind(m))) await undoCall(m)
+  }
 
   // What a flag's target actually *is* varies by detector -- most are a
   // plain source IP, but distributed_brute_force is keyed by port,
@@ -615,7 +830,19 @@
   // outside every known zone still lands on the map itself -- the map's
   // own "degrades honestly" stance, never a wrong guess.
   function openWhere(f: Flag) {
-    const ip = extractSourceIp(f.target)
+    openWhereIp(extractSourceIp(f.target))
+  }
+
+  // Whose usual the scored line measures against: the host for a
+  // per-source flag, the rule for a rule spike, the whole network for a
+  // global one.
+  function scoredSubject(f: Flag): string {
+    if (f.type === 'global_spike') return "the network's"
+    if (f.type === 'rule_spike' || f.type === 'stale_rule') return `rule ${f.target}'s`
+    return `${extractSourceIp(f.target) ?? f.target}'s`
+  }
+
+  function openWhereIp(ip: string | null) {
     if (ip) {
       const zone = zonesState.zones.find((z) => {
         if (!z.cidr) return false
@@ -666,6 +893,35 @@
           </div>
         </div>
       {:else}
+        <!-- Flags by type (#988, round 47): a strip across the table's
+             width, above the column heads -- one labelled cell per type
+             with something open, its count, and a single-hue bar of that
+             count against the largest. Identity is the label, never the
+             ink: the six family inks are a warm family that only the
+             label tells apart (the round's validator failed a stacked
+             bar on exactly that), so nothing here is decoded by colour
+             alone. Click a cell and the table narrows to that type;
+             again, and it clears. -->
+        {#if byType.total > 0}
+          <div class="bytype" aria-label="Open flags by type — click a type to filter the table to it">
+            <span class="btl">by type · <b>{byType.total}</b> open</span>
+            <div class="btcells" class:picked={pickedType !== null}>
+              {#each byType.cells as cell (cell.type)}
+                {@const fam = familyOf(cell.type)}
+                <button
+                  class="btc"
+                  class:on={pickedType === cell.type}
+                  style="--ti: {fam.ink}"
+                  aria-pressed={pickedType === cell.type}
+                  onclick={() => pickType(cell.type)}
+                >
+                  <span class="btn"><span><i>{fam.mark}</i>{labelFor(cell.type)}</span><b>{cell.n}</b></span>
+                  <span class="btbar"><span style="width: {Math.round((100 * cell.n) / byType.max)}%"></span></span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
         <!-- The ratified table (#688, round 29's `#s7`): flag · where ·
              evidence · count · age, then the disclosure. Both the sort
              (the head) and the filter (the quiet dashed row beneath it)
@@ -715,13 +971,22 @@
           </thead>
           {#if active.length > 0}
             <tbody>
-              {#if sortedActive.length === 0}
+              {#if shownCount === 0}
                 <tr>
                   <td class="empty" colspan="6">No flags match these filters.</td>
                 </tr>
               {/if}
-              {#each sortedActive as f (f.id)}
-                {@render flagRows(f, false)}
+              {#each rows as r (r.kind === 'flag' ? r.flag.id : r.campaign.id)}
+                {#if r.kind === 'flag'}
+                  {@render flagRows(r.flag, false)}
+                {:else}
+                  {@render campaignRow(r.campaign, r.members, r.open)}
+                  {#if r.open}
+                    {#each r.members as m (m.id)}
+                      {@render flagRows(m, false, true)}
+                    {/each}
+                  {/if}
+                {/if}
               {/each}
             </tbody>
           {/if}
@@ -790,14 +1055,18 @@
   </div>
 </div>
 
-{#snippet flagRows(f: Flag, provisional: boolean)}
+{#snippet flagRows(f: Flag, provisional: boolean, member: boolean = false)}
   {@const family = familyOf(f.type)}
   {@const open = expandedId === f.id}
   {@const ep = episodes[f.id]}
   {@const kind = verdictKind(f)}
   {@const returning = returningNoteFor(f)}
+  <!-- A campaign's member (#988) is this same row, one step in, with a
+       dash where the step is; its drawer is the round 29 drawer
+       verbatim. -->
   <tr
     class="frow"
+    class:mem={member}
     class:open
     class:provisional
     class:struck={kind !== null}
@@ -810,7 +1079,16 @@
     style="--ft: {family.ink}"
     onclick={() => toggleExpanded(f)}
   >
-    <td class="fmark">{family.mark} {labelFor(f.type)}{#if provisional}<span class="ptag">provisional</span>{/if}</td>
+    <td class="fmark"
+      >{family.mark} {labelFor(f.type)}{#if f.confidence != null}<!-- The scored number (#988, round
+          47): the detector's own 0-100, beside the type, only where a
+          detector scored the flag -- the baseline family
+          (internal/engine/baseline.go's emaConfidence). The other
+          types carry nothing here: no dash, no word. --><span
+          class="conf"
+          title="scored {f.confidence} of 100 by the detector">{f.confidence}</span
+        >{/if}{#if provisional}<span class="ptag">provisional</span>{/if}</td
+    >
     <td class="k">
       {#if isFilterable(f)}
         <button
@@ -941,7 +1219,7 @@
          lines down the left, the episode's shape on the
          right, the actions across the foot. The type's
          stripe runs on through it unbroken. -->
-    <tr class="drawer" class:provisional style="--ft: {family.ink}">
+    <tr class="drawer" class:provisional class:inc={member} style="--ft: {family.ink}">
       <td colspan="6">
         <div class="dwr-in">
           {#if provisional}
@@ -970,6 +1248,17 @@
               >
             {/if}
             <b class="headline">{headlineFor(f)}</b> {storyFor(f)}
+            {#if f.confidence != null}
+              <!-- Where the number came from (#988): one line under the
+                   story. Deviation from the subject's own usual, scaled
+                   by how much history backs the baseline -- and named
+                   as the detector's number, not a verdict, because the
+                   trio beside the row is where verdicts live. -->
+              <span class="scored"
+                ><b>Scored {f.confidence}.</b> How far this sits from {scoredSubject(f)} usual, and how much history
+                backs that. The detector's number, not a verdict.</span
+              >
+            {/if}
           </p>
           <div class="side">
             <span class="lab">the episode</span>
@@ -999,7 +1288,10 @@
                  episode once it's fetched, the flag's
                  firstSeen/lastSeen before then). See
                  episodeShape.ts. -->
-            <span class="span">{episodeShapeFor(f, ep, appState.now)}</span>
+            <span class="span"
+              >{episodeShapeFor(f, ep, appState.now)}{#if f.confidence != null}
+                · scored {f.confidence}{/if}</span
+            >
             {#if ep === 'loading'}
               <p class="ep-note">fetching the events…</p>
             {:else if ep === 'error'}
@@ -1045,6 +1337,131 @@
           </div>
         </div>
       </td>
+    </tr>
+  {/if}
+{/snippet}
+
+<!-- A campaign (#988, round 47): the flags one source raised inside one
+     30-minute window, as one row wearing the worst flag's ink. FLAG names
+     it and counts; WHERE is the source; EVIDENCE is one word per type
+     inside, each in its own ink, then the span; COUNT is the sum; AGE is
+     from the oldest flag. It has no drawer of its own -- a click opens it
+     to its members, under a quiet line saying why they are one. -->
+{#snippet campaignRow(c: Campaign, members: Flag[], open: boolean)}
+  {@const types = campaignTypes(c)}
+  {@const family = worstFamilyOf(types)}
+  {@const kind = campaignKind(c.flags)}
+  {@const done = campaignDone(c.flags)}
+  {@const why = campaignRule(c)}
+  <tr
+    class="frow camp"
+    class:open
+    class:fdone={done}
+    class:investigating={kind === 'investigate'}
+    style="--ft: {family.ink}"
+    aria-label="Campaign: {c.flags.length} flags from {c.ip} inside one 30-minute window"
+    onclick={() => toggleCampaign(c)}
+  >
+    <td class="fmark"><i class="cm">⁂</i> campaign<span class="cn">{c.flags.length} flags</span></td>
+    <td class="k">
+      <button
+        class="wl"
+        title="Open {c.ip} in the topography"
+        onclick={(ev) => {
+          ev.stopPropagation()
+          openWhereIp(c.ip)
+        }}
+      >
+        {c.ip}
+      </button>
+    </td>
+    <td class="ev">
+      {#each types as t (t)}
+        <span class="tchip" style="color: {familyOf(t).ink}">{labelFor(t)}</span>
+      {/each}
+      <span class="cspan">{campaignSpan(c)}</span>
+    </td>
+    <td class="num">{c.count}×</td>
+    <td class="t">{formatFlagAge(c.firstSeen, appState.now)}</td>
+    <td class="vc">
+      <!-- The trio on a campaign row calls every flag inside it; the
+           stamp then reads for the set (`all N`), and undo undoes them
+           all. Opened, each member still carries its own trio, so one
+           flag can be called differently -- and then the campaign's
+           stamp no longer speaks for it. -->
+      {#if done}
+        <span class="vdone">
+          {#if kind}<span class="stamp {kind}">{kind}</span>{/if}
+          <span class="by">{kind ? `all ${c.flags.length}` : 'each called'}</span>
+          <button
+            class="olink"
+            onclick={(ev) => {
+              ev.stopPropagation()
+              undoCampaign(c)
+            }}>undo</button
+          >
+        </span>
+      {:else if canEdit}
+        <span class="vrow">
+          <button
+            class="v expected"
+            title="Normal for this host, at this size — clears every flag in the campaign"
+            onclick={(ev) => {
+              ev.stopPropagation()
+              callCampaign(c, 'expected')
+            }}><i>✓</i>expected</button
+          >
+          {#if kind === 'investigate'}
+            <button
+              class="v resolved"
+              title="Dealt with — clears every flag in the campaign; if the same circumstances recur they come back"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                callCampaign(c, 'resolved')
+              }}><i>✦</i>resolved</button
+            >
+          {:else}
+            <button
+              class="v checked"
+              title="Looked at, fine this time — clears every flag in the campaign"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                callCampaign(c, 'checked')
+              }}><i>~</i>checked</button
+            >
+            <button
+              class="v investigate"
+              title="Of concern — records the verdict on every flag in the campaign; they stay open while you look"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                investigateCampaign(c)
+              }}><i>✱</i>investigate</button
+            >
+          {/if}
+        </span>
+      {/if}
+      <button
+        class="openc"
+        aria-expanded={open}
+        aria-label="{open ? 'Close' : 'Open'} the campaign to its {c.flags.length} flags"
+        onclick={(ev) => {
+          ev.stopPropagation()
+          toggleCampaign(c)
+        }}
+      >
+        ▸
+      </button>
+    </td>
+  </tr>
+  {#if open}
+    <tr class="crule" style="--ft: {family.ink}">
+      <td colspan="6"
+        >{why.rule} — <b>one campaign</b>.{#if members.length < c.flags.length}
+          Showing the {members.length === 1 ? 'one' : spellCount(members.length)} that {members.length === 1
+            ? 'matches'
+            : 'match'} the filters.{/if}{#if why.outsider}
+          {why.outsider}{/if}</td
+      >
     </tr>
   {/if}
 {/snippet}
@@ -1243,6 +1660,143 @@
     font-weight: 700;
     white-space: nowrap;
     text-transform: uppercase;
+  }
+
+  /* The FLAG column is pinned at its resting width (#988), so opening a
+     campaign -- whose members step in 32px -- never moves WHERE or
+     EVIDENCE. Wide enough for the longest built-in label plus the step
+     and a scored number; a longer custom label still widens it, once,
+     rather than being cut. `min-width` as well as `width`, on the cells
+     too: a `width` alone is only a hint the browser trades away when
+     EVIDENCE squeezes the table, and the live check caught it giving
+     the column back (161px, then 254px once the members rendered). */
+  .ftable thead th:first-child,
+  .ftable tbody td.fmark {
+    width: 248px;
+    min-width: 248px;
+  }
+
+  /* The scored number (#988, round 47): bold, pure white, a size up
+     from the type, nothing round it -- the owner's "just the number".
+     Fixed white rather than --fg because it must read against the
+     family ink beside it in every theme; a judged row lets it dim with
+     the rest. */
+  .fmark .conf {
+    font-size: 13px;
+    color: #ffffff;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    margin-left: 10px;
+  }
+
+  .frow.fdone .fmark .conf {
+    color: inherit;
+  }
+
+  /* ============================================================
+     Campaigns (#988, round 47), ported from docs/design/concepts/
+     round-47/build.py's tr.camp/.tchip/.cspan/tr.mem/tr.crule onto
+     this app's tokens (--ink-3 -> --fg-dim, --hair -> --border).
+     ============================================================ */
+  tr.camp .fmark .cn {
+    font-weight: 400;
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    margin-left: 9px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  /* ⁂ is small in this face, so it gets its own size. */
+  tr.camp .fmark .cm {
+    font-style: normal;
+    font-size: 16px;
+    line-height: 0;
+    vertical-align: -2px;
+    margin-right: 2px;
+  }
+
+  tr.camp td.ev {
+    white-space: nowrap;
+  }
+
+  /* One word per type inside, in that type's ink (decorative: the label
+     is the identity), then the span. */
+  .tchip {
+    font-weight: 600;
+  }
+
+  .tchip + .tchip::before,
+  .cspan::before {
+    content: ' · ';
+    color: var(--fg-dim);
+    font-weight: 400;
+  }
+
+  .cspan {
+    color: var(--fg-dim);
+  }
+
+  tr.camp .openc {
+    transform: none;
+  }
+
+  tr.camp.open .openc {
+    transform: rotate(90deg);
+  }
+
+  tr.camp.open td {
+    border-bottom-color: transparent;
+  }
+
+  /* The members: the same flag rows, one step in, a dash where the step
+     is. ::after, because ::before on the first cell is the investigate
+     lens. */
+  tr.mem td:first-child {
+    padding-left: 32px;
+  }
+
+  tr.mem td:first-child::after {
+    content: '';
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    width: 8px;
+    height: 1px;
+    background: var(--fg-dim);
+    opacity: 0.6;
+  }
+
+  tr.mem td,
+  tr.crule td,
+  tr.drawer.inc > td {
+    background-color: color-mix(in srgb, var(--fg) 3%, transparent);
+  }
+
+  tr.mem.open td {
+    background-color: color-mix(in srgb, var(--fg) 5%, transparent);
+  }
+
+  /* Why these are one campaign: one quiet line under the campaign row,
+     the ink line running on through it as it does through a drawer. */
+  tr.crule td {
+    padding: 6px 12px 6px 32px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 400;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+    box-shadow: inset 3px 0 0 var(--ft);
+  }
+
+  tr.crule td b {
+    color: var(--fg-muted);
+    font-weight: 600;
+  }
+
+  /* A campaign called from its own row: the stamp reads for the set. */
+  tr.camp .vdone .by {
+    color: var(--fg-dim);
   }
 
   /* `.ftable tbody td` above sets the muted body ink at higher CSS
@@ -1448,6 +2002,20 @@
 
   .vdone + .openc {
     margin-left: 16px;
+  }
+
+  /* Where the scored number came from (#988): under the story, quieter
+     than it. */
+  .story .scored {
+    display: block;
+    color: var(--fg-dim);
+    font-size: 11px;
+    margin-top: 6px;
+  }
+
+  .story .scored b {
+    color: var(--fg-muted);
+    font-weight: 600;
   }
 
   /* Under investigation: leads the story (see the drawer's .story
@@ -1680,6 +2248,122 @@
     text-decoration-color: currentColor;
   }
 
+  /* ============================================================
+     Flags by type (#988, round 47): .bytype/.btcells/.btc/.btbar from
+     round 47's build.py, --ti being the cell's family ink.
+     ============================================================ */
+  .bytype {
+    padding: 0 12px;
+    margin-bottom: 14px;
+  }
+
+  .bytype .btl {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin-bottom: 8px;
+  }
+
+  .bytype .btl b {
+    color: var(--fg-muted);
+    font-weight: 600;
+  }
+
+  .btcells {
+    display: flex;
+    gap: 14px;
+  }
+
+  .btc {
+    --ti: var(--fg-muted);
+    flex: 1 1 0;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition: opacity 0.18s;
+  }
+
+  .btc .btn {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ti);
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .btc .btn i {
+    font-style: normal;
+    margin-right: 5px;
+  }
+
+  .btc .btn b {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+  }
+
+  /* A single-hue bar of the count against the largest -- magnitude,
+     never identity. */
+  .btc .btbar {
+    display: block;
+    height: 3px;
+    margin-top: 6px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--ti) 16%, transparent);
+  }
+
+  .btc .btbar span {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--ti);
+    transition: width 0.3s ease;
+  }
+
+  .btc:hover .btn,
+  .btc.on .btn {
+    color: var(--fg);
+  }
+
+  .btc:hover .btn i,
+  .btc.on .btn i {
+    color: var(--ti);
+  }
+
+  .btc.on .btbar {
+    background: color-mix(in srgb, var(--ti) 30%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--ti) 40%, transparent);
+  }
+
+  .btcells.picked .btc:not(.on) {
+    opacity: 0.38;
+  }
+
+  .btc:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 2px;
+  }
+
   /* The learning shelf (#642). Its heading is the section's own label
      -- the docket switcher carries no counts (round 30), so the shelf's
      number lives here -- wearing a small hatch swatch so the section
@@ -1788,6 +2472,12 @@
 
     .vrow button.v:hover {
       transform: none;
+    }
+
+    /* #988: the strip's cell fade and bar growth. */
+    .btc,
+    .btc .btbar span {
+      transition: none;
     }
   }
 </style>

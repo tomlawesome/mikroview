@@ -133,10 +133,11 @@ const STORIES: Partial<Record<FlagType, (f: Flag) => string>> = {
     const portsPhrase = listPortsPhrase(f.evidence?.ports ?? [])
     return `${f.target} made ${plural(f.count, 'attempt')} against ${portsPhrase}${durationClause(span(f))} -- ports this deployment has flagged as worth knowing about the moment anything external asks.`
   },
-  activity_spike: (f) => {
-    const confidence = f.confidence != null ? ` mikroview scores this ${f.confidence}% likely to be a real departure from its own baseline, not noise.` : ''
-    return `${f.target} fired ${plural(f.count, 'time')}${durationClause(span(f))}, well above what this host normally does in that stretch.${confidence}`
-  },
+  // The confidence number is not cited here (#988, round 47): the
+  // drawer's own scored line under the story carries it, for every
+  // scored type, as the detector's number rather than a likelihood.
+  activity_spike: (f) =>
+    `${f.target} fired ${plural(f.count, 'time')}${durationClause(span(f))}, well above what this host normally does in that stretch.`,
   global_spike: (f) =>
     `The whole network fired ${plural(f.count, 'time')}${durationClause(span(f))}, well above its usual baseline for the hour. No single source stands out -- the rise is broad, not one actor.`,
   distributed_brute_force: (f) => {
