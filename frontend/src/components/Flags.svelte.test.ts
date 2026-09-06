@@ -418,6 +418,92 @@ describe('the drawer: headline, story and episode shape (#678)', () => {
   })
 })
 
+// #791 (restoring #654): the drawer's per-host evidence pairs -- the
+// (host, port) combinations actually observed together, grouped one row
+// per host, never a flat host:port list and never a cross-product that
+// implies combinations never seen. Dropped by 68fd460's round-29
+// rebuild; #791 placed it closing the drawer's left column, with #750's
+// ruled truncation foot landing with the list it closes.
+describe('the drawer: evidence pairs by host (#791, #654)', () => {
+  // Five observed pairs across three hosts -- the same shape
+  // live-evidence-pairs.mjs's assertion 6 feeds (5 pairs, 3 hosts,
+  // 9 cross-product combinations), so the two tests state one claim.
+  const fivePairs = [
+    { host: '192.168.2.10', port: 3389 },
+    { host: '192.168.2.10', port: 22 },
+    { host: '192.168.2.11', port: 22 },
+    { host: '192.168.2.11', port: 445 },
+    { host: '192.168.2.12', port: 3389 },
+  ]
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+  })
+
+  async function openDrawer() {
+    render(Flags)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    await Promise.resolve()
+    flushSync()
+  }
+
+  it('groups the pairs one row per host -- three rows, not five per pair or nine per combination', async () => {
+    flagsState.list = [
+      testFlag({ type: 'critical_port', evidence: { ports: [22, 445, 3389], pairs: fivePairs } }),
+    ]
+    await openDrawer()
+
+    const rows = Array.from(document.querySelectorAll('.ev-pair-row'))
+    expect(rows.length).toBe(3)
+    // Each host's row carries that host's own ports, ascending -- the
+    // display unit #654 ratified (groupPairsByHost's HostPortGroup).
+    expect(rows[0]?.textContent).toContain('192.168.2.10')
+    expect(rows[0]?.textContent).toContain('22, 3389')
+    expect(rows[1]?.textContent).toContain('192.168.2.11')
+    expect(rows[1]?.textContent).toContain('22, 445')
+    expect(rows[2]?.textContent).toContain('192.168.2.12')
+    expect(rows[2]?.textContent).toContain('3389')
+  })
+
+  it('closes a truncated list with the ruled foot, spelling a floor out as "at least"', async () => {
+    flagsState.list = [
+      testFlag({ type: 'critical_port', evidence: { pairs: fivePairs, pairsTotal: 8 } }),
+    ]
+    await openDrawer()
+
+    expect(document.querySelector('.ev-foot')?.textContent).toBe('5 of 8 pairs')
+  })
+
+  it('says "at least" when the total is itself a floor', async () => {
+    flagsState.list = [
+      testFlag({ type: 'critical_port', evidence: { pairs: fivePairs, pairsTotal: 8, pairsTotalIsFloor: true } }),
+    ]
+    await openDrawer()
+
+    expect(document.querySelector('.ev-foot')?.textContent).toBe('5 of at least 8 pairs')
+  })
+
+  it('draws no foot when nothing was cut', async () => {
+    flagsState.list = [
+      testFlag({ type: 'critical_port', evidence: { pairs: fivePairs } }),
+    ]
+    await openDrawer()
+    expect(document.querySelectorAll('.ev-pair-row').length).toBe(3)
+    expect(document.querySelector('.ev-foot')).toBeNull()
+  })
+
+  it('draws no panel at all for a flag without pairs', async () => {
+    flagsState.list = [testFlag({ type: 'port_scan', evidence: { ports: [1000, 1001] } })]
+    await openDrawer()
+    expect(document.querySelector('.evpairs')).toBeNull()
+    expect(document.querySelectorAll('.ev-pair-row').length).toBe(0)
+  })
+})
+
 // #678's third item: "where" is a link into the topography at its
 // sensible level, not the live stream -- filterToTarget/appState.view =
 // 'live' (still used by "open in stream" in the drawer) is no longer

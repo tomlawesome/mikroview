@@ -58,6 +58,7 @@
   import { wizardState } from '../lib/wizard.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
+  import { toIngestLossInputs } from '../lib/ingestLossBanners'
   import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
 
@@ -407,6 +408,25 @@
     )
     return list.slice(0, 2)
   })
+
+  // #995: the same counters ConnectionBanner.svelte turns into banners,
+  // read here so the readout stays quiet (plain muted ink) while
+  // healthy and only takes on the ratified severity colour once a
+  // counter is actually above zero -- "the counters idling in the
+  // Settings readout" the owner ratified as the family's healthy state.
+  const ingestLoss = $derived(
+    toIngestLossInputs(
+      appState.stats?.syslog ?? {
+        rejected: 0,
+        rejectedConfigured: 0,
+        rejectedConfiguredHosts: [],
+        dropped: 0,
+        oversized: 0,
+        oversizedHost: '',
+      },
+      appState.wsDropped,
+    ),
+  )
 
   function quietFor(lastSeen: string): string | null {
     const days = Math.floor((Date.now() - new Date(lastSeen).getTime()) / 86400000)
@@ -773,6 +793,47 @@
             <span>who may speak</span>
             <span class="ov">holders of an ingest key — the keys group below</span>
           </div>
+          {#if appState.stats?.syslog}
+            {@const syslog = appState.stats.syslog}
+            <div class="orow">
+              <span>syslog slots</span>
+              <span class="ov">{syslog.inUse} of {syslog.capacity} in use</span>
+            </div>
+            <div class="orow sub">
+              <span>lost after receipt</span>
+              <span class="ov" class:ink-critical={ingestLoss.dropped > 0}>
+                {ingestLoss.dropped.toLocaleString()} since restart
+              </span>
+            </div>
+            <div class="orow sub">
+              <span>declared routers refused</span>
+              <span class="ov" class:ink-warn={ingestLoss.rejectedConfigured > 0}>
+                {ingestLoss.rejectedConfigured.toLocaleString()}{ingestLoss.rejectedConfiguredHosts[0]
+                  ? ` · ${ingestLoss.rejectedConfiguredHosts[0]}`
+                  : ''}
+              </span>
+            </div>
+            <div class="orow sub">
+              <span>undeclared refused</span>
+              <span class="ov" class:ink-caution={ingestLoss.rejectedUndeclared > 0}>
+                {ingestLoss.rejectedUndeclared.toLocaleString()}
+              </span>
+            </div>
+            <div class="orow sub">
+              <span>oversized truncated</span>
+              <span class="ov" class:ink-caution={ingestLoss.oversized > 0}>
+                {ingestLoss.oversized.toLocaleString()}{ingestLoss.oversizedHost
+                  ? ` · from ${ingestLoss.oversizedHost}`
+                  : ''}
+              </span>
+            </div>
+            <div class="orow sub">
+              <span>not shown in this tab</span>
+              <span class="ov" class:ink-info={ingestLoss.wsDropped > 0}>
+                {ingestLoss.wsDropped.toLocaleString()}
+              </span>
+            </div>
+          {/if}
         </div>
       </div>
 
@@ -1458,6 +1519,35 @@
 
   .orow .ov.dim {
     color: var(--fg-dim);
+  }
+
+  /* #995: the ingest-loss counters' sub-rows under "syslog slots" --
+     indented like a breakdown of the row above, muted (the default .ov
+     colour) while zero, and coloured to the ratified severity scale
+     only once a counter actually fires. Same tokens
+     ConnectionBanner.svelte's banners use, so the readout and the
+     banner always agree on what a given counter means. */
+  .orow.sub {
+    padding-left: 14px;
+  }
+
+  .orow .ov.ink-critical {
+    color: var(--alarm);
+    font-weight: 600;
+  }
+
+  .orow .ov.ink-warn {
+    color: var(--warn);
+    font-weight: 600;
+  }
+
+  .orow .ov.ink-caution {
+    color: var(--caution);
+    font-weight: 600;
+  }
+
+  .orow .ov.ink-info {
+    color: var(--log);
   }
 
   .yaml {
