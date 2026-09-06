@@ -215,17 +215,12 @@ if (psExt.ok) {
 //
 // #788 reselected this scenario's outer navigation onto the ratified
 // table (68fd460: `.card`/`section[aria-labelledby="active-heading"]`
-// became `tr.frow`/`section[aria-label^="Active flags"]`), but the
-// per-host pairs breakdown this block used to read (`.ev-pair-row`/
-// `.ev-label`/`.ev-value`) is not a stale selector -- that panel was
-// dropped wholesale in the same rebuild (Flags.svelte's own comment,
-// above the drawer's evidence-truncation line: "68fd460 dropped the
-// per-host pairs panel when this drawer was rebuilt to round 29, and
-// #791 is where it comes back"). Nothing in the current drawer renders
-// a per-host grouping at all, so this cannot be fixed by reselecting.
-// Recorded as a gap (#788): left failing on purpose, not deleted, so
-// #791 landing turns it green again rather than the coverage having
-// quietly vanished.
+// became `tr.frow`/`section[aria-label^="Active flags"]`). 68fd460 also
+// dropped the per-host pairs panel this block reads (`.ev-pair-row`)
+// wholesale in the same round-29 rebuild; cdadc66 (#791) restored it in
+// the drawer's left column (Flags.svelte's own comment there says so),
+// so this is a real assertion again, not a recorded gap left failing on
+// purpose.
 
 if (cp.ok) {
   await goTo(page, 'Flags')
@@ -239,8 +234,7 @@ if (cp.ok) {
   const pairRowCount = await drawer.locator('.ev-pair-row').count()
   check(
     pairRowCount === 3,
-    `the drawer shows one row per host (3), not one per pair (5) or per cross-product combination (9) -- got ${pairRowCount} ` +
-      `(0 is the recorded #791 gap: 68fd460 dropped the per-host pairs panel and it has not come back yet)`,
+    `the drawer shows one row per host (3), not one per pair (5) or per cross-product combination (9) -- got ${pairRowCount}`,
   )
 }
 

@@ -110,11 +110,16 @@ await page.locator('[data-card="topography"] .altitude input[type="range"]').fil
 await page.waitForSelector('[data-card="topography"] .redge', { timeout: 10000 })
 // The first `.redge` paints as soon as `appState.events` has landed;
 // `ghostIntents` also needs `policyState.edges` from its own separate
-// fetch, which was seen to still be in flight at this exact point once
-// (0 ghosts where the pushed table always draws one) -- a settle here,
-// the same margin the lens switches elsewhere in this file already
-// take, rather than a re-read of an assertion that already failed once.
-await new Promise((r) => setTimeout(r, 600))
+// fetch. A fixed settle here once stood in for that fetch's own
+// latency, which is fine on a quiet instance but not on a gate run
+// that has already pushed dozens of scenarios' state through the same
+// server (0 ghosts where the pushed table always draws one, seen at
+// this exact point) -- wait for the ghost edge itself to land instead
+// of guessing how long its fetch takes. `.redge` above already proves
+// the card is mounted, so this resolves the moment the fetch finishes
+// rather than timing out; the ghost-count check below still fails
+// honestly if the edge never arrives.
+await page.waitForSelector('[data-card="topography"] .gedge', { timeout: 10000 }).catch(() => {})
 
 // SVG geometry-box visibility lies for lines (live-check skill), so
 // presence and text carry the assertions.
@@ -122,9 +127,18 @@ const alarmCount = await page.locator('[data-card="topography"] .redge.alarm').c
 check(alarmCount >= 1, `the unplanned flow spends the saturated colour (${alarmCount} alarm edge)`)
 
 const badges = await page.locator('[data-card="topography"] [class*="edge-badge"]').allTextContents()
+// f2451cc (#897 item 2): the busiest unplanned pair no longer draws a
+// pill at all -- it escalates into its own `.unplanned-card`, labelled
+// in the card's own words ("UNPLANNED · from -> to ..."). With only one
+// unplanned pair fed below, that pair *is* the escalated one, so the
+// word never appears among the ordinary `[class*="edge-badge"]` pills;
+// it has to be read off the card too, case-insensitively (the card
+// shouts it, the pills murmur it lower-case).
+const escalatedCard = await page.locator('[data-card="topography"] .unplanned-card').allTextContents()
+const labels = [...badges, ...escalatedCard]
 check(
-  badges.some((b) => b.includes('unplanned')),
-  `the unplanned flow says so in words (${JSON.stringify(badges)})`,
+  labels.some((b) => b.toLowerCase().includes('unplanned')),
+  `the unplanned flow says so in words (${JSON.stringify(labels)})`,
 )
 check(
   badges.some((b) => b.includes('held') || b.includes('dropped')),
