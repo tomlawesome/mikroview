@@ -282,6 +282,13 @@ var authzMatrix = []routeExpectation{
 	{http.MethodDelete, "/api/coverage/declarations/{key}", accessUser,
 		"undeclares a coverage gap, re-exposing it as unexplained -- same tier as creating it"},
 
+	{http.MethodGet, "/api/hosts", accessViewer,
+		"the host presence register (#1016): which hosts the feed has shown, when each was last heard from, and which quiet ones somebody has already explained. Same viewer-tier read as GET /api/coverage/declarations directly above, and for the same reason -- a non-admin looking at the map is exactly who needs to know whether a grey host is quiet on purpose. Deliberately not on readOnlyRoutes: it is a partial inventory of the operator's private address space, which no bearer token has ever been able to read"},
+	{http.MethodPut, "/api/hosts/{key}/mark", accessUser,
+		"marking a quiet host intended, or dismissing it, is an on-record statement about a silence -- the same weight as declaring a coverage gap intentionally quiet, so it takes the same user tier and the same audit line"},
+	{http.MethodDelete, "/api/hosts/{key}/mark", accessUser,
+		"withdraws that statement, putting the host back to whatever its own last-seen time says it is -- same tier as making it, exactly as DELETE /api/coverage/declarations/{key} sits at its sibling's tier"},
+
 	{http.MethodGet, "/api/suggestions", accessUser,
 		"a suggestion's Justification names a specific rule/device -- same tier as the expectation definitions it can become. Widened from admin to user tier by #653, same as the definitions surface"},
 	{http.MethodPost, "/api/suggestions/{id}/accept", accessUser,

@@ -42,6 +42,7 @@ flags:
 store: {settingsStorePath: $dir/settings.json}
 entities: {storePath: $dir/entities.json}
 coverage: {storePath: $dir/coverage.json}
+hosts: {storePath: $dir/hosts.json}
 audit: {storePath: $dir/audit.json}
 setup: {storePath: $dir/setup.json}
 watchlist:
