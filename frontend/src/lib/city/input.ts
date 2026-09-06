@@ -5,6 +5,7 @@
 // data so layout.ts stays pure and testable without the stores.
 import { addressInCidr, parseCidr } from '../addressMatch'
 import type { RouterFilterRule } from '../api'
+import { boundaryCoverage, type Coverage } from '../coverageRule'
 import type { PolicyEdge } from '../policy.svelte'
 import type { RealityEdge } from '../reality'
 import type { TunnelInterface } from '../tunnels.svelte'
@@ -32,8 +33,18 @@ export interface CityZone {
   eventCount: number
   /** The router this zone stands behind. */
   routerId: string
-  /** Nothing logs on this boundary (a rule table is pushed and no rule
-   * on it logs): the plate and its buildings dim. */
+  /** How this boundary reads under the one coverage rule
+   * (lib/coverageRule.ts): `logged` when something on it logs, `quiet`
+   * when every remaining direction was declared intentionally quiet
+   * (#392), `dark` when neither. Only ever a claim about a pushed
+   * table: with nothing pushed at all it reads `quiet`, which is what
+   * `dark: false` has always said here, and `rulesPushed` is the field
+   * that says why. */
+  coverage: Coverage
+  /** Nothing logs on this boundary and nobody declared it quiet (a rule
+   * table is pushed and no rule on it logs): the plate and its
+   * buildings dim. Derived from `coverage` -- #1014, where reading the
+   * policy edges alone left a declared boundary dark. */
   dark: boolean
 }
 
@@ -129,6 +140,12 @@ export function cityInputFrom(
    * tunnelInterfaces does: every caller that predates walls-and-gates
    * still compiles and reads as "nothing pushed yet". */
   rules: RouterFilterRule[] = [],
+  /** The boundary-directions an admin has declared intentionally quiet
+   * (#392 -- coverageState.byKey's keys), so a district can tell a
+   * declared silence from an unexplained one (#1014). Defaults to none,
+   * which is also the honest reading while the store cannot be read:
+   * dark stays dark. */
+  quietKeys: ReadonlySet<string> = new Set(),
 ): CityInput {
   let primary = primaryId ?? devices[0]?.id ?? ''
   const routers: CityRouter[] = devices.map((d) => ({ id: d.id, name: d.name, primary: d.id === primary, sourceIp: d.sourceIp }))
@@ -172,6 +189,13 @@ export function cityInputFrom(
   for (const p of policyEdges) if (p.logged) (logged.add(p.from), logged.add(p.to))
   const wanLogged = wan !== null && logged.has(wan)
 
+  // A lane's three-way reading, the one rule both the city plaque and
+  // the 2D zones card draw from (#1014). No table pushed at all is not
+  // a claim about any boundary -- there is nothing to read as dark, and
+  // rulesPushed below is what says so -- so it reads quiet rather than
+  // accusing every lane of a hole.
+  const coverageOfZone = (iface: string): Coverage => (anyPushed ? boundaryCoverage(iface, policyEdges, quietKeys) : 'quiet')
+
   // A tunnel this build knows about either from its own events or from
   // a device's pushed tunnel table -- the first API entry to name it
   // wins when two devices happen to share an interface name, the same
@@ -194,16 +218,20 @@ export function cityInputFrom(
 
   const cityZones: CityZone[] = zones
     .filter((z) => !isTunnel(z.id))
-    .map((z) => ({
-      id: z.id,
-      name: z.name,
-      cidr: z.cidr,
-      hosts: z.hosts,
-      hostCount: z.hostCount,
-      eventCount: z.eventCount,
-      routerId: routerOf(z.id),
-      dark: anyPushed && !logged.has(z.id),
-    }))
+    .map((z) => {
+      const coverage = coverageOfZone(z.id)
+      return {
+        id: z.id,
+        name: z.name,
+        cidr: z.cidr,
+        hosts: z.hosts,
+        hostCount: z.hostCount,
+        eventCount: z.eventCount,
+        routerId: routerOf(z.id),
+        coverage,
+        dark: coverage === 'dark',
+      }
+    })
 
   return {
     routers,

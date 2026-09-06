@@ -5,6 +5,7 @@
 // here knows about pixels or a camera. This is the one ground plan both
 // views share (docs/design/screens/city/DESIGN.md): the zones stop
 // draws it flat (#869), the city stops draw it in isometric.
+import type { Coverage } from '../coverageRule'
 import type { Pt } from './project'
 
 /** What a building is, for the device library's stamp (#864). Until
@@ -64,7 +65,11 @@ export interface District {
   /** Which lane ink (Topography's LANE_INKS index) tints it. */
   ink: number
   routerId: string
-  /** Nothing logs on this boundary: plate and buildings dim. */
+  /** The lane's three-way coverage reading, carried through from
+   * CityZone (see its own note): logged, declared quiet, or dark. */
+  coverage: Coverage
+  /** Nothing logs on this boundary and nobody declared it quiet: plate
+   * and buildings dim. `coverage === 'dark'`. */
   dark: boolean
   buildings: Building[]
   /** Hosts beyond the buildings drawn (the plate is bounded). */

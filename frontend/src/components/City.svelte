@@ -18,6 +18,7 @@
   import { zonesState } from '../lib/zones.svelte'
   import { tunnelsState } from '../lib/tunnels.svelte'
   import { policyState } from '../lib/policy.svelte'
+  import { coverageState } from '../lib/coverage.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { realityEdges } from '../lib/reality'
   import { symbolFor } from '../lib/city/blocks'
@@ -124,6 +125,7 @@
           zonesState.wanInterface,
           tunnelsState.list,
           policyState.pushed,
+          new Set(coverageState.byKey.keys()),
         ),
       ),
   )

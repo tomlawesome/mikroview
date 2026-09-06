@@ -4,17 +4,18 @@
 // component the way setupsteps.ts is kept out of SetupWizard.svelte --
 // unit-testable without a DOM, and the one place this logic can live
 // rather than being re-derived wherever the component needs it.
+import { edgeCoverage } from './coverageRule'
 import type { PolicyEdge } from './policy.svelte'
 import type { TuneLoggingRule } from './types'
 
 // darkBoundaryKeys is the set of boundary-direction pairs the analyse
 // request's `darkBoundaries` field names (contract §3): every pushed
 // pair that neither logs nor has been declared intentionally quiet.
-// Mirrors Topography.svelte's own coverageOf exactly (logged -> observed,
-// declared -> quiet, neither -> dark) so the two surfaces can never
-// disagree about what counts as dark.
+// The rule itself is coverageRule.ts's, shared with the map's own
+// coverage lens and the city's ground plan, so no surface can drift
+// into a different reading of dark (#1014).
 export function darkBoundaryKeys(edges: readonly PolicyEdge[], quietKeys: ReadonlySet<string>): string[] {
-  return edges.filter((e) => !e.logged && !quietKeys.has(e.key)).map((e) => e.key)
+  return edges.filter((e) => edgeCoverage(e, quietKeys) === 'dark').map((e) => e.key)
 }
 
 // waitingMessage is the under-24h state's own words (contract §6):

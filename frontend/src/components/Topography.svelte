@@ -40,6 +40,7 @@
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
   import { realityEdges, unexercisedIntents, worstUnplannedOf, type RealityEdge } from '../lib/reality'
   import { coverageState } from '../lib/coverage.svelte'
+  import { edgeCoverage, type Coverage } from '../lib/coverageRule'
   import { composeCommand, reachComposeInput, refusingCommentFor } from '../lib/compose'
   import type { ReachStrand } from '../lib/reach'
   import { portsLine, reachFor } from '../lib/reach'
@@ -728,11 +729,8 @@
       : '',
   )
 
-  type CoverageStateOf = 'observed' | 'quiet' | 'dark'
-
-  function coverageOf(e: PolicyEdge): CoverageStateOf {
-    if (e.logged) return 'observed'
-    return coverageState.byKey.has(e.key) ? 'quiet' : 'dark'
+  function coverageOf(e: PolicyEdge): Coverage {
+    return edgeCoverage(e, quietKeys)
   }
 
   function pairName(from: string, to: string): string {
@@ -742,7 +740,7 @@
 
   function coverageLabel(e: PolicyEdge): string {
     const st = coverageOf(e)
-    if (st === 'observed') return `${pairName(e.from, e.to)}: logged`
+    if (st === 'logged') return `${pairName(e.from, e.to)}: logged`
     if (st === 'quiet') {
       const d = coverageState.byKey.get(e.key)
       return `${pairName(e.from, e.to)}: intentionally quiet — ${d?.reason ?? ''}`
@@ -810,7 +808,7 @@
 
   function coverageBadgeText(e: PolicyEdge): string {
     const st = coverageOf(e)
-    if (st === 'observed') return ''
+    if (st === 'logged') return ''
     if (st === 'dark') return 'dark'
     return `quiet · ${(coverageState.byKey.get(e.key)?.reason ?? '').slice(0, 28)}`
   }
@@ -829,7 +827,7 @@
   )
 
   function openCoverage(e: PolicyEdge) {
-    if (!isAdmin || coverageOf(e) === 'observed') return
+    if (!isAdmin || coverageOf(e) === 'logged') return
     coverageState.error = null
     declareReason = coverageState.byKey.get(e.key)?.reason ?? ''
     declarePanel = { key: e.key, from: e.from, to: e.to }
@@ -869,16 +867,14 @@
   function zoneCaption(zoneId: string): string | null {
     const wan = zonesState.wanInterface
     if (!policyState.anyPushed || !wan) return null
-    const stateOf = (key: string): 'observed' | 'quiet' | 'dark' | 'none' => {
+    const stateOf = (key: string): Coverage | 'none' => {
       const e = policyState.edges.find((p) => p.key === key)
-      if (!e) return 'none'
-      if (e.logged) return 'observed'
-      return coverageState.byKey.has(key) ? 'quiet' : 'dark'
+      return e ? edgeCoverage(e, quietKeys) : 'none'
     }
     const out = stateOf(`${zoneId}|${wan}`)
     const inward = stateOf(`${wan}|${zoneId}`)
-    const fine = (st: string) => st === 'observed' || st === 'quiet'
-    if (out === 'observed' && inward === 'observed') return 'LOGGED BOTH WAYS'
+    const fine = (st: string) => st === 'logged' || st === 'quiet'
+    if (out === 'logged' && inward === 'logged') return 'LOGGED BOTH WAYS'
     if (fine(out) && fine(inward)) return 'COVERED — logged or declared quiet'
     if (out === 'quiet' && !fine(inward)) return 'DARK FROM WAN — quiet toward it by choice'
     if (fine(out)) return 'DARK FROM WAN — no log rule inbound'
@@ -1163,6 +1159,12 @@
   // the zones stop's own flat drawing further down -- one source, so
   // the two views can never quietly drift into disagreeing position
   // models.
+  // The declared-quiet boundary-directions (#392), read by everything
+  // below that applies the coverage rule -- including the ground plan
+  // itself, which used to know only the policy edges and so called a
+  // declared boundary dark on the plaque and the zones card (#1014).
+  const quietKeys = $derived(new Set(coverageState.byKey.keys()))
+
   const ground = $derived<Ground>(
     layoutGround(
       cityInputFrom(
@@ -1176,6 +1178,7 @@
         zonesState.wanInterface,
         tunnelsState.list,
         policyState.pushed,
+        quietKeys,
       ),
     ),
   )
@@ -2480,8 +2483,8 @@
           {@const st = coverageOf(d.edge)}
           <g
             class="cov-g"
-            class:actionable={isAdmin && st !== 'observed'}
-            {...isAdmin && st !== 'observed'
+            class:actionable={isAdmin && st !== 'logged'}
+            {...isAdmin && st !== 'logged'
               ? { role: 'button', tabindex: 0, 'aria-label': `Declare or review this gap: ${coverageLabel(d.edge)}` }
               : {}}
             onclick={() => openCoverage(d.edge)}
@@ -2491,7 +2494,7 @@
           >
             <title>{coverageLabel(d.edge)}</title>
             <path class="edge-hit" d={edgePath(d.line)} />
-            {#if st === 'observed'}
+            {#if st === 'logged'}
               <path class="cedge observed" d={edgePath(d.line)} />
             {:else if st === 'quiet'}
               <path class="cedge quiet" d={edgePath(d.line)} />
@@ -2503,7 +2506,7 @@
 
         {#each drawnCoverage.drawn as d, di (d.edge.key)}
           {@const st = coverageOf(d.edge)}
-          {#if st !== 'observed'}
+          {#if st !== 'logged'}
             {@const badge = coverageBadges[di]}
             <g
               class="detail"

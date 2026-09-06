@@ -170,6 +170,7 @@ export function layoutGround(input: CityInput): Ground {
         r,
         ink: inkIndex++,
         routerId,
+        coverage: z.coverage,
         dark: z.dark,
         buildings: [],
         more: Math.max(0, z.hostCount - Math.min(z.hosts.length, MAX_BUILDINGS)),

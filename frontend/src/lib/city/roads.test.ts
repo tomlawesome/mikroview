@@ -12,6 +12,7 @@ const plate = (id: string, u: number, v: number, r: number): District => ({
   r,
   ink: 0,
   routerId: 'r',
+  coverage: 'logged',
   dark: false,
   buildings: [],
   more: 0,
