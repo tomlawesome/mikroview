@@ -40,6 +40,21 @@ export interface ReachStrand {
   /** The same ports with how often each was asked for and the protocol
    * seen asking -- the compose panel's "it's been asking · 14×". */
   portHits: { port: number; n: number; proto: string }[]
+  /** Every (destination port, protocol) pair the strand carried, with how
+   * often each was seen -- what `reachLineSummary` needs and `portHits`
+   * cannot answer, since that keeps one row per port with the first
+   * protocol seen asking.
+   *
+   * `port` is null where the event named no destination port (ICMP and
+   * friends), so these entries total `count` and a per-protocol split
+   * does not quietly drop portless traffic. `proto` is '' where the event
+   * named no protocol: `portHits` falls back to 'tcp' for display, but
+   * counting an unnamed protocol as TCP would invent the fact a tcp/udp
+   * split is asked for.
+   *
+   * Optional only so the existing hand-built strand fixtures elsewhere
+   * still compile; `reachFor` always fills it. */
+  protoHits?: { port: number | null; proto: string; n: number }[]
   count: number
   /** The same traffic with recent events counting for more, decaying by
    * RECENCY_HALF_LIFE_MS. Ranks "busiest right now"; `count` still ranks
@@ -83,6 +98,7 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
       peerAddrCounts: Map<string, number>
       portCounts: Map<number, number>
       portProto: Map<number, string>
+      protoCounts: Map<string, { port: number | null; proto: string; n: number }>
     }
   >()
 
@@ -115,6 +131,7 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
         peerAddrCounts: new Map(),
         portCounts: new Map(),
         portProto: new Map(),
+        protoCounts: new Map(),
       }
       groups.set(key, g)
     }
@@ -131,6 +148,15 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
       g.portCounts.set(e.dstPort, (g.portCounts.get(e.dstPort) ?? 0) + 1)
       if (e.protocol && !g.portProto.has(e.dstPort)) g.portProto.set(e.dstPort, e.protocol.toLowerCase())
     }
+    // The same traffic counted per (port, protocol) instead of per port,
+    // for the hovered line's own summary. Every event is counted, port or
+    // not, so these entries total `count`.
+    const hitPort = e.dstPort ? e.dstPort : null
+    const hitProto = e.protocol ? e.protocol.toLowerCase() : ''
+    const hitKey = `${hitPort ?? ''}|${hitProto}`
+    const hit = g.protoCounts.get(hitKey)
+    if (hit) hit.n++
+    else g.protoCounts.set(hitKey, { port: hitPort, proto: hitProto, n: 1 })
     // The latest drop wins, not the first: events arrive oldest-first, so
     // this is "what the most recent refusal said", including reverting
     // to unnamed when the newest drop carries no label even though an
@@ -151,6 +177,7 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
       portHits: [...g.portCounts.entries()]
         .sort((a, b) => b[1] - a[1])
         .map(([port, n]) => ({ port, n, proto: g.portProto.get(port) ?? 'tcp' })),
+      protoHits: [...g.protoCounts.values()].sort((a, b) => b.n - a.n || (a.port ?? Infinity) - (b.port ?? Infinity) || (a.proto < b.proto ? -1 : a.proto > b.proto ? 1 : 0)),
       count: g.count,
       weight: g.weight,
       refusedBy: g.refusedBy,
@@ -167,6 +194,104 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
   const busiest = strands.reduce<ReachStrand | null>((best, s) => (best === null || s.weight > best.weight ? s : best), null)
 
   return { strands, reaches, reachedBy, topBlocked, busiest }
+}
+
+/** One destination port on a hovered line: what was tried there, and
+ * whether it landed. `proto` is '' where the events named no protocol --
+ * unknown, not assumed TCP. */
+export interface ReachLinePort {
+  port: number
+  proto: 'tcp' | 'udp' | string
+  accepted: number
+  dropped: number
+}
+
+/** What a hovered reach line says about itself (#1016). */
+export interface ReachLineSummary {
+  counterpart: string
+  /** Busiest first by total events, ties broken by port number. */
+  ports: ReachLinePort[]
+  /** Events on the line by protocol. Everything that is neither TCP nor
+   * UDP -- ICMP, an unnamed protocol -- lands in `other`, so the three
+   * total `accepted + dropped`. */
+  tcp: number
+  udp: number
+  other: number
+  /** Events on the line by outcome, portless traffic included. */
+  accepted: number
+  dropped: number
+  /** The rule that refused this line, from its busiest dropped strand.
+   * Undefined when nothing on the line was refused, or when the refusal
+   * carried no rule label -- the same refusal to name a rule the events
+   * did not name that `ReachStrand.refusedBy` makes (#967). */
+  refusedBy?: string
+}
+
+/** What the reach view's hover card reads: one drawn line, not one strand
+ * (#1016).
+ *
+ * A line is a counterpart pair, but `reachFor` groups by counterpart *and*
+ * direction *and* outcome, so accepted and dropped traffic between the
+ * same two ends arrive as separate strands. The owner's question -- "which
+ * ports are being attempted here, and was each dropped or accepted" --
+ * is about the pair, so this merges every strand on the counterpart back
+ * into one reading. Direction is deliberately ignored: which way the
+ * packets went is what the drawn arrow already says.
+ *
+ * A counterpart the buffer never saw is not an error, just an empty
+ * summary -- an absence of ours is never reported as a fact about the
+ * network. */
+export function reachLineSummary(strands: ReachStrand[], counterpart: string): ReachLineSummary {
+  const ports = new Map<string, ReachLinePort>()
+  let tcp = 0
+  let udp = 0
+  let other = 0
+  let accepted = 0
+  let dropped = 0
+  let refusedBy: string | undefined
+  // The busiest refusal wins where a line was refused in both directions,
+  // so the card names one rule and always the same one.
+  let refusedFrom = -1
+
+  for (const s of strands) {
+    if (s.counterpart !== counterpart) continue
+    const blocked = s.outcome === 'blocked'
+    if (blocked) {
+      dropped += s.count
+      if (s.refusedBy !== undefined && s.count > refusedFrom) {
+        refusedBy = s.refusedBy
+        refusedFrom = s.count
+      }
+    } else {
+      accepted += s.count
+    }
+
+    for (const h of s.protoHits ?? []) {
+      if (h.proto === 'tcp') tcp += h.n
+      else if (h.proto === 'udp') udp += h.n
+      else other += h.n
+      // Portless traffic counts toward the protocol split but has no port
+      // row to sit in.
+      if (h.port === null) continue
+      const key = `${h.port}|${h.proto}`
+      let p = ports.get(key)
+      if (!p) {
+        p = { port: h.port, proto: h.proto, accepted: 0, dropped: 0 }
+        ports.set(key, p)
+      }
+      if (blocked) p.dropped += h.n
+      else p.accepted += h.n
+    }
+  }
+
+  const ranked = [...ports.values()].sort(
+    (a, b) =>
+      b.accepted + b.dropped - (a.accepted + a.dropped) ||
+      a.port - b.port ||
+      (a.proto < b.proto ? -1 : a.proto > b.proto ? 1 : 0),
+  )
+
+  return { counterpart, ports: ranked, tcp, udp, other, accepted, dropped, refusedBy }
 }
 
 /** The top few ports a strand carries, as the reach's own short form --
