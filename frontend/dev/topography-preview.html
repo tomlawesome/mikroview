@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only
+
+     Dev-only: Topography alone against a small hand-built estate
+     (#979's default-stop review). Not linked from the app and not
+     part of the production build -- `vite build` takes index.html as
+     its only input. Reach it on the dev server at
+     /dev/topography-preview.html?stop=zones (stop defaults to "zones";
+     any of lib/altitude.ts's ALTITUDE_LABELS accepted), or run
+     `node scripts/capture-topography-preview.mjs` to shoot it. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MikroView — topography preview (dev)</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #060a12;
+      }
+      #stage {
+        display: flex;
+        width: 1600px;
+        height: 900px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <script type="module" src="/src/dev/topographyPreview.ts"></script>
+  </body>
+</html>
