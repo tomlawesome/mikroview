@@ -1145,17 +1145,6 @@
     const y = Y(mc, vp.v0)
     return { x: R2(x), y: R2(y), w: R2(X(mc, vp.u1) - x), h: R2(Y(mc, vp.v1) - y) }
   })
-  const fr = (a: number, lo: number, hi: number) => Math.max(0, Math.min(100, ((a - lo) / (hi - lo || 1)) * 100))
-  const bars = $derived.by(() => {
-    const b = ground.bounds
-    const vp = viewport
-    return {
-      left: R2(fr(vp.u0, b.u0, b.u1)),
-      right: R2(100 - fr(vp.u1, b.u0, b.u1)),
-      top: R2(fr(vp.v0, b.v0, b.v1)),
-      bottom: R2(100 - fr(vp.v1, b.v0, b.v1)),
-    }
-  })
   const viewShare = $derived.by(() => {
     const b = ground.bounds
     const vp = viewport
@@ -1418,8 +1407,6 @@
     </button>
     <div class="mk"><span>viewport ≈ {viewShare}%</span><span>drag · arrows to walk</span></div>
   </div>
-  <div class="sbar h" aria-hidden="true"><i style:left="{bars.left}%" style:right="{bars.right}%"></i></div>
-  <div class="sbar v" aria-hidden="true"><i style:top="{bars.top}%" style:bottom="{bars.bottom}%"></i></div>
 </div>
 
 <style>
@@ -1778,49 +1765,6 @@
     font: 9px var(--font-mono);
     color: var(--fg-dim);
     margin: 6px 0 0;
-  }
-
-  .sbar {
-    position: absolute;
-    z-index: 7;
-    background: rgba(160, 185, 230, 0.06);
-    border-radius: 3px;
-    /* Purely decorative (aria-hidden, no handler of its own) -- without
-     * this a building or plate under either strip is unclickable, the
-     * click swallowed by this indicator instead of reaching the map
-     * beneath it (#977). */
-    pointer-events: none;
-  }
-
-  .sbar.h {
-    left: 16px;
-    right: 16px;
-    bottom: 5px;
-    height: 5px;
-  }
-
-  .sbar.v {
-    top: 66px;
-    bottom: 66px;
-    right: 6px;
-    width: 5px;
-  }
-
-  .sbar i {
-    position: absolute;
-    background: rgba(157, 184, 232, 0.5);
-    border-radius: 3px;
-    display: block;
-  }
-
-  .sbar.h i {
-    top: 0;
-    bottom: 0;
-  }
-
-  .sbar.v i {
-    left: 0;
-    right: 0;
   }
 
   @media (prefers-reduced-motion: reduce) {
