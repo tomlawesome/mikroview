@@ -59,8 +59,38 @@ describe('city input', () => {
     const zones = [zone('bridge1', null), zone('vlan-guest', null)]
     const lit = cityInputFrom(devices, zones, [], [], [policy('bridge1', 'ether1', true)], true, 'rb', 'ether1')
     expect(lit.zones.map((z) => z.dark)).toEqual([false, true])
+    expect(lit.zones.map((z) => z.coverage)).toEqual(['logged', 'dark'])
     const none = cityInputFrom(devices, zones, [], [], [], false, 'rb', null)
     expect(none.zones.map((z) => z.dark)).toEqual([false, false])
+  })
+
+  // #1014: the plaque and the zones card read cityInputFrom, and it
+  // knew only the policy edges -- so a boundary an admin had declared
+  // intentionally quiet still came out dark on both.
+  it('reads a declared boundary as quiet, not dark', () => {
+    const devices = [device('rb', '10.0.0.1')]
+    const zones = [zone('vlan-guest', null)]
+    const edges = [policy('vlan-guest', 'ether1', false), policy('ether1', 'vlan-guest', false)]
+    const declared = new Set(['vlan-guest|ether1', 'ether1|vlan-guest'])
+    const quiet = cityInputFrom(devices, zones, [], [], edges, true, 'rb', 'ether1', [], [], declared)
+    expect(quiet.zones[0].coverage).toBe('quiet')
+    expect(quiet.zones[0].dark).toBe(false)
+
+    // One direction declared and the other still unexplained is a hole,
+    // not a quiet lane -- the same reading zoneCaption already gives.
+    const half = cityInputFrom(devices, zones, [], [], edges, true, 'rb', 'ether1', [], [], new Set(['vlan-guest|ether1']))
+    expect(half.zones[0].coverage).toBe('dark')
+    expect(half.zones[0].dark).toBe(true)
+
+    // A declaration never outranks a real logging rule.
+    const logged = cityInputFrom(devices, zones, [], [], [policy('vlan-guest', 'ether1', true)], true, 'rb', 'ether1', [], [], declared)
+    expect(logged.zones[0].coverage).toBe('logged')
+
+    // Nothing pushed at all is not a claim about any boundary:
+    // rulesPushed carries that on its own, and nothing dims.
+    const nothing = cityInputFrom(devices, zones, [], [], [], false, 'rb', 'ether1')
+    expect(nothing.zones[0].dark).toBe(false)
+    expect(nothing.zones[0].coverage).toBe('quiet')
   })
 
   it('stands in a router when no device exists yet', () => {

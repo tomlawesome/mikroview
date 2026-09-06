@@ -14,12 +14,12 @@ export function mockupEstate(): CityInput {
       { id: 'hapax3', name: 'hAP ax3', primary: false, sourceIp: '10.10.0.40' },
     ],
     zones: [
-      { id: 'bridge-lan', name: 'LAN', cidr: '10.10.0.0/24', hosts: hosts(6, 'lan', '10.10.0.'), hostCount: 9, eventCount: 900, routerId: 'rb5009', dark: false },
-      { id: 'vlan-srv', name: 'Servers', cidr: '10.20.0.0/24', hosts: hosts(4, 'srv', '10.20.0.'), hostCount: 4, eventCount: 600, routerId: 'rb5009', dark: false },
-      { id: 'vlan-iot', name: 'IoT', cidr: '10.30.0.0/24', hosts: hosts(5, 'iot', '10.30.0.'), hostCount: 5, eventCount: 300, routerId: 'rb5009', dark: false },
-      { id: 'vlan-guest', name: 'Guest', cidr: '10.40.0.0/24', hosts: hosts(1, 'guest', '10.40.0.'), hostCount: 1, eventCount: 40, routerId: 'rb5009', dark: true },
-      { id: 'wlan-wsh', name: 'Workshop', cidr: '10.50.0.0/24', hosts: hosts(3, 'wsh', '10.50.0.'), hostCount: 3, eventCount: 60, routerId: 'hapax3', dark: false },
-      { id: 'wlan-cams', name: 'Cameras', cidr: '10.60.0.0/24', hosts: hosts(2, 'cam', '10.60.0.'), hostCount: 2, eventCount: 20, routerId: 'hapax3', dark: false },
+      { id: 'bridge-lan', name: 'LAN', cidr: '10.10.0.0/24', hosts: hosts(6, 'lan', '10.10.0.'), hostCount: 9, eventCount: 900, routerId: 'rb5009', coverage: 'logged', dark: false },
+      { id: 'vlan-srv', name: 'Servers', cidr: '10.20.0.0/24', hosts: hosts(4, 'srv', '10.20.0.'), hostCount: 4, eventCount: 600, routerId: 'rb5009', coverage: 'logged', dark: false },
+      { id: 'vlan-iot', name: 'IoT', cidr: '10.30.0.0/24', hosts: hosts(5, 'iot', '10.30.0.'), hostCount: 5, eventCount: 300, routerId: 'rb5009', coverage: 'logged', dark: false },
+      { id: 'vlan-guest', name: 'Guest', cidr: '10.40.0.0/24', hosts: hosts(1, 'guest', '10.40.0.'), hostCount: 1, eventCount: 40, routerId: 'rb5009', coverage: 'dark', dark: true },
+      { id: 'wlan-wsh', name: 'Workshop', cidr: '10.50.0.0/24', hosts: hosts(3, 'wsh', '10.50.0.'), hostCount: 3, eventCount: 60, routerId: 'hapax3', coverage: 'logged', dark: false },
+      { id: 'wlan-cams', name: 'Cameras', cidr: '10.60.0.0/24', hosts: hosts(2, 'cam', '10.60.0.'), hostCount: 2, eventCount: 20, routerId: 'hapax3', coverage: 'logged', dark: false },
     ],
     edges: [
       { key: 'bridge-lan|ether1', from: 'bridge-lan', to: 'ether1', events: 500, verdict: 'planned' },
