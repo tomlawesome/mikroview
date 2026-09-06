@@ -69,7 +69,7 @@ CSS = r'''
 
   /* --- the scored number: beside the type, only where a detector
      scored it, and plainly visible (owner, 2026-09-06). No bands. --- */
-  .fmark .conf { display: inline-block; font: 700 12px var(--mono); color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: 0; margin-left: 10px; padding: 0 6px; line-height: 17px; border-radius: 3px; background: color-mix(in srgb, currentColor 0%, rgba(160, 185, 230, 0.12)); box-shadow: inset 0 0 0 1px rgba(160, 185, 230, 0.28); vertical-align: 1px; }
+  .fmark .conf { display: inline-block; font: 700 13px var(--mono); color: #ffffff; font-variant-numeric: tabular-nums; letter-spacing: 0; margin-left: 10px; padding: 0 7px; line-height: 18px; border-radius: 3px; background: rgba(233, 238, 251, 0.14); box-shadow: inset 0 0 0 1px rgba(233, 238, 251, 0.5); vertical-align: 1px; }
   tr.fdone .fmark .conf { color: inherit; box-shadow: none; background: transparent; padding: 0; }
   .story .scored { display: block; color: var(--ink-3); font-size: 11px; margin-top: 6px; }
   .story .scored b { color: var(--ink-2); font-weight: 600; }
