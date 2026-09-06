@@ -1,0 +1,616 @@
+<!doctype html>
+<!--
+  Placement mockup for #77 (retired control #1 on #691's list): where the
+  "⚠ syslog full" warning goes now that the old stream toolbar is gone
+  (retired in 1c0f85d when the scene bar was built -- the design round it
+  came from drew nowhere to put it). The backend signal
+  (GET /api/stats -> stats.syslog, internal/syslog/tcp_listener.go:231-272,
+  frontend/src/lib/types.ts SyslogListenerStats) is still fully alive; only
+  the display disappeared. This is a placement proposal, not a visioning
+  round -- one named folder, not a round-NN directory.
+
+  One data story runs through every panel below: the router branch-e4a1,
+  43 syslog connection attempts turned away, 24 of 24 syslog slots in use.
+  Tokens and component markup are the app's own (frontend/src/app.css,
+  ConnectionBanner.svelte, SceneBar.svelte, Whisper.svelte, ActionBadge.svelte,
+  EngineRoom.svelte's settings-row grammar). MikroView ships one theme
+  (dark void, color-scheme: dark) -- there is no light variant to draw.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>#77 — syslog-full placement mockup</title>
+<style>
+  /* ---------- the app's own tokens (frontend/src/app.css :root) ---------- */
+  :root {
+    --bg: #06080e;
+    --bg-elevated: #0f1422;
+    --bg-hover: rgba(160, 185, 230, 0.08);
+    --border: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --fg: #e9eefb;
+    --fg-muted: #97a4c4;
+    --fg-dim: #55628a;
+    --accent: #9db8e8;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e;
+    --accept-bg: rgba(62, 207, 126, 0.12);
+    --drop: #f5a623;
+    --drop-bg: rgba(245, 166, 35, 0.12);
+    --reject: #ef4444;
+    --reject-bg: rgba(239, 68, 68, 0.12);
+    --log: #38bdf8;
+    --log-bg: rgba(56, 189, 248, 0.12);
+    --accept-tinted: color-mix(in srgb, var(--accept) 85%, var(--accent) 15%);
+    --drop-tinted: color-mix(in srgb, var(--drop) 85%, var(--accent) 15%);
+    --reject-tinted: color-mix(in srgb, var(--reject) 85%, var(--accent) 15%);
+    --log-tinted: color-mix(in srgb, var(--log) 85%, var(--accent) 15%);
+    --row-drop-bg: color-mix(in srgb, var(--drop-tinted) 9%, transparent);
+    --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 15px;
+  }
+
+  /* ---------- case-study scaffold (not app chrome; labels the panels) ---------- */
+  .brief {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 24px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brief h1 {
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--fg);
+  }
+  .brief p {
+    margin: 0 0 8px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--fg-muted);
+    max-width: 900px;
+  }
+  .brief .figs {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+  .brief .figs b { color: var(--now); font-weight: 600; }
+
+  .scenes {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 4px 24px 60px;
+  }
+  .scene {
+    padding: 26px 0 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .scene:last-child { border-bottom: none; }
+  .case-label {
+    margin: 0 0 12px;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .case-note {
+    margin: 10px 0 0;
+    font-size: 11.5px;
+    font-style: italic;
+    line-height: 1.5;
+    color: var(--fg-dim);
+    max-width: 760px;
+  }
+  .compare {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    font-size: 12px;
+    color: var(--fg-muted);
+    max-width: 760px;
+    line-height: 1.6;
+  }
+  .compare b { color: var(--fg); }
+
+  /* ---------- the app frame (a scene's own dark surface) ---------- */
+  .appframe {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  /* ---------- ConnectionBanner.svelte, ported verbatim ---------- */
+  .banner {
+    padding: 8px 16px;
+    font-size: 13px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+  .banner-warning {
+    background: var(--row-drop-bg);
+    color: var(--drop);
+  }
+
+  /* ---------- SceneBar.svelte, ported field-for-field ---------- */
+  .scene-bar {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    padding: 12px 20px 4px;
+    flex-wrap: wrap;
+  }
+  .wm { font-size: 15px; font-weight: 800; letter-spacing: 0.04em; color: var(--fg); }
+  .wm em { color: var(--accent); font-style: normal; }
+  .status-cluster { margin-left: auto; display: flex; gap: 16px; align-items: center; }
+
+  /* ConnectionIndicator.svelte */
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-muted); }
+  .conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accept-tinted); }
+
+  /* AlarmCluster.svelte */
+  .fmk, .wmk {
+    display: inline-flex; align-items: center; gap: 3px;
+    background: transparent; border: none; padding: 0;
+    font: 600 12px var(--font-mono);
+  }
+  .fmk { color: var(--alarm); }
+  .fmk.zero { color: var(--accept-tinted); }
+  .wmk { color: #a78bfa; }
+  .wmk svg { display: block; }
+
+  /* AccountMenu.svelte, minimal chip */
+  .acc-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--fg-muted);
+  }
+  .acc-avatar {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--bg-hover); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font: 700 9px var(--font-mono); color: var(--fg-dim);
+  }
+
+  /* ---------- Whisper.svelte, ported ---------- */
+  .whisper { display: flex; gap: 14px; align-items: center; padding: 10px 20px 6px; flex-wrap: wrap; }
+  .wbar { position: relative; flex: 1; min-width: 260px; }
+  .wsvg { width: 100%; height: 26px; display: block; }
+  .wline { stroke: var(--accent); stroke-width: 1.4; opacity: 0.8; }
+  .wtimes { display: flex; justify-content: space-between; margin-top: 2px; font: 9px var(--font-mono); color: var(--fg-dim); }
+  .wstat { flex: none; font: 11px var(--font-mono); color: var(--fg-dim); white-space: nowrap; }
+  .wstat .k { color: var(--fg-muted); font-weight: 600; }
+  .wstat .r { color: var(--drop); font-weight: 600; }
+  .hand { display: inline-flex; gap: 4px; }
+  .hand-btn {
+    padding: 3px 9px; border-radius: 6px; border: 1px solid transparent;
+    background: transparent; font: 600 10px var(--font-mono);
+    letter-spacing: 0.04em; color: var(--fg-dim);
+  }
+  .hand-btn.on { color: var(--now); border-color: color-mix(in srgb, var(--now) 50%, transparent); }
+  .wpill {
+    flex: none; font: 600 10px var(--font-mono); letter-spacing: 0.06em;
+    color: var(--fg-dim); background: transparent; border: 1px solid var(--hair-2);
+    border-radius: 6px; padding: 3px 9px;
+  }
+
+  /* ---------- LiveTable / EventRow / ActionBadge, ported ---------- */
+  .stream {
+    padding: 4px 20px 18px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+  .stream-head, .stream-row {
+    display: grid;
+    grid-template-columns: 112px 78px 1fr 1fr 110px;
+    gap: 12px;
+    padding: 6px 8px;
+    align-items: center;
+  }
+  .stream-head {
+    font-size: 9.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+  }
+  .stream-row.band { background: var(--bg-hover); border-radius: 4px; }
+  .stream-row .t { color: var(--fg-dim); }
+  .stream-row .src, .stream-row .dst { color: var(--fg-muted); }
+  .stream-row .dev { color: var(--fg-dim); text-align: right; }
+  .badge {
+    display: inline-block; font: 700 10px var(--font-mono);
+    letter-spacing: 0.06em; padding: 0 6px; border-radius: 4px;
+    white-space: nowrap; width: fit-content;
+  }
+  .badge-accept { color: var(--accept); background: var(--accept-bg); }
+  .badge-drop { color: var(--drop); background: var(--drop-bg); }
+  .badge-reject { color: var(--reject); background: var(--reject-bg); }
+  .badge-log { color: var(--log); background: var(--log-bg); }
+
+  /* ---------- EngineRoom.svelte's settings-row grammar, ported ---------- */
+  .og {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    max-width: 900px;
+  }
+  .og h3 {
+    margin: 0 0 10px;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .stsection.wide { display: grid; grid-template-columns: 380px 1fr; column-gap: 32px; align-items: start; }
+  .stsection.wide > h3 { grid-column: 1 / -1; }
+  .stsection.wide > .wleft { grid-column: 1; min-width: 0; }
+  .stsection.wide > .wrows { grid-column: 2; min-width: 0; }
+  .oghint { margin: 6px 0 0; font-size: 11.5px; font-style: italic; color: var(--fg-dim); }
+  .stmem { width: 100%; height: auto; display: block; }
+  .sp-n { font-family: var(--font-mono); font-size: 9.5px; fill: var(--fg-dim); }
+  .sp-k { font-family: var(--font-mono); font-size: 10px; fill: var(--fg-muted); }
+  .stmemctl { width: 100%; height: auto; display: block; margin: 10px 0 0; }
+  .mrail { stroke: var(--border); stroke-width: 2; stroke-linecap: round; }
+  .mfill { stroke: var(--accent); stroke-width: 2; stroke-linecap: round; opacity: 0.55; }
+  .mh { fill: var(--bg); stroke: var(--accent); stroke-width: 1.6; }
+
+  .orow {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 14px; padding: 7px 0; font-size: 12px;
+  }
+  .orow > span:first-child { color: var(--fg-dim); flex: none; }
+  .orow .ov { color: var(--fg-muted); text-align: right; }
+  .orow.new { border-radius: 6px; margin: 0 -8px; padding: 7px 8px; background: rgba(245, 166, 35, 0.06); }
+  .orow.new > span:first-child { color: var(--drop); }
+  .orow.new .ov { color: var(--drop); font-weight: 600; }
+  .orow.healthy.new { background: transparent; }
+  .orow.healthy.new > span:first-child { color: var(--fg-dim); }
+  .orow.healthy.new .ov { color: var(--fg-muted); font-weight: 400; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .banner { animation: banner-in 0.22s ease-out; }
+    @keyframes banner-in {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="brief">
+  <h1>Where does "⚠ syslog full" live now? — #77</h1>
+  <p>
+    The old stream toolbar carried a warning when MikroView turned away a configured router's syslog
+    connections because its connection pool was full. That toolbar was retired when the scene bar was
+    built (1c0f85d) and the warning lost its home — the only retired control that hides data loss rather
+    than costing a convenience (tracked as item 1 on #691). The backend still reports it on every
+    <code>GET /api/stats</code> call; only the display disappeared. This mockup proposes two places for
+    it to come back: the same banner slot <code>ConnectionBanner.svelte</code> already uses, and a
+    persistent line in Settings beside the buffer readout.
+  </p>
+  <p class="figs">
+    One story throughout: router <b>branch-e4a1</b> · <b>43</b> connection attempts turned away ·
+    <b>24 of 24</b> syslog slots in use.
+  </p>
+</header>
+
+<main class="scenes">
+
+  <!-- ============ Scene 1: healthy ============ -->
+  <section class="scene" id="scene-healthy">
+    <p class="case-label">1 — healthy: nothing turned away</p>
+    <div class="appframe">
+      <div class="scene-bar">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <div class="status-cluster">
+          <span class="conn"><span class="dot"></span>LIVE · 38/s</span>
+          <button class="fmk zero" type="button" aria-label="no open flags">⚑ 0</button>
+          <button class="wmk" type="button" aria-label="3 watchers held">
+            <svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true">
+              <path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+              <circle cx="7" cy="5" r="1.8" fill="currentColor" />
+            </svg>
+            3
+          </button>
+          <span class="acc-chip"><span class="acc-avatar">T</span>tom</span>
+        </div>
+      </div>
+
+      <div class="whisper" aria-label="The last 15 minutes, whispered">
+        <div class="wbar">
+          <svg class="wsvg" viewBox="0 0 1000 30" preserveAspectRatio="none" role="img" aria-label="Event rate curve, last 15 minutes">
+            <polyline class="wline" fill="none" points="0,20 80,17 160,19 240,12 320,15 400,9 480,14 560,11 640,16 720,10 800,13 880,8 960,12 1000,11" />
+          </svg>
+          <div class="wtimes"><span>14:17</span><span>14:32 · now</span></div>
+        </div>
+        <span class="wstat">
+          <b class="k">38/s</b> now · <b class="r">drops 1%</b> · top talker <b class="k">10.20.4.7</b> · top port <b class="k">53</b>
+        </span>
+        <span class="hand" role="group" aria-label="The stream's hand">
+          <button type="button" class="hand-btn on" aria-pressed="true">following</button>
+          <button type="button" class="hand-btn" aria-pressed="false">pause</button>
+          <button type="button" class="hand-btn" aria-pressed="false">group</button>
+        </span>
+        <button type="button" class="wpill">wipe</button>
+      </div>
+
+      <div class="stream">
+        <div class="stream-head"><span>time</span><span>action</span><span>src</span><span>dst</span><span>device</span></div>
+        <div class="stream-row band">
+          <span class="t">14:32:07.112</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51422</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:07.098</span><span><span class="badge badge-drop">DROP</span></span>
+          <span class="src">10.20.6.2:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.884</span><span><span class="badge badge-log">LOG</span></span>
+          <span class="src">10.20.4.7:22</span><span class="dst">10.20.4.1:51500</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:06.771</span><span><span class="badge badge-reject">REJECT</span></span>
+          <span class="src">10.20.9.14:443</span><span class="dst">10.20.0.5:8080</span><span class="dev">guest-e8b2</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.650</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51420</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+      </div>
+    </div>
+    <p class="case-note">
+      No banner: the stream looks completely ordinary here — branch-e4a1's firewall traffic keeps
+      flowing normally. That is exactly the danger this control exists to close: the syslog blackout is
+      invisible everywhere except the one place that reports it.
+    </p>
+  </section>
+
+  <!-- ============ Scene 2: banner alone ============ -->
+  <section class="scene" id="scene-banner-alone">
+    <p class="case-label">2 — the syslog-full banner, alone</p>
+    <div class="appframe">
+      <div class="banner banner-warning" role="status">
+        MikroView has turned away 43 connection attempts from a router listed in your config, because its
+        syslog connection slots were full (24 of 24 in use). Those log lines never arrived. This usually
+        means something is opening a lot of connections to the syslog port.
+      </div>
+      <div class="scene-bar">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <div class="status-cluster">
+          <span class="conn"><span class="dot"></span>LIVE · 38/s</span>
+          <button class="fmk zero" type="button" aria-label="no open flags">⚑ 0</button>
+          <button class="wmk" type="button" aria-label="3 watchers held">
+            <svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true">
+              <path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+              <circle cx="7" cy="5" r="1.8" fill="currentColor" />
+            </svg>
+            3
+          </button>
+          <span class="acc-chip"><span class="acc-avatar">T</span>tom</span>
+        </div>
+      </div>
+      <div class="whisper" aria-label="The last 15 minutes, whispered">
+        <div class="wbar">
+          <svg class="wsvg" viewBox="0 0 1000 30" preserveAspectRatio="none" role="img" aria-label="Event rate curve, last 15 minutes">
+            <polyline class="wline" fill="none" points="0,20 80,17 160,19 240,12 320,15 400,9 480,14 560,11 640,16 720,10 800,13 880,8 960,12 1000,11" />
+          </svg>
+          <div class="wtimes"><span>14:17</span><span>14:32 · now</span></div>
+        </div>
+        <span class="wstat">
+          <b class="k">38/s</b> now · <b class="r">drops 1%</b> · top talker <b class="k">10.20.4.7</b> · top port <b class="k">53</b>
+        </span>
+        <span class="hand" role="group" aria-label="The stream's hand">
+          <button type="button" class="hand-btn on" aria-pressed="true">following</button>
+          <button type="button" class="hand-btn" aria-pressed="false">pause</button>
+          <button type="button" class="hand-btn" aria-pressed="false">group</button>
+        </span>
+        <button type="button" class="wpill">wipe</button>
+      </div>
+      <div class="stream">
+        <div class="stream-head"><span>time</span><span>action</span><span>src</span><span>dst</span><span>device</span></div>
+        <div class="stream-row band">
+          <span class="t">14:32:07.112</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51422</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:07.098</span><span><span class="badge badge-drop">DROP</span></span>
+          <span class="src">10.20.6.2:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.884</span><span><span class="badge badge-log">LOG</span></span>
+          <span class="src">10.20.4.7:22</span><span class="dst">10.20.4.1:51500</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:06.771</span><span><span class="badge badge-reject">REJECT</span></span>
+          <span class="src">10.20.9.14:443</span><span class="dst">10.20.0.5:8080</span><span class="dev">guest-e8b2</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.650</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51420</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+      </div>
+    </div>
+    <p class="case-note">
+      Same slot, same warning style ConnectionBanner already uses for the feed-drop notice — ⚠ syslog
+      full comes back as a sentence, not a chip nobody could hover on a phone.
+    </p>
+  </section>
+
+  <!-- ============ Scene 3: both banners stacked ============ -->
+  <section class="scene" id="scene-banner-stacked">
+    <p class="case-label">3 — stacked with the existing feed-drop banner (the collision case)</p>
+    <div class="appframe">
+      <div class="banner banner-warning" role="status">
+        MikroView has turned away 43 connection attempts from a router listed in your config, because its
+        syslog connection slots were full (24 of 24 in use). Those log lines never arrived. This usually
+        means something is opening a lot of connections to the syslog port.
+      </div>
+      <div class="banner banner-warning" role="status">
+        Server is dropping events under load — 156 events have been lost from the live feed this
+        connection.
+      </div>
+      <div class="scene-bar">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <div class="status-cluster">
+          <span class="conn"><span class="dot"></span>LIVE · 38/s</span>
+          <button class="fmk" type="button" aria-label="2 open flags">⚑ 2</button>
+          <button class="wmk" type="button" aria-label="3 watchers held">
+            <svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true">
+              <path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+              <circle cx="7" cy="5" r="1.8" fill="currentColor" />
+            </svg>
+            3
+          </button>
+          <span class="acc-chip"><span class="acc-avatar">T</span>tom</span>
+        </div>
+      </div>
+      <div class="whisper" aria-label="The last 15 minutes, whispered">
+        <div class="wbar">
+          <svg class="wsvg" viewBox="0 0 1000 30" preserveAspectRatio="none" role="img" aria-label="Event rate curve, last 15 minutes">
+            <polyline class="wline" fill="none" points="0,14 80,18 160,10 240,20 320,9 400,17 480,8 560,15 640,7 720,16 800,6 880,13 960,5 1000,9" />
+          </svg>
+          <div class="wtimes"><span>14:17</span><span>14:32 · now</span></div>
+        </div>
+        <span class="wstat">
+          <b class="k">61/s</b> now · <b class="r">drops 9%</b> · top talker <b class="k">10.20.4.7</b> · top port <b class="k">53</b>
+        </span>
+        <span class="hand" role="group" aria-label="The stream's hand">
+          <button type="button" class="hand-btn on" aria-pressed="true">following</button>
+          <button type="button" class="hand-btn" aria-pressed="false">pause</button>
+          <button type="button" class="hand-btn" aria-pressed="false">group</button>
+        </span>
+        <button type="button" class="wpill">wipe</button>
+      </div>
+      <div class="stream">
+        <div class="stream-head"><span>time</span><span>action</span><span>src</span><span>dst</span><span>device</span></div>
+        <div class="stream-row band">
+          <span class="t">14:32:07.112</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51422</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:07.098</span><span><span class="badge badge-drop">DROP</span></span>
+          <span class="src">10.20.6.2:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.884</span><span><span class="badge badge-log">LOG</span></span>
+          <span class="src">10.20.4.7:22</span><span class="dst">10.20.4.1:51500</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:06.771</span><span><span class="badge badge-reject">REJECT</span></span>
+          <span class="src">10.20.9.14:443</span><span class="dst">10.20.0.5:8080</span><span class="dev">guest-e8b2</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.650</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51420</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+      </div>
+    </div>
+    <div class="compare">
+      Identical style, different loss. <b>Top banner (syslog full):</b> lines that never reached
+      MikroView at all — nothing this browser tab can do brings them back, and the count keeps climbing
+      across reconnects until restart. <b>Bottom banner (feed drop):</b> events MikroView already has,
+      just not delivered to this tab — <code>wsDropped</code> resets to zero the moment this connection
+      re-opens. They can legitimately fire together, as here: the same load spike that saturated the
+      syslog pool is also outrunning the websocket.
+    </div>
+  </section>
+
+  <!-- ============ Scene 4: Settings ============ -->
+  <section class="scene" id="scene-settings">
+    <p class="case-label">4 — Settings: a persistent readout beside the buffer row</p>
+    <div class="og">
+      <div class="stsection wide">
+        <h3>memory</h3>
+        <div class="wleft">
+          <svg class="stmem" viewBox="0 0 400 40" role="img" aria-label="The event buffer, hour by hour">
+            <rect x="6" y="15" width="380" height="10" rx="5" fill="var(--bg-hover)" />
+            <rect x="6" y="15" width="27" height="10" fill="var(--accent)" opacity="0.08" />
+            <rect x="33" y="15" width="27" height="10" fill="var(--accent)" opacity="0.14" />
+            <rect x="60" y="15" width="27" height="10" fill="var(--accent)" opacity="0.22" />
+            <rect x="87" y="15" width="27" height="10" fill="var(--accent)" opacity="0.3" />
+            <rect x="114" y="15" width="27" height="10" fill="var(--accent)" opacity="0.12" />
+            <rect x="141" y="15" width="27" height="10" fill="var(--accent)" opacity="0.26" />
+            <rect x="168" y="15" width="27" height="10" fill="var(--accent)" opacity="0.19" />
+            <rect x="195" y="15" width="27" height="10" fill="var(--accent)" opacity="0.09" />
+            <rect x="222" y="15" width="27" height="10" fill="var(--accent)" opacity="0.24" />
+            <rect x="249" y="15" width="27" height="10" fill="var(--accent)" opacity="0.16" />
+            <rect x="276" y="15" width="27" height="10" fill="var(--accent)" opacity="0.28" />
+            <rect x="303" y="15" width="27" height="10" fill="var(--accent)" opacity="0.2" />
+            <rect x="330" y="15" width="27" height="10" fill="var(--accent)" opacity="0.31" />
+            <rect x="357" y="15" width="27" height="10" fill="var(--accent)" opacity="0.15" />
+            <rect x="386" y="10" width="3" height="20" rx="1.5" fill="var(--now)" />
+            <text x="6" y="36" class="sp-n">14:32 yesterday — the oldest event still held</text>
+            <text x="392" y="36" text-anchor="end" class="sp-k">now</text>
+          </svg>
+          <p class="oghint">the oldest falls away as the newest arrives; darker stretches held more</p>
+          <svg class="stmemctl still" viewBox="0 0 400 42" role="img" aria-label="The event buffer is set to 1.0 GiB, of the 3.8 GiB this host can spare">
+            <line x1="10" y1="20" x2="390" y2="20" class="mrail" />
+            <line x1="10" y1="20" x2="210" y2="20" class="mfill" />
+            <circle class="mh" cx="210" cy="20" r="6" />
+            <text x="210" y="9" text-anchor="middle" class="sp-k">1.0 GiB</text>
+            <text x="10" y="36" class="sp-n">32 MiB</text>
+            <text x="390" y="36" text-anchor="end" class="sp-n">3.8 GiB this host can spare</text>
+          </svg>
+        </div>
+        <div class="wrows">
+          <div class="orow">
+            <span>event buffer</span>
+            <span class="ov">612,480 of 750,000 events · ~14 h window</span>
+          </div>
+          <!-- The new row this mockup proposes: same grammar as every
+               other Settings fact, coloured with --drop only while a
+               configured router is actually being turned away. -->
+          <div class="orow new">
+            <span>syslog intake</span>
+            <span
+              class="ov"
+              role="status"
+              aria-label="24 of 24 syslog connection slots in use. 43 connection attempts from a configured router turned away since last restart."
+              title="MikroView reserves syslog connection slots for routers listed under devices: in config.yaml. It keeps counting turned-away attempts across reconnects — unlike the live feed's own drop counter, this does not reset until the server restarts."
+            >24 of 24 slots in use · 43 turned away since restart</span>
+          </div>
+          <div class="orow">
+            <span>on restart</span>
+            <span class="ov">kept 14 d, refilled from disk</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="oghint" style="max-width:760px;">
+      When nothing is being turned away this same row reads calmly, in the ordinary muted ink — it is not
+      always shouting:
+    </p>
+    <div class="og" style="margin-top:8px;">
+      <div class="orow healthy new" style="padding:0;">
+        <span>syslog intake</span>
+        <span class="ov">3 of 24 slots in use · 0 turned away</span>
+      </div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>
