@@ -50,6 +50,8 @@ LOGDIR="${MV_GATE_LOGDIR:-$HOME/projects/.gate-logs/mikroview}"
 POLL="${MV_GATE_POLL:-600}"
 REMOTE="${MV_GATE_REMOTE:-gitlab}"
 CREDENTIALS="${MV_GATE_CREDENTIALS:-$HOME/.config/mikroview/gitlab-credentials}"
+# Same host and env var as gate-remote.sh's HOST, since it is the same box.
+GATE_HOST="${MV_GATE_HOST:-mikroview-runner}"
 
 if [ ! -r "$CREDENTIALS" ]; then
   echo "ERROR $(date -u +%Y-%m-%dT%H:%M:%SZ) no credential file at $CREDENTIALS -- see the header"
@@ -78,6 +80,15 @@ stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 while :; do
   if ! git -C "$WORKTREE" -c "credential.helper=store --file=$CREDENTIALS" fetch -q "$REMOTE"; then
     echo "ERROR $(stamp) fetch failed; retrying in ${POLL}s"
+    sleep "$POLL"; continue
+  fi
+  # perf:promotion (#1003) asks the whole host to back off while it
+  # measures, via a flag under /srv/quiet-host on $GATE_HOST -- the same
+  # box this loop's gate run lands on. Skip this poll while it holds;
+  # an expired flag is the root unit's own job to clear within a minute,
+  # so nothing here needs to read the flag's expiry.
+  if ssh "$GATE_HOST" 'test -e /srv/quiet-host/hold' 2>/dev/null; then
+    echo "HOLD $(stamp) perf:promotion holds the host -- skipping this poll"
     sleep "$POLL"; continue
   fi
   sha=$(git -C "$WORKTREE" rev-parse --short "$REMOTE/dev")

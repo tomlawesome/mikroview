@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Applies or releases the quiet-host hold on this box's one gitlab-runner
+# service (issue #1003). A perf:promotion job writes $QH_DIR/hold to ask
+# every other runner job to back off while it measures; this script is
+# root's side of that: it sets `concurrent = 1` in the runner config while
+# a hold is active, and puts the original value back once it is not.
+#
+# Run by quiet-host.service, triggered by quiet-host.path (on any change
+# under $QH_DIR) and by quiet-host-expire.timer (once a minute), so an
+# expired hold is released even if nothing else touches the directory.
+#
+# Idempotent: running this with the same state twice changes nothing the
+# second time and says so.
+set -euo pipefail
+
+QH_DIR="${QH_DIR:-/srv/quiet-host}"
+# The saved value lives outside the watched directory, so saving it does
+# not re-trigger quiet-host.path (five starts in ten seconds hit systemd's
+# start limit on the first install, 2026-09-06).
+QH_STATE="${QH_STATE:-/var/lib/quiet-host}"
+CONFIG="${CONFIG:-/etc/gitlab-runner/config.toml}"
+
+HOLD="$QH_DIR/hold"
+ORIG="$QH_STATE/concurrent.orig"
+APPLIED="$QH_DIR/applied"
+
+apply_hold() {
+  job="$1"
+  match_count=$(grep -c '^concurrent = ' "$CONFIG" || true)
+  if [ "$match_count" -ne 1 ]; then
+    echo "refusing: expected exactly one '^concurrent = ' line in $CONFIG, found $match_count" >&2
+    exit 1
+  fi
+  if [ ! -f "$ORIG" ]; then
+    mkdir -p "$QH_STATE"
+    value=$(sed -n 's/^concurrent = \(.*\)$/\1/p' "$CONFIG")
+    printf '%s\n' "$value" >"$ORIG"
+  fi
+  sed -i 's/^concurrent = .*/concurrent = 1/' "$CONFIG"
+  systemctl reload gitlab-runner 2>/dev/null || true
+  printf 'concurrent=1 at %s for job=%s\n' "$(date +%s)" "$job" >"$APPLIED"
+  echo "HOLD applied: concurrent=1 for job=$job"
+}
+
+release_hold() {
+  value=$(cat "$ORIG")
+  sed -i "s/^concurrent = .*/concurrent = $value/" "$CONFIG"
+  systemctl reload gitlab-runner 2>/dev/null || true
+  rm -f "$ORIG" "$APPLIED"
+  echo "RELEASE: restored concurrent=$value"
+}
+
+now=$(date +%s)
+flag_job=""
+flag_expires=""
+held=0
+expired=0
+
+if [ -f "$HOLD" ]; then
+  flag_job=$(grep -m1 '^job=' "$HOLD" | cut -d= -f2-)
+  flag_expires=$(grep -m1 '^expires=' "$HOLD" | cut -d= -f2-)
+  case "$flag_expires" in
+    ''|*[!0-9]*) flag_expires=0 ;; # malformed -- treat as already expired
+  esac
+  if [ "$flag_expires" -gt "$now" ]; then
+    held=1
+  else
+    expired=1
+  fi
+fi
+
+if [ "$held" -eq 1 ]; then
+  if [ -f "$ORIG" ]; then
+    # A fresh flag can land right after an expired one was released but
+    # before this run: keep the marker naming the job that holds now, so
+    # the job side's wait for "job=<its id>" sees it.
+    if ! grep -q "job=${flag_job}\$" "$APPLIED" 2>/dev/null; then
+      printf 'concurrent=1 at %s for job=%s\n' "$now" "$flag_job" >"$APPLIED"
+      echo "HOLD re-marked for job=$flag_job (concurrent already 1)"
+    else
+      echo "hold already applied for job=$flag_job (expires $flag_expires) -- nothing to do"
+    fi
+  else
+    apply_hold "$flag_job"
+  fi
+else
+  if [ -f "$ORIG" ]; then
+    release_hold
+  fi
+  if [ "$expired" -eq 1 ]; then
+    echo "EXPIRED job=$flag_job expires=$flag_expires -- released"
+    rm -f "$HOLD"
+  fi
+fi
