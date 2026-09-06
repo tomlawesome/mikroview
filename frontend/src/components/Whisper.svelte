@@ -332,6 +332,30 @@
   // figure and the rows are one thing.
   const heldEvents = $derived(appState.filteredEvents)
 
+  // Round 36's "ring holds 41 m" (#1005): the old buffer-% stat, said as
+  // reach rather than a fraction -- how far back the events the stream
+  // currently holds go. Off appState.events, the same raw buffer
+  // statTalker/statPort read above via eventsBetween (not heldEvents,
+  // which is the table's own filtered view for csv ↓) -- arrives
+  // oldest-first (state.svelte's own append order), so the span is just
+  // its two ends, not a scan for a min/max nothing here can put out of
+  // order. Two units, space before the letter, matching
+  // formatUptimeDaysHours' shape rather than formatDurationShort's
+  // compact one -- the whisper's other clauses already read as clock
+  // times ("13:47"), not as "5h33m" durations. Null (and so omitted
+  // below, same as "no drops recorded yet") under two events: a single
+  // line has no reach to name, and "0 m" would read as a hold that just
+  // ended rather than one that never started.
+  const ringHolds = $derived.by((): string | null => {
+    const events = appState.events
+    if (events.length < 2) return null
+    const spanMs = events[events.length - 1].receivedAt - events[0].receivedAt
+    const totalMinutes = Math.round(spanMs / 60_000)
+    if (totalMinutes < 1) return null
+    if (totalMinutes < 60) return `${totalMinutes} m`
+    return `${Math.floor(totalMinutes / 60)} h ${totalMinutes % 60} m`
+  })
+
   function toggleFollow() {
     if (appState.autoscroll) whisperState.stopFollowing()
     else whisperState.resumeFollowing()
@@ -424,6 +448,12 @@
       {/if}
       {#if statPort}
         {' · top port '}<b class="k">{statPort}</b>
+      {/if}
+      <!-- Round 36 (#1005): the reach clause, last on the line and kept
+           through a pause -- it says what the held buffer is, which
+           pausing does not change. -->
+      {#if ringHolds}
+        {' · ring holds '}<b class="k">{ringHolds}</b>
       {/if}
     {/if}
   </span>
