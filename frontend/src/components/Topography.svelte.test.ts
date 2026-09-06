@@ -2225,6 +2225,22 @@ describe('the tunnel node (#877)', () => {
     expect(ribs).toContain('M1080 186 C 990 215, 880 240, 830 252')
   })
 
+  it('draws the tunnel node once, not a second time as a leftover survey dot (#976 items 1/2)', () => {
+    // The removed survey stop (#869) used to draw every node as a plain
+    // dot plus label; the tunnel's own copy of that (`.g-dot`,
+    // `.zone-label`) was never wired to any camera class, so it stayed
+    // on screen at every altitude, its own "WireGuard" printed straight
+    // over the card's -- the owner's "both renderings show at once".
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.g-dot')).toBeNull()
+    expect(container.querySelector('.zone-dot')).toBeNull()
+    expect(container.querySelector('.zone-label')).toBeNull()
+    expect([...container.querySelectorAll('.n-name')].filter((n) => n.textContent?.trim() === 'WireGuard').length).toBe(1)
+  })
+
   it('draws the ghost reference line only once traffic has reached a lane', () => {
     tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
     const bare = render(Topography)
