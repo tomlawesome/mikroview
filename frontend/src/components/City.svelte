@@ -53,7 +53,7 @@
     type Stop,
   } from '../lib/city/project'
   import { gateToward, lerpP, roadPieces, type Entity } from '../lib/city/roads'
-  import { portsLine, reachFor, type ReachStrand } from '../lib/reach'
+  import { reachFor, type ReachStrand } from '../lib/reach'
   import { composeCommand, reachComposeInput } from '../lib/compose'
   import { riverScene } from '../lib/city/river'
   import { P, type Paint } from '../lib/city/paint'
@@ -597,13 +597,12 @@
     /** Buildings the standing host actually reaches or is reached by,
      * always including itself. */
     litBuildingIds: Set<string>
-    /** A port label to draw at an accepted own road's midpoint. */
-    portChips: { roadId: string; text: string }[]
     /** Where a blocked strand's road would have crossed this district's
-     * wall, and the rule that refused it (absent said plainly, never
-     * guessed -- #865's own rule, the same source: the event's own
-     * ruleLabel). */
-    dropMarks: { p: Pt; refusedBy?: string }[]
+     * wall, and the counterpart's name -- present only when the strand
+     * arrived rather than left (#991: the drop is not on the building
+     * you are standing on, so the source is named; your own outbound
+     * attempt just reads "dropped"). */
+    dropMarks: { p: Pt; source?: string }[]
     /** Where the busiest blocked strand's own road crosses the wall --
      * the composer's own pin point -- computed regardless of whether a
      * fresh bollard mark was drawn there or an existing one already
@@ -631,8 +630,7 @@
     const ownRoadIds = new Set<string>()
     const reverseIds = new Set<string>()
     const litBuildingIds = new Set<string>([b.id])
-    const portChips: { roadId: string; text: string }[] = []
-    const dropMarks: { p: Pt; refusedBy?: string }[] = []
+    const dropMarks: { p: Pt; source?: string }[] = []
     const wan = zonesState.wanInterface
     const myToken = b.districtId ?? b.id
     const myDistrict = b.districtId ? districtOf(b.districtId) : null
@@ -672,7 +670,6 @@
         if (road) {
           ownRoadIds.add(road.id)
           if (flowReversed(road.pts, s.direction, b.u, b.v)) reverseIds.add(road.id)
-          if (s.outcome === 'accepted' && s.ports.length > 0) portChips.push({ roadId: road.id, text: portsLine(s.ports) })
         }
         const bridge = ground.bridges.find((br) => br.iface === counterpartToken)
         if (bridge) {
@@ -697,11 +694,16 @@
         // mark is only new ground when that road stayed standing.
         const pairId = counterpartToken ? [myToken, counterpartToken].sort().join('|') : null
         const already = pairId ? ground.roads.some((r) => !r.lane && r.id === pairId && r.stop === 'drop') : false
-        if (!already) dropMarks.push({ p: wallCrossingFor(counterpartToken || myToken), refusedBy: s.refusedBy })
+        // #991: named only when the drop is not on the building you are
+        // standing on -- an 'in' strand arrived from the counterpart and
+        // was refused here, so the counterpart is named; an 'out' strand
+        // was this building's own attempt, so it just reads "dropped".
+        const source = s.direction === 'in' ? (s.peers[0] ?? (s.counterpart === 'internet' ? 'the internet' : s.counterpart)) : undefined
+        if (!already) dropMarks.push({ p: wallCrossingFor(counterpartToken || myToken), source })
       }
     }
 
-    return { ownRoadIds, reverseIds, litBuildingIds, portChips, dropMarks, composerAnchor }
+    return { ownRoadIds, reverseIds, litBuildingIds, dropMarks, composerAnchor }
   })
 
   /** Everything on the ground, in the geometry camera. */
@@ -799,7 +801,12 @@
     // back edges the camera cannot see draws nothing -- the same
     // silence a hidden building face keeps -- but still keeps its lamp
     // and rule count for the plaque and the policy lens.
-    const gateBadges: { x: number; y: number; n: number }[] = []
+    // #991: "these pills are too busy, they should [be] bigger and just
+    // simply be a label" -- one word (the far end), bigger type; the
+    // rule number, its text and its ports move to the gate's click card.
+    // Outline colour is unchanged: amber where the gate logs, red where
+    // it doesn't (ported from round 46's marks.html, gateLabel()).
+    const gateBadges: { x: number; y: number; text: string; lamp: boolean }[] = []
     for (const d of g.districts) {
       const dim = d.dark
       const wallInk = dim ? 'var(--fg-dim)' : inkOf(d)
@@ -836,13 +843,12 @@
         // The policy lens lights every gate with its own rule number,
         // whether or not it happens to log -- the traffic lens leaves
         // the wall quiet and says nothing here at all.
-        if (policyLens) gateBadges.push({ x: R2(gx), y: R2(gy - lampH - 6), n: gate.ruleCount })
+        if (policyLens) gateBadges.push({ x: R2(gx), y: R2(gy - lampH - 13), text: gate.toward, lamp: gate.lamp })
       }
     }
 
     // Roads, cut into pieces that carry their own depth.
     const dropLabels: { x: number; y: number; text: string; alarm: boolean }[] = []
-    const portChipMarks: { x: number; y: number; text: string }[] = []
     const ents = new Map<string, Entity>()
     for (const b of allBuildings) ents.set(b.id, { u: b.u, v: b.v, R: b.R })
 
@@ -852,7 +858,12 @@
     // wall, not just where the district-pair aggregate already draws
     // one. `e` is the ground point the mark centres on (depth reads its
     // v, same as every other solid).
-    function dropMarkAt(e: Pt, alarm: boolean, text: string) {
+    // #991: the label is one plain word, "dropped" -- the source named
+    // only when the drop is not on the building you are standing on
+    // (`source` absent otherwise), never the refusing rule (that detail
+    // moved to the composer card, #868's own click card for the reach).
+    function dropMarkAt(e: Pt, alarm: boolean, source?: string) {
+      const text = source ? source + ' · dropped' : 'dropped'
       const col2 = alarm ? 'var(--alarm)' : 'var(--drop)'
       const px = X(c, e[0])
       const py = Y(c, e[1])
@@ -910,14 +921,16 @@
         solids.push({ kind: 'piece', v: pieceDepth(p), paints, flow: fl, label: r.label, roadId: r.id })
       }
       if (glowD.length) glows.push({ d: glowD.join(''), stroke: col, sw: R2(w + 4), so: 0.07 })
-      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x', r.refusedBy ? 'caught by ' + r.refusedBy : 'caught, no rule named')
-      const chip = reachOverlay?.portChips.find((pc) => pc.roadId === r.id)
-      if (chip) {
-        const mid = r.pts[Math.floor(r.pts.length / 2)]
-        portChipMarks.push({ x: R2(X(c, mid[0])), y: R2(Y(c, mid[1]) - 10), text: chip.text })
-      }
+      // #991: the district-pair aggregate has no per-building source to
+      // name (only the reach's own strands, below, resolve to one host),
+      // so this mark reads as the one plain word, "dropped".
+      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x')
     }
-    if (reachOverlay) for (const dm2 of reachOverlay.dropMarks) dropMarkAt(dm2.p, false, dm2.refusedBy ? 'caught by ' + dm2.refusedBy : 'caught, no rule named')
+    // #991: "gone from the street stop" -- the road port chips (#868's
+    // "ports on the road") are dropped entirely; the ports live on the
+    // building's card and the gate's card instead. Nothing else about
+    // roads changes.
+    if (reachOverlay) for (const dm2 of reachOverlay.dropMarks) dropMarkAt(dm2.p, false, dm2.source)
 
     // Buildings flat on the district plate (#986 dropped height and the
     // plinth, #867's own concept): the device symbol stamped on top
@@ -1038,7 +1051,7 @@
       bridgeChips.push({ x, y, w: R2(w), t, stroke })
     }
 
-    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, gateBadges, dropLabels, portChipMarks, claim }
+    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, gateBadges, dropLabels, claim }
   })
 
   /** Names float over buildings at the street stop, for what the
@@ -1260,22 +1273,16 @@
           </g>
         {/each}
         {#each scene.gateBadges as gb, i (i)}
+          {@const w = R2(gb.text.length * 7.6 + 20)}
           <g transform="translate({gb.x} {gb.y})">
-            <circle r="8" fill="#0a0f1c" fill-opacity="0.92" stroke="var(--accent)" stroke-opacity="0.7" />
-            <text x="0" y="3.5" text-anchor="middle" class="gate-n">{gb.n}</text>
+            <path d="M0 12V4" stroke="var(--hair-2)" stroke-width="1" />
+            <rect x={R2(-w / 2)} y="-12" width={w} height="24" rx="12" fill="#0a0f1c" fill-opacity="0.94"
+              stroke={gb.lamp ? 'rgba(232,176,90,0.5)' : 'rgba(255,84,112,0.4)'} />
+            <text x="0" y="4" text-anchor="middle" class="gate-lab">{gb.text}</text>
           </g>
         {/each}
         {#each scene.dropLabels as dl, i (i)}
           <text x={dl.x} y={dl.y} text-anchor="middle" class="drop-t" class:alarm-t={dl.alarm}>{dl.text}</text>
-        {/each}
-        {#each scene.portChipMarks as pc, i (i)}
-          <!-- The ports an accepted own road carries, while standing on
-               a building (#868) -- the design record's "with the ports
-               on the road". -->
-          <g transform="translate({pc.x} {pc.y})">
-            <rect x={R2(-pc.text.length * 3.1 - 8)} y="-8.5" width={R2(pc.text.length * 6.2 + 16)} height="17" rx="8" fill="#080c16" fill-opacity="0.92" stroke="var(--hair)" stroke-opacity="0.75" />
-            <text x="0" y="3.5" text-anchor="middle" class="port-t">{pc.text}</text>
-          </g>
         {/each}
       </g>
     </g>
@@ -1429,15 +1436,10 @@
     fill: var(--fg-muted);
   }
 
-  /* The ports on a road while standing on a building (#868). */
-  .port-t {
-    font: 600 9.5px var(--font-mono);
-    fill: var(--fg);
-  }
-
-  .gate-n {
-    font: 700 9px var(--font-mono);
-    fill: var(--accent);
+  /* The gate pill's one plain label, the far end's name (#991). */
+  .gate-lab {
+    font: 13px var(--font-mono);
+    fill: var(--fg-muted);
   }
 
   .drop-t {
