@@ -115,12 +115,13 @@ const entryId = entry.body?.id
 await new Promise((r) => setTimeout(r, 1200))
 await page.reload()
 await page.click('.rail-name >> text=Topography')
-// #979: the slider now defaults to zones, one stop out from the axis'
-// centre (#869) -- check that default here; the rest of this scenario
-// (which predates the join and draws entirely from the 2D map) already
-// has what it needs without moving the slider.
+// #869: the slider now defaults to the city, its centre -- check that
+// default here, before moving to a 2D stop so the rest of this scenario
+// (which predates the join and draws entirely from the 2D map) can wait
+// on what the 2D map draws.
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
-check((await page.locator('[data-card="topography"] .altitude input[type="range"]').inputValue()) === '2', 'the altitude defaults to "zones", one stop out from the centre (#979)')
+check((await page.locator('[data-card="topography"] .altitude input[type="range"]').inputValue()) === '3', 'the altitude defaults to "city", the axis\' centre (#869)')
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2') // zones
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
 // --- the health dials -----------------------------------------------------
