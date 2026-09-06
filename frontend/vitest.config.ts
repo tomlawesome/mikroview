@@ -25,6 +25,14 @@ export default defineConfig({
   plugins: [svelte(), svelteTesting()],
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.{test,spec}.{ts,js}', 'guards/**/*.{test,spec}.{ts,js}'],
+    include: [
+      'src/**/*.{test,spec}.{ts,js}',
+      'guards/**/*.{test,spec}.{ts,js}',
+      // scripts/ is plain Node .mjs (no jsdom/Svelte needed), but
+      // perf-compare.mjs's comparison rule is a pure function worth
+      // unit-testing same as anything else -- no reason to stand up a
+      // separate runner just for one file.
+      'scripts/**/*.{test,spec}.mjs',
+    ],
   },
 })
