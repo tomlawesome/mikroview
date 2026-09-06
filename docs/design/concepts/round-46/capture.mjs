@@ -7,6 +7,13 @@
 // IoT, which round 40's #street camera (centred on LAN) never frames,
 // so its crop is taken from #alarm instead, where cam-porch is the
 // scene's own subject.
+//
+// #981: cam-porch and pihole also carry an activity-spike pulse (a 2s
+// breathing rim + glow on their alarm mark) — a still can't show motion,
+// so paint-spike-low.png and paint-spike-high.png freeze the same
+// cam-porch crop at the pulse's dim and bright points, and
+// paint-spike-reduced.png shows the steady state prefers-reduced-motion
+// draws instead.
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -57,5 +64,32 @@ async function closeCrop(sceneId, ariaPrefix, name, clipW, clipH) {
 await closeCrop('alarm', 'cam-porch', 'cam-porch', 420, 300);
 // the 3-flag demonstration host, close enough to read the opacity step
 await closeCrop('survey', 'pihole', '3flags', 260, 220);
+
+// #981: freeze cam-porch's activity-spike pulse at its dim (t=0) and
+// bright (t=1, the 2s cycle's midpoint) points, by giving every pulsing
+// element a negative animation-delay and then pausing it — the standard
+// way to park a CSS animation at an arbitrary frame without waiting.
+async function setSpikeFrame(t) {
+  await page.evaluate((t) => {
+    document.querySelectorAll('.mk-spike-rim, .mk-spike-glow').forEach((el) => {
+      el.style.animationPlayState = 'running';
+      el.style.animationDelay = (-t) + 's';
+    });
+    document.body.getBoundingClientRect();   // force layout so the delay lands before pausing
+    document.querySelectorAll('.mk-spike-rim, .mk-spike-glow').forEach((el) => {
+      el.style.animationPlayState = 'paused';
+    });
+  }, t);
+}
+await page.locator('#alarm').scrollIntoViewIfNeeded();
+await setSpikeFrame(0);
+await closeCrop('alarm', 'cam-porch', 'spike-low', 420, 300);
+await setSpikeFrame(1);
+await closeCrop('alarm', 'cam-porch', 'spike-high', 420, 300);
+
+// the steady state prefers-reduced-motion draws instead of the pulse
+await page.emulateMedia({ reducedMotion: 'reduce' });
+await page.waitForTimeout(200);
+await closeCrop('alarm', 'cam-porch', 'spike-reduced', 420, 300);
 
 await browser.close();
