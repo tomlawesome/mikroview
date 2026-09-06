@@ -256,6 +256,13 @@ instead, which needs no credential and tests the same thing.
 **Never put a token on that host**, for a pull or a clone or anything
 else. If a step seems to need one, the step is wrong.
 
+**Quiet host (#1003).** perf:promotion writes `/srv/quiet-host/hold` on
+this box before it measures; a root-owned unit sets `concurrent = 1` on
+the runner until the flag goes or expires, so no sibling job starts
+mid-measurement. This loop skips a poll while the flag exists. Install
+steps: `deploy/quiet-host/README.md`. Stuck with `concurrent = 1` and
+nothing measuring: `rm /srv/quiet-host/hold`.
+
 Two traps met while setting this up, recorded so the next person does
 not:
 

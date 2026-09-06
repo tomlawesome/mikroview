@@ -1,0 +1,9 @@
+[Unit]
+Description=Release an expired quiet-host hold once a minute
+
+[Timer]
+OnCalendar=minutely
+Unit=quiet-host.service
+
+[Install]
+WantedBy=timers.target
