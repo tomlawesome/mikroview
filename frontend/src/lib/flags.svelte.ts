@@ -36,6 +36,97 @@ export function extractSourceIp(target: string): string | null {
   return isIpAddress(withoutDropsSuffix) ? withoutDropsSuffix : null
 }
 
+// A campaign (#988, round 47): the flags one source IP raised inside one
+// 30-minute window, whatever their types. Flags.svelte folds them into
+// one row that opens to its members.
+export interface Campaign {
+  // Stable while the campaign's oldest flag is: the row's key, and what
+  // Flags.svelte remembers as open.
+  id: string
+  ip: string
+  // Oldest first, as they joined.
+  flags: Flag[]
+  // The span: the oldest member's firstSeen to the newest member's
+  // lastSeen.
+  firstSeen: string
+  lastSeen: string
+  // Member counts summed.
+  count: number
+}
+
+export const CAMPAIGN_WINDOW_MS = 30 * 60 * 1000
+
+// Folds flags into campaigns (#988): same source IP *and* each flag's
+// active window (firstSeen..lastSeen) overlapping, or sitting within 30
+// minutes of, the campaign so far. A flag from the same source outside
+// that window starts a new campaign -- the owner's "separate worthy
+// items", not one campaign per IP. Flags whose target is not a single
+// IP (a rule label, a port, "global" -- see extractSourceIp) are never
+// grouped. A campaign of one is just a flag: returned as-is, in the
+// `singles` list, and never a campaign row.
+//
+// The window test is on time alone, never on type: a port scan, then a
+// critical-port hit, then repeated drops from the same host inside half
+// an hour is one actor doing one thing. This replaced groupedBySource
+// (#106), which grouped by IP alone and so folded a morning's activity
+// spike in with an afternoon's scan.
+export function buildCampaigns(
+  flags: Flag[],
+  windowMs = CAMPAIGN_WINDOW_MS,
+): { campaigns: Campaign[]; singles: Flag[] } {
+  const byIp = new Map<string, Flag[]>()
+  const singles: Flag[] = []
+  for (const f of flags) {
+    const ip = extractSourceIp(f.target)
+    if (!ip) {
+      singles.push(f)
+      continue
+    }
+    const existing = byIp.get(ip)
+    if (existing) existing.push(f)
+    else byIp.set(ip, [f])
+  }
+  const campaigns: Campaign[] = []
+  for (const [ip, list] of byIp) {
+    const ordered = [...list].sort((a, b) => Date.parse(a.firstSeen) - Date.parse(b.firstSeen))
+    let run: Flag[] = []
+    // The newest lastSeen in the run so far, and the flag carrying it --
+    // kept as the flag's own string rather than re-serialised, so the
+    // span reads exactly as the server wrote it.
+    let runEnd = Number.NEGATIVE_INFINITY
+    let runLast = ''
+    const flush = () => {
+      if (run.length >= 2) {
+        campaigns.push({
+          id: `campaign:${run[0].id}`,
+          ip,
+          flags: run,
+          firstSeen: run[0].firstSeen,
+          lastSeen: runLast,
+          count: run.reduce((n, f) => n + f.count, 0),
+        })
+      } else {
+        singles.push(...run)
+      }
+      run = []
+      runEnd = Number.NEGATIVE_INFINITY
+      runLast = ''
+    }
+    for (const f of ordered) {
+      const start = Date.parse(f.firstSeen)
+      const end = Math.max(start, Date.parse(f.lastSeen))
+      if (run.length > 0 && start - runEnd > windowMs) flush()
+      run.push(f)
+      if (end > runEnd) {
+        runEnd = end
+        runLast = end === start && end > Date.parse(f.lastSeen) ? f.firstSeen : f.lastSeen
+      }
+    }
+    flush()
+  }
+  return { campaigns, singles }
+}
+
 // Behavioral flags (port scans, activity spikes, critical-port attempts,
 // global volume spikes -- see internal/detect) raised server-side and
 // reviewed/cleared by a human here. Kept as its own small module rather
@@ -95,30 +186,6 @@ class FlagsState {
 
   // Open provisional flags -- the learning shelf's number (#642).
   provisionalCount = $derived(this.list.filter((f) => !f.cleared && f.provisional).length)
-
-  // Groups *active* flags by normalized source IP (see extractSourceIp)
-  // so "one actor, several signals" -- a port scan, then a critical-port
-  // hit, then a reputation-triggered flag, all from the same host --
-  // reads as one correlated unit in Flags.svelte instead of N unrelated
-  // entries (issue #106). Cleared flags are left out: they've already
-  // been reviewed, so there's nothing left to correlate them toward.
-  // Only IPs with more than one active flag are kept -- a group of one
-  // is just a normal flag, not a campaign worth calling out.
-  groupedBySource = $derived.by(() => {
-    const groups = new Map<string, Flag[]>()
-    for (const f of this.list) {
-      if (f.cleared) continue
-      const ip = extractSourceIp(f.target)
-      if (!ip) continue
-      const existing = groups.get(ip)
-      if (existing) existing.push(f)
-      else groups.set(ip, [f])
-    }
-    for (const [ip, flags] of groups) {
-      if (flags.length < 2) groups.delete(ip)
-    }
-    return groups
-  })
 
   async refresh() {
     const res = await fetchFlags()
