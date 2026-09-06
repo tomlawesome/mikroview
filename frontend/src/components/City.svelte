@@ -443,14 +443,30 @@
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return
     drag = { x: e.clientX, y: e.clientY, c: centre, moved: false }
-    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+    // Capture is taken lazily in onPointerMove, once a real drag is
+    // under way -- not here. See the comment there for why (#977).
   }
   function onPointerMove(e: PointerEvent) {
     if (!drag) return
     const k = stageScale()
     const dx = (e.clientX - drag.x) * k
     const dy = (e.clientY - drag.y) * k
-    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true
+    if (Math.abs(dx) + Math.abs(dy) > 3 && !drag.moved) {
+      drag.moved = true
+      // #977: setPointerCapture keeps a drag tracking the pointer past
+      // the svg's own edge, which a plain click never needs -- and
+      // capturing unconditionally on pointerdown broke every click,
+      // drag or not. Chromium decides a click's target from the
+      // capture state at pointerdown/pointerup, not at click-dispatch
+      // time, so releasing it in onPointerUp (tried first) was already
+      // too late: the click still landed on the capturing svg instead
+      // of bubbling through the building or plate under the pointer,
+      // and standing on a host or focusing a district did nothing.
+      // Taking capture only once a drag is confirmed leaves a plain
+      // click never captured at all, so its own click reaches the
+      // element it was aimed at exactly as before this existed.
+      ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+    }
     if (!drag.moved) return
     if (anim !== null) cancelAnimationFrame(anim)
     anim = null
@@ -1765,6 +1781,11 @@
     z-index: 7;
     background: rgba(160, 185, 230, 0.06);
     border-radius: 3px;
+    /* Purely decorative (aria-hidden, no handler of its own) -- without
+     * this a building or plate under either strip is unclickable, the
+     * click swallowed by this indicator instead of reaching the map
+     * beneath it (#977). */
+    pointer-events: none;
   }
 
   .sbar.h {
