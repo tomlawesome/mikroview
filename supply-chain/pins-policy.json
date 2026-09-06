@@ -272,6 +272,18 @@
       "reviewBy": "2026-11-05"
     },
     {
+      "name": "live-check gate image (this repository's own live-check.Dockerfile, built by gate:image into the project registry, #1004)",
+      "reference": "$CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG",
+      "shipped": false,
+      "license": "AGPL-3.0-only",
+      "source": "https://gitlab.tomlawson.io/ai/mikroview/-/blob/dev/live-check.Dockerfile",
+      "locations": [
+        ".gitlab-ci.yml"
+      ],
+      "reviewedOn": "2026-09-06",
+      "reviewBy": "2026-11-06"
+    },
+    {
       "name": "Docker CLI (container smoke-test image)",
       "reference": "docker:28-cli",
       "shipped": false,
