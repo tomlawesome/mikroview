@@ -14,6 +14,7 @@ import {
   SIG_ALARM,
   SIG_REST,
   SREF,
+  ZK,
   deviceScale,
   deviceStampAttrs,
   deviceSymbolId,
@@ -45,6 +46,20 @@ describe('the device library', () => {
   it('gives every scene its own symbol ids, so a <use> never crosses SVG roots', () => {
     expect(deviceSymbolId('street', 'router')).toBe('street-router')
     expect(deviceSymbolId('city', 'router')).not.toBe(deviceSymbolId('street', 'router'))
+  })
+
+  it('#992: the camera is a small dome on a disc, not a bullet on a post', () => {
+    const symbol = DEVICE_LIBRARY.camera
+    // The old bullet-on-a-post stood at 1.02 * LZ + 5; the dome sits
+    // squat on its own base, at 0.5 * LZ + 5 -- close to the puck it now
+    // reads like, not the router-post height it used to share.
+    expect(deviceTop('camera')).toBeCloseTo(0.5 * ZK * SREF + 5, 5)
+    // No post, no arm: a disc base and a dome (each an ellipse-rimmed
+    // path plus one filled path), one lens ring and one lens pinprick --
+    // never the old post/arm/body boxes and their two-ellipse lens.
+    expect(symbol.parts.filter((p) => p.shape === 'circle')).toHaveLength(2)
+    expect(symbol.parts.filter((p) => p.shape === 'ellipse')).toHaveLength(2)
+    expect(symbol.parts.some((p) => p.shape === 'path' && p.d?.includes('A'))).toBe(true)
   })
 })
 
