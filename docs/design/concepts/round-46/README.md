@@ -242,3 +242,17 @@ by giving it a negative `animation-delay` and then pausing it, and
 <!-- owner's verdict goes here -->
 
 Written by Claude Fable 5 (drawn by Claude Sonnet), 2026-09-06.
+
+## Owner verdict — ratified, 2026-09-06
+
+**Approved.** Owner, verbatim, on asking whether the spike pulse is always red:
+
+> "Yes, sorry. I was thinking it was for top talkers, it's for activity spikes. Approed"
+
+The pulse stays red. It is drawn only inside the flagged branch, with `stroke="var(--alarm)"` set inline on both the rim and the glow; the animation moves opacity and stroke-width only, never hue. So a pulsing mark is always a flagged mark — the breathe distinguishes a live activity spike from a standing flag, and nothing else does.
+
+Considered and rejected in the same breath: giving the spike its own colour. A second ink here would compete with the red/orange/yellow/cyan severity scale ratified for the ingest-loss banners (#995) on the same day.
+
+Also cleaned up on ratification: the rim carried an `mk-alarm` class with no CSS rule anywhere in the page — dead, since the colour comes entirely from the inline `stroke`. Removed so it does not read as meaningful.
+
+Unblocked by this verdict: #991 (street pills) and #992 (dome camera) product side.
