@@ -43,6 +43,20 @@
 // ends by resetting the table to non-logging, the same "tables pushed by
 // earlier scenarios have no logging rules" state that scenario documents
 // needing.
+//
+// #971: three scenarios that sort earlier in the whole suite --
+// live-city-importance.mjs, live-topography-furniture.mjs and
+// live-topography-layout.mjs (the last makes two) -- each create a
+// watchlist entry of their own and never delete it, unlike every
+// scenario in this file's own directory. coverage.go's "nothing anywhere
+// logs" answer applies to every expectation definition regardless of
+// its own scope, so the non-logging push below turns their leftovers
+// broken too, and the marker this scenario asserts on ends up counting
+// somebody else's watches alongside the one it made. This scenario's own
+// subject is that exact count, so rather than loosen "exactly one" into
+// a number that depends on which of those upstream scenarios have run,
+// it clears out any stray expectation definitions itself before making
+// its own -- see the cleanup below.
 
 import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
@@ -65,6 +79,27 @@ async function coverageFor(id) {
   const d = (got.body?.definitions ?? []).find((d) => d.id === id)
   return d?.coverage
 }
+
+// #971: a clean baseline for the count this scenario is about to make an
+// exact claim against -- see the header comment. Every expectation
+// definition still around from an earlier scenario would otherwise be
+// swept into "broken" by the non-logging push below, whatever its own
+// scope was authored with.
+const stray = (await api('GET', '/api/definitions')).body?.definitions ?? []
+for (const d of stray.filter((d) => d.intent === 'expectation')) {
+  await api('DELETE', `/api/definitions/${d.id}`)
+}
+// The page already mounted (session() above navigates to Stream before
+// this runs) and App.svelte's own watchlist poll may already have landed
+// once against the pre-cleanup state -- watchlistState is a module
+// singleton that otherwise sits on that stale count until its next 60s
+// tick (WATCHLIST_COVERAGE_REFRESH_MS). A reload re-mounts against what
+// the server holds now, the same pattern live-watchlist-coverage.mjs
+// uses for the same reason. goTo back to Stream explicitly rather than
+// trusting whatever the reload happens to land on by default -- this
+// scenario's own later checks are all read from there.
+await page.reload({ waitUntil: 'networkidle' })
+await goTo(page, 'Stream')
 
 const device = (await api('GET', '/api/devices')).body?.devices?.[0]?.id
 check(!!device, `the instance reports a device (${device})`)
