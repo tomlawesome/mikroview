@@ -154,6 +154,7 @@
   .hovercard .hc-r { display: flex; gap: 10px; align-items: center; margin-top: 7px; font: 10px var(--mono); }
   .hovercard .hc-r .w { color: #a78bfa; }
   .hovercard .hc-r .p { color: var(--ink-2); }
+  .hovercard .hc-r .f { color: var(--alarm); }
 
   /* ---- reach: the crumb at the top, the composer on the wall ---- */
   .crumb {
@@ -208,28 +209,14 @@
     .flow, .current { stroke-dasharray: none; }
   }
 
-  /* ---- #981: flags & watchers, marked locally on the building or
-     district that carries them. Both directions are drawn in the same
-     markup; this toggle just shows one. ---- */
-  .markstoggle { width: 1400px; margin: 0 auto 14px; display: flex; gap: 8px; padding: 0 4px; }
-  .markstoggle .mtb {
-    font: 10.5px var(--sans); color: var(--ink-3); cursor: pointer; background: transparent;
-    border: 1px solid var(--hair); border-radius: 13px; padding: 4px 13px;
-  }
-  .markstoggle .mtb.on { color: var(--ink); border-color: var(--hair-2); background: var(--raised); }
-  .markstoggle .mtb:hover { color: var(--ink-2); }
-  body[data-marks="ring"] .mk-tint { display: none; }
-  body[data-marks="tint"] .mk-ring { display: none; }
-  .mk-count { font: 700 9px var(--mono); fill: #0a0f1c; text-anchor: middle; }
-  .mk-ringnum { font: 700 9.5px var(--mono); }
+  /* ---- #981, direction C: a flagged building's plinth fill turns
+     alarm-red in place of its district colour, with a matching rim; a
+     watched building gets a purple outline around its plinth, drawn a
+     touch proud of the rim so both read when a building carries both.
+     No toggle — this is the only direction the page draws. ---- */
 </style>
 </head>
-<body data-marks="tint">
-
-<div class="markstoggle" role="group" aria-label="Marks direction">
-  <button class="mtb on" data-marks="tint" aria-pressed="true">marks: tinted block</button>
-  <button class="mtb" data-marks="ring" aria-pressed="false">marks: ring and number</button>
-</div>
+<body>
 
 <p class="cap"><b>SURVEY</b>the whole estate small — the river along the north edge with its three bridges, six walled districts, two boroughs; height is importance, and the toggle re-measures the skyline.</p>
 <section class="scene" id="survey" aria-label="Survey: the whole estate as an isometric town — the Internet as a river with the WAN bridge and two tunnel footbridges, districts as walled plates, devices standing on plinths whose height is importance"></section>
@@ -493,7 +480,7 @@ const DISTRICTS = [
       { id: 'hap', dir: [6, 20], n: 22, lamp: 1, rule: 'servers → workshop · :445 · accept' }
     ],
     hosts: [
-      { id: 'pihole', name: 'pihole', ip: '10.0.20.5', t: 'server', du: 0, dv: -9, R: 5.0, h: [6.6, 1.0] },
+      { id: 'pihole', name: 'pihole', ip: '10.0.20.5', t: 'server', du: 0, dv: -9, R: 5.0, h: [6.6, 1.0], flags: 3 },
       { id: 'nas', name: 'nas', ip: '10.0.20.10', t: 'server', du: -9, dv: 2, R: 5.4, h: [6.2, 4.4], watch: 1, down: 1 },
       { id: 'unifi', name: 'unifi', ip: '10.0.20.12', t: 'server', du: 9, dv: 2, R: 5.0, h: [4.2, 0.7], down: 1 }
     ] },
@@ -872,33 +859,15 @@ function bridge(c, b, opt) {
   return out;
 }
 
-/* ---- flags & watchers (#981): a district's marks are its hosts', summed ---- */
-function districtMarks(d) {
-  let flags = 0, watch = 0;
-  d.hosts.forEach((b) => { flags += b.flags || 0; watch += b.watch || 0; });
-  return { flags: flags, watch: watch };
-}
-/* open flags win the ink where a district or building carries both */
-function markInk(flags) { return flags ? 'var(--alarm)' : 'var(--watch)'; }
-/* the "⚑ 3 · ◉ 1" a marked district's pill gains after its name */
-function markLabel(d) {
-  const m = districtMarks(d), segs = [];
-  if (m.flags) segs.push({ t: ' · ⚑ ' + m.flags, fill: 'var(--alarm)' });
-  if (m.watch) segs.push({ t: ' · ◉ ' + m.watch, fill: 'var(--watch)' });
-  return segs;
-}
-
-/* ---- the district plate, and the wall round it ---- */
+/* ---- the district plate, and the wall round it. #981 direction C
+   leaves districts alone: the red house in a green district is the
+   signal, so no rim tint and no marks on the name pill here. ---- */
 function plate(c, d, opt) {
   const dim = d.dark;
-  const m = districtMarks(d);
   let s = '<g role="img" aria-label="' + esc(d.name + ' district ' + d.cidr + ' — coverage ' + d.cov) + '">';
   s += '<path d="' + diamond(c, d.u, d.v, d.r, 0) + '" fill="' + d.ink + '" fill-opacity="' + (dim ? 0.045 : 0.1) + '"/>';
   s += '<path d="' + diamond(c, d.u, d.v, d.r - 1.8, 0) + '" fill="none" stroke="' + (dim ? 'var(--ink-3)' : d.ink) +
        '" stroke-opacity="' + (dim ? 0.13 : 0.17) + '" stroke-width="0.7"/>';
-  /* direction A only: a marked district's wall rim takes the ink at 0.8 */
-  if (m.flags || m.watch) s += '<path class="mk-tint" d="' + diamond(c, d.u, d.v, d.r - 1.8, 0) +
-    '" fill="none" stroke="' + markInk(m.flags) + '" stroke-opacity="0.8" stroke-width="0.7"/>';
   s += '</g>';
   return s;
 }
@@ -977,40 +946,6 @@ function gateLabel(c, g, opt) {
     '<text x="0" y="3.5" text-anchor="middle" class="rule-n">#' + g.n + '</text></g>';
 }
 
-/* ---- #981, direction A: a filled count disc per mark, on the roof.
-   Alarm left, watch right when a building carries both. r floors at 6
-   so it stays legible from survey, and grows with the device at closer
-   stops — so it is bottom-anchored on clearLine (its base, not its
-   middle) and grows upward, away from any label under it. ---- */
-function markDiscs(clearLine, k, b) {
-  const rr = R2(Math.max(6, 7 * k)), cy = R2(clearLine - rr);
-  const one = (cx, ink, n) => '<circle class="mk-tint" cx="' + cx + '" cy="' + cy + '" r="' + rr + '" fill="' + ink + '"/>' +
-    '<text class="mk-tint mk-count" x="' + cx + '" y="' + R2(cy + 3.2) + '">' + n + '</text>';
-  if (b.flags && b.watch) {
-    const dx = R2(rr + 1);
-    return one(-dx, 'var(--alarm)', b.flags) + one(dx, 'var(--watch)', b.watch);
-  }
-  return b.flags ? one(0, 'var(--alarm)', b.flags) : (b.watch ? one(0, 'var(--watch)', b.watch) : '');
-}
-/* ---- #981, direction B: the halo above, made into a ring with its
-   count beside it — same bottom-anchoring as the discs. The first
-   ring's centre lands where round 40's halo always did when nothing
-   else claims the space above; a second mark's ring follows 3px clear
-   of the first count. ---- */
-function markRings(clearLine, k, b) {
-  const rr = R2(Math.max(4, 5 * k)), cy = R2(clearLine - rr);
-  let s = '', cx = 0;
-  const one = (ink, n) => {
-    s += '<circle class="mk-ring" cx="' + cx + '" cy="' + cy + '" r="' + rr + '" fill="none" stroke="' + ink + '" stroke-width="1.6"/>';
-    const numX = R2(cx + rr + 3);
-    s += '<text class="mk-ring mk-ringnum" x="' + numX + '" y="' + R2(cy + 3.3) + '" fill="' + ink + '">' + n + '</text>';
-    cx = R2(numX + String(n).length * 6.6 + 3 + rr);
-  };
-  if (b.flags) one('var(--alarm)', b.flags);
-  if (b.watch) one('var(--watch)', b.watch);
-  return s;
-}
-
 /* ---- a device on its plinth: the plinth is the only thing importance
    ever changes, so a phone never becomes a skyscraper ---- */
 function device(c, u, v, b, opt) {
@@ -1042,19 +977,25 @@ function device(c, u, v, b, opt) {
   s += pf(pin(h), pin(hd), pin(hw),
     ' stroke="' + pink + '" stroke-opacity="' + (unlit ? 0.55 : 0.95) + '" stroke-width="1"' +
     (unlit ? ' stroke-dasharray="3 3"' : ''), unlit ? 0.12 : 0.26);
-  /* #981, direction A: a marked building's plinth takes the ink — left
-     face favours an open flag, right face favours a watcher, the rim
-     follows the left face. Drawn on top of the base plinth above; CSS
-     hides it in ring mode. */
-  if (b.flags || b.watch) {
-    const rimInk = markInk(b.flags), rightInk = b.watch ? 'var(--watch)' : 'var(--alarm)';
-    const tf = (d1, d2, d3, ink, op) =>
-      '<path class="mk-tint" style="d:path(\'' + d1 + '\')" d="' + d1 + '"' + dat(d2, d3) +
-        ' fill="' + ink + '" fill-opacity="' + op + '"/>';
-    s += tf(pl(h), pl(hd), pl(hw), rimInk, 0.55);
-    s += tf(pr(h), pr(hd), pr(hw), rightInk, 0.7);
-    s += '<path class="mk-tint" style="d:path(\'' + pin(h) + '\')" d="' + pin(h) + '"' + dat(pin(hd), pin(hw)) +
-      ' fill="none" stroke="' + rimInk + '" stroke-width="1.4"/>';
+  /* #981 direction C: a flagged building's plinth fill turns to the
+     alarm ink on all three faces — replacing the district colour —
+     with a rim at the same ink; a watched building gets a purple
+     outline around its plinth, drawn a touch proud (R + 1.6) of the
+     rim so both read when a building carries both marks. */
+  if (b.flags) {
+    const flagOp = R2(Math.min(0.9, 0.45 + 0.15 * (b.flags - 1)) * 1000) / 1000;
+    const rimW = R2(Math.min(3, 1 + 0.5 * (b.flags - 1)));
+    const af = (d1, d2, d3) => '<path class="mk-alarm" style="d:path(\'' + d1 + '\')" d="' + d1 + '"' + dat(d2, d3) +
+      ' fill="var(--alarm)" fill-opacity="' + flagOp + '"/>';
+    s += af(pl(h), pl(hd), pl(hw)) + af(pr(h), pr(hd), pr(hw)) + af(pin(h), pin(hd), pin(hw));
+    s += '<path class="mk-alarm" style="d:path(\'' + pin(h) + '\')" d="' + pin(h) + '"' + dat(pin(hd), pin(hw)) +
+      ' fill="none" stroke="var(--alarm)" stroke-width="' + rimW + '"/>';
+  }
+  if (b.watch) {
+    const watchW = R2(Math.min(4, 1.5 + 0.75 * (b.watch - 1)));
+    const pinOut = (hh) => diamond(c, u, v, R + 1.6, hh);
+    s += '<path class="mk-watch" style="d:path(\'' + pinOut(h) + '\')" d="' + pinOut(h) + '"' + dat(pinOut(hd), pinOut(hw)) +
+      ' fill="none" stroke="var(--watch)" stroke-width="' + watchW + '"/>';
   }
   /* and the device itself, stamped from the library */
   const sig = lit || b.flags ? 'var(--alarm)' : (unlit ? 'var(--ink-3)' : (b.watch ? '#a78bfa' : 'var(--ok)'));
@@ -1067,20 +1008,6 @@ function device(c, u, v, b, opt) {
     const top = R2(-DEVLIB[b.t].top * k - 2);
     s += '<circle cx="0" cy="' + top + '" r="' + R2(Math.max(4, 5 * k)) + '" class="halo" fill="none" stroke="' +
       (opt.ring && !lit ? 'var(--accent)' : 'var(--alarm)') + '" stroke-width="1.4"/>';
-  }
-  /* #981: the local marks, both directions drawn, CSS shows one. Same
-     minimum size at every stop (the max() floor) so they stay legible
-     even at survey scale. Cleared further above the device wherever a
-     label already sits there — a name+ip card, the alarm-lit callout,
-     or the alarm scene's own flag chip — so the (much bigger, up close)
-     mark never lands on top of it. */
-  if (b.flags || b.watch) {
-    let clear = 2;
-    if (opt.named) clear = 44;
-    else if (lit) clear = 38;
-    else if (opt.alarm && b.flags) clear = 30;
-    const clearLine = R2(-DEVLIB[b.t].top * k - clear);
-    s += markDiscs(clearLine, k, b) + markRings(clearLine, k, b);
   }
   s += '</g></g>';
   if (opt.fade) s = '<g opacity="0.42">' + s + '</g>';
@@ -1127,34 +1054,27 @@ function plaque(c, d, compact) {
   if (y0 > lim) y0 = Y(c, d.v - d.r) - (compact ? 30 : 48);
   if (y0 < 6 || y0 > lim || x0 < -140 || x0 > 1540) return '';
   if (compact) {
-    const t = d.name, marks = markLabel(d), markLen = marks.reduce((n, s) => n + s.t.length, 0);
-    const w = (t.length + markLen) * 7.2 + (d.dark ? 62 : 26);
+    const t = d.name;
+    const w = t.length * 7.2 + (d.dark ? 62 : 26);
     const x = Math.max(8 + w / 2, Math.min(1392 - w / 2, x0)), y = y0;
     if (!claim(x, y, w, 20)) return '';
-    const markSvg = marks.map((s) => '<tspan fill="' + s.fill + '">' + esc(s.t) + '</tspan>').join('');
-    const ring = marks.length ? '<rect class="mk-ring" x="' + R2(-w / 2) + '" y="0" width="' + R2(w) +
-      '" height="20" rx="10" fill="none" stroke="' + markInk(districtMarks(d).flags) + '" stroke-width="1"/>' : '';
     return '<g transform="translate(' + R2(x) + ' ' + R2(y) + ')">' +
       '<rect x="' + R2(-w / 2) + '" y="0" width="' + R2(w) + '" height="20" rx="10" fill="#0a0f1c" fill-opacity="0.9" stroke="' +
       (d.dark ? 'rgba(255,84,112,0.4)' : 'var(--hair)') + '"/>' +
       '<circle cx="' + R2(-w / 2 + 11) + '" cy="10" r="3.2" fill="' + d.ink + '" fill-opacity="' + (d.dark ? 0.5 : 1) + '"/>' +
-      '<text x="' + R2(-w / 2 + 19) + '" y="14" class="p-name" style="font-size:11.5px">' + esc(t) + markSvg + '</text>' +
+      '<text x="' + R2(-w / 2 + 19) + '" y="14" class="p-name" style="font-size:11.5px">' + esc(t) + '</text>' +
       (d.dark ? '<text x="' + R2(w / 2 - 10) + '" y="13.5" text-anchor="end" class="cov cov-d">DARK</text>' : '') +
-      ring + '</g>';
+      '</g>';
   }
-  const marks = markLabel(d), markLen = marks.reduce((n, s) => n + s.t.length, 0);
-  const w = (d.lw || 200) + (markLen ? markLen * 6.6 + 6 : 0);
+  const w = d.lw || 200;
   const x = Math.max(10 + w / 2, Math.min(1390 - w / 2, x0)), y = y0;
   if (!claim(x, y, w, 38)) return '';
   const covc = d.covk === 'l' ? 'cov cov-l' : (d.covk === 'q' ? 'cov cov-q' : 'cov cov-d');
-  const markSvg = marks.map((s) => '<tspan fill="' + s.fill + '">' + esc(s.t) + '</tspan>').join('');
   let s = '<g transform="translate(' + R2(x) + ' ' + R2(y) + ')">';
   s += '<rect x="' + R2(-w / 2) + '" y="0" width="' + w + '" height="38" rx="8" fill="#0a0f1c" fill-opacity="0.93" stroke="' +
        (d.dark ? 'rgba(255,84,112,0.32)' : 'var(--hair)') + '"/>';
-  if (marks.length) s += '<rect class="mk-ring" x="' + R2(-w / 2) + '" y="0" width="' + w + '" height="38" rx="8" fill="none" stroke="' +
-    markInk(districtMarks(d).flags) + '" stroke-width="1"/>';
   s += '<circle cx="' + R2(-w / 2 + 13) + '" cy="14" r="3.4" fill="' + d.ink + '" fill-opacity="' + (d.dark ? 0.5 : 1) + '"/>';
-  s += '<text x="' + R2(-w / 2 + 22) + '" y="18" class="p-name">' + esc(d.name) + markSvg + '</text>';
+  s += '<text x="' + R2(-w / 2 + 22) + '" y="18" class="p-name">' + esc(d.name) + '</text>';
   s += '<text x="' + R2(w / 2 - 11) + '" y="17.5" text-anchor="end" class="p-cidr">' + esc(d.cidr) + '</text>';
   s += '<text x="' + R2(-w / 2 + 13) + '" y="31" class="' + covc + '">' + esc(d.cov) + '</text>';
   if (d.tally) s += '<text x="' + R2(w / 2 - 11) + '" y="31.5" text-anchor="end" class="wp">' + esc(d.tally) + '</text>';
@@ -1415,7 +1335,14 @@ function chrome(id) {
   h += '<div class="stage"><svg id="svg-' + id + '" viewBox="0 0 1400 700" role="img" aria-label="' + id + ' camera on the estate"></svg></div>';
   if (cfg.card) h += '<div class="hovercard" id="hc" aria-label="tom-desktop card"><div class="hc-n">tom-desktop</div>' +
     '<div class="hc-i">10.0.10.21 · 3 roads · workstation</div>' +
-    '<div class="hc-r"><span class="w">watch ◉</span><span class="p">:445 :5001 :53</span></div></div>';
+    '<div class="hc-r"><span class="w">watch ◉</span><span class="p">:445 :5001 :53</span></div></div>' +
+    /* #981: the click card is where a marked building's counts live now
+       — cam-porch is IoT's, off this camera's frame (see capture.mjs),
+       so its card floats free with no leader line, just to show the
+       idiom's new second line */
+    '<div class="hovercard" id="hc-cam" aria-label="cam-porch card"><div class="hc-n">cam-porch</div>' +
+    '<div class="hc-i">10.0.30.14 · 1 road · camera</div>' +
+    '<div class="hc-r"><span class="f">⚑ 2 flags</span><span class="p"> · </span><span class="w">◉ 1 watch</span></div></div>';
   h += '<div class="wlens2">' + LENSES.map((l) => '<span class="' + (on(l) ? 'on' : '') + '"' +
     (l.indexOf('flags') === 0 ? ' style="color:var(--alarm)"' : '') + '>' + l + '</span>').join('') + '</div>';
   h += '<div class="alt" style="flex-direction:column;gap:6px">' +
@@ -1495,22 +1422,13 @@ Object.keys(SCENES).forEach((id) => { chrome(id); render(id); });
 document.querySelectorAll('#survey .imp .ib').forEach((b) => {
   b.addEventListener('click', () => setMode(b.dataset.importance === 'watched' ? 'wat' : 'dep'));
 });
-/* the marks toggle: both directions are already drawn, this just picks
-   which one CSS shows */
-document.querySelectorAll('.markstoggle .mtb').forEach((b) => {
-  b.addEventListener('click', () => {
-    document.body.dataset.marks = b.dataset.marks;
-    document.querySelectorAll('.markstoggle .mtb').forEach((x) => {
-      const on = x === b;
-      x.classList.toggle('on', on);
-      x.setAttribute('aria-pressed', on ? 'true' : 'false');
-    });
-  });
-});
-/* the street card sits beside tom-desktop, with a leader to its roof */
+/* the street card sits beside tom-desktop, with a leader to its roof;
+   cam-porch's card floats on the opposite side, unconnected (#981) */
 (function placeCards() {
   const hc = document.getElementById('hc');
   if (hc) { hc.style.left = '1120px'; hc.style.top = '160px'; }
+  const hc2 = document.getElementById('hc-cam');
+  if (hc2) { hc2.style.left = '40px'; hc2.style.top = '160px'; }
 })();
 </script>
 </body>
