@@ -1090,9 +1090,19 @@
   const miniView = $derived.by(() => {
     const mc = miniCam
     const vp = viewport
-    const x = X(mc, vp.u0)
-    const y = Y(mc, vp.v0)
-    return { x: R2(x), y: R2(y), w: R2(X(mc, vp.u1) - x), h: R2(Y(mc, vp.v1) - y) }
+    // Clamped into the panel (#1000): at the city stop the viewport can
+    // be wider than the estate itself (cityFitS is capped, and the fit
+    // leaves slack on the non-binding axis), which used to push the
+    // rectangle's edges outside the svg where they clipped invisible.
+    // The owner's ask is a big rectangle covering everything at the
+    // default framing, shrinking as you zoom -- so an off-panel edge
+    // stops at the panel's inset instead of vanishing.
+    const inset = 1.5
+    const x0 = Math.max(inset, X(mc, vp.u0))
+    const y0 = Math.max(inset, Y(mc, vp.v0))
+    const x1 = Math.min(MINI_W - inset, X(mc, vp.u1))
+    const y1 = Math.min(MINI_H - inset, Y(mc, vp.v1))
+    return { x: R2(x0), y: R2(y0), w: R2(Math.max(0, x1 - x0)), h: R2(Math.max(0, y1 - y0)) }
   })
   const viewShare = $derived.by(() => {
     const b = ground.bounds
