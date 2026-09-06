@@ -901,6 +901,12 @@
   function nowClock(): string {
     return windowEnd ? new Date(windowEnd).toTimeString().slice(0, 8) : ''
   }
+
+  // #994: the foot's (i) is a link to the user docs, never a UI-side
+  // explanation (round 30 README §5, round 5's original ruling) -- the
+  // same pattern lib/history.ts's HOW_TO_MOUNT_URL uses for its own docs
+  // link.
+  const FALL_DOCS_URL = 'https://github.com/tomlawesome/mikroview/blob/main/docs/reading-the-fall.md'
 </script>
 
 <div class="fall">
@@ -1316,9 +1322,18 @@
          restating round 5's ruling): a learned display explains itself
          once, in the docs. What remains on-screen is a tiny (i), well
          out of the way -- not the toggleable key-plus-legend the build
-         had grown, which round 30 never draws. -->
+         had grown, which round 30 never draws. #994: the (i) had no
+         handler and did nothing when clicked; it is a link to
+         docs/reading-the-fall.md, opened in a new tab. -->
     <div class="fall-foot">
-      <button type="button" class="ibtn" title="How to read the fall — full explanation in the docs">i</button>
+      <a
+        class="ibtn"
+        href={FALL_DOCS_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="How to read the fall — full explanation in the docs"
+        aria-label="How to read the fall (opens the docs)">i</a
+      >
       {#if WINDOW_RANGE_CAPTION_ENABLED}
         <span class="window-caption">
           {#if windowHasMore}showing the most recent 5,000 events; more exist ·
@@ -1853,6 +1868,11 @@
     padding: 0;
     cursor: pointer;
     line-height: 1;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
   }
   .ibtn:hover {
     color: var(--accent);
