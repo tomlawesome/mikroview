@@ -566,16 +566,16 @@ describe('crossing the altitude centre (#869)', () => {
   it('keeps the selected lens when crossing the centre either way', () => {
     const { container } = render(Topography)
     flushSync()
-    const policyTab = [...container.querySelectorAll('[aria-label="Map lenses"] button')].find((b) => b.textContent?.trim() === 'policy')!
-    policyTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    const coverageTab = [...container.querySelectorAll('[aria-label="Map lenses"] button')].find((b) => b.textContent?.trim() === 'coverage')!
+    coverageTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     flushSync()
-    expect(policyTab.classList.contains('on')).toBe(true)
+    expect(coverageTab.classList.contains('on')).toBe(true)
 
     crossTo(container, '2') // to zones: the 2D side
-    expect(policyTab.classList.contains('on')).toBe(true)
+    expect(coverageTab.classList.contains('on')).toBe(true)
 
     crossTo(container, '4') // back across, to borough
-    expect(policyTab.classList.contains('on')).toBe(true)
+    expect(coverageTab.classList.contains('on')).toBe(true)
   })
 
   it('hands a 2D reach across the centre to the same host, standing on it in the city', () => {
@@ -811,7 +811,7 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
 })
 
 describe('the lens selector, ported to the scene\'s own bottom-left bar (#682)', () => {
-  it('renders the three lenses as .wlens2, not a top-right tab strip, and switches on click', () => {
+  it('renders the two lenses as .wlens2, not a top-right tab strip, and switches on click', () => {
     const { container } = render(Topography)
     flushSync()
 
@@ -819,15 +819,15 @@ describe('the lens selector, ported to the scene\'s own bottom-left bar (#682)',
     const bar = container.querySelector('.wlens2')
     expect(bar).not.toBeNull()
 
-    // Three exclusive base lenses, then the two overlays (#715 item 3).
+    // Two exclusive base lenses, then the two overlays (#715 item 3).
     const tabs = [...bar!.querySelectorAll('[role="tablist"] button')].map((b) => b.textContent?.trim())
-    expect(tabs).toEqual(['traffic', 'policy', 'coverage'])
+    expect(tabs).toEqual(['traffic', 'coverage'])
 
-    const policyTab = [...bar!.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'policy')!
-    expect(policyTab.classList.contains('on')).toBe(false)
-    policyTab.click()
+    const coverageTab = [...bar!.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'coverage')!
+    expect(coverageTab.classList.contains('on')).toBe(false)
+    coverageTab.click()
     flushSync()
-    expect(policyTab.classList.contains('on')).toBe(true)
+    expect(coverageTab.classList.contains('on')).toBe(true)
   })
 })
 
@@ -1421,30 +1421,6 @@ describe('#723: lines are painted before labels in every lens, so a line can nev
     linesComeBeforeEveryPlate(container, '.redge')
   })
 
-  it('holds for the policy lens, two accepted pairs with port badges', () => {
-    zonesState.pushed = [
-      { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
-      { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
-    ]
-    appState.events = [
-      event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
-      event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
-    ]
-    policyState.anyPushed = true
-    policyState.edges = [
-      { key: 'bridge1|ether1', from: 'bridge1', to: 'ether1', accepted: true, refused: false, acceptPorts: [':443'], refusePorts: [], comment: '', ruleCount: 1, logged: true },
-      { key: 'bridge2|ether1', from: 'bridge2', to: 'ether1', accepted: true, refused: false, acceptPorts: [':80'], refusePorts: [], comment: '', ruleCount: 1, logged: true },
-    ]
-    const { container } = render(Topography)
-    flushSync()
-    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
-    policyTab!.click()
-    flushSync()
-
-    linesComeBeforeEveryPlate(container, '.edge')
-  })
-
   it('holds for the coverage lens, two dark boundary-directions', () => {
     zonesState.pushed = [
       { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
@@ -1552,11 +1528,11 @@ describe('#726: distinct edges are not drawn along each other', () => {
     policyState.edges = [policyEdge('bridge1', 'ether1', [':443']), policyEdge('bridge2', 'ether1', [':80'])]
     const { container } = render(Topography)
     flushSync()
-    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
-    policyTab!.click()
+    const coverageTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'coverage')
+    coverageTab!.click()
     flushSync()
 
-    const [one, two] = pathsOf(container, '.edge')
+    const [one, two] = pathsOf(container, '.cedge')
     expect(one).toBeTruthy()
     expect(two).toBeTruthy()
     expect(sharedRun(one, two)).toBeLessThan(SMEARED)
@@ -1569,11 +1545,11 @@ describe('#726: distinct edges are not drawn along each other', () => {
     policyState.edges = [policyEdge('bridge1', 'ether1', [':443']), policyEdge('bridge1', '', [':53'])]
     const { container } = render(Topography)
     flushSync()
-    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
-    policyTab!.click()
+    const coverageTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'coverage')
+    coverageTab!.click()
     flushSync()
 
-    const [toInternet, toAnywhere] = pathsOf(container, '.edge')
+    const [toInternet, toAnywhere] = pathsOf(container, '.cedge')
     expect(toInternet).toBeTruthy()
     expect(toAnywhere).toBeTruthy()
     expect(sharedRun(toInternet, toAnywhere)).toBeLessThan(SMEARED)
@@ -1586,28 +1562,13 @@ describe('#726: distinct edges are not drawn along each other', () => {
     policyState.edges = [policyEdge('bridge1', 'bridge2', [':445']), policyEdge('bridge2', 'bridge1', [':22'])]
     const { container } = render(Topography)
     flushSync()
-    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
-    policyTab!.click()
+    const coverageTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'coverage')
+    coverageTab!.click()
     flushSync()
 
-    const [there, back] = pathsOf(container, '.edge')
+    const [there, back] = pathsOf(container, '.cedge')
     expect(sharedRun(there, back)).toBeLessThan(SMEARED)
   })
-
-  function refusedEdge(from: string, to: string, ports: string[]) {
-    return {
-      key: `${from}|${to}`,
-      from,
-      to,
-      accepted: false,
-      refused: true,
-      acceptPorts: [],
-      refusePorts: ports,
-      comment: '',
-      ruleCount: 1,
-      logged: true,
-    }
-  }
 
   // The gate caught this on the real map when the unit cases above did
   // not: they only ever hung the "anywhere" edge off lane 1, whose slot
@@ -1633,11 +1594,11 @@ describe('#726: distinct edges are not drawn along each other', () => {
       ]
       const { container } = render(Topography)
       flushSync()
-      const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
-      policyTab!.click()
+      const coverageTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'coverage')
+      coverageTab!.click()
       flushSync()
 
-      const edges = pathsOf(container, '.edge')
+      const edges = pathsOf(container, '.cedge')
       expect(edges.length).toBe(4)
       for (let a = 0; a < edges.length; a++) {
         for (let b = a + 1; b < edges.length; b++) {
@@ -1670,11 +1631,11 @@ describe('#726: distinct edges are not drawn along each other', () => {
     ]
     const { container } = render(Topography)
     flushSync()
-    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
-    policyTab!.click()
+    const coverageTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'coverage')
+    coverageTab!.click()
     flushSync()
 
-    const edges = pathsOf(container, '.edge')
+    const edges = pathsOf(container, '.cedge')
     expect(edges.length).toBe(8)
     for (let a = 0; a < edges.length; a++) {
       for (let b = a + 1; b < edges.length; b++) {
@@ -1683,18 +1644,20 @@ describe('#726: distinct edges are not drawn along each other', () => {
     }
   })
 
-  it('two inbound refusals to different lanes stop coinciding at the top of the waist', () => {
+  // A refused pair dies at the waist rather than crossing it, so its
+  // death point is its own geometry -- kept on the traffic lens, the
+  // only one that still draws a pair that does not cross.
+  it('two inbound drops to different lanes stop coinciding at the top of the waist', () => {
     zonesState.pushed = twoLanes
-    appState.events = seenOnBothLanes()
-    policyState.anyPushed = true
-    policyState.edges = [refusedEdge('ether1', 'bridge1', [':3389']), refusedEdge('ether1', 'bridge2', [':22'])]
+    appState.events = [
+      ...seenOnBothLanes(),
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 3389, action: 'drop' }),
+      event({ inInterface: 'ether1', outInterface: 'bridge2', srcIp: '203.0.113.9', dstPort: 22, action: 'drop' }),
+    ]
     const { container } = render(Topography)
     flushSync()
-    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
-    policyTab!.click()
-    flushSync()
 
-    const [toBridge1, toBridge2] = pathsOf(container, '.edge')
+    const [toBridge1, toBridge2] = pathsOf(container, '.redge')
     expect(toBridge1).toBeTruthy()
     expect(toBridge2).toBeTruthy()
     expect(sharedRun(toBridge1, toBridge2)).toBeLessThan(SMEARED)
@@ -2181,7 +2144,7 @@ describe('#715 item 3: the flags and watch overlays', () => {
     flushSync()
 
     const tabs = [...container.querySelectorAll('[aria-label="Map lenses"] button')]
-    expect(tabs.map((t) => t.textContent?.trim())).toEqual(['traffic', 'policy', 'coverage'])
+    expect(tabs.map((t) => t.textContent?.trim())).toEqual(['traffic', 'coverage'])
     // The toggles sit outside the tablist deliberately: a toggle inside
     // one breaks its semantics.
     expect(container.querySelectorAll('[aria-label="Map lenses"] [aria-pressed]').length).toBe(0)
@@ -2241,12 +2204,12 @@ describe('#715 item 3: the flags and watch overlays', () => {
     const { container } = render(Topography)
     flushSync()
 
-    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Map lenses"] button')].find(
-      (b) => b.textContent?.trim() === 'policy',
+    const coverageTab = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Map lenses"] button')].find(
+      (b) => b.textContent?.trim() === 'coverage',
     )
-    policyTab!.click()
+    coverageTab!.click()
     flushSync()
-    expect(policyTab!.classList.contains('on')).toBe(true)
+    expect(coverageTab!.classList.contains('on')).toBe(true)
 
     expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('true')
 
@@ -2263,7 +2226,7 @@ describe('#715 item 3: the flags and watch overlays', () => {
     // The other toggle and the base lens are untouched throughout.
     expect(overlays(container)[1].getAttribute('aria-pressed')).toBe('true')
     const lensOn = [...container.querySelectorAll('[aria-label="Map lenses"] button')].find((b) => b.classList.contains('on'))
-    expect(lensOn?.textContent?.trim()).toBe('policy')
+    expect(lensOn?.textContent?.trim()).toBe('coverage')
   })
 })
 

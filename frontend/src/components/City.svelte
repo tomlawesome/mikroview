@@ -97,9 +97,6 @@
   const VERDICT: Record<RoadKind, string> = { a: 'var(--accept)', d: 'var(--drop)', x: 'var(--alarm)', q: 'var(--fg-dim)' }
   const VOID = '#080d18'
   const MOVE_MS = 620
-  /** The policy lens fades roads and lights every gate with its rule
-   * number; the traffic lens is the reverse (#865's own lens table). */
-  const policyLens = $derived(lens === 'policy')
 
   /* ---------------- the model ---------------- */
 
@@ -802,13 +799,7 @@
     // that boundary. A gate that resolves to a point on one of the two
     // back edges the camera cannot see draws nothing -- the same
     // silence a hidden building face keeps -- but still keeps its lamp
-    // and rule count for the plaque and the policy lens.
-    // #991: "these pills are too busy, they should [be] bigger and just
-    // simply be a label" -- one word (the far end), bigger type; the
-    // rule number, its text and its ports move to the gate's click card.
-    // Outline colour is unchanged: amber where the gate logs, red where
-    // it doesn't (ported from round 46's marks.html, gateLabel()).
-    const gateBadges: { x: number; y: number; text: string; lamp: boolean }[] = []
+    // and rule count for the plaque.
     for (const d of g.districts) {
       const dim = d.dark
       const wallInk = dim ? 'var(--fg-dim)' : inkOf(d)
@@ -842,10 +833,6 @@
           paints: [],
           lamps: gate.lamp ? [{ x: R2(gx), y: R2(gy), h: lampH, r: R2(Math.max(1.6, c.S * 0.3)), rr: R2(Math.max(4, c.S * 0.7)) }] : [],
         })
-        // The policy lens lights every gate with its own rule number,
-        // whether or not it happens to log -- the traffic lens leaves
-        // the wall quiet and says nothing here at all.
-        if (policyLens) gateBadges.push({ x: R2(gx), y: R2(gy - lampH - 13), text: gate.toward, lamp: gate.lamp })
       }
     }
 
@@ -896,12 +883,9 @@
       const own = !reachOverlay || reachOverlay.ownRoadIds.has(r.id)
       const col = VERDICT[r.k]
       const w = Math.max(1.2, r.w * c.S * 0.3)
-      // The policy lens fades every road so the walls and their gates
-      // read as the rules; the traffic lens is the reverse (#865).
       // Standing on a building (#868) fades every road that is not its
-      // own the same way -- the two are independent dimmers on the same
-      // opacity, never confused with each other.
-      const op = (r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : 0.52) * (policyLens ? 0.22 : 1) * (own ? 1 : 0.16)
+      // own.
+      const op = (r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : 0.52) * (own ? 1 : 0.16)
       // While standing, only this building's own roads flow, in the
       // direction its own strand reads; otherwise the ordinary busy/
       // alarm-road flow from before this build.
@@ -1053,7 +1037,7 @@
       bridgeChips.push({ x, y, w: R2(w), t, stroke })
     }
 
-    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, gateBadges, dropLabels, claim }
+    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, dropLabels, claim }
   })
 
   /** Names float over buildings at the street stop, for what the
@@ -1274,22 +1258,6 @@
             <text x="0" y="3.5" text-anchor="middle" class="chip-t">{ch.t}</text>
           </g>
         {/each}
-        <!-- data-gate is the gate's stable hook, deliberately separate from
-             whatever the pill happens to say. The label has already changed
-             once (#991 swapped the rule number for the far end's name) and
-             slice C of #1016 changes it again; a live check counting gates
-             through the label class silently passed while it named a class
-             nobody drew any more (#1022). The hook counts gates; the label
-             is only text. -->
-        {#each scene.gateBadges as gb, i (i)}
-          {@const w = R2(gb.text.length * 7.6 + 20)}
-          <g transform="translate({gb.x} {gb.y})" data-gate={gb.text}>
-            <path d="M0 12V4" stroke="var(--hair-2)" stroke-width="1" />
-            <rect x={R2(-w / 2)} y="-12" width={w} height="24" rx="12" fill="#0a0f1c" fill-opacity="0.94"
-              stroke={gb.lamp ? 'rgba(232,176,90,0.5)' : 'rgba(255,84,112,0.4)'} />
-            <text x="0" y="4" text-anchor="middle" class="gate-lab">{gb.text}</text>
-          </g>
-        {/each}
         {#each scene.dropLabels as dl, i (i)}
           <text x={dl.x} y={dl.y} text-anchor="middle" class="drop-t" class:alarm-t={dl.alarm}>{dl.text}</text>
         {/each}
@@ -1455,12 +1423,6 @@
 
   .chip-t {
     font: 10.5px var(--font-mono);
-    fill: var(--fg-muted);
-  }
-
-  /* The gate pill's one plain label, the far end's name (#991). */
-  .gate-lab {
-    font: 13px var(--font-mono);
     fill: var(--fg-muted);
   }
 

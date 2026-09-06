@@ -78,8 +78,7 @@ scenarios() {
 # between *families* -- the word after `live-` (`city`, `history`,
 # `topography`, `watchlist`...). Scenarios share one instance in filename
 # order and a few lean on what a sibling left: live-history.mjs expects
-# the day files live-history-control.mjs wrote, live-topography-reality.mjs
-# reads the tables live-topography-policy.mjs pushed, and
+# the day files live-history-control.mjs wrote, and
 # live-watchlist-coverage.mjs starts from the non-logging table
 # live-watchlist-broken-ring.mjs resets. Every one of those pairs shares a
 # family, so a slice that never splits a family never splits a
