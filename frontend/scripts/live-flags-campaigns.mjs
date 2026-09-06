@@ -146,12 +146,25 @@ if (types.length >= 2) {
   )
 
   // Click the recon cell: the table narrows to that type, and the
-  // campaign is left opened to its one recon member.
+  // campaign is left opened to its one recon member. The strip counts
+  // every open flag on the page (byType is built from `active`, not
+  // this campaign alone), so a filter that matches recon force-opens
+  // *any* campaign holding a recon member -- including one from another
+  // source the gate's earlier scripts left open. Scoping the wait and
+  // the member lookup to SRC's own campaign is what "one recon member"
+  // actually means here; counting every `tr.frow.mem` on the page is
+  // only right in an empty table, which a shared gate host never is.
   await page.locator('.btc:has-text("Internal reconnaissance")').click()
-  await page.waitForFunction(() => document.querySelectorAll('tr.frow.mem').length === 1, null, { timeout: 5000 })
+  await page.waitForFunction(
+    (src) => [...document.querySelectorAll('tr.frow.mem')].filter((r) => r.textContent?.includes(src)).length === 1,
+    SRC,
+    { timeout: 5000 },
+  )
   const filterValue = await page.locator('input[aria-label="Filter by flag type"]').inputValue()
   check(filterValue === 'Internal reconnaissance', `the FLAG filter reads the picked type (got "${filterValue}")`)
-  const memberType = (await page.locator('tr.frow.mem td.fmark').textContent())?.trim()
+  const srcMembers = page.locator('tr.frow.mem', { hasText: SRC })
+  check((await srcMembers.count()) === 1, `only the recon member is left inside ${SRC}'s campaign (got ${await srcMembers.count()})`)
+  const memberType = (await srcMembers.first().locator('td.fmark').textContent())?.trim()
   check(/Internal reconnaissance/.test(memberType ?? ''), `only the recon member is left inside the campaign (got "${memberType}")`)
 
   await page.locator('.btc:has-text("Internal reconnaissance")').click()

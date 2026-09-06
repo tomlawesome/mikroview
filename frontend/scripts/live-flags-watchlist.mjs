@@ -59,16 +59,14 @@ async function openFlags() {
 // destinations clears both internal_recon's own threshold (10 distinct
 // destinations/60s) *and* repeated_drops' (10 attempts/15m,
 // shipped_defaults.go:248), since both read the same feed independently
-// and correctly. Once both flags are open, `tr.frow:has-text(ip)` alone
-// resolves to two rows -- "Repeated drops on a port" (target
-// "<ip> -> port <n>") and "Internal reconnaissance" (target "<ip>") --
-// and Playwright's strict mode throws. This scenario is about
-// internal_recon specifically, so scope to that row; not a product bug,
-// both flags are correctly raised.
-function rowFor(ip) {
-  return page.locator(`tr.frow:has-text("${ip}")`).filter({ hasText: 'Internal reconnaissance' })
-}
-
+// and correctly. Since #988 (round 47), one source's flags inside one
+// 30-minute window fold into a campaign row (buildCampaigns in
+// lib/flags.svelte.ts groups by the source IP extracted from `target`,
+// which strips repeated_drops' " -> port <n>" suffix first) -- so every
+// one of this scenario's three hosts is a two-member campaign, never a
+// lone flag row. This scenario is about internal_recon specifically, so
+// reconMemberRow below opens the campaign and scopes to that member; not
+// a product bug, both flags are correctly raised and correctly folded.
 async function api(path) {
   const res = await page.request.get(`${process.env.MV_URL}${path}`)
   return res.json()
@@ -100,6 +98,39 @@ async function waitFor(fn, { timeoutMs = 8000 } = {}) {
   return last
 }
 
+// The campaign's own row offers a bulk trio and an "undo" for the set
+// (see campaignRow in Flags.svelte), but not the per-flag "watch for
+// this" offer -- that rides on a single flag's own evidence, which a
+// mixed-type campaign row does not carry. Each opened member is the
+// same row a lone flag would be (Flags.svelte reuses one snippet for
+// both), with its own trio, stamp and offer. So this scenario opens the
+// campaign and acts on the internal_recon member throughout, never the
+// campaign's aggregate controls, to keep calling a verdict scoped to
+// the one flag under test the way it always was.
+//
+// Waiting for both flags on the server before touching the DOM (rather
+// than a `tr.frow:has-text(ip)` selector that would resolve to a lone
+// row or a campaign row depending on which of the two detectors has
+// finished) keeps this from being a race the page can be caught
+// mid-fold on.
+async function reconMemberRow(ip) {
+  await waitFor(
+    async () => {
+      const flags = (await api('/api/flags')).flags ?? []
+      const types = new Set(flags.filter((f) => f.target === ip || f.target.startsWith(`${ip} `)).map((f) => f.type))
+      return types.has('internal_recon') && types.has('repeated_drops') ? true : null
+    },
+    { timeoutMs: 20000 },
+  )
+
+  const camp = page.locator(`tr.frow.camp:has-text("${ip}")`)
+  await camp.waitFor({ timeout: 15000 })
+  const member = page.locator(`tr.frow.mem:has-text("${ip}")`).filter({ hasText: 'Internal reconnaissance' })
+  if ((await member.count()) === 0) await camp.locator('button.openc').click()
+  await member.waitFor({ timeout: 5000 })
+  return member
+}
+
 const raised = await waitForFlag(page, EXPECT_IP)
 check(
   raised.ok,
@@ -122,8 +153,7 @@ if (raised.ok && resolveRaised.ok && undoRaised.ok) {
     `the flag carries the destination/port pairs it saw (got ${JSON.stringify(pairs).slice(0, 200)})`,
   )
 
-  const expectRow = rowFor(EXPECT_IP)
-  await expectRow.waitFor({ timeout: 15000 })
+  const expectRow = await reconMemberRow(EXPECT_IP)
   await expectRow.locator('button.v.expected').click()
   await expectRow.locator('.stamp.expected').waitFor({ timeout: 5000 })
 
@@ -149,8 +179,7 @@ if (raised.ok && resolveRaised.ok && undoRaised.ok) {
 
   // --- 2. Undo takes the permission and the entry back ----------------
 
-  const undoRow = rowFor(UNDO_IP)
-  await undoRow.waitFor({ timeout: 15000 })
+  const undoRow = await reconMemberRow(UNDO_IP)
   await undoRow.locator('button.v.expected').click()
   await undoRow.locator('.stamp.expected').waitFor({ timeout: 5000 })
   const created = await waitFor(async () => {
@@ -171,8 +200,7 @@ if (raised.ok && resolveRaised.ok && undoRaised.ok) {
 
   // --- 3. Resolved offers a watcher, and declining costs nothing ------
 
-  const resolveRow = rowFor(RESOLVE_IP)
-  await resolveRow.waitFor({ timeout: 15000 })
+  const resolveRow = await reconMemberRow(RESOLVE_IP)
   await resolveRow.locator('button.v.investigate').click()
   await resolveRow.locator('button.v.resolved').waitFor({ timeout: 5000 })
   await resolveRow.locator('button.v.resolved').click()
@@ -200,7 +228,7 @@ if (raised.ok && resolveRaised.ok && undoRaised.ok) {
   await page.waitForSelector('table.ftable', { state: 'visible', timeout: 10000 })
   check((await draft.count()) === 0, 'discarding closes the draft')
   check(
-    (await rowFor(RESOLVE_IP).isVisible()) === true,
+    (await (await reconMemberRow(RESOLVE_IP)).isVisible()) === true,
     'and returns the operator to the flags inbox -- declining costs no manual switch back',
   )
   check(
@@ -215,7 +243,7 @@ if (raised.ok && resolveRaised.ok && undoRaised.ok) {
 
   // --- 4. Taking it creates the watch, and comes back the same way ----
 
-  await rowFor(RESOLVE_IP).locator('button.olink', { hasText: 'watch for this' }).click()
+  await (await reconMemberRow(RESOLVE_IP)).locator('button.olink', { hasText: 'watch for this' }).click()
   await draft.waitFor({ timeout: 10000 })
   await draft.locator('button.act', { hasText: 'start watching' }).click()
   await page.waitForSelector('table.ftable', { state: 'visible', timeout: 10000 })
@@ -230,7 +258,7 @@ if (raised.ok && resolveRaised.ok && undoRaised.ok) {
     check((watcher.ports ?? []).includes(3389), `it watches the port the flag saw (got ${JSON.stringify(watcher.ports)})`)
   }
   check(
-    (await rowFor(RESOLVE_IP).isVisible()) === true,
+    (await (await reconMemberRow(RESOLVE_IP)).isVisible()) === true,
     'and saving returns the operator to the flags inbox too',
   )
 } else {
