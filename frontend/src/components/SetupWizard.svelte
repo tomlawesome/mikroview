@@ -139,6 +139,17 @@
   // token endpoint would be called in a tight loop rather than reported
   // once.
   let mintAttempted = false
+  // #1009: whether this visit to step 4/6 has already read the device
+  // list once. The single-device convenience below is only honest at
+  // the moment the picker would first appear -- devices is polled every
+  // POLL_MS regardless, and without this the effect re-applies "skip the
+  // picker" every time the count merely passes through one on its way
+  // to settling. That already yanked the form (and its <select>) out
+  // from under an operator -- or Playwright -- mid-pick, the moment a
+  // late-arriving device made the count read 1 for one poll. One look
+  // per visit: if the count was not 1 the first time this pane was
+  // shown, the picker stays up, however the count moves afterwards.
+  let deviceCountSeen = false
 
   $effect(() => {
     // Reading pane is what re-runs this on every move.
@@ -148,9 +159,13 @@
   })
 
   $effect(() => {
-    if ((wizardState.pane !== 4 && wizardState.pane !== 6) || !wizardState.open) return
-    if (token || minting || mintAttempted) return
+    if ((wizardState.pane !== 4 && wizardState.pane !== 6) || !wizardState.open) {
+      deviceCountSeen = false
+      return
+    }
+    if (token || minting || mintAttempted || deviceCountSeen) return
     const known = wizardState.devices
+    deviceCountSeen = true
     if (known.length === 1) {
       mintAttempted = true
       tokenDevice = known[0].id
