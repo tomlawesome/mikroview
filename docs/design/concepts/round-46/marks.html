@@ -1004,7 +1004,7 @@ function markRings(clearLine, k, b) {
     s += '<circle class="mk-ring" cx="' + cx + '" cy="' + cy + '" r="' + rr + '" fill="none" stroke="' + ink + '" stroke-width="1.6"/>';
     const numX = R2(cx + rr + 3);
     s += '<text class="mk-ring mk-ringnum" x="' + numX + '" y="' + R2(cy + 3.3) + '" fill="' + ink + '">' + n + '</text>';
-    cx = R2(numX + String(n).length * 6.6 + 3);
+    cx = R2(numX + String(n).length * 6.6 + 3 + rr);
   };
   if (b.flags) one('var(--alarm)', b.flags);
   if (b.watch) one('var(--watch)', b.watch);
