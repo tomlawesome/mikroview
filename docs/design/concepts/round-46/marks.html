@@ -1067,7 +1067,7 @@ function device(c, u, v, b, opt) {
        --sig of its own — without one its lights fall back to their
        neutral colours and glaze the red light below them green */
     inner += '<g style="color:var(--alarm);--sig:var(--alarm)" opacity="' + flagOp + '"><use href="#' + opt.sid + '-' + b.t + '"/></g>';
-    const rimCls = b.spike ? 'mk-alarm mk-spike-rim' : 'mk-alarm';
+    const rimCls = b.spike ? 'mk-spike-rim' : '';
     if (b.spike) inner += '<path d="' + hullPath(lib.hull) + '" fill="none" stroke="var(--alarm)" stroke-width="' +
       R2(rimW * 1.8) + '" stroke-linejoin="round" class="mk-spike-glow"/>';
     inner += '<path d="' + hullPath(lib.hull) + '" fill="none" stroke="var(--alarm)" stroke-width="' + rimW +
