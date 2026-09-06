@@ -9,11 +9,15 @@
      ROUND 40 — Direction R: ISOMETRIC, second cut.
      ONE town on a ground plane ~2.5x the viewport; every scene is a
      camera onto it. Roads are smooth ground-plane curves. Devices are
-     stamped from a library of isometric symbols, one per type, each
-     standing on a plinth whose HEIGHT is importance. Districts are
-     gated communities: a low wall with gates, a gate is an accept rule,
-     a lamp on the gate means it logs. The Internet is a river; every
-     tunnel is a bridge to the far bank.
+     stamped from a library of isometric symbols, one per type, standing
+     straight on the district plate. Districts are gated communities: a
+     low wall with gates, a gate is an accept rule, a lamp on the gate
+     means it logs. The Internet is a river; every tunnel is a bridge to
+     the far bank.
+     Round 40 originally stood each device on a plinth whose height was
+     importance; round 46 (#981) removed the plinth and the height
+     concept entirely — the owner: "we dont need a pedestal … Just drop
+     the height concept altogether."
      Chrome, tokens and vocabulary are round 39's.
      ============================================================ */
   :root {
@@ -118,8 +122,6 @@
   .flat text { paint-order: stroke; stroke: #06080e; stroke-width: 3.4px; stroke-linejoin: round; }
   .flat .nostroke text, text.nostroke { stroke-width: 0; }
 
-  .face, .plin { transition: d 0.62s cubic-bezier(0.45, 0.02, 0.2, 1); }
-  .topper, .dev { transition: transform 0.62s cubic-bezier(0.45, 0.02, 0.2, 1); }
   .road-alarm { filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.5)); }
   .flow { stroke-dasharray: 7 11; animation: flow 1.5s linear infinite; }
   @keyframes flow { to { stroke-dashoffset: -18; } }
@@ -129,19 +131,6 @@
   @keyframes halo { from { opacity: 0.8; transform: scale(1); } to { opacity: 0; transform: scale(2.3); } }
   .lamp { animation: lamp 3.4s ease-in-out infinite; }
   @keyframes lamp { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
-
-  /* ---- the importance toggle (survey) ---- */
-  .imp {
-    position: absolute; top: 56px; right: 24px; z-index: 8;
-    display: flex; align-items: center; gap: 8px;
-    font: 10.5px var(--sans); color: var(--ink-3);
-  }
-  .imp .ib {
-    font: 10.5px var(--sans); color: var(--ink-3); cursor: pointer;
-    background: transparent; border: 1px solid var(--hair); border-radius: 13px; padding: 2px 11px;
-  }
-  .imp .ib.on { color: var(--ink); border-color: var(--hair-2); background: var(--raised); }
-  .imp .ib:hover { color: var(--ink-2); }
 
   /* ---- the hover card (round 39's card, on the street) ---- */
   .hovercard {
@@ -204,22 +193,33 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .face, .plin, .topper, .dev { transition: none; }
     .flow, .halo, .lamp, .current { animation: none; }
     .flow, .current { stroke-dasharray: none; }
   }
 
-  /* ---- #981, direction C: a flagged building's plinth fill turns
-     alarm-red in place of its district colour, with a matching rim; a
-     watched building gets a purple outline around its plinth, drawn a
-     touch proud of the rim so both read when a building carries both.
-     No toggle — this is the only direction the page draws. ---- */
+  /* ---- #981, direction C, redrawn twice on the owner's word: the red
+     fill and rim, and the purple watch outline, are on the device
+     symbol itself — "I meant the actual item not the cube/tower it
+     sits on" — and there is no plinth or height under it at all any
+     more — "we dont need a pedestal … Just drop the height concept
+     altogether." No toggle — this is the only direction the page
+     draws. ---- */
+  .mk-spike-rim { animation: mk-spike-rim 2s ease-in-out infinite; }
+  .mk-spike-glow { filter: blur(2.5px); opacity: 0.4; animation: mk-spike-glow 2s ease-in-out infinite; }
+  @keyframes mk-spike-rim { 0%, 100% { stroke-opacity: 0.6; } 50% { stroke-opacity: 1; } }
+  @keyframes mk-spike-glow { 0%, 100% { stroke-width: 2px; opacity: 0.28; } 50% { stroke-width: 6px; opacity: 0.55; } }
+  @media (prefers-reduced-motion: reduce) {
+    /* a pulse cannot reduce to nothing without losing the signal, so it
+       holds at the peak state instead of animating to it */
+    .mk-spike-rim { animation: none; stroke-opacity: 1; }
+    .mk-spike-glow { animation: none; stroke-width: 6px; opacity: 0.55; }
+  }
 </style>
 </head>
 <body>
 
-<p class="cap"><b>SURVEY</b>the whole estate small — the river along the north edge with its three bridges, six walled districts, two boroughs; height is importance, and the toggle re-measures the skyline.</p>
-<section class="scene" id="survey" aria-label="Survey: the whole estate as an isometric town — the Internet as a river with the WAN bridge and two tunnel footbridges, districts as walled plates, devices standing on plinths whose height is importance"></section>
+<p class="cap"><b>SURVEY</b>the whole estate small — the river along the north edge with its three bridges, six walled districts, two boroughs; devices stand straight on the district plate, no plinth, no height.</p>
+<section class="scene" id="survey" aria-label="Survey: the whole estate as an isometric town — the Internet as a river with the WAN bridge and two tunnel footbridges, districts as walled plates, devices standing straight on the plate with no plinth or height"></section>
 
 <p class="cap"><b>STREET</b>the camera dropped into the LAN district — four devices up close, LAN's wall and its three gates named with the rule each one is, one card open.</p>
 <section class="scene" id="street" aria-label="Street level in the LAN district: four devices at close range with names and addresses, the district wall with its gates labelled by rule, and tom-desktop's card open"></section>
@@ -253,22 +253,12 @@ const Y = (c, v, z) => c.oy + v * VK * c.S - (z || 0) * ZK * c.S;
 const R2 = (n) => Math.round(n * 10) / 10;
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
-/* a diamond footprint (plate, plinth top, plinth base) */
+/* a diamond footprint (a plate, a device's ground shadow, the focus ring) */
 function diamond(c, u, v, R, z) {
   return 'M' + R2(X(c, u)) + ' ' + R2(Y(c, v - R, z)) +
          'L' + R2(X(c, u + R)) + ' ' + R2(Y(c, v, z)) +
          'L' + R2(X(c, u)) + ' ' + R2(Y(c, v + R, z)) +
          'L' + R2(X(c, u - R)) + ' ' + R2(Y(c, v, z)) + 'Z';
-}
-/* the two faces of a diamond prism the camera can see */
-function wallFace(c, u, v, R, h, side, z0) {
-  const a = side === 'l' ? [u - R, v] : [u, v + R];
-  const b = side === 'l' ? [u, v + R] : [u + R, v];
-  const ax = R2(X(c, a[0])), bx = R2(X(c, b[0]));
-  const ay = Y(c, a[1], z0 || 0), by = Y(c, b[1], z0 || 0);
-  const rise = h * ZK * c.S;
-  return 'M' + ax + ' ' + R2(ay) + 'L' + bx + ' ' + R2(by) + 'L' + bx + ' ' + R2(by - rise) +
-         'L' + ax + ' ' + R2(ay - rise) + 'Z';
 }
 
 /* A box on the diagonal axes: half-extent A along d1 (screen: right and
@@ -378,9 +368,12 @@ function ldisc(rad, z0, h, o) {
          '<ellipse cx="0" cy="' + yT + '" rx="' + rx + '" ry="' + ry + '" fill="currentColor" fill-opacity="0.93" stroke="currentColor" stroke-opacity="0.9" stroke-width="0.45"/>';
 }
 
-/* every symbol, and how tall it stands in local px (for label placing) */
+/* every symbol, and how tall it stands in local px (for label placing).
+   `outline` is the set of boxes/discs the symbol is actually built from
+   — #981 strokes each of them to approximate the whole symbol's outline,
+   there being no path-boolean union available to fuse them into one. */
 const DEVLIB = {};
-function dev(id, top, markup) { DEVLIB[id] = { top: top, m: markup }; }
+function dev(id, top, markup, outline) { DEVLIB[id] = { top: top, m: markup, outline: outline || [] }; }
 
 (function buildLibrary() {
   /* ROUTER — flat wide chassis, a row of port lights on the front face */
@@ -388,27 +381,27 @@ function dev(id, top, markup) { DEVLIB[id] = { top: top, m: markup }; }
   const routerBody = lfaces(chassis, { t: 0.95, r: 0.74, l: 0.4 }) + lLights(chassis, 6, 0.45, 1.5, 0.16, 0.84) +
     '<path d="M' + lp(-0.5 - 0.86, -0.5 + 0.86, 0.34) + 'L' + lp(-0.5 + 0.86, -0.5 - 0.86, 0.34) +
     '" stroke="currentColor" stroke-opacity="0.55" stroke-width="0.8"/>';
-  dev('router', 0.34 * LZ + 4, routerBody);
+  dev('router', 0.34 * LZ + 4, routerBody, [chassis]);
   /* the hap-ax3 variant: two short antennas off the back corners */
   const ant = (ou, ov) => '<path d="M' + lp(ou, ov, 0.34) + 'L' + lp(ou, ov, 0.95) +
     '" stroke="currentColor" stroke-opacity="0.8" stroke-width="1.5" stroke-linecap="round"/>' +
     '<circle cx="' + R2(ou * LU) + '" cy="' + R2(ov * LV - 0.99 * LZ) + '" r="1.5" fill="currentColor" fill-opacity="0.85"/>';
-  dev('router-ant', 1.0 * LZ + 4, routerBody + ant(-0.86, -0.16) + ant(0.16, -0.86));
+  dev('router-ant', 1.0 * LZ + 4, routerBody + ant(-0.86, -0.16) + ant(0.16, -0.86), [chassis]);
   /* SWITCH — the same chassis, longer and thinner, many port lights */
   const sw = lbox(0.3, 1.0, 0, 0.24);
-  dev('switch', 0.24 * LZ + 4, lfaces(sw, { t: 0.95, r: 0.74, l: 0.4 }) + lLights(sw, 10, 0.5, 1.2, 0.1, 0.9));
+  dev('switch', 0.24 * LZ + 4, lfaces(sw, { t: 0.95, r: 0.74, l: 0.4 }) + lLights(sw, 10, 0.5, 1.2, 0.1, 0.9), [sw]);
   /* SERVER BOX — tall upright box, drive bays, one status light */
   const sb = lbox(0.45, 0.5, 0, 1.05);
   dev('server', 1.05 * LZ + 5, lfaces(sb) + lSlits(sb, 4, 1.5) +
     '<circle cx="' + R2((sb.p.F[0] + (sb.p.R[0] - sb.p.F[0]) * 0.82) * LU) + '" cy="' +
-    R2((sb.p.F[1] + (sb.p.R[1] - sb.p.F[1]) * 0.82) * LV - 0.95 * LZ) + '" r="1.7" fill="var(--sig, #37b364)"/>');
+    R2((sb.p.F[1] + (sb.p.R[1] - sb.p.F[1]) * 0.82) * LV - 0.95 * LZ) + '" r="1.7" fill="var(--sig, #37b364)"/>', [sb]);
   /* WORKSTATION — a tower beside a monitor */
   const tower = lbox(0.26, 0.22, 0, 0.78, -0.32, -0.32);
   const stand = lbox(0.08, 0.13, 0, 0.14, 0.26, 0.26);
   const mon = lbox(0.07, 0.5, 0.14, 0.46, 0.26, 0.26);
   dev('workstation', 0.82 * LZ + 6, lfaces(tower) + lLights(tower, 2, 0.75, 1.2, 0.3, 0.7) +
     lfaces(stand, { t: 0.6, r: 0.5, l: 0.3 }) + lfaces(mon, { t: 0.8, r: 0.34, l: 0.22 }) +
-    '<path d="' + mon.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.5"/>');
+    '<path d="' + mon.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.5"/>', [tower, stand, mon]);
   /* LAPTOP — open lid, screen face lit */
   const base = lbox(0.38, 0.5, 0, 0.07);
   const hL = base.p.L, hK = base.p.K, tilt = 0.17, lidz = 0.07 + 0.5;
@@ -416,15 +409,16 @@ function dev(id, top, markup) { DEVLIB[id] = { top: top, m: markup }; }
     'L' + lp(hK[0] - tilt, hK[1] - tilt, lidz) + 'L' + lp(hL[0] - tilt, hL[1] - tilt, lidz) + 'Z';
   dev('laptop', lidz * LZ + 5, lfaces(base, { t: 0.9, r: 0.6, l: 0.34 }) +
     '<path d="' + lid + '" fill="#0a1120"/>' +
-    '<path d="' + lid + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.4" stroke="currentColor" stroke-opacity="0.85" stroke-width="0.5"/>');
+    '<path d="' + lid + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.4" stroke="currentColor" stroke-opacity="0.85" stroke-width="0.5"/>',
+    [base, { top: lid }]);
   /* PHONE — a thin upright slab, screen lit */
   const ph = lbox(0.1, 0.34, 0.02, 0.62);
   dev('phone', 0.64 * LZ + 5, lfaces(ph, { t: 0.85, r: 0.4, l: 0.26 }) +
-    '<path d="' + ph.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.5"/>');
+    '<path d="' + ph.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.5"/>', [ph]);
   /* TV — a wide thin slab on a stand */
   const tvs = lbox(0.1, 0.17, 0, 0.12), tv = lbox(0.06, 0.68, 0.12, 0.5);
   dev('tv', 0.62 * LZ + 5, lfaces(tvs, { t: 0.6, r: 0.5, l: 0.3 }) + lfaces(tv, { t: 0.8, r: 0.34, l: 0.22 }) +
-    '<path d="' + tv.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.46"/>');
+    '<path d="' + tv.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.46"/>', [tvs, tv]);
   /* PoE CAMERA — a bullet body on a short post, lens facing the road */
   const post = lbox(0.09, 0.09, 0, 0.86, -0.24, -0.24);
   const body = lbox(0.44, 0.19, 0.72, 0.3, 0.16, 0.16);
@@ -434,15 +428,18 @@ function dev(id, top, markup) { DEVLIB[id] = { top: top, m: markup }; }
   dev('camera', 1.02 * LZ + 5, lfaces(post, { t: 0.6, r: 0.5, l: 0.34 }) +
     lfaces(arm, { t: 0.5, r: 0.45, l: 0.3 }) + lfaces(body) +
     '<ellipse cx="' + R2(lensU * LU) + '" cy="' + R2(lensV * LV - 0.86 * LZ) + '" rx="4.2" ry="3.4" fill="#06080e" stroke="currentColor" stroke-opacity="0.9" stroke-width="1"/>' +
-    '<ellipse cx="' + R2(lensU * LU) + '" cy="' + R2(lensV * LV - 0.86 * LZ) + '" rx="2.1" ry="1.7" fill="var(--sig, #cfe0ff)" fill-opacity="0.85"/>');
+    '<ellipse cx="' + R2(lensU * LU) + '" cy="' + R2(lensV * LV - 0.86 * LZ) + '" rx="2.1" ry="1.7" fill="var(--sig, #cfe0ff)" fill-opacity="0.85"/>',
+    [post, arm, body]);
   /* IoT PUCK — a low flat disc with one light */
   dev('puck', 0.2 * LZ + 4, ldisc(0.62, 0, 0.2) +
-    '<circle cx="0" cy="' + R2(-0.2 * LZ) + '" r="1.5" fill="var(--sig, #cfe0ff)" fill-opacity="0.95"/>');
+    '<circle cx="0" cy="' + R2(-0.2 * LZ) + '" r="1.5" fill="var(--sig, #cfe0ff)" fill-opacity="0.95"/>',
+    [{ disc: 1, rad: 0.62, z0: 0, h: 0.2 }]);
   /* GATEWAY POST — a bollard with a light, for ether1 / wg0 / l2tp */
   const bol = lbox(0.28, 0.28, 0, 1.0), cap = lbox(0.36, 0.36, 1.0, 0.1);
   dev('post', 1.35 * LZ + 6, lfaces(bol, { t: 0.8, r: 0.62, l: 0.4 }) + lfaces(cap, { t: 0.85, r: 0.6, l: 0.38 }) +
     '<circle cx="0" cy="' + R2(-1.28 * LZ) + '" r="4" fill="var(--sig, #9db8e8)" fill-opacity="0.95"/>' +
-    '<circle cx="0" cy="' + R2(-1.28 * LZ) + '" r="7.5" fill="none" stroke="var(--sig, #9db8e8)" stroke-opacity="0.3" stroke-width="1"/>');
+    '<circle cx="0" cy="' + R2(-1.28 * LZ) + '" r="7.5" fill="none" stroke="var(--sig, #9db8e8)" stroke-opacity="0.3" stroke-width="1"/>',
+    [bol, cap]);
 })();
 
 /* the library, emitted into each scene's own <defs> under a scene
@@ -454,8 +451,10 @@ function defsFor(sid) {
 }
 /* ================================================================
    THE MODEL — one estate, laid out with real distance between things.
-   h: [depended-on, watched] — the two importance readings, and the only
-   thing that ever changes a plinth's height.
+   #981 dropped height (and the plinth that carried it) from every
+   device: R is still each device's footprint radius, for its shadow
+   and its marks' scale, but nothing here changes how tall anything
+   stands, because nothing does any more.
    ================================================================ */
 const DISTRICTS = [
   { id: 'lan', name: 'LAN', cidr: '10.0.10.0/24', u: -76, v: 36, r: 21, ink: 'var(--lan)',
@@ -466,10 +465,10 @@ const DISTRICTS = [
       { id: 'hap', dir: [-6, 20], n: 19, lamp: 1, rule: 'lan → hap-ax3 · :80 :8291 · accept' }
     ],
     hosts: [
-      { id: 'tom-desktop', name: 'tom-desktop', ip: '10.0.10.21', t: 'workstation', du: 10, dv: -2, R: 5.0, h: [4.0, 2.6], watch: 1 },
-      { id: 'laptop-anna', name: 'laptop-anna', ip: '10.0.10.34', t: 'laptop', du: -1, dv: -11, R: 4.6, h: [2.6, 2.4], flags: 1 },
-      { id: 'phone-tom', name: 'phone-tom', ip: '10.0.10.52', t: 'phone', du: -11, dv: 1, R: 3.8, h: [1.8, 0.7] },
-      { id: 'tv-lounge', name: 'tv-lounge', ip: '10.0.10.60', t: 'tv', du: 1, dv: 11, R: 4.6, h: [1.5, 0.6], flags: 1, down: 1 }
+      { id: 'tom-desktop', name: 'tom-desktop', ip: '10.0.10.21', t: 'workstation', du: 10, dv: -2, R: 5.0, watch: 1 },
+      { id: 'laptop-anna', name: 'laptop-anna', ip: '10.0.10.34', t: 'laptop', du: -1, dv: -11, R: 4.6, flags: 1 },
+      { id: 'phone-tom', name: 'phone-tom', ip: '10.0.10.52', t: 'phone', du: -11, dv: 1, R: 3.8 },
+      { id: 'tv-lounge', name: 'tv-lounge', ip: '10.0.10.60', t: 'tv', du: 1, dv: 11, R: 4.6, flags: 1, down: 1 }
     ] },
   { id: 'srv', name: 'Servers', cidr: '10.0.20.0/24', u: -18, v: 72, r: 19, ink: 'var(--srv)',
     cov: 'LOGGED BOTH WAYS', covk: 'l', tally: '◉2', lw: 202, boro: 'rb',
@@ -480,9 +479,9 @@ const DISTRICTS = [
       { id: 'hap', dir: [6, 20], n: 22, lamp: 1, rule: 'servers → workshop · :445 · accept' }
     ],
     hosts: [
-      { id: 'pihole', name: 'pihole', ip: '10.0.20.5', t: 'server', du: 0, dv: -9, R: 5.0, h: [6.6, 1.0], flags: 3 },
-      { id: 'nas', name: 'nas', ip: '10.0.20.10', t: 'server', du: -9, dv: 2, R: 5.4, h: [6.2, 4.4], watch: 1, down: 1 },
-      { id: 'unifi', name: 'unifi', ip: '10.0.20.12', t: 'server', du: 9, dv: 2, R: 5.0, h: [4.2, 0.7], down: 1 }
+      { id: 'pihole', name: 'pihole', ip: '10.0.20.5', t: 'server', du: 0, dv: -9, R: 5.0, flags: 3, spike: 1 },
+      { id: 'nas', name: 'nas', ip: '10.0.20.10', t: 'server', du: -9, dv: 2, R: 5.4, watch: 1, down: 1 },
+      { id: 'unifi', name: 'unifi', ip: '10.0.20.12', t: 'server', du: 9, dv: 2, R: 5.0, down: 1 }
     ] },
   { id: 'iot', name: 'IoT', cidr: '10.0.30.0/24 · +4', u: 46, v: 30, r: 20, ink: 'var(--iot)',
     cov: 'DARK TOWARD WAN', covk: 'd', tally: '◉1 ✱3', lw: 208, boro: 'rb',
@@ -491,57 +490,57 @@ const DISTRICTS = [
       { id: 'srv', dir: [-64, 42], n: 26, lamp: 1, rule: 'iot → servers · :53 · accept' }
     ],
     hosts: [
-      { id: 'cam-porch', name: 'cam-porch', ip: '10.0.30.14', t: 'camera', du: -10, dv: -2, R: 4.4, h: [1.3, 7.2], flags: 2, watch: 1 },
-      { id: 'hue-bridge', name: 'hue-bridge', ip: '10.0.30.21', t: 'puck', du: -2, dv: -10, R: 4.0, h: [1.6, 0.6] },
-      { id: 'thermostat', name: 'thermostat', ip: '10.0.30.30', t: 'puck', du: 4, dv: -4, R: 3.8, h: [1.1, 0.6] },
-      { id: 'doorbell', name: 'doorbell', ip: '10.0.30.41', t: 'puck', du: -4, dv: 4, R: 3.8, h: [1.2, 3.0], flags: 1 },
-      { id: 'esp-weather', name: 'esp-weather', ip: '10.0.30.52', t: 'puck', du: 10, dv: 2, R: 3.8, h: [0.9, 0.5] },
-      { id: 'plug-kettle', name: 'plug-kettle', ip: '10.0.30.58', t: 'puck', du: 2, dv: 10, R: 3.8, h: [0.9, 0.5] }
+      { id: 'cam-porch', name: 'cam-porch', ip: '10.0.30.14', t: 'camera', du: -10, dv: -2, R: 4.4, flags: 2, watch: 1, spike: 1 },
+      { id: 'hue-bridge', name: 'hue-bridge', ip: '10.0.30.21', t: 'puck', du: -2, dv: -10, R: 4.0 },
+      { id: 'thermostat', name: 'thermostat', ip: '10.0.30.30', t: 'puck', du: 4, dv: -4, R: 3.8 },
+      { id: 'doorbell', name: 'doorbell', ip: '10.0.30.41', t: 'puck', du: -4, dv: 4, R: 3.8, flags: 1 },
+      { id: 'esp-weather', name: 'esp-weather', ip: '10.0.30.52', t: 'puck', du: 10, dv: 2, R: 3.8 },
+      { id: 'plug-kettle', name: 'plug-kettle', ip: '10.0.30.58', t: 'puck', du: 2, dv: 10, R: 3.8 }
     ] },
   { id: 'guest', name: 'Guest', cidr: '10.0.40.0/24 · +2', u: 66, v: -14, r: 13, ink: 'var(--guest)',
     cov: 'DARK — no log rule on this boundary', covk: 'd', dark: 1, lw: 248, boro: 'rb',
     gates: [ { id: 'wan', dir: [-88, 10], n: 31, lamp: 0, rule: 'guest → wan only · accept · NO log rule' } ],
     hosts: [
-      { id: 'guest-e8b2', name: 'guest-e8b2', ip: '10.0.40.19', t: 'phone', du: 0, dv: -1, R: 4.0, h: [1.0, 0.6] }
+      { id: 'guest-e8b2', name: 'guest-e8b2', ip: '10.0.40.19', t: 'phone', du: 0, dv: -1, R: 4.0 }
     ] },
   { id: 'wsh', name: 'Workshop', cidr: '10.0.50.0/24', u: -30, v: 116, r: 15, ink: 'var(--wsh)',
     cov: 'LOGGED BOTH WAYS', covk: 'l', lw: 196, boro: 'hap',
     gates: [ { id: 'hap', dir: [44, -12], n: 4, lamp: 1, rule: 'workshop → lan · :445 · accept' } ],
     hosts: [
-      { id: 'cnc', name: 'cnc', ip: '10.0.50.4', t: 'puck', du: 0, dv: -7, R: 4.2, h: [1.9, 0.6] },
-      { id: 'printer-3d', name: 'printer-3d', ip: '10.0.50.7', t: 'puck', du: 7, dv: 1, R: 4.2, h: [1.5, 0.5] },
-      { id: 'pc-bench', name: 'pc-bench', ip: '10.0.50.9', t: 'workstation', du: -6, dv: 3, R: 4.6, h: [2.2, 0.6], down: 1 }
+      { id: 'cnc', name: 'cnc', ip: '10.0.50.4', t: 'puck', du: 0, dv: -7, R: 4.2 },
+      { id: 'printer-3d', name: 'printer-3d', ip: '10.0.50.7', t: 'puck', du: 7, dv: 1, R: 4.2 },
+      { id: 'pc-bench', name: 'pc-bench', ip: '10.0.50.9', t: 'workstation', du: -6, dv: 3, R: 4.6, down: 1 }
     ] },
   { id: 'cams', name: 'Cams', cidr: '10.0.60.0/24', u: 58, v: 116, r: 13, ink: 'var(--cam2)',
     cov: 'DARK', covk: 'd', dark: 1, tally: '✱1', lw: 150, boro: 'hap',
     gates: [ { id: 'hap', dir: [-44, -12], n: 7, lamp: 0, rule: 'cams → nas · :554 · accept · NO log rule' } ],
     hosts: [
-      { id: 'cam-yard', name: 'cam-yard', ip: '10.0.60.3', t: 'camera', du: -1, dv: -6, R: 4.2, h: [1.1, 0.6] },
-      { id: 'cam-gate', name: 'cam-gate', ip: '10.0.60.4', t: 'camera', du: 1, dv: 6, R: 4.2, h: [1.2, 3.0], flags: 1, down: 1 }
+      { id: 'cam-yard', name: 'cam-yard', ip: '10.0.60.3', t: 'camera', du: -1, dv: -6, R: 4.2 },
+      { id: 'cam-gate', name: 'cam-gate', ip: '10.0.60.4', t: 'camera', du: 1, dv: 6, R: 4.2, flags: 1, down: 1 }
     ] }
 ];
 
 /* the civic buildings and the bridge heads. u/v for the two posts are
    filled in from the bridges once the river is resolved. */
 const NODES = [
-  { id: 'rb5009', name: 'rb5009', t: 'router', u: -10, v: 10, R: 7.5, h: [9.0, 3.2], ink: 'var(--accent)',
+  { id: 'rb5009', name: 'rb5009', t: 'router', u: -10, v: 10, R: 7.5, ink: 'var(--accent)',
     roof: 'rb5009', roofsub: 'RouterOS 7.20.1 · 41 rules · LIVE 34/s',
     card: ['rb5009', 'RouterOS 7.20.1 · 41 rules', '41 gates and walls you can walk'] },
-  { id: 'hapax3', name: 'hap-ax3', t: 'router-ant', u: 14, v: 96, R: 6.2, h: [5.0, 1.5], ink: 'var(--accent)', down: 1,
+  { id: 'hapax3', name: 'hap-ax3', t: 'router-ant', u: 14, v: 96, R: 6.2, ink: 'var(--accent)', down: 1,
     roof: 'hap-ax3', roofsub: '12 rules · a second router',
     card: ['hap-ax3', 'RouterOS 7.20.1 · 12 rules', 'ether1 10.0.10.9 — inside LAN'] },
-  { id: 'ether1', name: 'ether1', t: 'post', u: 0, v: 0, R: 3.4, h: [4.0, 1.2], ink: 'var(--accent)',
+  { id: 'ether1', name: 'ether1', t: 'post', u: 0, v: 0, R: 3.4, ink: 'var(--accent)',
     roof: 'ether1', roofsub: 'wan bridge · LOGGED' },
-  { id: 'wg0', name: 'wg0', t: 'post', u: 0, v: 0, R: 3.0, h: [2.0, 4.2], ink: 'var(--accent)', watch: 1,
+  { id: 'wg0', name: 'wg0', t: 'post', u: 0, v: 0, R: 3.0, ink: 'var(--accent)', watch: 1,
     roof: 'wg0', roofsub: '10.99.0.0/24 · QUIET ◉1' },
-  { id: 'l2tp', name: 'l2tp', t: 'post', u: 0, v: 0, R: 3.0, h: [2.2, 1.0], ink: 'var(--accent)',
+  { id: 'l2tp', name: 'l2tp', t: 'post', u: 0, v: 0, R: 3.0, ink: 'var(--accent)',
     roof: 'l2tp', roofsub: '1 peer · UP · 0.3/s' }
 ];
 
 /* the far bank: the tunnels' peers, same shapes, across the water */
 const PEERS = [
-  { id: 'phone-tom-away', name: 'phone-tom-away', ip: 'wg0 peer · QUIET', t: 'phone', u: -23, v: -70, R: 4.0, h: [1.0, 1.6], ink: 'var(--ink-3)' },
-  { id: 'anna-remote', name: 'anna-remote', ip: 'l2tp peer · UP', t: 'laptop', u: 13, v: -74, R: 4.6, h: [1.4, 0.8], ink: 'var(--ink-3)' }
+  { id: 'phone-tom-away', name: 'phone-tom-away', ip: 'wg0 peer · QUIET', t: 'phone', u: -23, v: -70, R: 4.0, ink: 'var(--ink-3)' },
+  { id: 'anna-remote', name: 'anna-remote', ip: 'l2tp peer · UP', t: 'laptop', u: 13, v: -74, R: 4.6, ink: 'var(--ink-3)' }
 ];
 
 /* ---------------- the river and its three bridges ---------------- */
@@ -946,66 +945,78 @@ function gateLabel(c, g, opt) {
     '<text x="0" y="3.5" text-anchor="middle" class="rule-n">#' + g.n + '</text></g>';
 }
 
-/* ---- a device on its plinth: the plinth is the only thing importance
-   ever changes, so a phone never becomes a skyscraper ---- */
+/* the union of a symbol's boxes/discs has no boolean fuse available
+   here, so #981 approximates it by stroking every constituent shape
+   the symbol is actually built from — where two are adjacent (the
+   laptop's base and lid, the camera's post/arm/body) the seam gets a
+   double line, but the assembly reads as one outline in practice. */
+function outlineParts(parts, color, w, cls) {
+  const cattr = cls ? ' class="' + cls + '"' : '';
+  let s = '';
+  (parts || []).forEach((p) => {
+    if (p.disc) {
+      const rx = R2(p.rad * LU), ry = R2(p.rad * LV);
+      const yT = R2(-(p.z0 + p.h) * LZ), yB = R2(-p.z0 * LZ);
+      s += '<ellipse' + cattr + ' cx="0" cy="' + yT + '" rx="' + rx + '" ry="' + ry +
+        '" fill="none" stroke="' + color + '" stroke-width="' + w + '"/>';
+      s += '<path' + cattr + ' d="M' + R2(-rx) + ' ' + yT + 'L' + R2(-rx) + ' ' + yB +
+        '" stroke="' + color + '" stroke-width="' + w + '" fill="none"/>';
+      s += '<path' + cattr + ' d="M' + R2(rx) + ' ' + yT + 'L' + R2(rx) + ' ' + yB +
+        '" stroke="' + color + '" stroke-width="' + w + '" fill="none"/>';
+    } else {
+      ['top', 'right', 'left'].forEach((k) => {
+        if (p[k]) s += '<path' + cattr + ' d="' + p[k] + '" fill="none" stroke="' + color + '" stroke-width="' + w + '"/>';
+      });
+    }
+  });
+  return s;
+}
+
+/* ---- a device, stamped straight onto the district plate. #981 dropped
+   the plinth and the height it carried ("we dont need a pedestal … just
+   drop the height concept altogether") — every device now sits at
+   ground level, and the only thing standing in for a footprint is a
+   soft ground shadow. ---- */
 function device(c, u, v, b, opt) {
-  const R = b.R, hd = b.h[0], hw = b.h[1];
-  const h = opt.mode === 'wat' ? hw : hd;
+  const R = b.R;
   const unlit = opt.unlit, lit = opt.lit;
   const ink = unlit ? 'var(--ink-3)' : (b.ink || opt.ink || 'var(--ink-2)');
-  /* the device stands ON the plinth, a little inside its edge */
   const k = R2(R * 0.74 * c.S / SREF);
-  const pin = (hh) => diamond(c, u, v, R, hh);
-  const pl = (hh) => wallFace(c, u, v, R, hh, 'l');
-  const pr = (hh) => wallFace(c, u, v, R, hh, 'r');
-  const dat = (a, z) => ' data-dd="' + a + '" data-dw="' + z + '"';
   const aria = b.name + (b.ip ? ' at ' + b.ip : '') + ' — ' + b.t.replace('-ant', ' with antennas') +
-    ' · importance ' + (opt.mode === 'wat' ? 'watched' : 'depended-on') +
-    (b.flags ? ' · ' + b.flags + ' flags' : '') + (b.watch ? ' · watched' : '');
-  const pink = lit ? 'var(--alarm)' : ink;
+    (b.flags ? ' · ' + b.flags + ' flags' : '') + (b.watch ? ' · watched' : '') + (b.spike ? ' · activity spike' : '');
   let s = '<g class="blk" role="img" aria-label="' + esc(aria) + '"><title>' + esc(aria) + '</title>';
-  s += '<path d="' + pin(0) + '" fill="#000" fill-opacity="' + (unlit ? 0.22 : 0.4) + '"/>';
-  /* the plinth: masonry, not glass — a dark pedestal with a lit rim, so
-     what you read at a glance is its HEIGHT, not its colour */
-  const pf = (d1, d2, d3, dark, tint) =>
-    '<path class="plin" style="d:path(\'' + d1 + '\')" d="' + d1 + '"' + dat(d2, d3) +
-      ' fill="#0a0f1c" fill-opacity="' + (unlit ? 0.7 : 0.94) + '"/>' +
-    '<path class="plin" style="d:path(\'' + d1 + '\')" d="' + d1 + '"' + dat(d2, d3) +
-      ' fill="' + pink + '" fill-opacity="' + tint + '"' + (dark || '') + '/>';
-  s += pf(pl(h), pl(hd), pl(hw), '', unlit ? 0.1 : 0.2);
-  s += pf(pr(h), pr(hd), pr(hw), '', unlit ? 0.16 : 0.34);
-  s += pf(pin(h), pin(hd), pin(hw),
-    ' stroke="' + pink + '" stroke-opacity="' + (unlit ? 0.55 : 0.95) + '" stroke-width="1"' +
-    (unlit ? ' stroke-dasharray="3 3"' : ''), unlit ? 0.12 : 0.26);
-  /* #981 direction C: a flagged building's plinth fill turns to the
-     alarm ink on all three faces — replacing the district colour —
-     with a rim at the same ink; a watched building gets a purple
-     outline around its plinth, drawn a touch proud (R + 1.6) of the
-     rim so both read when a building carries both marks. */
+  /* the soft ground shadow — the only thing left under the device */
+  s += '<path d="' + diamond(c, u, v, R, 0) + '" fill="#000" fill-opacity="' + (unlit ? 0.14 : 0.24) + '"/>';
+  const sig = lit || b.flags ? 'var(--alarm)' : (unlit ? 'var(--ink-3)' : (b.watch ? '#a78bfa' : 'var(--ok)'));
+  const lib = DEVLIB[b.t];
+  let inner = '<g style="color:' + ink + ';--sig:' + sig + '"' + (unlit ? ' opacity="0.62"' : '') +
+    '><use href="#' + opt.sid + '-' + b.t + '"/></g>';
+  /* #981: the red fill and rim, and the purple watch outline, are on
+     the device symbol itself now, not a pedestal underneath it — the
+     owner: "I meant the actual item not the cube/tower it sits on."
+     The fill re-stamps the whole symbol in alarm ink (currentColor
+     reaches every shape it is built from) under an opacity that
+     climbs with the flag count, layered over the district-ink stamp
+     below it; the rim strokes the same shapes' outlines (see
+     outlineParts above). */
   if (b.flags) {
     const flagOp = R2(Math.min(0.9, 0.45 + 0.15 * (b.flags - 1)) * 1000) / 1000;
     const rimW = R2(Math.min(3, 1 + 0.5 * (b.flags - 1)));
-    const af = (d1, d2, d3) => '<path class="mk-alarm" style="d:path(\'' + d1 + '\')" d="' + d1 + '"' + dat(d2, d3) +
-      ' fill="var(--alarm)" fill-opacity="' + flagOp + '"/>';
-    s += af(pl(h), pl(hd), pl(hw)) + af(pr(h), pr(hd), pr(hw)) + af(pin(h), pin(hd), pin(hw));
-    s += '<path class="mk-alarm" style="d:path(\'' + pin(h) + '\')" d="' + pin(h) + '"' + dat(pin(hd), pin(hw)) +
-      ' fill="none" stroke="var(--alarm)" stroke-width="' + rimW + '"/>';
+    inner += '<g style="color:var(--alarm)" opacity="' + flagOp + '"><use href="#' + opt.sid + '-' + b.t + '"/></g>';
+    const rimCls = b.spike ? 'mk-alarm mk-spike-rim' : 'mk-alarm';
+    if (b.spike) inner += outlineParts(lib.outline, 'var(--alarm)', R2(rimW * 1.8), 'mk-spike-glow');
+    inner += outlineParts(lib.outline, 'var(--alarm)', rimW, rimCls);
   }
   if (b.watch) {
     const watchW = R2(Math.min(4, 1.5 + 0.75 * (b.watch - 1)));
-    const pinOut = (hh) => diamond(c, u, v, R + 1.6, hh);
-    s += '<path class="mk-watch" style="d:path(\'' + pinOut(h) + '\')" d="' + pinOut(h) + '"' + dat(pinOut(hd), pinOut(hw)) +
-      ' fill="none" stroke="var(--watch)" stroke-width="' + watchW + '"/>';
+    /* "a touch proud" of the flag rim: the same outline, scaled up a
+       little around the device's own centre */
+    inner += '<g transform="scale(1.09)">' + outlineParts(lib.outline, 'var(--watch)', R2(watchW / 1.09), 'mk-watch') + '</g>';
   }
-  /* and the device itself, stamped from the library */
-  const sig = lit || b.flags ? 'var(--alarm)' : (unlit ? 'var(--ink-3)' : (b.watch ? '#a78bfa' : 'var(--ok)'));
-  const gy = (hh) => R2(Y(c, v, hh));
-  s += '<g class="dev" data-x="' + R2(X(c, u)) + '" data-yd="' + gy(hd) + '" data-yw="' + gy(hw) + '"' +
-       ' style="transform:translate(' + R2(X(c, u)) + 'px,' + gy(h) + 'px)">' +
-       '<g transform="scale(' + k + ')" style="color:' + ink + ';--sig:' + sig + '"' +
-       (unlit ? ' opacity="0.62"' : '') + '><use href="#' + opt.sid + '-' + b.t + '"/></g>';
+  s += '<g class="dev" style="transform:translate(' + R2(X(c, u)) + 'px,' + R2(Y(c, v, 0)) + 'px)">' +
+       '<g transform="scale(' + k + ')">' + inner + '</g>';
   if (lit || (opt.alarm && b.flags) || opt.ring) {
-    const top = R2(-DEVLIB[b.t].top * k - 2);
+    const top = R2(-lib.top * k - 2);
     s += '<circle cx="0" cy="' + top + '" r="' + R2(Math.max(4, 5 * k)) + '" class="halo" fill="none" stroke="' +
       (opt.ring && !lit ? 'var(--accent)' : 'var(--alarm)') + '" stroke-width="1.4"/>';
   }
@@ -1021,15 +1032,13 @@ function device(c, u, v, b, opt) {
 
 /* a device's name, floated clear above (or below) it */
 function topper(c, u, v, b, opt, lines, box) {
-  const hd = b.h[0], hw = b.h[1];
-  const h = opt.mode === 'wat' ? hw : hd;
   const k = b.R * 0.74 * c.S / SREF, x = R2(X(c, u)), down = !!b.down;
-  const yy = (hh) => down
+  const yy = down
     ? R2(Y(c, v) + b.R * VK * c.S + 15)
-    : R2(Y(c, v, hh) - DEVLIB[b.t].top * k - (box ? 17 : 10));
-  if (x < 60 || x > 1340 || yy(hd) < 26 || yy(hw) < 26 || yy(hd) > 672 || yy(hw) > 672) return '';
+    : R2(Y(c, v, 0) - DEVLIB[b.t].top * k - (box ? 17 : 10));
+  if (x < 60 || x > 1340 || yy < 26 || yy > 672) return '';
   const cw = Math.max.apply(null, lines.map((l) => l.t.length)) * 6.6 + 22;
-  if (!claim(x, down ? yy(h) - 11 : yy(h) - (lines.length - 1) * 13 - 15, cw, lines.length * 13 + 11)) return '';
+  if (!claim(x, down ? yy - 11 : yy - (lines.length - 1) * 13 - 15, cw, lines.length * 13 + 11)) return '';
   let inner = '';
   if (box) {
     const w = Math.max.apply(null, lines.map((l) => l.t.length)) * 6.0 + 26;
@@ -1040,8 +1049,7 @@ function topper(c, u, v, b, opt, lines, box) {
   lines.forEach((l, i) => {
     inner += '<text x="0" y="' + (down ? i * 13 : -(lines.length - 1 - i) * 13) + '" text-anchor="middle" class="' + l.c + '">' + esc(l.t) + '</text>';
   });
-  return '<g class="topper" data-x="' + x + '" data-yd="' + yy(hd) + '" data-yw="' + yy(hw) + '"' +
-         ' style="transform:translate(' + x + 'px,' + yy(h) + 'px)">' + inner + '</g>';
+  return '<g class="topper" style="transform:translate(' + x + 'px,' + yy + 'px)">' + inner + '</g>';
 }
 
 /* the plaque at a plate's near corner — the full badge close up, just
@@ -1129,15 +1137,14 @@ function boroughRing(c, ids, label) {
    them tries to show all of it.
    ================================================================ */
 const SCENES = {
-  survey: { c: [-9, 26, 5.9], mode: () => impMode, compact: 1, roofs: 1, river: 1, imp: 1,
+  survey: { c: [-9, 26, 5.9], compact: 1, roofs: 1, river: 1,
     lens: ['flags', 'watch'], alt: 3,
     cap: 'the whole estate at once — silhouettes, lit points, district names' },
-  street: { c: [-72, 36, 17], mode: () => 'dep', names: 1, plaques: 1, lanes: 1, rules: 1, labels: 1,
+  street: { c: [-72, 36, 17], names: 1, plaques: 1, lanes: 1, rules: 1, labels: 1,
     card: 1, lens: ['traffic'], alt: 6 },
-  alarm: { c: [0, 24, 9.0], mode: () => 'dep', plaques: 1, roofs: 1, alarm: 1, labels: 1, river: 1,
+  alarm: { c: [0, 24, 9.0], plaques: 1, roofs: 1, alarm: 1, labels: 1, river: 1,
     lens: ['coverage', 'flags', 'watch'], alt: 6 }
 };
-let impMode = 'dep';
 
 const onStage = (c, u, v, pad) => {
   const x = X(c, u), y = Y(c, v);
@@ -1159,8 +1166,7 @@ function lanesFor(d) {
 
 function render(id) {
   const cfg = SCENES[id], c = cam(cfg.c[0], cfg.c[1], cfg.c[2], cfg.c[3], cfg.c[4]);
-  const mode = cfg.mode();
-  const opt = { mode: mode, sid: id, alarm: cfg.alarm, policy: cfg.policy, rules: cfg.rules, nogo: cfg.nogo };
+  const opt = { sid: id, alarm: cfg.alarm, policy: cfg.policy, rules: cfg.rules, nogo: cfg.nogo };
   const nogo = (x, y) => cfg.nogo && x > cfg.nogo[0] && y < cfg.nogo[1];
   PLACED = []; NOGO = cfg.nogo || null;
   let ground = '', flat = '';
@@ -1211,7 +1217,7 @@ function render(id) {
       if (!onStage(c, u, v, 140)) return;
       const lit = cfg.alarm && b.id === 'cam-porch';
       const named = cfg.names || (cfg.names2 && cfg.names2.indexOf(b.id) >= 0);
-      const o = { mode: mode, ink: d.ink, unlit: d.dark, lit: lit, sid: id, alarm: cfg.alarm, nogo: cfg.nogo,
+      const o = { ink: d.ink, unlit: d.dark, lit: lit, sid: id, alarm: cfg.alarm, nogo: cfg.nogo,
         focus: cfg.reach === b.id, ring: cfg.names2 && cfg.names2.indexOf(b.id) >= 0 && cfg.reach !== b.id,
         fade: own && !named, named: named };
       solids.push({ v: v + b.R, s: device(c, u, v, b, o) });
@@ -1227,7 +1233,7 @@ function render(id) {
        badge hanging from its own bridge: the badge wins */
     const isHead = BRIDGES.some((b) => b.node === n.id);
     const named = !!(n.roof && (cfg.roofs || cfg.names) && !(isHead && cfg.compact));
-    const o = { mode: mode, ink: n.ink, sid: id, alarm: cfg.alarm, nogo: cfg.nogo, named: named,
+    const o = { ink: n.ink, sid: id, alarm: cfg.alarm, nogo: cfg.nogo, named: named,
       fade: !!(own && (!cfg.names2 || cfg.names2.indexOf(n.id) < 0)) };
     solids.push({ v: n.v + n.R, s: device(c, n.u, n.v, n, o) });
     if (named) {
@@ -1301,7 +1307,7 @@ function render(id) {
   if (cfg.card) {
     /* the leader from tom-desktop's roof to its open card */
     const e = ENT['tom-desktop'];
-    const bx = R2(X(c, e.u)), by = R2(Y(c, e.v, e.b.h[0]) - DEVLIB.workstation.top * (e.R * 0.74 * c.S / SREF));
+    const bx = R2(X(c, e.u)), by = R2(Y(c, e.v, 0) - DEVLIB.workstation.top * (e.R * 0.74 * c.S / SREF));
     flat += '<path d="M' + bx + ' ' + by + 'L1120 124" fill="none" stroke="var(--hair-2)" stroke-width="1"/>' +
       '<circle cx="' + bx + '" cy="' + by + '" r="3" fill="var(--accent)"/>';
   }
@@ -1329,9 +1335,6 @@ function chrome(id) {
     '<svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/>' +
     '<circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b>○1</b></a>' +
     '<button class="who">tom (admin)</button></span></div>';
-  if (cfg.imp) h += '<div class="imp" role="group" aria-label="Importance reading"><span>importance</span>' +
-    '<button class="ib on" data-importance="depended-on" aria-pressed="true">depended-on</button>' +
-    '<button class="ib" data-importance="watched" aria-pressed="false">watched</button></div>';
   h += '<div class="stage"><svg id="svg-' + id + '" viewBox="0 0 1400 700" role="img" aria-label="' + id + ' camera on the estate"></svg></div>';
   if (cfg.card) h += '<div class="hovercard" id="hc" aria-label="tom-desktop card"><div class="hc-n">tom-desktop</div>' +
     '<div class="hc-i">10.0.10.21 · 3 roads · workstation</div>' +
@@ -1352,10 +1355,7 @@ function chrome(id) {
     '" aria-label="Altitude: clients, services, zones, city, borough, district, street">' +
     ALTS.map((t, i) => '<i class="tick' + (i === 3 ? ' city' : (cfg.alt === i ? ' on' : '')) +
       '" style="left:' + R2(3 + i * 15.667) + '%"></i>').join('') + '</span></div>';
-  h += '<div class="legend" aria-label="Legend: plinth height is importance, road width is traffic, colour is verdict">' +
-    '<span><svg width="19" height="12" aria-hidden="true"><rect x="1" y="8" width="6" height="4" fill="var(--ink-3)"/>' +
-    '<rect x="2.5" y="5" width="3" height="3" fill="var(--ink-2)"/><rect x="11" y="3" width="6" height="9" fill="var(--ink-3)"/>' +
-    '<rect x="12.5" y="0" width="3" height="3" fill="var(--ink-2)"/></svg>plinth = importance</span>' +
+  h += '<div class="legend" aria-label="Legend: road width is traffic, colour is verdict">' +
     '<span><svg width="17" height="11" aria-hidden="true"><rect x="1" y="3" width="15" height="1.4" fill="var(--ink-3)"/>' +
     '<rect x="1" y="7" width="15" height="4" fill="var(--ink-2)"/></svg>width = traffic</span>' +
     '<span><i class="sw" style="background:var(--accept)"></i><i class="sw" style="background:var(--drop)"></i>' +
@@ -1396,32 +1396,9 @@ function minimap(id) {
     '<div class="edgehint" style="right:24px;bottom:64px">more town south ▾</div>';
 }
 
-/* ---- the importance toggle: the plinths re-measure, the town keeps
-   its shape and every device keeps its size ---- */
-function setMode(m) {
-  impMode = m;
-  const sc = document.getElementById('survey');
-  sc.querySelectorAll('path[data-dd]').forEach((p) => {
-    const d = m === 'wat' ? p.dataset.dw : p.dataset.dd;
-    p.style.d = "path('" + d + "')";
-    p.setAttribute('d', d);
-  });
-  sc.querySelectorAll('[data-yd]').forEach((g) => {
-    g.style.transform = 'translate(' + g.dataset.x + 'px,' + (m === 'wat' ? g.dataset.yw : g.dataset.yd) + 'px)';
-  });
-  sc.querySelectorAll('.imp .ib').forEach((b) => {
-    const isOn = (b.dataset.importance === 'watched') === (m === 'wat');
-    b.classList.toggle('on', isOn);
-    b.setAttribute('aria-pressed', isOn ? 'true' : 'false');
-  });
-}
-
 /* ---------------- go ---------------- */
 initModel();
 Object.keys(SCENES).forEach((id) => { chrome(id); render(id); });
-document.querySelectorAll('#survey .imp .ib').forEach((b) => {
-  b.addEventListener('click', () => setMode(b.dataset.importance === 'watched' ? 'wat' : 'dep'));
-});
 /* the street card sits beside tom-desktop, with a leader to its roof;
    cam-porch's card floats on the opposite side, unconnected (#981) */
 (function placeCards() {
