@@ -254,8 +254,7 @@
 
 <style>
   /* Pointer-width chrome (dock, density) is a rail-only affordance --
-     nothing here reads railPref or renders anything with an equivalent
-     job, per the record. */
+     the rail is gone, and nothing here renders an equivalent job. */
   .bottom-bar {
     position: fixed;
     left: 0;
