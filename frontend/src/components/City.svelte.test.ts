@@ -469,11 +469,14 @@ describe('a released drag stays put (#975)', () => {
     policyState.pushed = []
     topologyNavState.pendingDescend = null
     appState.events = [event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge1', outInterface: 'vlan-iot' })]
-    if (!('setPointerCapture' in Element.prototype)) {
-      // jsdom has no pointer-capture model; City only calls it to keep
-      // receiving move/up events off the same target, which this
-      // dispatch-directly-on-the-svg test does not need.
-      Element.prototype.setPointerCapture = function () {}
+    // jsdom has no pointer-capture model; City only calls it to keep
+    // receiving move/up events off the same target, which this
+    // dispatch-directly-on-the-svg test does not need. Assigned through a
+    // loose view of the prototype: `in` against Element.prototype narrows
+    // it to `never`, so the direct assignment does not type-check.
+    const elementProto = Element.prototype as unknown as Record<string, unknown>
+    if (!('setPointerCapture' in elementProto)) {
+      elementProto.setPointerCapture = function () {}
     }
   })
 
