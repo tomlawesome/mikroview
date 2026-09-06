@@ -169,6 +169,7 @@
   let S = $state(STOP_HEIGHT.city)
   let centre = $state<Pt>([0, 0])
   let started = false
+  let lastStop: Stop | null = null
   let anim: number | null = null
   let svgEl: SVGSVGElement | undefined = $state()
 
@@ -228,19 +229,32 @@
     const s = stop
     const g = ground
     untrack(() => {
+      // ground is read here only so the first real layout (devices
+      // arriving after mount) reaches the `!started` branch below with
+      // real bounds rather than an empty stub -- it must not, by itself,
+      // re-centre an already-started view. Every live event redraws
+      // ground (#975: layoutGround returns a fresh object on every
+      // appState.events change), so treating ground as a re-centre
+      // trigger snapped a released drag straight back to the stop's
+      // default the moment the next event arrived. Only a genuine stop
+      // change re-centres; lastStop is updated unconditionally, even
+      // while standing, so a stop change that happens while standing
+      // does not surface as a stale mismatch once standSurface runs.
+      const stopChanged = s !== lastStop
+      lastStop = s
       // While standing, the camera belongs to standOn/standSurface --
       // the slider's own stop keeps changing under it unread, so
       // surfacing lands on the position it actually saved rather than
       // wherever the prop drifted to meanwhile.
       if (stand) return
-      const to = centreFor(s, focus)
       if (!started) {
         started = true
         S = initialS ?? STOP_HEIGHT[s]
-        centre = clampCentre(initialCentre ?? to, g.bounds)
+        centre = clampCentre(initialCentre ?? centreFor(s, focus), g.bounds)
         return
       }
-      moveCamera(STOP_HEIGHT[s], to)
+      if (!stopChanged) return
+      moveCamera(STOP_HEIGHT[s], centreFor(s, focus))
     })
   })
 
