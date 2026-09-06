@@ -1781,9 +1781,13 @@
   .ovstrip.dragging {
     cursor: grabbing;
   }
+  /* #984: focus lights the rail's own hairline rather than drawing a
+     2px ring 2px outside it -- the ring read as a second box around a
+     6px control, and pointerdown's focus() put it up on every mouse
+     drag too, not only from the keyboard. */
   .ovstrip:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+    outline: none;
+    border-color: var(--accent);
   }
   .ovtick {
     flex: 1;
