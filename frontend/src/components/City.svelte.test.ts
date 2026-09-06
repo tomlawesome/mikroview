@@ -157,18 +157,26 @@ describe('City', () => {
     for (const p of container.querySelectorAll('.plate')) expect(p.getAttribute('aria-label')).toMatch(/no rule table has been pushed yet/)
   })
 
-  it('carries the refusing rule beside a drop mark, from the events themselves', () => {
+  it('marks a dropped aggregate road plainly as "dropped" (#991), not the refusing rule', () => {
+    // The district-pair aggregate has no per-building source to name
+    // (only a standing host's own strands, below, resolve to one) --
+    // ported from round 46's marks.html, whose only drawn drop pill
+    // reads one plain word.
     const { container } = render(City, { props: { stop: 'district', ground } })
-    expect(container.textContent).toContain('caught by iot-egress-drop')
-    expect(container.textContent).toContain('caught by guest-isolation')
+    const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent)
+    expect(labels.length).toBeGreaterThan(0)
+    for (const t of labels) expect(t).toBe('dropped')
   })
 
-  it('the policy lens lights every gate with its rule number; the traffic lens leaves the wall quiet', () => {
+  it('the policy lens gives each gate a bigger pill naming its far end; the traffic lens leaves the wall quiet (#991)', () => {
     const quiet = render(City, { props: { stop: 'district', ground, lens: 'traffic' } })
-    expect(quiet.container.querySelectorAll('.gate-n').length).toBe(0)
+    expect(quiet.container.querySelectorAll('.gate-lab').length).toBe(0)
     quiet.unmount()
     const lit = render(City, { props: { stop: 'district', ground, lens: 'policy' } })
-    expect(lit.container.querySelectorAll('.gate-n').length).toBeGreaterThan(0)
+    const labels = [...lit.container.querySelectorAll('.gate-lab')].map((e) => e.textContent)
+    expect(labels.length).toBeGreaterThan(0)
+    // The lit lan->srv gate names its far end, not a rule number.
+    expect(labels).toContain('vlan-srv')
   })
 })
 
@@ -290,8 +298,10 @@ describe('standing on a building (#868)', () => {
     const srv1Paints = srv1?.querySelectorAll('path') ?? []
     expect([...srv1Paints].some((p) => p.getAttribute('fill-opacity') === '0.12')).toBe(false)
 
-    // The port it asked for is drawn on the road.
-    expect(container.textContent).toContain(':990')
+    // #991: the road no longer carries its own port chip while standing
+    // on a building ("gone from the street stop") -- the ports moved to
+    // the building's card and the gate's card instead.
+    expect(container.querySelector('.port-t')).toBeNull()
   })
 
   it('shows dashes moving toward the host when it was spoken to, not away', () => {
@@ -302,24 +312,38 @@ describe('standing on a building (#868)', () => {
     expect(container.querySelector('[data-road="bridge-lan|vlan-srv"].flow.flow-rev')).not.toBeNull()
   })
 
-  it('a refused road ends at the wall carrying the refusing rule from the event itself, even where no aggregate road already drops', () => {
-    appState.events = [
-      event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel: 'no-cross-router-cams' }),
-    ]
-    const { container } = render(City, { props: { stop: 'street', ground } })
-    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
-    flushSync()
-    expect(container.textContent).toContain('caught by no-cross-router-cams')
+  it('reads plainly as "dropped" for the standing building\'s own refused outbound attempt (#991), whether or not the rule carried a label', () => {
+    // Direction 'out': lan-1 (the standing building) is the source, so
+    // the drop is on the building you are standing on -- the pill never
+    // names it back to itself, and never repeats the refusing rule
+    // either way (that detail lives on the composer card, below).
+    for (const ruleLabel of ['no-cross-router-cams', '']) {
+      appState.events = [
+        event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel }),
+      ]
+      const { container, unmount } = render(City, { props: { stop: 'street', ground } })
+      fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+      flushSync()
+      const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent)
+      expect(labels).toContain('dropped')
+      for (const t of labels) expect(t).not.toMatch(/caught/)
+      unmount()
+    }
   })
 
-  it('says plainly when the refusing event carried no rule label, rather than inventing one', () => {
+  it('names the source only when the drop is not on the building you are standing on (#991)', () => {
+    // Direction 'in': cam-porch tried to reach lan-1 (the standing
+    // building) and was refused at lan-1's own wall -- the drop is not
+    // "at" lan-1, so the pill names the source, matching round 46's
+    // marks.html exactly ("cam-porch · dropped").
     appState.events = [
-      event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel: '' }),
+      event({ srcIp: '10.60.0.10', srcHostName: 'cam-porch', dstIp: '10.10.0.10', inInterface: 'wlan-cams', outInterface: 'bridge-lan', action: 'drop', ruleLabel: 'no-cross-router-cams' }),
     ]
     const { container } = render(City, { props: { stop: 'street', ground } })
     fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
     flushSync()
-    expect(container.textContent).toContain('caught, no rule named')
+    const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent)
+    expect(labels).toContain('cam-porch · dropped')
   })
 
   it('the composer pins to the wall, drafted, never run, with what it has been asking for and the count', () => {
