@@ -41,6 +41,25 @@ export function familyOf(type: string): FlagFamily {
   return FLAG_FAMILIES[type as FlagType] ?? custom
 }
 
+// The families worst-first, as the record lists them: alarms before
+// advisories, and within each the palette's own order. A campaign row
+// (#988, round 47) wears the worst ink among its flags, so a port scan
+// beside a critical-port hit reads as the hit.
+const SEVERITY: readonly FlagFamily[] = [hostile, scan, outbound, repeat, surge, presence, custom]
+
+export function worstFamilyOf(types: readonly string[]): FlagFamily {
+  let worst = custom
+  let rank = SEVERITY.length
+  for (const t of types) {
+    const r = SEVERITY.indexOf(familyOf(t))
+    if (r < rank) {
+      rank = r
+      worst = SEVERITY[r]
+    }
+  }
+  return worst
+}
+
 // The health dial's generic advisory-severity ink (#648): the ring
 // splits by mark (✱ alarm / ▲ advisory), not by family, and the record
 // says reuse the ratified inks rather than mint a new one -- this is

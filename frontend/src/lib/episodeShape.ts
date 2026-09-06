@@ -15,7 +15,7 @@ import type { Flag, FirewallEvent } from './types'
 // two-event burst thirty seconds long should use the same clock, since
 // what an operator actually wants to know is "is this still happening
 // right now."
-const RECENT_MS = 10 * 60 * 1000
+export const RECENT_MS = 10 * 60 * 1000
 
 // A steady cadence ("every ~2 m since 13:28") only reads as its own
 // shape once it has run long enough to look deliberate -- a two-minute
