@@ -155,6 +155,15 @@ SCANNER_ONE_OFF = "89.248.165.100"     # fires once, never again -- "stopped"
 # engine/coverage.go) means something: a rule with no port restriction
 # covers everything trivially, which would make a genuine "broken ring"
 # entry impossible to construct.
+#
+# `fires=True` is only honest on a `log=True` rule: RouterOS never writes
+# a syslog line for a rule that isn't logging, no matter how much traffic
+# matches it, so `log=False` rules stay `fires=False` here on principle,
+# not because the feed happens not to emit one (#738 measurement found
+# two, `icmp-out` and `invalid-drop`, marked `fires=True` with `log=False`
+# -- the same "claims to fire but never does" defect #696 named, just not
+# caught by that sweep because these two were never observably wrong in
+# the UI: a log=False rule never shows a hit either way).
 # Every rule below carries the inInterface/outInterface pair the fall's
 # boundary bands (#616) group by -- see frontend/src/lib/fall.svelte.ts's
 # boundaryKeyOf, which keys a pushed rule and a live event on the exact
@@ -177,10 +186,10 @@ FILTER_RULES = {
              logPrefix="guest-isolate", log=True, dstPort=445, protocol="tcp", fires=True,
              inInterface="vlan30", outInterface="bridge1"),
         dict(ordinal=4, comment="Allow outbound ICMP", chain="forward", action="accept",
-             logPrefix="icmp-out", log=False, protocol="icmp", fires=True,
+             logPrefix="icmp-out", log=False, protocol="icmp", fires=False,
              inInterface="bridge1", outInterface="ether1"),
         dict(ordinal=5, comment="Reject invalid state", chain="forward", action="reject",
-             logPrefix="invalid-drop", log=False, connectionState=["invalid"], fires=True,
+             logPrefix="invalid-drop", log=False, connectionState=["invalid"], fires=False,
              inInterface="bridge1", outInterface="ether1"),
         dict(ordinal=6, comment="Legacy PPTP VPN allow (pending removal)", chain="input", action="accept",
              logPrefix="legacy-vpn-allow", log=True, dstPort=1723, protocol="tcp", fires=False,
@@ -762,15 +771,23 @@ def host_active(h, elapsed):
 
 
 # #738 item 3's other half: "uniform random talkers are what make the map
-# read as noise". A handful of round-40's hosts talk more or less than
-# their zone's baseline; everything not listed here gets the baseline
-# weight of 1.0 -- most hosts, deliberately, since "a few characters and a
-# quiet majority" is the shape the issue asks for, not a tuned number for
-# every host.
+# read as noise". A handful of hosts talk more or less than their zone's
+# baseline; everything not listed here gets the baseline weight of 1.0 --
+# most hosts, deliberately, since "a few characters and a quiet majority"
+# is the shape the issue asks for, not a tuned number for every host.
+# The three original-estate entries below were added on the #738
+# measurement pass: lines_for_router picked egress/drop/masquerade hosts
+# with plain random.choice, so every host in a zone talked at exactly the
+# same rate -- the round-40 half of the estate already had characters,
+# the original three-router half did not, and a demo review sees both
+# halves on the same map.
 HOST_WEIGHT = {
     "aa:bb:cc:40:01:20": 3.0,   # tom-desktop: the LAN's heaviest talker
     "aa:bb:cc:40:01:23": 0.3,   # tv-lounge: mostly idle
     "aa:bb:cc:40:02:10": 2.0,   # nas: busy as both source and destination
+    "aa:bb:cc:01:01:02": 2.5,   # home-nas: busy, same character as round-40's nas
+    "aa:bb:cc:02:01:02": 2.0,   # office-nas: same character, office-hex's estate
+    "aa:bb:cc:01:02:02": 0.3,   # printer-office: mostly idle appliance
 }
 
 
@@ -849,7 +866,7 @@ def lines_for_router(router, elapsed, tick):
         return out
 
     def pick_host():
-        return random.choice(hosts)
+        return weighted_pick(hosts)
 
     # Ordinary egress on the router's LAN-egress rule, one of its own
     # covered ports (matching FILTER_RULES' dstPort exactly, so a rule
@@ -866,7 +883,7 @@ def lines_for_router(router, elapsed, tick):
     egress_hosts = [h for h in hosts if h[1] == egress_zone]
     if egress in rules and egress_hosts:
         for _ in range(random.randint(2, 4)):
-            h = random.choice(egress_hosts)
+            h = weighted_pick(egress_hosts)
             ip = full_ip(h)
             pub = random.choice(PUBLIC)
             port = random.choice(egress_ports)
@@ -888,7 +905,7 @@ def lines_for_router(router, elapsed, tick):
     drop_hosts = [h for h in hosts if h[1] == drop_src_zone]
     if drop in rules and drop_hosts:
         for _ in range(random.randint(1, 3)):
-            h = random.choice(drop_hosts)
+            h = weighted_pick(drop_hosts)
             ip = full_ip(h)
             victim = f"{zone_subnet(router, drop_dst_zone)}.{random.randint(60, 99)}"
             out.append(f"firewall,info D|{drop}| forward: in:{zone_iface(router, drop_src_zone)} "
@@ -919,7 +936,7 @@ def lines_for_router(router, elapsed, tick):
     masq_zone = {"border-rb5009": "core", "office-hex": "office", "lab-crs": "servers"}[router]
     masq_hosts = [h for h in hosts if h[1] == masq_zone]
     if masq_hosts:
-        h = random.choice(masq_hosts)
+        h = weighted_pick(masq_hosts)
         ip = full_ip(h)
         pub = random.choice(PUBLIC)
         out.append(f"firewall,info A|{masq}| srcnat: in:{zone_iface(router, masq_zone)} out:{wan}, proto TCP, "
@@ -956,6 +973,15 @@ def lines_for_router(router, elapsed, tick):
             out.append(f"firewall,info A|voip-priority| forward: in:{zone_iface(router, 'voip')} out:{wan}, "
                         f"connection-state:new src-mac {h[3]}, proto UDP, "
                         f"{full_ip(h)}:{random.randint(1024, 65000)}->{random.choice(PUBLIC)}:5060, len 200")
+    # smb-block was declared fires=True with no emission at all (#738
+    # measurement, the same defect #696 named for three other rules): an
+    # office host occasionally tries SMB off-net and the rule drops it.
+    if router == "office-hex" and "smb-block" in rules and random.random() < 0.3:
+        h = next((x for x in hosts if x[1] == "office"), None)
+        if h:
+            out.append(f"firewall,info D|smb-block| forward: in:{zone_iface(router, 'office')} out:{wan}, "
+                        f"connection-state:new src-mac {h[3]}, proto TCP (SYN), "
+                        f"{full_ip(h)}:{random.randint(1024, 65000)}->{random.choice(PUBLIC)}:445, len 60")
     if router == "lab-crs" and "mgmt-ssh-in" in rules and random.random() < 0.2:
         h = next((x for x in hosts if x[1] == "mgmt"), None)
         if h:
