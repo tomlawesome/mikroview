@@ -41,6 +41,7 @@ import type {
   TuneLoggingRenderResponse,
   UserSummary,
   Verdict,
+  WatchlistBoundary,
   WatchlistEntry,
   WatchlistCoverage,
   WatchlistIdentity,
@@ -788,6 +789,12 @@ export interface WatchlistEntryRequest {
   ports?: number[]
   invert?: boolean
   includeStructuralNoise?: boolean
+  // The (chain, inInterface, outInterface) boundary this entry is scoped
+  // to, if any (#806, mirrors internal/watchlist.Boundary). Absent or
+  // every field empty means unscoped, full-replace like source/destIp/
+  // ports above -- see internal/api's expectationRequest.Boundary doc
+  // comment for why this is not a leave-alone-on-PUT field like window.
+  boundary?: WatchlistBoundary
 }
 
 // expectationBlock splits a request into the two halves the definitions
@@ -800,6 +807,7 @@ function expectationBlock(req: WatchlistEntryRequest) {
     ports: req.ports ?? [],
     invert: req.invert ?? false,
     includeStructuralNoise: req.includeStructuralNoise ?? false,
+    boundary: req.boundary ?? {},
   }
 }
 

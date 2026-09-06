@@ -1039,6 +1039,18 @@ export interface WatchRing {
   reason?: string
 }
 
+// Mirrors internal/watchlist.Boundary's JSON tags (#806) -- the boundary
+// a watcher is scoped to, keyed exactly as fall.svelte.ts's own
+// boundaryKeyOf(chain, inInterface, outInterface). Absent (the server's
+// `omitzero` zero value: every field empty) means unscoped -- matching
+// isn't restricted to one band, coverage stays estate-wide, and the fall
+// makes no per-band claim about this entry's ring.
+export interface WatchlistBoundary {
+  chain?: string
+  inInterface?: string
+  outInterface?: string
+}
+
 // Mirrors internal/watchlist.Entry's JSON tags (#243) -- see that type's
 // own doc comment for the full non-inverted/inverted matching rules.
 // ports/invert/includeStructuralNoise/observing/permitted/observed all
@@ -1073,6 +1085,9 @@ export interface WatchlistEntry {
   window?: WatchWindow
   nights?: WatchNight[]
   ring?: WatchRing
+  // #806: the boundary this entry is scoped to, if any -- see
+  // WatchlistBoundary's own doc comment.
+  boundary?: WatchlistBoundary
   createdAt: string
 }
 

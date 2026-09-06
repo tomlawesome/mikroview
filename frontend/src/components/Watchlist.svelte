@@ -42,8 +42,10 @@
   import { nightlySummary, windowLabel } from '../lib/watchWindow'
   import { topologyNavState, type PendingWatchDraft } from '../lib/topologyNav.svelte'
   import { fetchWatchlistMatches } from '../lib/api'
+  import { fallState, boundaryKeyOf, type FallBoundary } from '../lib/fall.svelte'
   import type {
     Suggestion,
+    WatchlistBoundary,
     WatchlistEntry,
     WatchlistIdentity,
     WatchlistMatch,
@@ -54,6 +56,12 @@
   onMount(() => {
     watchlistState.refresh()
     suggestState.refresh()
+    // The boundary picker below (#806) is fed by the same real,
+    // pushed-rule-derived boundary list the fall draws its bands from --
+    // fetched here too (not only from Fall.svelte) since an operator may
+    // open this page without ever visiting the fall, and a picker with no
+    // options could scope nothing.
+    fallState.refresh()
     // The ratified table's "last event" column, and round 33's match
     // list in the drawer, both read matchesState's own bulk feed
     // (GET /api/matches?entries=all) -- one fetch for the whole table
@@ -342,7 +350,15 @@
   // "wherever it goes" -- there is nothing scoped yet to name (#761 item
   // 2/4). Once fenced, it names what it actually trusts rather than a
   // generic "its observed destinations".
-  function boundaryLabel(e: WatchlistEntry): string {
+  //
+  // Renamed from boundaryLabel to scopeSummary (#806): this is a
+  // who-toward summary of an entry's own matching scope, not the network
+  // boundary (chain/inInterface/outInterface) the table's "boundary"
+  // column is actually named after in the drawing (round-38's watch
+  // table, `iot → wan`). rowBoundaryLabel below is what that column now
+  // calls, falling back to this summary for the (still common) unscoped
+  // case.
+  function scopeSummary(e: WatchlistEntry): string {
     if (e.invert) {
       if (e.observing) return `${sourceLabel(e)} → wherever it goes`
       const n = (e.permitted ?? []).length
@@ -350,6 +366,58 @@
     }
     const dest = e.destIp ? e.destIp : 'any destination'
     return `${sourceLabel(e)} → ${dest}`
+  }
+
+  // --- #806: the boundary picker -----------------------------------------
+  //
+  // An entry reaches a boundary by carrying one explicitly (the ratified
+  // decision on #806), and the only boundaries worth offering are ones a
+  // real pushed rule actually names -- fallState.boundaries, the same list
+  // that feeds the fall's own bands (fallState.refresh() in onMount above
+  // keeps it populated even for an operator who never visits the fall).
+  // Picking a boundary that does not exist yet would let an entry claim a
+  // per-band story no band can ever back up.
+
+  // entryBoundaryKey reads the boundaryKeyOf key an entry's own Boundary
+  // names, or '' for unscoped -- the same reading fall.svelte.ts's private
+  // scopedBoundaryKey gives, rebuilt here since that one is not exported.
+  function entryBoundaryKey(e: WatchlistEntry): string {
+    const b = e.boundary
+    if (!b || (!b.chain && !b.inInterface && !b.outInterface)) return ''
+    return boundaryKeyOf(b.chain ?? '', b.inInterface, b.outInterface)
+  }
+
+  // boundaryFromKey turns a picker selection back into the wire shape a
+  // save sends -- '' (the "unscoped" option) or an unknown key (a
+  // boundary that stopped being pushed between opening the picker and
+  // saving) both mean no boundary at all, never a guess.
+  function boundaryFromKey(key: string): WatchlistBoundary {
+    const b = fallState.boundaries.find((fb) => fb.key === key)
+    if (!b) return {}
+    return { chain: b.chain, inInterface: b.inInterface || undefined, outInterface: b.outInterface || undefined }
+  }
+
+  // rowBoundaryLabel is what the table's "boundary" column actually shows
+  // (round-38's watch table draws `iot → wan`): the real network boundary
+  // once an entry names one, in the same wording the picker itself uses
+  // for that option, since it is the same fallState.boundaries entry. An
+  // unscoped entry -- everything before #806, and everything an operator
+  // has not scoped since -- falls back to the who→toward summary, which is
+  // the only scope such an entry has.
+  function rowBoundaryLabel(e: WatchlistEntry): string {
+    const key = entryBoundaryKey(e)
+    if (!key) return scopeSummary(e)
+    const known = fallState.boundaries.find((b) => b.key === key)
+    if (known) return known.label
+    // The boundary is real (the entry carries one) but nothing currently
+    // pushed still names it -- state the fact plainly rather than
+    // silently falling back to the who→toward summary, which would read
+    // as though the entry had never been scoped at all.
+    const b = e.boundary!
+    if (b.inInterface && b.outInterface) return `${b.inInterface} → ${b.outInterface}`
+    if (b.inInterface) return `${b.inInterface} · ${b.chain}`
+    if (b.outInterface) return `${b.chain} · ${b.outInterface}`
+    return b.chain ?? ''
   }
 
   // The drawer's standalone headline plus the rest of the paragraph
@@ -525,6 +593,8 @@
   let draftToward = $state('')
   let draftMode = $state<DraftMode>('expect')
   let draftIncludeStructuralNoise = $state(false)
+  // '' is the "unscoped" option -- see the boundary picker section above.
+  let draftBoundaryKey = $state('')
   let draftSaving = $state(false)
   let draftError = $state<string | null>(null)
   // Where a prefilled draft's values came from, and where the operator
@@ -552,6 +622,7 @@
     draftToward = fill?.toward ?? ''
     draftMode = fill?.mode ?? 'expect'
     draftIncludeStructuralNoise = false
+    draftBoundaryKey = ''
     draftError = null
     draftProvenance = fill?.provenance ?? null
     draftReturnTo = fill?.returnTo
@@ -593,6 +664,7 @@
       destIp: draftMode === 'expect' ? destIp : undefined,
       ports: draftMode === 'expect' ? ports : undefined,
       includeStructuralNoise: draftMode === 'fence' ? draftIncludeStructuralNoise : undefined,
+      boundary: boundaryFromKey(draftBoundaryKey),
     }
     draftSaving = true
     try {
@@ -645,6 +717,8 @@
   let editToward = $state('')
   let editMode = $state<DraftMode>('expect')
   let editIncludeStructuralNoise = $state(false)
+  // '' is the "unscoped" option -- see the boundary picker section above.
+  let editBoundaryKey = $state('')
   let editSaving = $state(false)
 
   function startEditWatch(e: WatchlistEntry) {
@@ -654,6 +728,7 @@
     editToward = towardLabel(e.destIp, e.ports)
     editMode = e.invert ? 'fence' : 'expect'
     editIncludeStructuralNoise = !!e.includeStructuralNoise
+    editBoundaryKey = entryBoundaryKey(e)
     wtError = null
   }
 
@@ -672,6 +747,7 @@
       destIp: editMode === 'expect' ? destIp : undefined,
       ports: editMode === 'expect' ? ports : undefined,
       includeStructuralNoise: editMode === 'fence' ? editIncludeStructuralNoise : undefined,
+      boundary: boundaryFromKey(editBoundaryKey),
     }
     editSaving = true
     try {
@@ -779,7 +855,7 @@
       const st = watchState(e)
       return {
         entry: e,
-        boundary: boundaryLabel(e),
+        boundary: rowBoundaryLabel(e),
         // "always" for an entry with no window; the clock range, days and
         // zone for one that has (#680).
         window: windowLabel(e),
@@ -1227,6 +1303,19 @@
                          saved -- offering it would silently lose what the
                          operator set. See startWatching's own comment. -->
                     <div class="wf-row"><span class="lab">window</span><span class="t">always</span></div>
+                    <!-- #806: the boundary picker. Fed by fallState.boundaries
+                         -- the same real, pushed-rule-derived list the fall
+                         draws its bands from -- never free text, so an
+                         entry can only ever claim a boundary that actually
+                         exists to back a WATCH BROKEN/WATCHED story up. -->
+                    <label class="wf-field"
+                      ><span class="lab">boundary</span><select bind:value={draftBoundaryKey} aria-label="Boundary this watch is scoped to">
+                        <option value="">any boundary</option>
+                        {#each fallState.boundaries as b (b.key)}
+                          <option value={b.key}>{b.label}</option>
+                        {/each}
+                      </select></label
+                    >
                     {#if draftProvenance}
                       <!-- Where these values came from, stated wherever
                            the pairs are shown (#641): the firing window
@@ -1349,6 +1438,25 @@
                             /></label
                           >
                           <div class="wf-row"><span class="lab">window</span><span class="t">{row.window}</span></div>
+                          <!-- #806: same picker, same fallState.boundaries
+                               source, as the draft form above. -->
+                          <label class="wf-field"
+                            ><span class="lab">boundary</span><select bind:value={editBoundaryKey} aria-label="Boundary this watch is scoped to">
+                              <option value="">any boundary</option>
+                              {#if editBoundaryKey && !fallState.boundaries.some((b) => b.key === editBoundaryKey)}
+                                <!-- The entry's own boundary is real (it
+                                     was saved with one) but nothing
+                                     currently pushed still names it --
+                                     kept selectable and named plainly
+                                     rather than silently dropped the
+                                     moment this form is opened. -->
+                                <option value={editBoundaryKey}>{rowBoundaryLabel(row.entry)} (no longer pushed)</option>
+                              {/if}
+                              {#each fallState.boundaries as b (b.key)}
+                                <option value={b.key}>{b.label}</option>
+                              {/each}
+                            </select></label
+                          >
                           {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
                         </div>
                         <div class="side wf-mode">

@@ -395,6 +395,8 @@ var watchlistNonInvertedParamSchema = []ParamSchema{
 		Description: "JSON-encoded watchlist.Ring -- the recorded break in this expectation's run of kept nights, written at the moment it broke."},
 	{Name: "silentJSON", Type: ParamTypeStringList, Max: floatBound(1),
 		Description: "JSON-encoded []time.Time -- the Open instant of every currently-open-or-recent occurrence found, at some tick, to have the device behind this expectation's pathway gone stale (issue #730). Sticky: written while the occurrence is still open, so FillNights can still close it as not-observed even if the device recovered before the window shut."},
+	{Name: "boundaryJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded watchlist.Boundary -- the (chain, inInterface, outInterface) triple this expectation is scoped to, if any (#806). Absent means unscoped: matching is not restricted to one boundary, and coverage stays estate-wide."},
 }
 
 // watchlistInvertedParamSchema is what an inverted watchlist entry ("this
@@ -433,6 +435,8 @@ var watchlistInvertedParamSchema = []ParamSchema{
 		Description: "JSON-encoded watchlist.Ring -- the recorded break in this expectation's run of kept nights, written at the moment it broke."},
 	{Name: "silentJSON", Type: ParamTypeStringList, Max: floatBound(1),
 		Description: "JSON-encoded []time.Time -- the Open instant of every currently-open-or-recent occurrence found, at some tick, to have the device behind this expectation's pathway gone stale (issue #730). Sticky: written while the occurrence is still open, so FillNights can still close it as not-observed even if the device recovered before the window shut."},
+	{Name: "boundaryJSON", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "JSON-encoded watchlist.Boundary -- the (chain, inInterface, outInterface) triple this expectation is scoped to, if any (#806). Absent means unscoped: matching is not restricted to one boundary, and coverage stays estate-wide."},
 }
 
 func convertWatchlistEntry(e *watchlist.Entry) (Definition, error) {
@@ -509,8 +513,30 @@ func watchHistoryParams(e *watchlist.Entry) (windowJSON, nightsJSON, ringJSON, s
 	return windowJSON, nightsJSON, ringJSON, silentJSON, nil
 }
 
+// boundaryParam encodes e's boundary scope (#806) as the JSON-in-a-string
+// param both watchlist schemas declare, for the same reason
+// watchHistoryParams' fields are: there is no ParamType shaped like "a
+// (chain, inInterface, outInterface) triple" (see params.go's type menu).
+// Empty (unscoped, every existing entry before this field) adds no param
+// at all, so an unscoped entry converts to exactly the definition it
+// converted to before #806, byte for byte.
+func boundaryParam(e *watchlist.Entry) (string, error) {
+	if e.Boundary.Empty() {
+		return "", nil
+	}
+	b, err := json.Marshal(e.Boundary)
+	if err != nil {
+		return "", fmt.Errorf("encoding the boundary: %w", err)
+	}
+	return string(b), nil
+}
+
 func convertNonInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
 	windowJSON, nightsJSON, ringJSON, silentJSON, err := watchHistoryParams(e)
+	if err != nil {
+		return Definition{}, err
+	}
+	boundaryJSON, err := boundaryParam(e)
 	if err != nil {
 		return Definition{}, err
 	}
@@ -524,6 +550,9 @@ func convertNonInvertedEntry(e *watchlist.Entry, name string) (Definition, error
 		"createdAt":        optionalStringList(formatTime(e.CreatedAt)),
 	}
 	addWatchHistoryParams(params, windowJSON, nightsJSON, ringJSON, silentJSON)
+	if boundaryJSON != "" {
+		params["boundaryJSON"] = []string{boundaryJSON}
+	}
 	normalized, err := ValidateParams(watchlistNonInvertedParamSchema, params)
 	if err != nil {
 		return Definition{}, fmt.Errorf("converting to a declarative expectation definition: %w", err)
@@ -558,6 +587,10 @@ func convertInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
 	if err != nil {
 		return Definition{}, fmt.Errorf("encoding observed destinations: %w", err)
 	}
+	boundaryJSON, err := boundaryParam(e)
+	if err != nil {
+		return Definition{}, err
+	}
 
 	params := Params{
 		"sourceMac":              optionalStringList(e.Source.MAC),
@@ -569,6 +602,9 @@ func convertInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
 		"createdAt":              optionalStringList(formatTime(e.CreatedAt)),
 	}
 	addWatchHistoryParams(params, windowJSON, nightsJSON, ringJSON, silentJSON)
+	if boundaryJSON != "" {
+		params["boundaryJSON"] = []string{boundaryJSON}
+	}
 	normalized, err := ValidateParams(watchlistInvertedParamSchema, params)
 	if err != nil {
 		return Definition{}, fmt.Errorf("converting to a programmatic expectation definition: %w", err)

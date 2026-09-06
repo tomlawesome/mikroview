@@ -519,6 +519,13 @@ type expectationRequest struct {
 	Ports                  []int                    `json:"ports"`
 	Invert                 bool                     `json:"invert"`
 	IncludeStructuralNoise bool                     `json:"includeStructuralNoise"`
+	// Boundary scopes this entry to one (chain, inInterface,
+	// outInterface) triple (#806, watchlist.Boundary). Full-replace like
+	// Source/DestIP/Ports above, not a leave-alone pointer like Window
+	// below: the watchlist editor's boundary picker sends it alongside
+	// those on every save, so there is no partial-form caller yet that
+	// would need "absent means unchanged" semantics.
+	Boundary watchlist.Boundary `json:"boundary,omitempty"`
 	// Window sets when this entry is expected to see traffic (#680,
 	// watchlist.Window). Deliberately a pointer, unlike every sibling
 	// field above: those replace in full whenever the expectation block
@@ -546,6 +553,7 @@ func (req expectationRequest) applyTo(e *watchlist.Entry) {
 	e.Ports = req.Ports
 	e.Invert = req.Invert
 	e.IncludeStructuralNoise = req.IncludeStructuralNoise
+	e.Boundary = req.Boundary
 	if req.Window != nil {
 		e.Window = *req.Window
 	}
