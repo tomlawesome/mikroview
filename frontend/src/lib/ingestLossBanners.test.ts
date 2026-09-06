@@ -26,6 +26,31 @@ describe('buildIngestLossBanners', () => {
     expect(buildIngestLossBanners(inputs())).toEqual([])
   })
 
+  // #1001: the `details` link is a real-loss affordance. wsDropped lost
+  // nothing, so the drawing gives it the reassurance instead and no
+  // link (docs/design/concepts/ingest-loss-995, scene 2's note).
+  it('gives every real-loss banner a details target, and wsDropped none', () => {
+    const banners = buildIngestLossBanners(
+      inputs({
+        dropped: 812,
+        rejectedConfigured: 43,
+        rejectedConfiguredHosts: ['branch-e4a1'],
+        rejectedUndeclared: 2867,
+        oversized: 7,
+        oversizedHost: '10.20.3.9',
+        wsDropped: 156,
+      }),
+    )
+    const linked = banners.filter((b) => b.details).map((b) => b.id)
+    expect(linked.sort()).toEqual(
+      ['dropped', 'oversized', 'rejectedConfigured', 'rejectedUndeclared'].sort(),
+    )
+    expect(banners.find((b) => b.id === 'wsDropped')?.details).toBeUndefined()
+    expect(banners.every((b) => b.details === undefined || b.details === 'engineroom/ingest')).toBe(
+      true,
+    )
+  })
+
   it('renders the owner-ratified copy verbatim for each signal', () => {
     const banners = buildIngestLossBanners(
       inputs({
