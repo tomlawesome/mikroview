@@ -9,9 +9,6 @@ import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
 import { layoutGround } from '../lib/city/layout'
-import { cityImportanceState } from '../lib/cityImportance.svelte'
-import { flagsState } from '../lib/flags.svelte'
-import { watchlistState } from '../lib/watchlist.svelte'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { policyState } from '../lib/policy.svelte'
@@ -376,52 +373,14 @@ describe('standing on a building (#868)', () => {
   })
 })
 
-describe('the importance toggle (#867)', () => {
-  beforeEach(() => {
-    cityImportanceState.set('depended-on')
-    flagsState.loaded = false
-    watchlistState.loaded = false
-  })
+describe('no height, no plinth (#986): buildings sit flat on their district plate', () => {
+  it('never draws a height/importance toggle, at any stop', () => {
+    const city = render(City, { props: { stop: 'city', ground } })
+    expect(city.container.querySelector('.importance')).toBeNull()
+    city.unmount()
 
-  it('only appears at the city stop, as a real button so it is in the tab order and Enter/Space already activate it', () => {
     const district = render(City, { props: { stop: 'district', ground } })
-    expect(district.container.querySelector('.importance .reading')).toBeNull()
-    district.unmount()
-
-    const { container } = render(City, { props: { stop: 'city', ground } })
-    const btn = container.querySelector('.importance .reading')
-    expect(btn?.tagName).toBe('BUTTON')
-    expect(btn?.getAttribute('tabindex')).not.toBe('-1')
-  })
-
-  it('states the current reading in its own text and aria, not just a pressed style, and switches when activated', async () => {
-    const { container } = render(City, { props: { stop: 'city', ground } })
-    const btn = container.querySelector('.importance .reading') as HTMLButtonElement
-    expect(btn.textContent).toContain('depended-on')
-    expect(btn.getAttribute('aria-label')).toContain('depended-on')
-    expect(btn.getAttribute('aria-pressed')).toBe('false')
-
-    await fireEvent.click(btn)
-    await tick()
-    expect(cityImportanceState.reading).toBe('watched')
-    expect(btn.textContent).toContain('watched')
-    expect(btn.getAttribute('aria-label')).toContain('watched')
-    expect(btn.getAttribute('aria-pressed')).toBe('true')
-
-    await fireEvent.click(btn)
-    await tick()
-    expect(cityImportanceState.reading).toBe('depended-on')
-  })
-
-  it('says plainly that the watched reading is not yet known while the flags/watchlist stores have not loaded, and stops saying so once they have', async () => {
-    cityImportanceState.set('watched')
-    const { container } = render(City, { props: { stop: 'city', ground } })
-    expect(container.querySelector('.importance .notice')?.textContent).toMatch(/not loaded yet/)
-
-    flagsState.loaded = true
-    watchlistState.loaded = true
-    await tick()
-    expect(container.querySelector('.importance .notice')).toBeNull()
+    expect(district.container.querySelector('.importance')).toBeNull()
   })
 })
 

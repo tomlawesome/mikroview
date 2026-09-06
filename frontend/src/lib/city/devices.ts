@@ -556,9 +556,10 @@ export function deviceSymbolId(prefix: string, kind: DeviceKind): string {
 
 /**
  * The scale a symbol is stamped at: it was drawn for footprint radius 1
- * at S = SREF, and 0.74 keeps a device comfortably inside the plinth it
- * stands on. The device itself never scales with importance (#867) --
- * only R (the footprint) and S (the camera) move it.
+ * at S = SREF, and 0.74 keeps a device comfortably inside the district
+ * plate it stands on. Only R (the footprint) and S (the camera) move
+ * it -- #986 dropped the plinth (#867's importance reading), and the
+ * device itself never scaled with that either.
  */
 export function deviceScale(footprintRadius: number, cameraScale: number): number {
   return (footprintRadius * 0.74 * cameraScale) / SREF

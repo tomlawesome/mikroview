@@ -58,6 +58,7 @@
   import type { SortDir } from '../lib/sortFilter'
   import { headlineFor, returningNoteFor, storyFor } from '../lib/flagNarrative'
   import { episodeShapeFor, RECENT_MS } from '../lib/episodeShape'
+  import { groupPairsByHost, pairsTruncated, pairsTruncationLabel } from '../lib/evidencePairs'
   import { zonesState } from '../lib/zones.svelte'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
   import { topologyNavState } from '../lib/topologyNav.svelte'
@@ -1311,19 +1312,41 @@
               {/each}
             </div>
           {/if}
-          <!-- #750 group B item 3, the evidence-truncation line, goes
-               here: one foot closing the pairs list -- "12 of 340
-               pairs", or "12 of at least 340 pairs" when the total is a
-               floor, and no line at all when nothing is cut. The
-               wording is ruled and built (evidencePairs.ts's
-               pairsTruncationLabel, with its own tests); what it counts
-               is not on screen. 68fd460 dropped the per-host pairs
-               panel when this drawer was rebuilt to round 29, and #791
-               is where it comes back -- placement inside this drawer is
-               that issue's open design call, not this one's. A foot
-               reading "12 of 340 pairs" above no pairs would disclose
-               a truncation of nothing, so the line lands with the list
-               it closes. -->
+          <!-- The per-host pairs (#654, restored by #791): the (host,
+               port) combinations actually observed together, grouped
+               one row per host -- never a flat host:port list, never
+               two independent lists implying combinations that were
+               never seen (#654's ruling; groupPairsByHost is its pure
+               piece). 68fd460 dropped the panel in the round-29
+               rebuild; #791 ruled it back in and placed it here,
+               closing the left column: the story says what happened,
+               the matched lines show it raw, and this list is the
+               structured middle -- which doors were asked of which
+               hosts. The label wears the record's own .lab idiom,
+               same as "the episode" across the aisle. -->
+          {#if f.evidence?.pairs?.length}
+            {@const pairs = f.evidence?.pairs ?? []}
+            {@const pairsTotal = f.evidence?.pairsTotal}
+            <div class="evpairs">
+              <span class="lab">the pairs, by host</span>
+              {#each groupPairsByHost(pairs) as g (g.host)}
+                <div class="ev-pair-row">
+                  <span class="ev-host">{g.host}</span>
+                  <span class="ev-ports">{g.ports.join(', ')}</span>
+                </div>
+              {/each}
+              <!-- #750 group B item 3, the evidence-truncation line:
+                   one foot closing the pairs list -- "12 of 340
+                   pairs", or "12 of at least 340 pairs" when the
+                   total is a floor, and no line at all when nothing
+                   is cut. A foot above no pairs would disclose a
+                   truncation of nothing, so it lands with the list
+                   it closes. -->
+              {#if pairsTruncated(pairs, pairsTotal)}
+                <p class="ev-foot">{pairsTruncationLabel(pairs.length, pairsTotal ?? 0, f.evidence?.pairsTotalIsFloor)}</p>
+              {/if}
+            </div>
+          {/if}
 
           <div class="dwr-acts">
             {#if isFilterable(f)}
@@ -2123,6 +2146,49 @@
     color: var(--fg-dim);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+
+  /* The per-host pairs (#654 via #791): the left column's structured
+     middle, in the same mono idiom as .lines. The label is the
+     record's .lab, as the episode wears across the aisle. */
+  .dwr-in .evpairs {
+    grid-column: 1;
+  }
+
+  .dwr-in .evpairs .lab {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin-bottom: 4px;
+  }
+
+  /* The host carries the row; its ports read on from it, dimmer, so
+     a glance answers "who" before "which doors". */
+  .dwr-in .ev-pair-row {
+    display: flex;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.6;
+  }
+
+  .dwr-in .ev-pair-row .ev-host {
+    color: var(--fg-muted);
+  }
+
+  .dwr-in .ev-pair-row .ev-ports {
+    color: var(--fg-dim);
+  }
+
+  .dwr-in .ev-foot {
+    margin: 4px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
   }
 
   .dwr-in .side {

@@ -231,6 +231,61 @@ var (
 	tcpRejectedConfigured atomic.Uint64
 )
 
+// maxRejectedConfiguredHosts bounds how many distinct locked-out
+// declared hosts rejectedConfiguredHosts remembers. Matches
+// maxTCPConnectionsPerSource (8): both exist to keep a value that is
+// ultimately driven by an unauthenticated remote peer -- host, in this
+// case -- from growing without limit. In practice the *set* of hosts
+// that can ever land here is already bounded by configuredSources (the
+// operator's own devices: list), so this cap is defence in depth rather
+// than the thing doing the bounding: even a deployment that somehow
+// declared thousands of devices, or a future caller of noteRejected
+// that stops checking isConfiguredSource first, still holds only 8
+// entries. Recency, not identity, decides what is worth keeping: the
+// banner and the Settings readout only ever need the most recently
+// locked-out router, so evicting the oldest is the right eviction rule.
+const maxRejectedConfiguredHosts = 8
+
+// rejectedConfiguredHosts holds the most recently rejected declared
+// hosts, most-recent-first, deduplicated (a host already present moves
+// to the front rather than appearing twice). Guarded by its own mutex
+// rather than an atomic, since an append-and-truncate isn't a single
+// word.
+var (
+	rejectedConfiguredHostsMu sync.Mutex
+	rejectedConfiguredHosts   []string
+)
+
+// noteRejectedConfiguredHost records host as the most recently
+// rejected declared source. Call only after isConfiguredSource(host)
+// -- see noteRejected.
+func noteRejectedConfiguredHost(host string) {
+	rejectedConfiguredHostsMu.Lock()
+	defer rejectedConfiguredHostsMu.Unlock()
+
+	for i, h := range rejectedConfiguredHosts {
+		if h == host {
+			rejectedConfiguredHosts = append(rejectedConfiguredHosts[:i], rejectedConfiguredHosts[i+1:]...)
+			break
+		}
+	}
+	rejectedConfiguredHosts = append([]string{host}, rejectedConfiguredHosts...)
+	if len(rejectedConfiguredHosts) > maxRejectedConfiguredHosts {
+		rejectedConfiguredHosts = rejectedConfiguredHosts[:maxRejectedConfiguredHosts]
+	}
+}
+
+// rejectedConfiguredHostsSnapshot returns a copy of the current
+// most-recent-first list, safe for a caller to hold onto.
+func rejectedConfiguredHostsSnapshot() []string {
+	rejectedConfiguredHostsMu.Lock()
+	defer rejectedConfiguredHostsMu.Unlock()
+
+	out := make([]string, len(rejectedConfiguredHosts))
+	copy(out, rejectedConfiguredHosts)
+	return out
+}
+
 // ListenerStats is a snapshot of syslog listener saturation.
 type ListenerStats struct {
 	InUse                 int    `json:"inUse"`
@@ -251,18 +306,30 @@ type ListenerStats struct {
 	// larger than the 64 KiB per-message limit. Above zero means
 	// something is sending log lines no RouterOS device produces.
 	Oversized uint64 `json:"oversized"`
+	// RejectedConfiguredHosts names the most recently rejected declared
+	// hosts, most-recent-first -- so the UI can say *which* router was
+	// locked out rather than only how many were. Bounded; see
+	// maxRejectedConfiguredHosts.
+	RejectedConfiguredHosts []string `json:"rejectedConfiguredHosts"`
+	// OversizedHost names the source of the most recent oversized
+	// message, so the "non-RouterOS sender" banner can say which
+	// address to look at rather than leaving that half of its own copy
+	// unfillable. Empty until the first oversized message.
+	OversizedHost string `json:"oversizedHost"`
 }
 
 // Stats reports current listener saturation. Safe to call at any time.
 func Stats() ListenerStats {
 	return ListenerStats{
-		InUse:                 int(tcpInUse.Load()),
-		Capacity:              maxTCPConns(),
-		ReservedForConfigured: reservedSlots(),
-		Rejected:              tcpRejected.Load(),
-		RejectedConfigured:    tcpRejectedConfigured.Load(),
-		Dropped:               tcpDropped.Load(),
-		Oversized:             tcpOversized.Load(),
+		InUse:                   int(tcpInUse.Load()),
+		Capacity:                maxTCPConns(),
+		ReservedForConfigured:   reservedSlots(),
+		Rejected:                tcpRejected.Load(),
+		RejectedConfigured:      tcpRejectedConfigured.Load(),
+		Dropped:                 tcpDropped.Load(),
+		Oversized:               tcpOversized.Load(),
+		RejectedConfiguredHosts: rejectedConfiguredHostsSnapshot(),
+		OversizedHost:           oversizedHostSnapshot(),
 	}
 }
 
@@ -270,6 +337,7 @@ func noteRejected(host string) {
 	tcpRejected.Add(1)
 	if isConfiguredSource(host) {
 		tcpRejectedConfigured.Add(1)
+		noteRejectedConfiguredHost(host)
 	}
 }
 
@@ -933,6 +1001,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				// by the network.
 				idx := bytes.IndexByte(buf[:n], '\n')
 				tcpOversized.Add(1)
+				noteOversizedHost(host)
 				if idx < 0 {
 					oversized = true
 					if err != nil {
@@ -967,6 +1036,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				}
 				emit(pending[:maxTCPMessageBytes])
 				tcpOversized.Add(1)
+				noteOversizedHost(host)
 				pending = pending[idx+1:]
 				headerScanned = 0
 			}
@@ -1113,6 +1183,30 @@ var (
 	tcpOversized atomic.Uint64
 	dropLogGate  = logging.NewLimiter(ingestDropLogInterval)
 )
+
+// tcpOversizedHost holds the source host of the most recent oversized
+// message, so the UI can say which sender is producing lines no
+// RouterOS device would (#995's yellow "non-RouterOS sender" banner).
+// Deliberately just the latest value, not a bounded set like
+// rejectedConfiguredHosts: overwriting in place is already O(1) memory
+// regardless of how often or from how many hosts it fires, so there is
+// nothing here for an attacker to grow.
+var (
+	tcpOversizedHostMu sync.Mutex
+	tcpOversizedHost   string
+)
+
+func noteOversizedHost(host string) {
+	tcpOversizedHostMu.Lock()
+	tcpOversizedHost = host
+	tcpOversizedHostMu.Unlock()
+}
+
+func oversizedHostSnapshot() string {
+	tcpOversizedHostMu.Lock()
+	defer tcpOversizedHostMu.Unlock()
+	return tcpOversizedHost
+}
 
 func noteIngestDrop() {
 	total := tcpDropped.Add(1)

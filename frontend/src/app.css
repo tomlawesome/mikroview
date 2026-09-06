@@ -50,6 +50,23 @@
   --reject-bg: rgba(239, 68, 68, 0.12);
   --log: #38bdf8;
   --log-bg: rgba(56, 189, 248, 0.12);
+
+  /* The ingest-loss banner family's warning and below-warning tiers
+     (#995, docs/design/concepts/ingest-loss-995): a permanent pair, not
+     a mockup-local value, approved by the owner alongside the drawing.
+     Deliberately not --drop (also amber, #f5a623) even though the two
+     sit close on the wheel -- --drop names a firewall verdict on packet
+     rows, --warn names an ingest-loss severity on the connection
+     banner, and they appear in different regions, so reuse would have
+     conflated two distinct meanings. Both values are chosen, not
+     eyeballed: the dataviz colour-separation validator moved the
+     initial amber/yellow pair (ΔE 10.9 normal, below its floor of 15)
+     to this one (ΔE 20.4 normal, 15.1 deutan, 21.2 tritan -- all pass)
+     against --bg. Changing either value without re-running that
+     validator can silently put orange and yellow back below the
+     separation floor. */
+  --warn: #f28a1e;
+  --caution: #e8e04d;
   /* The two non-filter action classes (#437): a mangle mark rule and an
      address translation. Placed in the two widest gaps the existing five
      leave on the hue circle -- violet between --log (sky, ~235) and the

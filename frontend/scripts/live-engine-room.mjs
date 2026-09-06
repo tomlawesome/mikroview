@@ -140,8 +140,7 @@ check(
 // detectors -- a watchlist entry is stored as an intent=expectation
 // definition (definitions_convert.go's convertNonInvertedEntry et al),
 // and one can easily still be sitting there from an earlier scenario in
-// this run (live-city-importance.mjs creates one and does not delete
-// it). detectorSettingsState.refresh() (detectorSettings.svelte.ts)
+// this run. detectorSettingsState.refresh() (detectorSettings.svelte.ts)
 // deliberately narrows to intent === 'detection' && available before
 // this page ever sees the list, because those are the only rows the
 // bench can toggle -- so the comparison here has to apply the same

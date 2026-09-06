@@ -247,11 +247,23 @@ await page.emulateMedia({ reducedMotion: 'reduce' })
 await slider.fill('3')
 await new Promise((r) => setTimeout(r, 30))
 const instant = await page.evaluate(() => document.querySelector('.city')?.dataset.stop)
-const scale = await page.evaluate(() => {
-  const g = document.querySelector('.city > svg > g[transform]')
-  return g ? g.getAttribute('transform') : null
-})
-check(instant === 'city' && /scale\(1\)/.test(scale || ''), `reduced motion lands the city stop at once (${scale})`)
+const readCamera = () =>
+  page.evaluate(() => {
+    const g = document.querySelector('.city > svg > g[transform]')
+    return g ? g.getAttribute('transform') : null
+  })
+// Landed "at once" means the camera is already at rest, not that it sits at
+// any particular zoom: #979 pulled the city stop's resting scale back to fit
+// the whole estate, and a hard-coded scale(1) here just re-encodes whatever
+// the framing happened to be. Read it twice instead -- unchanged across a
+// tween's worth of time is the property this check is really about.
+const settled = await readCamera()
+await new Promise((r) => setTimeout(r, 400))
+const later = await readCamera()
+check(
+  instant === 'city' && settled !== null && settled === later,
+  `reduced motion lands the city stop at once (${settled} still ${later})`,
+)
 await page.emulateMedia({ reducedMotion: 'no-preference' })
 
 // Back to a 2D stop, and the city goes away.

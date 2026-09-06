@@ -51,7 +51,8 @@ describe('the device library', () => {
 describe('stamping', () => {
   it('scales a symbol by its footprint and the camera, nothing else', () => {
     // Drawn for footprint radius 1 at S = SREF; 0.74 keeps it inside
-    // the plinth. Importance never appears here (#867 moves the plinth).
+    // the district plate. Importance never appeared here even before
+    // #986 dropped it (#867 only ever moved the plinth).
     expect(deviceScale(1, SREF)).toBeCloseTo(0.74)
     expect(deviceScale(4.6, 17)).toBeCloseTo(deviceScale(4.6, 8.5) * 2)
   })
