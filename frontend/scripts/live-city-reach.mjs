@@ -85,8 +85,7 @@ for (let i = 0; i < 5; i++) {
 }
 // srv1 also has to be the *source* of some crossing to stand on the
 // map at all -- zones.svelte.ts's own host-attribution counts only the
-// private side (the source) of a boundary-crossing event, the same
-// lesson live-city-importance.mjs's own comment records.
+// private side (the source) of a boundary-crossing event.
 feedRaw(`firewall,info A|reach| forward: in:vlan-srv out:bridge-lan, connection-state:new, proto TCP (SYN), ${SRV1}:5000->${LAN1}:12345, len 60`)
 // LAN1 asks the iot boundary for tcp/445 and is refused every time,
 // named by its own rule.
