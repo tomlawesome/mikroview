@@ -510,7 +510,9 @@ gate:scenarios:
       - gate-shard-*.log
     expire_in: 1 week
 
-# The four standalone shell checks (scripts/run-live-scripts.sh), once.
+# The four standalone shell checks (scripts/run-live-scripts.sh), once,
+# plus the quiet-host unit tests (#1003) -- plain bash, no live instance
+# needed, so they run here rather than earning their own job.
 gate:scripts:
   stage: gate
   tags: [light]
@@ -522,6 +524,8 @@ gate:scripts:
     - set -o pipefail
     - (cd frontend && npm ci)
     - make live-check-scripts 2>&1 | tee gate-scripts.log
+    - deploy/quiet-host/quiet-host-apply.test.sh
+    - scripts/quiet-host.test.sh
   artifacts:
     when: always
     paths:
@@ -541,21 +545,36 @@ gate:scripts:
 # trip it. Accepting a regression means committing the new numbers in the
 # same MR, so the change is reviewed rather than silently overwritten.
 #
-# resource_group serialises this against any other promotion MR
-# measuring at the same time -- two at once would each see the other's
-# CPU as noise in its own numbers. wait-quiet-host.sh (scripts/) is the
-# other half of that: it polls the host idle before measuring rather
-# than assuming it, since GitLab itself has no "wait for idle". A host
-# that never quiets down fails the job loudly instead of measuring
-# nonsense.
+# The box this runs on (`big`) also carries every other runner in the
+# group and mikroview's own dev gate loop, so a fair measurement needs
+# the rest of that work out of the way, not just a quiet moment: hold ->
+# drain -> measure -> release.
+#   - hold: scripts/quiet-host.sh writes a flag the host's root-owned
+#     unit reacts to (deploy/quiet-host/) by setting `concurrent = 1` on
+#     the runner, so no sibling job starts while this one measures. No
+#     token is involved -- a flag file and a script the owner installed
+#     once. Until that install happens, this step refuses with exit 2:
+#     that is expected, not a bug, and deploy/quiet-host/README.md has
+#     the install steps.
+#   - drain: scripts/wait-quiet-host.sh still waits for whatever was
+#     already running to finish, since holding stops new work, not work
+#     in flight.
+#   - measure: probe-perf.mjs against the fresh instance, as before.
+#   - release: the after_script below always runs -- pass, fail, timeout
+#     or cancel -- so the hold never outlives the job on purpose. If the
+#     job dies without even that, the flag carries its own expiry (this
+#     job's timeout plus 5 minutes) and the host's minutely timer
+#     releases it -- the self-heal for the stuck case.
 #
-# On the `big` lane for now -- the quietest lane that exists, not a
-# guarantee of quiet. Known limit: a fresh instance is empty, so this
-# baselines the app, not the app under a large docket (seeding is a
-# follow-up, filed separately). Owner follow-up recorded on #1003: create
-# a runner tagged `quiet` with `concurrent = 1` in
-# /etc/gitlab-runner/config.toml (root-only, so it's not done here), then
-# change `tags: [big]` below to `tags: [quiet]`.
+# resource_group still serialises this against any other promotion MR
+# measuring at the same time -- two at once would each see the other's
+# CPU as noise in its own numbers, and a second `hold` would simply
+# refuse while the first is active.
+#
+# Timeout arithmetic: npm ci ~90s, quiet-host hold and wait-quiet-host's
+# drain together up to 600s worst case, the probe itself measured at 38s
+# on this workstation (frontend/scripts/probe-perf.mjs, run twice). Sum
+# ~730s, doubled and rounded up: 25 minutes.
 perf:promotion:
   stage: gate
   tags: [big]
@@ -564,20 +583,28 @@ perf:promotion:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
   resource_group: perf-promotion
-  timeout: 30m
+  timeout: 25m
   script:
     - set -o pipefail
+    - t0=$(date +%s)
     - (cd frontend && npm ci)
+    - t1=$(date +%s); echo "npm ci wall seconds: $((t1 - t0))"
+    - scripts/quiet-host.sh hold
     - scripts/wait-quiet-host.sh
+    - t2=$(date +%s); echo "hold+drain wall seconds: $((t2 - t1))"
     - eval "$(scripts/live-env.sh up)"
     - trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT
+    - t3=$(date +%s)
     - node frontend/scripts/probe-perf.mjs --json perf-current.json
+    - t4=$(date +%s); echo "probe wall seconds: $((t4 - t3))"
     - |
       if [ -f frontend/perf-baseline.json ]; then
         node frontend/scripts/perf-compare.mjs frontend/perf-baseline.json perf-current.json
       else
         echo "no baseline -- commit perf-current.json as frontend/perf-baseline.json"
       fi
+  after_script:
+    - scripts/quiet-host.sh release
   artifacts:
     when: always
     paths:
