@@ -71,8 +71,7 @@ export interface ReachSummary {
 }
 
 // What counts as a connection actually landing, rather than being
-// refused -- shared with lib/city/importance.ts's depended-on reading
-// (#867) so the two never quietly disagree about what "reached" means.
+// refused.
 export const ACCEPTED_ACTIONS = new Set(['accept', 'nat', 'log'])
 export const isAccepted = (action: string): boolean => ACCEPTED_ACTIONS.has(action)
 
