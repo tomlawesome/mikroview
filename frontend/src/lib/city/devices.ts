@@ -483,30 +483,38 @@ function buildLibrary(): Record<DeviceKind, DeviceSymbol> {
     litScreen(facePatch(panel, 'r', 0.06, 0.94, 0.09, 0.91), 0.55),
   ])
 
-  // PoE CAMERA -- a bullet body on a short post, lens facing the road.
-  // The facing here is fixed toward the camera; turning it toward a
-  // building's own road is the stamping side's job (#863).
-  const cpost = lbox(0.09, 0.09, 0, 0.86, -0.24, -0.24)
-  const body = lbox(0.44, 0.19, 0.72, 0.3, 0.16, 0.16)
-  const arm = lbox(0.2, 0.05, 0.8, 0.06, -0.06, -0.06)
-  const lensU = px(body.p.F[0] + (body.p.R[0] - body.p.F[0]) * 0.5 + 0.12)
-  const lensV = py(body.p.F[1] + (body.p.R[1] - body.p.F[1]) * 0.5 + 0.12, 0.86)
-  dev('camera', 1.02 * LZ + 5, [
-    ...lfaces(cpost, { t: 0.6, r: 0.5, l: 0.34 }),
-    ...lfaces(arm, { t: 0.5, r: 0.45, l: 0.3 }),
-    ...lfaces(body),
-    {
-      shape: 'ellipse',
-      cx: lensU,
-      cy: lensV,
-      rx: 4.2,
-      ry: 3.4,
-      fill: '#06080e',
-      stroke: 'currentColor',
-      strokeOpacity: 0.9,
-      strokeWidth: 1,
-    },
-    { shape: 'ellipse', cx: lensU, cy: lensV, rx: 2.1, ry: 1.7, fill: SCREEN, fillOpacity: 0.85 },
+  // DOME CAMERA (#992) -- a small home CCTV dome, not a bullet on a
+  // post: a flat base and a half-sphere sitting on it, no post, no arm.
+  // Ported from round 46's marks.html ("DOME CAMERA (#992)"). The
+  // brief's "radial gradient, district colour to a smoked centre" is
+  // approximated with two flat layers (a currentColor dome, a void-dark
+  // smoked centre) rather than a true SVG radialGradient: a gradient's
+  // stops live in <defs> and do not inherit the colour set where the
+  // symbol is <use>d, so a real gradient would paint every district's
+  // camera the same fixed colour instead of recolouring per district
+  // like every other symbol in this library.
+  const camBase = ldisc(0.5, 0, 0.14)
+  const domeR = 0.34
+  const domeZ0 = 0.14
+  const drx = r2(domeR * LU)
+  const dry = r2(domeR * LV)
+  const dy = r2(-domeZ0 * LZ)
+  const dome = `M${-drx} ${dy}A${drx} ${dry} 0 0 1 ${drx} ${dy}Z`
+  const smokedR = domeR * 0.62
+  const sx = r2(smokedR * LU)
+  const sy = r2(smokedR * LV)
+  const smoked = `M${-sx} ${dy}A${sx} ${sy} 0 0 1 ${sx} ${dy}Z`
+  const hi =
+    `M${r2(-drx * 0.5)} ${r2(dy - dry * 0.3)}` +
+    `A${r2(drx * 0.35)} ${r2(dry * 0.35)} 0 0 1 ${r2(-drx * 0.05)} ${r2(dy - dry * 0.72)}`
+  const lensY = r2(dy - dry * 0.12)
+  dev('camera', 0.5 * LZ + 5, [
+    ...camBase,
+    { shape: 'path', d: dome, fill: 'currentColor', fillOpacity: 0.55, stroke: 'currentColor', strokeOpacity: 0.9, strokeWidth: 0.5 },
+    { shape: 'path', d: smoked, fill: VOID, fillOpacity: 0.55 },
+    { shape: 'path', d: hi, fill: 'none', stroke: 'var(--fg, #e9eefb)', strokeOpacity: 0.55, strokeWidth: 0.6, strokeLinecap: 'round' },
+    { shape: 'circle', cx: 0, cy: lensY, r: 2.2, fill: VOID, stroke: 'currentColor', strokeOpacity: 0.7, strokeWidth: 0.4 },
+    { shape: 'circle', cx: 0, cy: lensY, r: 0.9, fill: SCREEN, fillOpacity: 0.9 },
   ])
 
   // IoT PUCK -- a low flat disc with one light. Also the fallback shape.

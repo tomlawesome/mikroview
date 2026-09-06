@@ -1685,18 +1685,20 @@
     text-transform: uppercase;
   }
 
-  /* The FLAG column is pinned at its resting width (#988), so opening a
-     campaign -- whose members step in 32px -- never moves WHERE or
-     EVIDENCE. Wide enough for the longest built-in label plus the step
-     and a scored number; a longer custom label still widens it, once,
-     rather than being cut. `min-width` as well as `width`, on the cells
-     too: a `width` alone is only a hint the browser trades away when
-     EVIDENCE squeezes the table, and the live check caught it giving
-     the column back (161px, then 254px once the members rendered). */
+  /* The FLAG column is pinned (#988), so opening a campaign -- whose
+     members step in 32px -- never moves WHERE or EVIDENCE. Must fit the
+     longest built-in label stepped in, plus a 3-digit scored number and
+     its 10px gap, plus 1ch slack. In `ch` rather than a flat px (#1010:
+     248px was tuned against one host's guess at what `monospace`
+     resolves to, and a different host's guess overflowed it by 10px) --
+     `ch` scales with the actual font, `--font-mono`'s own pinned
+     Liberation Mono, on every host alike. 32px step + 12px right padding
+     + 10px badge gap = 54px; mark + space + "Known-bad IP (blocklist
+     match)" + "100" + 1ch slack = 36ch. */
   .ftable thead th:first-child,
   .ftable tbody td.fmark {
-    width: 248px;
-    min-width: 248px;
+    width: calc(54px + 36ch);
+    min-width: calc(54px + 36ch);
   }
 
   /* The scored number (#988, round 47): bold, pure white, a size up

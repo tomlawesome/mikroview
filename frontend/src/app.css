@@ -212,7 +212,11 @@
   --accent-bg-hover: color-mix(in srgb, var(--accent) 18%, transparent);
 
   --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  /* 'Liberation Mono' sits ahead of the bare 'monospace' keyword (#1010):
+     that generic keyword resolves to whatever font each host's own
+     fontconfig picks, so pin the font Playwright installs on Debian --
+     dev and CI then measure text against the same font. */
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
   /* #721: the deck's roll rail (Deck.svelte's `.roll-rail`) is fixed
      over the right edge of every scene; every card's content needs to
