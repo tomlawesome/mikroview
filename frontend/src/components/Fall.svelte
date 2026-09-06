@@ -570,6 +570,14 @@
     return clampStart(Math.round(frac * maxStart))
   }
 
+  // #985: how far a lit tick stands proud of the rail -- a half-sine
+  // over the run, 0 at either end and 1 in the middle, so the run
+  // bulges like a lens and settles back to the rail at its ends.
+  function stripLens(i: number): number {
+    if (perPage <= 1) return 1
+    return Math.sin((Math.PI * (i - viewStart)) / (perPage - 1))
+  }
+
   function onStripPointerMove(e: PointerEvent) {
     viewStart = viewStartFromClientX(e.clientX)
   }
@@ -1025,6 +1033,7 @@
             class:inwin-start={i === viewStart}
             class:inwin-end={i === viewStart + perPage - 1}
             style:background-color={laneMap.get(b.key) || 'var(--o-ink3)'}
+            style:--lens={i >= viewStart && i < viewStart + perPage ? stripLens(i) : 0}
             aria-hidden="true"
           ></span>
         {/each}
@@ -1799,31 +1808,27 @@
   .ovstrip:hover .ovtick {
     opacity: 0.55;
   }
+  /* #985 (owner, 2026-09-06): the lit run bulges like a lens -- each
+     tick stands proud of the rail by --lens (0 at the run's ends, 1 in
+     the middle, set per tick from stripLens), and the two end ticks
+     come to a point in their own colour. The #731 light edge on the
+     ends is gone: "just the block colour of the segment is fine". */
   .ovtick.inwin {
     opacity: 1;
+    align-self: center;
+    height: calc(100% + var(--lens, 0) * 8px);
   }
   .ovtick.inwin-start {
-    box-shadow:
-      inset 1px 0 0 var(--o-ink),
-      inset 0 1px 0 var(--o-ink),
-      inset 0 -1px 0 var(--o-ink);
+    clip-path: polygon(4px 0, 100% 0, 100% 100%, 4px 100%, 0 50%);
   }
   .ovtick.inwin-end {
-    box-shadow:
-      inset -1px 0 0 var(--o-ink),
-      inset 0 1px 0 var(--o-ink),
-      inset 0 -1px 0 var(--o-ink);
+    clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 0 100%);
   }
   /* perPage === 1: the run's first and last tick are the same element,
-     so it needs both outer edges rather than whichever of the two
-     rules above happens to win. Three classes outranks two, so this
+     so it needs both points. Three classes outranks two, so this
      always applies over them when both match. */
   .ovtick.inwin-start.inwin-end {
-    box-shadow:
-      inset 1px 0 0 var(--o-ink),
-      inset -1px 0 0 var(--o-ink),
-      inset 0 1px 0 var(--o-ink),
-      inset 0 -1px 0 var(--o-ink);
+    clip-path: polygon(4px 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 4px 100%, 0 50%);
   }
 
   /* ── the foot: the (i), and (when enabled) the window caption ────── */
