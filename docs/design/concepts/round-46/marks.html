@@ -104,14 +104,14 @@
   .p-cidr { font: 10px var(--mono); fill: var(--ink-3); }
   .cov { font: 700 8.5px var(--mono); letter-spacing: 0.1em; }
   .cov-l { fill: var(--ok); } .cov-q { fill: var(--ink-3); } .cov-d { fill: var(--alarm); }
-  .wp { fill: #a78bfa; font: 9.5px var(--mono); }
-  .fchip { fill: var(--alarm); font: 9.5px var(--mono); }
   .chip-t { font: 10.5px var(--mono); fill: var(--ink-2); }
   .alarm-t { font: 700 10.5px var(--mono); fill: var(--alarm); }
   .roof-t { font: 600 10.5px var(--sans); fill: var(--ink); }
   .roof-s { font: 9px var(--mono); fill: var(--ink-2); }
   .st-name { font: 600 13px var(--sans); fill: var(--ink); }
   .st-ip { font: 10.5px var(--mono); fill: var(--ink-2); }
+  /* #991: the street stop's gate pill, one plain label, bigger type */
+  .gate-lab { font: 13px var(--mono); fill: var(--ink-2); }
   .rule-t { font: 9.5px var(--mono); fill: var(--ink-2); }
   .rule-n { font: 700 9.5px var(--mono); fill: var(--accent); }
   .port-t { font: 10px var(--mono); fill: var(--ink-2); letter-spacing: 0.04em; }
@@ -127,8 +127,6 @@
   @keyframes flow { to { stroke-dashoffset: -18; } }
   .current { stroke-dasharray: 30 46; animation: current 7s linear infinite; }
   @keyframes current { to { stroke-dashoffset: -76; } }
-  .halo { animation: halo 2.2s ease-out infinite; transform-box: fill-box; transform-origin: center; }
-  @keyframes halo { from { opacity: 0.8; transform: scale(1); } to { opacity: 0; transform: scale(2.3); } }
   .lamp { animation: lamp 3.4s ease-in-out infinite; }
   @keyframes lamp { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
@@ -193,7 +191,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .flow, .halo, .lamp, .current { animation: none; }
+    .flow, .lamp, .current { animation: none; }
     .flow, .current { stroke-dasharray: none; }
   }
 
@@ -368,12 +366,41 @@ function ldisc(rad, z0, h, o) {
          '<ellipse cx="0" cy="' + yT + '" rx="' + rx + '" ry="' + ry + '" fill="currentColor" fill-opacity="0.93" stroke="currentColor" stroke-opacity="0.9" stroke-width="0.45"/>';
 }
 
+/* every part's corners/rim, in local px, for the convex hull below —
+   a box contributes its four diamond corners at both its base and top;
+   a disc samples its rim at 12 points at both levels; `pts` is an
+   explicit list of (u, v, z) ground triples for a shape that is neither
+   (the laptop's lid). */
+function hullPointsFor(parts) {
+  const pts = [];
+  (parts || []).forEach((p) => {
+    if (p.disc) {
+      const N = 12;
+      [p.z0, p.z0 + p.h].forEach((z) => {
+        const yc = -z * LZ;
+        for (let i = 0; i < N; i++) {
+          const a = i / N * Math.PI * 2;
+          pts.push([R2(Math.cos(a) * p.rad * LU), R2(yc + Math.sin(a) * p.rad * LV)]);
+        }
+      });
+    } else if (p.pts) {
+      p.pts.forEach((q) => pts.push([R2(q[0] * LU), R2(q[1] * LV - q[2] * LZ)]));
+    } else {
+      ['L', 'F', 'R', 'K'].forEach((k) => {
+        pts.push([R2(p.p[k][0] * LU), R2(p.p[k][1] * LV - p.z0 * LZ)]);
+        pts.push([R2(p.p[k][0] * LU), R2(p.p[k][1] * LV - p.zt * LZ)]);
+      });
+    }
+  });
+  return pts;
+}
+
 /* every symbol, and how tall it stands in local px (for label placing).
-   `outline` is the set of boxes/discs the symbol is actually built from
-   — #981 strokes each of them to approximate the whole symbol's outline,
-   there being no path-boolean union available to fuse them into one. */
+   `parts` — the boxes/discs the symbol is actually built from — becomes
+   a single convex-hull silhouette (#981): one clean outline instead of
+   stroking each part (which read as a cage of overlapping bars). */
 const DEVLIB = {};
-function dev(id, top, markup, outline) { DEVLIB[id] = { top: top, m: markup, outline: outline || [] }; }
+function dev(id, top, markup, parts) { DEVLIB[id] = { top: top, m: markup, hull: convexHull(hullPointsFor(parts)) }; }
 
 (function buildLibrary() {
   /* ROUTER — flat wide chassis, a row of port lights on the front face */
@@ -410,7 +437,8 @@ function dev(id, top, markup, outline) { DEVLIB[id] = { top: top, m: markup, out
   dev('laptop', lidz * LZ + 5, lfaces(base, { t: 0.9, r: 0.6, l: 0.34 }) +
     '<path d="' + lid + '" fill="#0a1120"/>' +
     '<path d="' + lid + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.4" stroke="currentColor" stroke-opacity="0.85" stroke-width="0.5"/>',
-    [base, { top: lid }]);
+    [base, { pts: [[hL[0], hL[1], 0.09], [hK[0], hK[1], 0.09],
+      [hK[0] - tilt, hK[1] - tilt, lidz], [hL[0] - tilt, hL[1] - tilt, lidz]] }]);
   /* PHONE — a thin upright slab, screen lit */
   const ph = lbox(0.1, 0.34, 0.02, 0.62);
   dev('phone', 0.64 * LZ + 5, lfaces(ph, { t: 0.85, r: 0.4, l: 0.26 }) +
@@ -419,17 +447,32 @@ function dev(id, top, markup, outline) { DEVLIB[id] = { top: top, m: markup, out
   const tvs = lbox(0.1, 0.17, 0, 0.12), tv = lbox(0.06, 0.68, 0.12, 0.5);
   dev('tv', 0.62 * LZ + 5, lfaces(tvs, { t: 0.6, r: 0.5, l: 0.3 }) + lfaces(tv, { t: 0.8, r: 0.34, l: 0.22 }) +
     '<path d="' + tv.right + '" fill="var(--sig, #cfe0ff)" fill-opacity="0.46"/>', [tvs, tv]);
-  /* PoE CAMERA — a bullet body on a short post, lens facing the road */
-  const post = lbox(0.09, 0.09, 0, 0.86, -0.24, -0.24);
-  const body = lbox(0.44, 0.19, 0.72, 0.3, 0.16, 0.16);
-  const arm = lbox(0.2, 0.05, 0.8, 0.06, -0.06, -0.06);
-  const lensU = body.p.F[0] + (body.p.R[0] - body.p.F[0]) * 0.5 + 0.12;
-  const lensV = body.p.F[1] + (body.p.R[1] - body.p.F[1]) * 0.5 + 0.12;
-  dev('camera', 1.02 * LZ + 5, lfaces(post, { t: 0.6, r: 0.5, l: 0.34 }) +
-    lfaces(arm, { t: 0.5, r: 0.45, l: 0.3 }) + lfaces(body) +
-    '<ellipse cx="' + R2(lensU * LU) + '" cy="' + R2(lensV * LV - 0.86 * LZ) + '" rx="4.2" ry="3.4" fill="#06080e" stroke="currentColor" stroke-opacity="0.9" stroke-width="1"/>' +
-    '<ellipse cx="' + R2(lensU * LU) + '" cy="' + R2(lensV * LV - 0.86 * LZ) + '" rx="2.1" ry="1.7" fill="var(--sig, #cfe0ff)" fill-opacity="0.85"/>',
-    [post, arm, body]);
+  /* DOME CAMERA (#992) — a small home CCTV dome, not a bullet on a
+     post: a flat base and a half-sphere sitting on it, no post, no arm.
+     The brief's "radial gradient, district colour to a smoked centre"
+     is approximated with two flat layers (currentColor rim, void-dark
+     centre) rather than a true SVG <radialGradient>: a gradient's
+     <stop> lives in <defs> and does not inherit the colour set where
+     the symbol is <use>d, so a real gradient here would paint every
+     district's camera the same fixed colour instead of recolouring
+     per district like every other symbol in this library. */
+  const camBase = ldisc(0.5, 0, 0.14);
+  const domeR = 0.34, domeZ0 = 0.14;
+  const drx = R2(domeR * LU), dry = R2(domeR * LV), dy = R2(-domeZ0 * LZ);
+  const dome = 'M' + R2(-drx) + ' ' + dy + 'A' + drx + ' ' + dry + ' 0 0 1 ' + drx + ' ' + dy + 'Z';
+  const smokedR = domeR * 0.62, sx = R2(smokedR * LU), sy = R2(smokedR * LV);
+  const smoked = 'M' + R2(-sx) + ' ' + dy + 'A' + sx + ' ' + sy + ' 0 0 1 ' + sx + ' ' + dy + 'Z';
+  const hi = 'M' + R2(-drx * 0.5) + ' ' + R2(dy - dry * 0.3) +
+    'A' + R2(drx * 0.35) + ' ' + R2(dry * 0.35) + ' 0 0 1 ' + R2(-drx * 0.05) + ' ' + R2(dy - dry * 0.72);
+  const lensY = R2(dy - dry * 0.12);
+  dev('camera', 0.5 * LZ + 5,
+    camBase +
+    '<path d="' + dome + '" fill="currentColor" fill-opacity="0.55" stroke="currentColor" stroke-opacity="0.9" stroke-width="0.5"/>' +
+    '<path d="' + smoked + '" fill="#06080e" fill-opacity="0.55"/>' +
+    '<path d="' + hi + '" fill="none" stroke="#e9eefb" stroke-opacity="0.55" stroke-width="0.6" stroke-linecap="round"/>' +
+    '<circle cx="0" cy="' + lensY + '" r="2.2" fill="#06080e" stroke="currentColor" stroke-opacity="0.7" stroke-width="0.4"/>' +
+    '<circle cx="0" cy="' + lensY + '" r="0.9" fill="var(--sig, #cfe0ff)" fill-opacity="0.9"/>',
+    [{ disc: 1, rad: 0.5, z0: 0, h: 0.14 }, { disc: 1, rad: domeR, z0: domeZ0, h: domeR * 0.7 }]);
   /* IoT PUCK — a low flat disc with one light */
   dev('puck', 0.2 * LZ + 4, ldisc(0.62, 0, 0.2) +
     '<circle cx="0" cy="' + R2(-0.2 * LZ) + '" r="1.5" fill="var(--sig, #cfe0ff)" fill-opacity="0.95"/>',
@@ -644,6 +687,17 @@ function bezRange(s, a, b) {
 }
 /* diamond metric — the footprints are diamonds, so this is exact */
 const dm = (p, q) => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]);
+
+/* Andrew's monotone chain: the convex hull of a set of 2D points, used
+   both for the borough ring and (#981) for a device's own silhouette */
+function convexHull(pts) {
+  pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower = [], upper = [];
+  for (const p of pts) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
+  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
 
 /* ---------------- resolving the model ---------------- */
 const ENT = {};   /* everything solid a road can be trimmed against */
@@ -927,15 +981,24 @@ function gateLabel(c, g, opt) {
   const x = R2(X(c, g.p[0])), y = R2(Y(c, g.p[1], 4.4));
   if (x < 30 || x > 1370 || y < 24 || y > 686) return '';
   if (opt.rules) {
-    const t = g.rule, w = t.length * 5.6 + 34;
-    if (!claim(x, y - 29, w, 19)) return '';
+    /* #991: "these pills are too busy, they should [be] bigger and
+       just simply be a label" — one word (the far end), bigger type;
+       the rule number, its text and its ports move to the gate's
+       click card (a real one, once this is built outside the mockup).
+       Outline colour is unchanged: amber where the gate logs, red
+       where it doesn't. */
+    /* the far-end display name isn't g.id (LAN's servers gate is
+       'srv', its hap-ax3 gate is 'hap') — the rule text already spells
+       it out in full right after the arrow, for every gate, so read it
+       from there instead of a second id-to-name table */
+    const t = (g.rule.match(/→\s*(\S+)/) || [0, g.id])[1];
+    const w = R2(t.length * 7.6 + 20);
+    if (!claim(x, y - 34, w, 24)) return '';
     return '<g transform="translate(' + x + ' ' + R2(y - 16) + ')">' +
-      '<path d="M0 16V4" stroke="var(--hair-2)" stroke-width="1"/>' +
-      '<rect x="' + R2(-w / 2) + '" y="-13" width="' + R2(w) + '" height="19" rx="9.5" fill="#0a0f1c" fill-opacity="0.94" stroke="' +
+      '<path d="M0 12V4" stroke="var(--hair-2)" stroke-width="1"/>' +
+      '<rect x="' + R2(-w / 2) + '" y="-12" width="' + w + '" height="24" rx="12" fill="#0a0f1c" fill-opacity="0.94" stroke="' +
       (g.lamp ? 'rgba(232,176,90,0.5)' : 'rgba(255,84,112,0.4)') + '"/>' +
-      '<text x="' + R2(-w / 2 + 11) + '" y="0.5" class="rule-n">#' + g.n + '</text>' +
-      '<text x="' + R2(-w / 2 + 32) + '" y="0.5" class="rule-t">' + esc(t) + '</text>' +
-      (g.lamp ? '' : '<text x="' + R2(w / 2 - 9) + '" y="0.5" text-anchor="end" class="cov cov-d">✕</text>') + '</g>';
+      '<text x="0" y="4" text-anchor="middle" class="gate-lab">' + esc(t) + '</text></g>';
   }
   const w = 26;
   if (!claim(x, y - 22, w, 17)) return '';
@@ -945,31 +1008,20 @@ function gateLabel(c, g, opt) {
     '<text x="0" y="3.5" text-anchor="middle" class="rule-n">#' + g.n + '</text></g>';
 }
 
-/* the union of a symbol's boxes/discs has no boolean fuse available
-   here, so #981 approximates it by stroking every constituent shape
-   the symbol is actually built from — where two are adjacent (the
-   laptop's base and lid, the camera's post/arm/body) the seam gets a
-   double line, but the assembly reads as one outline in practice. */
-function outlineParts(parts, color, w, cls) {
-  const cattr = cls ? ' class="' + cls + '"' : '';
-  let s = '';
-  (parts || []).forEach((p) => {
-    if (p.disc) {
-      const rx = R2(p.rad * LU), ry = R2(p.rad * LV);
-      const yT = R2(-(p.z0 + p.h) * LZ), yB = R2(-p.z0 * LZ);
-      s += '<ellipse' + cattr + ' cx="0" cy="' + yT + '" rx="' + rx + '" ry="' + ry +
-        '" fill="none" stroke="' + color + '" stroke-width="' + w + '"/>';
-      s += '<path' + cattr + ' d="M' + R2(-rx) + ' ' + yT + 'L' + R2(-rx) + ' ' + yB +
-        '" stroke="' + color + '" stroke-width="' + w + '" fill="none"/>';
-      s += '<path' + cattr + ' d="M' + R2(rx) + ' ' + yT + 'L' + R2(rx) + ' ' + yB +
-        '" stroke="' + color + '" stroke-width="' + w + '" fill="none"/>';
-    } else {
-      ['top', 'right', 'left'].forEach((k) => {
-        if (p[k]) s += '<path' + cattr + ' d="' + p[k] + '" fill="none" stroke="' + color + '" stroke-width="' + w + '"/>';
-      });
-    }
+/* a hull, pushed outward from its own centroid by a fixed distance —
+   how a watch mark sits "a touch proud" of an alarm rim beneath it
+   without the two strokes landing on top of each other */
+function offsetPoly(hull, d) {
+  if (!d) return hull;
+  const cx = hull.reduce((s, p) => s + p[0], 0) / hull.length;
+  const cy = hull.reduce((s, p) => s + p[1], 0) / hull.length;
+  return hull.map((p) => {
+    const dx = p[0] - cx, dy = p[1] - cy, m = Math.hypot(dx, dy) || 1;
+    return [p[0] + dx / m * d, p[1] + dy / m * d];
   });
-  return s;
+}
+function hullPath(hull) {
+  return 'M' + hull.map((p) => R2(p[0]) + ' ' + R2(p[1])).join('L') + 'Z';
 }
 
 /* ---- a device, stamped straight onto the district plate. #981 dropped
@@ -995,32 +1047,35 @@ function device(c, u, v, b, opt) {
      the device symbol itself now, not a pedestal underneath it — the
      owner: "I meant the actual item not the cube/tower it sits on."
      The fill re-stamps the whole symbol in alarm ink (currentColor
-     reaches every shape it is built from) under an opacity that
-     climbs with the flag count, layered over the district-ink stamp
-     below it; the rim strokes the same shapes' outlines (see
-     outlineParts above). */
+     reaches every shape it is built from, at its own normal per-face
+     shading) under an opacity that climbs with the flag count, over
+     the district-ink stamp below it. The rim and the watch outline are
+     each ONE stroke of the symbol's convex-hull silhouette (lib.hull) —
+     the owner, on the first attempt's per-part stroking: "These
+     overlapping planes are weird ... I can't even tell what you're
+     trying to show me." One line reads as one outline. */
+  let rimW = 0;
   if (b.flags) {
     const flagOp = R2(Math.min(0.9, 0.45 + 0.15 * (b.flags - 1)) * 1000) / 1000;
-    const rimW = R2(Math.min(3, 1 + 0.5 * (b.flags - 1)));
+    rimW = R2(Math.min(3, 1 + 0.5 * (b.flags - 1)));
     inner += '<g style="color:var(--alarm)" opacity="' + flagOp + '"><use href="#' + opt.sid + '-' + b.t + '"/></g>';
     const rimCls = b.spike ? 'mk-alarm mk-spike-rim' : 'mk-alarm';
-    if (b.spike) inner += outlineParts(lib.outline, 'var(--alarm)', R2(rimW * 1.8), 'mk-spike-glow');
-    inner += outlineParts(lib.outline, 'var(--alarm)', rimW, rimCls);
+    if (b.spike) inner += '<path d="' + hullPath(lib.hull) + '" fill="none" stroke="var(--alarm)" stroke-width="' +
+      R2(rimW * 1.8) + '" stroke-linejoin="round" class="mk-spike-glow"/>';
+    inner += '<path d="' + hullPath(lib.hull) + '" fill="none" stroke="var(--alarm)" stroke-width="' + rimW +
+      '" stroke-linejoin="round" class="' + rimCls + '"/>';
   }
   if (b.watch) {
     const watchW = R2(Math.min(4, 1.5 + 0.75 * (b.watch - 1)));
-    /* "a touch proud" of the flag rim: the same outline, scaled up a
-       little around the device's own centre */
-    inner += '<g transform="scale(1.09)">' + outlineParts(lib.outline, 'var(--watch)', R2(watchW / 1.09), 'mk-watch') + '</g>';
+    /* "a touch proud" of the flag rim: the same hull, pushed outward by
+       half of each stroke's width plus a hair, so the two lines sit
+       side by side rather than on top of one another */
+    const wHull = offsetPoly(lib.hull, rimW ? R2(rimW / 2 + watchW / 2 + 0.6) : 0);
+    inner += '<path d="' + hullPath(wHull) + '" fill="none" stroke="var(--watch)" stroke-width="' + watchW +
+      '" stroke-linejoin="round" stroke-opacity="1" class="mk-watch"/>';
   }
   s += '<g class="dev" style="transform:translate(' + R2(X(c, u)) + 'px,' + R2(Y(c, v, 0)) + 'px)">' +
-       '<g transform="scale(' + k + ')">' + inner + '</g>';
-  if (lit || (opt.alarm && b.flags) || opt.ring) {
-    const top = R2(-lib.top * k - 2);
-    s += '<circle cx="0" cy="' + top + '" r="' + R2(Math.max(4, 5 * k)) + '" class="halo" fill="none" stroke="' +
-      (opt.ring && !lit ? 'var(--accent)' : 'var(--alarm)') + '" stroke-width="1.4"/>';
-  }
-  s += '</g></g>';
+       '<g transform="scale(' + k + ')">' + inner + '</g></g>';
   if (opt.fade) s = '<g opacity="0.42">' + s + '</g>';
   if (opt.focus) {
     /* you are standing here */
@@ -1085,7 +1140,9 @@ function plaque(c, d, compact) {
   s += '<text x="' + R2(-w / 2 + 22) + '" y="18" class="p-name">' + esc(d.name) + '</text>';
   s += '<text x="' + R2(w / 2 - 11) + '" y="17.5" text-anchor="end" class="p-cidr">' + esc(d.cidr) + '</text>';
   s += '<text x="' + R2(-w / 2 + 13) + '" y="31" class="' + covc + '">' + esc(d.cov) + '</text>';
-  if (d.tally) s += '<text x="' + R2(w / 2 - 11) + '" y="31.5" text-anchor="end" class="wp">' + esc(d.tally) + '</text>';
+  /* #981: no ◉/✱ tally on the plaque either — the owner's "get rid of
+     them completely" covers district pills as well as buildings; the
+     tally data stays in DISTRICTS unused rather than being stripped. */
   return s + '</g>';
 }
 
@@ -1119,12 +1176,7 @@ function boroughRing(c, ids, label) {
   NODES.filter((n) => ids.indexOf(n.id) >= 0).forEach((n) => {
     [[0, -n.R], [n.R, 0], [0, n.R], [-n.R, 0]].forEach((o) => pts.push([X(c, n.u + o[0]), Y(c, n.v + o[1])]));
   });
-  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-  const lower = [], upper = [];
-  for (const p of pts) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
-  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
-  let hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+  let hull = convexHull(pts);
   const cx = hull.reduce((s, p) => s + p[0], 0) / hull.length, cy = hull.reduce((s, p) => s + p[1], 0) / hull.length;
   hull = hull.map((p) => { const dx = p[0] - cx, dy = p[1] - cy, m = Math.hypot(dx, dy) || 1; return [p[0] + dx / m * 34, p[1] + dy / m * 26]; });
   const d = hull.map((p, i) => (i ? 'L' : 'M') + R2(p[0]) + ' ' + R2(p[1])).join('') + 'Z';
@@ -1216,14 +1268,16 @@ function render(id) {
       const u = d.u + b.du, v = d.v + b.dv;
       if (!onStage(c, u, v, 140)) return;
       const lit = cfg.alarm && b.id === 'cam-porch';
-      const named = cfg.names || (cfg.names2 && cfg.names2.indexOf(b.id) >= 0);
+      /* #981: no ring, no count glyph over a building any more — the
+         owner: "I said to remove these rings with numbers. Get rid of
+         them completely." cam-porch keeps a plain name label in the
+         alarm scene (same idiom as every other named building) instead
+         of its old glyph-and-halo treatment. */
+      const named = cfg.names || (cfg.names2 && cfg.names2.indexOf(b.id) >= 0) || lit;
       const o = { ink: d.ink, unlit: d.dark, lit: lit, sid: id, alarm: cfg.alarm, nogo: cfg.nogo,
-        focus: cfg.reach === b.id, ring: cfg.names2 && cfg.names2.indexOf(b.id) >= 0 && cfg.reach !== b.id,
-        fade: own && !named, named: named };
+        focus: cfg.reach === b.id, fade: own && !named, named: named };
       solids.push({ v: v + b.R, s: device(c, u, v, b, o) });
       if (named) flat += topper(c, u, v, b, o, [{ t: b.name, c: 'st-name' }, { t: b.ip, c: 'st-ip' }]);
-      else if (lit) flat += topper(c, u, v, b, o, [{ t: 'cam-porch ✱✱ ◉', c: 'alarm-t' }], 'x');
-      else if (b.flags && cfg.alarm) flat += topper(c, u, v, b, o, [{ t: '✱' + b.flags, c: 'fchip' }]);
     });
   });
 
@@ -1255,20 +1309,27 @@ function render(id) {
 
   if (boroLabels) boroLabels.forEach((b) => { flat += chipAt(b.lx, b.ly, b.t, 'boro-t'); });
 
+  /* #991: the street stop drops the ordinary road port chips entirely
+     ("too busy") — only a road's drop survives there, reworded to one
+     word plus the source, since it isn't standing on the building the
+     drop is at. Survey and alarm are untouched: they still draw every
+     road's ports exactly as before. */
   if (cfg.labels || cfg.rules) ROADS.forEach((r) => {
     if (!r.ports || !r.lats) return;
+    if (id === 'street' && r.stop !== 'drop') return;
+    const label = (id === 'street' && r.stop === 'drop') ? 'cam-porch · dropped' : r.ports;
     for (const t of r.lats) {
       const p = roadPoint(r, t), a = roadPoint(r, Math.max(0, t - 0.03)), b = roadPoint(r, Math.min(1, t + 0.03));
       const px = X(c, p[0]), py = Y(c, p[1]);
       if (px < 90 || px > 1310 || py < 34 || py > 664) continue;
       let ang = Math.atan2(Y(c, b[1]) - Y(c, a[1]), X(c, b[0]) - X(c, a[0])) * 180 / Math.PI;
       if (ang > 90) ang -= 180; if (ang < -90) ang += 180;
-      const w = r.ports.length * 5.9 + 16;
+      const w = label.length * 5.9 + 16;
       flat += '<g transform="translate(' + R2(px) + ' ' + R2(py) + ') rotate(' + R2(ang) + ')">' +
         '<rect x="' + R2(-w / 2) + '" y="-8.5" width="' + R2(w) + '" height="17" rx="8" fill="#080c16" fill-opacity="0.92" stroke="' +
         (r.k === 'x' ? 'var(--alarm)' : 'var(--hair)') + '" stroke-opacity="0.75"/>' +
         '<text x="0" y="3.5" text-anchor="middle" class="port-t"' + (r.k === 'x' ? ' fill="var(--alarm)"' : '') + '>' +
-        esc(r.ports) + '</text></g>';
+        esc(label) + '</text></g>';
       break;
     }
   });
