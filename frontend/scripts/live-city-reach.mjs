@@ -132,7 +132,15 @@ check(stoodOnLan1, 'the keyboard walk reaches LAN1 among the four districts')
 // The keyboard walk itself pans the camera as it goes (ArrowRight and
 // ArrowDown each recentre, same as every focus move); the position Esc
 // must restore is wherever that walk actually left it the instant
-// before Enter, not wherever the district stop first landed.
+// before Enter, not wherever the district stop first landed. City.svelte's
+// moveCamera tweens each of those recentres over 620ms
+// (MOVE_MS) via requestAnimationFrame, so reading the viewport straight
+// off the last key press samples it mid-flight -- standOn (fired by Enter)
+// then saves a *later* point on the same tween as savedCentre, and Escape
+// restores that later point rather than the one this scenario compared
+// against. Settle before reading, same wait this file already uses after
+// every other camera-moving step below.
+await new Promise((r) => setTimeout(r, 900))
 const viewportBefore = await page.locator('[data-card="topography"] .mini rect.viewport').getAttribute('x')
 await page.keyboard.press('Enter')
 await new Promise((r) => setTimeout(r, 900))
