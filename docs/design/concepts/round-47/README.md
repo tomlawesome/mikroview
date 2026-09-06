@@ -117,4 +117,4 @@ transitions; round 35's reductions still apply.
 2026-09-06, owner, in chat on the first cut: the row colour line broke
 at the campaign's rule line — fixed the same day. "Scored: the number
 needs to be much more visible" — the dimmed number became the pill
-above, same day.
+above, same day. Then: "Everything else is great."
