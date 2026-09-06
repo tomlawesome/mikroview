@@ -211,7 +211,9 @@ and nothing should be added to let it.
 repo on the host, checks it out, builds the image if it is not cached,
 runs the gate, brings the log back as `gate-run.log`, and removes the
 work tree afterwards. `MV_BROWSER=firefox make live-check-remote` picks
-the engine. `scripts/gate-remote.sh` carries the reasoning. The host is
+the engine; `MV_SHARDS=4 make live-check-remote` runs the browser phase
+as four slices at once, in about a quarter of the wall time (#1004; the
+live-check skill has the shape). `scripts/gate-remote.sh` carries the reasoning. The host is
 single-tenant -- one branch, one work tree -- so the script takes a lock
 (`~/gate-lock`) before it pushes and refuses (exit 75, distinct from a
 gate failure) if another run already holds it (#809); run
@@ -490,6 +492,13 @@ So:
   before the next promotion. A tripwire, not a turnstile.
 - **One clean run is mandatory before `dev -> preview`.** That is the
   only place it blocks.
+- **CI runs it too, sharded, since #1004** -- the `gate` stage, four
+  slices of the browser phase in parallel plus the standalone scripts,
+  on every MR and `dev` pipeline. It is `allow_failure` until it has read
+  green on `dev` for a run of pipelines; flipping it to blocking is the
+  moment the second-host loop can retire, and that decision goes on
+  #1004. Until then the loop is the gate of record and a red CI gate is
+  read, not ignored: it is the same suite on the same host.
 
 The cost is accepted: a regression can sit on `dev` for a run before it is
 seen, and work stacks on it meanwhile. `dev` is not released from.
