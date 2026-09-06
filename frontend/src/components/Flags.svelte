@@ -1685,34 +1685,20 @@
     text-transform: uppercase;
   }
 
-  /* The FLAG column is pinned at its resting width (#988), so opening a
-     campaign -- whose members step in 32px -- never moves WHERE or
-     EVIDENCE. Wide enough for the longest built-in label ("Known-bad IP
-     (blocklist match)") stepped in, plus a 3-digit scored number; a
-     longer custom label still widens it, once, rather than being cut.
-     `min-width` as well as `width`, on the cells too: a `width` alone is
-     only a hint the browser trades away when EVIDENCE squeezes the
-     table, and the live check caught it giving the column back (161px,
-     then 254px once the members rendered).
-
-     248px was that budget under whatever font the generic `monospace`
-     keyword happened to resolve to on the machine it was tuned on (#988).
-     That keyword's actual font comes from the OS/fontconfig, not this
-     stack, so it is not the same font on every host: #1010 is that same
-     stepped-in "Internal reconnaissance" label alone -- nowhere near the
-     longest -- overflowing to 258px in CI while fitting at 248px in
-     dev, because CI's `monospace` resolved to a wider font. Measured
-     (frontend/scripts/live-flags-campaigns.mjs, temporarily, against a
-     detached `<td class="fmark">`) at 32px padding-left with a 3-digit
-     confidence: the worst label needs 299px under the stack's own fonts
-     and 350px under Liberation Mono, the font app.css's `--font-mono`
-     now pins ahead of the bare `monospace` keyword so this measurement
-     stays true on any Debian host, including CI's. 360px leaves 10px of
-     slack above that. */
+  /* The FLAG column is pinned (#988), so opening a campaign -- whose
+     members step in 32px -- never moves WHERE or EVIDENCE. Must fit the
+     longest built-in label stepped in, plus a 3-digit scored number and
+     its 10px gap, plus 1ch slack. In `ch` rather than a flat px (#1010:
+     248px was tuned against one host's guess at what `monospace`
+     resolves to, and a different host's guess overflowed it by 10px) --
+     `ch` scales with the actual font, `--font-mono`'s own pinned
+     Liberation Mono, on every host alike. 32px step + 12px right padding
+     + 10px badge gap = 54px; mark + space + "Known-bad IP (blocklist
+     match)" + "100" + 1ch slack = 36ch. */
   .ftable thead th:first-child,
   .ftable tbody td.fmark {
-    width: 360px;
-    min-width: 360px;
+    width: calc(54px + 36ch);
+    min-width: calc(54px + 36ch);
   }
 
   /* The scored number (#988, round 47): bold, pure white, a size up
