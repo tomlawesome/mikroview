@@ -40,8 +40,10 @@ REPEATED DROPS (13:28 → still arriving) fold into one row:
 - The FLAG column is pinned at its resting width, so opening a
   campaign never moves WHERE or EVIDENCE.
 
-**2. The scored number.** Dimmed mono beside the type, only where a
-detector scored the flag: `▲ DROP SURGE 71`, `▲ ACTIVITY SPIKE 72`. The
+**2. The scored number.** Beside the type, only where a detector
+scored the flag: `▲ DROP SURGE 71`, `▲ ACTIVITY SPIKE 72` — bold, full
+ink, in a hairline pill (first cut was dimmed; owner, 2026-09-06: "the
+number needs to be much more visible"). The
 other five carry nothing — no dash, no band, no word. In the drawer one
 line under the story says where it came from: *Scored 71. How far this
 hour sits from the wan boundary's usual, and how much history backs
@@ -111,3 +113,8 @@ that route longer.
 transitions; round 35's reductions still apply.
 
 ## Verdicts
+
+2026-09-06, owner, in chat on the first cut: the row colour line broke
+at the campaign's rule line — fixed the same day. "Scored: the number
+needs to be much more visible" — the dimmed number became the pill
+above, same day.
