@@ -195,6 +195,26 @@ await range.fill('2')
 await page.waitForSelector('[data-card="topography"] .camera.cam-zones', { timeout: 5000 })
 check(true, 'moving the slider to zones applies the flat ground-plan camera')
 
+// #976 item 1: the lane-based trunk and traffic-lens edges used to stay
+// on screen at zones -- present in the markup at every altitude like
+// every other camera layer, but never added to the stylesheet's
+// cam-zones hide list the way `.isl-card`/`.detail` were -- so the
+// ground plan's own river and roads and the old lane lines painted at
+// once. This scenario already has real accepted traffic on one lane, so
+// the trunk and its edge both exist to check.
+await new Promise((r) => setTimeout(r, 700)) // let the camera's own opacity transition settle
+const zonesVisibility = await page.evaluate(() => {
+  const vis = (el) => (el ? getComputedStyle(el).opacity !== '0' : null)
+  return {
+    ground: vis(document.querySelector('[data-card="topography"] .ground-flat')),
+    rib: vis(document.querySelector('[data-card="topography"] path.rib')),
+    edge: vis(document.querySelector('[data-card="topography"] .edge-g')),
+  }
+})
+check(zonesVisibility.ground === true, `the ground plan is shown at zones (${JSON.stringify(zonesVisibility)})`)
+check(zonesVisibility.rib === false, `the lane-based trunk is hidden at zones (${JSON.stringify(zonesVisibility)})`)
+check(zonesVisibility.edge === false, `the traffic lens's own edges are hidden at zones, so they no longer paint over the ground plan (${JSON.stringify(zonesVisibility)})`)
+
 // --- node info cards ---------------------------------------------------------
 
 // #869's one ground plan: `zones` draws cards with a host count and no

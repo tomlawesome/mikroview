@@ -59,7 +59,7 @@
   import { STOPS, R2, flatFit, FX, FY } from '../lib/city/project'
   import { layoutGround } from '../lib/city/layout'
   import { cityInputFrom } from '../lib/city/input'
-  import type { Ground } from '../lib/city/types'
+  import type { District, Ground } from '../lib/city/types'
   import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
   import { altitudeStopState } from '../lib/altitudeStop.svelte'
 
@@ -1103,6 +1103,30 @@
     }
   }
 
+  // One anchor per counterpart (#976 item 3), not one per strand: the
+  // membrane point above already fans each of a counterpart's up to
+  // four strands (out/in x accepted/blocked) by a small perpendicular
+  // offset, ±8 or ±18 -- enough to keep the *lines* apart, but a label
+  // is much taller than 16-36 units, so their pills still landed on
+  // each other. Every strand toward one counterpart now stacks its own
+  // pill from this single, offset-free point instead, the same way the
+  // cluster card's own chiprow list already stacks (#726's "stack or
+  // thin", applied here to the membrane's own labels).
+  function counterpartAnchor(counterpart: string): { x: number; y: number } {
+    const t = strandTarget(counterpart)
+    const dx = t.x - MX
+    const dy = t.y - MY
+    const len = Math.hypot(dx, dy) || 1
+    return { x: MX + (dx / len) * MR, y: MY + (dy / len) * MR }
+  }
+
+  // A strand's place in its own counterpart's stack -- stable because
+  // reachSummary.strands has one fixed order per render, not because
+  // this reorders anything.
+  function strandRank(s: ReachStrand): number {
+    return reachSummary!.strands.filter((x) => x.counterpart === s.counterpart).indexOf(s)
+  }
+
   const reachZoneInk = $derived(reach ? LANE_INKS[Math.max(0, zoneIndex(reach.zoneId)) % LANE_INKS.length] : 'var(--accent)')
 
   const siblings = $derived.by(() => {
@@ -1159,6 +1183,76 @@
   // A flat (non-isometric) fit of that same ground into the 2D stage,
   // for the zones stop below.
   const flatCam = $derived(flatFit(ground.bounds, 1400, 720))
+
+  // District cards must never overlap (#976 follow-up): districts sit
+  // on fixed slots (PRIMARY_SLOTS/BOROUGH_SLOTS, lib/city/layout.ts)
+  // that can be close enough together to collide even at a conservative
+  // size floor, and a floor alone only lowers the odds rather than
+  // ruling it out. After each card's own size and position are
+  // computed, this pairwise pass nudges any pair still closer than an
+  // 8px gutter apart along whichever axis needs the smaller move, a
+  // few iterations -- the same idea #726 used to separate edge labels,
+  // applied here to boxes instead of points.
+  interface FlatCard {
+    d: District
+    x: number
+    y: number
+    gr: number
+    gh: number
+  }
+  const CARD_GUTTER = 8
+  const CARD_PUSH_ITERATIONS = 6
+  function pushCardsApart(cards: FlatCard[]): FlatCard[] {
+    const out = cards.map((c) => ({ ...c }))
+    for (let iter = 0; iter < CARD_PUSH_ITERATIONS; iter++) {
+      let moved = false
+      for (let a = 0; a < out.length; a++) {
+        for (let b = a + 1; b < out.length; b++) {
+          const c1 = out[a]
+          const c2 = out[b]
+          const dx = c2.x - c1.x
+          const dy = c2.y - c1.y
+          const overlapX = c1.gr + c2.gr + CARD_GUTTER - Math.abs(dx)
+          const overlapY = c1.gh / 2 + c2.gh / 2 + CARD_GUTTER - Math.abs(dy)
+          if (overlapX <= 0 || overlapY <= 0) continue // clear on at least one axis
+          moved = true
+          if (overlapX < overlapY) {
+            const push = overlapX / 2
+            const dir = dx === 0 ? 1 : Math.sign(dx)
+            c1.x -= push * dir
+            c2.x += push * dir
+          } else {
+            const push = overlapY / 2
+            const dir = dy === 0 ? 1 : Math.sign(dy)
+            c1.y -= push * dir
+            c2.y += push * dir
+          }
+        }
+      }
+      if (!moved) break
+    }
+    return out
+  }
+  const flatCards = $derived.by(() =>
+    pushCardsApart(
+      ground.districts.map((d) => {
+        const gr = Math.max(38, d.r * flatCam.S * 0.9)
+        // 56, not 44: the card's third line (host count, at -gh/2+48
+        // below) needs the plate's own bottom edge past 48 with some
+        // padding, or that line prints below the opaque plate rather
+        // than on it -- the map's own roads then show straight through
+        // "0 hosts" rather than stopping at the card's edge (owner
+        // review, #976 follow-up: it read as "lines painted through the
+        // card," but the actual cause was this card being too short for
+        // its own text, not the roads drawn in the wrong order -- they
+        // were always behind the plate, they just had nothing solid to
+        // stop against past its bottom edge). The push-apart pass above
+        // absorbs the size increase by spacing cards further apart, so
+        // growing this floor no longer risks two cards colliding.
+        return { d, x: FX(flatCam, d.u), y: FY(flatCam, d.v), gr, gh: Math.max(56, gr * 0.84) }
+      }),
+    ),
+  )
 
   // Crossing the centre swaps which side draws. The lens is one piece
   // of state already shared by both (`lens`, threaded straight into
@@ -2488,12 +2582,15 @@
               {@render aggregateBar(tunnelAggregate, -84, 188, 32, 16, { id: tunnelIface, name: tunnelIface })}
             {/if}
           </g>
-          <g class="g-dot">
-            <!-- Mirrored: the node sits at the right of the stage, so
-                 its survey label runs leftward off the dot. -->
-            <circle r="8" class="zone-dot" stroke="var(--accent)" />
-            <text x="-16" y="4" text-anchor="end" class="zone-label">WireGuard</text>
-          </g>
+          <!-- The removed survey stop used to draw every node as a plain
+               dot-plus-label (#869); this was that dot for the tunnel
+               node specifically, left behind when the stop went. It sat
+               unconditioned by any camera class -- unlike every other
+               tiered element on this map -- so it stayed on screen at
+               every altitude, its own "WireGuard" printed over the
+               card's (#976 item 1/2: "both renderings show at once").
+               The card above already names the tunnel; nothing here was
+               a second fact. -->
         </g>
       {/if}
 
@@ -2785,10 +2882,16 @@
            no dots, no per-host labels (those are `clients`'s job).
            Present at every altitude like every other camera layer;
            `.camera.cam-zones` is what shows it, the same convention the
-           removed survey dot used to follow. Left alongside the lens's
-           own edge lines above rather than reconciling the two
-           coordinate systems -- that reconciliation is #726's, still
-           open. -->
+           removed survey dot used to follow. It used to be left showing
+           alongside the lens's own edge lines above rather than
+           reconciling the two coordinate systems -- #726 bundled the
+           edges' own overlap but never touched this -- so both
+           renderings painted at once: this card's river and roads
+           together with the lane-based rib/edge lines, neither drawn to
+           the other's positions (#976 item 1). The stylesheet now hides
+           `.rib`/`.rib-ghost`/`.mote`/`.edge-g`/`.gedge` at cam-zones
+           alongside `.isl-card`/`.detail`, so zones draws this ground
+           plan alone. -->
       <g class="ground-flat">
         {#if ground.river}
           <path
@@ -2812,33 +2915,53 @@
           <circle class="gf-node" cx={nx} cy={ny} r={Math.max(4, n.R * flatCam.S * 0.6)} />
           <text class="gf-node-label" x={nx} y={ny - n.R * flatCam.S * 0.6 - 4} text-anchor="middle">{n.name}</text>
         {/each}
-        {#each ground.districts as d (d.id)}
-          {@const gx = FX(flatCam, d.u)}
-          {@const gy = FY(flatCam, d.v)}
-          {@const gr = Math.max(30, d.r * flatCam.S * 0.9)}
-          {@const total = d.buildings.length + d.more}
+        {#each flatCards as fc (fc.d.id)}
+          <!-- The name and CIDR used to sit either side of the card's
+               own centre line, so the smallest districts (`gr` at its
+               30 floor, a 60-wide card) printed them on top of each
+               other -- "10.0.10.1/24 shows through LAN" (#976 item 2).
+               They now stack instead, which is the actual fix: it holds
+               regardless of card width. `gr`/`gh`'s floors and the
+               push-apart pass computing `flatCards` (above) are what
+               keep two cards clear of each other -- see that comment
+               for why a floor alone was not enough. -->
+          {@const total = fc.d.buildings.length + fc.d.more}
           <g
             class="gf-card"
-            class:dark={d.dark}
-            transform="translate({R2(gx)} {R2(gy)})"
+            class:dark={fc.d.dark}
+            transform="translate({R2(fc.x)} {R2(fc.y)})"
             role="button"
             tabindex="0"
-            aria-label="Open the stream filtered to {d.name}"
-            onclick={() => openZone(d.id)}
+            aria-label="Open the stream filtered to {fc.d.name}"
+            onclick={() => openZone(fc.d.id)}
             onkeydown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
-                openZone(d.id)
+                openZone(fc.d.id)
               }
             }}
           >
-            <rect class="gf-plate" x={-gr} y={-gr * 0.42} width={gr * 2} height={gr * 0.84} rx="10" stroke={LANE_INKS[d.ink % LANE_INKS.length]} />
-            <text class="n-name" x={-gr + 12} y={-gr * 0.42 + 20}>{d.name}</text>
-            <text class="n-cidr" x={gr - 12} y={-gr * 0.42 + 20} text-anchor="end">{d.cidr ?? 'from boundaries'}</text>
-            <text class="gf-count" x={-gr + 12} y={-gr * 0.42 + 42}>{total} host{total === 1 ? '' : 's'}</text>
-            {#if d.dark}
-              <text class="zone-state bad" x={gr - 12} y={-gr * 0.42 + 42} text-anchor="end">DARK</text>
-            {/if}
+            <rect
+              class="gf-plate"
+              x={-fc.gr}
+              y={-fc.gh / 2}
+              width={fc.gr * 2}
+              height={fc.gh}
+              rx="10"
+              stroke={LANE_INKS[fc.d.ink % LANE_INKS.length]}
+            />
+            <text class="n-name" x={-fc.gr + 12} y={-fc.gh / 2 + 18}>{fc.d.name}</text>
+            <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? 'from boundaries'}</text>
+            <!-- DARK used to sit right-anchored on this same row, the
+               exact side-by-side layout that overlapped the name and
+               CIDR above -- a card with a host count wide enough to
+               reach it printed "hostsARK" (found rendering a denser
+               estate for #976's own follow-up). A trailing tspan flows
+               after the count instead, so there is only ever one piece
+               of text to fit, never two racing across one line. -->
+            <text class="gf-count" x={-fc.gr + 12} y={-fc.gh / 2 + 48}
+              >{total} host{total === 1 ? '' : 's'}{#if fc.d.dark}{' '}<tspan class="zone-state bad">· DARK</tspan>{/if}</text
+            >
           </g>
         {/each}
       </g>
@@ -2901,17 +3024,28 @@
             stroke={s.outcome === 'accepted' ? 'var(--accept)' : 'var(--alarm)'}
             stroke-width={s.outcome === 'accepted' ? 2.2 : 2}
           />
+          <!-- Each strand's own line still leaves from its own
+               membranePoint `p` above -- direction and outcome fan
+               those far enough apart to follow. Its pill does not: a
+               counterpart with all four of out/in x accepted/blocked
+               put four labels within a couple of those small offsets
+               of each other (#976 item 3, "port pills overlap each
+               other"). Every strand toward one counterpart instead
+               stacks its own line, in strandRank order, from that
+               counterpart's one shared anchor -- the same "stack
+               rather than let it overprint" #726 used for the edge
+               labels. -->
+          {@const anchor = counterpartAnchor(s.counterpart)}
+          {@const rank = strandRank(s)}
           {#if s.outcome === 'blocked'}
             <g transform="translate({p.x} {p.y}) rotate({p.angle})">
               <line x1="-8" y1="0" x2="8" y2="0" stroke="var(--alarm)" stroke-width="3" />
             </g>
-            <!-- Labels stagger by direction and outcome so no two
-                 strands of one crossing ever overprint. -->
             <!-- The blocked label is the composer's door (scene 4): a
                  denial becomes a rule in two clicks. -->
             <text
-              x={p.x + 14}
-              y={p.y + (s.direction === 'in' ? 30 : -22)}
+              x={anchor.x + 14}
+              y={anchor.y - 30 + rank * 18}
               class="chip-t alarm-t strand-door"
               role="button"
               tabindex="0"
@@ -2932,7 +3066,7 @@
                 : ''}
             </text>
           {:else}
-            <text x={p.x + 14} y={p.y + (s.direction === 'in' ? 14 : -6)} class="chip-t ok-t">
+            <text x={anchor.x + 14} y={anchor.y - 30 + rank * 18} class="chip-t ok-t">
               {s.direction === 'out' ? '→' : '→ in'} {portsLine(s.ports)} · {s.count}×
             </text>
           {/if}
@@ -4324,7 +4458,12 @@
   .camera .ground-flat,
   .camera .detail,
   .camera .svc,
-  .camera .cli {
+  .camera .cli,
+  .camera .rib,
+  .camera .rib-ghost,
+  .camera .mote,
+  .camera .edge-g,
+  .camera .gedge {
     transition: opacity 0.55s ease;
   }
 
@@ -4368,8 +4507,19 @@
     pointer-events: auto;
   }
 
+  /* #976 item 1: the trunk, the tunnel's own rib, the travelling mote
+     and every lens's edges/badges are the lane-based drawing zones
+     replaced -- left visible here, they painted across the ground
+     plan's river and roads at the same stop, unreconciled with its
+     coordinates. Still shown at clients/services, where the old
+     lane-card drawing they belong to is what's on screen. */
   .camera.cam-zones .isl-card,
-  .camera.cam-zones .detail {
+  .camera.cam-zones .detail,
+  .camera.cam-zones .rib,
+  .camera.cam-zones .rib-ghost,
+  .camera.cam-zones .mote,
+  .camera.cam-zones .edge-g,
+  .camera.cam-zones .gedge {
     opacity: 0;
     pointer-events: none;
   }
@@ -4611,6 +4761,15 @@
 
   .gf-card.dark .gf-plate {
     opacity: 0.55;
+  }
+
+  /* A size down from the default `.n-cidr` (#976 item 2): this card is
+     the smallest thing on the map that prints a full CIDR, and it now
+     stacks under the name rather than racing it across one line, so
+     the narrower glyphs buy back some of the margin a modest card-width
+     floor did not. */
+  .gf-card .n-cidr {
+    font-size: 9px;
   }
 
   .gf-count {
