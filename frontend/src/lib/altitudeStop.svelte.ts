@@ -6,7 +6,13 @@
 import { ALTITUDE_LABELS, type AltitudeLabel } from './altitude'
 
 const STORAGE_KEY = 'mikroview:topography-altitude'
-const DEFAULT_STOP: AltitudeLabel = 'city'
+// #979: one stop further out than 'city' -- the axis' own centre and
+// former default (#869) -- so the card opens with the whole estate in
+// view. 'city' is already the widest of City's own stops (the whole
+// estate, isometric); the only stop further out is 'zones', the 2D
+// map's own widest -- so this default now opens on the flat map, not
+// the isometric city.
+const DEFAULT_STOP: AltitudeLabel = 'zones'
 
 function loadInitial(): AltitudeLabel {
   try {
