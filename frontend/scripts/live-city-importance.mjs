@@ -114,6 +114,7 @@ const entry = await api('POST', '/api/definitions', {
   expectation: { source: { ip: WATCHED }, ports: [22] },
 })
 check(entry.status === 201, `the watchlist entry on watched-host is created (${entry.status})`)
+const entryId = entry.body?.id
 
 await page.setViewportSize({ width: 1600, height: 900 })
 await page.reload()
@@ -158,6 +159,10 @@ check(watchedBusy < dependedBusy, `busy-host's own plinth actually shrank when t
 await page.keyboard.press('Space')
 await new Promise((r) => setTimeout(r, 900))
 check((await readingBtn.getAttribute('aria-pressed')) === 'false', 'Space on the focused button switches back to depended-on')
+
+// #972: leave the shared instance as found -- the watchlist entry this
+// scenario made is done its job once the readings above are checked.
+await api('DELETE', `/api/definitions/${entryId}`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()

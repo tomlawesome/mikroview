@@ -154,20 +154,21 @@ async function api(method, path, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return res.status()
+  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
 }
-await api('POST', '/api/definitions', {
+const watchLan = await api('POST', '/api/definitions', {
   name: 'live layout watch lan',
   intent: 'expectation',
   kind: 'declarative',
   expectation: { source: { ip: '10.0.10.20' }, ports: [22] },
 })
-await api('POST', '/api/definitions', {
+const watchWan = await api('POST', '/api/definitions', {
   name: 'live layout watch wan',
   intent: 'expectation',
   kind: 'declarative',
   expectation: { source: { ip: '203.0.113.9' }, ports: [443] },
 })
+const watchIds = [watchLan.body?.id, watchWan.body?.id]
 
 await new Promise((r) => setTimeout(r, 1500))
 
@@ -358,6 +359,13 @@ for (const width of WIDTHS) {
   }
   await page.click(`[data-card="topography"] .wlens2 >> text=traffic`)
   await new Promise((r) => setTimeout(r, 400))
+}
+
+// #972: leave the shared instance as found -- the two watches this
+// scenario made would otherwise be inherited by any later scenario that
+// counts them exactly.
+for (const id of watchIds) {
+  if (id) await api('DELETE', `/api/definitions/${id}`)
 }
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.slice(0, 3).join(' | ')})`)

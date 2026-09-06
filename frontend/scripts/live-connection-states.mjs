@@ -92,11 +92,21 @@ check(true, 'the banner appears once the connection is actually lost')
 const bannerBox = await bannerHandle.evaluate((el) => el.getBoundingClientRect())
 const mainTopDisconnected = await page.$eval('#main-content', (el) => el.getBoundingClientRect().top)
 
-await page.waitForSelector(`${CONN}.conn-closed`, { timeout: 15000 })
-check(
-  (await page.$eval(CONN, (el) => el.textContent.trim())) === 'Disconnected',
-  'the scene bar indicator turns Disconnected with it',
+// One evaluate, not waitForSelector followed by a separate $eval: ws.ts's
+// backoff loop keeps retrying the blocked connection, flipping connState
+// to 'connecting' and straight back to 'closed' between attempts (#907).
+// Two round trips can straddle that flip -- the class read as closed, the
+// text read a moment later as "Connecting…" -- so class and text are read
+// together, at one instant, instead.
+await page.waitForFunction(
+  (sel) => {
+    const el = document.querySelector(sel)
+    return !!el && el.classList.contains('conn-closed') && el.textContent.trim() === 'Disconnected'
+  },
+  CONN,
+  { timeout: 15000 },
 )
+check(true, 'the scene bar indicator turns Disconnected with it')
 
 // "Tops the content column and pushes content -- never overlays." An
 // overlay would leave #main-content's top exactly where it was; pushing
@@ -113,10 +123,14 @@ check(
 // --- Nav stays operable while disconnected ---------------------------------
 await goTo(page, 'Metrics')
 check(true, 'clicking a roll-rail name still rolls the deck while disconnected')
-check(
-  (await page.$$(`${CONN}.conn-closed`)).length === 1,
-  "and the Metrics card's own bar carries the same disconnected state -- no scene is blind to it",
+// Same backoff flip as above: wait for the settled count rather than
+// sampling once, or a reconnect attempt mid-poll reads as 0 or 2.
+await page.waitForFunction(
+  (sel) => document.querySelectorAll(sel).length === 1,
+  `${CONN}.conn-closed`,
+  { timeout: 15000 },
 )
+check(true, "and the Metrics card's own bar carries the same disconnected state -- no scene is blind to it")
 await goTo(page, 'Stream')
 await page.waitForSelector('input.rule', { timeout: 5000 })
 check(true, 'and switching back works too')
