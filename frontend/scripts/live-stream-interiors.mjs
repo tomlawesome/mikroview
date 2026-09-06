@@ -228,14 +228,12 @@ await page
 const dimmedAfter = await page.locator(`${CARD} .row.dimmed`).count()
 check(dimmedAfter === 0, `clearing the fence restores every row -- ${dimmedAfter} still dimmed`)
 
-// clearFence() only drops the range -- following (appState.autoscroll)
-// stays off from the drag's own setFenceRange, same as a seek. Left off,
-// LiveTable stays frozen on the pool it held when following stopped
-// (state.svelte.ts's frozenPool, #232/#381), so the filter section below
-// would fill a field against a table that can never show what it feeds
-// next. Only resumeFollowing (the pill itself) un-freezes it.
-await followBtn.click()
-check(await isFollowing(), 'following turns back on once the fence is cleared, unfreezing the table for what comes next')
+// #968: clearFence() itself turns following back on -- the drag's own
+// setFenceRange stopped it because the fence is a window on the past,
+// and clearing that window removes the reason to hold the stream, so
+// no extra click on the pill should be needed here (unlike the seek
+// case above, which is a different gesture with its own way back).
+check(await isFollowing(), 'clearing the fence turns following back on, unfreezing the table for what comes next')
 
 // ============================================================
 // The filter box's own folding strip

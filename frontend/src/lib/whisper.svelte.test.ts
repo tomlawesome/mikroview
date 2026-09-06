@@ -105,6 +105,17 @@ describe('whisperState.clearFence', () => {
     whisperState.clearFence()
     expect(whisperState.fenceRange).toBeNull()
   })
+
+  // #968: setFenceRange turns autoscroll off (it is a window on the
+  // past); clearing that window removes the reason autoscroll was
+  // stopped, so the table should follow new rows again.
+  it('turns autoscroll back on, since the reason it was off is gone', () => {
+    whisperState.setFenceRange(1 * MIN, 2 * MIN)
+    expect(appState.autoscroll).toBe(false)
+
+    whisperState.clearFence()
+    expect(appState.autoscroll).toBe(true)
+  })
 })
 
 describe('whisperState.dimmed', () => {
