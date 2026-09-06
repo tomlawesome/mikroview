@@ -37,6 +37,7 @@
     Y,
     cam,
     clampCentre,
+    clearDropLabels,
     diamond,
     ease,
     gbox,
@@ -997,6 +998,7 @@
         })
       }
     }
+    clearDropLabels(dropLabels, rings)
 
     // Labels claim their rectangle: anything that would land on one
     // already placed is dropped rather than drawn over it.

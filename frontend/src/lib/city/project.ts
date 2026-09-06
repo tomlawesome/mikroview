@@ -166,6 +166,24 @@ export function wallFace(c: Cam, u: number, v: number, R: number, h: number, sid
   return 'M' + ax + ' ' + R2(ay) + 'L' + bx + ' ' + R2(by) + 'L' + bx + ' ' + R2(by - rise) + 'L' + ax + ' ' + R2(ay - rise) + 'Z'
 }
 
+/** A wall's own drop-mark callout must never print over a borough
+ * label (#982): each callout is checked against every ring label at its
+ * own line, and pushed onto its own line clear of it -- above if that
+ * has room, below otherwise -- rather than left to draw across it.
+ * Both label kinds are text-anchor="middle", so x is each one's centre. */
+export function clearDropLabels(dropLabels: { x: number; y: number; text: string }[], rings: { x: number; y: number; label: string }[], lineH = 14): void {
+  for (const dl of dropLabels) {
+    const dlHalfW = (dl.text.length * 5.4 + 12) / 2
+    for (const r of rings) {
+      const rHalfW = (r.label.length * 6.2 + 12) / 2
+      if (Math.abs(dl.x - r.x) >= dlHalfW + rHalfW) continue
+      if (Math.abs(dl.y - r.y) >= lineH) continue
+      const above = dl.y - lineH
+      dl.y = above > lineH ? above : dl.y + lineH
+    }
+  }
+}
+
 /** The four ground corners of a box on the diagonal axes: half-extent A
  * along d1 (screen: right and down), B along d2 (right and up). */
 export function boxPts(u: number, v: number, A: number, B: number): { L: Pt; F: Pt; R: Pt; K: Pt } {
