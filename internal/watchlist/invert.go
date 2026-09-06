@@ -60,6 +60,9 @@ func (e Entry) isPermitted(destIP string, port int) bool {
 // own piece of work, tracked as a follow-up on #243 rather than silently
 // built around.
 func matchInverted(entry Entry, e store.Event) (matchlog.Tuple, Outcome) {
+	if !entry.Boundary.Matches(e.Chain, e.InInterface, e.OutInterface) {
+		return matchlog.Tuple{}, NoMatch // wrong boundary -- see Boundary.Matches
+	}
 	if entry.Source.Empty() {
 		// Store.Upsert refuses this at write time (ErrInvertedRequiresSource)
 		// -- reachable only via a hand-constructed Entry bypassing Upsert

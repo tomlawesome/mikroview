@@ -61,3 +61,34 @@ func TestValidateEntryRejectsInvalidText(t *testing.T) {
 		}
 	}
 }
+
+// #806: a Boundary naming an interface with no chain is refused -- a
+// rule's In/OutInterface has no meaning apart from the chain it was
+// matched on, so this shape could never be looked up against a pushed
+// rule table.
+func TestValidateEntryRejectsInterfaceWithoutChain(t *testing.T) {
+	cases := []Entry{
+		{ID: "e1", Ports: []int{22}, Boundary: Boundary{InInterface: "ether1"}},
+		{ID: "e1", Ports: []int{22}, Boundary: Boundary{OutInterface: "bridge1"}},
+	}
+	for _, e := range cases {
+		if err := ValidateEntry(e); !errors.Is(err, ErrBoundaryRequiresChain) {
+			t.Errorf("ValidateEntry(%+v) = %v, want ErrBoundaryRequiresChain", e, err)
+		}
+	}
+}
+
+// A chain alone, or a chain with an interface, is a valid boundary --
+// confirming the refusal above is about an interface with no chain, not
+// about the boundary field existing at all.
+func TestValidateEntryAllowsChainScopedBoundary(t *testing.T) {
+	cases := []Entry{
+		{ID: "e1", Ports: []int{22}, Boundary: Boundary{Chain: "forward"}},
+		{ID: "e1", Ports: []int{22}, Boundary: Boundary{Chain: "forward", InInterface: "ether1", OutInterface: "bridge1"}},
+	}
+	for _, e := range cases {
+		if err := ValidateEntry(e); err != nil {
+			t.Errorf("ValidateEntry(%+v) = %v, want nil", e, err)
+		}
+	}
+}
