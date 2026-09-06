@@ -1507,12 +1507,16 @@
       animation: fall-pulse 1.6s ease-in-out infinite;
     }
   }
-  .att.dark {
-    color: var(--o-drop);
-  }
+  /* #807: every round of the drawing draws the dark-boundary chip dim
+     (the-whole.html's `.fc-dim`, unchanged through round 38), never in
+     the alarm ink -- only the flag chip beside it is alarm-red. `.att`'s
+     own resting colour is already ink-2 and already carries the hairline
+     border, so no `.att.dark` colour override belongs here at all; this
+     rule is only the hollow "○" the base `.att i` has no border to draw,
+     the same treatment the window-cap chip below already uses. */
   .att.dark i {
     background: transparent;
-    border: 1px solid var(--o-drop);
+    border: 1px solid currentColor;
   }
   /* The window-cap chip (#801): the drawing's `.fc-dim` -- ink-2 text on
      the hairline border `.att` already carries, and the same hollow "○"
