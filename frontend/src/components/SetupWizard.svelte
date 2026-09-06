@@ -139,6 +139,20 @@
   // token endpoint would be called in a tight loop rather than reported
   // once.
   let mintAttempted = false
+  // #1009: whether this visit to step 4/6 has already read a non-empty
+  // device list. The single-device convenience below is only honest at
+  // the moment the picker would first appear -- devices is polled every
+  // POLL_MS regardless, and without this the effect re-applies "skip the
+  // picker" every time the count merely passes through one on its way
+  // to settling. That already yanked the form (and its <select>) out
+  // from under an operator -- or Playwright -- mid-pick, the moment a
+  // late-arriving device made the count read 1 for one poll. The first
+  // non-empty read decides, and later polls no longer move the form:
+  // an empty list (the normal first-run case -- no router has reported
+  // yet) does not count as a look, or the operator who opens the wizard
+  // before the first router shows up would be stuck with the picker,
+  // one-router shortcut and all, forever.
+  let deviceCountSeen = false
 
   $effect(() => {
     // Reading pane is what re-runs this on every move.
@@ -148,9 +162,14 @@
   })
 
   $effect(() => {
-    if ((wizardState.pane !== 4 && wizardState.pane !== 6) || !wizardState.open) return
-    if (token || minting || mintAttempted) return
+    if ((wizardState.pane !== 4 && wizardState.pane !== 6) || !wizardState.open) {
+      deviceCountSeen = false
+      return
+    }
+    if (token || minting || mintAttempted || deviceCountSeen) return
     const known = wizardState.devices
+    if (known.length === 0) return
+    deviceCountSeen = true
     if (known.length === 1) {
       mintAttempted = true
       tokenDevice = known[0].id
