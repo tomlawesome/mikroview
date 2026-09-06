@@ -184,6 +184,79 @@ func TestMatchRequiresAllScopesTogether(t *testing.T) {
 	}
 }
 
+// --- Boundary scoping (#806) ---------------------------------------------
+
+// An unscoped entry (the zero Boundary, every entry before #806) matches
+// an event regardless of what chain/interfaces it carries -- Boundary's
+// own Empty/Matches contract.
+func TestMatchUnscopedEntryIgnoresBoundary(t *testing.T) {
+	entry := Entry{ID: "e1", Ports: []int{22}}
+
+	e := baseEvent()
+	e.Chain = "forward"
+	e.InInterface = "ether1"
+	e.OutInterface = "bridge1"
+	if _, outcome := Match(entry, e); outcome != Violation {
+		t.Errorf("an unscoped entry must match regardless of boundary, got %v", outcome)
+	}
+}
+
+// An event off a scoped entry's boundary is NoMatch first -- the build
+// plan's own wording for step 2, checked here directly against
+// matchNonInverted rather than through the higher-level nightly memory.
+func TestMatchScopedByBoundary(t *testing.T) {
+	entry := Entry{
+		ID:       "e1",
+		Ports:    []int{22},
+		Boundary: Boundary{Chain: "forward", InInterface: "ether1", OutInterface: "bridge1"},
+	}
+
+	onBoundary := baseEvent()
+	onBoundary.Chain = "forward"
+	onBoundary.InInterface = "ether1"
+	onBoundary.OutInterface = "bridge1"
+	if _, outcome := Match(entry, onBoundary); outcome != Violation {
+		t.Fatalf("an event on the entry's own boundary must match, got %v", outcome)
+	}
+
+	offBoundary := baseEvent()
+	offBoundary.Chain = "forward"
+	offBoundary.InInterface = "ether9"
+	offBoundary.OutInterface = "bridge9"
+	if _, outcome := Match(entry, offBoundary); outcome != NoMatch {
+		t.Errorf("an event off the entry's boundary must not match, even though source/port/dest agree, got %v", outcome)
+	}
+
+	// Right chain, but no interfaces pushed at all (a rule/event that
+	// never named one) -- still off this entry's specific boundary.
+	noInterfaces := baseEvent()
+	noInterfaces.Chain = "forward"
+	if _, outcome := Match(entry, noInterfaces); outcome != NoMatch {
+		t.Errorf("an event with no interfaces must not match a boundary that names them, got %v", outcome)
+	}
+}
+
+// The scenario the build plan names explicitly: one event lands on one of
+// two boundaries two otherwise-identical entries are each scoped to, and
+// only the entry on the matching boundary sees it -- which is what keeps
+// only one entry's night (FillNights/RecordMatch) rather than both.
+func TestMatchOneEventTwoBoundariesKeepsOnlyOneEntry(t *testing.T) {
+	entryA := Entry{ID: "a", Ports: []int{22}, Boundary: Boundary{Chain: "forward", InInterface: "ether1", OutInterface: "bridge1"}}
+	entryB := Entry{ID: "b", Ports: []int{22}, Boundary: Boundary{Chain: "forward", InInterface: "ether9", OutInterface: "bridge9"}}
+
+	e := baseEvent()
+	e.Chain = "forward"
+	e.InInterface = "ether1"
+	e.OutInterface = "bridge1"
+
+	if _, outcome := Match(entryA, e); outcome != Violation {
+		t.Errorf("entry A, scoped to the event's own boundary, should match, got %v", outcome)
+	}
+	if _, outcome := Match(entryB, e); outcome != NoMatch {
+		t.Errorf("entry B, scoped to a different boundary, must not match the same event, got %v", outcome)
+	}
+}
+
 // --- Inverted -----------------------------------------------------------
 
 func invertedEntry() Entry {
@@ -202,6 +275,31 @@ func TestMatchInvertedRequiresSourceDevice(t *testing.T) {
 	other.SrcMAC = "99:99:99:99:99:99"
 	if _, outcome := Match(entry, other); outcome != NoMatch {
 		t.Errorf("a different device's traffic must not be evaluated by this entry, got %v", outcome)
+	}
+}
+
+// #806: an inverted entry gates on its boundary before anything else,
+// same as the non-inverted rule -- matchInverted has its own call site
+// for Boundary.Matches (invert.go), so this exercises that path directly
+// rather than trusting the non-inverted coverage above to stand in for it.
+func TestMatchInvertedScopedByBoundary(t *testing.T) {
+	entry := invertedEntry()
+	entry.Boundary = Boundary{Chain: "forward", InInterface: "ether1", OutInterface: "bridge1"}
+
+	onBoundary := baseEvent()
+	onBoundary.Chain = "forward"
+	onBoundary.InInterface = "ether1"
+	onBoundary.OutInterface = "bridge1"
+	if _, outcome := Match(entry, onBoundary); outcome != Violation {
+		t.Errorf("the device's own traffic on the entry's boundary must be evaluated, got %v", outcome)
+	}
+
+	offBoundary := baseEvent()
+	offBoundary.Chain = "forward"
+	offBoundary.InInterface = "ether9"
+	offBoundary.OutInterface = "bridge9"
+	if _, outcome := Match(entry, offBoundary); outcome != NoMatch {
+		t.Errorf("the same device's traffic off the entry's boundary must not be evaluated, got %v", outcome)
 	}
 }
 
