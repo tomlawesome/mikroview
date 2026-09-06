@@ -51,6 +51,9 @@ visit until you import that certificate -- expected for a self-hosted
 admin interface with no external CA, same as Proxmox/TrueNAS/pfSense's
 own web UIs.
 
+See [docs/reading-the-fall.md](docs/reading-the-fall.md) for how to
+read the fall, the app's landing view.
+
 ### Prebuilt image
 
 ```sh
