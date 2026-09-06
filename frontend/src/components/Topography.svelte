@@ -1103,6 +1103,30 @@
     }
   }
 
+  // One anchor per counterpart (#976 item 3), not one per strand: the
+  // membrane point above already fans each of a counterpart's up to
+  // four strands (out/in x accepted/blocked) by a small perpendicular
+  // offset, ±8 or ±18 -- enough to keep the *lines* apart, but a label
+  // is much taller than 16-36 units, so their pills still landed on
+  // each other. Every strand toward one counterpart now stacks its own
+  // pill from this single, offset-free point instead, the same way the
+  // cluster card's own chiprow list already stacks (#726's "stack or
+  // thin", applied here to the membrane's own labels).
+  function counterpartAnchor(counterpart: string): { x: number; y: number } {
+    const t = strandTarget(counterpart)
+    const dx = t.x - MX
+    const dy = t.y - MY
+    const len = Math.hypot(dx, dy) || 1
+    return { x: MX + (dx / len) * MR, y: MY + (dy / len) * MR }
+  }
+
+  // A strand's place in its own counterpart's stack -- stable because
+  // reachSummary.strands has one fixed order per render, not because
+  // this reorders anything.
+  function strandRank(s: ReachStrand): number {
+    return reachSummary!.strands.filter((x) => x.counterpart === s.counterpart).indexOf(s)
+  }
+
   const reachZoneInk = $derived(reach ? LANE_INKS[Math.max(0, zoneIndex(reach.zoneId)) % LANE_INKS.length] : 'var(--accent)')
 
   const siblings = $derived.by(() => {
@@ -2924,17 +2948,28 @@
             stroke={s.outcome === 'accepted' ? 'var(--accept)' : 'var(--alarm)'}
             stroke-width={s.outcome === 'accepted' ? 2.2 : 2}
           />
+          <!-- Each strand's own line still leaves from its own
+               membranePoint `p` above -- direction and outcome fan
+               those far enough apart to follow. Its pill does not: a
+               counterpart with all four of out/in x accepted/blocked
+               put four labels within a couple of those small offsets
+               of each other (#976 item 3, "port pills overlap each
+               other"). Every strand toward one counterpart instead
+               stacks its own line, in strandRank order, from that
+               counterpart's one shared anchor -- the same "stack
+               rather than let it overprint" #726 used for the edge
+               labels. -->
+          {@const anchor = counterpartAnchor(s.counterpart)}
+          {@const rank = strandRank(s)}
           {#if s.outcome === 'blocked'}
             <g transform="translate({p.x} {p.y}) rotate({p.angle})">
               <line x1="-8" y1="0" x2="8" y2="0" stroke="var(--alarm)" stroke-width="3" />
             </g>
-            <!-- Labels stagger by direction and outcome so no two
-                 strands of one crossing ever overprint. -->
             <!-- The blocked label is the composer's door (scene 4): a
                  denial becomes a rule in two clicks. -->
             <text
-              x={p.x + 14}
-              y={p.y + (s.direction === 'in' ? 30 : -22)}
+              x={anchor.x + 14}
+              y={anchor.y - 30 + rank * 18}
               class="chip-t alarm-t strand-door"
               role="button"
               tabindex="0"
@@ -2955,7 +2990,7 @@
                 : ''}
             </text>
           {:else}
-            <text x={p.x + 14} y={p.y + (s.direction === 'in' ? 14 : -6)} class="chip-t ok-t">
+            <text x={anchor.x + 14} y={anchor.y - 30 + rank * 18} class="chip-t ok-t">
               {s.direction === 'out' ? '→' : '→ in'} {portsLine(s.ports)} · {s.count}×
             </text>
           {/if}

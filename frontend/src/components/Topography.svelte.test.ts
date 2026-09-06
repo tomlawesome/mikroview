@@ -1938,6 +1938,48 @@ describe('#701: the reach names its busiest pathway, and says the ranking is wei
     expect(busiestLine(container)).toBeNull()
     expect(container.textContent).toContain('nothing observed this window')
   })
+
+  it('stacks a counterpart\'s own pills rather than letting them land on each other (#976 item 3: "port pills overlap each other")', () => {
+    // All four combinations of direction and outcome toward the one
+    // counterpart -- out/accepted, out/blocked, in/accepted, in/blocked
+    // -- put four labels near the same membrane point (#976 item 3).
+    const container = openReach([
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 443, protocol: 'tcp', action: 'accept' }),
+      talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 445, protocol: 'tcp', action: 'drop' }),
+      talk({
+        srcIp: '10.0.2.9',
+        srcHostName: 'nas',
+        dstIp: '10.0.1.20',
+        dstHostName: 'cam-porch',
+        inInterface: 'bridge2',
+        outInterface: 'bridge1',
+        dstPort: 22,
+        protocol: 'tcp',
+        action: 'accept',
+      }),
+      talk({
+        srcIp: '10.0.2.9',
+        srcHostName: 'nas',
+        dstIp: '10.0.1.20',
+        dstHostName: 'cam-porch',
+        inInterface: 'bridge2',
+        outInterface: 'bridge1',
+        dstPort: 3389,
+        protocol: 'tcp',
+        action: 'drop',
+      }),
+    ])
+
+    const pills = [...container.querySelectorAll('.membrane-layer .chip-t')]
+    expect(pills.length).toBe(4)
+    const ys = pills.map((p) => Number(p.getAttribute('y'))).sort((a, b) => a - b)
+    // Never mind their exact position -- no two of one counterpart's own
+    // pills may be closer than a line's height, or their text overlaps
+    // regardless of how far apart the lines they label are drawn.
+    for (let i = 1; i < ys.length; i++) {
+      expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(18)
+    }
+  })
 })
 
 describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () => {
