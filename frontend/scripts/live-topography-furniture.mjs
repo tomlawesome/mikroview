@@ -110,6 +110,7 @@ const entry = await api('POST', '/api/definitions', {
   expectation: { source: { ip: '192.168.1.60' }, ports: [22] },
 })
 check(entry.status === 201, `the watch entry is created (${entry.status})`)
+const entryId = entry.body?.id
 
 await new Promise((r) => setTimeout(r, 1200))
 await page.reload()
@@ -236,6 +237,10 @@ check(cardText.includes('watched'), 'the card says it is watched')
 await page.click('.node-card .nc-act >> text=open in stream ▸')
 await page.waitForFunction(() => location.search.includes('Query='), null, { timeout: 5000 })
 check(true, 'the open-in-stream action filters the live view to this address')
+
+// #972: leave the shared instance as found -- later scenarios that count
+// watch entries exactly should not inherit this one.
+await api('DELETE', `/api/definitions/${entryId}`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()
