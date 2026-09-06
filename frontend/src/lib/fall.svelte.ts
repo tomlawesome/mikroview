@@ -44,8 +44,9 @@
 // none of them log -- otherwise 'unknown', which the UI renders as
 // silence rather than a guess.
 
-import { fetchDevices, fetchRouterNat, fetchRouterRules, type RouterFilterRule, type RouterNatRule } from './api'
+import { fetchDevices, fetchRouterNat, fetchRouterRules, fetchWatchlistEntries, type RouterFilterRule, type RouterNatRule } from './api'
 import { appState } from './state.svelte'
+import type { WatchlistBoundary, WatchlistEntry } from './types'
 
 export type BoundaryCoverage = 'unknown' | 'dark' | 'observed'
 
@@ -224,8 +225,46 @@ export function openBoundaryInStream(b: FallBoundary, port?: number) {
   appState.view = 'live'
 }
 
+// scopedBoundaryKey reads the boundaryKeyOf key an entry's Boundary
+// names, or '' when the entry carries none. Every field empty (the
+// server's omitzero zero value) is the unscoped case, not a boundary
+// whose chain happens to be '' -- ValidateEntry refuses an interface
+// without a chain server-side, so a chain-less, interface-bearing
+// Boundary never arrives here in practice.
+function scopedBoundaryKey(b: WatchlistBoundary | undefined): string {
+  if (!b || (!b.chain && !b.inInterface && !b.outInterface)) return ''
+  return boundaryKeyOf(b.chain ?? '', b.inInterface, b.outInterface)
+}
+
+/**
+ * brokenWatchesByKey groups enabled, boundary-scoped, ring-broken
+ * watchlist entries by the boundary they name (#806's join) -- the same
+ * key bandsData buckets live traffic into, so a band can read WATCH
+ * BROKEN on evidence that is genuinely about that boundary rather than
+ * the estate. A disabled entry, an unscoped one, or one whose ring is
+ * intact makes no appearance here and so no per-band claim. Exported
+ * (not just used internally) so it is unit-testable without a DOM, the
+ * same reasoning boundariesFromRules above documents.
+ */
+export function brokenWatchesByKey(entries: WatchlistEntry[]): Map<string, WatchlistEntry[]> {
+  const m = new Map<string, WatchlistEntry[]>()
+  for (const e of entries) {
+    if (!e.enabled || !e.ring?.broken) continue
+    const key = scopedBoundaryKey(e.boundary)
+    if (!key) continue
+    const list = m.get(key)
+    if (list) list.push(e)
+    else m.set(key, [e])
+  }
+  return m
+}
+
 class FallState {
   boundaries = $state<FallBoundary[]>([])
+  // The watchlist entries alongside the rules, loaded on the same poll
+  // (#806) -- brokenWatchesByKey above is the join that turns these into
+  // a per-band WATCH BROKEN claim.
+  entries = $state<WatchlistEntry[]>([])
   loading = $state(true)
   error = $state<string | null>(null)
 
@@ -235,7 +274,7 @@ class FallState {
       // #695: NAT rules feed the same grouping filter rules do, so a
       // pushed srcnat/dstnat table gets a band too instead of every NAT
       // event falling through to "not in a pushed rule table".
-      const [filterTables, natTables] = await Promise.all([
+      const [filterTables, natTables, watchlist] = await Promise.all([
         Promise.all(
           devices.map((d) =>
             fetchRouterRules(d.id).catch(
@@ -250,6 +289,10 @@ class FallState {
             ),
           ),
         ),
+        // Non-fatal like the rule tables above: a watchlist read failing
+        // must never take the fall's boundaries down with it, it just
+        // means no band can make a WATCH BROKEN claim this poll.
+        fetchWatchlistEntries().catch(() => ({ entries: [] as WatchlistEntry[], coverage: {} })),
       ])
       const rules: (RouterFilterRule | RouterNatRule)[] = []
       let anyAvailable = false
@@ -262,6 +305,7 @@ class FallState {
         rules.push(...table.rules)
       }
       this.boundaries = boundariesFromRules(rules, anyAvailable)
+      this.entries = watchlist.entries
       this.error = null
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e)

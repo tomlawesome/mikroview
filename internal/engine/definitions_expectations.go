@@ -134,6 +134,12 @@ func EntryFromDefinition(d Definition) (watchlist.Entry, error) {
 	if err := decodeJSONParam(params, "silentJSON", &e.SilentOccurrences); err != nil {
 		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
 	}
+	// #806: the boundary this entry is scoped to, if any -- read before
+	// the Kind split, same as the watch history above, since both
+	// non-inverted and inverted entries can carry one.
+	if err := decodeJSONParam(params, "boundaryJSON", &e.Boundary); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
+	}
 
 	if d.Kind == KindProgrammatic {
 		e.Invert = true

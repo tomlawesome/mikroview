@@ -41,8 +41,26 @@ import { suggestState } from '../lib/suggest.svelte'
 import { matchesState } from '../lib/matches.svelte'
 import { appState } from '../lib/state.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
+import { fallState, type FallBoundary } from '../lib/fall.svelte'
 import type { Suggestion, WatchNight, WatchlistCoverage, WatchlistEntry, WatchlistMatch } from '../lib/types'
 import Watchlist from './Watchlist.svelte'
+
+// #806: a real boundary the picker can offer and a scoped row can name --
+// same literal shape JourneyTour.rings.test.ts's own boundary() helper
+// uses, since fallState.boundaries is the one real source both draw from.
+function fallBoundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
+  return {
+    key: 'forward|ether9|ether1',
+    chain: 'forward',
+    inInterface: 'ether9',
+    outInterface: 'ether1',
+    srcAddressList: 'iot',
+    label: 'iot → ether1',
+    coverage: 'observed',
+    epithet: '',
+    ...overrides,
+  }
+}
 
 // #547/#584 gave Suggestions and Matches tabs of their own on the house
 // tablist. Round 33 (#771) goes further than round 30's "no sub-tab row"
@@ -568,6 +586,29 @@ describe('The ratified watch table (#676)', () => {
     // what a row with one reads instead.
     expect(table.querySelectorAll('td.t').length).toBeGreaterThan(0)
     expect(table.textContent?.match(/always/g)?.length).toBe(3)
+  })
+
+  // #806: an entry scoped to a real boundary names it in the "boundary"
+  // column, in the same wording the fall's own boundariesFromRules gives
+  // it -- not the who→toward summary an unscoped entry still falls back
+  // to (the case the test above covers).
+  it('a boundary-scoped entry names its real boundary, not the who→toward summary', async () => {
+    fallState.boundaries = [fallBoundary()]
+    try {
+      await renderWatchlist([
+        entry('e1', 'cam-porch quiet hours', {
+          source: { mac: 'aa:bb:cc:dd:ee:ff' },
+          ports: [443],
+          boundary: { chain: 'forward', inInterface: 'ether9', outInterface: 'ether1' },
+        }),
+      ])
+
+      const table = watchTable()
+      expect(table.textContent).toContain('iot → ether1')
+      expect(table.textContent).not.toContain('aa:bb:cc:dd:ee:ff → any destination')
+    } finally {
+      fallState.boundaries = []
+    }
   })
 
   it("shows the entry's most recent match as last event, from matchesState's bulk feed", async () => {
