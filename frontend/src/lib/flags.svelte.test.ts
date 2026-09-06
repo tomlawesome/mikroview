@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Flag, FlagType, Verdict } from './types'
 
 // flagsState only ever reaches the network through fetchFlags/setFlagVerdict
-// (see api.ts) -- groupedBySource and extractSourceIp are pure logic
+// (see api.ts) -- buildCampaigns and extractSourceIp are pure logic
 // over whatever's already sitting in .list, so no network mocking is
 // needed here, unlike auth.svelte.test.ts. The judge*/undoVerdict tests
 // below (#638) are the exception: they exercise setFlagVerdict/
@@ -17,7 +17,7 @@ vi.mock('./api', async (importOriginal) => {
 })
 
 import { deleteFlagVerdict, setFlagVerdict } from './api'
-import { extractSourceIp, flagsState } from './flags.svelte'
+import { buildCampaigns, extractSourceIp, flagsState } from './flags.svelte'
 
 let nextId = 1
 
@@ -80,77 +80,86 @@ describe('extractSourceIp', () => {
   })
 })
 
-describe('FlagsState.groupedBySource', () => {
-  it('groups multiple active flags sharing a source IP', () => {
-    flagsState.list = [flag('port_scan', '203.0.113.9'), flag('critical_port', '203.0.113.9')]
+// buildCampaigns (#988, round 47): same source IP *and* inside one
+// 30-minute window. Pure over whatever list it is handed -- Flags.svelte
+// hands it the settled table's rows -- so no state is involved here.
+describe('buildCampaigns', () => {
+  const at = (hhmm: string) => `2026-01-01T${hhmm}:00Z`
 
-    const group = flagsState.groupedBySource.get('203.0.113.9')
-    expect(group).toHaveLength(2)
-    expect(group?.map((f) => f.type).sort()).toEqual(['critical_port', 'port_scan'])
+  it('folds two flags from one source inside the window into one campaign', () => {
+    const a = flag('port_scan', '203.0.113.9', { firstSeen: at('13:28'), lastSeen: at('13:30'), count: 20 })
+    const b = flag('critical_port', '203.0.113.9', { firstSeen: at('13:40'), lastSeen: at('13:41'), count: 6 })
+    const { campaigns, singles } = buildCampaigns([b, a])
+
+    expect(singles).toEqual([])
+    expect(campaigns).toHaveLength(1)
+    expect(campaigns[0].ip).toBe('203.0.113.9')
+    expect(campaigns[0].flags.map((f) => f.type)).toEqual(['port_scan', 'critical_port'])
+    expect(campaigns[0].firstSeen).toBe(at('13:28'))
+    expect(campaigns[0].lastSeen).toBe(at('13:41'))
+    expect(campaigns[0].count).toBe(26)
+    expect(campaigns[0].id).toBe(`campaign:${a.id}`)
   })
 
-  it('extracts and groups a repeated_drops composite target under the bare IP', () => {
-    flagsState.list = [flag('port_scan', '203.0.113.9'), flag('repeated_drops', '203.0.113.9 -> port 22')]
+  it('a flag from the same source outside the window keeps its own row', () => {
+    // cam-porch's activity spike at 11:10 is two hours from the 13:28
+    // campaign -- the round-47 drawing's own example.
+    const spike = flag('activity_spike', '10.0.20.14', { firstSeen: at('11:10'), lastSeen: at('11:50') })
+    const a = flag('outbound_anomaly', '10.0.20.14', { firstSeen: at('13:28'), lastSeen: at('13:50') })
+    const b = flag('repeated_drops', '10.0.20.14 -> port 22', { firstSeen: at('13:45'), lastSeen: at('13:52') })
+    const { campaigns, singles } = buildCampaigns([spike, a, b])
 
-    const group = flagsState.groupedBySource.get('203.0.113.9')
-    expect(group).toHaveLength(2)
-    expect(group?.map((f) => f.type).sort()).toEqual(['port_scan', 'repeated_drops'])
+    expect(singles).toEqual([spike])
+    expect(campaigns).toHaveLength(1)
+    expect(campaigns[0].flags).toEqual([a, b])
   })
 
-  it('does not surface a source with only one active flag as a group', () => {
-    flagsState.list = [flag('port_scan', '203.0.113.9')]
+  it('measures the gap from the end of the campaign so far, not from the previous flag alone', () => {
+    // A long first flag still active at 13:50 reaches a 14:10 flag even
+    // though their starts are 42 minutes apart.
+    const a = flag('port_scan', '203.0.113.9', { firstSeen: at('13:28'), lastSeen: at('13:50') })
+    const b = flag('critical_port', '203.0.113.9', { firstSeen: at('14:10'), lastSeen: at('14:10') })
+    expect(buildCampaigns([a, b]).campaigns).toHaveLength(1)
 
-    expect(flagsState.groupedBySource.has('203.0.113.9')).toBe(false)
+    const c = flag('critical_port', '203.0.113.9', { firstSeen: at('14:21'), lastSeen: at('14:21') })
+    expect(buildCampaigns([a, c]).campaigns).toHaveLength(0)
   })
 
-  it('excludes cleared flags from grouping, including from the group size check', () => {
-    flagsState.list = [
-      flag('port_scan', '203.0.113.9'),
-      flag('critical_port', '203.0.113.9'),
-      flag('activity_spike', '203.0.113.9', { cleared: true }),
-    ]
-
-    const group = flagsState.groupedBySource.get('203.0.113.9')
-    expect(group).toHaveLength(2)
-    expect(group?.every((f) => !f.cleared)).toBe(true)
+  it('groups a repeated_drops composite target under its bare IP', () => {
+    const a = flag('port_scan', '203.0.113.9')
+    const b = flag('repeated_drops', '203.0.113.9 -> port 22')
+    expect(buildCampaigns([a, b]).campaigns[0]?.flags).toEqual([a, b])
   })
 
-  it('drops a group down to nothing once only its cleared flags remain', () => {
-    flagsState.list = [
-      flag('port_scan', '203.0.113.9', { cleared: true }),
-      flag('critical_port', '203.0.113.9'),
-    ]
-
-    expect(flagsState.groupedBySource.has('203.0.113.9')).toBe(false)
+  it('a source with one flag is a single, never a campaign', () => {
+    const a = flag('port_scan', '203.0.113.9')
+    const { campaigns, singles } = buildCampaigns([a])
+    expect(campaigns).toEqual([])
+    expect(singles).toEqual([a])
   })
 
-  it('excludes global_spike flags entirely', () => {
-    flagsState.list = [flag('global_spike', 'global'), flag('rule_spike', 'other-rule')]
-
-    expect(flagsState.groupedBySource.size).toBe(0)
-  })
-
-  it('does not group non-source targets (distributed_brute_force / rule_spike) under a bogus shared key', () => {
-    flagsState.list = [
+  it('never groups targets that are not a single source IP', () => {
+    const list = [
+      flag('global_spike', 'global'),
       flag('distributed_brute_force', 'port 22'),
       flag('distributed_brute_force', 'port 22'),
       flag('rule_spike', 'wan-block-scan'),
       flag('rule_spike', 'wan-block-scan'),
     ]
-
-    expect(flagsState.groupedBySource.size).toBe(0)
+    const { campaigns, singles } = buildCampaigns(list)
+    expect(campaigns).toEqual([])
+    expect(singles).toHaveLength(5)
   })
 
-  it('keeps unrelated source IPs in separate groups', () => {
-    flagsState.list = [
+  it('keeps unrelated source IPs in separate campaigns', () => {
+    const list = [
       flag('port_scan', '203.0.113.9'),
       flag('critical_port', '203.0.113.9'),
       flag('port_scan', '198.51.100.4'),
       flag('activity_spike', '198.51.100.4'),
     ]
-
-    expect(flagsState.groupedBySource.get('203.0.113.9')).toHaveLength(2)
-    expect(flagsState.groupedBySource.get('198.51.100.4')).toHaveLength(2)
+    const { campaigns } = buildCampaigns(list)
+    expect(campaigns.map((c) => c.ip).sort()).toEqual(['198.51.100.4', '203.0.113.9'])
   })
 })
 

@@ -1204,3 +1204,162 @@ describe('a pinned row across the watch-for-this detour (#961)', () => {
     expect(screen.getByText('Nothing open.')).toBeTruthy()
   })
 })
+
+// #988 (round 47): campaigns, the scored number, flags by type -- the
+// three ratified additions, each pinned by what it renders rather than
+// how it is styled.
+describe('campaigns, the scored number and the by-type strip (#988, round 47)', () => {
+  const now = Date.parse('2026-01-01T13:55:00Z')
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })
+    // The API answers with the judged flag; the store copies its verdict
+    // fields back onto the row.
+    vi.mocked(setFlagVerdict).mockImplementation(async (id, verdict) => ({
+      ...(flagsState.list.find((f) => f.id === id) as Flag),
+      verdict,
+      verdictBy: 'tom',
+      verdictAt: '2026-01-01T13:56:00Z',
+      cleared: verdict !== 'investigate',
+      clearedAt: verdict !== 'investigate' ? '2026-01-01T13:56:00Z' : undefined,
+    }))
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.now = now
+    flagsState.clearPins()
+    flagsState.list = [
+      // Two from one source inside 30 minutes: a campaign.
+      testFlag({ id: 'a', type: 'port_scan', target: '10.0.20.14', detail: 'twenty ports', count: 20, firstSeen: '2026-01-01T13:28:00Z', lastSeen: '2026-01-01T13:30:00Z' }),
+      testFlag({ id: 'b', type: 'repeated_drops', target: '10.0.20.14 -> port 445', detail: 'six drops', count: 6, firstSeen: '2026-01-01T13:40:00Z', lastSeen: '2026-01-01T13:52:00Z' }),
+      // The same source two hours earlier: outside the window, its own row, and scored.
+      testFlag({ id: 'c', type: 'activity_spike', target: '10.0.20.14', detail: 'busy hour', count: 300, firstSeen: '2026-01-01T11:10:00Z', lastSeen: '2026-01-01T11:50:00Z', confidence: 72 }),
+      // Unrelated, unscored.
+      testFlag({ id: 'd', type: 'outbound_anomaly', target: '10.0.30.2', detail: 'mail out', count: 3, firstSeen: '2026-01-01T13:45:00Z', lastSeen: '2026-01-01T13:45:00Z' }),
+    ]
+  })
+
+  function campaign() {
+    return document.querySelector('tr.frow.camp') as HTMLElement
+  }
+
+  it('folds the two flags into one campaign row: count, source, one word per type, the span, the sum', () => {
+    render(Flags)
+    flushSync()
+
+    const rows = document.querySelectorAll('tr.frow')
+    expect(rows).toHaveLength(3)
+    const c = campaign()
+    const cells = Array.from(c.querySelectorAll('td')).map((td) => td.textContent?.replace(/\s+/g, ' ').trim())
+    expect(cells[0]).toBe('⁂ campaign2 flags')
+    expect(cells[1]).toBe('10.0.20.14')
+    expect(cells[2]).toBe('Port scanRepeated drops on a port 13:28 → still arriving')
+    expect(cells[3]).toBe('26×')
+    // Age from the oldest flag (13:28, 27 minutes before now).
+    expect(cells[4]).toBe('27 m')
+    // Members are not rendered until the campaign opens.
+    expect(document.querySelector('tr.frow.mem')).toBeNull()
+  })
+
+  it('wears the worst flag’s ink, the port scan’s, not the repeated drop’s', () => {
+    render(Flags)
+    flushSync()
+    expect(campaign().getAttribute('style')).toContain('#ff9e64')
+  })
+
+  it('opens on a click to its members, one step in, under the rule line naming the flag that kept its own row', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(campaign())
+    flushSync()
+
+    const members = Array.from(document.querySelectorAll('tr.frow.mem td.k')).map((td) => td.textContent?.trim())
+    expect(members).toEqual(['10.0.20.14 -> port 445', '10.0.20.14'])
+    const rule = document.querySelector('tr.crule td')?.textContent?.replace(/\s+/g, ' ').trim()
+    expect(rule).toContain('one source, two flags, each inside 30 minutes of the last — one campaign.')
+    expect(rule).toContain("10.0.20.14's ACTIVITY SPIKE at 11:10 is 1 h from these, so it keeps its own row.")
+
+    await fireEvent.click(campaign())
+    flushSync()
+    expect(document.querySelector('tr.frow.mem')).toBeNull()
+  })
+
+  it('a call on the campaign row calls every flag inside it, and the stamp reads for the set', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(within(campaign()).getByRole('button', { name: /checked/ }))
+    // The members are called one after another, each awaiting its own
+    // (mocked) request.
+    await new Promise((r) => setTimeout(r, 0))
+    flushSync()
+
+    expect(vi.mocked(setFlagVerdict).mock.calls.map((c) => c[0]).sort()).toEqual(['a', 'b'])
+    const stamp = campaign().querySelector('.vdone')?.textContent?.replace(/\s+/g, ' ').trim()
+    expect(stamp).toBe('checked all 2 undo')
+    expect(campaign().classList.contains('fdone')).toBe(true)
+  })
+
+  it('a filter that only a member matches shows the campaign opened to just that member', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.input(screen.getByLabelText('Filter by evidence'), { target: { value: 'six drops' } })
+    flushSync()
+
+    expect(document.querySelectorAll('tr.frow.camp')).toHaveLength(1)
+    const members = Array.from(document.querySelectorAll('tr.frow.mem td.k')).map((td) => td.textContent?.trim())
+    expect(members).toEqual(['10.0.20.14 -> port 445'])
+    expect(document.querySelector('tr.crule')?.textContent).toContain('Showing the one that matches the filters.')
+  })
+
+  it('shows the scored number beside the type only where a detector scored the flag, and says where it came from in the drawer', async () => {
+    render(Flags)
+    flushSync()
+
+    const confs = Array.from(document.querySelectorAll('tr.frow .fmark .conf')).map((el) => el.textContent)
+    expect(confs).toEqual(['72'])
+    const scored = document.querySelector('tr.frow:has(.conf)') as HTMLElement
+    expect(scored.querySelector('td.k')?.textContent?.trim()).toBe('10.0.20.14')
+
+    await fireEvent.click(scored)
+    flushSync()
+    const drawer = document.querySelector('tr.drawer') as HTMLElement
+    expect(drawer.querySelector('.story .scored')?.textContent?.replace(/\s+/g, ' ')).toContain(
+      "Scored 72. How far this sits from 10.0.20.14's usual, and how much history backs that. The detector's number, not a verdict.",
+    )
+    expect(drawer.querySelector('.side .span')?.textContent?.replace(/\s+/g, ' ')).toContain('· scored 72')
+  })
+
+  it('the strip counts open flags by type, and a click filters the table to that type; again clears it', async () => {
+    render(Flags)
+    flushSync()
+
+    const cells = () =>
+      Array.from(document.querySelectorAll('.btc')).map((b) => b.textContent?.replace(/\s+/g, ' ').trim())
+    expect(document.querySelector('.bytype .btl')?.textContent?.replace(/\s+/g, ' ')).toBe('by type · 4 open')
+    // Equal counts fall back to the metrics order the engine room uses.
+    expect(cells()).toEqual(['✱Port scan1', '▲Activity spike1', '✱Outbound anomaly1', '✱Repeated drops on a port1'])
+
+    await fireEvent.click(screen.getByRole('button', { name: /Repeated drops on a port/ }))
+    flushSync()
+
+    expect((screen.getByLabelText('Filter by flag type') as HTMLInputElement).value).toBe('Repeated drops on a port')
+    // Only the campaign's repeated-drops member is left, the campaign opened to it.
+    const wheres = Array.from(document.querySelectorAll('tr.frow.mem td.k, tr.frow:not(.camp):not(.mem) td.k')).map((td) => td.textContent?.trim())
+    expect(wheres).toEqual(['10.0.20.14 -> port 445'])
+
+    await fireEvent.click(screen.getByRole('button', { name: /Repeated drops on a port/ }))
+    flushSync()
+    expect((screen.getByLabelText('Filter by flag type') as HTMLInputElement).value).toBe('')
+    expect(document.querySelectorAll('tr.frow')).toHaveLength(3)
+  })
+
+  it('the strip is gone when nothing is open', () => {
+    flagsState.list = []
+    render(Flags)
+    flushSync()
+    expect(document.querySelector('.bytype')).toBeNull()
+  })
+})

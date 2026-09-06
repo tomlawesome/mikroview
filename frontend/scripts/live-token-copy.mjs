@@ -83,7 +83,7 @@ const line =
 feedRaw(line)
 
 // Wait for the event on the *server* before asking the UI about it --
-// #354's pattern, the same reason live-flags-investigate.mjs waits via
+// #354's pattern, the same reason live-flags-expectations.mjs waits via
 // waitForFlag (#450/#465). Under the full suite's load a single fed
 // line can be dropped by a saturated ingest queue or arrive seconds
 // late; waiting on the rendered row alone turned that into an uncaught

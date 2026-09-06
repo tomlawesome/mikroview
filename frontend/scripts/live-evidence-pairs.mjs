@@ -223,9 +223,9 @@ if (psExt.ok) {
 // per-host pairs panel when this drawer was rebuilt to round 29, and
 // #791 is where it comes back"). Nothing in the current drawer renders
 // a per-host grouping at all, so this cannot be fixed by reselecting.
-// Recorded as a gap, same as #788's other two (live-flags-layout,
-// live-verdicts): left failing on purpose, not deleted, so #791 landing
-// turns it green again rather than the coverage having quietly vanished.
+// Recorded as a gap (#788): left failing on purpose, not deleted, so
+// #791 landing turns it green again rather than the coverage having
+// quietly vanished.
 
 if (cp.ok) {
   await goTo(page, 'Flags')
