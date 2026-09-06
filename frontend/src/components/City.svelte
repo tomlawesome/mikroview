@@ -1065,8 +1065,8 @@
 
   /* ---------------- the minimap ---------------- */
 
-  const MINI_W = 214
-  const MINI_H = 132
+  const MINI_W = 264
+  const MINI_H = 148
   const miniCam = $derived(minimapCam(ground.bounds, MINI_W, MINI_H))
   const mini = $derived.by(() => {
     const mc = miniCam
@@ -1079,7 +1079,10 @@
       fo: d.dark ? 0.22 : 0.5,
       name: d.name,
       x: R2(X(mc, d.u)),
-      y: R2(Y(mc, d.v)),
+      // The name sits under the plate's bottom vertex (#978), not over
+      // the diamond and its device dots -- clamped so a plate at the
+      // panel's own bottom edge keeps its name inside the svg.
+      y: R2(Math.min(MINI_H - 3, Y(mc, d.v + d.r) + 8)),
     }))
     const nodes = g.nodes.filter((n) => n.kind !== 'post').map((n) => ({ x: R2(X(mc, n.u)), y: R2(Y(mc, n.v)) }))
     return { river, plates, nodes }
@@ -1502,7 +1505,7 @@
     z-index: 8;
     left: 20px;
     top: 58px;
-    width: 232px;
+    width: 282px;
     padding: 8px 9px 7px;
     background: var(--glass);
     border: 1px solid var(--hair-2);
@@ -1545,11 +1548,12 @@
     justify-content: space-between;
   }
 
-  /* District names on the minimap (#978): the smallest legible mono,
-     since the plate itself is already tiny -- otherwise the plates
-     are meaningless colour without a legend. */
+  /* District names on the minimap (#978): the app's own 8px legibility
+     floor, never below it (owner, 2026-09-06) -- the panel grew to give
+     six names this size the room, and each sits under its own plate
+     rather than over the diamond. */
   .mini-name {
-    font: 6px var(--font-mono);
+    font: 8px var(--font-mono);
     fill: var(--fg-dim);
     pointer-events: none;
   }
