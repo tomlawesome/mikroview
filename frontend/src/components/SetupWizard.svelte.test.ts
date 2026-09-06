@@ -619,6 +619,58 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-hap-ax2', 'ingest', 'hap-ax2'))
   })
 
+  // #1009: the normal first-run shape is opening this step before any
+  // router has reported at all -- devices starts empty, not absent. An
+  // empty first read must not count as "looked and it wasn't one", or
+  // the auto-mint above never gets its one shot once the router does
+  // show up, and the operator is stuck with the picker forever.
+  it('mints once a router arrives, having opened the step with none known yet (#1009)', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    wizardState.pane = 6
+    wizardState.devices = []
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.textContent).toContain('No routers known yet'))
+    expect(createToken).not.toHaveBeenCalled()
+
+    // The router mikroview was waiting for reports in, the same way a
+    // later poll tick would deliver it.
+    wizardState.devices = [rb5009()]
+
+    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-rb5009', 'ingest', 'rb5009'))
+  })
+
+  // #1009's actual defect: the count passing through one on its way
+  // from two down to one used to be read as "exactly one router,
+  // skip the picker", tearing the form (and the operator's in-progress
+  // pick) out from under them. Once the picker has been shown for a
+  // real count, later polls must not move it again.
+  it('keeps the picker up once two known routers settle to one, rather than minting for whoever is left (#1009)', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    const twoDevices = [rb5009(), { ...rb5009(), id: 'hap-ax2', name: 'hap-ax2' }]
+    vi.mocked(fetchDevices).mockResolvedValue(twoDevices)
+    wizardState.pane = 6
+    wizardState.devices = twoDevices
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelectorAll('.mint select option').length).toBe(3))
+
+    // One of the two drops off, the way a later poll might read it.
+    wizardState.devices = [rb5009()]
+
+    await tick()
+    await waitFor(() => expect(container.querySelector('.mint select')).toBeTruthy())
+    expect(createToken).not.toHaveBeenCalled()
+  })
+
   it('reaches the lost-router shape only through wizardState.openLostRouter, never on its own', async () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(
       backupsFixture({
