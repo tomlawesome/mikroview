@@ -212,7 +212,16 @@
   --accent-bg-hover: color-mix(in srgb, var(--accent) 18%, transparent);
 
   --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  /* 'Liberation Mono' sits ahead of the bare 'monospace' keyword (#1010):
+     that generic keyword's actual font is picked by the OS/fontconfig,
+     not this stack, so two Linux hosts with different font packages can
+     resolve it to fonts with markedly different character widths --
+     which silently changed how wide a pinned-width monospace cell (the
+     flags table's FLAG column) needed to be between a developer's
+     machine and the CI image. Liberation Mono is what Playwright's
+     `--with-deps` installs on Debian for Chromium's own use, so pinning
+     it here makes the metric the same font live-check measures. */
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
   /* #721: the deck's roll rail (Deck.svelte's `.roll-rail`) is fixed
      over the right edge of every scene; every card's content needs to
