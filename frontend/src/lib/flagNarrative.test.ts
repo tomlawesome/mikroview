@@ -59,12 +59,10 @@ describe('headlineFor / storyFor per flag type (#678)', () => {
     expect(storyFor(f)).toContain('ports 22 and 3389')
   })
 
-  it('activity_spike: cites the confidence score only when the flag carries one', () => {
+  it('activity_spike: leaves the confidence score to the drawer\'s scored line (#988), never a likelihood in the story', () => {
     const withConfidence = baseFlag({ type: 'activity_spike', count: 500, confidence: 82 })
-    expect(storyFor(withConfidence)).toContain('82%')
-
-    const without = baseFlag({ type: 'activity_spike', count: 500, confidence: undefined })
-    expect(storyFor(without)).not.toContain('%')
+    expect(storyFor(withConfidence)).not.toContain('82')
+    expect(storyFor(withConfidence)).not.toContain('%')
   })
 
   it('global_spike: network-wide, no single source named', () => {
