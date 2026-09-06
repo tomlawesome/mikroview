@@ -134,8 +134,26 @@ check(
 // version renders the same dialect today, so the answer must come back
 // byte-identical to the blocks already collected.
 const pickedLabel = versionOptions.find((label, i) => i > 0)
+// Matched on the request's own `version` field, not just the URL.
+// wizard.svelte.ts's refreshCommands runs on a 5s poll for as long as
+// the modal is open (SetupWizard.svelte's POLL_MS), and re-fires
+// whenever commandsKey changes -- which includes pushKinds, so a
+// backend still catching up on an earlier scenario's push can flip it
+// independently of anything this scenario does. Its own comment records
+// this exact test failing that way before the seq guard existed: a
+// still-in-flight, unrelated commands request resolving around the same
+// time as the deliberate pick. The guard fixes which response the app
+// keeps; it does nothing for a test that matches on URL alone, which can
+// just as easily catch the unrelated response, see 200 (a normal
+// success -- nothing here was ever a bad response), and read `reseen`
+// before the version-scoped one has landed. Requiring `version` to equal
+// what was actually picked -- not merely "some commands request
+// answered" -- is what ties the wait to the exchange this step needs.
+const pickedValue = await versionSelect.locator('option').nth(1).getAttribute('value')
 const [pickResponse] = await Promise.all([
-  page.waitForResponse((r) => r.url().includes('/api/setup/commands')),
+  page.waitForResponse(
+    (r) => r.url().includes('/api/setup/commands') && r.request().postDataJSON()?.version === pickedValue,
+  ),
   versionSelect.selectOption({ label: pickedLabel }),
 ])
 check(pickResponse.status() === 200, `picking ${pickedLabel} re-requests the commands (${pickResponse.status()})`)
