@@ -22,8 +22,10 @@ export interface Building {
   v: number
   /** Footprint radius, in the diamond metric. */
   R: number
-  /** Plinth height. #867 makes this the importance reading; here it is
-   * a rank within the district so the skyline is not flat. */
+  /** A rank within the district, busiest first. #986 dropped the plinth
+   * that once stood this tall (#867's importance reading) -- City.svelte
+   * draws every building flat now -- but layout.ts still computes it and
+   * layout.test.ts/depth.test.ts still check it. */
   h: number
   /** The district this stands in; null for a router or a bridge head. */
   districtId: string | null

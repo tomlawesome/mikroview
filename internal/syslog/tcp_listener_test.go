@@ -300,6 +300,87 @@ func TestPerSourceConnectionCap(t *testing.T) {
 	}
 }
 
+// TestRejectedConfiguredHostsTracksAndBoundsRecentLockouts is the
+// regression test for #995's one genuinely new backend piece:
+// noteRejected knew which declared host it was turning away but only
+// ever bumped a counter. It must now remember which hosts, most recent
+// first, so the banner can name the locked-out router -- and it must
+// never grow without bound, since the accept loop calls this off an
+// unauthenticated port that an attacker fully controls the traffic on.
+func TestRejectedConfiguredHostsTracksAndBoundsRecentLockouts(t *testing.T) {
+	prevConfigured := configuredSources.Load()
+	t.Cleanup(func() { configuredSources.Store(prevConfigured) })
+	prevHosts := rejectedConfiguredHostsSnapshot()
+	t.Cleanup(func() {
+		rejectedConfiguredHostsMu.Lock()
+		rejectedConfiguredHosts = prevHosts
+		rejectedConfiguredHostsMu.Unlock()
+	})
+
+	hosts := make([]string, maxRejectedConfiguredHosts+3)
+	for i := range hosts {
+		hosts[i] = fmt.Sprintf("10.20.%d.1", i)
+	}
+	SetConfiguredSources(hosts)
+
+	for _, h := range hosts {
+		noteRejected(h)
+	}
+
+	got := rejectedConfiguredHostsSnapshot()
+	if len(got) != maxRejectedConfiguredHosts {
+		t.Fatalf("got %d retained hosts, want bounded to %d: %v", len(got), maxRejectedConfiguredHosts, got)
+	}
+
+	wantMostRecent := hosts[len(hosts)-1]
+	if got[0] != wantMostRecent {
+		t.Errorf("most recently rejected host = %q, want %q (list: %v)", got[0], wantMostRecent, got)
+	}
+
+	for _, h := range hosts[:3] {
+		for _, g := range got {
+			if g == h {
+				t.Errorf("host %q rejected earliest should have been evicted, still found in %v", h, got)
+			}
+		}
+	}
+
+	// Re-rejecting an already-listed host moves it to the front instead
+	// of duplicating it or growing the list.
+	repeat := got[len(got)-1]
+	noteRejected(repeat)
+	got2 := rejectedConfiguredHostsSnapshot()
+	if len(got2) != maxRejectedConfiguredHosts {
+		t.Fatalf("re-rejecting a known host changed the list length: got %d, want %d", len(got2), maxRejectedConfiguredHosts)
+	}
+	if got2[0] != repeat {
+		t.Errorf("re-rejecting %q should move it to the front, got %v", repeat, got2)
+	}
+	count := 0
+	for _, g := range got2 {
+		if g == repeat {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("%q appears %d times, want exactly once: %v", repeat, count, got2)
+	}
+
+	// An undeclared host is never a "locked-out router" -- it must not
+	// leak into the same list, which the banner reads as declared-only.
+	noteRejected("10.99.99.99")
+	got3 := rejectedConfiguredHostsSnapshot()
+	for _, g := range got3 {
+		if g == "10.99.99.99" {
+			t.Errorf("undeclared host leaked into RejectedConfiguredHosts: %v", got3)
+		}
+	}
+
+	if stats := Stats(); len(stats.RejectedConfiguredHosts) != maxRejectedConfiguredHosts {
+		t.Errorf("Stats().RejectedConfiguredHosts length = %d, want %d", len(stats.RejectedConfiguredHosts), maxRejectedConfiguredHosts)
+	}
+}
+
 // TestTCPUnterminatedMessageIsIngested is the case every other test in
 // this file misses, and the one that matters: RouterOS sends each
 // message as a bare payload with no trailing newline and no octet
@@ -561,6 +642,20 @@ func TestTCPOversizedMessageFragmentedAcrossManyReadsStaysBounded(t *testing.T) 
 	}
 	if Stats().Oversized == 0 {
 		t.Error("the discarded continuation was not counted")
+	}
+
+	// #995: the yellow "non-RouterOS sender" banner's ratified copy
+	// names the sender ("received from <ip>"), which only Stats().
+	// OversizedHost can supply. The second (normal) message's emit
+	// happens-after noteOversizedHost in program order on the
+	// connection's own goroutine, and the channel receive above
+	// synchronizes with it, so this read is race-free without a poll.
+	wantHost, _, err := net.SplitHostPort(conn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("split local addr: %v", err)
+	}
+	if got := Stats().OversizedHost; got != wantHost {
+		t.Errorf("Stats().OversizedHost = %q, want %q (the connection that sent the oversized message)", got, wantHost)
 	}
 }
 

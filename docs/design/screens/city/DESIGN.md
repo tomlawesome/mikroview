@@ -35,8 +35,8 @@ clients · services · zones · ◆ city · borough · district · street
   both views; the header, badges and callout wording are the 2D map's.
 
 **The join (#869).** One `<input type=range>` with seven stops carries
-the whole axis above; which stop was last open persists per user, the
-same way the importance reading above does. Crossing the centre swaps
+the whole axis above; which stop was last open persists per user.
+Crossing the centre swaps
 the drawing, and carries what still makes sense rather than resetting
 everything: the selected lens always carries (it is one piece of state
 threaded to both sides); a reach -- a host held open on the 2D map, or
@@ -50,8 +50,7 @@ returning to the city lands back where it was left.
 
 | City | Network | Drawn as |
 |---|---|---|
-| Building | a host, a router, a gateway | an isometric device shape by type, VLAN-tinted three-face shading |
-| Plinth under a building | importance (two readings, below) | a raised base; the device itself never scales |
+| Building | a host, a router, a gateway | an isometric device shape by type, VLAN-tinted three-face shading, flat on its district plate |
 | District | a VLAN / zone | an isometric plate with a low wall around its edge, its name, subnet and coverage badge on a plaque |
 | Borough | a router's territory | that router's districts, grouped; a second router is a second borough down a road |
 | Road | traffic between two buildings or a building and a gate | a curved ground ribbon: width = volume, colour = verdict (`--accept`, `--drop`, `--alarm` for an escalated unplanned road) |
@@ -71,18 +70,13 @@ the camera occludes a road behind it. Roads leave and arrive at a
 footprint edge at a tangent; no straight runs, no elbows; a road that
 would cross a plate goes round it and through a gate.
 
-## Height = importance
+## Height (dropped)
 
-Two readings, a small toggle on the survey (persisted per user):
-
-- **depended-on** (default): how many distinct hosts talk to it in the
-  window — routers tallest, then the services everyone asks (DNS, NAS),
-  then workstations, then phones and IoT.
-- **watched**: the flag and watch weight the operator has put on it — a
-  twice-flagged camera becomes the spike; everything unwatched sits low.
-
-The reading changes the plinth height with a transition; under reduced
-motion it snaps.
+#867 built a plinth under each building whose height read one of two
+importance readings, depended-on or watched, toggled per user. The
+owner ratified dropping the height concept altogether (#981); #986
+removed the toggle, the plinth and both readings. Devices now sit flat
+on their district plate.
 
 ## The device library
 
@@ -141,9 +135,9 @@ coverage badge in alarm ink or an escalated callout.
 ## Honesty and motion
 
 Everything drawn arrived; nothing was provoked. A district with no log
-rule is unlit, never guessed at. Motion: road flow dashes, the plinth
-transition, camera moves between stops; all instant under reduced
-motion. Every building and district has an accessible name; the
+rule is unlit, never guessed at. Motion: road flow dashes, camera moves
+between stops; all instant under reduced motion. Every building and
+district has an accessible name; the
 keyboard walks buildings within a district and districts within the
 map, Enter stands on a building, Esc surfaces.
 
