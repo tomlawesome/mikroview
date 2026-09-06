@@ -270,6 +270,23 @@ export interface SyslogListenerStats {
   // Above zero means a *declared* router was turned away, which is the
   // condition worth showing rather than saturation on its own.
   rejectedConfigured: number
+  // Syslog messages discarded because the ingest channel was full --
+  // real router records that were received and then thrown away.
+  dropped: number
+  // Continuation reads discarded from a message over the 64 KiB
+  // per-message limit. Above zero means something is sending log lines
+  // no RouterOS device produces.
+  oversized: number
+  // The most recently rejected declared hosts, most-recent-first,
+  // bounded server-side (see internal/syslog.maxRejectedConfiguredHosts).
+  // #995: this is what lets the orange banner name the locked-out
+  // router instead of only counting it. Empty when nothing declared has
+  // been turned away.
+  rejectedConfiguredHosts: string[]
+  // The source of the most recent oversized message -- what the yellow
+  // "non-RouterOS sender" banner's "received from <ip>" names. Empty
+  // string until the first oversized message.
+  oversizedHost: string
 }
 
 // Mirrors internal/api/auth.go's sessionResponse.

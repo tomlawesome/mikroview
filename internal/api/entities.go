@@ -4,8 +4,10 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/tomlawesome/mikroview/internal/entities"
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // entityRequest is the wire shape for both POST (create/update) and
@@ -64,6 +66,7 @@ func (s *Server) handleEntitiesUpsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Audit.Record(auditActor(r), "entity.upsert", e.Type+":"+e.Key, "label="+e.Label)
+	s.restampBufferedNames(e.Type, e.Key)
 	status := http.StatusCreated
 	if existed {
 		status = http.StatusOK
@@ -93,5 +96,56 @@ func (s *Server) handleEntitiesDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Audit.Record(auditActor(r), "entity.delete", req.Type+":"+req.Key, "")
+	s.restampBufferedNames(req.Type, req.Key)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+// restampBufferedNames re-resolves the friendly-name fields derived from
+// one entity key on every event already in the ring, straight after an
+// upsert or delete has changed what that key resolves to (#993 -- see
+// store.Restamp's comment for why buffered events would otherwise keep
+// the old name in every later fetch). Resolution is re-run through the
+// same resolver ingest uses rather than the new label pasted in, so the
+// precedence that actually applies -- RouterOS first for hosts (#186:
+// "RouterOS always wins"), config.yaml as fallback -- decides what is
+// stamped, exactly as it would for the next arriving event.
+func (s *Server) restampBufferedNames(typ, key string) {
+	if s.Store == nil {
+		return
+	}
+	switch typ {
+	case entities.TypeHost:
+		s.Store.Restamp(func(e *store.Event) {
+			// Host names are device-scoped (one router's pushed name
+			// must not label another router's traffic), so the lookup
+			// is per event, not hoisted.
+			if e.SrcIP == key {
+				e.SrcHostName = s.Naming.Host(e.DeviceID, key)
+			}
+			if e.DstIP == key {
+				e.DstHostName = s.Naming.Host(e.DeviceID, key)
+			}
+		})
+	case entities.TypePort:
+		port, err := strconv.Atoi(key)
+		if err != nil {
+			return
+		}
+		name := s.Naming.Port(port)
+		s.Store.Restamp(func(e *store.Event) {
+			if e.SrcPort == port {
+				e.SrcPortName = name
+			}
+			if e.DstPort == port {
+				e.DstPortName = name
+			}
+		})
+	case entities.TypeRule:
+		name := s.Naming.Rule(key)
+		s.Store.Restamp(func(e *store.Event) {
+			if e.RuleLabel == key {
+				e.RuleName = name
+			}
+		})
+	}
 }

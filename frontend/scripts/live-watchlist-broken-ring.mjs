@@ -44,19 +44,17 @@
 // earlier scenarios have no logging rules" state that scenario documents
 // needing.
 //
-// #971: three scenarios that sort earlier in the whole suite --
-// live-city-importance.mjs, live-topography-furniture.mjs and
-// live-topography-layout.mjs (the last makes two) -- each create a
-// watchlist entry of their own and never delete it, unlike every
-// scenario in this file's own directory. coverage.go's "nothing anywhere
-// logs" answer applies to every expectation definition regardless of
-// its own scope, so the non-logging push below turns their leftovers
-// broken too, and the marker this scenario asserts on ends up counting
-// somebody else's watches alongside the one it made. This scenario's own
-// subject is that exact count, so rather than loosen "exactly one" into
-// a number that depends on which of those upstream scenarios have run,
-// it clears out any stray expectation definitions itself before making
-// its own -- see the cleanup below.
+// #971: scenarios that sort earlier in the whole suite can leave a
+// watchlist entry of their own sitting around (live-topography-furniture.mjs,
+// live-topography-layout.mjs, which makes two). coverage.go's "nothing
+// anywhere logs" answer applies to every expectation definition
+// regardless of its own scope, so a leftover entry would turn broken
+// too, and the marker this scenario asserts on would end up counting
+// somebody else's watches alongside the one it made. This scenario's
+// own subject is that exact count, so rather than depend on which
+// upstream scenarios ran and whether their own cleanup fired, it clears
+// out any stray expectation definitions itself before making its own --
+// see the cleanup below.
 
 import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 

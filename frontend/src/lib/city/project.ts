@@ -104,10 +104,23 @@ export function minimapCam(bounds: GroundRect, W: number, H: number, pad = 6): C
   }
 }
 
+/**
+ * The camera height the city stop opens at (#979): the whole estate at
+ * a glance. Fits the estate's bounds into the stage the same way
+ * minimapCam fits its panel, capped at the mockup's own survey height
+ * (STOP_HEIGHT.city) so a small estate never opens closer in than it
+ * always did -- the cap means this only ever pulls back, never zooms
+ * in. The pad keeps edge plates and their labels clear of the frame.
+ */
+export function cityFitS(bounds: GroundRect, w = STAGE_W, h = STAGE_H, pad = 40): number {
+  const s = Math.min((w - 2 * pad) / ((bounds.u1 - bounds.u0) * IK || 1), (h - 2 * pad) / ((bounds.v1 - bounds.v0) * VK || 1))
+  return Math.min(STOP_HEIGHT.city, s)
+}
+
 /** Whether the reader has asked for reduced motion -- the one place the
- * city decides that, so a camera move (moveCamera) and a plinth height
- * change (importance.ts's tweenHeights, wired up in City.svelte) read
- * the same answer rather than each asking matchMedia itself. */
+ * city decides that, so every camera move (moveCamera, wired up in
+ * City.svelte) reads the same answer rather than each asking
+ * matchMedia itself. */
 export const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /** The mockup's easing for a camera move, sampled: 0..1 in, 0..1 out. */
@@ -164,6 +177,24 @@ export function wallFace(c: Cam, u: number, v: number, R: number, h: number, sid
   const by = Y(c, b[1], z0)
   const rise = h * ZK * c.S
   return 'M' + ax + ' ' + R2(ay) + 'L' + bx + ' ' + R2(by) + 'L' + bx + ' ' + R2(by - rise) + 'L' + ax + ' ' + R2(ay - rise) + 'Z'
+}
+
+/** A wall's own drop-mark callout must never print over a borough
+ * label (#982): each callout is checked against every ring label at its
+ * own line, and pushed onto its own line clear of it -- above if that
+ * has room, below otherwise -- rather than left to draw across it.
+ * Both label kinds are text-anchor="middle", so x is each one's centre. */
+export function clearDropLabels(dropLabels: { x: number; y: number; text: string }[], rings: { x: number; y: number; label: string }[], lineH = 14): void {
+  for (const dl of dropLabels) {
+    const dlHalfW = (dl.text.length * 5.4 + 12) / 2
+    for (const r of rings) {
+      const rHalfW = (r.label.length * 6.2 + 12) / 2
+      if (Math.abs(dl.x - r.x) >= dlHalfW + rHalfW) continue
+      if (Math.abs(dl.y - r.y) >= lineH) continue
+      const above = dl.y - lineH
+      dl.y = above > lineH ? above : dl.y + lineH
+    }
+  }
 }
 
 /** The four ground corners of a box on the diagonal axes: half-extent A

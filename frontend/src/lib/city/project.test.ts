@@ -9,6 +9,7 @@ import {
   cam,
   centreOf,
   clampCentre,
+  clearDropLabels,
   diamond,
   ease,
   gbox,
@@ -97,5 +98,26 @@ describe('city projection', () => {
     expect(b.top.endsWith('Z')).toBe(true)
     expect(b.left.endsWith('Z')).toBe(true)
     expect(b.right.endsWith('Z')).toBe(true)
+  })
+
+  it('pushes a drop-mark callout clear of a borough label it would otherwise print over (#982)', () => {
+    const dropLabels = [{ x: 400, y: 100, text: 'caught by iot-egress-drop' }]
+    const rings = [{ x: 410, y: 100, label: 'HAP-AX3 BOROUGH · 3 DISTRICT' }]
+    clearDropLabels(dropLabels, rings)
+    expect(Math.abs(dropLabels[0].y - rings[0].y)).toBeGreaterThanOrEqual(14)
+  })
+
+  it('moves the callout below when there is no room above (near the top of the map)', () => {
+    const dropLabels = [{ x: 400, y: 8, text: 'caught by iot-egress-drop' }]
+    const rings = [{ x: 410, y: 8, label: 'HAP-AX3 BOROUGH · 3 DISTRICT' }]
+    clearDropLabels(dropLabels, rings)
+    expect(dropLabels[0].y).toBeGreaterThan(8)
+  })
+
+  it('leaves a callout untouched when it never overlaps a label', () => {
+    const dropLabels = [{ x: 0, y: 0, text: 'caught by iot-egress-drop' }]
+    const rings = [{ x: 500, y: 500, label: 'HAP-AX3 BOROUGH · 3 DISTRICT' }]
+    clearDropLabels(dropLabels, rings)
+    expect(dropLabels[0]).toEqual({ x: 0, y: 0, text: 'caught by iot-egress-drop' })
   })
 })
