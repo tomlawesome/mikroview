@@ -194,12 +194,25 @@ if (populated.length < 2) {
 }
 check(populated.length >= 2, `at least two minutes carry real traffic before fencing -- got ${populated.length}`)
 
-// The target minute's position within the whisper's own visible window
-// (its last WHISPER_WINDOW_MINUTES buckets), not within the server's
-// full 60-bucket series -- mirrors whisperStats.ts's recentBuckets.
+// The target must be a minute the whisper's own window (its last
+// WHISPER_WINDOW_MINUTES buckets, not the server's full 60-bucket
+// series -- mirrors whisperStats.ts's recentBuckets) still shows *right
+// now*, not merely one that had traffic at some point. #970: plain
+// populated[0] (the earliest minute the server has ever recorded) sits
+// inside the window on a fresh instance, but well into the full gate the
+// server's 60-minute history reaches back past the window's own 15, so
+// the earliest-ever minute has already scrolled out from under the
+// whisper by the time this scenario runs -- there is nothing left to drag
+// over. Restricting the search to the minutes the window still shows, and
+// keeping the earliest of those, fixes that without weakening the point
+// of the pick: the older the fenced minute, the more of the table's own
+// (mostly more recent) rows sit outside its range for the dimming check
+// below to find.
 const visible = await visibleBuckets(page)
-const targetLabel = hmLabel(populated[0])
-const targetIdx = visible.findIndex((b) => b.time === populated[0])
+const visibleTimes = new Set(visible.map((b) => b.time))
+const target = populated.find((t) => visibleTimes.has(t))
+const targetLabel = target ? hmLabel(target) : 'none'
+const targetIdx = target ? visible.findIndex((b) => b.time === target) : -1
 check(targetIdx >= 0, `the whisper's own window includes the populated minute ${targetLabel}`)
 
 if (targetIdx >= 0) {
