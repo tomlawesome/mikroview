@@ -7,10 +7,26 @@
 // push opens real gates, the policy lens lights every one with its rule
 // number while the traffic lens leaves the wall quiet, and a drop road
 // ends at the wall carrying the refusing rule's own name.
+//
+// The no-rule-label pair (#969) is read by standing on its own host
+// rather than off the city-wide escalated wall: `worstUnplannedOf`
+// (reality.ts) picks the single busiest unplanned pair on the whole
+// device, ratified and correct (#969, decision on the issue), and on a
+// live instance shared with every other scenario in a gate run some
+// earlier scenario's own traffic is routinely busier than the nine
+// events this one feeds. Standing on the host that sent them reads its
+// own reach overlay instead (City.svelte's dropMarks, ~947) -- drawn
+// for every one of *that host's* blocked strands regardless of which
+// pair the city-wide wall escalates, the same wording and the same code
+// path either way.
 
 import { session, check, done, feedRaw } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
+// The one host that sends the unplanned, no-rule-label traffic below --
+// its own IP, not shared with any of the accepted-traffic hosts, so
+// standing on it reads a clean single strand.
+const IOT_UNPLANNED_SRC = '10.0.10.39'
 
 const { page, consoleErrors } = await session()
 
@@ -117,18 +133,19 @@ check(
 )
 
 // Traffic: the gate carries real traffic; the guest boundary is refused
-// by its own named rule; a third, unrelated pair (lan -> iot) crosses
-// with no rule anticipating it at all and no rule label on the drop, so
-// the escalated callout must say "no rule named" rather than inventing
-// one. Kept off the guest pair deliberately: a road folds both
-// directions of the same pair together (layout.ts), so a rule label on
-// one direction would otherwise paper over the other's silence.
+// by its own named rule; a third, unrelated pair (lan -> iot), one host
+// only, crosses with no rule anticipating it at all and no rule label on
+// the drop, so standing on that host must read "no rule named" rather
+// than inventing one. Kept off the guest pair deliberately: a road folds
+// both directions of the same pair together (layout.ts), so a rule
+// label on one direction would otherwise paper over the other's
+// silence.
 for (let i = 0; i < 6; i++) {
   feedRaw(`firewall,info A|walls| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), 10.0.10.2${i}:5${100 + i}->10.0.40.10:443, len 60`)
   feedRaw(`firewall,info D|guest-isolation| forward: in:vlan-guest out:bridge-lan, connection-state:new, proto TCP (SYN), 10.0.30.2${i}:5${200 + i}->10.0.10.10:445, len 60`)
 }
 for (let i = 0; i < 9; i++) {
-  feedRaw(`firewall,info D|| forward: in:bridge-lan out:vlan-iot, connection-state:new, proto TCP (SYN), 10.0.10.3${i % 9}:5${300 + i}->10.0.20.20:22, len 60`)
+  feedRaw(`firewall,info D|| forward: in:bridge-lan out:vlan-iot, connection-state:new, proto TCP (SYN), ${IOT_UNPLANNED_SRC}:5${300 + i}->10.0.20.20:22, len 60`)
 }
 
 await toDistrictStop()
@@ -150,15 +167,48 @@ check(
   `every lit gate carries a plain rule count, not invented text (${JSON.stringify(gateNumbers)})`,
 )
 
-// Both marks below are drawn per refused road, not only on the
-// escalated one, so read them at the city stop where the whole estate
-// is in frame -- the district stop frames one district and which one
-// that is depends on the data (#869's axis, #897).
+// --- The no-rule-label pair, read off its own host (#969) ------------------
+//
+// Still at the district stop. Walk the keyboard the same way
+// live-city-reach.mjs does, except this district carries more than one
+// building, so every one of them is tried in turn rather than assuming
+// the first is the right one.
+const targetCid = `bridge-lan/${IOT_UNPLANNED_SRC}`
+const firstDistrict = page.locator('[data-card="topography"] .city .plate[tabindex="0"]')
+await firstDistrict.focus()
+let stoodOnHost = false
+for (let d = 0; d < 6 && !stoodOnHost; d++) {
+  for (let b = 0; b < 8; b++) {
+    await page.keyboard.press('ArrowRight')
+    const cid = await page.evaluate(() => document.activeElement?.getAttribute('data-cid') ?? null)
+    if (cid === targetCid) {
+      stoodOnHost = true
+      break
+    }
+  }
+  if (stoodOnHost) break
+  await page.keyboard.press('ArrowDown')
+}
+check(stoodOnHost, `the keyboard walk reaches the unplanned pair's own host (${targetCid})`)
+
+await page.keyboard.press('Enter')
+await new Promise((r) => setTimeout(r, 900))
+const standCity = page.locator('[data-card="topography"] .city')
+check((await standCity.getAttribute('data-stop')) === 'street', 'standing on the host drops the camera to the street stop')
+const standText = await standCity.textContent()
+check(standText.includes('caught, no rule named'), "standing on its own host, the unplanned pair says so plainly rather than guessing one -- whichever pair the city-wide wall escalates")
+
+await page.keyboard.press('Escape')
+await new Promise((r) => setTimeout(r, 900))
+
+// --- The named refusal, still read at the city stop (#865, unchanged) -----
+//
+// This one is drawn on every refused road, not only an escalated one, so
+// it is read where the whole estate is in frame.
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('3') // the city stop
 await new Promise((r) => setTimeout(r, 900))
 const cityText = await page.locator('[data-card="topography"] .city').textContent()
 check(cityText.includes('caught by guest-isolation'), 'the refused boundary names its own rule beside the mark, from the event itself')
-check(cityText.includes('caught, no rule named'), 'the escalated pair with no rule label says so plainly rather than guessing one')
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()
