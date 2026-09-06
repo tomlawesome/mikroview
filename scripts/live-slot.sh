@@ -51,6 +51,35 @@ MV_SLOT_SYSLOG_TLS_PORT=$((16801 + MV_SLOT * 2))
 MV_STANDALONE_HTTP_PORT=$((19900 + MV_SLOT))
 MV_STANDALONE_SYSLOG_TLS_PORT=$((17000 + MV_SLOT))
 
+# A sharded gate (#1004) runs several instances of the same checkout at
+# once, one per shard, so a shard cannot take the slot's single pair: the
+# shards would bind the same port and the second `up` would refuse. Three
+# more bands, eight ports per slot in each -- MV_SHARD is `i/N`, 1-based,
+# so N is capped at 8 here, which is more than one host can usefully run:
+#
+#   15000-15511  shard i's syslog          (15000 + slot*8 + i)
+#   15600-16111  shard i's syslog-TLS      (15600 + slot*8 + i)
+#   18000-18511  shard i's HTTP            (18000 + slot*8 + i)
+#
+# An unsharded run keeps the bands above exactly as before, so nothing
+# that never sets MV_SHARD moves.
+MV_SHARD_INDEX=""
+MV_SHARD_COUNT=""
+if [ -n "${MV_SHARD:-}" ]; then
+  case "$MV_SHARD" in
+    [1-8]/[1-8]) ;;
+    *) echo "live-slot: MV_SHARD must be i/N with 1 <= i <= N <= 8, got '$MV_SHARD'" >&2; exit 2 ;;
+  esac
+  MV_SHARD_INDEX="${MV_SHARD%/*}"
+  MV_SHARD_COUNT="${MV_SHARD#*/}"
+  if [ "$MV_SHARD_INDEX" -gt "$MV_SHARD_COUNT" ]; then
+    echo "live-slot: MV_SHARD index exceeds the shard count: '$MV_SHARD'" >&2; exit 2
+  fi
+  MV_SLOT_HTTP_PORT=$((18000 + MV_SLOT * 8 + MV_SHARD_INDEX))
+  MV_SLOT_SYSLOG_PORT=$((15000 + MV_SLOT * 8 + MV_SHARD_INDEX))
+  MV_SLOT_SYSLOG_TLS_PORT=$((15600 + MV_SLOT * 8 + MV_SHARD_INDEX))
+fi
+
 # The RouterOS fixture (live-routeros-step0.sh) is opt-in rather than
 # part of live-check, but it ran on the same two-allocator mistake: its
 # SFTP probe defaulted to 19822, which is slot 22's HTTP port, and its
