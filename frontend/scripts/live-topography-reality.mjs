@@ -94,7 +94,20 @@ feedRaw('firewall,info A|mystery-accept| forward: in:ether1 out:ether5, connecti
 // and its badge can never say held -- the refused-share check below
 // starved on exactly that. accepts stays 0 on this pair, so it reads
 // holding in the suite and standalone alike.
-for (let i = 0; i < 4; i++) {
+//
+// #1006: 20 iterations, not 4. zones.svelte.ts caps the lane row at the
+// five busiest boundaries (deliberately -- "the map is spare by
+// design"), and on a suite run live-topography-layout.mjs has already
+// planted five lanes of its own (bridge-lan/srv/iot/guest/lab, 8 events
+// apiece, fixed). ether5 is in the pushed address table so it always
+// enters that ranking, but it only wins a *slot* by outscoring layout's
+// lanes on events -- 4 drops here plus the one mystery-accept above
+// (5 total) placed it 6th of 7 and the ghost's own zone never rendered,
+// so `ghostCount` read 0 without the map's ghost logic being wrong.
+// 20 clears layout's fixed 8 with room to spare; bridge1 (fed by nearly
+// every sibling scenario) is always first regardless, so this only has
+// to beat the other four, fixed-size lanes actually in the running.
+for (let i = 0; i < 20; i++) {
   feedRaw(`firewall,info D|quiet-block| forward: in:ether5 out:bridge1, connection-state:new, proto TCP (SYN), 10.9.0.${40 + i}:3${300 + i}->192.168.1.10:445, len 60`)
 }
 
