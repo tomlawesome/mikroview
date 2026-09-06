@@ -17,9 +17,24 @@ need access:
 
 ```
 mkdir -p /srv/quiet-host
-chown gitlab-runner:gitlab-runner /srv/quiet-host
-chmod 0755 /srv/quiet-host
+chown 100999:100999 /srv/quiet-host
+chmod 0775 /srv/quiet-host
 ```
+
+`100999`, not `gitlab-runner`. The runner's Docker is rootless (its socket
+is `/run/user/988/docker.sock`), so the job's container runs in a user
+namespace: host uid 988 appears inside as uid 0, and hosts 100000-165535
+appear as 1-65536. `live-check.Dockerfile` ends `USER node`, uid 1000, so
+the job writes as host uid 100000 + 999 = 100999. A directory owned by
+`gitlab-runner` is not writable by it -- from inside the container that
+directory shows as owned by 65534 (`nobody`), because the host uid is
+outside the mapped range, and `mktemp` fails with "Permission denied".
+
+This was wrong from the first install and `perf:promotion` could never
+have worked: it failed here on every attempt until 2026-09-06 (#1003).
+If the runner is ever moved off rootless Docker, or its subuid range
+changes, this number changes with it -- check `/etc/subuid` for
+`gitlab-runner` and add 999 to the start of its range.
 
 Install the script:
 
