@@ -7,7 +7,9 @@ writes a flag file (`/srv/quiet-host/hold`) and this root-owned unit sets
 away or expires. No token of any kind is involved — everything here is a
 flag file and a script, both owned by root.
 
-Run each block below as root on that box.
+Run each block below as root on that box (prefix every command with
+`sudo`, or run the block in a root shell). The script keeps the saved
+`concurrent` value in `/var/lib/quiet-host/`, which it creates itself.
 
 Create the flag directory. The runner's containers run as `gitlab-runner`
 under rootless Docker, and `mvagent` needs to read the flag too, so both
@@ -66,7 +68,8 @@ You should see a `HOLD applied` line. Check the config changed:
 grep ^concurrent /etc/gitlab-runner/config.toml
 ```
 
-Remove the flag and watch it restore:
+Remove the flag and watch it restore (the minutely timer catches it
+within a minute even if the watcher misses the removal):
 
 ```
 rm /srv/quiet-host/hold

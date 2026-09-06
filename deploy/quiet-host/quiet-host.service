@@ -1,5 +1,8 @@
 [Unit]
 Description=Apply or release the quiet-host hold on gitlab-runner concurrency
+# One-shot and idempotent: every trigger is safe, so never rate-limit it.
+# Writing `applied` into the watched directory re-fires the path unit once.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
