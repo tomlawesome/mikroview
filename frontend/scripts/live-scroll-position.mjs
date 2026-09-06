@@ -63,7 +63,7 @@ await wizard.waitFor({ state: 'visible' })
 
 await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').click()
 if (await page.locator('.setup-wizard .mint select').count()) {
-  const devices = await page.request.get(`${process.env.MV_URL}/api/devices`).then((r) => r.json())
+  const { devices } = await page.request.get(`${process.env.MV_URL}/api/devices`).then((r) => r.json())
   const withEvents = devices.find((d) => d.eventCount > 0) ?? devices[0]
   if (withEvents) {
     await page.selectOption('.setup-wizard .mint select', withEvents.id)
