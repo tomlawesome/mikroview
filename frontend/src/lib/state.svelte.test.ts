@@ -385,3 +385,71 @@ describe('AppState stream hold (#445)', () => {
     expect(appState.streamHeld).toBe(false)
   })
 })
+
+// #993: a rename racing the debounced server refetch. refetchWithFilters
+// replaces `events` wholesale with the server's snapshot, and the server
+// stamps names at ingest -- so a snapshot taken before the rename carries
+// the old name even when its response lands *after* relabel() has
+// rewritten the buffer (~9 ms after, in the #611 trace), silently undoing
+// the rename on every visible row. The guard records relabels taken while
+// a fetch is in flight and applies them, one-shot, to that fetch's
+// response; fetches issued after the save are the server's problem (its
+// buffer is re-stamped on entity upsert, same one-shot philosophy).
+describe('relabel racing an in-flight refetch (#993)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    appState.events = []
+    appState.filters = emptyFilters()
+    appState.fetchFailed = false
+  })
+
+  function deferredFetch() {
+    let land!: (r: Awaited<ReturnType<typeof fetchEvents>>) => void
+    vi.mocked(fetchEvents).mockImplementationOnce(
+      () => new Promise((resolve) => { land = resolve }),
+    )
+    return (events: FirewallEvent[]) =>
+      land({ events, hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })
+  }
+
+  it('a refetch snapshotted before a rename cannot resurface the old name by landing after relabel', async () => {
+    appState.setInitialEvents([evt({ id: 1, srcIp: '10.0.0.9' })])
+
+    const land = deferredFetch()
+    const refetch = appState.refetchWithFilters()
+
+    // The save lands while that fetch is in flight...
+    appState.relabel('host', '10.0.0.9', 'jellyfish')
+    expect(appState.events[0]?.srcHostName).toBe('jellyfish')
+
+    // ...and the stale pre-rename snapshot arrives afterwards.
+    land([evt({ id: 1, srcIp: '10.0.0.9' })])
+    await refetch
+
+    expect(appState.events[0]?.srcHostName).toBe('jellyfish')
+  })
+
+  it('the rewrite dies with the flight it raced -- a later response is applied exactly as the server sent it', async () => {
+    appState.setInitialEvents([evt({ id: 1, srcIp: '10.0.0.9' })])
+
+    const land = deferredFetch()
+    const refetch = appState.refetchWithFilters()
+    appState.relabel('host', '10.0.0.9', 'jellyfish')
+    land([evt({ id: 1, srcIp: '10.0.0.9' })])
+    await refetch
+
+    // No fetch in flight now. A later response carrying a different name
+    // (say, RouterOS started supplying one) must win untouched: replaying
+    // old relabels onto it would be the standing overlay relabel()'s own
+    // comment records as rejected.
+    vi.mocked(fetchEvents).mockResolvedValue({
+      events: [evt({ id: 1, srcIp: '10.0.0.9', srcHostName: 'android-dhcp' })],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    await appState.refetchWithFilters()
+
+    expect(appState.events[0]?.srcHostName).toBe('android-dhcp')
+  })
+})
