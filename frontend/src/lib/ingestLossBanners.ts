@@ -14,6 +14,8 @@
 // is both the sort key (worst leads the collapsed bar) and the
 // expanded stack's order.
 
+import type { SectionId } from './sectionLink'
+
 export type IngestLossSeverity = 'critical' | 'warn' | 'caution' | 'info'
 
 const SEVERITY_ORDER: readonly IngestLossSeverity[] = ['critical', 'warn', 'caution', 'info']
@@ -32,6 +34,13 @@ export interface IngestLossBanner {
   // markup, which this mirrors field-for-field.
   label: string
   detail: string
+  // #1001: where this banner's `details` link goes, absent when it has
+  // none. Set here rather than in the component so which banners carry
+  // the link stays unit-testable -- and it is a real loss that carries
+  // it: wsDropped lost nothing, so the drawing ends it with the
+  // reassurance instead (docs/design/concepts/ingest-loss-995, scene 2's
+  // note).
+  details?: SectionId
 }
 
 // The five raw counters the banners are built from. rejectedUndeclared
@@ -89,6 +98,7 @@ export function buildIngestLossBanners(input: IngestLossInputs): IngestLossBanne
       id: 'dropped',
       severity: 'critical',
       label: 'Ingest queue full',
+      details: 'engineroom/ingest',
       detail: `${input.dropped.toLocaleString()} log ${noun(input.dropped, 'line')} lost`,
     })
   }
@@ -100,6 +110,7 @@ export function buildIngestLossBanners(input: IngestLossInputs): IngestLossBanne
       id: 'rejectedConfigured',
       severity: 'warn',
       label: 'Syslog slots full',
+      details: 'engineroom/ingest',
       detail: `${input.rejectedConfigured.toLocaleString()} refused${lockout}`,
     })
   }
@@ -109,6 +120,7 @@ export function buildIngestLossBanners(input: IngestLossInputs): IngestLossBanne
       id: 'rejectedUndeclared',
       severity: 'caution',
       label: 'Undeclared sources',
+      details: 'engineroom/ingest',
       detail: `${input.rejectedUndeclared.toLocaleString()} ${noun(input.rejectedUndeclared, 'connection')} refused`,
     })
   }
@@ -120,6 +132,7 @@ export function buildIngestLossBanners(input: IngestLossInputs): IngestLossBanne
       id: 'oversized',
       severity: 'caution',
       label: 'Non-RouterOS sender',
+      details: 'engineroom/ingest',
       detail: `${input.oversized.toLocaleString()} oversized ${noun(input.oversized, 'message')}${from} ${verb} truncated`,
     })
   }

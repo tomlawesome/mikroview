@@ -731,7 +731,11 @@
     </div>
 
     <div class="og stgrid">
-      <div class="stsection wide">
+      <!-- id: where the ingest-loss banners' `details` link lands
+           (#1001). The name is registered in lib/sectionLink.ts's
+           SECTION_TARGETS as 'engineroom/ingest'; change one and the
+           other stops working. -->
+      <div class="stsection wide" id="engineroom-ingest">
         <h3>ingest</h3>
         <div class="wleft">
           <svg

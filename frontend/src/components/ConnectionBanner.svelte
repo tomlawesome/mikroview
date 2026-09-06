@@ -17,9 +17,18 @@
   // unit tested there without a component harness; this file only
   // renders whatever that pure function returns.
   import { appState } from '../lib/state.svelte'
+  import { authState } from '../lib/auth.svelte'
   import { selectIngestLossBar, toIngestLossInputs } from '../lib/ingestLossBanners'
+  import { goToSection } from '../lib/sectionLink'
 
   let expanded = $state(false)
+
+  // #1001: the `details` link goes to the Settings readout, and the
+  // Settings card only exists for a session that can edit
+  // (deckCards.ts) -- a viewer sent to that view gets an empty deck
+  // (#785). So a viewer sees the banner without the link, the same
+  // grammar Flags.svelte uses to gate its audit-log link.
+  const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
 
   const bar = $derived(
     selectIngestLossBar(
@@ -69,6 +78,11 @@
             >
               less
             </button>
+            {#if banner.details && canEdit}
+              <button class="detail" type="button" onclick={() => goToSection(banner.details!)}>
+                details
+              </button>
+            {/if}
           {/if}
         </div>
       {/each}
@@ -85,6 +99,11 @@
           onclick={() => (expanded = true)}
         >
           +{bar.moreCount} more
+        </button>
+      {/if}
+      {#if bar.lead.details && canEdit}
+        <button class="detail" type="button" onclick={() => goToSection(bar.lead!.details!)}>
+          details
         </button>
       {/if}
     </div>
@@ -141,6 +160,28 @@
   .banner-info {
     background: var(--row-log-bg);
     color: var(--log);
+  }
+
+  /* #1001: ported verbatim from
+     docs/design/concepts/ingest-loss-995's `.banner .detail` rule, plus
+     the resets a <button> needs that the drawing's <a> did not -- the
+     app has no URL for this, so the affordance is a button that moves
+     the view rather than a link that navigates. */
+  .detail {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font: 600 10px var(--font-mono);
+    letter-spacing: 0.06em;
+    color: inherit;
+    opacity: 0.75;
+    text-decoration: none;
+    border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+    border-radius: 6px;
+    padding: 2px 8px;
+    background: transparent;
+    cursor: pointer;
   }
 
   .more {
