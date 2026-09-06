@@ -2952,10 +2952,16 @@
             />
             <text class="n-name" x={-fc.gr + 12} y={-fc.gh / 2 + 18}>{fc.d.name}</text>
             <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? 'from boundaries'}</text>
-            <text class="gf-count" x={-fc.gr + 12} y={-fc.gh / 2 + 48}>{total} host{total === 1 ? '' : 's'}</text>
-            {#if fc.d.dark}
-              <text class="zone-state bad" x={fc.gr - 12} y={-fc.gh / 2 + 48} text-anchor="end">DARK</text>
-            {/if}
+            <!-- DARK used to sit right-anchored on this same row, the
+               exact side-by-side layout that overlapped the name and
+               CIDR above -- a card with a host count wide enough to
+               reach it printed "hostsARK" (found rendering a denser
+               estate for #976's own follow-up). A trailing tspan flows
+               after the count instead, so there is only ever one piece
+               of text to fit, never two racing across one line. -->
+            <text class="gf-count" x={-fc.gr + 12} y={-fc.gh / 2 + 48}
+              >{total} host{total === 1 ? '' : 's'}{#if fc.d.dark}{' '}<tspan class="zone-state bad">· DARK</tspan>{/if}</text
+            >
           </g>
         {/each}
       </g>

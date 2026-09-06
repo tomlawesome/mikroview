@@ -1092,6 +1092,27 @@ describe('the round-30 layout (#699)', () => {
     }
   })
 
+  it("never lets a dark district's DARK state collide with its own host count (#976 follow-up)", () => {
+    // DARK used to sit right-anchored on the count's own row -- the
+    // same side-by-side layout that put the name on top of the CIDR --
+    // so a card with a host count wide enough to reach it printed
+    // "hostsARK" (found rendering a denser estate for #976's own
+    // follow-up). It now flows as a trailing tspan on the count's own
+    // text instead, so there is only ever one piece of text on the row.
+    pushLanes(1)
+    policyState.anyPushed = true
+    policyState.edges = [] // nothing logs this lane, so it reads dark
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = container.querySelector('.ground-flat .gf-card.dark')!
+    expect(card).not.toBeNull()
+    expect(card.querySelectorAll('.gf-count').length).toBe(1)
+    const count = card.querySelector('.gf-count')!
+    expect(count.textContent?.replace(/\s+/g, ' ').trim()).toMatch(/host.* · DARK$/)
+    expect(count.querySelector('.zone-state.bad')).not.toBeNull()
+  })
+
   it('adds a services layer and a client tier rather than scaling the map up', () => {
     zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
     appState.events = [
