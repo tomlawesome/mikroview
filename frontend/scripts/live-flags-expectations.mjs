@@ -33,6 +33,10 @@
 // prune an expectation until #640 part C lands the ledger; when it does,
 // this scenario should reset itself the way live-flags-clearing.mjs used
 // to reset its exclusion.
+//
+// #1009: step 2's flag can read "returned" before its scan has finished
+// arriving -- see waitForRowText's doc comment below for why that step
+// waits for the settled size rather than the first sighting.
 
 import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
 
@@ -70,6 +74,30 @@ async function waitForApiFlag(target, predicate, { timeoutMs = 8000 } = {}) {
     await page.waitForTimeout(300)
   }
   return { ok: false, flag: last }
+}
+
+// #1009: the 40-port scan below arrives as several syslog lines, and the
+// detector's recorded size climbs as they land -- it flips the flag to
+// "returned" as soon as the count passes the expectation ceiling, well
+// before all 40 have been ingested. Reading the card off the first
+// "returned" sighting can therefore catch a still-growing count instead
+// of the scan's real total, and comparing it against a second, later
+// sighting of the same flag just races two different partial counts
+// against each other. Waiting for size to reach the fed count first
+// (below) settles that: the 40 fed ports are a superset of every
+// smaller scan this scenario has already run against this IP (all from
+// the same 1000+i sequence -- see portscan() in live-env.sh), so the
+// distinct-port total can only ever land on exactly 40, never drift or
+// overshoot, once ingestion is done.
+async function waitForRowText(locator, expected, { timeoutMs = 8000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let last = ''
+  while (Date.now() < deadline) {
+    last = (await locator.textContent())?.trim() ?? ''
+    if (last === expected) return { ok: true, text: last }
+    await page.waitForTimeout(300)
+  }
+  return { ok: false, text: last }
 }
 
 // Server-side first (#354): a locator timeout cannot say whether the
@@ -145,14 +173,22 @@ if (first.ok && resolveRaised.ok) {
       back.flag.expectedSize === recorded,
       `the returning flag carries the size the expectation recorded (${back.flag.expectedSize} vs ${recorded})`,
     )
+    // The flag can already read "returned" before all 40 ports have
+    // landed (see waitForRowText's doc comment) -- settle on the fed
+    // scan's real, final size before reading anything off it.
+    const settled = await waitForApiFlag(EXPECT_IP, (f) => !f.cleared && f.size === 40, { timeoutMs: 20000 })
+    check(settled.ok, `the 40-port scan's full count reached the server (got: ${JSON.stringify(settled.flag)})`)
+
     await openFlags()
     const returnedRow = rowFor(EXPECT_IP)
     await returnedRow.waitFor({ timeout: 15000 })
-    const note = (await returnedRow.locator('.returned').textContent())?.trim() ?? ''
-    check(
-      note === `expected up to ${back.flag.expectedSize}, saw ${back.flag.size}`,
-      `the card reads the two real numbers back: "${note}"`,
-    )
+    const expectedNote = `expected up to ${settled.flag.expectedSize}, saw ${settled.flag.size}`
+    // The Flags list itself only refreshes every 5s (App.svelte), so the
+    // row can still be showing an earlier, smaller count for a few
+    // seconds after the server has settled -- wait for it to catch up
+    // rather than reading it once.
+    const noteResult = await waitForRowText(returnedRow.locator('.returned'), expectedNote)
+    check(noteResult.ok, `the card reads the two real numbers back: "${noteResult.text}"`)
   }
 
   // --- 4. Resolved is not a suppression ------------------------------
