@@ -124,7 +124,7 @@ beforeEach(() => {
   topologyNavState.pendingDescend = null
   wizardState.open = false
   // Every test starts on a fresh slider: altitudeStopState is a
-  // module-level singleton (like cityImportanceState), so a test that
+  // module-level singleton that persists across reloads, so a test that
   // moves the slider would otherwise leak its last stop into whichever
   // test runs next in this file.
   altitudeStopState.stop = 'city'
@@ -537,7 +537,7 @@ describe('the altitude slider (#648, named ends #682; joined to the city #869)',
     expect(container.querySelector<HTMLElement>('.stage')?.hidden).toBe(false)
   })
 
-  it('remembers the last stop across mounts, the same convention cityImportance.svelte.ts uses (#869)', () => {
+  it('remembers the last stop across mounts, via altitudeStopState persistence (#869)', () => {
     const first = render(Topography)
     flushSync()
     const range = first.container.querySelector<HTMLInputElement>('.alt-range')!
