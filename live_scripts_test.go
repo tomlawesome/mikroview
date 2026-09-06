@@ -174,10 +174,20 @@ func TestEveryLiveCheckIsRun(t *testing.T) {
 
 	seen := map[string]bool{}
 	for pattern, runner := range runners {
-		body, err := os.ReadFile(runner)
+		raw, err := os.ReadFile(runner)
 		if err != nil {
 			t.Fatalf("reading %s: %v", runner, err)
 		}
+		// Comments do not skip anything. run-scenarios.sh explains its
+		// shard split by naming the scenarios that depend on each other
+		// (#1004), and a name in prose is not an exclusion.
+		var code []string
+		for _, line := range strings.Split(string(raw), "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+				code = append(code, line)
+			}
+		}
+		body := strings.Join(code, "\n")
 		files, err := filepath.Glob(pattern)
 		if err != nil {
 			t.Fatalf("globbing %s: %v", pattern, err)
@@ -188,7 +198,7 @@ func TestEveryLiveCheckIsRun(t *testing.T) {
 		for _, f := range files {
 			seen[f] = true
 			reason, isExcluded := excluded[f]
-			inRunner := strings.Contains(string(body), filepath.Base(f))
+			inRunner := strings.Contains(body, filepath.Base(f))
 			switch {
 			case isExcluded && reason == "":
 				t.Errorf("%s is excluded with no reason given", f)
