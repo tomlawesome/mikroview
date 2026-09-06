@@ -71,13 +71,11 @@ await closeCrop('survey', 'pihole', '3flags', 260, 220);
 // way to park a CSS animation at an arbitrary frame without waiting.
 async function setSpikeFrame(t) {
   await page.evaluate((t) => {
+    // getAnimations gives the running animation object directly, so the
+    // frame is exact — a negative animation-delay only shifts the
+    // original start time, which freezes an arbitrary phase instead.
     document.querySelectorAll('.mk-spike-rim, .mk-spike-glow').forEach((el) => {
-      el.style.animationPlayState = 'running';
-      el.style.animationDelay = (-t) + 's';
-    });
-    document.body.getBoundingClientRect();   // force layout so the delay lands before pausing
-    document.querySelectorAll('.mk-spike-rim, .mk-spike-glow').forEach((el) => {
-      el.style.animationPlayState = 'paused';
+      el.getAnimations().forEach((a) => { a.pause(); a.currentTime = t * 1000; });
     });
   }, t);
 }

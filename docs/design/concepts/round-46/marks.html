@@ -39,7 +39,12 @@
     /* second borough: the same lan/srv hues held back a stop, so the
        borough ranks its own districts without minting a new ink */
     --wsh: #34837c; --cam2: #4576bc;
-    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    /* 'Liberation Sans' is a capture-host shim only (#995's idiom):
+       this Linux capture host resolves system-ui to a single-weight
+       face, which hides every weight cue in ratification shots. On the
+       owner's Windows/Firefox, 'Segoe UI' still matches first, exactly
+       as before. Never copy this stack into the app itself. */
+    --sans: -apple-system, "Segoe UI", "Liberation Sans", system-ui, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; margin: 0; }
@@ -203,9 +208,9 @@
      altogether." No toggle — this is the only direction the page
      draws. ---- */
   .mk-spike-rim { animation: mk-spike-rim 2s ease-in-out infinite; }
-  .mk-spike-glow { filter: blur(2.5px); opacity: 0.4; animation: mk-spike-glow 2s ease-in-out infinite; }
-  @keyframes mk-spike-rim { 0%, 100% { stroke-opacity: 0.6; } 50% { stroke-opacity: 1; } }
-  @keyframes mk-spike-glow { 0%, 100% { stroke-width: 2px; opacity: 0.28; } 50% { stroke-width: 6px; opacity: 0.55; } }
+  .mk-spike-glow { filter: blur(3px); animation: mk-spike-glow 2s ease-in-out infinite; }
+  @keyframes mk-spike-rim { 0%, 100% { stroke-opacity: 0.45; } 50% { stroke-opacity: 1; } }
+  @keyframes mk-spike-glow { 0%, 100% { stroke-width: 1.5px; opacity: 0.12; } 50% { stroke-width: 9px; opacity: 0.75; } }
   @media (prefers-reduced-motion: reduce) {
     /* a pulse cannot reduce to nothing without losing the signal, so it
        holds at the peak state instead of animating to it */
@@ -219,8 +224,8 @@
 <p class="cap"><b>SURVEY</b>the whole estate small — the river along the north edge with its three bridges, six walled districts, two boroughs; devices stand straight on the district plate, no plinth, no height.</p>
 <section class="scene" id="survey" aria-label="Survey: the whole estate as an isometric town — the Internet as a river with the WAN bridge and two tunnel footbridges, districts as walled plates, devices standing straight on the plate with no plinth or height"></section>
 
-<p class="cap"><b>STREET</b>the camera dropped into the LAN district — four devices up close, LAN's wall and its three gates named with the rule each one is, one card open.</p>
-<section class="scene" id="street" aria-label="Street level in the LAN district: four devices at close range with names and addresses, the district wall with its gates labelled by rule, and tom-desktop's card open"></section>
+<p class="cap"><b>STREET</b>the camera dropped into the LAN district — four devices up close, LAN's wall and its gates as plain far-end labels (#991), two click cards with counts as words.</p>
+<section class="scene" id="street" aria-label="Street level in the LAN district: four devices at close range with names and addresses, the district wall with its gates labelled by their far end, and two click cards open"></section>
 
 <p class="cap"><b>ALARM</b>the one road that should not exist — it leaves IoT, crosses town and stops dead at LAN's wall, bollards and a red mark where the default drop caught it.</p>
 <section class="scene" id="alarm" aria-label="The alarm: the unplanned road from cam-porch stopped at the LAN district wall by the default drop, cam-porch lit, Guest unlit for want of a log rule"></section>
@@ -575,7 +580,7 @@ const NODES = [
   { id: 'ether1', name: 'ether1', t: 'post', u: 0, v: 0, R: 3.4, ink: 'var(--accent)',
     roof: 'ether1', roofsub: 'wan bridge · LOGGED' },
   { id: 'wg0', name: 'wg0', t: 'post', u: 0, v: 0, R: 3.0, ink: 'var(--accent)', watch: 1,
-    roof: 'wg0', roofsub: '10.99.0.0/24 · QUIET ◉1' },
+    roof: 'wg0', roofsub: '10.99.0.0/24 · QUIET' },
   { id: 'l2tp', name: 'l2tp', t: 'post', u: 0, v: 0, R: 3.0, ink: 'var(--accent)',
     roof: 'l2tp', roofsub: '1 peer · UP · 0.3/s' }
 ];
@@ -615,7 +620,7 @@ const BRIDGES = [
   { id: 'wan', at: -56, w: 3.4, node: 'ether1', state: 'up', lamps: 2,
     label: 'ether1 → Internet · 203.0.113.7 · LOGGED' },
   { id: 'wg0', at: 8, w: 1.5, node: 'wg0', state: 'quiet', lamps: 0,
-    label: 'wg0 · 10.99.0.0/24 · QUIET ◉1' },
+    label: 'wg0 · 10.99.0.0/24 · QUIET' },
   { id: 'l2tp', at: 36, w: 1.5, node: 'l2tp', state: 'up', lamps: 0, ldy: 30,
     label: 'l2tp · 1 peer · UP · 0.3/s' }
 ];
@@ -646,7 +651,7 @@ const ROADS = [
   /* the unplanned road: out of IoT's wan gate, across the plaza, and
      dead into LAN's wall where nothing lets it through */
   { id: 'unplanned', via: ['@cam-porch', [26, 26], [2, 22], [-26, 20], [-46, 28], [-57, 34]], w: 1.6, k: 'x',
-    stop: 'drop', ports: 'cam-porch ✱ tcp/445', lats: [0.55, 0.9] },
+    stop: 'drop', ports: 'cam-porch · dropped', lats: [0.55, 0.9] },
   /* guest tries the same thing on its own wall */
   { id: 'guest-drop', via: ['@guest-e8b2', [64.5, -8], [61.7, -5.3]], w: 0.9, k: 'd', stop: 'drop' }
 ];
@@ -1058,7 +1063,10 @@ function device(c, u, v, b, opt) {
   if (b.flags) {
     const flagOp = R2(Math.min(0.9, 0.45 + 0.15 * (b.flags - 1)) * 1000) / 1000;
     rimW = R2(Math.min(3, 1 + 0.5 * (b.flags - 1)));
-    inner += '<g style="color:var(--alarm)" opacity="' + flagOp + '"><use href="#' + opt.sid + '-' + b.t + '"/></g>';
+    /* the restamp is a SIBLING of the base stamp, so it inherits no
+       --sig of its own — without one its lights fall back to their
+       neutral colours and glaze the red light below them green */
+    inner += '<g style="color:var(--alarm);--sig:var(--alarm)" opacity="' + flagOp + '"><use href="#' + opt.sid + '-' + b.t + '"/></g>';
     const rimCls = b.spike ? 'mk-alarm mk-spike-rim' : 'mk-alarm';
     if (b.spike) inner += '<path d="' + hullPath(lib.hull) + '" fill="none" stroke="var(--alarm)" stroke-width="' +
       R2(rimW * 1.8) + '" stroke-linejoin="round" class="mk-spike-glow"/>';
@@ -1075,7 +1083,7 @@ function device(c, u, v, b, opt) {
       '" stroke-linejoin="round" stroke-opacity="1" class="mk-watch"/>';
   }
   s += '<g class="dev" style="transform:translate(' + R2(X(c, u)) + 'px,' + R2(Y(c, v, 0)) + 'px)">' +
-       '<g transform="scale(' + k + ')">' + inner + '</g></g>';
+       '<g transform="scale(' + k + ')">' + inner + '</g></g></g>';
   if (opt.fade) s = '<g opacity="0.42">' + s + '</g>';
   if (opt.focus) {
     /* you are standing here */
@@ -1310,14 +1318,15 @@ function render(id) {
   if (boroLabels) boroLabels.forEach((b) => { flat += chipAt(b.lx, b.ly, b.t, 'boro-t'); });
 
   /* #991: the street stop drops the ordinary road port chips entirely
-     ("too busy") — only a road's drop survives there, reworded to one
-     word plus the source, since it isn't standing on the building the
-     drop is at. Survey and alarm are untouched: they still draw every
-     road's ports exactly as before. */
+     ("too busy") — only a road's drop survives there. The drop pill is
+     the same one plain label at every stop, `cam-porch · dropped` (the
+     source named because you are not standing on the building the drop
+     is at); the port detail lives on the alarm callout and the click
+     cards. Other roads' port pills still draw at the alarm stop. */
   if (cfg.labels || cfg.rules) ROADS.forEach((r) => {
     if (!r.ports || !r.lats) return;
     if (id === 'street' && r.stop !== 'drop') return;
-    const label = (id === 'street' && r.stop === 'drop') ? 'cam-porch · dropped' : r.ports;
+    const label = r.ports;
     for (const t of r.lats) {
       const p = roadPoint(r, t), a = roadPoint(r, Math.max(0, t - 0.03)), b = roadPoint(r, Math.min(1, t + 0.03));
       const px = X(c, p[0]), py = Y(c, p[1]);
@@ -1399,14 +1408,14 @@ function chrome(id) {
   h += '<div class="stage"><svg id="svg-' + id + '" viewBox="0 0 1400 700" role="img" aria-label="' + id + ' camera on the estate"></svg></div>';
   if (cfg.card) h += '<div class="hovercard" id="hc" aria-label="tom-desktop card"><div class="hc-n">tom-desktop</div>' +
     '<div class="hc-i">10.0.10.21 · 3 roads · workstation</div>' +
-    '<div class="hc-r"><span class="w">watch ◉</span><span class="p">:445 :5001 :53</span></div></div>' +
+    '<div class="hc-r"><span class="w">1 watch</span><span class="p">:445 :5001 :53</span></div></div>' +
     /* #981: the click card is where a marked building's counts live now
        — cam-porch is IoT's, off this camera's frame (see capture.mjs),
        so its card floats free with no leader line, just to show the
        idiom's new second line */
     '<div class="hovercard" id="hc-cam" aria-label="cam-porch card"><div class="hc-n">cam-porch</div>' +
     '<div class="hc-i">10.0.30.14 · 1 road · camera</div>' +
-    '<div class="hc-r"><span class="f">⚑ 2 flags</span><span class="p"> · </span><span class="w">◉ 1 watch</span></div></div>';
+    '<div class="hc-r"><span class="f">2 flags</span><span class="p"> · </span><span class="w">1 watch</span></div></div>';
   h += '<div class="wlens2">' + LENSES.map((l) => '<span class="' + (on(l) ? 'on' : '') + '"' +
     (l.indexOf('flags') === 0 ? ' style="color:var(--alarm)"' : '') + '>' + l + '</span>').join('') + '</div>';
   h += '<div class="alt" style="flex-direction:column;gap:6px">' +

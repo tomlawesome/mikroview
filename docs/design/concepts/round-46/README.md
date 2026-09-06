@@ -56,6 +56,27 @@ flag is an activity spike — activity is the one flag kind that is
 *happening now*, so motion fits it and nothing else; other flags stay a
 still red. `marks.html` draws direction C only — no toggle, one page.
 
+Two more rulings landed on that drawing's first crops, still
+2026-09-06. On an IoT puck still wearing round 40's halo ring and `✱1`
+glyph:
+
+> I said to remove these rings with numbers. Get rid of them
+> completely.
+
+Applied to the whole page: no halo, no count glyph, no tally glyph on
+any building, card, pill or label, at any stop — wg0's roof label and
+bridge badge lost their `◉1` too. Counts exist only as words on the
+click card. And on a mark that stroked every face of every box the
+symbol is built from:
+
+> These overlapping planes are weird. The outlines are supposed to
+> just be lines … I can't even tell what you're trying to show me.
+
+A mark is now ONE line round the symbol's silhouette (see **Choices**).
+The same pass also redraws the street pills (#991) and the camera as a
+small home CCTV dome (#992) — both drawn here first, so the owner rules
+on a picture before any product code moves.
+
 ### The rules
 
 - Flagged (`b.flags > 0`): the device symbol itself — every shape it is
@@ -65,16 +86,22 @@ still red. `marks.html` draws direction C only — no toggle, one page.
   the same ink, width `min(3, 1 + 0.5*(flags-1))`. Unflagged neighbours
   keep their own district colour untouched. The plinth underneath is
   gone — there is no plinth, and nothing marks it.
-- Watched (`b.watch > 0`): the device symbol's own outline strokes in
-  `--watch`, width `min(4, 1.5 + 0.75*(watch-1))`, scaled up 1.09× from
-  the device's own centre so it reads as a touch proud of the flag rim
-  on a building that carries both.
+- Watched (`b.watch > 0`): the device symbol's silhouette strokes once
+  in `--watch`, width `min(4, 1.5 + 0.75*(watch-1))`. On a building
+  that also carries flags, the watch line is pushed outward from the
+  silhouette by half of both stroke widths plus a hair, so it sits a
+  touch proud of the flag rim — side by side, never on top of it.
 - Activity spike (`b.spike`): a flagged building whose open flag is an
-  activity spike also pulses — its rim's opacity breathes 0.6→1→0.6 and
-  a soft glow alongside it breathes too, both on a 2s ease-in-out loop.
+  activity spike also pulses — its rim's opacity breathes 0.45→1→0.45
+  and a soft glow alongside it swells from almost nothing to a wide
+  blurred bloom (1.5px at 0.12 → 9px at 0.75), both on a 2s ease-in-out
+  loop. The swing is deliberately wide: a first draft breathed
+  0.6→1/2px→6px and the dim and bright freeze-frames were nearly
+  indistinguishable, which is no way to ratify a throb from stills.
   The red fill itself does not animate; only the rim and the glow do.
-  Under `prefers-reduced-motion`, the pulse is dropped for a steady rim
-  and glow held at the bright end, not fully switched off — the mark
+  Under `prefers-reduced-motion`, the pulse is dropped for a steady
+  full-opacity rim and a steady mid-bright glow (6px at 0.55), not
+  fully switched off — the mark
   would otherwise carry no signal at all under a rule that only exists
   to answer "is this happening now".
 - No height anywhere, for anything: every device — building, router,
@@ -85,16 +112,19 @@ still red. `marks.html` draws direction C only — no toggle, one page.
 - District plates and name pills are unchanged from round 40 — the red
   house in a green district is the signal, not a second badge.
 - The street scene's click card (round 40's `.hovercard` idiom) gains
-  a second line on a marked building — cam-porch's reads `⚑ 2 flags ·
-  ◉ 1 watch`, ⚑ and its count in `--alarm`, ◉ and its count in
-  `--watch`.
+  a counts line on a marked building, as plain words — cam-porch's
+  reads `2 flags · 1 watch`, the flag words in `--alarm`, the watch
+  words in `--watch`, no ⚑/◉ glyphs ("counts exist only as words on
+  the click card"). tom-desktop's watch row reads `1 watch` the same
+  way.
 
 ### What's on the map
 
 Same hosts as round 40: cam-porch (2 flags, 1 watch — IoT, the alarm
 scene's own subject), laptop-anna and tv-lounge (1 flag each, LAN),
 doorbell (1 flag, IoT), cam-gate (1 flag, Cams), nas (watch only,
-Servers). Added: **pihole** (Servers — plain green, previously
+Servers), and the wg0 gateway post (watch only — its old `◉1` roof
+badge is gone, the purple silhouette is the signal now). Added: **pihole** (Servers — plain green, previously
 carried no marks) now carries 3 flags, so the opacity step from
 cam-porch's 0.6 to pihole's 0.75 is visible on the same page without
 touching the 0.9 cap. cam-porch and pihole also each carry the
@@ -102,17 +132,18 @@ activity-spike pulse (see **Choices** for why these two).
 
 ### Choices the spec left open
 
-- **How a multi-shape symbol's outline is drawn**: the library builds
-  each symbol from several boxes and discs (a workstation is a tower
-  plus a monitor; a camera is a post, an arm and a body) with no
-  boolean union available to fuse them into one path. Both the flag rim
-  and the watch outline stroke *every* constituent shape the symbol is
-  actually built from instead — where two are adjacent (the laptop's
-  base and lid, the camera's post/arm/body) the shared seam gets a
-  double line, but the assembly reads as one outline in every case
-  drawn. `outlineParts()` in `marks.html` does this generically from
-  the same box/disc objects the visible symbol is stamped from, so it
-  never drifts out of sync with the artwork.
+- **How a multi-shape symbol's outline is drawn**: one convex-hull
+  silhouette. The library builds each symbol from several boxes and
+  discs with no boolean union available to fuse them into one path; the
+  first attempt stroked every constituent shape and the owner rejected
+  it ("overlapping planes … I can't even tell what you're trying to
+  show me"). Now every part contributes its corners (a disc samples its
+  rim; the laptop's lid its four points) and Andrew's monotone chain —
+  the same hull the borough ring already used — turns them into one
+  polygon, stroked once (`hullPointsFor()`/`convexHull()` in
+  `marks.html`). A hull cannot follow a concave silhouette (the gap
+  between a workstation's tower and monitor is bridged), but one clean
+  line that slightly rounds the shape beats a cage of true edges.
 - **The ground shadow**: now that there is no plinth to cast one, each
   device keeps the soft dark diamond that used to sit under the plinth,
   sized to the device's own footprint radius — the closest thing the
@@ -129,11 +160,34 @@ activity-spike pulse (see **Choices** for why these two).
   — both already the flagged hosts the capture crops sit closest to, so
   the pulse is checkable in the same shots that show the opacity step
   and the device-not-plinth correction.
-- **The watch outline's "a touch proud"**: scaled 1.09× around the
-  device's own centre, rather than the plinth version's fixed 1.6-unit
-  margin — device symbols vary far more in local size than the plinths
-  did (a puck and a router chassis are not close), so a proportional
-  offset holds up across all of them where a fixed one would not.
+- **The watch outline's "a touch proud"**: the hull's points pushed
+  outward from its centroid by `rimW/2 + watchW/2 + 0.6px`
+  (`offsetPoly()`), rather than scaling the whole mark — a scale factor
+  moves a big symbol's line further than a small one's, where an offset
+  in stroke widths puts the two lines side by side at every size.
+- **The gate pill's one label (#991)**: the far end's display name is
+  read from the rule text's `→ <name>` rather than a second id-to-name
+  table — the rule strings already spell every far end out in full, so
+  the pill can never drift from the rule it abbreviates. 13px mono in a
+  24px pill; the rule number, text and ports move to the gate's click
+  card when this is built.
+- **The drop pill (#991)**: one plain label, `cam-porch · dropped`, at
+  every stop that draws it (street and alarm) — the source is named
+  because you are not standing on the building the drop is at; the port
+  detail lives on the alarm callout and the click cards.
+- **The dome camera's "radial gradient" (#992)**: approximated with two
+  flat layers (a currentColor dome, a void-dark smoked centre) rather
+  than a real SVG `<radialGradient>` — a gradient's stops live in
+  `<defs>` and do not inherit the colour set where the symbol is
+  `<use>`d, so a true gradient would paint every district's camera one
+  fixed colour instead of recolouring per district like every other
+  symbol. No post, no arm; base disc, dome, one lens dot, one highlight
+  arc.
+- **The capture-host font shim**: `'Liberation Sans'` sits in `--sans`
+  after `'Segoe UI'` (#995's idiom) so this Linux capture host renders
+  real weights where its own `system-ui` is a single face; the owner's
+  Windows/Firefox still matches `'Segoe UI'` first, unchanged. The shim
+  is mockup-only and must never be copied into the app.
 - **Which host demonstrates 3 flags**: pihole — a plain, previously
   unmarked host in Servers (green), picked to avoid disturbing the
   already-marked cast that demonstrates the 1-flag/2-flag/watch-only
@@ -162,6 +216,11 @@ C, second draft: the marks moved to the device symbol as asked, but a
 "we dont need a pedestal … Just drop the height concept altogether …
 It doesn't work, it looks rubbish with things sat on cubes." The plinth
 is gone outright; every device stands straight on the district plate.
+
+C, third draft: an IoT puck still wore round 40's halo ring and `✱1`
+glyph ("remove these rings with numbers. Get rid of them completely"),
+and the outline stroked every face of every part ("overlapping
+planes"). Both purged: no glyph anywhere, one silhouette line.
 
 ## Capture
 
