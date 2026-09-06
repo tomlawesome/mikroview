@@ -62,12 +62,27 @@ const wizard = page.locator('.setup-wizard')
 await wizard.waitFor({ state: 'visible' })
 
 await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').click()
-if (await page.locator('.setup-wizard .mint select').count()) {
+// SetupWizard.svelte renders two identical .mint blocks: step 4's own
+// (line 649, gated on `wizardState.status` as well as the step) and a
+// fallback in a later step for when step 4 was skipped (line 719).
+// `page.click` is not strict -- it takes the first match in DOM order --
+// so when step 4's block has not rendered yet, the old form here clicked
+// at the fallback and waited the full 30s for an element in a step that
+// was never opened (#1009). Address the visible block instead, and keep
+// the locator strict so an ambiguous match fails loudly and at once
+// rather than hanging.
+const mint = page.locator('.setup-wizard .mint:visible')
+// `wizardState.status` may not have arrived when the step row was
+// clicked, so give step 4's block a moment to appear. Absence is still
+// allowed: a token may already exist, in which case nothing is offered
+// and there is nothing to mint.
+await mint.first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
+if (await mint.count()) {
   const { devices } = await page.request.get(`${process.env.MV_URL}/api/devices`).then((r) => r.json())
   const withEvents = devices.find((d) => d.eventCount > 0) ?? devices[0]
   if (withEvents) {
-    await page.selectOption('.setup-wizard .mint select', withEvents.id)
-    await page.click('.setup-wizard .mint button.primary')
+    await mint.locator('select').selectOption(withEvents.id)
+    await mint.locator('button.primary').click()
   }
 }
 await page.locator('.setup-wizard pre.script').waitFor({ state: 'visible' })
