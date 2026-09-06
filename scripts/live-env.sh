@@ -51,7 +51,9 @@ set -euo pipefail
 #
 # MV_SLOT and the port bands come from live-slot.sh, sourced above.
 
-MV_DIR="${MV_DIR:-/tmp/mikroview-live-$MV_SLOT}"
+# A shard (#1004) is one more instance of the same checkout, so it gets
+# its own directory beside the slot's -- the ports come from live-slot.sh.
+MV_DIR="${MV_DIR:-/tmp/mikroview-live-$MV_SLOT${MV_SHARD_INDEX:+-shard$MV_SHARD_INDEX}}"
 MV_BIND="${MV_BIND:-127.0.0.1}"
 HTTP_PORT="${MV_HTTP_PORT:-$MV_SLOT_HTTP_PORT}"
 SYSLOG_PORT="${MV_SYSLOG_PORT:-$MV_SLOT_SYSLOG_PORT}"
@@ -250,8 +252,30 @@ build() {
   mv_dirty=""
   git diff --quiet HEAD 2>/dev/null || mv_dirty="-dirty"
   mv_stamp="$(cat VERSION 2>/dev/null || echo 0.0.0)+g${mv_sha}${mv_dirty}.$(date -u +%Y%m%dT%H%M%SZ)"
-  go build -buildvcs=false -ldflags "-X main.version=$mv_stamp" -o "$MV_DIR/mikroview" .
+  go build -buildvcs=false -ldflags "-X main.version=$mv_stamp" -o "${1:-$MV_DIR/mikroview}" .
   echo "live-env: built $mv_stamp" >&2
+}
+
+# stage_binary -- put the binary the instance will run at $MV_DIR/mikroview.
+#
+# Normally that is a build. With MV_BINARY set it is a copy of a binary
+# built once already: a sharded run (#1004) brings up several instances of
+# the same checkout at once, and N concurrent build()s would all write
+# web/dist and frontend/dist under each other. `make live-check-sharded`
+# builds once with `live-env.sh build <path>` and hands every shard the
+# result, so the shards run the same bytes and none of them races the
+# tree. A CI shard is its own checkout and just builds.
+stage_binary() {
+  if [ -n "${MV_BINARY:-}" ]; then
+    if [ ! -x "$MV_BINARY" ]; then
+      echo "live-env: MV_BINARY=$MV_BINARY is not an executable file" >&2
+      exit 1
+    fi
+    cp "$MV_BINARY" "$MV_DIR/mikroview"
+    echo "live-env: using prebuilt $MV_BINARY" >&2
+    return
+  fi
+  build
 }
 
 # True if anything is listening on the given TCP port on this host.
@@ -287,7 +311,7 @@ up() {
     fi
   done
   rm -rf "$MV_DIR"; mkdir -p "$MV_DIR/data"
-  build
+  stage_binary
   # ADDING A PERSISTED STORE TO MIKROVIEW? IT NEEDS A LINE IN THE CONFIG
   # BELOW. Every store gets an explicit path under $MV_DIR/data, because
   # a store left at its /var/lib/mikroview default cannot be written by
@@ -408,10 +432,13 @@ down() {
 
 case "${1:-}" in
   up) up ;;
+  # build PATH -- build the binary (and the UI it embeds) to PATH without
+  # standing anything up, for MV_BINARY above.
+  build) shift; [ -n "${1:-}" ] || { echo "usage: $0 build PATH" >&2; exit 2; }; mkdir -p "$(dirname "$1")"; build "$1" ;;
   syslog) shift; syslog "$@" ;;
   raw) shift; raw "$@" ;;
   portscan) shift; portscan "$@" ;;
   recon) shift; recon "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|syslog N [label]|raw LINE|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|build PATH|syslog N [label]|raw LINE|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
 esac

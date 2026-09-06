@@ -10,8 +10,10 @@
 # The `sync` stage is inert until the owner sets MIRROR_TO_GITHUB=true as
 # a project CI/CD variable (#935 step 4). Nothing in this file sets it.
 #
-# The live-check gate is not here and never will be: it runs on the
-# second host, after the merge (AGENTS.md, "The gate runs on `dev`").
+# The live-check gate runs here too, sharded, since #1004: the `gate`
+# stage below. It used to be kept off CI on purpose -- 36 minutes holding
+# one host -- and the second-host loop on `dev` (AGENTS.md, "The gate runs
+# on `dev`") is still there until the CI gate has proven itself.
 # ============================================================
 #
 # Runner: rootless-Docker executor, single group runner, untagged jobs only.
@@ -22,6 +24,7 @@ stages:
   - lint
   - test
   - security
+  - gate
   - sync
   - chr-exercise
   - renovate
@@ -409,6 +412,118 @@ test:container:
   after_script:
     - docker rm --force "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
     - docker image rm "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# GATE — the live-check gate, sharded (#1004).
+#
+# `make live-check` drives 85 browser scenarios one at a time against one
+# real instance, about 36 minutes on about three cores, and then four
+# standalone shell checks. It had been kept off CI because a 36-minute job
+# holding a host is a poor fit for a pipeline, and run instead by a loop on
+# the second host after each merge to dev (#831 has that loop and the
+# measurements). But that host *is* the CI runner's host, so any pipeline
+# lands on a running gate and the gate fails on navigation timeouts that
+# have nothing to do with the code.
+#
+# Sharding is the fix: `MV_SHARD=i/N make live-check` runs the i-th of N
+# contiguous slices of the scenario list against its own instance
+# (scripts/run-scenarios.sh explains how the list is cut), so four jobs in
+# parallel take the browser phase in about nine minutes each. That is a
+# shorter *window*, not more capacity -- the core-minutes are the same, the
+# host is the same -- but a nine-minute window collides with the rest of
+# the world far less often than a thirty-six-minute one, and here GitLab
+# does the scheduling instead of a lock file. The standalone scripts are
+# one unit and run once, in gate:scripts.
+#
+# Three jobs, all `allow_failure: true` for now: a tripwire, not a
+# turnstile. The second-host loop stays the gate of record until this one
+# has read green on dev for a run of pipelines; flipping these to blocking
+# is the trigger for retiring that loop, and is recorded on #1004.
+#
+# The image is the same one gate-remote.sh builds on the second host
+# (live-check.Dockerfile: node, Go, the three Playwright engines, ~1.5 GB).
+# gate:image builds it once per Dockerfile revision into the project
+# registry and points a per-branch tag at it, so the shard jobs can name
+# an `image:` without computing anything; a pipeline whose Dockerfile has
+# not changed just moves the tag.
+# ---------------------------------------------------------------------------
+
+# In the `test` stage on purpose, with `needs: []`: it starts the moment the
+# pipeline does, and the shards below, which name no `needs`, wait for the
+# whole of lint, test and security to finish before they start. Giving
+# the shards `needs: [gate:image]` instead would start them early, on top
+# of trivy and the Go compiles, on the four-slot light lane they would
+# fill -- exactly the contention #831 measured.
+gate:image:
+  stage: test
+  tags: [light]
+  image: docker:28-cli
+  <<: *dev_or_mr
+  needs: []
+  allow_failure: true
+  # #952: pushes to the registry -- never cut mid-write.
+  interruptible: false
+  timeout: 45m
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    IMAGE: $CI_REGISTRY_IMAGE/live-check
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      TAG="df-$(sha256sum live-check.Dockerfile | cut -c1-12)"
+      if docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+        echo "live-check image for this Dockerfile is already in the registry: $IMAGE:$TAG"
+      else
+        docker pull "$IMAGE:latest" || true
+        docker build --cache-from "$IMAGE:latest" --tag "$IMAGE:$TAG" --tag "$IMAGE:latest" -f live-check.Dockerfile .
+        docker push "$IMAGE:$TAG"
+        docker push "$IMAGE:latest"
+      fi
+      # Retag in the registry, without pulling: the shards name this tag.
+      docker buildx imagetools create -t "$IMAGE:$CI_COMMIT_REF_SLUG" "$IMAGE:$TAG"
+
+# One slice each. `parallel: 4` sets CI_NODE_INDEX (1-based) and
+# CI_NODE_TOTAL, which is exactly MV_SHARD's shape. Four, because the
+# light lane runs four at a time and the shards all sit there: a fifth
+# would queue behind the first four and add nothing but a longer window.
+# The image runs as its own `node` user (the gate must not run as root --
+# docs/decisions/gitlab-ci-root-in-container-test-failure.md) and the
+# executor checks out world-writable, so no chown dance is needed here.
+gate:scenarios:
+  stage: gate
+  tags: [light]
+  image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
+  <<: [*dev_or_mr, *git_safe]
+  parallel: 4
+  allow_failure: true
+  timeout: 30m
+  script:
+    - set -o pipefail
+    - (cd frontend && npm ci)
+    - MV_SHARD="$CI_NODE_INDEX/$CI_NODE_TOTAL" make live-check 2>&1 | tee "gate-shard-$CI_NODE_INDEX.log"
+  artifacts:
+    when: always
+    paths:
+      - gate-shard-*.log
+    expire_in: 1 week
+
+# The four standalone shell checks (scripts/run-live-scripts.sh), once.
+gate:scripts:
+  stage: gate
+  tags: [light]
+  image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
+  <<: [*dev_or_mr, *git_safe]
+  allow_failure: true
+  timeout: 30m
+  script:
+    - set -o pipefail
+    - (cd frontend && npm ci)
+    - make live-check-scripts 2>&1 | tee gate-scripts.log
+  artifacts:
+    when: always
+    paths:
+      - gate-scripts.log
+    expire_in: 1 week
 
 # ---------------------------------------------------------------------------
 # SECURITY — parallel jobs, diff-scoped Semgrep on MRs, full scan on dev.
