@@ -534,6 +534,13 @@ flags at all. To tell a regression from a pre-existing failure, run the
 whole `make live-check` on both trees, a worktree at `gitlab/dev` and the
 branch, never the one scenario twice.
 
+Some of that state never resets. A tripped ingest-loss counter draws a
+banner over the screen for the life of the instance, so a scenario that
+trips one has to sort last (`live-zz-ingest-loss-details.mjs`). Filename
+order is load-bearing, not tidiness: put such a scenario anywhere else
+and every later one fails on a banner it did not cause, looking like a
+real regression.
+
 ### Match CI's exact commands, not the obvious equivalents
 
 Local verification is incomplete unless it used the same commands CI uses —

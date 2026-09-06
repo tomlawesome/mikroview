@@ -213,13 +213,38 @@ for (let i = 0; i < STOPS.length; i++) {
 }
 
 // Keyboard: a district takes focus, Right walks its buildings, Down
-// walks to the next district; Shift+arrow pans.
-await page.locator('.city .plate').first().focus()
-const first = await page.evaluate(() => document.activeElement?.dataset.cid)
-await page.keyboard.press('ArrowRight')
-await new Promise((r) => setTimeout(r, 200))
-const walked = await page.evaluate(() => ({ cid: document.activeElement?.dataset.cid, cls: document.activeElement?.getAttribute('class') }))
-check(walked.cls?.includes('blk') && walked.cid?.startsWith(first + '/'), `Right walks from the district ${first} into its first building (${walked.cid})`)
+// walks to the next district; Shift+arrow pans. Pick the first plate
+// that actually has a building to walk into -- a district sorting
+// first with no hosts (e.g. the "from boundaries" bridge district on a
+// fresh instance, #1012) has nothing for Right to walk to, and that is
+// the app behaving correctly, not a failed walk.
+const first = await page.evaluate(() => {
+  // .blk buildings are not DOM descendants of their .plate district --
+  // they live in a separate paint-order layer -- so ownership is read
+  // off the "<district>/<host>" data-cid convention instead. A plain
+  // element.focus() also will not do: the component tracks "current"
+  // in its own $state, set only by a click (or by a previous keyboard
+  // walk), never by a native focus event -- so ArrowRight would judge
+  // the walk against whatever that state defaults to, not against the
+  // element the DOM says is focused. Clicking the plate is what a real
+  // user does before walking its buildings, so it is what this does too.
+  const blkCids = [...document.querySelectorAll('.city .blk')].map((b) => b.dataset.cid)
+  const plate = [...document.querySelectorAll('.city .plate')].find((p) => blkCids.some((cid) => cid?.startsWith(p.dataset.cid + '/')))
+  if (plate) plate.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  return plate ? plate.dataset.cid : null
+})
+const hasWalkable = !!first
+check(hasWalkable, 'a district with at least one building is on the map to walk the keyboard into')
+if (hasWalkable) {
+  // The click's focusItem() recentres the camera and focuses the plate
+  // asynchronously (a tick, then el.focus()); give it a moment to land
+  // before judging where the keyboard walk starts from.
+  await new Promise((r) => setTimeout(r, 300))
+  await page.keyboard.press('ArrowRight')
+  await new Promise((r) => setTimeout(r, 200))
+  const walked = await page.evaluate(() => ({ cid: document.activeElement?.dataset.cid, cls: document.activeElement?.getAttribute('class') }))
+  check(walked.cls?.includes('blk') && walked.cid?.startsWith(first + '/'), `Right walks from the district ${first} into its first building (${walked.cid})`)
+}
 await page.keyboard.press('ArrowDown')
 await new Promise((r) => setTimeout(r, 200))
 const next = await page.evaluate(() => ({ cid: document.activeElement?.dataset.cid, cls: document.activeElement?.getAttribute('class') }))

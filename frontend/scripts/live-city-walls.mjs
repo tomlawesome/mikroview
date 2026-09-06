@@ -4,9 +4,19 @@
 // The unit tests prove the derivations on fixtures (gates.ts, walls.ts,
 // escalate.ts); this walks the real thing: before any rule table is
 // pushed the walls carry no gates and say why, then a real filter-rule
-// push opens real gates, the policy lens lights every one with its rule
-// number while the traffic lens leaves the wall quiet, and a drop road
-// ends at the wall carrying the refusing rule's own name.
+// push opens real gates, the policy lens lights every one with a plain
+// label naming its far end while the traffic lens leaves the wall quiet,
+// and a drop road ends at the wall with its own plain mark.
+//
+// #991 (city.svelte, 5d90918) made the gate and drop pills bigger and
+// plainer: the gate pill now names its far end rather than a rule
+// number, and a drop mark reads one plain word, "dropped", rather than
+// the refusing rule's name. Both moves were ratified and are covered by
+// City.svelte.test.ts's own updated expectations. The rule number's new
+// home (the gate's click card) and the aggregate drop's new home (a
+// click-through per-rule breakdown) are both recorded, un-built gaps --
+// #1017 for the gate, #1002 for the drop -- not defects for this
+// scenario to route around by reaching for the old text.
 //
 // The no-rule-label pair (#969) is read by standing on its own host
 // rather than off the city-wide escalated wall: `worstUnplannedOf`
@@ -65,7 +75,7 @@ const prePushed = preRules.ok() && (await preRules.json()).available
 if (!prePushed) {
   const preText = await page.locator('[data-card="topography"] .city').textContent()
   check(preText.includes('NO RULES PUSHED'), 'before any push, a district plaque says plainly that no rule table has been pushed yet')
-  check((await page.locator('[data-card="topography"] .city .gate-n').count()) === 0, 'a router with no pushed rule table draws no gates at all')
+  check((await page.locator('[data-card="topography"] .city .gate-lab').count()) === 0, 'a router with no pushed rule table draws no gates at all')
   const plate = page.locator('[data-card="topography"] .city .plate').first()
   check((await plate.getAttribute('aria-label'))?.includes('no rule table has been pushed yet') ?? false, 'the district itself says why, not just the plaque')
 } else {
@@ -150,21 +160,26 @@ for (let i = 0; i < 9; i++) {
 
 await toDistrictStop()
 
-// --- Traffic lens: the wall stays quiet, no rule numbers -------------------
+// --- Traffic lens: the wall stays quiet, no gate pills ----------------------
 
 await clickLens('Traffic')
 await new Promise((r) => setTimeout(r, 400))
-check((await page.locator('[data-card="topography"] .city .gate-n').count()) === 0, 'the traffic lens leaves every gate quiet -- no rule numbers lit')
+check((await page.locator('[data-card="topography"] .city .gate-lab').count()) === 0, 'the traffic lens leaves every gate quiet -- no gate pills lit')
 
-// --- Policy lens: every gate lights with its rule count ---------------------
+// --- Policy lens: every gate lights with a plain far-end label -------------
+//
+// #991 moved the rule number off this pill onto the gate's click card,
+// which is not built yet (#1017 records that as a gap, not a defect).
+// What the live pill still promises, and what this proves against a
+// real push, is one plain label per gate naming its far end.
 
 await clickLens('Policy')
 await new Promise((r) => setTimeout(r, 400))
-const gateNumbers = await page.locator('[data-card="topography"] .city .gate-n').allTextContents()
-check(gateNumbers.length > 0, `the policy lens lights every gate with its rule number (${JSON.stringify(gateNumbers)})`)
+const gateLabels = await page.locator('[data-card="topography"] .city .gate-lab').allTextContents()
+check(gateLabels.length > 0, `the policy lens lights every gate with a far-end label (${JSON.stringify(gateLabels)})`)
 check(
-  gateNumbers.every((t) => /^\d+$/.test(t)),
-  `every lit gate carries a plain rule count, not invented text (${JSON.stringify(gateNumbers)})`,
+  gateLabels.every((t) => ['vlan-srv', 'bridge-lan'].includes(t)),
+  `every lit gate names one of the boundary's own two interfaces, not an invented number (${JSON.stringify(gateLabels)})`,
 )
 
 // --- The no-rule-label pair, read off its own host (#969) ------------------
@@ -201,14 +216,23 @@ check(standText.includes('caught, no rule named'), "standing on its own host, th
 await page.keyboard.press('Escape')
 await new Promise((r) => setTimeout(r, 900))
 
-// --- The named refusal, still read at the city stop (#865, unchanged) -----
+// --- The refused boundary reads plainly, city-wide (#991) ------------------
 //
-// This one is drawn on every refused road, not only an escalated one, so
-// it is read where the whole estate is in frame.
+// This mark is drawn on every refused road, not only an escalated one, so
+// it is read where the whole estate is in frame. Round 46 simplified it
+// to one plain word, "dropped" -- ported in 5d90918 and covered by
+// City.svelte.test.ts's own updated expectations. The refusing rule's
+// name for this aggregate, district-pair mark has no home yet: #1002
+// records that as a ratified gap (a click-through per-rule breakdown,
+// decided by the owner, not built), not a defect to route around here.
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('3') // the city stop
 await new Promise((r) => setTimeout(r, 900))
-const cityText = await page.locator('[data-card="topography"] .city').textContent()
-check(cityText.includes('caught by guest-isolation'), 'the refused boundary names its own rule beside the mark, from the event itself')
+const cityDropLabels = await page.locator('[data-card="topography"] .city .drop-t').allTextContents()
+check(cityDropLabels.includes('dropped'), `the refused boundary reads plainly as dropped, from a real drop event (${JSON.stringify(cityDropLabels)})`)
+check(
+  cityDropLabels.every((t) => !/caught|guest-isolation|iot-egress-drop/.test(t)),
+  `no drop mark invents a rule name the aggregate pill has no home for yet (${JSON.stringify(cityDropLabels)})`,
+)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()
