@@ -1723,8 +1723,12 @@
     border: 1px solid var(--hair);
     border-radius: 7px;
     padding: 7px 9px;
-    white-space: pre;
-    overflow-x: auto;
+    /* Wraps within the composer's fixed 300px width, the same as the 2D
+     * composer's own .cmd (Topography.svelte) -- a printed command line
+     * routinely runs past 300px, and overflow-x:auto here (the previous
+     * rule) showed a horizontal scroll bar rather than fitting it (#974). */
+    white-space: pre-wrap;
+    word-break: break-all;
     margin: 0;
   }
 
