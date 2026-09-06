@@ -394,7 +394,39 @@ export async function goTo(page, label, { unfold = true } = {}) {
       },
       scene.card,
       { timeout: 10000 },
-    )
+    ).catch(async (err) => {
+      // #1011: seven scenarios died here in one run and every one of
+      // them reported only "Timeout 10000ms exceeded", which cannot tell
+      // the two possible causes apart -- the rail click never changed
+      // the view, or the view changed and the roll never settled. Both
+      // look identical in the log, and the scenario dies before printing
+      // anything of its own, so the failing set names scenarios rather
+      // than the one helper they share. Report the page's actual state
+      // and then rethrow: behaviour on success is unchanged.
+      // page.evaluate has no timeout of its own, so on a page that has
+      // stopped answering it would hang and turn this 10s failure into a
+      // stuck run. Race it.
+      const seen = await Promise.race([
+        // unref so a resolved evaluate does not leave a live timer
+        // holding the process open for another five seconds.
+        new Promise((r) => setTimeout(() => r({ evaluateTimedOut: true }), 5000).unref()),
+        page
+        .evaluate((c) => {
+          const deck = document.querySelector('.deck')
+          const el = deck?.querySelector(`.card[data-card="${c}"]`)
+          return {
+            deckPresent: !!deck,
+            cardPresent: !!el,
+            cards: [...(deck?.querySelectorAll('.card') ?? [])].map((n) => n.dataset.card),
+            offsetFromDeckTop:
+              el && deck ? el.getBoundingClientRect().top - deck.getBoundingClientRect().top : null,
+          }
+        }, scene.card)
+        .catch((e) => ({ evaluateFailed: String(e) })),
+      ])
+      console.log(`  goTo("${label}") timed out waiting for card "${scene.card}": ${JSON.stringify(seen)}`)
+      throw err
+    })
     if (scene.tab) {
       // Round 30 (#697/#700) moved the docket's tabs into SceneBar's own
       // switcher (.switch[role="tablist"] .sw). They are still
