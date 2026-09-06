@@ -106,8 +106,15 @@ clean:
 # the better part of an hour. scripts/gate-remote.sh has the reasoning;
 # AGENTS.md's "The second host live-check runs on" has the account.
 live-check-remote:
-	@scripts/gate-remote.sh $(if $(MV_BROWSER),--browser $(MV_BROWSER),)
+	@scripts/gate-remote.sh $(if $(MV_BROWSER),--browser $(MV_BROWSER),) $(if $(MV_SHARDS),--shards $(MV_SHARDS),)
 
+# With MV_SHARD=i/N set, this is one slice of the browser phase (#1004):
+# its own instance on its own ports (scripts/live-slot.sh), the i-th of N
+# runs of scenarios (scripts/run-scenarios.sh), and no standalone-script
+# phase -- those four scripts are one unit, run once by live-check-scripts,
+# not once per slice. live-check-sharded below drives N of these at once;
+# CI's gate:scenarios job runs one per parallel job. Unset, it is the whole
+# gate, exactly as before.
 live-check:
 	@eval "$$(scripts/live-env.sh up)"; \
 	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT; \
@@ -118,10 +125,51 @@ live-check:
 	  wait "$$runner_pid" || status=1; \
 	  runner_pid=""; \
 	  scripts/live-env.sh down; \
+	  $(if $(MV_SHARD),:,scripts/run-live-scripts.sh || status=1); \
+	  exit $$status
+
+# The four standalone shell checks on their own (scripts/run-live-scripts.sh):
+# the second half of live-check, split out so a sharded run can do it once.
+live-check-scripts:
+	@scripts/run-live-scripts.sh
+
+# live-check-sharded: the same gate in a fraction of the wall time (#1004).
+#
+# The whole suite runs its 85 scenarios one at a time against one instance
+# and takes about 36 minutes on about three cores. This target builds the
+# binary once, brings up MV_SHARDS instances, gives each a contiguous
+# slice of the scenario list (the split rule is in run-scenarios.sh), and
+# runs the standalone scripts once afterwards. What that buys is a shorter
+# *window*, not more capacity: the core-minutes are the same, but the host
+# is shared with CI (#831), and a nine-minute run collides with a pipeline
+# far less often than a thirty-six-minute one.
+#
+# Each slice writes to its own log and the logs are printed afterwards in
+# slice order, so the output reads as one run and gate-remote.sh's count of
+# `== ` against `RESULT:` lines still holds. Ctrl-C reaches every slice,
+# since the terminal signals the whole foreground group; a kill aimed at
+# this shell alone reaches only what it can see, which is the sub-makes.
+MV_SHARDS ?= 4
+live-check-sharded:
+	@bin=$$(mktemp -d /tmp/mikroview-live-bin.XXXXXX); \
+	  logs=$$(mktemp -d /tmp/mikroview-live-logs.XXXXXX); \
+	  pids=""; \
+	  trap 'rm -rf "$$bin" "$$logs"' EXIT; \
+	  trap 'for p in $$pids; do kill "$$p" 2>/dev/null; done; exit 130' INT TERM; \
+	  scripts/live-env.sh build "$$bin/mikroview" || exit 1; \
+	  status=0; i=1; \
+	  while [ "$$i" -le "$(MV_SHARDS)" ]; do \
+	    echo "--> shard $$i/$(MV_SHARDS) started" >&2; \
+	    MV_SHARD=$$i/$(MV_SHARDS) MV_BINARY="$$bin/mikroview" $(MAKE) --no-print-directory live-check >"$$logs/shard-$$i.log" 2>&1 & pids="$$pids $$!"; \
+	    i=$$((i + 1)); \
+	  done; \
+	  for p in $$pids; do wait "$$p" || status=1; done; \
+	  i=1; \
+	  while [ "$$i" -le "$(MV_SHARDS)" ]; do cat "$$logs/shard-$$i.log"; i=$$((i + 1)); done; \
 	  scripts/run-live-scripts.sh || status=1; \
 	  exit $$status
 
-.PHONY: live-check
+.PHONY: live-check live-check-scripts live-check-sharded
 
 # live-routeros: boot a real RouterOS CHR and point it at a real
 # mikroview. Opt-in rather than part of live-check, because it boots a VM

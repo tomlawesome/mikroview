@@ -29,6 +29,10 @@ set -euo pipefail
 
 HOST="${MV_GATE_HOST:-mikroview-runner}"
 BROWSER="${MV_BROWSER:-chromium}"
+# --shards N / MV_SHARDS: run `make live-check-sharded` over there instead
+# of `make live-check` -- N instances, N slices, the same scenarios in a
+# fraction of the window (#1004). Empty means the unsharded gate.
+SHARDS="${MV_SHARDS:-}"
 KEEP=0
 # --wait / MV_GATE_WAIT: poll for the lock instead of refusing (#811).
 WAIT="${MV_GATE_WAIT:-0}"
@@ -38,11 +42,12 @@ REF="$(git rev-parse --abbrev-ref HEAD)"
 while [ $# -gt 0 ]; do
   case "$1" in
     --browser) BROWSER="$2"; shift 2 ;;
+    --shards)  SHARDS="$2"; shift 2 ;;
     --host)    HOST="$2"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
     --wait)    WAIT=1; shift ;;
     -h|--help)
-      echo "usage: scripts/gate-remote.sh [--browser chromium|firefox|webkit] [--host NAME] [--keep] [--wait]"
+      echo "usage: scripts/gate-remote.sh [--browser chromium|firefox|webkit] [--shards N] [--host NAME] [--keep] [--wait]"
       exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -53,7 +58,17 @@ case "$BROWSER" in
   *) echo "--browser must be chromium, firefox or webkit (got '$BROWSER')" >&2; exit 2 ;;
 esac
 
-echo "==> gate on $HOST, engine $BROWSER, from $REF ($(git rev-parse --short HEAD))"
+case "$SHARDS" in
+  ''|[1-8]) ;;
+  *) echo "--shards must be 1 to 8 (got '$SHARDS')" >&2; exit 2 ;;
+esac
+if [ -n "$SHARDS" ]; then
+  GATE_TARGET="MV_SHARDS=$SHARDS live-check-sharded"
+else
+  GATE_TARGET="live-check"
+fi
+
+echo "==> gate on $HOST, engine $BROWSER${SHARDS:+, $SHARDS shards}, from $REF ($(git rev-parse --short HEAD))"
 
 # A dirty tree would run code that is not what gets pushed, and the run would
 # claim to have tested a commit it did not. Refuse rather than mislead.
@@ -159,7 +174,7 @@ echo "==> checking out and building the image (cached after the first run)"
 ssh "$HOST" "$RECLAIM
 $CHECKOUT_AND_BUILD"
 
-echo "==> running the gate (35-50 minutes)"
+echo "==> running the gate (35-50 minutes unsharded; about 36 divided by the shard count plus the standalone scripts, sharded)"
 # --user 0 then dropping to ci-gate inside is deliberate, and is what the
 # GitLab job worked out: under rootless Docker this account maps to container
 # root, so it owns the bind mount, while the gate itself must not run as root
@@ -174,7 +189,7 @@ ssh "$HOST" "set -eu
     useradd -m -u 10001 ci-gate
     chown -R ci-gate:ci-gate /work
     su ci-gate -c \"cd /work/frontend && HOME=/home/ci-gate npm ci\"
-    su ci-gate -c \"cd /work && HOME=/home/ci-gate MV_BROWSER=$BROWSER make live-check\"
+    su ci-gate -c \"cd /work && HOME=/home/ci-gate MV_BROWSER=$BROWSER make $GATE_TARGET\"
   '" 2>&1 | tee gate-run.log
 gate_status=${PIPESTATUS[0]}
 set -e

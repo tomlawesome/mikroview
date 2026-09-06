@@ -32,6 +32,21 @@ instead of refusing. Do not start a second `make live-check-remote` against
 the same host expecting it to queue on its own -- without `--wait` it exits
 immediately.
 
+**It can be sharded (#1004).** `MV_SHARDS=4 make live-check-sharded` builds
+once, brings up four instances on their own ports, gives each a contiguous
+slice of the scenario list, prints the four logs in order, then runs the
+standalone scripts once. Same scenarios, same core-minutes, about a
+quarter of the wall time -- a shorter window on a host CI shares, not more
+capacity. `MV_SHARDS=4 make live-check-remote` does it on the second host,
+and CI's `gate` stage runs the same slices as `gate:scenarios 1/4`..`4/4`
+plus `gate:scripts`, `allow_failure` until it has proven itself. Slices
+are cut only between scenario *families* (the word after `live-`), so a
+scenario that needs what a sibling left behind must share its family;
+`MV_SHARD=2/4 scripts/run-scenarios.sh --list` shows a slice. Every run,
+sharded or not, now feeds 300 `live-baseline` events before the first
+scenario, so a slice that starts mid-suite is not starting on an empty
+instance. Each scenario's wall time is printed as `-- <scenario> Ns`.
+
 ## Why this exists
 
 Nearly every defect worth finding in this project was found by running it.
