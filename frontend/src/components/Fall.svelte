@@ -1773,7 +1773,8 @@
     display: flex;
     align-items: stretch;
     gap: 1px;
-    height: 6px;
+    --rail: 6px;
+    height: var(--rail);
     margin: 2px 0 10px;
     padding: 1px;
     border-radius: 3px;
@@ -1784,7 +1785,7 @@
     transition: height 150ms ease, margin-bottom 150ms ease;
   }
   .ovstrip:hover {
-    height: 9px;
+    --rail: 9px;
     margin-bottom: 7px;
   }
   .ovstrip.dragging {
@@ -1816,7 +1817,10 @@
   .ovtick.inwin {
     opacity: 1;
     align-self: center;
-    height: calc(100% + var(--lens, 0) * 8px);
+    /* --rail in px, not 100%: a percentage here resolved to ~2px in
+       Chrome (thinner than the rail at the run's ends), so the ends
+       now sit exactly at rail height and the middle 10px above it. */
+    height: calc(var(--rail) + var(--lens, 0) * 10px);
   }
   .ovtick.inwin-start {
     clip-path: polygon(4px 0, 100% 0, 100% 100%, 4px 100%, 0 50%);
