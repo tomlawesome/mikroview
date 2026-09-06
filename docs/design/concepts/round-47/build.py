@@ -100,6 +100,8 @@ CSS = r'''
   /* why these are one campaign: one quiet line under the campaign row */
   tr.crule td { padding: 6px 18px 6px 32px; font: 10.5px var(--mono); color: var(--ink-3); border-bottom: 1px solid var(--hair); }
   tr.crule td b { color: var(--ink-2); font-weight: 600; }
+  /* the ink line runs through the rule line, as it does through a drawer */
+  tr.crule.ft-unplanned td { box-shadow: inset 3px 0 0 #ff5470; }
   tr.camp.open td { border-bottom-color: transparent; }
   tr.mem[hidden], tr.crule[hidden] { display: none; }
   /* a campaign called from its own row: the stamp reads for the set */
@@ -168,7 +170,7 @@ campaign = ('        <tr class="frow camp ft-unplanned" data-c="c1" aria-label="
             '<td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · 10.0.20.14</td>'
             '<td class="ev"><span class="tchip ft-unplanned">unplanned</span><span class="tchip ft-outbound">outbound</span><span class="tchip ft-repeat">repeated drops</span><span class="cspan">13:28 → still arriving</span></td>'
             '<td class="num">26×</td><td class="t">24 m</td>' + TRIO + '</tr>\n'
-            '        <tr class="crule in-c1" hidden><td colspan="6">one source, three flags, each inside 30 minutes of the last — <b>one campaign</b>. cam-porch\'s ACTIVITY SPIKE at 11:10 is two hours from these, so it keeps its own row.</td></tr>\n')
+            '        <tr class="crule in-c1 ft-unplanned" hidden><td colspan="6">one source, three flags, each inside 30 minutes of the last — <b>one campaign</b>. cam-porch\'s ACTIVITY SPIKE at 11:10 is two hours from these, so it keeps its own row.</td></tr>\n')
 
 # the drop surge is scored: the number beside the type, and the line that says where it came from
 d5 = rows['d5']
