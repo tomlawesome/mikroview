@@ -120,5 +120,6 @@ needs to be much more visible" — the dimmed number became the pill
 above, same day. Then: "Everything else is great." Asked whether that
 ratifies round 47 with the number as now drawn: "yes it does."
 **Ratified 2026-09-06.** Then, same day: "the numbers still need to
-be brighter" — the scored pill went to pure white at 13px on a stronger
-pill (`.fmark .conf`); the FLAG column's 208px still holds it.
+be brighter" — the number went to pure white at 13px on a stronger
+pill; then "I don't want a pill, just the number" — the pill is gone and
+the bare white number sits beside the type (`.fmark .conf`).
