@@ -12,6 +12,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 export QH_DIR="$TMP/qh"
+export QH_STATE="$TMP/state"
 export CONFIG="$TMP/config.toml"
 mkdir -p "$QH_DIR" "$TMP/bin"
 
@@ -46,19 +47,19 @@ write_config
 write_flag "$(($(date +%s) + 300))"
 "$SCRIPT" >/dev/null
 check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 1" "hold sets concurrent=1"
-check "$(cat "$QH_DIR/concurrent.orig")" "4" "orig saved"
+check "$(cat "$QH_STATE/concurrent.orig")" "4" "orig saved"
 [ -f "$QH_DIR/applied" ] && echo "ok - applied written" || { echo "FAIL - applied written"; fail=1; }
 
 # idempotent re-run while held
 "$SCRIPT" >/dev/null
 check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 1" "idempotent hold leaves concurrent=1"
-check "$(cat "$QH_DIR/concurrent.orig")" "4" "idempotent leaves orig untouched"
+check "$(cat "$QH_STATE/concurrent.orig")" "4" "idempotent leaves orig untouched"
 
 # release restores the original value
 rm -f "$QH_DIR/hold"
 "$SCRIPT" >/dev/null
 check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 4" "release restores concurrent=4"
-[ -f "$QH_DIR/concurrent.orig" ] && { echo "FAIL - orig should be gone"; fail=1; } || echo "ok - orig removed"
+[ -f "$QH_STATE/concurrent.orig" ] && { echo "FAIL - orig should be gone"; fail=1; } || echo "ok - orig removed"
 [ -f "$QH_DIR/applied" ] && { echo "FAIL - applied should be gone"; fail=1; } || echo "ok - applied removed"
 
 # expired flag releases and is deleted
@@ -73,7 +74,7 @@ echo "$out" | grep -q '^EXPIRED ' && echo "ok - EXPIRED logged" || { echo "FAIL 
 
 # missing concurrent line is refused
 printf 'check_interval = 3\n' >"$CONFIG"
-rm -f "$QH_DIR/hold" "$QH_DIR/concurrent.orig" "$QH_DIR/applied"
+rm -f "$QH_DIR/hold" "$QH_STATE/concurrent.orig" "$QH_DIR/applied"
 write_flag "$(($(date +%s) + 300))"
 if "$SCRIPT" >/dev/null 2>"$TMP/err"; then
   echo "FAIL - missing concurrent line should refuse"; fail=1

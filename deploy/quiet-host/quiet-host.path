@@ -2,7 +2,7 @@
 Description=Watch /srv/quiet-host for hold flag changes
 
 [Path]
-PathModified=/srv/quiet-host
+PathChanged=/srv/quiet-host
 PathExists=/srv/quiet-host/hold
 Unit=quiet-host.service
 

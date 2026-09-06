@@ -16,10 +16,14 @@
 set -euo pipefail
 
 QH_DIR="${QH_DIR:-/srv/quiet-host}"
+# The saved value lives outside the watched directory, so saving it does
+# not re-trigger quiet-host.path (five starts in ten seconds hit systemd's
+# start limit on the first install, 2026-09-06).
+QH_STATE="${QH_STATE:-/var/lib/quiet-host}"
 CONFIG="${CONFIG:-/etc/gitlab-runner/config.toml}"
 
 HOLD="$QH_DIR/hold"
-ORIG="$QH_DIR/concurrent.orig"
+ORIG="$QH_STATE/concurrent.orig"
 APPLIED="$QH_DIR/applied"
 
 apply_hold() {
@@ -30,6 +34,7 @@ apply_hold() {
     exit 1
   fi
   if [ ! -f "$ORIG" ]; then
+    mkdir -p "$QH_STATE"
     value=$(sed -n 's/^concurrent = \(.*\)$/\1/p' "$CONFIG")
     printf '%s\n' "$value" >"$ORIG"
   fi
