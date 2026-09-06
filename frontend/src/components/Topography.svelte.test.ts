@@ -1068,6 +1068,30 @@ describe('the round-30 layout (#699)', () => {
     }
   })
 
+  it("keeps every line of a district card's own text inside its plate, so the roads behind it have something solid to stop against (#976 follow-up)", () => {
+    // A road passing under a card is only ever hidden by the plate's
+    // own opaque fill -- there is no other mechanism. If a text line
+    // sits below the plate's own bottom edge, whatever is behind it
+    // (a road, in a real estate) shows straight through that line
+    // instead of stopping at the card, which read as "lines painted
+    // through the card" even though the roads were always drawn first.
+    pushLanes(1)
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = container.querySelector('.ground-flat .gf-card')!
+    const plate = card.querySelector('.gf-plate')!
+    const plateTop = Number(plate.getAttribute('y'))
+    const plateBottom = plateTop + Number(plate.getAttribute('height'))
+    const texts = [...card.querySelectorAll('text')]
+    expect(texts.length).toBeGreaterThan(0)
+    for (const t of texts) {
+      const y = Number(t.getAttribute('y'))
+      expect(y).toBeGreaterThan(plateTop)
+      expect(y).toBeLessThan(plateBottom)
+    }
+  })
+
   it('adds a services layer and a client tier rather than scaling the map up', () => {
     zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
     appState.events = [

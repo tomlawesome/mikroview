@@ -1237,7 +1237,19 @@
     pushCardsApart(
       ground.districts.map((d) => {
         const gr = Math.max(38, d.r * flatCam.S * 0.9)
-        return { d, x: FX(flatCam, d.u), y: FY(flatCam, d.v), gr, gh: Math.max(44, gr * 0.84) }
+        // 56, not 44: the card's third line (host count, at -gh/2+48
+        // below) needs the plate's own bottom edge past 48 with some
+        // padding, or that line prints below the opaque plate rather
+        // than on it -- the map's own roads then show straight through
+        // "0 hosts" rather than stopping at the card's edge (owner
+        // review, #976 follow-up: it read as "lines painted through the
+        // card," but the actual cause was this card being too short for
+        // its own text, not the roads drawn in the wrong order -- they
+        // were always behind the plate, they just had nothing solid to
+        // stop against past its bottom edge). The push-apart pass above
+        // absorbs the size increase by spacing cards further apart, so
+        // growing this floor no longer risks two cards colliding.
+        return { d, x: FX(flatCam, d.u), y: FY(flatCam, d.v), gr, gh: Math.max(56, gr * 0.84) }
       }),
     ),
   )
