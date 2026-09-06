@@ -620,6 +620,16 @@ security:semgrep:
   tags: [light]
   image: semgrep/semgrep:1.176.0
   <<: *dev_or_mr
+  variables:
+    # The whole history, as gitleaks below. On a merge request the scan
+    # is diff-scoped against $CI_MERGE_REQUEST_DIFF_BASE_SHA, and on the
+    # dev -> preview promotion that base is the preview tip, a thousand
+    # commits back: outside GitLab's 20-commit shallow default, so
+    # semgrep's `git diff --merge-base <base>` failed (exit 128) and the
+    # job died with "Exception in BaselineHandler initialization" before
+    # scanning a file (!980, first promotion run under #1003). A dev MR
+    # never saw it because its base is always within reach.
+    GIT_DEPTH: 0
   script:
     # The image sets SEMGREP_IN_DOCKER, which makes semgrep insist the
     # code is bind-mounted at /src and chdir there before it looks at
