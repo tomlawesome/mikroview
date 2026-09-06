@@ -346,7 +346,21 @@ export async function unfoldStreamFilter(page) {
   const box = page.locator('.filterline .fbox')
   if (!(await box.count())) return
   if (await box.evaluate((el) => el.classList.contains('open'))) return
-  await box.click()
+  // Click the always-present hint input, not the box's own bounding-box
+  // centre. `.fbox` is a flex-wrap row (FilterBar.svelte) whose content
+  // shifts with the active filter chips, and FilterPresetsMenu's `.saved`
+  // root -- pinned to the box's right end -- calls stopPropagation() on
+  // every click inside it, so reaching for a saved filter doesn't also
+  // unfold the strip (same reasoning as each chip's own `.chip-x`). Once
+  // enough chips are active the row can wrap or shift far enough that a
+  // plain box.click() lands in that dead zone: the click is swallowed,
+  // the box never opens, and whatever comes next times out waiting for
+  // input.rule -- live-waterfall's third boundary/carrier handoff (three
+  // chips: interface, chain, port) is exactly the shape that moves the
+  // centre point onto `.saved`. `.fbtype` (flex:1, min-width 60px) is the
+  // one part of the box that never stops that propagation -- the
+  // "genuine control" FilterBar.svelte's own comment names it as.
+  await box.locator('input.fbtype').click()
 }
 
 /**
