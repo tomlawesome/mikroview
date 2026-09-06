@@ -1151,8 +1151,8 @@
   // level and zoom you left" falls out of that for free, and now
   // carries across the join too (crossAltitudeCentre below).
   //
-  // The last stop visited persists per user, the same small-module
-  // convention cityImportance.svelte.ts uses for its reading.
+  // The last stop visited persists per user via altitudeStopState,
+  // using the small-module pattern shared with colorway and retention.
   let altitude = $state<Altitude>(ALTITUDE_LABELS.indexOf(altitudeStopState.stop) as Altitude)
   const cityStop = $derived(isCityAltitude(altitude) ? STOPS[altitude - CENTRE_ALTITUDE] : null)
 

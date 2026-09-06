@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // Which altitude stop the slider remembers across visits (#869): a
-// standing preference like cityImportance.svelte.ts's reading -- its
+// standing preference persisted like colorway and retention -- its
 // own small module rather than growing appState.
 import { ALTITUDE_LABELS, type AltitudeLabel } from './altitude'
 
