@@ -545,7 +545,7 @@ class AppState {
   // entity is gone.
   relabel(type: 'host' | 'port' | 'rule', key: string, label: string) {
     const name = label || undefined
-    const rewrite = (e: ClientEvent): ClientEvent => {
+    const rewrite = <E extends FirewallEvent>(e: E): E => {
       switch (type) {
         case 'host': {
           const src = e.srcIp === key
@@ -574,6 +574,13 @@ class AppState {
     if (this.frozenPool !== null) this.frozenPool = this.frozenPool.map(rewrite)
     this.incomingBuffer = this.incomingBuffer.map(rewrite)
     this.pendingBuffer = this.pendingBuffer.map(rewrite)
+
+    // A server fetch in flight right now was snapshotted before this
+    // rename reached the server's buffer, so its response still carries
+    // the old name and would undo everything above the moment it lands
+    // (#993: ~9 ms later, wholesale, via setInitialEvents). Remember the
+    // rewrite so that response gets it too -- see fetchEventsRelabelSafe.
+    if (this.eventsFetchesInFlight > 0) this.midFlightRelabels.push(rewrite)
   }
 
   clearBuffer() {
@@ -626,18 +633,52 @@ class AppState {
     }
   }
 
+  // The rename-vs-refetch race (#993). loadInitial/refetchWithFilters
+  // replace `events` wholesale with the server's snapshot -- and a
+  // snapshot taken before a rename reached the server carries the old
+  // name, so landing it after relabel() has run silently undoes the
+  // rename on every visible row (an operator only needs to change a
+  // filter, then rename within FILTER_DEBOUNCE_MS + the round trip).
+  //
+  // The guard: relabels taken while a fetch is in flight are recorded
+  // and re-applied, once, to that fetch's response before it lands.
+  // Scoped to the flight on purpose -- cleared the moment no fetch is
+  // outstanding, never consulted at render -- so this stays a one-shot
+  // rewrite in relabel()'s own mould, not the standing overlay its
+  // comment records as rejected. Fetches *issued* after the save need
+  // nothing from this: the server re-stamps its buffered events on
+  // entity upsert/delete (internal/api's restampBufferedNames), so
+  // their responses already carry the new name.
+  //
+  // Plain fields, not $state: nothing renders from them, same reasoning
+  // as `holds` above.
+  private eventsFetchesInFlight = 0
+  private midFlightRelabels: (<E extends FirewallEvent>(e: E) => E)[] = []
+
+  private async fetchEventsRelabelSafe(): Promise<FirewallEvent[]> {
+    this.eventsFetchesInFlight++
+    try {
+      const res = await fetchEvents({ ...this.filters, limit: 500 })
+      const raced = this.midFlightRelabels
+      return raced.length === 0 ? res.events : res.events.map((e) => raced.reduce((ev, rw) => rw(ev), e))
+    } finally {
+      this.eventsFetchesInFlight--
+      if (this.eventsFetchesInFlight === 0) this.midFlightRelabels = []
+    }
+  }
+
   async loadInitial() {
     // Uses whatever's already in this.filters -- App.svelte sets this from
     // the URL's query string (if present) before calling loadInitial(), so
     // a shared/bookmarked filtered link loads pre-filtered instead of
     // fetching everything and only filtering after the fact.
     try {
-      const [eventsRes, devices, stats] = await Promise.all([
-        fetchEvents({ ...this.filters, limit: 500 }),
+      const [events, devices, stats] = await Promise.all([
+        this.fetchEventsRelabelSafe(),
         fetchDevices(),
         fetchStats(),
       ])
-      this.setInitialEvents(eventsRes.events)
+      this.setInitialEvents(events)
       this.devices = devices
       this.stats = stats
       this.fetchFailed = false
@@ -662,8 +703,7 @@ class AppState {
   // to exist alongside client-side filtering, not instead of it.
   async refetchWithFilters() {
     try {
-      const res = await fetchEvents({ ...this.filters, limit: 500 })
-      this.setInitialEvents(res.events)
+      this.setInitialEvents(await this.fetchEventsRelabelSafe())
       this.fetchFailed = false
     } catch (err) {
       // Deliberately does not touch `events` -- the pre-refetch buffer is
