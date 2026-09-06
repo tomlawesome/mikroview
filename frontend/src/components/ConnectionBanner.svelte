@@ -58,7 +58,7 @@
     <div id="ingest-loss-stack">
       {#each bar.banners as banner, i (banner.id)}
         <div class="banner banner-{banner.severity}" role="status">
-          {banner.text}
+          <strong>{banner.label}:</strong> <span class="dt">{banner.detail}</span>
           {#if i === 0}
             <button
               class="more"
@@ -75,7 +75,7 @@
     </div>
   {:else}
     <div class="banner banner-{bar.lead.severity}" role="status">
-      {bar.lead.text}
+      <strong>{bar.lead.label}:</strong> <span class="dt">{bar.lead.detail}</span>
       {#if bar.moreCount > 0}
         <button
           class="more"
@@ -98,6 +98,15 @@
     font-size: 13px;
     text-align: center;
     border-bottom: 1px solid var(--border);
+  }
+
+  /* #995 (owner ruling, 2026-09-06): each banner is set in two tiers,
+     the label bold and dominant, the detail at text weight and
+     subordinate. Weight is the only cue -- no size, opacity or
+     letter-spacing on top -- ported from
+     docs/design/concepts/ingest-loss-995's <strong> rule. */
+  .banner strong {
+    font-weight: 700;
   }
 
   .banner-connecting {
