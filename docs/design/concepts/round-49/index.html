@@ -137,8 +137,9 @@
   .hbt { pointer-events: none; }
   .wp { font: 600 9.5px var(--mono); fill: var(--watch); }
   .fchip { font: 600 9.5px var(--mono); fill: var(--alarm); }
-  .halo { animation: halo 2s ease-out infinite; transform-box: fill-box; transform-origin: center; }
-  @keyframes halo { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2.6); } }
+  /* a flagged host throbs in place: the ring hugs the dot and breathes, it does not ripple out */
+  .halo { animation: halo 1.6s ease-in-out infinite; }
+  @keyframes halo { 0%, 100% { opacity: 0.45; stroke-width: 1.2; } 50% { opacity: 1; stroke-width: 2; } }
   .hot { cursor: pointer; }
   .hot:hover { filter: brightness(1.3); }
 
@@ -1008,7 +1009,7 @@ function device(c, u, v, b, opt) {
        (pres === 'quiet' ? ' opacity="0.62"' : pres === 'intended' ? ' opacity="0.55"' : '') + '><use href="#' + opt.sid + '-' + b.t + '"/></g>';
   if (flagged || opt.lit || opt.ring || watched) {
     const top = R2(-DEVLIB[b.t].top * k - 2);
-    s += '<circle cx="0" cy="' + top + '" r="' + R2(Math.max(4, 5 * k)) + '" class="' + (watched && !flagged && !opt.lit ? '' : 'halo') +
+    s += '<circle cx="0" cy="' + top + '" r="' + R2(Math.max(3.5, 4 * k)) + '" class="' + (watched && !flagged && !opt.lit ? '' : 'halo') +
       '" fill="none" stroke="' + (flagged || opt.lit ? 'var(--alarm)' : (opt.ring ? 'var(--accent)' : 'var(--watch)')) + '" stroke-width="1.4"' +
       (watched && !flagged && !opt.lit ? ' stroke-opacity="0.8"' : '') + '/>';
   }
@@ -1216,7 +1217,7 @@ function node2(id, opt) {
       const ink2 = HOST_INK[st] || n.lane;
       s += '<g class="hot" data-host="' + h[0] + '"><title>' + h[0] + (st === 'quiet' ? ' · quiet' : st === 'intended' ? ' · quiet on purpose' : '') + '</title>';
       s += '<circle class="c-dot" cx="' + x + '" cy="' + y + '" r="4.5" fill="' + ink2 + '"' + (st === 'intended' ? ' fill-opacity="0.55"' : st === 'quiet' ? ' fill-opacity="0.75"' : '') + '/>';
-      if (h[2] === 'f' && opt.flags) s += '<circle cx="' + x + '" cy="' + y + '" r="7.5" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/>';
+      if (h[2] === 'f' && opt.flags) s += '<circle cx="' + x + '" cy="' + y + '" r="6" fill="none" stroke="var(--alarm)" class="halo"/>';
       if (h[2] === 'w' && opt.watch) s += '<circle cx="' + x + '" cy="' + y + '" r="7" fill="none" stroke="var(--watch)" stroke-width="1.1" stroke-opacity="0.9"/>';
       if (opt.hostFocus === h[0]) s += '<circle cx="' + x + '" cy="' + y + '" r="8.5" fill="none" stroke="var(--accent)" stroke-width="1" stroke-dasharray="2 3"/>';
       s += '</g>';
