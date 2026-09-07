@@ -66,7 +66,7 @@
   import { cityInputFrom } from '../lib/city/input'
   import type { District, Ground } from '../lib/city/types'
   import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
-  import { cardSize, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
+  import { cardSize, drawnRect, drawnRects, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
   import { altitudeStopState } from '../lib/altitudeStop.svelte'
   // Living hosts (#1016). The register is the source of presence, not
   // the event buffer: zonesState derives its host list from the lines
@@ -1111,6 +1111,36 @@
    * (#1028). */
   let cardTick = $state(0)
 
+  /**
+   * The rendered plates of some zones, in the host's own pixels (#1028).
+   *
+   * A zone is drawn twice over: once as a lane card along the foot
+   * (`g.zone`) and once as a ground-plan card (`g.gf-card`), and the
+   * stop decides which of the two a reader can see -- the other is left
+   * in the DOM at `opacity: 0`, still measurable and still the wrong
+   * answer. Both carry `data-zone`, so both are asked, and
+   * `cardAnchor`'s `drawnRects` keeps only what is actually on screen.
+   *
+   * Reading it off the drawing rather than recomputing it also means the
+   * card follows the drawing when the drawing changes, instead of
+   * quietly avoiding where a plate used to be.
+   */
+  function zonePlates(host: Element, ids: readonly string[]): Rect[] {
+    const els: Element[] = []
+    for (const id of ids) {
+      const sel = `g.zone[data-zone="${CSS.escape(id)}"] rect.isl, g.gf-card[data-zone="${CSS.escape(id)}"] rect.gf-plate`
+      for (const el of host.querySelectorAll(sel)) els.push(el)
+    }
+    return drawnRects(els, host)
+  }
+
+  /** Whether the lane row is the drawing on screen, as opposed to the
+   * ground plan that replaces it at the zones stop. */
+  function laneRowDrawn(host: Element): boolean {
+    const el = host.querySelector('g.zone rect.isl')
+    return el !== null && drawnRect(el, host) !== null
+  }
+
   /** The open boundary's own drawn half, taken live rather than kept
    * from when the card opened: the lane row re-lays itself out as zones
    * arrive, and a leader pointing where the rib used to be is worse
@@ -1126,6 +1156,7 @@
     // which boundary is open, where its rib is drawn, the altitude, the
     // card's arrival in the DOM, and the stage's size.
     const drawn = openDrawn
+    const open = boundaryCard
     const svg = mapSvgEl
     const host = topoEl
     const card = cardEl
@@ -1133,7 +1164,7 @@
     void stageTick
     void cardTick
 
-    if (!drawn || !svg || !host || !card || reach) {
+    if (!drawn || !open || !svg || !host || !card || reach) {
       cardPlace = null
       return
     }
@@ -1144,16 +1175,29 @@
       return
     }
     const anchor = map(halfMid(drawn.line))
-    // Both islands, not just the near one: the card names a pair, and
+    // Both plates, not just the near one: the card names a pair, and
     // sitting on either end hides half of what it is describing.
-    const avoid = [islandRect(drawn.line.from), islandRect(drawn.line.to)].map((r) => mapRect(map, r))
-    // Every other lane card is worth keeping clear too, but only as a
-    // tie-break: the lane row fills the foot of the map, and insisting
-    // would leave nowhere to put the card at all.
-    const softAvoid = zones
-      .map((_, i) => islandRect({ x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }))
-      .concat([islandRect({ ...WAIST, kind: 'any' }), islandRect({ x: 700, y: 104, kind: 'internet' })])
-      .map((r) => mapRect(map, r))
+    //
+    // Measured off the drawing rather than recomputed from `islandRect`
+    // (#1028). A zone is drawn by the lane row at clients and services
+    // and by the ground plan at zones, in a completely different place,
+    // and the two swap with `opacity: 0` -- so a set built from the lane
+    // row's own coordinates is, at the zones stop, a set of rectangles
+    // nobody can see, and the card cleared those while coming down on
+    // the ground-plan plate its title names. `zonePlates` returns
+    // whichever layer is really on screen.
+    const avoid = zonePlates(host, [open.from, open.to])
+    // Every other plate is worth keeping clear too, but only as a
+    // tie-break: the plates fill the map, and insisting would leave
+    // nowhere to put the card at all.
+    const others = zones.map((z) => z.id).filter((id) => id !== open.from && id !== open.to)
+    const softAvoid = zonePlates(host, others).concat(
+      // The waist and the internet island belong to the lane-row drawing
+      // and go with it: at the zones stop the ground plan has replaced
+      // them, and avoiding where they used to be is the same mistake
+      // again.
+      laneRowDrawn(host) ? [islandRect({ ...WAIST, kind: 'any' }), islandRect({ x: 700, y: 104, kind: 'internet' })].map((r) => mapRect(map, r)) : [],
+    )
     cardPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
   })
 
@@ -1232,13 +1276,14 @@
     // The dot's own point on the map, in the lane card's space plus the
     // lane's own offset.
     const anchor = map({ x: laneX(open.zi, zones.length) + hostDotX(open.di), y: 490 + HOST_DOT_Y })
-    // The dot's own lane card is the one thing the card must not sit on:
-    // it is the thing being pointed at.
-    const avoid = [mapRect(map, islandRect({ x: laneX(open.zi, zones.length), y: 484, kind: 'zone', idx: open.zi }))]
-    const softAvoid = zones
-      .map((_, i) => islandRect({ x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }))
-      .concat([islandRect({ ...WAIST, kind: 'any' }), islandRect({ x: 700, y: 104, kind: 'internet' })])
-      .map((r) => mapRect(map, r))
+    // The dot's own plate is the one thing the card must not sit on: it
+    // is the thing being pointed at. Measured off the drawing, for the
+    // reason the boundary card's own placement gives above (#1028).
+    const avoid = zonePlates(host, [open.zone.id])
+    const others = zones.map((z) => z.id).filter((id) => id !== open.zone.id)
+    const softAvoid = zonePlates(host, others).concat(
+      laneRowDrawn(host) ? [islandRect({ ...WAIST, kind: 'any' }), islandRect({ x: 700, y: 104, kind: 'internet' })].map((r) => mapRect(map, r)) : [],
+    )
     hostCardPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
   })
 
@@ -3132,6 +3177,7 @@
           class="zone"
           role="button"
           tabindex="0"
+          data-zone={z.id}
           aria-label="Open the stream filtered to {z.name}"
           onclick={() => openZone(z.id)}
           onkeydown={(e) => {
@@ -3476,6 +3522,7 @@
             transform="translate({R2(fc.x)} {R2(fc.y)})"
             role="button"
             tabindex="0"
+            data-zone={fc.d.id}
             aria-label="Open the stream filtered to {fc.d.name}"
             onclick={() => openZone(fc.d.id)}
             onkeydown={(e) => {
