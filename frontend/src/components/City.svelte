@@ -64,7 +64,7 @@
   import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
   import { faceCoverage, faceOf, facePoint, wallPiece, wallSegments, GATE_HALF_WIDTH, WALL_H, type WallBreak, type WallSide } from '../lib/city/walls'
   import { worseCoverage } from '../lib/city/gates'
-  import { cardSize, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
+  import { cardSize, drawnRect, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
   import type { Coverage } from '../lib/coverageRule'
   import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
@@ -1469,11 +1469,21 @@
     // DarkLane.
     const toward = wallCard ? (ground.districts.find((x) => x.id === wallCard.gate.toward || x.name === wallCard.gate.toward) ?? null) : null
     const ends = toward && toward.id !== d.id ? [d, toward] : [d]
-    const avoid = ends.map((x) => mapRect(map, plateBox(x)))
+    // Only the plates a reader can actually see (#1028). The city draws
+    // every district at every stop, so this changes nothing today; it
+    // stops the card ever keeping off a plate that is not on screen,
+    // which is the mistake the 2D map made when its two zone layers
+    // swapped under the same placement.
+    const shown = (x: { id: string }) => host.querySelector(`g.plate[data-cid="${CSS.escape(x.id)}"]`)
+    const drawnPlate = (x: { id: string; u: number; v: number; r: number }) => {
+      const el = shown(x)
+      return el !== null && drawnRect(el, host) !== null ? [mapRect(map, plateBox(x))] : []
+    }
+    const avoid = ends.flatMap(drawnPlate)
     // Every other plate is worth keeping clear too, but only as a
     // tie-break: at the city stop the whole estate is on screen and
     // insisting would leave nowhere to put the card at all.
-    const softAvoid = ground.districts.filter((x) => !ends.some((e) => e.id === x.id)).map((x) => mapRect(map, plateBox(x)))
+    const softAvoid = ground.districts.filter((x) => !ends.some((e) => e.id === x.id)).flatMap(drawnPlate)
     cardPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
   })
 

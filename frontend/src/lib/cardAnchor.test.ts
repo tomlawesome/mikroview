@@ -11,8 +11,11 @@ import {
   LEAD_INSET,
   boundsOf,
   cardSize,
+  drawnRect,
+  drawnRects,
   fitViewBox,
   grace,
+  isDrawn,
   leaderEnd,
   mapRect,
   parseAspect,
@@ -490,6 +493,117 @@ describe('grace — the card outliving the pointer (#1027)', () => {
     vi.advanceTimersByTime(CARD_GRACE_MS)
     expect(first).not.toHaveBeenCalled()
     expect(second).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #1028: a subject the card cannot escape along the side's own axis.
+// `pushClear` moves a left-side card sideways and never upwards, so a
+// wide subject left every seeded side overlapping and the card settled
+// for the least-bad one -- on the plate its own title named, with clear
+// ground above it the whole time.
+describe('placeCard where no side clears the subject on its own axis (#1028)', () => {
+  // A band right across the map, as the lane row is across the foot.
+  const band: Rect = { x: 0, y: 480, w: 1400, h: 110 }
+
+  it('finds the clear ground above a subject that spans the map', () => {
+    const tall = { w: 288, h: 420 }
+    const p = placeCard({ anchor: { x: 700, y: 520 }, card: tall, stage: STAGE, avoid: [band] })
+    const box = { x: p.left, y: p.top, w: tall.w, h: tall.h }
+    expect(overlap(box, band), 'the card came down on a subject it could have cleared').toBe(0)
+  })
+
+  it('still keeps the card on the stage while it escapes', () => {
+    const tall = { w: 288, h: 420 }
+    const p = placeCard({ anchor: { x: 40, y: 520 }, card: tall, stage: STAGE, avoid: [band] })
+    expect(p.left).toBeGreaterThanOrEqual(0)
+    expect(p.top).toBeGreaterThanOrEqual(0)
+    expect(p.left + tall.w).toBeLessThanOrEqual(STAGE.w)
+    expect(p.top + tall.h).toBeLessThanOrEqual(STAGE.h)
+  })
+
+  it('leaves a placement that already clears its subject exactly where it was', () => {
+    // The seeds work here, so the wider search must not run and must not
+    // move the card: this is what stops the fix disturbing the surfaces
+    // that place correctly today.
+    // Left side, seeded to the anchor's right and then pushed clear of
+    // the subject's right edge: 740 + the 22 gap.
+    const req = { anchor: { x: 700, y: 300 }, card: CARD, stage: STAGE, avoid: [{ x: 660, y: 280, w: 80, h: 40 }] }
+    const p = placeCard(req)
+    expect({ left: p.left, top: p.top }).toEqual({ left: 762, top: 300 - LEAD_INSET })
+  })
+
+  it('takes the least-covering placement where the subject really cannot be cleared', () => {
+    // A subject bigger than the stage: there is nowhere clear, and the
+    // card must still be placed and still be joined to it.
+    const everywhere: Rect = { x: -100, y: -100, w: 2000, h: 1000 }
+    const p = placeCard({ anchor: { x: 700, y: 350 }, card: CARD, stage: STAGE, avoid: [everywhere] })
+    expect(Number.isFinite(p.left)).toBe(true)
+    expect(Number.isFinite(p.top)).toBe(true)
+    expect(p.from).toEqual({ x: 700, y: 350 })
+  })
+})
+
+// #1028: the avoidance set has to be what is on screen. The 2D map draws
+// a zone twice -- a lane card and a ground-plan card -- and swaps them
+// with `opacity: 0`, so the hidden one still answers with real numbers
+// and avoiding it is avoiding nothing.
+describe('isDrawn / drawnRect — only what a reader can see', () => {
+  const withBox = (el: HTMLElement, box: { x: number; y: number; w: number; h: number }) => {
+    el.getBoundingClientRect = () =>
+      ({ left: box.x, top: box.y, width: box.w, height: box.h, right: box.x + box.w, bottom: box.y + box.h, x: box.x, y: box.y }) as DOMRect
+    return el
+  }
+  const scene = () => {
+    const host = withBox(document.createElement('div'), { x: 10, y: 20, w: 800, h: 600 })
+    const layer = document.createElement('div')
+    const plate = withBox(document.createElement('div'), { x: 110, y: 120, w: 60, h: 40 })
+    layer.append(plate)
+    host.append(layer)
+    document.body.append(host)
+    return { host, layer, plate }
+  }
+  afterEach(() => {
+    document.body.replaceChildren()
+  })
+
+  it('measures a drawn plate relative to the container, not the page', () => {
+    const { host, plate } = scene()
+    expect(drawnRect(plate, host)).toEqual({ x: 100, y: 100, w: 60, h: 40 })
+    expect(isDrawn(plate)).toBe(true)
+  })
+
+  it('refuses a plate its layer has faded out, which is how the two zone layers swap', () => {
+    const { host, layer, plate } = scene()
+    layer.style.opacity = '0'
+    expect(isDrawn(plate)).toBe(false)
+    expect(drawnRect(plate, host)).toBeNull()
+  })
+
+  it('refuses a plate hidden by display, visibility or the hidden attribute', () => {
+    for (const hide of [
+      (l: HTMLElement) => (l.style.display = 'none'),
+      (l: HTMLElement) => (l.style.visibility = 'hidden'),
+      (l: HTMLElement) => l.setAttribute('hidden', ''),
+    ]) {
+      const { host, layer, plate } = scene()
+      hide(layer)
+      expect(drawnRect(plate, host)).toBeNull()
+      document.body.replaceChildren()
+    }
+  })
+
+  it('refuses a plate with no size at all, rather than avoiding the corner', () => {
+    const { host, plate } = scene()
+    withBox(plate, { x: 110, y: 120, w: 0, h: 0 })
+    expect(drawnRect(plate, host)).toBeNull()
+  })
+
+  it('keeps only the drawn ones, so a hidden layer contributes nothing', () => {
+    const { host, layer, plate } = scene()
+    const second = withBox(document.createElement('div'), { x: 210, y: 220, w: 30, h: 30 })
+    layer.append(second)
+    second.style.opacity = '0'
+    expect(drawnRects([plate, second], host)).toEqual([{ x: 100, y: 100, w: 60, h: 40 }])
   })
 })
 

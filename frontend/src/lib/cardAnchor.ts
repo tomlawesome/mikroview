@@ -232,10 +232,87 @@ export function placeCard(req: PlaceRequest): Placement {
     if (best === null || hard < best.hard || (hard === best.hard && soft < best.soft)) best = { at, hard, soft }
   }
 
+  // A side that clears everything wins outright, and the four seeded
+  // sides are the drawing's own arrangement, so they are tried first and
+  // kept whenever one of them works.
+  //
+  // When none of them does, the seeds are not the last word (#1028).
+  // Each side only ever escapes along its own axis -- `pushClear` moves
+  // a left-side card sideways and never upwards -- so a subject that
+  // spans the map in that direction leaves every seed overlapping, and
+  // the old code then shrugged and took the least-bad one. That is how
+  // the card ended up on the plate its own title named while there was
+  // clear ground above it the whole time.
+  //
+  // So: if the best seed still covers a named subject, widen the search
+  // to the positions where the card sits just clear of each subject's
+  // own edges, on both axes. Those are the only places a rectangle can
+  // change from overlapping to not, so this finds a clear placement
+  // whenever one exists at all. It runs only when the seeds have already
+  // failed, which is why nothing that places correctly today moves.
+  if (best!.hard > 0) {
+    const wider = escapePlacements(anchor, card, stage, avoid, softAvoid, gap)
+    if (wider !== null && wider.hard < best!.hard) best = wider
+  }
+
   const at = best!.at
   const box = { x: at.x, y: at.y, w: card.w, h: card.h }
   const { to, side } = leaderEnd(anchor, box)
   return { left: at.x, top: at.y, from: anchor, to, side }
+}
+
+/**
+ * The best placement among the positions that sit flush outside the
+ * subjects' own edges.
+ *
+ * A card only stops overlapping a rectangle by clearing one of its four
+ * sides, so the x it can take are the seeds' own plus, for each subject,
+ * "just left of it" and "just right of it" -- and likewise for y. Every
+ * combination is scored, which is a few hundred at the sizes these
+ * avoidance sets actually reach.
+ *
+ * Ties are settled by how far the card's centre is from the anchor, so
+ * the card stays beside the thing it describes and the leader stays
+ * short rather than reaching across the map.
+ */
+function escapePlacements(
+  anchor: Point,
+  card: Size,
+  stage: Rect,
+  avoid: readonly Rect[],
+  softAvoid: readonly Rect[],
+  gap: number,
+): { at: Point; hard: number; soft: number } | null {
+  const lox = stage.x + gap
+  const hix = stage.x + stage.w - card.w - gap
+  const loy = stage.y + gap
+  const hiy = stage.y + stage.h - card.h - gap
+
+  const xs = new Set<number>([anchor.x + gap, anchor.x - gap - card.w, anchor.x - card.w / 2])
+  const ys = new Set<number>([anchor.y - LEAD_INSET, anchor.y + gap, anchor.y - gap - card.h])
+  for (const r of avoid) {
+    xs.add(r.x - gap - card.w)
+    xs.add(r.x + r.w + gap)
+    ys.add(r.y - gap - card.h)
+    ys.add(r.y + r.h + gap)
+  }
+
+  const covered = (box: Rect, rects: readonly Rect[]): number => rects.reduce((sum, r) => sum + overlapArea(box, r), 0)
+  let best: { at: Point; hard: number; soft: number; near: number } | null = null
+  for (const rawX of xs) {
+    const x = clamp(rawX, lox, hix)
+    for (const rawY of ys) {
+      const y = clamp(rawY, loy, hiy)
+      const box = { x, y, w: card.w, h: card.h }
+      const hard = covered(box, avoid)
+      const soft = covered(box, softAvoid)
+      const near = Math.hypot(x + card.w / 2 - anchor.x, y + card.h / 2 - anchor.y)
+      if (best === null || hard < best.hard || (hard === best.hard && (soft < best.soft || (soft === best.soft && near < best.near)))) {
+        best = { at: { x, y }, hard, soft, near }
+      }
+    }
+  }
+  return best === null ? null : { at: best.at, hard: best.hard, soft: best.soft }
 }
 
 /* ---------------- viewBox arithmetic ---------------- */
@@ -346,6 +423,65 @@ export function unitMapper(svg: SVGSVGElement, container: Element): UnitMapper |
     const q = userToBox(fit, vb, p)
     return { x: dx + q.x, y: dy + q.y }
   }
+}
+
+/**
+ * Is this element one a reader can actually see? (#1028)
+ *
+ * A card must keep off what is drawn, and a surface can draw the same
+ * subject through more than one layer -- the 2D map draws a zone as a
+ * lane card along the foot at some stops and as a ground-plan card
+ * somewhere else entirely at others, switching between them with
+ * `opacity: 0` rather than by removing either from the DOM. Both layers
+ * are therefore always measurable, and an avoidance set built from the
+ * wrong one keeps the card off rectangles nobody can see while it comes
+ * down on the plate they can. That is #1028, and it is why this asks the
+ * browser what is on screen instead of trusting a second copy of the
+ * layout kept in the placement code.
+ *
+ * `opacity` is the one that matters here and the one a hit-test would
+ * miss: the hidden layer still occupies its box and still answers
+ * `getBoundingClientRect()` with real numbers.
+ */
+export function isDrawn(el: Element): boolean {
+  if (typeof getComputedStyle !== 'function') return false
+  for (let n: Element | null = el; n !== null; n = n.parentElement) {
+    if (n.hasAttribute('hidden')) return false
+    const cs = getComputedStyle(n)
+    if (cs.display === 'none') return false
+    if (cs.visibility === 'hidden' || cs.visibility === 'collapse') return false
+    if (Number.parseFloat(cs.opacity) < 0.05) return false
+  }
+  return true
+}
+
+/**
+ * An element's own rendered rectangle, in `container`'s pixels -- the
+ * space `placeCard` works in -- or null where it is not drawn.
+ *
+ * Null rather than a zero rectangle, so a caller drops it from the
+ * avoidance set instead of avoiding the container's top-left corner. In
+ * jsdom, where nothing is laid out, every element is null and the
+ * avoidance set is simply empty, which is what the surfaces already do
+ * there.
+ */
+export function drawnRect(el: Element, container: Element): Rect | null {
+  const r = el.getBoundingClientRect()
+  if (!(r.width > 0) || !(r.height > 0)) return null
+  if (!isDrawn(el)) return null
+  const origin = container.getBoundingClientRect()
+  return { x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height }
+}
+
+/** Every one of `els` that is actually drawn, as rectangles in
+ * `container`'s pixels. */
+export function drawnRects(els: Iterable<Element>, container: Element): Rect[] {
+  const out: Rect[] = []
+  for (const el of els) {
+    const r = drawnRect(el, container)
+    if (r !== null) out.push(r)
+  }
+  return out
 }
 
 /** A rectangle in user units, as its bounding box in container pixels.

@@ -2863,21 +2863,42 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     authState.role = ''
   })
 
-  // #1028: the card's side was chosen from how big the card was at the
-  // moment it opened. Clicking the pin reveals the declare form, the
-  // card gets taller, and nothing re-ran the rule -- so the grown card
-  // came down on the zone plate named in its own title and hid the very
-  // thing it was describing (round-49/compare/flat-declare.png).
+  // #1028: the grown card came down on the zone plate named in its own
+  // title and hid the very thing it was describing.
   //
-  // jsdom lays nothing out and has no ResizeObserver, so the three
-  // things a browser would report are supplied here: the map's rendered
-  // box, its matrix, and the card's own size before and after the form.
-  it('re-places the card when the declare form grows it, so it never covers either end of its own boundary (#1028)', () => {
+  // What this can and cannot prove is worth being exact about, because
+  // the first attempt at #1028 got it wrong. jsdom lays nothing out, so
+  // it cannot say where a plate really is, and a test that invents the
+  // plates' coordinates and then checks the card avoids them is checking
+  // its own arithmetic -- that test passed while the defect was on
+  // screen and photographed. The real gate is
+  // `scripts/live-topography-card-placement.mjs`, which reads every
+  // rectangle out of a real browser.
+  //
+  // What is honestly testable here is the part that went wrong: *which*
+  // rectangles the card is told to keep off. A zone is drawn twice, as a
+  // lane card and as a ground-plan card, and the stop swaps them with
+  // `opacity: 0` rather than by removing either. So the browser's own
+  // answers are supplied at the one boundary the component reads them
+  // through -- `getBoundingClientRect` and the computed opacity -- and
+  // the assertion is that the card follows whichever layer is drawn.
+  // That is a claim about the component's logic, not about layout, and
+  // jsdom can settle it.
+  it('keeps off the zone plates that are actually drawn, not the layer the stop has hidden (#1028)', () => {
     resizeWatchers.clear()
     vi.stubGlobal('ResizeObserver', FakeResizeObserver)
     try {
       laneRowDark()
       const { container } = render(Topography)
+      flushSync()
+
+      // Down onto the 2D map. Every test starts at the city, where the
+      // stage carries `hidden` and nothing on it is drawn at all -- and
+      // a card that has no visible subject to keep off is not the case
+      // under test here.
+      const range = container.querySelector<HTMLInputElement>('.alt-range')!
+      range.value = '1' // "services"
+      range.dispatchEvent(new Event('input', { bubbles: true }))
       flushSync()
 
       // The map's own 1400x720 rendered at 1400x720: user units and
@@ -2889,24 +2910,44 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
       svg.getBoundingClientRect = () => box as DOMRect
       ;(svg as unknown as { getScreenCTM: () => DOMMatrix }).getScreenCTM = () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }) as DOMMatrix
 
-      // The two lane plates the boundary runs between, read off the
-      // drawing rather than restated from the component: these are the
-      // boxes the screenshot shows the card sitting on.
-      const plateOf = (name: string) => {
-        const g = [...container.querySelectorAll('g.zone')].find((z) => z.getAttribute('aria-label')?.includes(name)) as SVGGElement
-        const [tx, ty] = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(g.getAttribute('transform') ?? '')!.slice(1).map(Number)
-        const isl = g.querySelector('rect.isl') as SVGRectElement
-        return {
-          x: tx + Number(isl.getAttribute('x')),
-          y: ty + Number(isl.getAttribute('y')),
-          w: Number(isl.getAttribute('width')),
-          h: Number(isl.getAttribute('height')),
-        }
-      }
-      const ends = [plateOf('IoT'), plateOf('LitLane')]
-
       type Box = { x: number; y: number; w: number; h: number }
       const hits = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+      // Give every plate the rendered box a browser would report for it,
+      // taken from what the component actually drew. Without this the
+      // component measures zeros -- jsdom's answer for everything -- and
+      // has no rectangles to keep off at all.
+      const stub = (el: Element, b: Box) => {
+        el.getBoundingClientRect = () => ({ left: b.x, top: b.y, width: b.w, height: b.h, right: b.x + b.w, bottom: b.y + b.h, x: b.x, y: b.y }) as DOMRect
+      }
+      const boxOf = (g: Element, rectSel: string): Box => {
+        const [tx, ty] = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(g.getAttribute('transform') ?? '')!.slice(1).map(Number)
+        const r = g.querySelector(rectSel) as SVGRectElement
+        return { x: tx + Number(r.getAttribute('x')), y: ty + Number(r.getAttribute('y')), w: Number(r.getAttribute('width')), h: Number(r.getAttribute('height')) }
+      }
+      const layer = (groupSel: string, rectSel: string) => {
+        const out = new Map<string, { g: Element; box: Box }>()
+        for (const g of container.querySelectorAll(groupSel)) {
+          const rect = g.querySelector(rectSel)
+          if (!rect) continue
+          const box = boxOf(g, rectSel)
+          stub(rect, box)
+          out.set(g.getAttribute('data-zone') ?? '', { g, box })
+        }
+        return out
+      }
+      const lane = layer('g.zone', 'rect.isl')
+      const groundPlan = layer('g.gf-card', 'rect.gf-plate')
+
+      // Which layer the stop is showing, done the way the stylesheet
+      // does it -- the hidden one stays in the DOM, still measurable.
+      const show = (which: Map<string, { g: Element; box: Box }>, on: boolean) => {
+        for (const { g } of which.values()) (g as SVGElement).style.opacity = on ? '1' : '0'
+      }
+
+      expect(lane.size, 'the lane row drew no plates to keep off').toBeGreaterThan(0)
+      expect(groundPlan.size, 'the ground plan drew no plates to keep off').toBeGreaterThan(0)
+
       const drawn = (h: number): Box => {
         const el = container.querySelector('.card') as HTMLElement
         return { x: parseFloat(el.style.left), y: parseFloat(el.style.top), w: 288, h }
@@ -2923,30 +2964,55 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
       const card = container.querySelector('.card') as HTMLElement
       expect(card, 'no card opened on the boundary').not.toBeNull()
       expect(card.classList.contains('placed'), 'the card never got a measured position').toBe(true)
-      // Unpinned it is the fallback height, and it clears both ends --
-      // otherwise the growth below would prove nothing.
-      for (const end of ends) expect(hits(drawn(180), end), 'the card was on an end of its own boundary before it ever grew').toBe(false)
 
       card.querySelector<HTMLButtonElement>('.pin')!.click()
       flushSync()
       expect(container.querySelector('.card .form'), 'the declare form never opened').not.toBeNull()
 
-      // The form is in, so the card is taller. This is the moment the
-      // placement has to be worked out again.
-      const grown = 420
+      // The two ends the card names, by the id both layers tag their
+      // plate with.
+      const idOf = (name: string) =>
+        [...container.querySelectorAll('g.zone')].find((z) => z.getAttribute('aria-label')?.includes(name))!.getAttribute('data-zone')!
+      const ends = [idOf('IoT'), idOf('LitLane')]
+
+      // The form is in, so the card is taller. Growing it is what makes
+      // the placement run again, so each case grows it to a size it has
+      // not been -- `watchCardSize` drops a report that says nothing new.
       const open = container.querySelector('.card') as HTMLElement
       Object.defineProperty(open, 'offsetWidth', { value: 288, configurable: true })
-      Object.defineProperty(open, 'offsetHeight', { value: grown, configurable: true })
-      reportResize(open)
-      flushSync()
+      const growTo = (h: number) => {
+        Object.defineProperty(open, 'offsetHeight', { value: h, configurable: true })
+        reportResize(open)
+        flushSync()
+        return drawn(h)
+      }
 
-      const after = drawn(grown)
-      for (const end of ends) expect(hits(after, end), 'the grown card came down on an end of the boundary named in its own title').toBe(false)
+      // Clients and services: the lane row is the drawing.
+      show(lane, true)
+      show(groundPlan, false)
+      const onLaneRow = growTo(420)
+      for (const id of ends) {
+        expect(hits(onLaneRow, lane.get(id)!.box), `the grown card came down on the ${id} lane plate, named in its own title`).toBe(false)
+      }
+
+      // Zones: the ground plan has replaced the lane row, in a different
+      // place. This is the case the screenshot caught -- the card
+      // cleared the lane row, which nobody could see, and sat on the
+      // ground-plan plate, which they could.
+      show(lane, false)
+      show(groundPlan, true)
+      const onGroundPlan = growTo(430)
+      for (const id of ends) {
+        expect(hits(onGroundPlan, groundPlan.get(id)!.box), `the grown card came down on the ${id} ground-plan plate, named in its own title`).toBe(false)
+      }
+
       // And it is still a card on the stage, not one shoved off it.
-      expect(after.x).toBeGreaterThanOrEqual(0)
-      expect(after.y).toBeGreaterThanOrEqual(0)
-      expect(after.x + after.w).toBeLessThanOrEqual(1400)
-      expect(after.y + after.h).toBeLessThanOrEqual(720)
+      for (const after of [onLaneRow, onGroundPlan]) {
+        expect(after.x).toBeGreaterThanOrEqual(0)
+        expect(after.y).toBeGreaterThanOrEqual(0)
+        expect(after.x + after.w).toBeLessThanOrEqual(1400)
+        expect(after.y + after.h).toBeLessThanOrEqual(720)
+      }
     } finally {
       vi.unstubAllGlobals()
     }
