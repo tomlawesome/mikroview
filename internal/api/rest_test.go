@@ -769,6 +769,42 @@ func TestHandleStats(t *testing.T) {
 	if body["total"].(float64) != 1 {
 		t.Errorf("total = %v, want 1", body["total"])
 	}
+
+	// #1015: "syslog.loss" is the one field ListenerStats gained.
+	// Nothing above it changed shape (still asserted by "total" == 1
+	// above, unaffected by loss), so this only pins the new part: one
+	// entry per counter, each with recent/lastAt/active present, and
+	// lastAt null on a counter that has never moved -- exactly what the
+	// frontend drawer reads to decide whether a row is active. Values
+	// aren't asserted (this package never drives real syslog traffic),
+	// only shape; internal/syslog's own tests cover the freshness
+	// arithmetic itself.
+	syslogStats, ok := body["syslog"].(map[string]any)
+	if !ok {
+		t.Fatalf("body[\"syslog\"] = %v (%T), want an object", body["syslog"], body["syslog"])
+	}
+	loss, ok := syslogStats["loss"].(map[string]any)
+	if !ok {
+		t.Fatalf("syslog.loss = %v (%T), want an object", syslogStats["loss"], syslogStats["loss"])
+	}
+	for _, kind := range []string{"dropped", "rejectedConfigured", "rejected", "oversized"} {
+		entry, ok := loss[kind].(map[string]any)
+		if !ok {
+			t.Fatalf("syslog.loss[%q] = %v (%T), want an object", kind, loss[kind], loss[kind])
+		}
+		if _, ok := entry["recent"].(float64); !ok {
+			t.Errorf("syslog.loss[%q].recent = %v (%T), want a number", kind, entry["recent"], entry["recent"])
+		}
+		if _, ok := entry["active"].(bool); !ok {
+			t.Errorf("syslog.loss[%q].active = %v (%T), want a bool", kind, entry["active"], entry["active"])
+		}
+		lastAt, present := entry["lastAt"]
+		if !present {
+			t.Errorf("syslog.loss[%q] is missing lastAt entirely -- it must be present and null, not absent", kind)
+		} else if lastAt != nil {
+			t.Errorf("syslog.loss[%q].lastAt = %v, want null (this test drives no real syslog traffic)", kind, lastAt)
+		}
+	}
 }
 
 // asAdmin wraps the ungated mux with a stand-in admin identity -- what a

@@ -360,6 +360,11 @@ func (s *Server) routes() []route {
 		// handleStatsTops' own doc comment for why this is a separate
 		// route rather than a field on /api/stats above.
 		{http.MethodGet, "/api/stats/tops", s.handleStatsTops},
+		// Ingest-loss "Clear all" (#1015): zeroes the four monotonic
+		// syslog-listener loss counters /api/stats' "syslog.loss" field
+		// reads, so a transient loss stops permanently marking the
+		// instance once the operator has seen it. See syslog.go.
+		{http.MethodPost, "/api/syslog/loss/clear", s.handleSyslogLossClear},
 		// The one setting an admin may change from inside the app (#796).
 		// No matching GET: the memory group's whole state rides on
 		// /api/stats' "memory" object, which every open tab is already
