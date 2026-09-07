@@ -36,15 +36,22 @@ export function mockupEstate(): CityInput {
     ],
     wan: 'ether1',
     wanLogged: true,
+    wanCoverage: 'logged',
+    // The WireGuard boundary was declared quiet on purpose, so nothing
+    // logs it and no road runs to wg0 (round 49) -- a road there would
+    // claim a log line that was never written. The bridge still stands,
+    // white and unlamped; the deck is what says so.
+    unloggedBoundaries: ['bridge-lan|wg0'],
     rulesPushed: true,
     gates: [
-      // lan -> srv is a lit gate (an accept rule that logs); the reverse
-      // direction is a real gate too, but unlit -- two different gates
-      // on the same boundary, so a lamp is never assumed symmetric.
-      { key: 'forward|bridge-lan|vlan-srv', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'vlan-srv', logged: true, ruleCount: 3, comment: 'nas access' },
-      { key: 'forward|vlan-srv|bridge-lan', chain: 'forward', inInterface: 'vlan-srv', outInterface: 'bridge-lan', logged: false, ruleCount: 1, comment: '' },
+      // lan -> srv logs; srv -> lan is a real gate too but logs nothing
+      // and nobody declared it. Round 49 (#1016) folds the two into one
+      // break in the wall, wearing the worse of them: the edge is dark
+      // and the gate unlit, and the card lists both directions.
+      { key: 'forward|bridge-lan|vlan-srv', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'vlan-srv', logged: true, ruleCount: 3, comment: 'nas access', edgeKey: 'bridge-lan|vlan-srv', reverseEdgeKey: 'vlan-srv|bridge-lan', coverage: 'logged', reverseCoverage: 'dark' },
+      { key: 'forward|vlan-srv|bridge-lan', chain: 'forward', inInterface: 'vlan-srv', outInterface: 'bridge-lan', logged: false, ruleCount: 1, comment: '', edgeKey: 'vlan-srv|bridge-lan', reverseEdgeKey: 'bridge-lan|vlan-srv', coverage: 'dark', reverseCoverage: 'logged' },
       // The second router's workshop opens onto the primary LAN too.
-      { key: 'forward|wlan-wsh|bridge-lan', chain: 'forward', inInterface: 'wlan-wsh', outInterface: 'bridge-lan', logged: true, ruleCount: 2, comment: '' },
+      { key: 'forward|wlan-wsh|bridge-lan', chain: 'forward', inInterface: 'wlan-wsh', outInterface: 'bridge-lan', logged: true, ruleCount: 2, comment: '', edgeKey: 'wlan-wsh|bridge-lan', reverseEdgeKey: 'bridge-lan|wlan-wsh', coverage: 'logged', reverseCoverage: 'logged' },
       // Nothing accepts vlan-iot -> bridge-lan or vlan-guest -> bridge-lan
       // at all: those walls stand with no gate, matching the unplanned
       // and holding verdicts above -- no rule anticipated the first, and
@@ -57,8 +64,10 @@ export function mockupEstate(): CityInput {
         apiState: 'up',
         events: 3,
         peers: [{ id: 'l2tp-out1/ppp/branch', name: 'branch-office', address: '10.90.0.2', kind: 'ppp' }],
+        coverage: 'logged',
       },
-      { iface: 'wg0', routerId: 'rb5009', apiState: 'down', events: 0, peers: [] },
+      // wg0 was declared quiet on purpose: a white deck, no lamps, no road.
+      { iface: 'wg0', routerId: 'rb5009', apiState: 'down', events: 0, peers: [], coverage: 'quiet' },
     ],
   }
 }

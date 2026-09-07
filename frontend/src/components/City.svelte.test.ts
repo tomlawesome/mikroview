@@ -13,6 +13,8 @@ import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { policyState } from '../lib/policy.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
+import { authState } from '../lib/auth.svelte'
+import { coverageState } from '../lib/coverage.svelte'
 import type { ClientEvent, Device } from '../lib/types'
 import { emptyFilters } from '../lib/types'
 import City from './City.svelte'
@@ -148,13 +150,121 @@ describe('City', () => {
     expect(reported[0]).toEqual({ s: 30, centre: [12, 34] })
   })
 
-  it('says plainly when no router has ever pushed a rule table, rather than claiming DARK or LOGGED', () => {
+  it('says plainly when no router has ever pushed a rule table, and carries no coverage word at all', () => {
     const unpushed = layoutGround({ ...mockupEstate(), rulesPushed: false, gates: [] })
     const { container } = render(City, { props: { stop: 'district', ground: unpushed } })
-    expect(container.textContent).toContain('NO RULES PUSHED')
+    // Round 49 (#1016): the plaque says name and subnet, and this one
+    // dim line -- never a coverage word, because the wall is what says
+    // the coverage now, and a plaque that ignored declarations said the
+    // wrong thing anyway (#1014). "no rule table pushed" stays, because
+    // it is a different fact from dark: there, a table exists and
+    // nothing on it logs.
+    expect(container.textContent).toContain('no rule table pushed')
+    expect(container.textContent).not.toContain('NO RULES PUSHED')
     expect(container.textContent).not.toContain('DARK')
     expect(container.textContent).not.toContain('LOGGED')
     for (const p of container.querySelectorAll('.plate')) expect(p.getAttribute('aria-label')).toMatch(/no rule table has been pushed yet/)
+  })
+
+  // ---- Round 49 (#1016): coverage is the material, always on, and the
+  // wall is where the declare path starts.
+
+  it('draws each wall edge in its own boundary’s state, and never a coverage badge', () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const walls = [...container.querySelectorAll('[data-wall]')]
+    expect(walls.length).toBeGreaterThan(0)
+    const labels = walls.map((w) => w.getAttribute('aria-label'))
+    // bridge-lan -> vlan-srv logs but the way back does not, so the LAN's
+    // edge toward Servers is dark: the worse of the two, because a wall
+    // has no direction.
+    expect(labels.some((l) => l?.includes('dark'))).toBe(true)
+    // An ungated edge keeps the district's own ink, so it is not dark.
+    expect(labels.some((l) => l?.includes('logged'))).toBe(true)
+  })
+
+  it('lamps a gate only when the whole boundary logs, never one direction of it', () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    // The workshop's boundary onto the LAN logs both ways in the
+    // fixture; nothing else in the estate does, so the lamps that exist
+    // belong to boundaries that log, and there is at least one.
+    expect(container.querySelectorAll('circle.lamp').length).toBeGreaterThan(0)
+  })
+
+  it('opens the boundary card from the wall, listing both directions, with declare behind the pin', async () => {
+    authState.role = 'admin'
+    authState.username = 'tom'
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const wall = [...container.querySelectorAll('[data-wall]')].find((w) => w.getAttribute('aria-label')?.includes('dark'))
+    expect(wall).toBeTruthy()
+    await fireEvent.pointerEnter(wall!)
+    flushSync()
+    const card = container.querySelector('.bcard') as HTMLElement
+    expect(card).toBeTruthy()
+    // Both directions, because a wall has no direction of its own.
+    expect(card.textContent).toContain('bridge-lan → vlan-srv')
+    expect(card.textContent).toContain('vlan-srv → bridge-lan')
+    expect(card.textContent).toContain('nothing drawn across it is a fact; nothing is known')
+    // The three actions the ratified card offers, and no form until it
+    // is pinned.
+    expect(card.textContent).toContain('declare quiet on purpose ▸')
+    expect(card.textContent).toContain('rules ▸')
+    expect(card.textContent).toContain('stream ▸')
+    expect(card.querySelector('.form')).toBeNull()
+
+    await fireEvent.click(card.querySelector('.pin') as HTMLElement)
+    flushSync()
+    const pinned = container.querySelector('.bcard') as HTMLElement
+    expect(pinned.classList.contains('pinned')).toBe(true)
+    expect(pinned.textContent).toContain('QUIET ON PURPOSE — WHY?')
+    expect(pinned.textContent).toContain('both directions')
+    expect(pinned.textContent).toContain('as tom')
+    // Both directions is checked by default: one declared and the other
+    // still dark would leave the wall grey and the card explaining why.
+    expect((pinned.querySelector('.who input[type="checkbox"]') as HTMLInputElement).checked).toBe(true)
+    // A reason is required -- Declare stays refused until there is one.
+    expect((pinned.querySelector('.go') as HTMLButtonElement).disabled).toBe(true)
+    authState.role = ''
+    authState.username = ''
+  })
+
+  it('declares through the existing coverage API, one key per direction (#392)', async () => {
+    authState.role = 'admin'
+    authState.username = 'tom'
+    const declare = vi.spyOn(coverageState, 'declare').mockResolvedValue(true)
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const wall = [...container.querySelectorAll('[data-wall]')].find((w) => w.getAttribute('aria-label')?.includes('dark'))
+    await fireEvent.pointerEnter(wall!)
+    flushSync()
+    await fireEvent.click(container.querySelector('.bcard .pin') as HTMLElement)
+    flushSync()
+    const input = container.querySelector('.bcard .form input:not([type])') as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'the servers answer, they never call back' } })
+    flushSync()
+    await fireEvent.click(container.querySelector('.bcard .go') as HTMLElement)
+    await tick()
+    expect(declare.mock.calls.map((c) => c[0])).toEqual(['bridge-lan|vlan-srv', 'vlan-srv|bridge-lan'])
+    expect(declare.mock.calls[0][1]).toBe('the servers answer, they never call back')
+    authState.role = ''
+    authState.username = ''
+  })
+
+  it('shows a declared boundary’s reason, who and when, and offers undeclare', async () => {
+    authState.role = 'admin'
+    coverageState.declarations = [
+      { key: 'bridge-lan|vlan-srv', reason: 'the servers answer, they never call back', declaredBy: 'tom', declaredAt: '2026-09-01T14:20:00Z' },
+      { key: 'vlan-srv|bridge-lan', reason: 'the servers answer, they never call back', declaredBy: 'tom', declaredAt: '2026-09-01T14:20:00Z' },
+    ]
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const wall = [...container.querySelectorAll('[data-wall]')].find((w) => w.getAttribute('aria-label')?.includes('dark'))
+    await fireEvent.pointerEnter(wall!)
+    flushSync()
+    const card = container.querySelector('.bcard') as HTMLElement
+    expect(card.querySelector('.quote')?.textContent).toBe('the servers answer, they never call back')
+    expect(card.textContent).toContain('tom')
+    expect(card.textContent).toContain('undeclare ▸')
+    expect(card.textContent).not.toContain('declare quiet on purpose ▸')
+    coverageState.declarations = []
+    authState.role = ''
   })
 
   it('marks a dropped aggregate road plainly as "dropped" (#991), not the refusing rule', () => {

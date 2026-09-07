@@ -20,6 +20,7 @@
   import { policyState } from '../lib/policy.svelte'
   import { coverageState } from '../lib/coverage.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
+  import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
   import { realityEdges } from '../lib/reality'
   import { symbolFor } from '../lib/city/blocks'
   import { buildingDepth, paintOrder, pieceDepth } from '../lib/city/depth'
@@ -61,17 +62,19 @@
   import { bridgeStateLabel } from '../lib/city/tunnelState'
   import { deviceKindFor } from '../lib/city/deviceKind'
   import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
-  import { faceOf, wallPiece, wallSegments, type WallBreak } from '../lib/city/walls'
+  import { faceCoverage, faceOf, facePoint, wallPiece, wallSegments, GATE_HALF_WIDTH, type WallBreak, type WallSide } from '../lib/city/walls'
+  import { worseCoverage } from '../lib/city/gates'
+  import type { Coverage } from '../lib/coverageRule'
+  import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
-  import type { Building, CityLens, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
+  import type { Building, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
 
   let {
     stop,
     ground: groundProp,
-    lens = 'traffic',
     initialS,
     initialCentre,
     onCameraChange,
@@ -79,7 +82,6 @@
   }: {
     stop: Stop
     ground?: Ground
-    lens?: CityLens
     /** The pan this side had when the slider last crossed away from it
      * (#869): Topography saves what onCameraChange reports below and
      * hands it back here across City's own mount/unmount, since a fresh
@@ -97,6 +99,22 @@
   const VERDICT: Record<RoadKind, string> = { a: 'var(--accept)', d: 'var(--drop)', x: 'var(--alarm)', q: 'var(--fg-dim)' }
   const VOID = '#080d18'
   const MOVE_MS = 620
+
+  // Round 49's three treatments (#1016), named once so the wall, the
+  // gate posts and the bridge deck all read from the same place -- and
+  // so the city and the 2D map cannot drift apart on what dark looks
+  // like. Quiet is the page ink (white, translucent); dark is the third
+  // ink (grey), and only dark is ever dashed.
+  const COVERAGE_INK: Record<Coverage, string> = { logged: 'var(--accent)', quiet: 'var(--fg)', dark: 'var(--fg-dim)' }
+  const WALL_TREATMENT: Record<Coverage, { back: number; fo: number; so: number; sw: number; dash?: string }> = {
+    logged: { back: 0.92, fo: 0.3, so: 0.6, sw: 0.5 },
+    quiet: { back: 0.7, fo: 0.16, so: 0.4, sw: 0.5 },
+    dark: { back: 0.7, fo: 0.12, so: 0.45, sw: 0.6, dash: '3 3' },
+  }
+  /** A gate post: half its ground extent, and how tall it stands -- half
+   * again the wall's own height (walls.ts's WALL_H), the mockup's ratio. */
+  const GATE_POST_HALF = 0.6
+  const GATE_POST_H = 2.25
 
   /* ---------------- the model ---------------- */
 
@@ -504,7 +522,15 @@
 
   type Solid =
     | { kind: 'piece'; v: number; paints: Paint[]; flow: Paint | null; label: string; roadId: string }
-    | { kind: 'other'; v: number; paints: Paint[]; lamps: { x: number; y: number; r: number; rr: number; h: number }[] }
+    | {
+        kind: 'other'
+        v: number
+        paints: Paint[]
+        lamps: { x: number; y: number; r: number; rr: number; h: number }[]
+        /** Present on a wall piece: which district's edge it is, so
+         * pointing at it opens that boundary's card. */
+        wall?: { districtId: string; side: WallSide; coverage: Coverage }
+      }
     | { kind: 'building'; v: number; b: Building; district: District | null; ink: string; dim: boolean; paints: Paint[]; stamp: { x: number; y: number; k: number }; aria: string }
     | { kind: 'hamlet'; v: number; id: string; aria: string; attrs: DeviceStampAttrs }
 
@@ -721,27 +747,40 @@
         // draws exactly like down: piers only, no deck lighting, because
         // this build makes no claim either way about a tunnel nothing
         // pushed a state for.
-        const lit = b.state === 'up' || b.state === 'quiet'
-        const ink = lit ? 'var(--accent)' : 'var(--fg-dim)'
+        // Round 49 (#1016): a bridge is an interface, and its deck wears
+        // its boundary's own state -- accent with lamps when a rule logs
+        // it, white when the operator declared it quiet on purpose, grey
+        // with dashed rails when nothing logs. That is a different fact
+        // from `state`, which is whether the tunnel is up; the chip
+        // below still carries that, and the road bridge never reads
+        // up/down at all.
+        const cov = b.coverage
+        const ink = COVERAGE_INK[cov]
         for (const t of [0.3, 0.7]) {
           const p = lerpP(b.f, b.t, t)
           const pr = gbox(c, p[0], p[1], b.w * 0.5, b.w * 0.5, -0.9, 1.5)
           solids.push({ kind: 'other', v: p[1] + 1, paints: gfaces(pr, 'var(--fg-dim)', { t: 0.5, r: 0.42, l: 0.26, s: 0.4 }), lamps: [] })
         }
         const deck = gbox(c, b.mid[0], b.mid[1], b.half, b.w, 0.55, 0.3)
-        const paints = gfaces(deck, ink, { t: 0.3, r: 0.5, l: 0.3, s: 0.55, bg: true })
+        const deckOp =
+          cov === 'logged' ? { t: 0.3, r: 0.5, l: 0.3, s: 0.55, bg: true } : cov === 'quiet' ? { t: 0.2, r: 0.16, l: 0.1, s: 0.45, bg: true } : { t: 0.14, r: 0.12, l: 0.08, s: 0.35, bg: true }
+        const paints = gfaces(deck, ink, deckOp)
         const rail = (sgn: number) => {
           const a: Pt = [b.f[0] + sgn * b.w, b.f[1] - sgn * b.w]
           const z: Pt = [b.t[0] + sgn * b.w, b.t[1] - sgn * b.w]
           return 'M' + P(c, a, 0.85) + 'L' + P(c, z, 0.85)
         }
-        paints.push({ d: rail(1), stroke: ink, so: 0.75, sw: 1 }, { d: rail(-1), stroke: ink, so: 0.55, sw: 1 })
+        const railDash = cov === 'dark' ? '3 4' : undefined
+        paints.push(
+          { d: rail(1), stroke: ink, so: cov === 'logged' ? 0.75 : 0.5, sw: 1, dash: railDash },
+          { d: rail(-1), stroke: ink, so: cov === 'logged' ? 0.55 : 0.35, sw: 1, dash: railDash },
+        )
         const lamps: { x: number; y: number; r: number; rr: number; h: number }[] = []
-        // The road bridge's lamp is coverage, not traffic: a logging
-        // rule covers the boundary (state 'up' means lamped for a road
-        // bridge -- see layout.ts's wanLogged wiring), never events.
-        if (b.kind === 'road' && b.state === 'up') {
-          for (let i = 0; i < 2; i++) {
+        // A bridge's lamps are coverage, never traffic and never the
+        // tunnel's state: a rule logs this boundary, and nothing more.
+        // Two on the wide road bridge, one on a footbridge, as drawn.
+        if (cov === 'logged') {
+          for (let i = 0; i < (b.kind === 'road' ? 2 : 1); i++) {
             const p = lerpP(b.f, b.t, 0.24 + 0.52 * i)
             lamps.push({ x: R2(X(c, p[0] + b.w)), y: R2(Y(c, p[1] - b.w, 0.85)), h: Math.max(7, c.S * 1.5), r: R2(Math.max(2, c.S * 0.36)), rr: R2(Math.max(5, c.S * 0.9)) })
           }
@@ -794,22 +833,35 @@
             : ''),
     }))
 
-    // Walls and gates (#865): every plate's own low prism, in its VLAN
-    // tint, broken open only where a pushed accept rule actually crosses
-    // that boundary. A gate that resolves to a point on one of the two
-    // back edges the camera cannot see draws nothing -- the same
-    // silence a hidden building face keeps -- but still keeps its lamp
-    // and rule count for the plaque.
+    // Walls and gates (#865, and round 49's material rule #1016): every
+    // plate's own low prism, broken open only where a pushed accept rule
+    // actually crosses that boundary. What an edge is drawn in is what
+    // its own boundary logs -- the district's ink where a rule logs,
+    // white and translucent where the operator declared the gap quiet on
+    // purpose, grey and dashed where nothing logs. There is no coverage
+    // lens and no badge: the material is the statement. A wall has no
+    // direction, so an edge takes the worse of the gates standing in it
+    // (walls.ts's faceCoverage) and the gate's card lists both.
+    //
+    // A gate that resolves to a point on one of the two back edges the
+    // camera cannot see draws nothing -- the same silence a hidden
+    // building face keeps -- but still keeps its lamp and rule count for
+    // the plaque.
     for (const d of g.districts) {
-      const dim = d.dark
-      const wallInk = dim ? 'var(--fg-dim)' : inkOf(d)
       const visible: { g: DistrictGate; f: WallBreak }[] = []
       for (const gate of d.gates) {
         const f = faceOf(d, gate.p)
         if (f) visible.push({ g: gate, f })
       }
-      const segs = wallSegments(d, visible.map((v) => v.f))
+      const faces = faceCoverage(visible.map((v) => ({ side: v.f.side, coverage: v.g.coverage })))
+      const segs = wallSegments(
+        d,
+        visible.map((v) => v.f),
+      )
       for (const seg of segs) {
+        const cov = faces[seg.side]
+        const t = WALL_TREATMENT[cov]
+        const ink = cov === 'logged' ? inkOf(d) : COVERAGE_INK[cov]
         const mid = (seg.t0 + seg.t1) / 2
         const midV = seg.side === 'l' ? d.v + d.r * mid : d.v + d.r * (1 - mid)
         const path = wallPiece(c, d, seg)
@@ -817,22 +869,31 @@
           kind: 'other',
           v: midV,
           paints: [
-            { d: path, fill: VOID, fo: dim ? 0.75 : 0.92 },
-            { d: path, fill: wallInk, fo: dim ? 0.14 : 0.3, stroke: wallInk, so: dim ? 0.35 : 0.6, sw: 0.5 },
+            { d: path, fill: VOID, fo: t.back },
+            { d: path, fill: ink, fo: t.fo, stroke: ink, so: t.so, sw: t.sw, dash: t.dash },
           ],
           lamps: [],
+          wall: { districtId: d.id, side: seg.side, coverage: cov },
         })
       }
       for (const { g: gate, f } of visible) {
-        const gx = X(c, gate.p[0])
-        const gy = Y(c, gate.p[1])
-        const lampH = Math.max(6, c.S * 1.1)
-        solids.push({
-          kind: 'other',
-          v: f.side === 'l' ? d.v + d.r * f.t : d.v + d.r * (1 - f.t),
-          paints: [],
-          lamps: gate.lamp ? [{ x: R2(gx), y: R2(gy), h: lampH, r: R2(Math.max(1.6, c.S * 0.3)), rr: R2(Math.max(4, c.S * 0.7)) }] : [],
-        })
+        // The gate's own two posts, one either side of the break: accent
+        // and lamped when the boundary logs, grey and unlit otherwise.
+        // One lamp, on the far post, exactly as the mockup draws it.
+        const lit = gate.coverage === 'logged'
+        const ink = lit ? 'var(--accent)' : COVERAGE_INK[gate.coverage]
+        const op = lit ? { t: 0.6, r: 0.5, l: 0.32, s: 0.7, bg: true } : { t: 0.3, r: 0.22, l: 0.14, s: 0.5, bg: true }
+        const dt = d.r > 0 ? GATE_HALF_WIDTH / d.r : 0
+        for (const sgn of [-1, 1]) {
+          const t = Math.max(0, Math.min(1, f.t + sgn * dt))
+          const m = facePoint(d, f.side, t)
+          const paints = gfaces(gbox(c, m[0], m[1], GATE_POST_HALF, GATE_POST_HALF, 0, GATE_POST_H), ink, op)
+          const lamps =
+            lit && sgn === 1
+              ? [{ x: R2(X(c, m[0])), y: R2(Y(c, m[1], GATE_POST_H)), h: Math.max(2, c.S * 0.3), r: R2(Math.max(1.9, c.S * 0.3)), rr: R2(Math.max(4.5, c.S * 0.8)) }]
+              : []
+          solids.push({ kind: 'other', v: m[1] + 0.8, paints, lamps })
+        }
       }
     }
 
@@ -1014,13 +1075,16 @@
       placed.push(r)
       return true
     }
-    const plaques: { d: District; x: number; y: number; w: number; ink: string; tally: string }[] = []
+    // A plaque is name and subnet, and (dim, on its own line) whether a
+    // rule table was ever pushed. It carries no coverage word any more,
+    // so it needs no room for one.
+    const plaques: { d: District; x: number; y: number; w: number; ink: string }[] = []
     for (const d of g.districts) {
       const x = R2(X(c, d.u))
       const y = R2(Y(c, d.v + d.r) + 5)
-      const w = compact ? d.name.length * 7.2 + (!d.rulesPushed ? 78 : d.dark ? 62 : 26) : 200
-      if (!claim(x, y, w, compact ? 20 : 38)) continue
-      plaques.push({ d, x, y, w: R2(w), ink: inkOf(d), tally: d.buildings.length + d.more + (d.buildings.length + d.more === 1 ? ' host' : ' hosts') })
+      const w = compact ? d.name.length * 7.2 + 26 : 200
+      if (!claim(x, y, w, compact ? 20 : d.rulesPushed ? 28 : 40)) continue
+      plaques.push({ d, x, y, w: R2(w), ink: inkOf(d) })
     }
     // Only a footbridge carries a state chip: the road bridge (the WAN)
     // never reads up/down/quiet, it is only ever lamped or unlit, and
@@ -1062,6 +1126,119 @@
     return out
   })
 
+  /* ---------------- the boundary card, and declaring ---------------- */
+
+  // Cards are the one interaction (DESIGN.md "Cards"): hover opens one,
+  // and the pin keeps it when the pointer leaves. The wording here is
+  // the 2D map's, because the two surfaces are drawn and worded to one
+  // rule -- a boundary reads the same whichever side of the slider you
+  // are on.
+  let hoverWall = $state<{ districtId: string; side: WallSide } | null>(null)
+  let pinnedWall = $state<{ districtId: string; side: WallSide } | null>(null)
+  let declareReason = $state('')
+  /** Declaring covers both directions by default: one direction declared
+   * and the other still dark would leave the wall grey and the card
+   * explaining why (round 49's item 7, ratified as drawn). */
+  let declareBoth = $state(true)
+  let declareBusy = $state(false)
+
+  const openWall = $derived(pinnedWall ?? hoverWall)
+  const wallPinned = $derived(pinnedWall !== null)
+
+  function sameWall(a: { districtId: string; side: WallSide } | null, b: { districtId: string; side: WallSide } | null): boolean {
+    return a !== null && b !== null && a.districtId === b.districtId && a.side === b.side
+  }
+
+  const COVERAGE_WORD: Record<Coverage, string> = {
+    logged: 'logged',
+    quiet: 'quiet on purpose',
+    dark: 'dark',
+  }
+
+  /** What one direction across the boundary actually says, in plain
+   * words -- never more than the pushed table supports. */
+  function directionDetail(dir: { coverage: Coverage; ruleCount: number }): string {
+    if (dir.coverage === 'logged') return dir.ruleCount > 0 ? `${dir.ruleCount} accept ${dir.ruleCount === 1 ? 'rule' : 'rules'}, logging` : 'a rule on it logs'
+    if (dir.coverage === 'quiet') return 'declared quiet on purpose'
+    return dir.ruleCount > 0 ? `${dir.ruleCount} accept ${dir.ruleCount === 1 ? 'rule' : 'rules'}, none with log=yes` : 'nothing on it logs'
+  }
+
+  /** The card for whichever wall edge is open: the gate that gave the
+   * edge its reading, and both of that boundary's directions. An edge
+   * with no gate has no boundary to describe, and opens nothing. */
+  const wallCard = $derived.by(() => {
+    const w = openWall
+    if (!w) return null
+    const d = ground.districts.find((x) => x.id === w.districtId)
+    if (!d) return null
+    const here = d.gates.filter((gt) => faceOf(d, gt.p)?.side === w.side)
+    if (here.length === 0) return null
+    let gate = here[0]
+    for (const g of here) if (worseCoverage(gate.coverage, g.coverage) === g.coverage && g.coverage !== gate.coverage) gate = g
+    const declaration = gate.directions.map((x) => coverageState.byKey.get(x.edgeKey)).find((x) => x !== undefined) ?? null
+    return { d, gate, declaration }
+  })
+
+  function openWallCard(districtId: string, side: WallSide) {
+    if (drag?.moved) return
+    hoverWall = { districtId, side }
+  }
+  function closeWallCard(districtId: string, side: WallSide) {
+    if (sameWall(hoverWall, { districtId, side })) hoverWall = null
+  }
+  function toggleWallPin() {
+    const w = openWall
+    if (!w) return
+    if (wallPinned) {
+      pinnedWall = null
+      return
+    }
+    pinnedWall = { districtId: w.districtId, side: w.side }
+    // Pinned, the card opens the declare form with whatever reason is
+    // already on record, so an existing declaration is edited rather
+    // than silently replaced by an empty one.
+    coverageState.error = null
+    declareReason = wallCard?.declaration?.reason ?? ''
+    declareBoth = true
+  }
+
+  /** Which keys a declaration writes: this direction, or both -- a wall
+   * has no direction, so both is the default. */
+  function declareKeys(): string[] {
+    const c = wallCard
+    if (!c) return []
+    const dirs = c.gate.directions
+    return declareBoth ? dirs.map((x) => x.edgeKey) : dirs.slice(0, 1).map((x) => x.edgeKey)
+  }
+
+  async function submitDeclaration() {
+    if (!declareReason.trim() || declareBusy) return
+    declareBusy = true
+    let ok = true
+    for (const key of declareKeys()) ok = (await coverageState.declare(key, declareReason.trim())) && ok
+    declareBusy = false
+    if (ok) pinnedWall = null
+  }
+
+  async function removeDeclaration() {
+    const c = wallCard
+    if (!c || declareBusy) return
+    declareBusy = true
+    let ok = true
+    for (const dir of c.gate.directions) if (coverageState.byKey.has(dir.edgeKey)) ok = (await coverageState.undeclare(dir.edgeKey)) && ok
+    declareBusy = false
+    if (ok) pinnedWall = null
+  }
+
+  /** The same second way in the 2D map's declare panel offers (#435): a
+   * dark boundary is exactly what tune-logging exists to fix. */
+  function openRulesForBoundary() {
+    const c = wallCard
+    if (!c || !primaryDevice) return
+    tuneLoggingNavState.request(primaryDevice.id, c.gate.key)
+    appState.view = 'tune-logging'
+  }
+
   /* ---------------- the minimap ---------------- */
 
   const MINI_W = 264
@@ -1075,7 +1252,7 @@
     const plates = g.districts.map((d) => ({
       d: diamond(mc, d.u, d.v, d.r, 0),
       ink: inkOf(d),
-      fo: d.dark ? 0.22 : 0.5,
+      fo: d.plateDark ? 0.22 : 0.5,
       name: d.name,
       x: R2(X(mc, d.u)),
       // The name sits under the plate's bottom vertex (#978), not over
@@ -1116,6 +1293,30 @@
 
 <svelte:window onkeydown={onWindowKeydown} />
 
+{#snippet otherPaints(paints: Paint[], lamps: { x: number; y: number; r: number; rr: number; h: number }[])}
+  {#each paints as p, j (j)}
+    {#if p.d}
+      <path
+        d={p.d}
+        fill={p.fill ?? 'none'}
+        fill-opacity={p.fo}
+        stroke={p.stroke}
+        stroke-opacity={p.so}
+        stroke-width={p.sw}
+        stroke-dasharray={p.dash}
+        stroke-linecap={p.cls === 'round' ? 'round' : undefined}
+      />
+    {:else}
+      <ellipse cx={p.cx} cy={p.cy} rx={p.rx} ry={p.ry} fill={p.fill ?? 'none'} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} />
+    {/if}
+  {/each}
+  {#each lamps as l, j (j)}
+    <path d="M{l.x} {l.y}V{R2(l.y - l.h)}" stroke="var(--accent)" stroke-opacity="0.6" stroke-width="1" />
+    <circle class="lamp" cx={l.x} cy={R2(l.y - l.h)} r={l.r} fill="var(--now)" />
+    <circle class="lamp" cx={l.x} cy={R2(l.y - l.h)} r={l.rr} fill="var(--now)" fill-opacity="0.13" />
+  {/each}
+{/snippet}
+
 <div class="city" data-stop={effectiveStop}>
   <svg
     bind:this={svgEl}
@@ -1155,8 +1356,18 @@
             onkeydown={onKey}
           >
             <title>{p.aria}</title>
-            <path d={p.outer} fill={p.ink} fill-opacity={p.d.dark ? 0.045 : 0.1} />
-            <path d={p.inner} fill="none" stroke={p.d.dark ? 'var(--fg-dim)' : p.ink} stroke-opacity={p.d.dark ? 0.13 : 0.17} stroke-width="0.7" />
+            <!-- The plate keeps its own ink unless every one of the
+                 district's boundaries is dark (round 49, #1016); then,
+                 and only then, it goes grey and dashed. -->
+            <path d={p.outer} fill={p.d.plateDark ? 'var(--fg-dim)' : p.ink} fill-opacity={p.d.plateDark ? 0.06 : 0.1} />
+            <path
+              d={p.inner}
+              fill="none"
+              stroke={p.d.plateDark ? 'var(--fg-dim)' : p.ink}
+              stroke-opacity={p.d.plateDark ? 0.2 : 0.17}
+              stroke-width="0.7"
+              stroke-dasharray={p.d.plateDark ? '3 4' : undefined}
+            />
             <path class="ring" d={p.outer} fill="none" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="4 5" />
           </g>
         {/each}
@@ -1174,18 +1385,29 @@
               <path d={s.flow.d} fill="none" stroke={s.flow.stroke} stroke-width={s.flow.sw} stroke-opacity={s.flow.so} class={s.flow.cls ?? 'flow'} stroke-dashoffset={s.flow.dash} data-road={s.roadId} />
             {/if}
           {:else if s.kind === 'other'}
-            {#each s.paints as p, j (j)}
-              {#if p.d}
-                <path d={p.d} fill={p.fill ?? 'none'} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} stroke-linecap={p.cls === 'round' ? 'round' : undefined} />
-              {:else}
-                <ellipse cx={p.cx} cy={p.cy} rx={p.rx} ry={p.ry} fill={p.fill ?? 'none'} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} />
-              {/if}
-            {/each}
-            {#each s.lamps as l, j (j)}
-              <path d="M{l.x} {l.y}V{R2(l.y - l.h)}" stroke="var(--accent)" stroke-opacity="0.6" stroke-width="1" />
-              <circle class="lamp" cx={l.x} cy={R2(l.y - l.h)} r={l.r} fill="var(--now)" />
-              <circle class="lamp" cx={l.x} cy={R2(l.y - l.h)} r={l.rr} fill="var(--now)" fill-opacity="0.13" />
-            {/each}
+            {#if s.wall}
+              <!-- A wall piece is pointable: hovering it opens its own
+                   boundary's card, which is where the declare path
+                   starts (DESIGN.md "Cards"). Everything else in this
+                   branch is scenery and takes no pointer. -->
+              {@const w = s.wall}
+              <g
+                class="wall-hot"
+                class:on={sameWall(openWall, { districtId: w.districtId, side: w.side })}
+                role="button"
+                tabindex="-1"
+                aria-label="{districtOf(w.districtId)?.name ?? w.districtId} wall, {COVERAGE_WORD[w.coverage]}"
+                data-wall="{w.districtId}:{w.side}"
+                onpointerenter={() => openWallCard(w.districtId, w.side)}
+                onpointerleave={() => closeWallCard(w.districtId, w.side)}
+                onclick={() => openWallCard(w.districtId, w.side)}
+                onkeydown={(e) => e.key === 'Enter' && openWallCard(w.districtId, w.side)}
+              >
+                {@render otherPaints(s.paints, s.lamps)}
+              </g>
+            {:else}
+              {@render otherPaints(s.paints, s.lamps)}
+            {/if}
           {:else if s.kind === 'hamlet'}
             <g class="hamlet" role="img" aria-label={s.aria}>
               <title>{s.aria}</title>
@@ -1222,24 +1444,25 @@
       <g class="flat" aria-hidden="true">
         {#each scene.plaques as p (p.d.id)}
           <g transform="translate({p.x} {p.y})">
+            <!-- The plaque says name · subnet, and nothing else (round
+                 49, #1016): LOGGED, DARK and NO RULES PUSHED are gone
+                 from it because the wall now says what the coverage is,
+                 and a plaque that ignored declarations said the wrong
+                 thing anyway (#1014). `no rule table pushed` stays, dim,
+                 because it is a different fact from dark: there, a table
+                 exists and nothing on it logs. -->
             {#if compact}
-              <rect x={R2(-p.w / 2)} y="0" width={p.w} height="20" rx="10" fill="#0a0f1c" fill-opacity="0.9" stroke={p.d.dark ? 'rgba(255,84,112,0.4)' : 'var(--border)'} />
-              <circle cx={R2(-p.w / 2 + 11)} cy="10" r="3.2" fill={p.ink} fill-opacity={p.d.dark ? 0.5 : 1} />
+              <rect x={R2(-p.w / 2)} y="0" width={p.w} height="20" rx="10" fill="#0a0f1c" fill-opacity="0.9" stroke="var(--border)" />
+              <circle cx={R2(-p.w / 2 + 11)} cy="10" r="3.2" fill={p.ink} />
               <text x={R2(-p.w / 2 + 19)} y="14" class="p-name small">{p.d.name}</text>
-              {#if !p.d.rulesPushed}
-                <text x={R2(p.w / 2 - 10)} y="13.5" text-anchor="end" class="cov cov-q">NO RULES</text>
-              {:else if p.d.dark}
-                <text x={R2(p.w / 2 - 10)} y="13.5" text-anchor="end" class="cov cov-d">DARK</text>
-              {/if}
             {:else}
-              <rect x={R2(-p.w / 2)} y="0" width={p.w} height="38" rx="8" fill="#0a0f1c" fill-opacity="0.93" stroke={p.d.dark ? 'rgba(255,84,112,0.32)' : 'var(--border)'} />
-              <circle cx={R2(-p.w / 2 + 13)} cy="14" r="3.4" fill={p.ink} fill-opacity={p.d.dark ? 0.5 : 1} />
+              <rect x={R2(-p.w / 2)} y="0" width={p.w} height={p.d.rulesPushed ? 28 : 40} rx="8" fill="#0a0f1c" fill-opacity="0.93" stroke="var(--border)" />
+              <circle cx={R2(-p.w / 2 + 13)} cy="14" r="3.4" fill={p.ink} />
               <text x={R2(-p.w / 2 + 22)} y="18" class="p-name">{p.d.name}</text>
               <text x={R2(p.w / 2 - 11)} y="17.5" text-anchor="end" class="p-cidr">{p.d.cidr ?? 'no address pushed'}</text>
-              <text x={R2(-p.w / 2 + 13)} y="31" class="cov {p.d.dark ? 'cov-d' : 'cov-q'}"
-                >{p.d.rulesPushed ? (p.d.dark ? 'DARK' : 'LOGGED') : 'NO RULES PUSHED'}</text
-              >
-              <text x={R2(p.w / 2 - 11)} y="31.5" text-anchor="end" class="wp">{p.tally}</text>
+              {#if !p.d.rulesPushed}
+                <text x={R2(-p.w / 2 + 13)} y="32" class="p-note">no rule table pushed</text>
+              {/if}
             {/if}
           </g>
         {/each}
@@ -1308,6 +1531,79 @@
         <p class="cm-b">nothing to draft from yet -- no destination port observed on this strand.</p>
       {/if}
       <div class="cm-f"><span>drafted · never run</span></div>
+    </div>
+  {/if}
+
+  {#if wallCard}
+    {@const c = wallCard}
+    <!-- The boundary card (DESIGN.md "Cards", round 49 #1016). Dark: what
+         the rule does, both directions, and the three actions; pinned, it
+         opens the declare form. Quiet: the reason quoted, who and when,
+         and undeclare. The wording is the 2D map's, so a boundary reads
+         the same on either side of the slider. -->
+    <div
+      class="bcard"
+      class:pinned={wallPinned}
+      role="dialog"
+      tabindex="-1"
+      aria-label="{c.d.name} to {c.gate.toward}: this boundary, {COVERAGE_WORD[c.gate.coverage]}"
+      onpointerenter={() => openWallCard(c.d.id, openWall!.side)}
+      onpointerleave={() => closeWallCard(c.d.id, openWall!.side)}
+    >
+      <div class="bc-t">
+        <span class="n">{c.d.name} → {c.gate.toward}<small>boundary</small></span>
+        <button
+          type="button"
+          class="pin"
+          class:on={wallPinned}
+          aria-pressed={wallPinned}
+          title={wallPinned ? 'pinned — click to let it go' : 'pin this card'}
+          onclick={toggleWallPin}>{wallPinned ? '✕' : '⊙'}</button
+        >
+      </div>
+
+      {#each c.gate.directions as dir (dir.edgeKey)}
+        <div class="s {dir.coverage}">
+          <i class="sw {dir.coverage}"></i>{dir.label} · {COVERAGE_WORD[dir.coverage]} — {directionDetail(dir)}
+        </div>
+      {/each}
+
+      {#if c.gate.coverage === 'dark'}
+        <div class="s">nothing drawn across it is a fact; nothing is known</div>
+      {/if}
+
+      {#if c.declaration}
+        <blockquote class="quote">{c.declaration.reason}</blockquote>
+        <div class="s">{c.declaration.declaredBy} · {new Date(c.declaration.declaredAt).toLocaleString()}</div>
+      {/if}
+
+      {#if wallPinned && authState.isAdmin && !c.declaration}
+        <div class="form">
+          <label for="city-declare-reason">QUIET ON PURPOSE — WHY?</label>
+          <input id="city-declare-reason" bind:value={declareReason} placeholder="why this gap is intentional…" />
+          <div class="btns">
+            <button type="button" class="go" disabled={!declareReason.trim() || declareBusy} onclick={submitDeclaration}>Declare</button>
+            <button type="button" class="no" onclick={() => (pinnedWall = null)}>cancel</button>
+            <label class="who">
+              <input type="checkbox" bind:checked={declareBoth} />
+              as {authState.username || 'you'} · both directions
+            </label>
+          </div>
+          {#if coverageState.error}<div class="s alarm">{coverageState.error}</div>{/if}
+        </div>
+      {/if}
+
+      <div class="acts">
+        {#if c.declaration}
+          {#if authState.isAdmin}
+            <button type="button" class="hot" disabled={declareBusy} onclick={removeDeclaration}>undeclare ▸</button>
+          {/if}
+        {:else if authState.isAdmin && !wallPinned && c.gate.coverage !== 'logged'}
+          <button type="button" onclick={toggleWallPin}>declare quiet on purpose ▸</button>
+        {/if}
+        <button type="button" onclick={openRulesForBoundary}>rules ▸</button>
+        <button type="button" class="dim" onclick={() => (appState.view = 'live')}>stream ▸</button>
+      </div>
     </div>
   {/if}
 
@@ -1403,22 +1699,234 @@
     fill: var(--fg-dim);
   }
 
-  .cov {
-    font: 700 8.5px var(--font-mono);
+  /* ---- The boundary card, ported from round 49's `.card` ---- */
+
+  .wall-hot {
+    cursor: pointer;
+  }
+
+  .wall-hot.on {
+    filter: brightness(1.4);
+  }
+
+  .bcard {
+    position: absolute;
+    z-index: 9;
+    right: 20px;
+    bottom: 32px;
+    width: 288px;
+    padding: 9px 12px;
+    background: rgba(15, 20, 34, 0.95);
+    border: 1px solid var(--hair-2);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    font: 10.5px var(--font-mono);
+    color: var(--fg-muted);
+  }
+
+  .bcard.pinned {
+    border-color: rgba(157, 184, 232, 0.5);
+  }
+
+  .bc-t {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .bc-t .n {
+    font: 650 13.5px var(--font-sans);
+    color: var(--fg);
+    flex: 1;
+  }
+
+  .bc-t .n small {
+    font: 10.5px var(--font-mono);
+    color: var(--fg-dim);
+    margin-left: 6px;
+  }
+
+  .bcard .pin {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 1px solid var(--hair-2);
+    background: transparent;
+    color: var(--fg-dim);
+    font: 11px var(--font-sans);
+    line-height: 1;
+    cursor: pointer;
+    align-self: flex-start;
+  }
+
+  .bcard .pin.on,
+  .bcard .pin:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .bcard .s {
+    margin-top: 3px;
+    color: var(--fg-dim);
+  }
+
+  .bcard .s.dark {
+    color: var(--fg-dim);
+  }
+
+  .bcard .s.quiet {
+    color: var(--fg);
+    opacity: 0.7;
+  }
+
+  .bcard .s.logged {
+    color: var(--accept);
+  }
+
+  .bcard .s.alarm {
+    color: var(--alarm);
+  }
+
+  /* The same three treatments the wall wears, as a swatch: solid for
+     logged, flat white for declared quiet, dashed grey for dark. */
+  .bcard .sw {
+    display: inline-block;
+    width: 22px;
+    height: 3px;
+    border-radius: 2px;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+
+  .bcard .sw.dark {
+    background: repeating-linear-gradient(90deg, var(--fg-dim) 0 3px, transparent 3px 6px);
+  }
+
+  .bcard .sw.quiet {
+    background: var(--fg);
+    opacity: 0.4;
+  }
+
+  .bcard .sw.logged {
+    background: var(--accept);
+    opacity: 0.8;
+  }
+
+  .bcard .quote {
+    margin: 5px 0 0;
+    padding: 5px 8px;
+    border-left: 2px solid var(--hair-2);
+    color: var(--fg);
+    font: italic 11px var(--font-sans);
+  }
+
+  .bcard .acts {
+    display: flex;
+    gap: 12px;
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px solid var(--hair);
+    flex-wrap: wrap;
+  }
+
+  .bcard .acts button {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--accent);
+    font: 10.5px var(--font-mono);
+    cursor: pointer;
+  }
+
+  .bcard .acts button:hover {
+    text-decoration: underline;
+  }
+
+  .bcard .acts button.dim {
+    color: var(--fg-dim);
+  }
+
+  .bcard .acts button.hot {
+    color: var(--alarm);
+  }
+
+  .bcard .form {
+    margin-top: 7px;
+  }
+
+  .bcard .form > label {
+    display: block;
+    font: 600 9px var(--font-mono);
     letter-spacing: 0.1em;
+    color: var(--fg-dim);
+    margin-bottom: 3px;
   }
 
-  .cov-q {
-    fill: var(--fg-dim);
+  .bcard .form input:not([type]) {
+    width: 100%;
+    padding: 5px 8px;
+    background: #080c16;
+    border: 1px solid var(--hair-2);
+    border-radius: 6px;
+    color: var(--fg);
+    font: 11px var(--font-sans);
+    outline: none;
   }
 
-  .cov-d {
-    fill: var(--alarm);
+  .bcard .form input:focus {
+    border-color: var(--accent);
   }
 
-  .wp {
+  .bcard .form .btns {
+    display: flex;
+    gap: 8px;
+    margin-top: 7px;
+    align-items: center;
+  }
+
+  .bcard .form .go {
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--hair-2);
+    background: var(--raised);
+    color: var(--fg);
+    font: 600 10.5px var(--font-mono);
+    cursor: pointer;
+  }
+
+  .bcard .form .go:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+
+  .bcard .form .go:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .bcard .form .no {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--fg-dim);
+    font: 10.5px var(--font-mono);
+    cursor: pointer;
+  }
+
+  .bcard .form .who {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--fg-dim);
+    font: 10.5px var(--font-mono);
+    cursor: pointer;
+  }
+
+  /* The plaque's dim second line. The coverage words that used to sit
+     here went with round 49 (#1016): the wall is the statement. */
+  .p-note {
     font: 9.5px var(--font-mono);
-    fill: var(--fg-muted);
+    fill: var(--fg-dim);
   }
 
   .chip-t {

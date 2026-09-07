@@ -13,8 +13,10 @@ import { bezAt, bulge, gateToward, routeRound, segsOf } from './roads'
 import { worstUnplanned } from './escalate'
 import type { CityEdge, CityInput, CityZone } from './input'
 import { zoneHolding } from './input'
+import { worseCoverage, type CityGate } from './gates'
+import type { Coverage } from '../coverageRule'
 import { bridgeStateFor } from './tunnelState'
-import type { Borough, Bridge, Building, CityPeer, District, Ground, River, Road, RoadKind } from './types'
+import type { Borough, Bridge, Building, District, CityPeer, GateDirection, Ground, River, Road, RoadKind } from './types'
 
 /** The mockup's primary router. */
 const ROUTER: Pt = [-10, 10]
@@ -172,6 +174,9 @@ export function layoutGround(input: CityInput): Ground {
         routerId,
         coverage: z.coverage,
         dark: z.dark,
+        // Filled in once this district's gates are known, below: the
+        // plate only goes grey and dashed when every boundary is dark.
+        plateDark: false,
         buildings: [],
         more: Math.max(0, z.hostCount - Math.min(z.hosts.length, MAX_BUILDINGS)),
         gates: [],
@@ -237,10 +242,31 @@ export function layoutGround(input: CityInput): Ground {
   // logging rule covers the boundary), 'unknown' means unlit; a
   // footbridge's state is tunnelState.ts's bridgeStateFor, never guessed.
   const bridges: Bridge[] = []
-  const crossings: { id: string; iface: string; at: number; w: number; kind: Bridge['kind']; postR: number; state: Bridge['state']; peers: CityPeer[] }[] = []
-  if (input.wan) crossings.push({ id: 'wan', iface: input.wan, at: ROUTER[0] - 46, w: 3.4, kind: 'road', postR: POST_R, state: input.wanLogged ? 'up' : 'unknown', peers: [] })
+  const crossings: {
+    id: string
+    iface: string
+    at: number
+    w: number
+    kind: Bridge['kind']
+    postR: number
+    state: Bridge['state']
+    coverage: Coverage
+    peers: CityPeer[]
+  }[] = []
+  if (input.wan)
+    crossings.push({ id: 'wan', iface: input.wan, at: ROUTER[0] - 46, w: 3.4, kind: 'road', postR: POST_R, state: input.wanLogged ? 'up' : 'unknown', coverage: input.wanCoverage, peers: [] })
   input.tunnels.forEach((t, i) =>
-    crossings.push({ id: t.iface, iface: t.iface, at: ROUTER[0] + 18 + i * 28, w: 1.5, kind: 'foot', postR: FOOT_POST_R, state: bridgeStateFor(t.apiState, t.events), peers: t.peers }),
+    crossings.push({
+      id: t.iface,
+      iface: t.iface,
+      at: ROUTER[0] + 18 + i * 28,
+      w: 1.5,
+      kind: 'foot',
+      postR: FOOT_POST_R,
+      state: bridgeStateFor(t.apiState, t.events),
+      coverage: t.coverage,
+      peers: t.peers,
+    }),
   )
   for (const c of crossings) {
     const tv = bankV(sampledN, c.at)
@@ -268,7 +294,7 @@ export function layoutGround(input: CityInput): Ground {
       index: 0,
     }
     nodes.push(post)
-    bridges.push({ id: c.id, iface: c.iface, kind: c.kind, t, f, mid: [(t[0] + f[0]) / 2, (t[1] + f[1]) / 2], half: d / 2, w: c.w, post: post.id, state: c.state, peers: c.peers })
+    bridges.push({ id: c.id, iface: c.iface, kind: c.kind, t, f, mid: [(t[0] + f[0]) / 2, (t[1] + f[1]) / 2], half: d / 2, w: c.w, post: post.id, state: c.state, coverage: c.coverage, peers: c.peers })
   }
 
   // Roads. A gate is where a road toward its far end crosses a plate's
@@ -296,15 +322,63 @@ export function layoutGround(input: CityInput): Ground {
   // rule, or naming a place this build has no ground for) aims at the
   // district's own router: a defensible "somewhere out of town" rather
   // than a guessed neighbour.
+  //
+  // One gate per neighbour, not one per rule direction (round 49,
+  // #1016): a wall has no direction, so the two directions across the
+  // same boundary are one break in it. The gate wears the worse of them
+  // and its card lists both.
   for (const d of districts) {
+    const byNeighbour = new Map<string, CityGate[]>()
     for (const gate of input.gates) {
       if (gate.inInterface !== d.id && gate.outInterface !== d.id) continue
       const other = gate.inInterface === d.id ? gate.outInterface : gate.inInterface
       if (other === d.id) continue // a hairpin rule names no real neighbour
+      const list = byNeighbour.get(other)
+      if (list) list.push(gate)
+      else byNeighbour.set(other, [gate])
+    }
+    for (const [other, gates] of byNeighbour) {
       const targetEnd: End = (other && endOf(other)) || { kind: 'node', n: routerNode(d.routerId) }
       const g = gateToward(d, centre(targetEnd))
-      d.gates.push({ key: gate.key, p: g.p, n1: g.n1, toward: other || d.name + '’s own gateway', lamp: gate.logged, ruleCount: gate.ruleCount })
+      // Both directions, outbound first, each named the way the rule
+      // names it. A direction with no accept rule of its own still gets
+      // a line -- that it has no gate is exactly what the card should
+      // say -- and its reading came from the pushed boundary, never from
+      // the other direction's rules.
+      const seen = new Map<string, GateDirection>()
+      for (const gate of gates) {
+        for (const [edgeKey, coverage, ruleCount] of [
+          [gate.edgeKey, gate.coverage, gate.ruleCount],
+          [gate.reverseEdgeKey, gate.reverseCoverage, 0],
+        ] as const) {
+          const [from, to] = edgeKey.split('|')
+          const existing = seen.get(edgeKey)
+          if (existing) {
+            // A direction that is a gate in its own right keeps its own
+            // rule count rather than the reverse lookup's zero.
+            existing.ruleCount = Math.max(existing.ruleCount, ruleCount)
+            continue
+          }
+          seen.set(edgeKey, { label: `${from || 'any lane'} → ${to || 'any lane'}`, edgeKey, coverage, ruleCount })
+        }
+      }
+      const directions = [...seen.values()].sort((a, b) => (a.edgeKey.startsWith(d.id + '|') ? -1 : b.edgeKey.startsWith(d.id + '|') ? 1 : 0))
+      const coverage = directions.reduce<Coverage>((w, x) => worseCoverage(w, x.coverage), 'logged')
+      d.gates.push({
+        key: gates[0].key,
+        p: g.p,
+        n1: g.n1,
+        toward: other || d.name + '’s own gateway',
+        lamp: coverage === 'logged',
+        ruleCount: gates.reduce((n, x) => n + x.ruleCount, 0),
+        coverage,
+        directions,
+      })
     }
+    // The plate itself only goes grey and dashed when every one of this
+    // district's boundaries is dark. With no gates at all there is no
+    // boundary to read, so the lane's own reading stands in.
+    d.plateDark = d.gates.length > 0 ? d.gates.every((x) => x.coverage === 'dark') : d.dark
   }
 
   const connect = (id: string, a: End, b: End, w: number, k: RoadKind, label: string, stop?: 'drop', refusedBy?: string) => {
@@ -366,7 +440,13 @@ export function layoutGround(input: CityInput): Ground {
   // A zone's road to the WAN runs to its router (the bridge road takes
   // it on from there); any other pair runs gate to gate.
   const isWan = (i: string) => input.wan !== null && i === input.wan
+  // No road crosses a boundary nothing logs (round 49, #1016): drawing
+  // one would claim a log line that was never written. Only boundaries a
+  // pushed rule actually names are in here, so unplanned traffic -- the
+  // thing nothing anticipated -- still draws its road.
+  const unlogged = new Set(input.unloggedBoundaries)
   for (const e of pairs.values()) {
+    if (unlogged.has([e.from, e.to].sort().join('|'))) continue
     const k = VERDICT_KIND[e.verdict]
     const w = roadWidth(e.events)
     // Every 'holding' pair dies at the wall; an 'unplanned' pair only
@@ -390,6 +470,11 @@ export function layoutGround(input: CityInput): Ground {
   for (const b of bridges) {
     const post = nodes.find((n) => n.id === b.post)
     if (!post) continue
+    // The same rule as every other road: nothing logs this crossing, so
+    // nothing crossed it that anyone can point at. The bridge itself
+    // still stands -- white when declared quiet, grey when dark -- it
+    // simply carries no traffic anybody wrote down.
+    if (b.coverage !== 'logged') continue
     const w = b.kind === 'road' ? 2.8 : 0.8
     const k: RoadKind = b.state === 'up' ? 'a' : 'q'
     connect('rb-' + b.id, { kind: 'node', n: primaryNode }, { kind: 'node', n: post }, w, k, primary.name + ' to ' + b.iface)
