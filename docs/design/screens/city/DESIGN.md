@@ -65,7 +65,7 @@ returning to the city lands back where it was left.
 | Road | traffic between two buildings or a building and a gate | a curved ground ribbon: width = volume, colour = verdict (`--accept`, `--drop`, `--alarm` for an escalated unplanned road) |
 | Gate | an accept rule crossing a district boundary | a break in the wall; a road crosses a wall only through a gate |
 | Lamp on a gate | the rule logs | a lit post; a wall with no lamp toward a neighbour is that boundary's dark made visible |
-| Bollards and a red mark on a wall | a drop — the road ends at the wall | with the refusing rule's name beside the mark (`caught by default drop`) |
+| Bollards and a red mark on a wall | a drop — the road ends at the wall | the plain mark only, reading `dropped`; **the refusing rule's name is not written on the drawing** — it lives in the card (#991, kept by round 49) |
 | River | the Internet | along one edge of the map; there is no Internet box. It must read as water — banks, an uneven edge, a ripple texture, no lane marks — the owner read the mockup's river as a road (2026-09-03) |
 | Road bridge | the WAN interface (ether1) | wide, lamped when logged |
 | Footbridge | a tunnel (wg0, l2tp) | narrow; lit when up, piers only when down, lit but empty when quiet |
@@ -160,9 +160,11 @@ building drops the camera to the street stop on it and fades every road
 that is not its own. Its roads light with direction shown by the flow
 (dashes moving away = it spoke, toward = it was spoken to); accepted
 roads pass the district's gates and light the peer buildings; a refused
-road ends at the wall with bollards, the red mark and the refusing
-rule's name. **Nothing is written on a road or strand** — no pill
-labels, on either surface; the ports live in the card. Established
+road ends at the wall with bollards and the red mark, reading `dropped`.
+**Nothing is written on a road or strand** — no pill labels and no rule
+names, on either surface; the ports and the refusing rule both live in
+the card. That is one rule, not two: if it names something, it is in a
+card. Established
 strands recede and off-baseline ones are bright, by the same rule as
 everywhere else. The crumb card
 (`name · ip · reaches N · reached by N · refused N · Esc surfaces ▸`)
