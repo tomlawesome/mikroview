@@ -73,6 +73,8 @@
   .scstatus .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: 1px; }
   .scstatus .fmk { color: var(--alarm); font: 600 11px var(--mono); text-decoration: none; }
   .scstatus .wmk { color: var(--watch); font: 600 11px var(--mono); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+  .scstatus .nmk { color: var(--accept); font: 600 11px var(--mono); text-decoration: none; }
+  .scstatus .nmk b { font-weight: 400; color: var(--ink-3); }
   .scstatus .wmk b { color: var(--alarm); font-size: 9px; font-weight: 600; }
   .scstatus .who { background: transparent; border: 1px solid transparent; border-radius: 999px; padding: 2px 10px; font: inherit; color: var(--ink-3); cursor: pointer; }
 
@@ -112,6 +114,8 @@
   .legend span { display: inline-flex; gap: 5px; align-items: center; }
   .legend i.sw { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
   .legend i.sw.dk { background: repeating-linear-gradient(90deg, var(--dark) 0 3px, transparent 3px 6px); opacity: 0.8; }
+  .legend i.sw.es { background: var(--accept); opacity: 0.28; height: 2px; }
+  .legend i.sw.nb { background: var(--accept); box-shadow: 0 0 0 2px rgba(62,207,126,0.35); }
   .legend i.sw.qt { background: var(--quiet); opacity: 0.4; }
 
   /* ---- the stage ---- */
@@ -192,6 +196,8 @@
   .card .sw.dk { background: repeating-linear-gradient(90deg, var(--dark) 0 3px, transparent 3px 6px); }
   .card .sw.qt { background: var(--quiet); opacity: 0.4; }
   .card .sw.ok { background: var(--accept); opacity: 0.8; }
+  .card .sw.nb { background: var(--accept); box-shadow: 0 0 0 2px rgba(62,207,126,0.3); }
+  .card .sw.es { background: var(--accept); opacity: 0.3; height: 2px; }
   .card .sw.al { background: var(--alarm); opacity: 0.9; }
   .card .sw.dot { width: 8px; height: 8px; border-radius: 50%; }
   .card .quote { margin-top: 5px; padding: 5px 8px; border-left: 2px solid var(--hair-2); color: var(--ink); font: italic 11px var(--sans); }
@@ -267,7 +273,7 @@
   </div>
 </div>
 
-<p class="cap"><b>2D · SERVICES</b>the services stop with nothing clicked — the same seven cards as round 30, the ribs now the verdict; Guest's half toward the WAN grey and dashed because nothing logs it, WireGuard white because Tom said so; hosts as a dot row inside each lane card.</p>
+<p class="cap"><b>2D · SERVICES</b>the services stop with nothing clicked — the same seven cards as round 30. Colour is the verdict, brightness is the baseline: the established ribs (the same routes and ports for days) thin and dim, the two halves carrying something off-baseline today bright with a ring where it arrived; Guest's half toward the WAN grey and dashed because nothing logs it, WireGuard white because Tom said so; hosts as a dot row inside each lane card, the header counting today's off-baseline lines.</p>
 <section class="scene" id="flat" aria-label="The 2D services stop: every boundary carries its own logging state on the rib, hosts are a dot row in each lane card, the lens row is two pills"></section>
 
 <p class="cap"><b>2D · DECLARE</b>the grey half hovered and pinned: the card names the boundary, says what is missing, and is where declaring it quiet on purpose lives — the reason typed here, then the half turns white.</p>
@@ -276,19 +282,22 @@
 <p class="cap"><b>2D · READ BACK</b>the white rib hovered: who declared it quiet, why and when, with the way to undeclare — the same card, read the other way.</p>
 <section class="scene" id="flat-quiet" aria-label="The WireGuard rib hovered: its card reads back the declaration, reason, who and when"></section>
 
-<p class="cap"><b>2D · A HOST GONE QUIET</b>tv-lounge stopped talking 14 minutes ago: its dot is grey; the card says so and offers the two marks — intended (white) or dismiss (gone). printer-old is already white.</p>
+<p class="cap"><b>2D · A HOST GONE QUIET</b>tv-lounge has not been heard for 26 hours: its dot is grey; the card says so and offers the two marks — intended (white) or dismiss (gone). printer-old is already white.</p>
 <section class="scene" id="flat-host" aria-label="A quiet host's dot in the LAN card hovered: the card shows last seen and the intended and dismiss marks"></section>
 
-<p class="cap"><b>2D · REACH</b>standing on tom-desktop: no pills on the strands; the nas line hovered shows every port tried on it, accepted or dropped, and the tcp/udp split; the refused strand to cam-porch ends at the rule that refused it. The crumb is the city's.</p>
+<p class="cap"><b>2D · REACH</b>standing on tom-desktop: no pills on the strands; the established strands dim, the nas strand bright because one port on it is new today; its card shows every port tried, the new one marked, accepted or dropped, and the tcp/udp split; the refused strand to cam-porch ends at the rule that refused it. The crumb is the city's.</p>
 <section class="scene" id="flat-reach" aria-label="tom-desktop's reach on the 2D map: strands with nothing written on them, the nas strand hovered with its ports card"></section>
 
-<p class="cap"><b>CITY</b>the same estate from the city stop — IoT's north wall and Guest's whole wall grey and dashed (nothing logs them), wg0's footbridge white (declared quiet), Cams with no rule table pushed; roads the verdict; a grey building where a host went quiet.</p>
+<p class="cap"><b>2D · OFF-BASELINE</b>the bright half toward Servers hovered: the card rolls the rib up — a thousand established lines in one dim word, the one line that is not on the pattern spelled out with when it was first seen, and the two ways to answer it: <em>expected</em> (a reason that stays said; the line drops to established at once) or look closer.</p>
+<section class="scene" id="flat-new" aria-label="The rb5009 to Servers rib hovered: its card lists the one off-baseline line with its first-seen time and the expected action"></section>
+
+<p class="cap"><b>CITY</b>the same estate from the city stop — IoT's north wall and Guest's whole wall grey and dashed (nothing logs them), wg0's footbridge white (declared quiet), Cams with no rule table pushed; established roads dim, the two carrying something new today bright and moving, with a ring where it arrived; a grey building where a host went quiet.</p>
 <section class="scene" id="city" aria-label="The city stop: district walls carry the logging state, the footbridge to wg0 is white, roads are verdict-coloured, one grey building"></section>
 
 <p class="cap"><b>CITY · DECLARE</b>the district stop on Guest: its grey wall hovered, the card pinned with the declare form — the same card, the same words, as the 2D half-rib.</p>
 <section class="scene" id="district" aria-label="District stop on Guest: the grey wall hovered, its card pinned with the declare form"></section>
 
-<p class="cap"><b>CITY · STREET</b>street level in LAN: tv-lounge grey (quiet 14 min, card open), printer-old white (intended), the rest lit; nobody is removed until Tom dismisses them.</p>
+<p class="cap"><b>CITY · STREET</b>street level in LAN: tv-lounge grey (quiet 26 h, card open), printer-old white (intended), the rest lit; nobody is removed until Tom dismisses them.</p>
 <section class="scene" id="street" aria-label="Street stop in LAN: a quiet building in grey with its card open, an intended building in white"></section>
 
 <p class="cap"><b>CITY · REACH</b>standing on tom-desktop: its roads alone, no port chips on them; the road to nas hovered with the same ports card as the 2D reach; cam-porch's refused road dead at the wall with the refusing rule named on the card.</p>
@@ -818,13 +827,15 @@ const BRIDGES = [
    called out). A boundary nothing logs yields no road at all: none runs
    to wg0, none reaches Guest — a road ending in a drop mark there would
    claim a log line that was never written. */
+/* nb: the road carries at least one line off the baseline today; ring:
+   it is the road that line arrived on, so the ring sits at its end */
 const ROADS = [
-  { id: 'rb-wan', via: ['@rb5009', [-28, 2], [-46, -14], '@ether1'], w: 2.8, k: 'a' },
-  { id: 'rb-lan', via: ['@rb5009', [-36, 18], 'lan:wan'], w: 2.2, k: 'a' },
+  { id: 'rb-wan', via: ['@rb5009', [-28, 2], [-46, -14], '@ether1'], w: 2.8, k: 'a', nb: 1, ring: 1 },
+  { id: 'rb-lan', via: ['@rb5009', [-36, 18], 'lan:wan'], w: 2.2, k: 'a', nb: 1 },
   { id: 'rb-srv', via: ['@rb5009', [-14, 34], 'srv:wan'], w: 2.0, k: 'a' },
   { id: 'rb-iot', via: ['@rb5009', [14, 16], 'iot:wan'], w: 1.3, k: 'a' },
   { id: 'rb-l2tp', via: ['@rb5009', [10, -6], [28, -22], '@l2tp'], w: 0.9, k: 'a' },
-  { id: 'lan-srv', via: ['lan:srv', [-50, 56], 'srv:lan'], w: 2.6, k: 'a' },
+  { id: 'lan-srv', via: ['lan:srv', [-50, 56], 'srv:lan'], w: 2.6, k: 'a', nb: 1, ring: 1 },
   { id: 'iot-srv', via: ['iot:srv', [16, 54], 'srv:iot'], w: 1.2, k: 'a' },
   { id: 'lan-hap', via: ['lan:hap', [-86, 78], [-74, 98], [-46, 108], '@hapax3'], w: 1.6, k: 'a' },
   { id: 'srv-hap', via: ['srv:hap', [-32, 98], [-52, 102]], w: 1.0, k: 'a' },
@@ -850,8 +861,10 @@ function roadPieces(c, r, opt) {
   if (r.from) trim(0, 's', r.from);
   if (r.to) trim(segs.length - 1, 'e', r.to);
   const col = VERDICT[r.k];
-  const w = Math.max(1.2, r.w * c.S * 0.30);
-  let op = r.k === 'x' ? 0.9 : (r.k === 'r' ? 0.6 : 0.52);
+  /* established: thin and dim. off-baseline: full width, bright. */
+  const est = r.k === 'a' && !r.nb;
+  const w = Math.max(est ? 1 : 1.2, r.w * c.S * (est ? 0.18 : 0.30));
+  let op = r.k === 'x' ? 0.9 : (r.k === 'r' ? 0.6 : (est ? 0.26 : 0.8));
   if (opt.dim) op *= opt.dim;
   const out = [];
   let cum = 0;
@@ -865,7 +878,7 @@ function roadPieces(c, r, opt) {
       const d = 'M' + P(q[0]) + 'C' + P(q[1]) + ' ' + P(q[2]) + ' ' + P(q[3]);
       const gt = (si + (k + 0.5) / n) / total;
       const fade = r.fade ? Math.max(0, 1 - Math.max(0, gt - 0.35) * 1.75) : 1;
-      let sk = '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="' + R2(w + 4) +
+      let sk = est ? '' : '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="' + R2(w + 4) +
         '" stroke-opacity="' + R2(0.07 * fade) + '"/>';
       sk += '<path' + (r.k === 'x' ? ' class="road-alarm"' : '') + ' d="' + d + '" fill="none" stroke="' + col +
         '" stroke-width="' + R2(w) + '" stroke-opacity="' + R2(op * fade) + '"/>';
@@ -878,6 +891,11 @@ function roadPieces(c, r, opt) {
       out.push({ v: (q[0][1] + q[3][1]) / 2, s: sk });
     }
   });
+  if (r.ring) {
+    const e = r.pts[r.pts.length - 1];
+    out.push({ v: e[1] + 8, s: '<circle class="halo" cx="' + R2(X(c, e[0])) + '" cy="' + R2(Y(c, e[1])) + '" r="' +
+      R2(Math.max(5, c.S * 0.7)) + '" fill="none" stroke="' + col + '"/>' });
+  }
   if (r.stop === 'drop') {
     const e = r.pts[r.pts.length - 1], col2 = 'var(--alarm)';
     const px = R2(X(c, e[0])), py = R2(Y(c, e[1]));
@@ -997,7 +1015,7 @@ function device(c, u, v, b, opt) {
   const k = R2(R * 0.74 * c.S / SREF);
   const flagged = b.flags && opt.flags, watched = b.watch && opt.watch;
   const aria = b.name + (b.ip ? ' at ' + b.ip : '') + ' — ' + b.t.replace('-ant', ' with antennas') +
-    (pres === 'quiet' ? ' · quiet, not heard for 14 min' : pres === 'intended' ? ' · quiet on purpose' : '') +
+    (pres === 'quiet' ? ' · quiet, not heard for 26 h' : pres === 'intended' ? ' · quiet on purpose' : '') +
     (b.flags ? ' · ' + b.flags + ' flags' : '') + (b.watch ? ' · watched' : '');
   const sig = flagged || opt.lit ? 'var(--alarm)' : (pres !== 'live' ? ink : (watched ? 'var(--watch)' : 'var(--ok)'));
   let s = '<g class="blk hot" role="img" aria-label="' + esc(aria) + '" data-host="' + b.id + '"><title>' + esc(aria) + '</title>';
@@ -1113,19 +1131,29 @@ const CARDS = {
       '<div class="s">tom · 2026-09-01 14:20 · 1 watcher ◉</div>',
     acts: [['undeclare', 1, 'hot'], ['watchers', 1], ['rules #36', 1], ['stream', 1, 'dim']] }),
   tvQuiet: (px) => ({ px: px, n: 'tv-lounge', sub: '10.0.10.60',
-    body: '<div class="s dk"><i class="sw dot" style="background:var(--dark)"></i>quiet · not heard for <b>14 min</b></div>' +
-      '<div class="s">last seen 21:12:04 · first seen 3 Aug · 1,204 events · LAN</div>' +
+    body: '<div class="s dk"><i class="sw dot" style="background:var(--dark)"></i>quiet · not heard for <b>26 h</b> (window 24 h)</div>' +
+      '<div class="s">last seen yesterday 19:12 · first seen 3 Aug · 1,204 events · LAN</div>' +
       '<div class="s">comes back by itself when the feed hears it again</div>',
     acts: [['mark quiet on purpose', 1], ['dismiss', 1, 'hot'], ['stream', 1, 'dim'], ['reach', 1, 'dim']] }),
   nasLine: (px) => ({ px: px, w: 292, n: 'tom-desktop → nas', sub: '10.0.20.10',
     body: '<table><tr><th>PORT</th><th>PROTO</th><th class="n">ACCEPTED</th><th class="n">DROPPED</th></tr>' +
       '<tr><td>445</td><td>tcp</td><td class="n ok">212</td><td class="n dim">—</td></tr>' +
-      '<tr><td>5001</td><td>tcp</td><td class="n ok">40</td><td class="n dim">—</td></tr>' +
+      '<tr style="color:var(--ink)"><td>5001 <span class="wp" style="color:var(--accept)">new</span></td><td>tcp</td><td class="n ok">40</td><td class="n dim">—</td></tr>' +
       '<tr><td>53</td><td>udp</td><td class="n ok">12</td><td class="n dim">—</td></tr>' +
       '<tr><td>22</td><td>tcp</td><td class="n dim">—</td><td class="n al">3</td></tr></table>' +
       '<div class="s" style="margin-top:6px">tcp <b>255</b> · udp <b>12</b> · other 0 · last 21:26:41</div>' +
-      '<div class="s al">:22 refused by #17 default drop</div>',
-    acts: [['flags 0', 0, 'dim'], ['watchers ◉ nas', 1], ['stream', 1]] })
+      '<div class="s al">:22 refused by #17 default drop</div>' +
+      '<div class="s"><i class="sw nb"></i>:5001 first seen today 21:26 · not on the baseline</div>',
+    acts: [['expected', 1], ['watchers ◉ nas', 1], ['stream', 1, 'dim']] }),
+  newLine: (px, pinned) => ({ px: px, w: 300, pinned: pinned, n: 'rb5009 → Servers', sub: 'rib',
+    body: '<div class="s es"><i class="sw es"></i>established · <b>1,214</b> lines on the same routes and ports for 14 days</div>' +
+      '<div class="s"><i class="sw nb"></i><b>1 off the baseline today</b></div>' +
+      '<table><tr><th>LINE</th><th>PORT</th><th class="n">SEEN</th><th class="n">FIRST</th></tr>' +
+      '<tr style="color:var(--ink)"><td>tom-desktop → nas</td><td>5001/tcp</td><td class="n ok">40</td><td class="n">today 21:26</td></tr></table>' +
+      '<div class="s" style="margin-top:6px">the router accepted it (rule #12); nothing decided it was wanted</div>' +
+      (pinned ? '<div class="form"><label>EXPECTED — WHY?</label><input value="new backup job from the desktop to the nas" aria-label="Reason">' +
+        '<div class="btns"><button class="go">Expected</button><span class="no">cancel</span><span class="who">as tom · this line only</span></div></div>' : ''),
+    acts: pinned ? [['reach tom-desktop', 1], ['stream', 1, 'dim']] : [['expected', 1], ['reach tom-desktop', 1], ['stream', 1, 'dim']] })
 };
 
 /* ================================================================
@@ -1150,11 +1178,13 @@ const N2 = {
   guest: { x: 1116, y: 490, lane: 'var(--guest)', name: 'Guest', cidr: '10.0.40.0/24',
     hosts: [['guest-e8b2', 'live'], ['guest-1a07', 'quiet'], ['guest-c3d9', 'quiet']], tally: '3 hosts · 2 quiet' }
 };
-/* a rib: [from, to, bezier, width, {cov,k} for from→to, {cov,k} for to→from] */
+/* a rib: [from, to, bezier, width, {cov,k,nb} for from→to, {cov,k,nb} for to→from]
+   nb: that direction carries a line off the baseline today; the ring
+   sits at the end it arrived at */
 const RIBS2 = [
-  ['internet', 'rb', [[700, 144], [700, 173], [700, 203], [700, 232]], 3.5, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a' }],
-  ['rb', 'lan', [[645, 302], [565, 380], [355, 410], [285, 480]], 3.5, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a' }],
-  ['rb', 'srv', [[683, 302], [653, 380], [595, 420], [577, 480]], 2.4, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a' }],
+  ['internet', 'rb', [[700, 144], [700, 173], [700, 203], [700, 232]], 3.5, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a', nb: 1 }],
+  ['rb', 'lan', [[645, 302], [565, 380], [355, 410], [285, 480]], 3.5, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a', nb: 1 }],
+  ['rb', 'srv', [[683, 302], [653, 380], [595, 420], [577, 480]], 2.4, { cov: 'l', k: 'a', nb: 1 }, { cov: 'l', k: 'a' }],
   ['rb', 'iot', [[718, 302], [748, 380], [818, 420], [848, 480]], 1.7, { cov: 'l', k: 'a' }, { cov: 'd' }],
   ['rb', 'guest', [[756, 302], [846, 375], [1050, 405], [1116, 480]], 1.7, { cov: 'd' }, { cov: 'd' }],
   ['wg', 'rb', [[1080, 186], [990, 215], [880, 240], [830, 252]], 1.7, { cov: 'q' }, { cov: 'q' }],
@@ -1168,8 +1198,9 @@ function halfRib(pts, w, st, key) {
   let stroke, op = 0.5, dash = '';
   if (st.cov === 'd') { stroke = 'var(--dark)'; op = 0.5; dash = ' stroke-dasharray="3 6"'; }
   else if (st.cov === 'q') { stroke = 'var(--quiet)'; op = 0.3; }
-  else { stroke = st.k === 'a' ? 'var(--accept)' : 'var(--alarm)'; op = st.k === 'a' ? 0.55 : 0.7; }
-  return '<path class="rib hot" data-rib="' + key + '" d="' + d + '" stroke="' + stroke + '" stroke-width="' + w + '" opacity="' + op + '"' + dash + '/>' +
+  else if (st.k === 'a') { stroke = 'var(--accept)'; op = st.nb ? 0.85 : 0.26; if (!st.nb) w = Math.max(1, w * 0.6); }
+  else { stroke = 'var(--alarm)'; op = 0.7; }
+  return '<path class="rib hot" data-rib="' + key + '" d="' + d + '" stroke="' + stroke + '" stroke-width="' + R2(w) + '" opacity="' + op + '"' + dash + '/>' +
     '<path d="' + d + '" fill="none" stroke="transparent" stroke-width="14" class="hot" data-rib="' + key + '"/>';
 }
 function ribs2(opt) {
@@ -1184,6 +1215,10 @@ function ribs2(opt) {
     const st4 = (opt.declared && r[0] === 'rb' && r[1] === 'guest') ? { cov: 'q' } : r[5];
     s += halfRib(a, r[3], r[4], r[0] + '>' + r[1]);
     s += halfRib(b, r[3], st4, r[1] + '>' + r[0]);
+    /* the ring where an off-baseline line arrived */
+    const ring = (p) => '<circle class="halo" cx="' + p[0] + '" cy="' + p[1] + '" r="6" fill="none" stroke="var(--accept)"/>';
+    if (r[4].nb && r[1] !== 'rb') s += ring(r[2][3]);
+    if (st4.nb && r[0] !== 'rb') s += ring(r[2][0]);
   });
   return s;
 }
@@ -1262,7 +1297,7 @@ function reach2(opt) {
   let s = '<svg viewBox="0 0 1400 720" preserveAspectRatio="xMidYMid meet" role="img" aria-label="tom-desktop held centre; its strands to what it reaches and what reaches it, nothing written on them">';
   const C = [700, 340];
   const strands = [
-    { to: [360, 300], n: 'nas', ip: '10.0.20.10', k: 'a', w: 3.2, out: 1, hot: 1 },
+    { to: [360, 300], n: 'nas', ip: '10.0.20.10', k: 'a', w: 3.2, out: 1, hot: 1, nb: 1 },
     { to: [380, 500], n: 'pihole', ip: '10.0.20.5', k: 'a', w: 2.2, out: 1 },
     { to: [560, 610], n: 'unifi', ip: '10.0.20.12', k: 'a', w: 1.4, out: 1 },
     { to: [700, 90], n: 'Internet', ip: 'via ether1', k: 'a', w: 2.6, out: 1 },
@@ -1272,13 +1307,15 @@ function reach2(opt) {
   ];
   strands.forEach((t) => {
     const col = t.k === 'a' ? 'var(--accept)' : 'var(--alarm)';
+    const est = t.k === 'a' && !t.nb;
     const mx = (C[0] + t.to[0]) / 2 + (t.to[1] - C[1]) * 0.18, my = (C[1] + t.to[1]) / 2 - (t.to[0] - C[0]) * 0.18;
     const end = t.refused ? [C[0] + (t.to[0] - C[0]) * 0.32, C[1] + (t.to[1] - C[1]) * 0.32] : C;
     const d = 'M' + t.to[0] + ' ' + t.to[1] + 'Q' + R2(mx) + ' ' + R2(my) + ' ' + R2(end[0]) + ' ' + R2(end[1]);
-    s += '<path class="rib hot" d="' + d + '" stroke="' + col + '" stroke-width="' + t.w + '" opacity="' + (t.k === 'a' ? 0.55 : 0.75) + '"' +
+    s += '<path class="rib hot" d="' + d + '" stroke="' + col + '" stroke-width="' + R2(est ? Math.max(1, t.w * 0.6) : t.w) + '" opacity="' + (est ? 0.28 : (t.k === 'a' ? 0.85 : 0.75)) + '"' +
       (t.refused ? ' filter="drop-shadow(0 0 5px rgba(255,84,112,0.4))"' : '') + '/>';
-    s += '<path class="flow" d="' + d + '" fill="none" stroke="' + col + '" stroke-width="' + R2(Math.max(1, t.w * 0.45)) + '" stroke-opacity="0.9"' +
+    if (!est) s += '<path class="flow" d="' + d + '" fill="none" stroke="' + col + '" stroke-width="' + R2(Math.max(1, t.w * 0.45)) + '" stroke-opacity="0.9"' +
       (t.out ? ' style="animation-direction:reverse"' : '') + '/>';
+    if (t.nb) s += '<circle class="halo" cx="' + t.to[0] + '" cy="' + t.to[1] + '" r="10" fill="none" stroke="' + col + '"/>';
     if (t.refused) s += '<g transform="translate(' + R2(end[0]) + ' ' + R2(end[1]) + ')"><path d="M-5 -5L5 5M-5 5L5 -5" stroke="var(--alarm)" stroke-width="2" stroke-linecap="round"/>' +
       '<circle r="9" fill="none" stroke="var(--alarm)" stroke-opacity="0.45"/></g>';
     if (t.hot) s += '<circle cx="' + R2(mx * 0.5 + (C[0] + t.to[0]) / 4) + '" cy="' + R2(my * 0.5 + (C[1] + t.to[1]) / 4) + '" r="5" fill="' + col + '" fill-opacity="0.9"/>';
@@ -1289,7 +1326,7 @@ function reach2(opt) {
   s += '<g transform="translate(700 340)"><rect class="isl" x="-130" y="-52" width="260" height="104" rx="14"/>' +
     '<circle cx="-108" cy="-26" r="4" fill="var(--lan)"/><text x="-94" y="-21" class="n-name" style="font-size:19px">tom-desktop</text>' +
     '<text x="-108" y="4" class="n-cidr">10.0.10.21 · LAN · workstation</text>' +
-    '<text x="-108" y="24" class="n-sub">reaches 4 · reached by 3 · 1 refused</text>' +
+    '<text x="-108" y="24" class="n-sub">reaches 4 · reached by 3 · 1 refused · <tspan fill="var(--accept)">1 off-baseline</tspan></text>' +
     (opt.watch ? '<text x="108" y="-21" text-anchor="end" class="wp">◉ watched</text>' : '') + '</g>';
   return s + '</svg>';
 }
@@ -1307,6 +1344,8 @@ const SCENES = {
     cards: [{ from: [246, 546], lead: [284, 420], make: () => CARDS.tvQuiet([20, 300]) }] },
   'flat-reach': { reach2: 1, alt: 0, flags: 1, watch: 1, crumb: 1,
     cards: [{ from: [526, 350], lead: [176, 262], make: () => CARDS.nasLine([30, 30]) }] },
+  'flat-new': { flat: 1, alt: 1, flags: 1, watch: 1,
+    cards: [{ from: [663, 337], make: () => CARDS.newLine([160, 150], 1) }] },
   city: { c: [-9, 26, 5.9], compact: 1, roofs: 1, river: 1, alt: 3, flags: 1, watch: 0, minimap: 1 },
   district: { c: [50, -4, 11.5], plaques: 1, roofs: 1, river: 1, lanes: 1, names: 1, alt: 5, flags: 1, watch: 1, minimap: 1,
     cards: [{ at: [53, -12.5], make: (px) => CARDS.guestDark([px[0] - 640, px[1] - 150], 1) }] },
@@ -1320,6 +1359,7 @@ const onStage = (c, u, v, pad) => {
   const x = X(c, u), y = Y(c, v);
   return x > -(pad || 60) && x < 1400 + (pad || 60) && y > -(pad || 60) && y < 700 + (pad || 60);
 };
+const NB_HOSTS = ['tom-desktop', 'laptop-anna'];
 function lanesFor(d) {
   if (d.dark) return [];
   return d.hosts.filter((b) => (b.pres || 'live') === 'live').map((b) => {
@@ -1327,7 +1367,7 @@ function lanesFor(d) {
     let g = d.gates[0], best = 1e9;
     d.gates.forEach((q) => { const m = dm(q.p, [hu, hv]); if (m < best) { best = m; g = q; } });
     const dx = g.p[0] - hu, dy = g.p[1] - hv;
-    return { id: 'lane-' + b.id, from: b.id, w: 0.8, k: 'a',
+    return { id: 'lane-' + b.id, from: b.id, w: 0.8, k: 'a', nb: NB_HOSTS.indexOf(b.id) >= 0 ? 1 : 0,
       pts: [[hu, hv], [(hu + g.p[0]) / 2 - dy * 0.18, (hv + g.p[1]) / 2 + dx * 0.18], [g.p[0], g.p[1]]] };
   });
 }
@@ -1359,7 +1399,7 @@ function render(id) {
   const own = cfg.own || null;
   ROADS.forEach((r) => {
     const mine = !own || own.indexOf(r.id) >= 0;
-    push(roadPieces(c, r, { dim: mine ? 1 : 0.2, flow: own ? mine : (r.k === 'x' || (cfg.lanes && r.w > 1.4)) }));
+    push(roadPieces(c, r, { dim: mine ? 1 : 0.2, flow: own ? mine : (r.k === 'x' || !!r.nb) }));
   });
   if (cfg.lanes) DISTRICTS.forEach((d) => {
     if (!onStage(c, d.u, d.v, 200)) return;
@@ -1377,7 +1417,7 @@ function render(id) {
         focus: cfg.reach === b.id, ring: cfg.names2 && cfg.names2.indexOf(b.id) >= 0 && cfg.reach !== b.id, fade: own && !named };
       solids.push({ v: v + b.R, s: device(c, u, v, b, o) });
       const dimName = b.pres && b.pres !== 'live';
-      if (named) flat += topper(c, u, v, b, [{ t: b.name, c: dimName ? 'st-dim' : 'st-name' }, { t: b.pres === 'quiet' ? 'quiet · 14 min' : b.pres === 'intended' ? 'quiet on purpose' : b.ip, c: 'st-ip' }]);
+      if (named) flat += topper(c, u, v, b, [{ t: b.name, c: dimName ? 'st-dim' : 'st-name' }, { t: b.pres === 'quiet' ? 'quiet · 26 h' : b.pres === 'intended' ? 'quiet on purpose' : b.ip, c: 'st-ip' }]);
       else if (b.flags && cfg.flags && cfg.compact) flat += topper(c, u, v, b, [{ t: '✱' + b.flags, c: 'fchip' }]);
     });
   });
@@ -1433,6 +1473,7 @@ function chrome(id) {
   const cfg = SCENES[id];
   let h = '<div class="scenebar"><span class="wordmark">MIKRO<em>VIEW</em></span>' +
     '<span class="scstatus"><span><span class="dot"></span>LIVE · 34/s</span>' +
+    '<a class="nmk" href="#" title="3 lines off the baseline today — new routes or ports, accepted or not">⟡ off-baseline <b>today</b> 3</a>' +
     '<a class="fmk" href="#" title="6 open flags">⚑ 6</a>' +
     '<a class="wmk" href="#" title="7 watchers — 6 healthy, 1 broken">' +
     '<svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/>' +
@@ -1464,10 +1505,11 @@ function chrome(id) {
     '" aria-label="Altitude: clients, services, zones, city, borough, district, street">' +
     ALTS.map((t, i) => '<i class="tick' + (i === 3 ? ' city' : (cfg.alt === i ? ' on' : '')) +
       '" style="left:' + R2(3 + i * 15.667) + '%"></i>').join('') + '</span></div>';
-  h += '<div class="legend" aria-label="Legend: colour is verdict, grey dashed is dark, white is quiet on purpose">' +
-    '<span><i class="sw" style="background:var(--accept)"></i>accepted</span>' +
-    '<span><i class="sw" style="background:var(--alarm)"></i>only dropped</span>' +
-    '<span><i class="sw dk"></i>nothing logs it</span>' +
+  h += '<div class="legend" aria-label="Legend: colour is the verdict, brightness is the baseline; grey dashed is dark, white is quiet on purpose">' +
+    '<span><i class="sw es"></i>established</span>' +
+    '<span><i class="sw nb"></i>off-baseline</span>' +
+    '<span><i class="sw" style="background:var(--alarm)"></i>refused</span>' +
+    '<span><i class="sw dk"></i>dark</span>' +
     '<span><i class="sw qt"></i>quiet on purpose</span>' +
     (cfg.flat || cfg.reach2 ? '' : '<span><svg width="12" height="11" aria-hidden="true"><circle cx="6" cy="4" r="3" fill="var(--now)"/><rect x="5" y="6" width="2" height="5" fill="var(--ink-3)"/></svg>lamp = logs</span>') +
     '</div>';
