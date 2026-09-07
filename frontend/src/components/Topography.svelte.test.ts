@@ -14,6 +14,8 @@ import { watchlistState } from '../lib/watchlist.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
 import { wizardState } from '../lib/wizard.svelte'
 import { altitudeStopState } from '../lib/altitudeStop.svelte'
+import { hostsState } from '../lib/hosts.svelte'
+import type { Host } from '../lib/api'
 import type { RouterFilterRule, RouterIPAddress } from '../lib/api'
 import { emptyFilters, type ClientEvent, type Device, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
 import Topography from './Topography.svelte'
@@ -142,6 +144,10 @@ beforeEach(() => {
   // judging traffic against a table it never pushed.
   policyState.anyPushed = false
   coverageState.declarations = []
+  // The host register is a module-level singleton too (#1016), so a test
+  // that seeds a quiet host would otherwise leave it quiet for the next.
+  hostsState.hosts = []
+  hostsState.error = null
   flagsState.list = []
   watchlistState.entries = []
   watchlistState.coverage = {}
@@ -615,7 +621,7 @@ describe('crossing the altitude centre (#869)', () => {
     flushSync()
     crossTo(container, '2') // zones: the 2D map is the active side
 
-    const hostLink = container.querySelector<SVGTSpanElement>('.host-link')!
+    const hostLink = container.querySelector<SVGGElement>('.hostrow .hot')!
     hostLink.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     flushSync()
     expect(container.querySelector('.membrane-layer')).not.toBeNull()
@@ -669,7 +675,7 @@ describe('node info cards (#648)', () => {
     const { container } = render(Topography)
     flushSync()
 
-    const hostLink = container.querySelector<SVGTSpanElement>('.host-link')
+    const hostLink = container.querySelector<SVGGElement>('.hostrow .hot')
     expect(hostLink).not.toBeNull()
     hostLink!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     flushSync()
@@ -1019,7 +1025,7 @@ describe('the ascend control, ported inside the map\'s own flow (#682)', () => {
     const { container } = render(Topography)
     flushSync()
 
-    container.querySelector<SVGTSpanElement>('.host-link')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     flushSync()
 
     const stage = container.querySelector('.stage')
@@ -1086,25 +1092,52 @@ describe('the round-30 layout (#699)', () => {
     expect((laid[0].cx + laid[3].cx) / 2).toBeCloseTo(700, 5)
   })
 
-  it('budgets the host row to the card rather than always drawing three', () => {
-    pushLanes(2, () => 'a-really-long-workstation-hostname')
-    zonesState.pushed = [
-      { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
-      { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
-    ]
-    appState.events = ['aa', 'bb', 'cc'].map((s, i) =>
-      event({ inInterface: 'bridge1', srcIp: `10.0.1.${20 + i}`, srcHostName: `${s}-a-really-long-workstation-hostname` }),
+  // Round 49 replaced the card's list of host *names* with a row of
+  // dots (#1016, DESIGN.md "Living hosts"): ten dots then `+N`, one dot
+  // per host. The old width budget went with the names -- ten is the
+  // ratified number, not an estimate off the card's width -- and #715
+  // item 10's "no per-name dot" ruling went with them too: it struck a
+  // dot decorating a name list, and there is no name list any more.
+  it('draws ten host dots then +N, one dot per host', () => {
+    pushLanes(1)
+    appState.events = Array.from({ length: 13 }, (_, i) =>
+      event({ inInterface: 'bridge1', srcIp: `10.0.1.${20 + i}`, srcHostName: `host-${i}` }),
     )
     const { container } = render(Topography)
     flushSync()
 
-    const row = container.querySelector('.zone .n-hosts')
+    const row = container.querySelector('.zone .hostrow')
     expect(row).not.toBeNull()
-    // one name fits a 216-wide card at that length; the rest become +N,
-    // and the clip is the backstop behind the estimate.
-    expect(row?.querySelectorAll('.host-link').length).toBe(1)
-    expect(row?.textContent).toContain('+2')
+    expect(row?.querySelectorAll('.hot').length).toBe(10)
+    expect(row?.querySelector('.c-label.more')?.textContent).toBe('+3')
+    // The clip is the backstop: a crowded lane stays inside its own card
+    // whatever the pitch works out to.
     expect(row?.getAttribute('clip-path')).toMatch(/^url\(#.+-hosts\)$/)
+  })
+
+  it('draws every host and no +N when the lane has ten or fewer', () => {
+    pushLanes(1)
+    appState.events = Array.from({ length: 4 }, (_, i) =>
+      event({ inInterface: 'bridge1', srcIp: `10.0.1.${20 + i}`, srcHostName: `host-${i}` }),
+    )
+    const { container } = render(Topography)
+    flushSync()
+
+    const row = container.querySelector('.zone .hostrow')
+    expect(row?.querySelectorAll('.hot').length).toBe(4)
+    expect(row?.querySelector('.c-label.more')).toBeNull()
+  })
+
+  it('counts the lane under its dots, and says nothing about a state no host is in', () => {
+    pushLanes(1)
+    appState.events = Array.from({ length: 3 }, (_, i) =>
+      event({ inInterface: 'bridge1', srcIp: `10.0.1.${20 + i}`, srcHostName: `host-${i}` }),
+    )
+    const { container } = render(Topography)
+    flushSync()
+
+    const tally = container.querySelector('.zone .hosttally')
+    expect(tally?.textContent).toBe('3 hosts')
   })
 
   it('draws the aggregate bar flush with the card, 16 tall', () => {
@@ -1174,14 +1207,15 @@ describe('the round-30 layout (#699)', () => {
     expect(cards.length).toBe(3)
     for (const c of cards) {
       expect(c.querySelector('.gf-count')?.textContent).toMatch(/^\d+ hosts?$/)
-      expect(c.querySelector('.n-hosts')).toBeNull()
+      expect(c.querySelector('.hostrow')).toBeNull()
       expect(c.querySelector('circle')).toBeNull()
     }
-    // The full card (host names included) stays available for clients
-    // and services -- "hosts appear at clients" -- so it is still drawn,
-    // just hidden by the stylesheet while zones is the active stop.
+    // The full card (the host dot row included) stays available for
+    // clients and services -- "hosts appear at clients" -- so it is
+    // still drawn, just hidden by the stylesheet while zones is the
+    // active stop.
     expect(container.querySelectorAll('.zone .isl-card').length).toBe(3)
-    expect(container.querySelectorAll('.zone .n-hosts').length).toBe(3)
+    expect(container.querySelectorAll('.zone .hostrow').length).toBe(3)
   })
 
   it("stacks a district card's name above its CIDR rather than printing them over each other (#976 item 2: \"10.0.10.1/24 shows through LAN\")", () => {
@@ -1533,7 +1567,7 @@ describe('#723: clicking (or keying into) a node opens the reach, not the stream
     const { container } = render(Topography)
     flushSync()
 
-    const hostLink = container.querySelector<SVGTSpanElement>('.host-link')
+    const hostLink = container.querySelector<SVGGElement>('.hostrow .hot')
     expect(hostLink).not.toBeNull()
     hostLink!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))
     flushSync()
@@ -1961,7 +1995,12 @@ describe('#715 item 7 / #701 fact 2: the waist card says what round 30 says', ()
 describe('#715 items 10 and 11: two treatments Fable ruled on, 2026-09-03', () => {
   const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
 
-  it('lists host names plainly, with no per-name dot and one target each', () => {
+  // #715 item 10 struck a dot that decorated a list of host *names*.
+  // Round 49 replaced the list itself with a dot row (#1016), so the
+  // ruling no longer has a subject -- but the tab-stop half of it does,
+  // and that is what this keeps: one focusable target per host, never a
+  // second one hidden from assistive tech behind it.
+  it('gives each host dot one focusable target, not two', () => {
     zonesState.pushed = oneLane
     appState.events = [
       event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', srcHostName: 'tom-desktop', dstPort: 443 }),
@@ -1970,18 +2009,16 @@ describe('#715 items 10 and 11: two treatments Fable ruled on, 2026-09-03', () =
     const { container } = render(Topography)
     flushSync()
 
-    const hosts = container.querySelector('.n-hosts')
-    expect(hosts).not.toBeNull()
-    // No round ever drew a text dot here; #648's "node symbols bigger"
-    // was about the map's own circles.
-    expect(hosts!.textContent).not.toMatch(/●/)
-    expect(container.querySelector('.host-dot')).toBeNull()
-    // And one focusable target per name, not two. The dot was
-    // role="button" tabindex="0" aria-hidden="true" at once -- focusable
-    // yet hidden from assistive tech, doubling the tab stops per host.
-    const targets = hosts!.querySelectorAll('[role="button"]')
+    const row = container.querySelector('.zone .hostrow')
+    expect(row).not.toBeNull()
+    const targets = row!.querySelectorAll('[role="button"]')
     expect(targets.length).toBe(2)
     expect([...targets].every((t) => t.getAttribute('aria-hidden') !== 'true')).toBe(true)
+    // Each one says which host it is and where it goes.
+    expect([...targets].map((t) => t.getAttribute('aria-label'))).toEqual([
+      'tom-desktop — open its reach',
+      'phone-tom — open its reach',
+    ])
   })
 
   it('gives the fifth lane its own ink rather than the one that means watchers', () => {
@@ -2012,7 +2049,9 @@ describe('#715 items 10 and 11: two treatments Fable ruled on, 2026-09-03', () =
     const { container } = render(Topography)
     flushSync()
 
-    const dots = [...container.querySelectorAll('.zone .isl-card circle')].map((c) => c.getAttribute('fill'))
+    // The lane's accent dot specifically: the card also carries a row of
+    // host dots now (#1016), and those wear the same ink by design.
+    const dots = [...container.querySelectorAll('.zone .isl-card .lane-ink')].map((c) => c.getAttribute('fill'))
     expect(dots.length).toBe(5)
     expect(dots[4]).toBe('var(--lane-5)')
     expect(dots).not.toContain('var(--marked)')
@@ -2026,7 +2065,7 @@ describe('#701: the reach names its busiest pathway, and says the ranking is wei
     appState.events = events
     const { container } = render(Topography)
     flushSync()
-    const hostLink = container.querySelector<SVGTSpanElement>('.host-link')
+    const hostLink = container.querySelector<SVGGElement>('.hostrow .hot')
     hostLink!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     flushSync()
     return container
@@ -2911,5 +2950,442 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+// ---------------------------------------------------------------------
+// Living hosts on the 2D map (#1016; DESIGN.md "Living hosts").
+//
+// Presence comes from the server's host register, not from the event
+// buffer: a machine that stops talking scrolls out of the buffer, and
+// the one thing presence must not do is let it vanish. These drive
+// hostsState directly, the same way the rest of this file drives
+// zonesState and coverageState, rather than mocking ../lib/api.
+// ---------------------------------------------------------------------
+describe('living hosts on the 2D map (#1016)', () => {
+  const HOUR = 60 * 60_000
+
+  const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+
+  function host(over: Partial<Host> & { ip: string }): Host {
+    const now = Date.now()
+    return {
+      key: `bridge1|${over.ip}`,
+      iface: 'bridge1',
+      firstSeen: new Date(now - 30 * 24 * HOUR).toISOString(),
+      lastSeen: new Date(now - 60_000).toISOString(),
+      events: 1204,
+      ...over,
+    }
+  }
+
+  /** One lane the register has answered for, with no live traffic of its
+   * own -- so what draws is the register's word and nothing else. */
+  function laneOf(...hosts: Host[]) {
+    zonesState.pushed = oneLane
+    appState.events = []
+    hostsState.hosts = hosts
+  }
+
+  function dots(container: HTMLElement) {
+    return [...container.querySelectorAll('.zone .hostrow .h-dot')]
+  }
+
+  function openCard(container: HTMLElement) {
+    container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+    flushSync()
+    return container.querySelector<HTMLDivElement>('.card[aria-label^="The host"]')
+  }
+
+  describe('presence', () => {
+    it('draws a live host in its lane ink, with no footprint and nothing to explain', () => {
+      laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop' }))
+      const { container } = render(Topography)
+      flushSync()
+
+      const [d] = dots(container)
+      expect(d.getAttribute('fill')).toBe('var(--lane-lan)')
+      expect(d.classList.contains('quiet')).toBe(false)
+      expect(d.classList.contains('intended')).toBe(false)
+      expect(container.querySelector('.zone .hostrow .h-foot')).toBeNull()
+      expect(container.querySelector('.zone .hosttally')?.textContent).toBe('1 host')
+    })
+
+    it('greys a host nothing has been heard from for the window, with a dashed footprint, and says how long', () => {
+      // 26 h -- the owner's own example, and comfortably past the
+      // ratified 24-hour window. Ten minutes of silence is not evidence
+      // of anything, which is why the window is a working day.
+      laneOf(host({ ip: '10.0.1.60', label: 'tv-lounge', lastSeen: new Date(Date.now() - 26 * HOUR).toISOString() }))
+      const { container } = render(Topography)
+      flushSync()
+
+      const [d] = dots(container)
+      expect(d.classList.contains('quiet')).toBe(true)
+      // The class carries the grey, so the lane ink is not also set.
+      expect(d.getAttribute('fill')).toBeNull()
+      expect(container.querySelector('.zone .hostrow .h-foot')).not.toBeNull()
+      expect(container.querySelector('.zone .hostrow title')?.textContent).toBe('tv-lounge · quiet · 26 h')
+      expect(container.querySelector('.zone .hosttally')?.textContent).toBe('1 host · 1 quiet')
+    })
+
+    it('leaves a host live at 23 hours: a short silence is not evidence of anything', () => {
+      laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop', lastSeen: new Date(Date.now() - 23 * HOUR).toISOString() }))
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(dots(container)[0].classList.contains('quiet')).toBe(false)
+      expect(container.querySelector('.zone .hosttally')?.textContent).toBe('1 host')
+    })
+
+    it('draws a host marked quiet on purpose white translucent, and counts it as such', () => {
+      laneOf(
+        host({
+          ip: '10.0.1.70',
+          label: 'printer-old',
+          lastSeen: new Date(Date.now() - 40 * HOUR).toISOString(),
+          mark: { kind: 'intended', reason: 'switched off at the wall', by: 'tom', at: new Date().toISOString() },
+        }),
+      )
+      const { container } = render(Topography)
+      flushSync()
+
+      const [d] = dots(container)
+      expect(d.classList.contains('intended')).toBe(true)
+      expect(d.classList.contains('quiet')).toBe(false)
+      expect(container.querySelector('.zone .hosttally')?.textContent).toBe('1 host · 1 quiet on purpose')
+    })
+
+    it('draws a host marked quiet on purpose as plainly live while it is still talking', () => {
+      // The mark is a statement about a silence, not a permanent label:
+      // while the machine is talking it is simply live, and the
+      // explanation waits for the next silence.
+      laneOf(
+        host({
+          ip: '10.0.1.70',
+          label: 'printer-old',
+          mark: { kind: 'intended', reason: 'switched off at the wall', by: 'tom', at: new Date().toISOString() },
+        }),
+      )
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(dots(container)[0].classList.contains('intended')).toBe(false)
+      expect(container.querySelector('.zone .hosttally')?.textContent).toBe('1 host')
+    })
+
+    it('takes a dismissed host off the map without touching the others', () => {
+      laneOf(
+        host({ ip: '10.0.1.20', label: 'tom-desktop' }),
+        host({ ip: '10.0.1.99', label: 'gone', mark: { kind: 'dismissed', by: 'tom', at: new Date().toISOString() } }),
+      )
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(dots(container).length).toBe(1)
+      expect(container.querySelector('.zone .hostrow title')?.textContent).toBe('tom-desktop')
+      expect(container.querySelector('.zone .hosttally')?.textContent).toBe('1 host')
+    })
+
+    it('keeps drawing a host the event buffer has forgotten', () => {
+      // The whole point: zonesState derives its hosts from the buffer, so
+      // with no events at all it knows of none. The register does.
+      laneOf(host({ ip: '10.0.1.60', label: 'tv-lounge', lastSeen: new Date(Date.now() - 26 * HOUR).toISOString() }))
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(dots(container).length).toBe(1)
+    })
+
+    it('draws a host the buffer has seen but the register has not answered for yet', () => {
+      zonesState.pushed = oneLane
+      appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'tom-desktop' })]
+      hostsState.hosts = []
+      const { container } = render(Topography)
+      flushSync()
+
+      // Being in the buffer is evidence of having just been heard, so
+      // live is the honest reading rather than a guess.
+      expect(dots(container).length).toBe(1)
+      expect(dots(container)[0].classList.contains('quiet')).toBe(false)
+    })
+
+    it('does not draw the same host twice when both the buffer and the register have it', () => {
+      zonesState.pushed = oneLane
+      appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'tom-desktop' })]
+      hostsState.hosts = [host({ ip: '10.0.1.20', label: 'tom-desktop' })]
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(dots(container).length).toBe(1)
+    })
+  })
+
+  describe('the dot row', () => {
+    const many = (n: number) =>
+      Array.from({ length: n }, (_, i) => host({ ip: `10.0.1.${20 + i}`, label: `host-${String(i).padStart(2, '0')}` }))
+
+    it('draws ten dots then +N, and counts every host including the ones past ten', () => {
+      laneOf(...many(14))
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(dots(container).length).toBe(10)
+      expect(container.querySelector('.zone .hostrow .c-label.more')?.textContent).toBe('+4')
+      expect(container.querySelector('.zone .hosttally')?.textContent).toBe('14 hosts')
+    })
+
+    it('draws no +N at exactly ten', () => {
+      laneOf(...many(10))
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(dots(container).length).toBe(10)
+      expect(container.querySelector('.zone .hostrow .c-label.more')).toBeNull()
+    })
+
+    it("spaces the dots evenly from the card's own left inset", () => {
+      laneOf(...many(3))
+      const { container } = render(Topography)
+      flushSync()
+
+      const xs = dots(container).map((d) => Number(d.getAttribute('cx')))
+      expect(xs[1] - xs[0]).toBeCloseTo(xs[2] - xs[1], 5)
+      expect(xs[1] - xs[0]).toBeGreaterThan(0)
+      // Every dot on the row's own baseline, the mockup's y 56.
+      expect(dots(container).every((d) => d.getAttribute('cy') === '56')).toBe(true)
+    })
+
+    it('halos a flagged host and rings a watched one, each only while its own pill is on', () => {
+      laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop' }))
+      flagsState.list = [flag('port_scan', '10.0.1.20')]
+      watchlistState.entries = [watchEntry({ destIp: '10.0.1.20' })]
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelector('.zone .hostrow .h-halo')).not.toBeNull()
+      expect(container.querySelector('.zone .hostrow .h-watch')).not.toBeNull()
+
+      for (const pill of container.querySelectorAll<HTMLButtonElement>('.pills .pill')) pill.click()
+      flushSync()
+
+      expect(container.querySelector('.zone .hostrow .h-halo')).toBeNull()
+      expect(container.querySelector('.zone .hostrow .h-watch')).toBeNull()
+    })
+
+    it('throbs the flagged halo in place rather than pulsing it outward', () => {
+      // Owner, 2026-09-07: a ring that travels outward reads as
+      // something moving through the network, and nothing here moved.
+      // So the animation may touch opacity and weight, never the radius.
+      const frames = componentSource.match(/@keyframes h-halo \{[^}]*\{[^}]*\}[^}]*\{[^}]*\}[^}]*\}/)
+      expect(frames).not.toBeNull()
+      expect(frames![0]).not.toMatch(/\br\s*:/)
+      expect(frames![0]).toMatch(/stroke-opacity/)
+      expect(frames![0]).toMatch(/stroke-width/)
+    })
+
+    it('opens the reach on a dot, the same place the old name list went', () => {
+      laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop' }))
+      const { container } = render(Topography)
+      flushSync()
+
+      container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+
+      expect(container.querySelector('.membrane-layer')).not.toBeNull()
+    })
+  })
+
+  describe('the host card', () => {
+    it('says the presence, both timestamps and the event count, and offers the two marks', () => {
+      laneOf(host({ ip: '10.0.1.60', label: 'tv-lounge', lastSeen: new Date(Date.now() - 26 * HOUR).toISOString() }))
+      const { container } = render(Topography)
+      flushSync()
+
+      const card = openCard(container)
+      expect(card).not.toBeNull()
+      expect(card!.textContent).toContain('quiet')
+      expect(card!.textContent).toContain('26 h')
+      expect(card!.textContent).toContain('first seen')
+      expect(card!.textContent).toMatch(/1[,. ]?204 events/)
+      expect(card!.textContent).toContain('comes back by itself')
+      const acts = [...card!.querySelectorAll('.acts button')].map((b) => b.textContent?.trim())
+      expect(acts).toContain('mark quiet on purpose ▸')
+      expect(acts).toContain('dismiss ▸')
+    })
+
+    it('floats beside its dot on the shared card anchor, never a second placement beside it', () => {
+      laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop' }))
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(openCard(container)).not.toBeNull()
+      // jsdom lays nothing out, so the placement itself declines rather
+      // than taking a wrong one -- but the card and its re-placement are
+      // lib/cardAnchor's, not a second implementation.
+      expect(componentSource).toMatch(/hostCardPlace = placeCard\(/)
+      expect(componentSource).toMatch(/watchCardSize\(card, \(\) => hostCardTick\+\+\)/)
+    })
+
+    it('survives the pointer leaving the dot, so it is still there when the pointer arrives', () => {
+      laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop' }))
+      const { container } = render(Topography)
+      flushSync()
+
+      const dot = container.querySelector<SVGGElement>('.hostrow .hot')!
+      dot.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+      flushSync()
+      dot.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+      flushSync()
+
+      // The grace period has not elapsed, so the card is still there.
+      expect(container.querySelector('.card[aria-label^="The host"]')).not.toBeNull()
+    })
+
+    it('marks its own dot while the card is open, so it is clear which host is being read', () => {
+      laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop' }))
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelector('.zone .hostrow .h-open')).toBeNull()
+      openCard(container)
+      expect(container.querySelector('.zone .hostrow .h-open')).not.toBeNull()
+    })
+
+    it('comes down when its own reach opens, rather than waiting behind it', () => {
+      laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop' }))
+      const { container } = render(Topography)
+      flushSync()
+
+      const dot = container.querySelector<SVGGElement>('.hostrow .hot')!
+      dot.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+      flushSync()
+      expect(container.querySelector('.card[aria-label^="The host"]')).not.toBeNull()
+
+      dot.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+      expect(container.querySelector('.membrane-layer')).not.toBeNull()
+      expect(container.querySelector('.card[aria-label^="The host"]')).toBeNull()
+    })
+  })
+
+  describe('the marks', () => {
+    function act(card: HTMLElement, label: string) {
+      return [...card.querySelectorAll<HTMLButtonElement>('.acts button')].find((b) => b.textContent?.trim() === label)
+    }
+
+    const quiet = () => host({ ip: '10.0.1.60', label: 'tv-lounge', lastSeen: new Date(Date.now() - 26 * HOUR).toISOString() })
+
+    it('asks for a reason before marking quiet on purpose -- the reason is the mark', () => {
+      laneOf(quiet())
+      const mark = vi.spyOn(hostsState, 'mark').mockResolvedValue(true)
+      const { container } = render(Topography)
+      flushSync()
+
+      act(openCard(container)!, 'mark quiet on purpose ▸')!.click()
+      flushSync()
+
+      expect(container.querySelector('.card .form input')).not.toBeNull()
+      // Nothing is written without one: an empty statement says nothing.
+      expect(container.querySelector<HTMLButtonElement>('.card .form .go')!.disabled).toBe(true)
+      expect(mark).not.toHaveBeenCalled()
+    })
+
+    it('writes the intended mark through the host register, with its reason', async () => {
+      laneOf(quiet())
+      const mark = vi.spyOn(hostsState, 'mark').mockResolvedValue(true)
+      const { container } = render(Topography)
+      flushSync()
+
+      act(openCard(container)!, 'mark quiet on purpose ▸')!.click()
+      flushSync()
+
+      const input = container.querySelector<HTMLInputElement>('.card .form input')!
+      input.value = 'switched off at the wall'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      flushSync()
+      container.querySelector<HTMLButtonElement>('.card .form .go')!.click()
+      await vi.waitFor(() => expect(mark).toHaveBeenCalled())
+
+      expect(mark).toHaveBeenCalledWith('bridge1|10.0.1.60', 'intended', 'switched off at the wall')
+    })
+
+    it('dismisses through the same register, with no reason to give', async () => {
+      laneOf(quiet())
+      const mark = vi.spyOn(hostsState, 'mark').mockResolvedValue(true)
+      const { container } = render(Topography)
+      flushSync()
+
+      act(openCard(container)!, 'dismiss ▸')!.click()
+      await vi.waitFor(() => expect(mark).toHaveBeenCalled())
+
+      expect(mark).toHaveBeenCalledWith('bridge1|10.0.1.60', 'dismissed')
+    })
+
+    it('offers to take a mark back, quoting what was said, and does it through the register', async () => {
+      laneOf(
+        host({
+          ip: '10.0.1.70',
+          label: 'printer-old',
+          lastSeen: new Date(Date.now() - 40 * HOUR).toISOString(),
+          mark: { kind: 'intended', reason: 'switched off at the wall', by: 'tom', at: new Date().toISOString() },
+        }),
+      )
+      const unmark = vi.spyOn(hostsState, 'unmark').mockResolvedValue(true)
+      const { container } = render(Topography)
+      flushSync()
+
+      const card = openCard(container)!
+      // Taking it back is an informed act, not a guess at what was said.
+      expect(card.textContent).toContain('switched off at the wall')
+      expect(act(card, 'mark quiet on purpose ▸')).toBeUndefined()
+      act(card, 'unmark ▸')!.click()
+      await vi.waitFor(() => expect(unmark).toHaveBeenCalled())
+
+      expect(unmark).toHaveBeenCalledWith('bridge1|10.0.1.70')
+    })
+
+    it("shows the register's own failure on the card rather than pretending the mark took", async () => {
+      laneOf(quiet())
+      vi.spyOn(hostsState, 'mark').mockImplementation(async () => {
+        hostsState.error = 'putHostMark: 403'
+        return false
+      })
+      const { container } = render(Topography)
+      flushSync()
+
+      act(openCard(container)!, 'dismiss ▸')!.click()
+      await vi.waitFor(() => expect(container.querySelector('.card .d-error')).not.toBeNull())
+
+      expect(container.querySelector('.card .d-error')?.textContent).toContain('403')
+      // Still on the map: nothing was written, so nothing is taken away.
+      expect(dots(container).length).toBe(1)
+    })
+
+    it('offers no marks to a reader, and still reads the facts out', () => {
+      authState.role = 'viewer'
+      laneOf(quiet())
+      const { container } = render(Topography)
+      flushSync()
+
+      const card = openCard(container)!
+      expect(act(card, 'mark quiet on purpose ▸')).toBeUndefined()
+      expect(act(card, 'dismiss ▸')).toBeUndefined()
+      expect(card.textContent).toContain('quiet')
+    })
+
+    it('offers no marks for a host the register has not answered for', () => {
+      // Its key is the map's own construction, not a record, and
+      // internal/hosts refuses a mark on a key it does not know.
+      zonesState.pushed = oneLane
+      appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'tom-desktop' })]
+      hostsState.hosts = []
+      const { container } = render(Topography)
+      flushSync()
+
+      const card = openCard(container)!
+      expect(act(card, 'mark quiet on purpose ▸')).toBeUndefined()
+      expect(act(card, 'dismiss ▸')).toBeUndefined()
+      expect(card.textContent).toContain('has not answered for it yet')
+    })
   })
 })

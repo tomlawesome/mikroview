@@ -68,6 +68,15 @@
   import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
   import { cardSize, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
   import { altitudeStopState } from '../lib/altitudeStop.svelte'
+  // Living hosts (#1016). The register is the source of presence, not
+  // the event buffer: zonesState derives its host list from the lines
+  // still in the buffer, so a machine that stops talking scrolls out and
+  // vanishes -- which is the one thing presence must not do. The
+  // server's register keeps the record instead, and hostsState is the
+  // browser's view of it.
+  import { hostsState, presenceOf, HOST_QUIET_AFTER_MS, type HostPresence } from '../lib/hosts.svelte'
+  import { baselineState } from '../lib/baseline.svelte'
+  import type { Host } from '../lib/api'
 
   // Five fixed lane inks. The fifth was --marked until #715 item 11 --
   // the ink this same screen uses for watchers, so one colour carried
@@ -84,6 +93,7 @@
       policyState.refresh()
       coverageState.refresh()
       tunnelsState.refresh()
+      hostsState.refresh()
     }
   })
 
@@ -172,30 +182,138 @@
     return 700 + (i - (n - 1) / 2) * lanePitch
   }
 
-  // The host row is sized to the card it sits in (#699; round 30's own
-  // list, the-whole.html:1007, which drops to one name on the narrow
-  // Guest card rather than running past its edge). `.n-hosts` is the
-  // sans face at 10px, so ~0.55em an advance is a safe estimate -- and
-  // whatever the estimate gets wrong the clip catches, so a name can
-  // never reach the neighbouring lane again.
-  const HOST_CH = 5.5
+  /* ---------------- living hosts (#1016) ---------------- */
 
-  function hostsShown(z: ZoneInfo): { hosts: { label: string; ip: string }[]; more: number } {
-    const budget = cardW - 2 * cardPad
-    const shown: { label: string; ip: string }[] = []
-    let used = 0
-    for (const h of z.hosts) {
-      if (shown.length >= 3) break
-      const w = h.label.length * HOST_CH + (shown.length > 0 ? 3 * HOST_CH : 0)
-      const rest = z.hostCount - (shown.length + 1)
-      const tail = rest > 0 ? (4 + String(rest).length) * HOST_CH : 0
-      // The first name always draws: a card that names none of its
-      // hosts says less than one that names one and clips it.
-      if (shown.length > 0 && used + w + tail > budget) break
-      used += w
-      shown.push(h)
+  // Round 49 draws the lane card's hosts as a row of dots rather than a
+  // list of names: ten dots then `+N`, every dot one host and clickable
+  // to its reach, with a count line under them (round-49/index.html's
+  // node2, and DESIGN.md "Living hosts"). The names went because a dot
+  // row says how many machines a lane has and which of them are quiet --
+  // three clipped names said neither, and #715 item 10 had already
+  // struck the per-name dot the old list grew.
+  const MAX_HOST_DOTS = 10
+  // The mockup's own geometry at the 216-wide card: the row starts on
+  // the card's own left inset, 17 apart, r 4.5, baseline y 56. Only the
+  // pitch scales with the card -- everything vertical in this card is
+  // unscaled, and a narrower lane must still fit ten dots and the `+N`.
+  const HOST_DOT_PITCH = 17
+  const HOST_DOT_Y = 56
+  const hostDotPitch = $derived(HOST_DOT_PITCH * laneScale)
+  const hostDotR = $derived(Math.min(4.5, hostDotPitch / 2 - 1))
+
+  /** Where a dot sits inside its lane card, in the card's own space. */
+  function hostDotX(i: number): number {
+    return -cardHalf + cardPad + i * hostDotPitch
+  }
+
+  /** One drawn host: what the dot is, and what its card would say. */
+  interface HostDot {
+    key: string
+    label: string
+    ip: string
+    presence: HostPresence
+    /** The register's record, absent for a host only the buffer knows. */
+    host: Host | null
+  }
+
+  interface HostRow {
+    dots: HostDot[]
+    more: number
+    total: number
+    quiet: number
+    intended: number
+  }
+
+  // Presence is a function of the clock, so it has to be recomputed
+  // without the server saying anything. A minute is far finer than the
+  // 24-hour window needs and costs nothing.
+  let nowMs = $state(Date.now())
+  $effect(() => {
+    const t = setInterval(() => (nowMs = Date.now()), 60_000)
+    return () => clearInterval(t)
+  })
+
+  /** The configured window where there is one, else the 24-hour default. */
+  const quietAfterMs = $derived(baselineState.hostQuietAfterMs > 0 ? baselineState.hostQuietAfterMs : HOST_QUIET_AFTER_MS)
+
+  const hostsByIface = $derived.by(() => {
+    const m = new Map<string, Host[]>()
+    for (const h of hostsState.hosts) {
+      const at = m.get(h.iface)
+      if (at) at.push(h)
+      else m.set(h.iface, [h])
     }
-    return { hosts: shown, more: z.hostCount - shown.length }
+    return m
+  })
+
+  // A zone's id is its boundary interface, and the register keys a host
+  // `"<iface>|<ip>"` (internal/hosts.KeyFor), so the two line up without
+  // a second index in between.
+  function laneHostRow(z: ZoneInfo): HostRow {
+    const out: HostDot[] = []
+    const seen = new Set<string>()
+    for (const h of hostsByIface.get(z.id) ?? []) {
+      const presence = presenceOf(h, nowMs, quietAfterMs)
+      // Dismissed is "take this off my map", so it leaves the row --
+      // and comes back by itself, because the server drops the mark the
+      // moment the host speaks again (internal/hosts.Register.Observe).
+      if (presence === 'dismissed') continue
+      seen.add(h.ip)
+      out.push({ key: h.key, label: h.label ?? h.ip, ip: h.ip, presence, host: h })
+    }
+    // Anything the buffer has seen that the register has not answered
+    // for yet -- the first paint, before GET /api/hosts lands. Being in
+    // the buffer *is* evidence of having just been heard, so live is not
+    // a guess here; it is the same fact the register will confirm.
+    for (const h of z.hosts) {
+      if (seen.has(h.ip)) continue
+      seen.add(h.ip)
+      out.push({ key: `${z.id}|${h.ip}`, label: h.label, ip: h.ip, presence: 'live', host: null })
+    }
+    // Sorted by key, which is the register's own order: stable, so a dot
+    // does not move under the pointer when one host's presence changes.
+    out.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    return {
+      dots: out.slice(0, MAX_HOST_DOTS),
+      more: Math.max(0, out.length - MAX_HOST_DOTS),
+      total: out.length,
+      quiet: out.filter((d) => d.presence === 'quiet').length,
+      intended: out.filter((d) => d.presence === 'intended').length,
+    }
+  }
+
+  /** The count line under the dots. Zero clauses are not drawn: "0
+   * quiet" is not a thing to report. */
+  function hostTally(r: HostRow): string {
+    const parts = [`${r.total} host${r.total === 1 ? '' : 's'}`]
+    if (r.quiet > 0) parts.push(`${r.quiet} quiet`)
+    if (r.intended > 0) parts.push(`${r.intended} quiet on purpose`)
+    return parts.join(' · ')
+  }
+
+  /** A span in the card's own wording -- the `26 h` of DESIGN.md's
+   * `quiet · 26 h`, and the `24 h` of the window beside it. */
+  function spanLabel(ms: number): string {
+    const mins = Math.max(0, Math.floor(ms / 60_000))
+    if (mins < 60) return `${mins} m`
+    const hrs = Math.floor(mins / 60)
+    if (hrs < 48) return `${hrs} h`
+    return `${Math.floor(hrs / 24)} d`
+  }
+
+  /** How long a host has been silent. An unparseable stamp says so
+   * rather than guessing a number off it. */
+  function quietFor(lastSeen: string, now: number): string {
+    const t = Date.parse(lastSeen)
+    if (Number.isNaN(t)) return 'an unknown time'
+    return spanLabel(now - t)
+  }
+
+  /** The dot's own tooltip, and the accessible name of its button. */
+  function hostDotLabel(d: HostDot): string {
+    if (d.presence === 'intended') return `${d.label} · quiet on purpose`
+    if (d.presence === 'quiet' && d.host) return `${d.label} · quiet · ${quietFor(d.host.lastSeen, nowMs)}`
+    return d.label
   }
 
   // Shared by ribPath and the internet-edge limbs (#726: "bundle the
@@ -1059,6 +1177,178 @@
     if (!card) return
     return watchCardSize(card, () => cardTick++)
   })
+
+  /* ---------------- the host card (#1016) ---------------- */
+
+  // The same one interaction as the boundary card, on the same shared
+  // placement (lib/cardAnchor): the card floats beside its dot with a
+  // leader, the pointer gets the grace period to travel to it, and it
+  // re-places itself when the mark form makes it taller.
+  let hostCard = $state<{ zoneId: string; key: string } | null>(null)
+  let hostCardPinned = $state(false)
+  let hostCardEl = $state<HTMLDivElement>()
+  let hostCardPlace = $state<Placement | null>(null)
+  let hostCardTick = $state(0)
+  /** The reason form, behind `mark quiet on purpose` -- the mark reads
+   * first and acts once it is asked for, as the declare form does. */
+  let hostMarkOpen = $state(false)
+  let hostReason = $state('')
+  let hostBusy = $state(false)
+  const hostGrace = grace()
+
+  /** The open host, taken live rather than kept from when the card
+   * opened: the lane row re-lays itself out as zones arrive, and a
+   * leader pointing where the dot used to be is worse than no leader. */
+  const openHostDot = $derived.by(() => {
+    const open = hostCard
+    if (!open) return null
+    const zi = zones.findIndex((z) => z.id === open.zoneId)
+    if (zi < 0) return null
+    const row = laneHostRow(zones[zi])
+    const di = row.dots.findIndex((d) => d.key === open.key)
+    if (di < 0) return null
+    return { zi, di, zone: zones[zi], dot: row.dots[di] }
+  })
+
+  $effect(() => {
+    const open = openHostDot
+    const svg = mapSvgEl
+    const host = topoEl
+    const card = hostCardEl
+    void altitude
+    void stageTick
+    void hostCardTick
+
+    if (!open || !svg || !host || !card || reach) {
+      hostCardPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      hostCardPlace = null
+      return
+    }
+    // The dot's own point on the map, in the lane card's space plus the
+    // lane's own offset.
+    const anchor = map({ x: laneX(open.zi, zones.length) + hostDotX(open.di), y: 490 + HOST_DOT_Y })
+    // The dot's own lane card is the one thing the card must not sit on:
+    // it is the thing being pointed at.
+    const avoid = [mapRect(map, islandRect({ x: laneX(open.zi, zones.length), y: 484, kind: 'zone', idx: open.zi }))]
+    const softAvoid = zones
+      .map((_, i) => islandRect({ x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }))
+      .concat([islandRect({ ...WAIST, kind: 'any' }), islandRect({ x: 700, y: 104, kind: 'internet' })])
+      .map((r) => mapRect(map, r))
+    hostCardPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
+  })
+
+  $effect(() => {
+    const card = hostCardEl
+    if (!card) return
+    return watchCardSize(card, () => hostCardTick++)
+  })
+
+  function openHostCard(zoneId: string, key: string) {
+    hostGrace.hold()
+    // Already open on this dot: coming back to it is not a reason to
+    // throw away a half-typed reason.
+    if (hostCard?.key === key) return
+    // A pinned card is kept until it is let go, whichever card it is --
+    // the same rule the boundary card already follows.
+    if (hostCardPinned || cardPinned) return
+    hostsState.error = null
+    hostReason = ''
+    hostMarkOpen = false
+    hostCard = { zoneId, key }
+  }
+
+  /** The pointer has left the dot, or the card. It may be crossing
+   * between them, so nothing is taken down until the grace period has
+   * passed with the pointer arriving at neither. */
+  function releaseHostCard() {
+    const open = hostCard
+    if (!open || hostCardPinned) return
+    hostGrace.release(() => {
+      if (!hostCardPinned && hostCard?.key === open.key) closeHostCard()
+    })
+  }
+
+  function closeHostCard() {
+    hostGrace.hold()
+    hostCard = null
+    hostCardPinned = false
+    hostMarkOpen = false
+    hostReason = ''
+  }
+
+  function pinHostCard() {
+    hostCardPinned = !hostCardPinned
+  }
+
+  /** `mark quiet on purpose` needs a reason -- the reason *is* the mark
+   * (internal/hosts.Register.Mark), so the action opens the form rather
+   * than writing an empty statement. */
+  function askHostMark() {
+    hostsState.error = null
+    hostMarkOpen = true
+    hostCardPinned = true
+  }
+
+  async function submitHostMark() {
+    const open = hostCard
+    if (!open || !hostReason.trim()) return
+    hostBusy = true
+    const ok = await hostsState.mark(open.key, 'intended', hostReason.trim())
+    hostBusy = false
+    if (ok) {
+      hostMarkOpen = false
+      hostReason = ''
+    }
+  }
+
+  /** Dismiss takes the host off the map. It needs no reason, and the
+   * server gives it back by itself the moment the feed hears the host
+   * again -- so this is never a deletion, only a "not now". */
+  async function dismissHost() {
+    const open = hostCard
+    if (!open) return
+    hostBusy = true
+    const ok = await hostsState.mark(open.key, 'dismissed')
+    hostBusy = false
+    if (ok) closeHostCard()
+  }
+
+  /** A dot's own door into the reach. The card comes down on the way
+   * through: it is about a dot on the map behind, and leaving it open
+   * would bring it back when the reach is surfaced from. */
+  function descendFromHost(zoneId: string, label: string, ip: string) {
+    closeHostCard()
+    descend(zoneId, label, ip)
+  }
+
+  /** The stream, filtered to this host's own address -- the same door
+   * the node card already offers, from the card that named the host. */
+  function openStreamFromHost() {
+    const open = openHostDot
+    if (!open) return
+    appState.resetFilters()
+    appState.setFilter('srcQuery', open.dot.ip)
+    appState.view = 'live'
+    closeHostCard()
+  }
+
+  /** Takes the statement back, whichever kind it was. */
+  async function unmarkHost() {
+    const open = hostCard
+    if (!open) return
+    hostBusy = true
+    const ok = await hostsState.unmark(open.key)
+    hostBusy = false
+    if (ok) {
+      hostMarkOpen = false
+      hostReason = ''
+    }
+  }
 
   /** The pin is what opens the form (round 49): the card reads first,
    * and acts only once it is kept. */
@@ -2491,9 +2781,13 @@
     >
       <defs>
         <!-- The host row's clip. Every lane card shares one local
-             coordinate space, so one clip serves them all. -->
+             coordinate space, so one clip serves them all. Tall enough
+             for a dot's outermost ring (the open card's, r + 4 at y 56)
+             and wide enough for the `+N` after the tenth dot: the clip
+             is the backstop that keeps a crowded lane inside its own
+             card whatever the pitch works out to. -->
         <clipPath id="{uid}-hosts">
-          <rect x={-cardHalf + cardPad - 2} y="40" width={cardW - 2 * cardPad + 4} height="18" />
+          <rect x={-cardHalf + cardPad - 8} y="44" width={cardW - 2 * cardPad + 16} height="24" />
         </clipPath>
       </defs>
       <!-- The altitude's camera (#648, concept T): a framing of the same
@@ -2831,7 +3125,7 @@
       <!-- The lanes -->
       {#each zones as z, i (z.id)}
         {@const agg = zoneAggregate(z)}
-        {@const shown = hostsShown(z)}
+        {@const row = laneHostRow(z)}
         {@const ink = LANE_INKS[i % LANE_INKS.length]}
         <g
           transform="translate({laneX(i, zones.length)} 490)"
@@ -2852,7 +3146,10 @@
                rather than from round 30's four fixed lane positions. -->
           <g class="isl-card">
             <rect class="isl" x={-cardHalf} y="0" width={cardW} height="106" rx="12" />
-            <circle cx={-cardHalf + cardPad} cy="22" r="3.5" fill={ink} />
+            <!-- The lane's own ink. Named, because the card now holds a
+                 row of host dots too and "the card's circles" stopped
+                 being one thing. -->
+            <circle class="lane-ink" cx={-cardHalf + cardPad} cy="22" r="3.5" fill={ink} />
             <text x={-cardHalf + cardPad + 11} y="26" class="n-name">{z.name}</text>
             <!-- Anchored to the card's right inset, not a fixed x: a
                  narrower card moves it in rather than past the edge. The
@@ -2864,40 +3161,81 @@
             <text x={cardHalf - 14} y="26" class="n-cidr" text-anchor="end"
               ><tspan class="cidr-v">{z.cidr ?? ''}</tspan><tspan class="cidr-deg">from boundaries</tspan></text
             >
-            {#if shown.hosts.length > 0}
-              <!-- Each host is the reach's door (#626): clicking the name
-                   recentres on that node rather than opening the zone.
-                   The name is the whole target. Rounds 23 and 30 both
-                   draw this list as plain names (round-23:871,
-                   round-30's own `n-sub` line); #648's "node symbols
-                   bigger" was about the map's circles -- the zone dots
-                   and station rings -- and a per-name text dot was read
-                   into it that no round ever drew (Fable 5, #715 item
-                   10). How many names are drawn is the card's own width
-                   budget (#699); the clip is the backstop, so an
-                   unusually long name cannot reach the neighbouring lane
-                   whatever the estimate said. -->
-              <text x={-cardHalf + cardPad} y="52" class="n-hosts" clip-path="url(#{uid}-hosts)">
-                {#each shown.hosts as h, hi (h.ip)}
-                  {#if hi > 0}<tspan> · </tspan>{/if}
-                  <tspan
-                    class="host-link"
+            {#if row.dots.length > 0}
+              <!-- The host dot row (round 49, ported from
+                   round-49/index.html's node2): one dot per host, ten
+                   then `+N`, in the lane's own ink while the host is
+                   live, grey once it has gone quiet, white translucent
+                   where the operator said the quiet was on purpose.
+                   Every dot is the reach's door (#626) -- clicking it
+                   recentres on that host rather than opening the zone --
+                   and hovering it opens the host's card. -->
+              <g class="hostrow" clip-path="url(#{uid}-hosts)">
+                {#each row.dots as d, di (d.key)}
+                  {@const w = nodeWarnings(d.ip)}
+                  <g
+                    class="hot"
                     role="button"
                     tabindex="0"
+                    aria-label="{hostDotLabel(d)} — open its reach"
                     onclick={(e) => {
                       e.stopPropagation()
-                      descend(z.id, h.label, h.ip)
+                      descendFromHost(z.id, d.label, d.ip)
                     }}
                     onkeydown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
                         e.stopPropagation()
-                        descend(z.id, h.label, h.ip)
+                        descendFromHost(z.id, d.label, d.ip)
                       }
-                    }}>{h.label}</tspan>
+                    }}
+                    onpointerenter={() => openHostCard(z.id, d.key)}
+                    onpointerleave={releaseHostCard}
+                    onfocus={() => openHostCard(z.id, d.key)}
+                    onblur={releaseHostCard}
+                  >
+                    <title>{hostDotLabel(d)}</title>
+                    <circle
+                      class="h-dot"
+                      class:quiet={d.presence === 'quiet'}
+                      class:intended={d.presence === 'intended'}
+                      cx={hostDotX(di)}
+                      cy={HOST_DOT_Y}
+                      r={hostDotR}
+                      fill={d.presence === 'live' ? ink : undefined}
+                    />
+                    <!-- The quiet host's dashed footprint (DESIGN.md
+                         "Presence", city and 2D alike): the dot keeps
+                         its place on the map and says only that nothing
+                         has been heard from it. -->
+                    {#if d.presence === 'quiet'}
+                      <circle class="h-foot" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 2} />
+                    {/if}
+                    <!-- Flagged, and the flags pill is on: a halo that
+                         hugs the dot and throbs in place. It never
+                         pulses outward (owner, 2026-09-07) -- a
+                         travelling ring reads as something moving
+                         through the network, and nothing here moved. -->
+                    {#if flagsOn && w.flagCount > 0}
+                      <circle class="h-halo" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 1.5} />
+                    {/if}
+                    <!-- Watched, and the watch pill is on: the same
+                         purple this screen already uses for watchers. -->
+                    {#if watchOn && w.watchCount > 0}
+                      <circle class="h-watch" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 2.5} />
+                    {/if}
+                    {#if hostCard?.key === d.key}
+                      <circle class="h-open" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 4} />
+                    {/if}
+                  </g>
                 {/each}
-                {#if shown.more > 0}<tspan> · +{shown.more}</tspan>{/if}
-              </text>
+                {#if row.more > 0}
+                  <text class="c-label more" x={hostDotX(row.dots.length) - 4} y={HOST_DOT_Y + 4}>+{row.more}</text>
+                {/if}
+              </g>
+              <!-- The count line: how many hosts the lane has, and how
+                   many of them are not being heard from. -->
+              <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally">{hostTally(row)}</text>
             {/if}
             <!-- Round 49: the card says `name · subnet` and stops.
                  LOGGED / DARK / COVERED are gone from it -- the ribs
@@ -2907,9 +3245,13 @@
                  `no rule table pushed` stays, dim, because it is a
                  different fact from dark: dark means a table exists and
                  nothing on it logs this boundary; this means there is
-                 no table at all (#865's wording). -->
+                 no table at all (#865's wording). It sits under the
+                 count line rather than where the old name list left it:
+                 round 49 gives y 82 to the tally and is silent about
+                 this line, and the two facts are both the card's own
+                 sub-text, so they stack. -->
             {#if !policyState.anyPushed}
-              <text x={-cardHalf + cardPad} y="74" class="n-sub no-table">no rule table pushed</text>
+              <text x={-cardHalf + cardPad} y={row.dots.length > 0 ? 96 : 74} class="n-sub no-table">no rule table pushed</text>
             {/if}
             <!-- Round 30's zone card carries name, subnet, hosts and the
                  coverage badge, and stops there (the-whole.html:1002-1008).
@@ -3437,7 +3779,120 @@
     </div>
   {/if}
 
-  {#if boundaryCard && !reach}
+  {#if openHostDot && !reach}
+    {@const d = openHostDot.dot}
+    <!-- The host card (round 49's `tvQuiet`, and DESIGN.md "Cards"):
+         presence, last and first seen, events, and the two marks. It is
+         the same card furniture as the boundary's, on the same shared
+         placement, because a host and a boundary are read the same way
+         -- hover to open, pin to keep. -->
+    {#if hostCardPlace}
+      <svg class="leader" aria-hidden="true">
+        <path
+          d="M{hostCardPlace.from.x} {hostCardPlace.from.y}L{hostCardPlace.to.x} {hostCardPlace.to.y}"
+          stroke="var(--hair-2)"
+          stroke-width="1"
+          fill="none"
+        />
+        <circle cx={hostCardPlace.from.x} cy={hostCardPlace.from.y} r="3" fill="var(--accent)" />
+      </svg>
+    {/if}
+    <div
+      class="card"
+      class:pinned={hostCardPinned}
+      class:placed={hostCardPlace !== null}
+      style={hostCardPlace ? `left:${R2(hostCardPlace.left)}px;top:${R2(hostCardPlace.top)}px` : undefined}
+      bind:this={hostCardEl}
+      role="dialog"
+      tabindex="-1"
+      aria-label="The host {d.label}"
+      onpointerenter={hostGrace.hold}
+      onpointerleave={releaseHostCard}
+    >
+      <div class="t">
+        <span class="n">{d.label}<small>{d.ip}</small></span>
+        <button
+          class="pin"
+          class:on={hostCardPinned}
+          aria-pressed={hostCardPinned}
+          title={hostCardPinned ? 'pinned — click to let it go' : 'pin this card'}
+          onclick={pinHostCard}
+        >
+          {hostCardPinned ? '✕' : '⊙'}
+        </button>
+      </div>
+
+      <!-- What the host is. Each line claims only "not heard": neither
+           quiet nor quiet-on-purpose is a statement about the network. -->
+      {#if d.presence === 'intended'}
+        <div class="s qt"><i class="sw qt"></i>quiet on purpose</div>
+        {#if d.host?.mark?.reason}
+          <div class="quote">{d.host.mark.reason}</div>
+          <div class="s">{d.host.mark.by} · {new Date(d.host.mark.at).toLocaleString()}</div>
+        {/if}
+      {:else if d.presence === 'quiet'}
+        <div class="s dk">
+          <i class="sw dk"></i>quiet · not heard for <b>{d.host ? quietFor(d.host.lastSeen, nowMs) : 'an unknown time'}</b> (window
+          {spanLabel(quietAfterMs)})
+        </div>
+      {:else}
+        <!-- A class, never an inline style: a `style` attribute is
+             refused under this app's CSP in Firefox (#659). -->
+        <div class="s"><i class="sw live"></i>live · heard from within the last {spanLabel(quietAfterMs)}</div>
+      {/if}
+
+      {#if d.host}
+        <div class="s">
+          last seen {formatRelative(d.host.lastSeen, nowMs)} · first seen {new Date(d.host.firstSeen).toLocaleDateString()} ·
+          {d.host.events.toLocaleString()} events · {openHostDot.zone.name}
+        </div>
+      {:else}
+        <div class="s">{openHostDot.zone.name} · seen in the live feed; the host register has not answered for it yet</div>
+      {/if}
+      {#if d.presence !== 'live'}
+        <div class="s">comes back by itself when the feed hears it again</div>
+      {/if}
+
+      {#if hostMarkOpen && isAdmin}
+        <!-- The reason is the mark: internal/hosts keeps it as the thing
+             that stays said, so there is nothing to write without it. -->
+        <div class="form">
+          <label for="{uid}-host-why">QUIET ON PURPOSE — WHY?</label>
+          <input id="{uid}-host-why" bind:value={hostReason} placeholder="why this machine is expected to be silent…" />
+          <div class="btns">
+            <button class="go" disabled={hostBusy || !hostReason.trim()} onclick={submitHostMark}>Mark</button>
+            <button class="no" onclick={() => (hostMarkOpen = false)}>cancel</button>
+            <span class="who">as {authState.username}</span>
+          </div>
+        </div>
+      {/if}
+
+      {#if hostsState.error}
+        <p class="d-error">{hostsState.error}</p>
+      {/if}
+
+      <div class="acts">
+        {#if isAdmin && d.host}
+          {#if d.host.mark}
+            <button class="hot" disabled={hostBusy} onclick={unmarkHost}>unmark ▸</button>
+          {:else if !hostMarkOpen}
+            <button disabled={hostBusy} onclick={askHostMark}>mark quiet on purpose ▸</button>
+          {/if}
+          <button class="hot" disabled={hostBusy} onclick={dismissHost}>dismiss ▸</button>
+        {/if}
+        <button class="dim" onclick={openStreamFromHost}>stream ▸</button>
+        <button
+          class="dim"
+          onclick={() => {
+            const open = openHostDot
+            if (open) descendFromHost(open.zone.id, open.dot.label, open.dot.ip)
+          }}>reach ▸</button
+        >
+      </div>
+    </div>
+  {/if}
+
+  {#if boundaryCard && !reach && !hostCard}
     <!-- The boundary card (round 49, ported from round-49/index.html's
          `.card`: title row with the pin, `.s` fact lines each with the
          material's own swatch, an `.acts` row, and the form the pin
@@ -3762,6 +4217,94 @@
   .n-hosts {
     fill: var(--fg-muted);
     font-size: 10px;
+  }
+
+  /* ---- the host dot row (#1016, round-49/index.html's node2) ---- */
+
+  .hot {
+    cursor: pointer;
+  }
+
+  .hot:hover .h-dot,
+  .hot:focus-visible .h-dot {
+    filter: brightness(1.3);
+  }
+
+  .hot:focus-visible {
+    outline: none;
+  }
+
+  /* Live wears the lane's own ink, set as a `fill` attribute the way the
+     card's accent dot already is. Quiet and quiet-on-purpose are states
+     the row itself decides, so they are classes: grey for "not heard",
+     white translucent for "the operator said so". Neither is a claim
+     about the network beyond that. */
+  .h-dot.quiet {
+    fill: var(--fg-dim);
+    fill-opacity: 0.75;
+  }
+
+  .h-dot.intended {
+    fill: var(--fg);
+    fill-opacity: 0.55;
+  }
+
+  /* The quiet host's dashed footprint: it keeps its place on the map. */
+  .h-foot {
+    fill: none;
+    stroke: var(--fg-dim);
+    stroke-width: 1;
+    stroke-opacity: 0.6;
+    stroke-dasharray: 2 2.5;
+  }
+
+  /* Flagged: a halo that hugs the dot. It throbs in place -- opacity and
+     stroke weight only, never the radius -- because a ring that travels
+     outward reads as something moving through the network, and nothing
+     here moved (owner, 2026-09-07). */
+  .h-halo {
+    fill: none;
+    stroke: var(--alarm);
+    animation: h-halo 1.6s ease-in-out infinite;
+  }
+
+  @keyframes h-halo {
+    0%,
+    100% {
+      stroke-opacity: 0.45;
+      stroke-width: 1.2;
+    }
+    50% {
+      stroke-opacity: 1;
+      stroke-width: 2;
+    }
+  }
+
+  /* Watched: this screen's own watcher ink, the same one the aggregate
+     bar and the dials use. */
+  .h-watch {
+    fill: none;
+    stroke: var(--marked);
+    stroke-width: 1.1;
+    stroke-opacity: 0.9;
+  }
+
+  /* Whose card is open. Dashed and in the accent, so it reads as the
+     pointer's own mark rather than as anything about the host. */
+  .h-open {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
+  }
+
+  .hosttally {
+    font-size: 10px;
+  }
+
+  /* The live swatch on the host card, beside `.sw.dk` and `.sw.qt`. */
+  .card .sw.live {
+    background: var(--accept);
   }
 
   .n-cidr {
@@ -4461,6 +5004,14 @@
   @media (prefers-reduced-motion: reduce) {
     .mote {
       display: none;
+    }
+
+    /* Instant under reduced motion (DESIGN.md "Honesty and motion"): the
+       halo still marks the flagged host, it just stops throbbing. */
+    .h-halo {
+      animation: none;
+      stroke-opacity: 1;
+      stroke-width: 1.6;
     }
   }
 
