@@ -127,7 +127,16 @@ describe('the composer prints the same line in the city as in 2D (#868)', () => 
     flushSync()
     topologyNavState.pendingDescend = { zoneId: 'bridge1', host: HOST_IP, ip: HOST_IP }
     flushSync()
-    const door = topo.container.querySelector('.strand-door') as HTMLElement
+    // Round 49 took the labels off the strands (#1016), and with them
+    // the pill that used to be the composer's door. The door is now
+    // `draft the rule ▸` on the refused line's own card, which opens by
+    // pointing at the strand -- the composer behind it, and the line it
+    // prints, are unchanged, which is what this test is about.
+    const refused = [...topo.container.querySelectorAll('.membrane-layer .strand-g')].find((g) => g.querySelector('.strand-x') !== null)
+    expect(refused).not.toBeUndefined()
+    await fireEvent.pointerEnter(refused!)
+    flushSync()
+    const door = topo.container.querySelector('[data-draft-rule]') as HTMLElement
     expect(door).not.toBeNull()
     await fireEvent.click(door)
     flushSync()
