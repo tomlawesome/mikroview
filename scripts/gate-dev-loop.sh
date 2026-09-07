@@ -247,6 +247,12 @@ while :; do
     [ -n "$fixed" ] && echo "FIXED $(stamp) $sha run $n/$MAX_REPEATS vs $prev_sha: $fixed"
     [ -z "$new" ] && [ -z "$fixed" ] && echo "SAME $(stamp) $sha run $n/$MAX_REPEATS vs $prev_sha: $nfail failing of $started"
   fi
-  [ "$nfail" -eq 0 ] && echo "CLEAN $(stamp) $sha run $n/$MAX_REPEATS: $started scenarios, none consistently failing"
+  # CLEAN keeps the meaning it has always had: *this run* had nothing
+  # failing. It deliberately does not mean "nothing fails consistently" --
+  # a scenario that fails three runs in twenty is not a green gate, and a
+  # CLEAN line printed over the top of a FLAKE line would say it was.
+  # Consistency is what NEWFAIL/FIXED/SAME compare across commits; CLEAN
+  # is about the run in hand.
+  [ "$nfail_run" -eq 0 ] && echo "CLEAN $(stamp) $sha run $n/$MAX_REPEATS: $started scenarios, none failing"
   echo "END $(stamp) $sha run $n/$MAX_REPEATS: $nfail_run failing of $started"
 done
