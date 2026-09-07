@@ -3,9 +3,10 @@
 // The mockup's estate as CityInput, for the city tests: two routers,
 // six zones, the WAN and two tunnels, roads of every verdict.
 import type { CityInput } from './input'
+import { bufferHost } from './presence'
 
 const hosts = (n: number, prefix: string, base: string) =>
-  Array.from({ length: n }, (_, i) => ({ label: prefix + '-' + (i + 1), ip: base + (10 + i) }))
+  Array.from({ length: n }, (_, i) => bufferHost(prefix + '-' + (i + 1), base + (10 + i)))
 
 export function mockupEstate(): CityInput {
   return {

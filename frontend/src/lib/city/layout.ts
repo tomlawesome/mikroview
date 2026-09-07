@@ -111,6 +111,7 @@ function placeBuildings(z: CityZone, d: { id: string; u: number; v: number; r: n
       districtId: d.id,
       routerId,
       index: i,
+      host: h,
     }
   })
 }

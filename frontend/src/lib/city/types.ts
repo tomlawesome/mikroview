@@ -6,6 +6,7 @@
 // views share (docs/design/screens/city/DESIGN.md): the zones stop
 // draws it flat (#869), the city stops draw it in isometric.
 import type { Coverage } from '../coverageRule'
+import type { CityHost } from './presence'
 import type { Pt } from './project'
 
 /** What a building is, for the device library's stamp (#864). Until
@@ -34,6 +35,13 @@ export interface Building {
   routerId: string
   /** Sequence within the district, for the keyboard walk. */
   index: number
+  /** What the host register and the event buffer between them know
+   * about this building (round 49, #1016): its presence, when it was
+   * last and first heard, and any mark on it. Absent on a router, a
+   * bridge post or anything else that is not a host -- presence is a
+   * statement about a machine the syslog feed hears, and the router is
+   * the thing doing the hearing. */
+  host?: CityHost
 }
 
 /** One direction across a boundary, for the gate's card: a wall has no
