@@ -150,3 +150,45 @@ describe('Deck scene mounting (#690)', () => {
     expect(document.querySelector('[data-card="metrics"]')?.querySelector('.card-body')?.childElementCount).toBeGreaterThan(0)
   })
 })
+
+// #1033: the map is loaded on demand so its weight leaves the entry
+// bundle. The card must still never read as blank -- it opens on the
+// chrome's ghost rows and swaps the map in when the chunk lands.
+describe('the map loads on demand (#1033)', () => {
+  beforeEach(() => {
+    FakeIntersectionObserver.instances = []
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    authState.username = 'kai'
+    appState.view = 'topography'
+    flagsState.list = []
+    watchlistState.entries = []
+    watchlistState.coverage = {}
+    suggestState.candidates = []
+    matchesState.reset()
+    auditState.list = []
+    auditState.hasMore = false
+  })
+
+  it('shows the ghost rows while the map chunk is in flight, then draws the map', async () => {
+    render(Deck)
+    flushSync()
+
+    const body = () => document.querySelector('[data-card="topography"]')?.querySelector('.card-body')
+
+    // Mounted, not blank: the placeholder stands in for the map rather
+    // than the card body being empty until the import resolves.
+    expect(body()).not.toBeNull()
+    expect(body()?.querySelector('.ghost-rows')).not.toBeNull()
+
+    await vi.waitFor(
+      () => {
+        flushSync()
+        expect(body()?.querySelector('.ghost-rows')).toBeNull()
+      },
+      { timeout: 20_000 },
+    )
+
+    expect(body()?.childElementCount).toBeGreaterThan(0)
+  }, 30_000)
+})
