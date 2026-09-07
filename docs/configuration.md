@@ -910,6 +910,47 @@ history:
   maxBytes: 1073741824   # 1 GiB
 ```
 
+#### CFG-0090
+
+`baseline.days` is zero, negative, or greater than `baseline.of`. A line
+cannot be seen on more days than the window holds, and a threshold of
+zero or less would make every line established the moment it appeared.
+See [Baseline line register](#baseline-line-register-issue-1016-optional).
+Clamped to the default of 3, or to `baseline.of` if that is smaller.
+
+```yaml
+baseline:
+  days: 3
+  of: 14
+```
+
+#### CFG-0091
+
+`baseline.of` is zero, negative, or greater than 32. 32 is the width of
+the per-line recurrence bitmap, so a longer window is refused rather
+than silently truncated. See [Baseline line
+register](#baseline-line-register-issue-1016-optional). Clamped to the
+default of 14.
+
+```yaml
+baseline:
+  days: 3
+  of: 14  # at most 32: the per-line recurrence bitmap is 32 bits wide
+```
+
+#### CFG-0092
+
+`baseline.hostQuietAfter` is zero or negative, which would draw every
+host quiet the instant it was heard from, greying out a working
+network. See [Baseline line
+register](#baseline-line-register-issue-1016-optional). Clamped to the
+default of 24h.
+
+```yaml
+baseline:
+  hostQuietAfter: 24h
+```
+
 ## Logging
 
 Mikroview's own server output (not event data -- see `store.retention`
@@ -1369,6 +1410,69 @@ with a pipe, e.g. `bridge-lan|10.0.10.5` -- the same key style as a
 coverage declaration. `GET` is open to any signed-in user; the two writes
 are user tier and audit-logged, since saying a silence is deliberate
 carries the same weight as any other authored explanation.
+
+## Baseline line register (issue #1016, optional)
+
+The map draws every **line** the router's log has shown -- a source IP
+→ destination IP · port · protocol combination. On its own that's
+every conversation drawn the same way, so one genuinely unusual line is
+lost among the routes and ports your network talks on every day.
+
+The **baseline line register** tells the two apart by recurrence. A line
+seen on `days` distinct days out of the last `of` is **established**: the
+map draws it thin, dim and without flow. A line off that pattern is
+**off-baseline**: full width, bright, with flow dashes -- the thing worth
+your eye. Nothing is hidden either way; established traffic just recedes
+so off-baseline traffic stands out. You can also mark a line **expected**
+from its card on the map, with a reason: from then on it counts as
+established regardless of how often it recurs, the same kind of
+permanent statement a coverage-gap declaration or a host's "intended"
+mark makes.
+
+mikroview learns all of this from the feed alone -- it never probes a
+line to find out whether it still exists; see the "observes, never
+scans" rule in [AGENTS.md](../AGENTS.md).
+
+```yaml
+baseline:
+  # Where the register is persisted, as a small JSON file. Unlike every
+  # other storePath in this file, leaving this unset is genuinely lossy,
+  # not just less convenient: recurrence is counted in *days*, not
+  # events, so a register that rebuilds from the feed after a restart
+  # sees every line as first seen today, and the map lights up
+  # everything as off-baseline for the first `days` days all over again.
+  # It still works, but it is the wrong picture -- set a path. If you set
+  # this in the container, mount a volume for its parent directory -- see
+  # deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/baseline.json"
+  # How many distinct days a line must be seen on before it counts as
+  # established.
+  days: 3
+  # The window `days` is counted within, in days. Capped at 32, the width
+  # of the per-line recurrence bitmap.
+  of: 14
+  # How long a host may go silent before the map draws it as quiet.
+  # Owner-ratified at 24h (2026-09-07): a host silent for ten minutes
+  # means nothing -- a laptop with its lid shut over lunch has not gone
+  # away.
+  hostQuietAfter: 24h
+```
+
+The register is bounded at **50,000 lines**. A line's key is four
+attacker-influenced fields (source, destination, port, protocol) rather
+than the host register's address alone, so the ceiling matters more, not
+less. At the cap, the line with the oldest last-seen time *that carries
+no expected mark* is evicted -- your own statement that a line is
+expected is the one thing here that cannot be rebuilt from the feed, so
+it is the last thing to go.
+
+Off-baseline lines are read via `GET /api/baseline/off` and marked via
+`PUT`/`DELETE /api/baseline/{key}/expected` (see [API
+reference](#api-reference)). `key` is the four-part line itself, the same
+opaque-string style as a host or coverage key. `GET` is open to any
+signed-in user, same as `GET /api/hosts`; the two writes are user tier
+and audit-logged, since saying a line is expected carries the same
+weight as any other authored explanation.
 
 ## Audit log: admin action accountability (optional)
 
@@ -3329,6 +3433,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_COVERAGE_STORE_PATH` | `coverage.storePath` (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)) |
 | `MIKROVIEW_HOSTS_STORE_PATH` | `hosts.storePath` (see [Host presence register](#host-presence-register-issue-1016-optional)) |
+| `MIKROVIEW_BASELINE_STORE_PATH` | `baseline.storePath` (see [Baseline line register](#baseline-line-register-issue-1016-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
@@ -3646,6 +3751,9 @@ exits, rather than starting the server. See
 | `GET /api/hosts` | open to any signed-in user (see [Host presence register](#host-presence-register-issue-1016-optional)): every host the feed has shown, each with its interface, address, last-seen hostname, first/last seen times, event count and any mark on it. Not reachable with a read-only API token: it is a partial inventory of your private address space |
 | `PUT /api/hosts/{key}/mark` | user tier: say what a quiet host is, taking `{"kind": "intended"\|"dismissed", "reason": "..."}` in the JSON body. `reason` is required for `intended` and optional for `dismissed`; `by`/`at` are set server-side. 400 on an unknown kind or an empty/oversized/control-character key or reason, 404 if no event has ever registered that key. Audit-logged as `hosts.mark` |
 | `DELETE /api/hosts/{key}/mark` | user tier: take the mark off the host at `key`, putting it back to whatever its own last-seen time says it is. 404 if there is no mark there. Audit-logged as `hosts.unmark` |
+| `GET /api/baseline/off` | open to any signed-in user (see [Baseline line register](#baseline-line-register-issue-1016-optional)): today's off-baseline lines, the establishment threshold that judged them, and the configured host-quiet window. Not reachable with a read-only API token: it is a partial inventory of your private address space, with destinations and ports attached |
+| `PUT /api/baseline/{key}/expected` | user tier: say the line at `key` is meant to be there, taking `{"reason": "..."}` in the JSON body. `reason` is required; empty is refused. 400 on an invalid key, 404 if no event has ever registered it. Audit-logged as `baseline.expected` |
+| `DELETE /api/baseline/{key}/expected` | user tier: take the mark off the line at `key`, putting it back to whatever its own recurrence says it is. 404 if there is no mark there. Audit-logged as `baseline.unexpected` |
 | `GET /api/naming/provenance` | user tier: where the name currently shown for one token comes from, given `type` (`host`/`rule`/`port`), `key` (the raw value) and, for a host, `device`. Answers `source` (`none`, `entity`, `config`, or one of `router-dns-static`/`router-dhcp-lease`/`router-wireguard-peer`), the `name` in use, your own saved `label` if any, and `editable` -- false when a router-pushed name would shadow anything saved here, which is what the live view's inline editor checks before offering a field. Widened from admin to user tier by #653, alongside `GET /api/entities` it serves |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/matches` | a windowed query over the persisted match log, in one of two modes -- by device, with `mac` and/or `ip` (at least one required), or across every watchlist entry with `entries=all`, which returns the most recent matches anywhere in the log, newest first. `entries=all` may not be combined with `mac`/`ip`. Both modes take `since`/`until` (RFC 3339) and `limit`, and both are bounded: `limit` defaults to 100 and is capped at 5000 whatever the caller asks for. Open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |

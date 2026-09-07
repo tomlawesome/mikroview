@@ -289,6 +289,13 @@ var authzMatrix = []routeExpectation{
 	{http.MethodDelete, "/api/hosts/{key}/mark", accessUser,
 		"withdraws that statement, putting the host back to whatever its own last-seen time says it is -- same tier as making it, exactly as DELETE /api/coverage/declarations/{key} sits at its sibling's tier"},
 
+	{http.MethodGet, "/api/baseline/off", accessViewer,
+		"today's off-baseline lines (#1016 round 49): the source/destination/port/protocol lines seen today that are not on the established pattern, with the threshold that judged them. Same viewer-tier read as GET /api/hosts directly above and for the same reason -- a non-admin looking at the map is exactly who needs to see what is off pattern today. Deliberately not on readOnlyRoutes for the same reason either, and more sharply: this is the operator's private address space with destinations and ports attached, which no bearer token has ever been able to read. Established lines are unreachable through this endpoint by design, not by permission -- see handleBaselineOff"},
+	{http.MethodPut, "/api/baseline/{key}/expected", accessUser,
+		"saying a line is expected is an on-record statement that traffic belongs, and it is the only way a line leaves the bright state early -- the same weight as marking a quiet host intended, so the same user tier and the same audit line. It also exempts the line from eviction, which is a second reason it is not a viewer's to make"},
+	{http.MethodDelete, "/api/baseline/{key}/expected", accessUser,
+		"withdraws that statement, putting the line back to whatever its own recurrence says it is -- same tier as making it, exactly as DELETE /api/hosts/{key}/mark sits at its sibling's tier"},
+
 	{http.MethodGet, "/api/suggestions", accessUser,
 		"a suggestion's Justification names a specific rule/device -- same tier as the expectation definitions it can become. Widened from admin to user tier by #653, same as the definitions surface"},
 	{http.MethodPost, "/api/suggestions/{id}/accept", accessUser,

@@ -22,15 +22,23 @@ import {
 } from './api'
 
 /**
- * How long a host may be silent before the map calls it quiet.
+ * How long a host may be silent before the map calls it quiet, when the
+ * server has not said otherwise.
  *
- * One constant, in one file, because the drawing round is expected to
- * argue about the number: ten minutes is long enough that an idle
- * laptop is not called quiet mid-coffee, and short enough that a
- * machine switched off before lunch has greyed out by the time anybody
- * looks. Whatever it becomes, it becomes here.
+ * 24 hours, owner-ratified 2026-09-07. This was ten minutes, chosen
+ * before anything drew it, on the reasoning that a machine switched off
+ * before lunch should have greyed out by the time anybody looked. The
+ * owner's correction was that ten minutes is not evidence of anything --
+ * a laptop with its lid shut over lunch has not gone away -- so presence
+ * is only worth drawing at the scale of a working day.
+ *
+ * It is a default, not the rule: the figure is configurable
+ * (`baseline.hostQuietAfter`) and the configured one arrives with the
+ * off-baseline document, on `baselineState.hostQuietAfterMs`. presenceOf
+ * takes the window as an argument precisely so a caller can pass that
+ * instead of this.
  */
-export const HOST_QUIET_AFTER_MS = 10 * 60_000
+export const HOST_QUIET_AFTER_MS = 24 * 60 * 60_000
 
 /** What the map should render a host as. */
 export type HostPresence = 'live' | 'quiet' | 'intended' | 'dismissed'
