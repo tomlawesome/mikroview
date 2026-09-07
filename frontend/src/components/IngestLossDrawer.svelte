@@ -4,16 +4,24 @@
   // #1015: the ingest-loss banner family (#995's dropped,
   // rejectedConfigured, rejectedUndeclared, oversized, wsDropped),
   // stacked here instead of collapsing to one line inside
-  // ConnectionBanner.svelte. Overlays the top of the content column
-  // (App.svelte's `.content` is the positioning context, z-index 35 --
-  // above the deck (20) and FilterBar (30/31), below menus and popovers
-  // (40) and modals (50)) rather than pushing it, superseding
-  // App.svelte:227's "pushes content rather than overlaying it" note
-  // for this family only -- the connecting/disconnected line in
-  // ConnectionBanner.svelte still pushes. Why: the deck's cards are
-  // full-viewport, and every row here can appear or clear on its own
-  // (section B's freshness signal), which would otherwise reflow the
-  // card underneath on every 5s poll.
+  // ConnectionBanner.svelte. Sits at the top of the content column in
+  // flow, exactly where the banners it replaces sat, and pushes what is
+  // below it -- App.svelte's "pushes content rather than overlaying it"
+  // rule holds for this family too, and the connecting/disconnected
+  // line in ConnectionBanner.svelte above it is unchanged. Folding is
+  // the whole difference from the old banners: open it takes the room a
+  // banner strip always took, closed it is a 3px line.
+  //
+  // An earlier cut of this overlaid the column instead
+  // (position:absolute, z-index 35), to avoid reflowing the deck's
+  // full-viewport cards when a row clears on its own. That covered the
+  // scene bar: with a single row showing, the flags count, the watchers
+  // count and the account menu all sat underneath it and could not be
+  // clicked (measured on a live instance, #1015). Owner's correction,
+  // 2026-09-07 -- the drawer is where the banners were, always; folding
+  // is what it adds. Only `position: relative` and a z-index above the
+  // deck remain, so the closed handle's hit area, which deliberately
+  // hangs below the line, stays clickable over the scene bar's top edge.
   //
   // Row selection (which rows show, in what order) lives in
   // lib/ingestLossBanners.ts (selectIngestLossRows) so it stays unit
@@ -143,11 +151,11 @@
 
 <style>
   .ingest-loss-drawer {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 35;
+    /* In flow -- see this file's header comment. Relative and above the
+       deck only so the closed handle's overhanging hit area stays
+       clickable, not to lift the drawer off the column. */
+    position: relative;
+    z-index: 25;
   }
 
   /* --- rows: the #995 banner verbatim, ported from ConnectionBanner ---
