@@ -169,12 +169,18 @@ describe('City', () => {
   })
 
   it('the policy lens gives each gate a bigger pill naming its far end; the traffic lens leaves the wall quiet (#991)', () => {
+    // Counted through data-gate, the hook that survives a label change,
+    // not through the label's own class (#1022).
     const quiet = render(City, { props: { stop: 'district', ground, lens: 'traffic' } })
-    expect(quiet.container.querySelectorAll('.gate-lab').length).toBe(0)
+    expect(quiet.container.querySelectorAll('[data-gate]').length).toBe(0)
     quiet.unmount()
     const lit = render(City, { props: { stop: 'district', ground, lens: 'policy' } })
-    const labels = [...lit.container.querySelectorAll('.gate-lab')].map((e) => e.textContent)
-    expect(labels.length).toBeGreaterThan(0)
+    const gates = [...lit.container.querySelectorAll('[data-gate]')]
+    expect(gates.length).toBeGreaterThan(0)
+    // The hook and the drawn label say the same thing, so a scenario
+    // counting gates and one reading their text cannot disagree.
+    const labels = gates.map((e) => e.textContent)
+    expect(gates.map((e) => e.getAttribute('data-gate'))).toEqual(labels)
     // The lit lan->srv gate names its far end, not a rule number.
     expect(labels).toContain('vlan-srv')
   })
