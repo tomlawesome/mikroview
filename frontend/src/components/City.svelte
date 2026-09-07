@@ -73,6 +73,16 @@
   import { HOST_QUIET_AFTER_MS, hostsState, presenceOf } from '../lib/hosts.svelte'
   import { baselineState } from '../lib/baseline.svelte'
   import {
+    EXPECTED_LABEL,
+    EXPECTED_ONE_LABEL,
+    expectedAllLabel,
+    expectedPlaceholder,
+    expectedTargets,
+    expectedWho,
+    offersExpectedAll,
+    type ExpectedScope,
+  } from '../lib/city/expected'
+  import {
     EMPTY_ROAD_BASELINE,
     addressName,
     endName,
@@ -1784,7 +1794,11 @@
   // and re-places when the reason form makes it taller (#1028).
   let hoverRoad = $state<string | null>(null)
   let pinnedRoad = $state<string | null>(null)
-  let expectedKey = $state<string | null>(null)
+  /** Which lines the open reason form will speak for: one named line
+   * (the default), or every line this road carries off the baseline.
+   * Null means no form is open. Shared with the 2D rib card through
+   * lib/city/expected, so the two surfaces cannot drift apart. */
+  let expectedScope = $state<ExpectedScope | null>(null)
   let expectedReason = $state('')
   let expectedBusy = $state(false)
   const roadGrace = grace()
@@ -1838,36 +1852,59 @@
   function toggleRoadPin(id: string) {
     if (pinnedRoad === id) {
       pinnedRoad = null
-      expectedKey = null
+      expectedScope = null
     } else {
       pinnedRoad = id
       hoverRoad = id
     }
   }
 
-  /** Open the reason form for one line; the reason is required. */
-  function startExpected(line: OffBaselineLine, roadId: string) {
+  /** The lines the open form is about to speak for, and how many. */
+  const expectedLines = $derived(expectedScope && roadCard ? expectedTargets(expectedScope, roadCard.entry.lines) : [])
+
+  /** Open the reason form for one line -- the default action, one per
+   * listed line. The reason is required either way. */
+  function startExpectedOne(line: OffBaselineLine, roadId: string) {
+    openExpectedForm({ kind: 'one', key: line.key }, roadId)
+  }
+
+  /** Open the reason form for every line this road carries off the
+   * baseline. Only ever reached from the control that said how many. */
+  function startExpectedAll(roadId: string) {
+    openExpectedForm({ kind: 'all' }, roadId)
+  }
+
+  function openExpectedForm(scope: ExpectedScope, roadId: string) {
     pinnedRoad = roadId
     hoverRoad = roadId
-    expectedKey = line.key
+    expectedScope = scope
     expectedReason = ''
     baselineState.error = null
   }
 
   async function submitExpected() {
-    const key = expectedKey
+    const targets = expectedLines
     const reason = expectedReason.trim()
-    if (!key || !reason || expectedBusy) return
+    if (targets.length === 0 || !reason || expectedBusy) return
     expectedBusy = true
     try {
+      // One write per line, the same reason against each: the endpoint's
+      // key is a single line, and a bulk mark is that write repeated
+      // rather than a second kind of record.
+      //
       // baselineState.expected re-reads the register on success, so the
       // road goes dim by itself the moment the last of its lines is
-      // spoken for -- nothing here has to model that.
-      const ok = await baselineState.expected(key, reason)
-      if (ok) {
-        expectedKey = null
-        expectedReason = ''
+      // spoken for -- nothing here has to model that. Marking one of
+      // several leaves the rest in the register, so the road stays
+      // bright.
+      for (const l of targets) {
+        // Stops at the first refusal rather than pressing on: the error
+        // is shown, and a half-written statement the operator cannot see
+        // the shape of is worse than none.
+        if (!(await baselineState.expected(l.key, reason))) return
       }
+      expectedScope = null
+      expectedReason = ''
     } finally {
       expectedBusy = false
     }
@@ -2449,6 +2486,29 @@
     </div>
   {/if}
 
+  <!-- The reason form, written once and rendered wherever it was opened:
+       under the line whose own `expected ▸` opened it, or under the bulk
+       control. Same words, same order, same wording as the 2D rib card,
+       which renders the identical snippet from lib/city/expected. The
+       reason is the statement -- the server refuses an empty one, and a
+       line quietly leaving the sieve with nothing said for it is the
+       failure this whole card exists to avoid. -->
+  {#snippet expectedForm()}
+    {@const scope = expectedScope}
+    {#if scope}
+      <div class="form">
+        <label for="city-expected-reason">{EXPECTED_LABEL}</label>
+        <input id="city-expected-reason" bind:value={expectedReason} placeholder={expectedPlaceholder(scope, expectedLines.length)} />
+        <div class="btns">
+          <button type="button" class="go" disabled={!expectedReason.trim() || expectedBusy} onclick={submitExpected}>Expected</button>
+          <button type="button" class="no" onclick={() => (expectedScope = null)}>cancel</button>
+          <span class="who">{expectedWho(authState.username, scope, expectedLines.length)}</span>
+        </div>
+        {#if baselineState.error}<div class="s alarm">{baselineState.error}</div>{/if}
+      </div>
+    {/if}
+  {/snippet}
+
   {#if roadCard}
     {@const rc = roadCard}
     {@const cfg = baselineState.off.config}
@@ -2511,29 +2571,41 @@
               <td class="n">today {formatHM(new Date(l.firstSeenToday).toISOString())}</td>
             </tr>
             <tr class="why"><td colspan="4">{verdictWords(l.outcome)}</td></tr>
-            {#if expectedKey === l.key}
+            {#if expectedScope?.kind === 'one' && expectedScope.key === l.key}
               <tr class="formrow">
-                <td colspan="4">
-                  <div class="form">
-                    <label for="city-expected-reason">EXPECTED — WHY?</label>
-                    <input id="city-expected-reason" bind:value={expectedReason} placeholder="why this line is meant to be here…" />
-                    <div class="btns">
-                      <button type="button" class="go" disabled={!expectedReason.trim() || expectedBusy} onclick={submitExpected}>Expected</button>
-                      <button type="button" class="no" onclick={() => (expectedKey = null)}>cancel</button>
-                      <span class="who">as {authState.username || 'you'} · this line only</span>
-                    </div>
-                    {#if baselineState.error}<div class="s alarm">{baselineState.error}</div>{/if}
-                  </div>
-                </td>
+                <td colspan="4">{@render expectedForm()}</td>
               </tr>
             {:else if authState.isAdmin}
+              <!-- Per-line is the default: this button marks the line it
+                   sits under and nothing else, so the ones above and
+                   below it stay bright and the road stays bright until
+                   none of them is left (#1016, owner 2026-09-07). -->
               <tr class="actrow">
-                <td colspan="4"><button type="button" class="linkact" onclick={() => startExpected(l, rc.road.id)}>expected ▸</button></td>
+                <td colspan="4"
+                  ><button type="button" class="linkact" data-expected-one={l.key} onclick={() => startExpectedOne(l, rc.road.id)}
+                    >{EXPECTED_ONE_LABEL}</button
+                  ></td
+                >
               </tr>
             {/if}
           {/each}
         </tbody>
       </table>
+
+      <!-- Accepting the lot, off the table and clearly apart from the
+           per-line buttons in it. It says its own count, so nobody can
+           retire several lines by clicking what looked like one line's
+           action. Never shown for a single line: that is what the button
+           in the row already does. -->
+      {#if authState.isAdmin && offersExpectedAll(rc.entry.lines.length)}
+        {#if expectedScope?.kind === 'all'}
+          <div class="allof">{@render expectedForm()}</div>
+        {:else}
+          <div class="allof">
+            <button type="button" class="linkact all" onclick={() => startExpectedAll(rc.road.id)}>{expectedAllLabel(rc.entry.lines.length)}</button>
+          </div>
+        {/if}
+      {/if}
     </div>
   {/if}
 
@@ -2880,6 +2952,24 @@
 
   .bcard .linkact:hover {
     text-decoration: underline;
+  }
+
+  /* The bulk control sits below the table, ruled off from it, so it
+     reads as being about the whole list rather than about whichever row
+     it happens to sit under. Dim rather than accent: it is the
+     deliberate one, never the one the eye lands on first. */
+  .bcard .allof {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--hair);
+  }
+
+  .bcard .linkact.all {
+    color: var(--fg-dim);
+  }
+
+  .bcard .linkact.all:hover {
+    color: var(--accent);
   }
 
   /* A bright road is pointable on a wide invisible stroke, and stays
