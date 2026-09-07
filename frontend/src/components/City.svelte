@@ -64,7 +64,7 @@
   import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
   import { faceCoverage, faceOf, facePoint, wallPiece, wallSegments, GATE_HALF_WIDTH, WALL_H, type WallBreak, type WallSide } from '../lib/city/walls'
   import { worseCoverage } from '../lib/city/gates'
-  import { cardSize, grace, mapRect, placeCard, stageRect, unitMapper, type Placement, type Rect } from '../lib/cardAnchor'
+  import { cardSize, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
   import type { Coverage } from '../lib/coverageRule'
   import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
@@ -1275,6 +1275,10 @@
   /** Bumped when the stage changes size under us, which no camera or
    * stop change reports. */
   let stageTick = $state(0)
+  /** Bumped when the card itself changes size -- the declare form going
+   * in makes it taller, and where it can sit depends on how tall it is
+   * (#1028). */
+  let cardTick = $state(0)
 
   /** A district's plate as a box on the stage, its wall included. */
   function plateBox(d: { u: number; v: number; r: number }): Rect {
@@ -1294,6 +1298,7 @@
     const card = bcardEl
     void effectiveStop
     void stageTick
+    void cardTick
 
     if (!w || !svg || !host || !card) {
       cardPlace = null
@@ -1339,6 +1344,18 @@
     const ro = new ResizeObserver(() => stageTick++)
     ro.observe(host)
     return () => ro.disconnect()
+  })
+
+  // And the card's own size, which nothing else reports either: the
+  // declare form goes in behind the pin and the card gets taller
+  // (#1028). watchCardSize is the 2D map's too -- one rule, both
+  // surfaces -- and it says there why this cannot move the card round in
+  // circles. The city has room where it sits today, which is luck
+  // rather than the rule holding; the same wiring makes it the rule.
+  $effect(() => {
+    const card = bcardEl
+    if (!card) return
+    return watchCardSize(card, () => cardTick++)
   })
 
   /* ---------------- the minimap ---------------- */
