@@ -68,8 +68,10 @@
   import type { Coverage } from '../lib/coverageRule'
   import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
-  import { flagsState } from '../lib/flags.svelte'
+  import { extractSourceIp, flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
+  import { HOST_QUIET_AFTER_MS, hostsState, presenceOf } from '../lib/hosts.svelte'
+  import { presenceNote, quietFor, type CityHost, type HostPresence } from '../lib/city/presence'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
   import type { Building, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
 
@@ -80,9 +82,19 @@
     initialCentre,
     onCameraChange,
     onStandChange,
+    flagsOn = true,
+    watchOn = true,
   }: {
     stop: Stop
     ground?: Ground
+    /** The two overlay pills (DESIGN.md "The always-on picture"), which
+     * live in the slider's own row and apply to both views. They are
+     * Topography.svelte's state, since that is where the row is drawn;
+     * these are how it reaches this side. Both default to on, which is
+     * the ratified default, so the city draws flags and watchers even
+     * while nothing threads them through. */
+    flagsOn?: boolean
+    watchOn?: boolean
     /** The pan this side had when the slider last crossed away from it
      * (#869): Topography saves what onCameraChange reports below and
      * hands it back here across City's own mount/unmount, since a fresh
@@ -127,6 +139,62 @@
     return [...pool].sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())[0]
   })
 
+  /* ---------------- living hosts (round 49, #1016) ---------------- */
+
+  // Presence is read against the clock, and the clock moves on its own:
+  // a host does not become quiet because anything happened, but because
+  // 24 hours passed with nothing happening. So the map keeps its own
+  // tick. A minute is far finer than a 24-hour window needs and costs
+  // one derivation; anything coarser would leave a building drawn live
+  // for up to its own period after it stopped being so.
+  const PRESENCE_TICK_MS = 60_000
+  let nowTick = $state(Date.now())
+
+  $effect(() => {
+    // No reactive read here on purpose: the register is fetched once on
+    // mount and again after every write (hostsState.mark/unmark refresh
+    // themselves), and reading hostsState.hosts here would make this
+    // effect its own trigger.
+    void hostsState.refresh()
+    const t = setInterval(() => {
+      nowTick = Date.now()
+      // Re-read on the same tick, which is what makes "it comes back by
+      // itself" true without a reload: the server clears a dismissal
+      // when the feed hears the host again, and this is where the map
+      // finds out. Nothing in the browser has to model that rule.
+      void hostsState.refresh()
+    }, PRESENCE_TICK_MS)
+    return () => clearInterval(t)
+  })
+
+  /** The register, reduced to what the ground plan needs and read
+   * against the current tick. `presenceOf` is the shared rule -- the 2D
+   * map answers the same question with the same function, so a host
+   * cannot read live on one surface and quiet on the other. */
+  const registeredHosts = $derived<CityHost[]>(
+    hostsState.hosts.map((h) => ({
+      key: h.key,
+      ip: h.ip,
+      label: h.label ?? '',
+      presence: presenceOf(h, nowTick, HOST_QUIET_AFTER_MS),
+      lastSeen: h.lastSeen,
+      firstSeen: h.firstSeen,
+      events: h.events,
+      reason: h.mark?.reason ?? null,
+      markedBy: h.mark?.by ?? null,
+      markedAt: h.mark?.at ?? null,
+    })),
+  )
+
+  /** Flagged and watched, read exactly as Topography.svelte's own
+   * `nodeWarnings` reads them (its flags are the uncleared ones, matched
+   * on the flag target's source address; its watchers are entries with
+   * this address at either end). Two readings of one fact would agree
+   * today and part on the first change to either. */
+  const activeFlags = $derived(flagsState.list.filter((f) => !f.cleared))
+  const flagCountFor = (ip: string): number => (ip ? activeFlags.filter((f) => extractSourceIp(f.target) === ip).length : 0)
+  const isWatched = (ip: string): boolean => (ip ? watchlistState.entries.some((e) => e.source?.ip === ip || e.destIp === ip) : false)
+
   const ground: Ground = $derived(
     groundProp ??
       layoutGround(
@@ -142,6 +210,7 @@
           tunnelsState.list,
           policyState.pushed,
           new Set(coverageState.byKey.keys()),
+          registeredHosts,
         ),
       ),
   )
@@ -532,7 +601,24 @@
          * pointing at it opens that boundary's card. */
         wall?: { districtId: string; side: WallSide; coverage: Coverage }
       }
-    | { kind: 'building'; v: number; b: Building; district: District | null; ink: string; dim: boolean; paints: Paint[]; stamp: { x: number; y: number; k: number }; aria: string }
+    | {
+        kind: 'building'
+        v: number
+        b: Building
+        district: District | null
+        ink: string
+        dim: boolean
+        /** What the host register says this building is (round 49,
+         * #1016). Always 'live' for a router or a bridge post, which
+         * are not hosts the feed hears. */
+        pres: HostPresence
+        /** The flagged halo or the watcher's ring, when a pill asks for
+         * one; null when neither applies. */
+        ring: { cy: number; r: number; stroke: string; throb: boolean } | null
+        paints: Paint[]
+        stamp: { x: number; y: number; k: number }
+        aria: string
+      }
     | { kind: 'hamlet'; v: number; id: string; aria: string; attrs: DeviceStampAttrs }
 
   /** This SVG root's own device-symbol prefix (#864's <use> convention):
@@ -992,16 +1078,67 @@
       // or is reached by fades, reusing one visual word for "not what
       // matters right now" rather than inventing a second.
       const dim = (d?.dark ?? false) || (reachOverlay ? !reachOverlay.litBuildingIds.has(b.id) : false)
-      const ink = dim ? 'var(--fg-dim)' : d ? inkOf(d) : 'var(--accent)'
+      // Presence is the building's own ink (round 49, #1016): a host not
+      // heard for the quiet window goes grey with a dashed footprint, one
+      // marked quiet on purpose goes white and translucent. Both stay on
+      // the map -- only a dismissal removes a building, and that happens
+      // upstream in presence.ts, where the host never becomes one.
+      // Presence outranks the district's ink because it is a statement
+      // about this machine, not about the boundary it stands behind.
+      const pres = b.host?.presence ?? 'live'
+      const presInk = pres === 'quiet' ? 'var(--fg-dim)' : pres === 'intended' ? 'var(--fg)' : null
+      const ink = presInk ?? (dim ? 'var(--fg-dim)' : d ? inkOf(d) : 'var(--accent)')
       const R = b.R
       const h = 0
       const pin = (hh: number) => diamond(c, b.u, b.v, R, hh)
+      // Only quiet is dashed. Quiet on purpose is solid and white, the
+      // same word the declared boundary and the white footbridge deck
+      // use: the operator said something, so the drawing is not missing
+      // anything. Dashed means nobody has.
+      const dashed = pres === 'quiet' || (dim && pres === 'live')
       const paints: Paint[] = [
-        { d: pin(0), fill: '#0a0f1c', fo: dim ? 0.7 : 0.94 },
-        { d: pin(0), fill: ink, fo: dim ? 0.12 : 0.26, stroke: ink, so: dim ? 0.55 : 0.95, sw: 1, dash: dim ? '3 3' : undefined },
+        { d: pin(0), fill: '#0a0f1c', fo: dim || pres !== 'live' ? 0.7 : 0.94 },
+        {
+          d: pin(0),
+          fill: ink,
+          fo: pres === 'intended' ? 0.1 : pres === 'quiet' ? 0.12 : dim ? 0.12 : 0.26,
+          stroke: ink,
+          so: pres === 'quiet' ? 0.6 : pres === 'intended' ? 0.35 : dim ? 0.55 : 0.95,
+          sw: 1,
+          dash: dashed ? '3 3' : undefined,
+        },
       ]
       const what = b.kind === 'router' ? 'router' : b.kind === 'router-ant' ? 'router with antennas' : b.kind === 'post' ? 'bridge post' : 'host'
-      const aria = b.name + (b.ip ? ' at ' + b.ip : '') + ', ' + what + (d ? ' in ' + d.name : '')
+      // The overlay pills gate the marks on the drawing, so what a
+      // screen reader is told and what the ring shows stay one fact.
+      const flagCount = flagsOn ? flagCountFor(b.ip) : 0
+      const watched = watchOn && isWatched(b.ip)
+      const note = b.host ? presenceNote(b.host, nowTick) : null
+      const aria =
+        b.name +
+        (b.ip ? ' at ' + b.ip : '') +
+        ', ' +
+        what +
+        (d ? ' in ' + d.name : '') +
+        (note ? ' · ' + note : '') +
+        (flagCount ? ' · ' + flagCount + (flagCount === 1 ? ' flag' : ' flags') : '') +
+        (watched ? ' · watched' : '')
+      // The ring hugs the shape and throbs in place; it never pulses
+      // outward (DESIGN.md "Honesty and motion", owner 2026-09-07). Red
+      // for a flag, the watcher's own ink for a watcher, and a flag wins
+      // when a building is both -- the louder fact is the one to see.
+      const k = (R * 0.74 * c.S) / SREF
+      const ring =
+        flagCount || watched
+          ? {
+              cy: R2(-symbolFor(b.kind).top * k - 2),
+              r: R2(Math.max(3.5, 4 * k)),
+              stroke: flagCount ? 'var(--alarm)' : 'var(--marked)',
+              // Only the flag throbs. A watcher is a standing statement,
+              // not something that just happened, so its ring is still.
+              throb: flagCount > 0,
+            }
+          : null
       solids.push({
         kind: 'building',
         v: buildingDepth(b),
@@ -1009,8 +1146,10 @@
         district: d,
         ink,
         dim,
+        pres,
+        ring,
         paints,
-        stamp: { x: R2(X(c, b.u)), y: R2(Y(c, b.v, h)), k: R2((R * 0.74 * c.S) / SREF) },
+        stamp: { x: R2(X(c, b.u)), y: R2(Y(c, b.v, h)), k: R2(k) },
         aria,
       })
     }
@@ -1111,18 +1250,23 @@
     if (effectiveStop !== 'street') return []
     const c = geomCam
     const vp = viewport
-    const out: { b: Building; x: number; y: number; w: number }[] = []
+    const out: { b: Building; x: number; y: number; w: number; sub: string; quiet: boolean }[] = []
     const placed: [number, number, number, number][] = []
     for (const b of allBuildings) {
       if (b.u < vp.u0 || b.u > vp.u1 || b.v < vp.v0 || b.v > vp.v1) continue
       const k = (b.R * 0.74 * c.S) / SREF
       const x = R2(X(c, b.u))
       const y = R2(Y(c, b.v, 0) - symbolFor(b.kind).top * k - 10)
-      const w = Math.max(b.name.length, b.ip.length) * 6.6 + 22
+      // A quiet building says how long instead of its address (round 49,
+      // #1016): the address is on its card, and how long it has been
+      // silent is the thing the street stop is there to show.
+      const note = b.host ? presenceNote(b.host, nowTick) : null
+      const sub = note ?? b.ip
+      const w = Math.max(b.name.length, sub.length) * 6.6 + 22
       const r: [number, number, number, number] = [x - w / 2, y - 28, x + w / 2, y + 8]
       if (placed.some((p) => r[0] < p[2] - 4 && r[2] > p[0] + 4 && r[1] < p[3] - 4 && r[3] > p[1] + 4)) continue
       placed.push(r)
-      out.push({ b, x, y, w })
+      out.push({ b, x, y, w, sub, quiet: note !== null })
     }
     return out
   })
@@ -1358,6 +1502,185 @@
     return watchCardSize(card, () => cardTick++)
   })
 
+  /* ---------------- the host card (round 49, #1016) ---------------- */
+
+  // The same card, the same rules: hover opens it, the pin keeps it, and
+  // it floats beside its building on a leader (lib/cardAnchor.ts, shared
+  // with the boundary card above and with the 2D map). Its wording is
+  // the 2D map's host card word for word -- presence, last and first
+  // seen, events, and `mark quiet on purpose ▸ · dismiss ▸` -- because
+  // the two surfaces are one product and a host must read the same on
+  // either side of the slider.
+  let hoverHost = $state<string | null>(null)
+  let pinnedHost = $state<string | null>(null)
+  let markReason = $state('')
+  let markBusy = $state(false)
+
+  const openHostId = $derived(pinnedHost ?? hoverHost)
+  const hostPinned = $derived(pinnedHost !== null)
+  const hostGrace = grace()
+
+  /** The building a host card is open on, with its district and the
+   * register's record. Only a host has one: a router or a bridge post is
+   * not something the syslog feed hears, so it has no presence to show
+   * and opens nothing. */
+  const hostCard = $derived.by(() => {
+    const id = openHostId
+    if (!id) return null
+    for (const d of ground.districts) {
+      const b = d.buildings.find((x) => x.id === id)
+      if (b?.host) return { b, d, h: b.host }
+    }
+    return null
+  })
+
+  function openHostCard(b: Building) {
+    if (drag?.moved || !b.host) return
+    hostGrace.hold()
+    hoverHost = b.id
+  }
+
+  /** The pointer has left the building, or the card. It may be crossing
+   * from one to the other, so nothing is taken down until the grace
+   * period passes with it arriving nowhere -- the same 180 ms the
+   * boundary card and the 2D map use (#1027). */
+  function releaseHostCard() {
+    const id = hoverHost
+    if (!id) return
+    hostGrace.release(() => {
+      if (hoverHost === id) hoverHost = null
+    })
+  }
+
+  function toggleHostPin() {
+    const c = hostCard
+    if (!c) return
+    if (hostPinned) {
+      pinnedHost = null
+      return
+    }
+    pinnedHost = c.b.id
+    hostsState.error = null
+    markReason = c.h.reason ?? ''
+  }
+
+  /** `mark quiet on purpose` needs a reason, so it pins the card and
+   * opens the form behind the pin -- exactly what declaring a boundary
+   * does, one interaction for both. */
+  function openMarkForm() {
+    const c = hostCard
+    if (!c) return
+    pinnedHost = c.b.id
+    hostsState.error = null
+    markReason = c.h.reason ?? ''
+  }
+
+  async function submitHostMark() {
+    const c = hostCard
+    if (!c || !markReason.trim() || markBusy || !c.h.key) return
+    markBusy = true
+    const ok = await hostsState.mark(c.h.key, 'intended', markReason.trim())
+    markBusy = false
+    if (ok) pinnedHost = null
+  }
+
+  /** Dismissing takes the building off the map. It is not a deletion and
+   * nothing has to remember it: the server clears the dismissal the
+   * moment the feed hears the host again, so a dismissed host that comes
+   * back comes back by itself. */
+  async function dismissHost() {
+    const c = hostCard
+    if (!c || markBusy || !c.h.key) return
+    markBusy = true
+    const ok = await hostsState.mark(c.h.key, 'dismissed')
+    markBusy = false
+    if (ok) {
+      pinnedHost = null
+      hoverHost = null
+    }
+  }
+
+  /** Taking the mark back, whichever it was. DESIGN.md names the two
+   * marks and not their undo; this is the boundary card's `undeclare ▸`
+   * read across to a host, because a statement you cannot withdraw is
+   * worse than one you never made. */
+  async function unmarkHost() {
+    const c = hostCard
+    if (!c || markBusy || !c.h.key) return
+    markBusy = true
+    const ok = await hostsState.unmark(c.h.key)
+    markBusy = false
+    if (ok) pinnedHost = null
+  }
+
+  /** What the card's first line says the host is. */
+  const PRESENCE_WORD: Record<string, string> = { live: 'live', quiet: 'quiet', intended: 'quiet on purpose', dismissed: 'dismissed' }
+
+  const stamp = (iso: string | null): string => (iso ? new Date(iso).toLocaleString() : 'not recorded')
+
+  /** The quiet window, in the card's own words -- the configured figure,
+   * not a constant repeated here, so the card cannot disagree with the
+   * rule that drew the building. */
+  const quietWindow = $derived(Math.round(HOST_QUIET_AFTER_MS / 3_600_000) + ' h')
+
+  /* ---- where the host card floats ---- */
+
+  let hcardEl: HTMLDivElement | undefined = $state()
+  let hostPlace = $state<Placement | null>(null)
+  let hostCardTick = $state(0)
+
+  /** A building as a box on the stage, its stamp included -- what the
+   * card must not sit on top of. */
+  function buildingBox(b: Building): Rect {
+    const k = (b.R * 0.74 * viewCam.S) / SREF
+    const x = X(viewCam, b.u - b.R)
+    const y = Y(viewCam, b.v - b.R, 0) - symbolFor(b.kind).top * k
+    return { x, y, w: X(viewCam, b.u + b.R) - x, h: Y(viewCam, b.v + b.R, 0) - y }
+  }
+
+  $effect(() => {
+    // Same reads as the boundary card's placement, for the same reason:
+    // everything that moves the subject has to move the card.
+    const c = hostCard
+    const vc = viewCam
+    const svg = svgEl
+    const host = cityEl
+    const card = hcardEl
+    void effectiveStop
+    void stageTick
+    void hostCardTick
+
+    if (!c || !svg || !host || !card) {
+      hostPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      hostPlace = null
+      return
+    }
+    const k = (c.b.R * 0.74 * vc.S) / SREF
+    // The top of the device, which is the point the leader's accent dot
+    // sits on: the card is about the building, not the ground under it.
+    const anchor = map({ x: X(vc, c.b.u), y: Y(vc, c.b.v, 0) - symbolFor(c.b.kind).top * k })
+    const avoid = [mapRect(map, buildingBox(c.b))]
+    // Its own plate is worth keeping clear, but only as a tie-break: at
+    // the street stop the plate fills the stage, and insisting would
+    // leave nowhere at all to put the card.
+    const softAvoid = ground.districts.map((x) => mapRect(map, plateBox(x)))
+    hostPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
+  })
+
+  // The card grows when the mark form opens behind the pin, and where it
+  // can sit depends on how tall it is (#1028) -- the same wiring the
+  // boundary card has.
+  $effect(() => {
+    const card = hcardEl
+    if (!card) return
+    return watchCardSize(card, () => hostCardTick++)
+  })
+
   /* ---------------- the minimap ---------------- */
 
   const MINI_W = 264
@@ -1538,11 +1861,17 @@
               class:focused={focus?.id === s.b.id}
               role="button"
               tabindex={s.district ? tabbable(s.b.id) : -1}
+              class:hot={!!s.b.host}
               data-cid={s.b.id}
               data-near={R2(s.b.v + s.b.R)}
+              data-presence={s.pres}
               aria-label={s.aria}
               onclick={() => onBuildingClick(s.district?.id ?? null, s.b.id)}
               onkeydown={onKey}
+              onpointerenter={() => openHostCard(s.b)}
+              onpointerleave={releaseHostCard}
+              onfocus={() => openHostCard(s.b)}
+              onblur={releaseHostCard}
             >
               <title>{s.aria}</title>
               {#if focus?.id === s.b.id}
@@ -1551,10 +1880,27 @@
               {#each s.paints as p, j (j)}
                 <path d={p.d} fill={p.fill} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} stroke-dasharray={p.dash} />
               {/each}
-              <g transform="translate({s.stamp.x} {s.stamp.y}) scale({s.stamp.k})" style:color={s.ink} opacity={s.dim ? 0.62 : undefined}>
-                {#each symbolFor(s.b.kind).paths as p, j (j)}
-                  <path d={p.d} fill={p.fill === 'void' ? VOID : 'currentColor'} fill-opacity={p.fillOpacity} stroke={p.fill === 'body' ? 'currentColor' : undefined} stroke-opacity={p.strokeOpacity} stroke-width={p.strokeWidth} />
-                {/each}
+              <g transform="translate({s.stamp.x} {s.stamp.y})">
+                <g transform="scale({s.stamp.k})" style:color={s.ink} opacity={s.pres === 'quiet' ? 0.62 : s.pres === 'intended' ? 0.55 : s.dim ? 0.62 : undefined}>
+                  {#each symbolFor(s.b.kind).paths as p, j (j)}
+                    <path d={p.d} fill={p.fill === 'void' ? VOID : 'currentColor'} fill-opacity={p.fillOpacity} stroke={p.fill === 'body' ? 'currentColor' : undefined} stroke-opacity={p.strokeOpacity} stroke-width={p.strokeWidth} />
+                  {/each}
+                </g>
+                {#if s.ring}
+                  <!-- The flagged halo and the watcher ring (round 49's
+                       two pills): both hug the building, and only the
+                       flag's throbs -- in place, never outward. -->
+                  <circle
+                    class:halo={s.ring.throb}
+                    cx="0"
+                    cy={s.ring.cy}
+                    r={s.ring.r}
+                    fill="none"
+                    stroke={s.ring.stroke}
+                    stroke-width="1.4"
+                    stroke-opacity={s.ring.throb ? undefined : 0.8}
+                  />
+                {/if}
               </g>
             </g>
           {/if}
@@ -1587,8 +1933,8 @@
         {/each}
         {#each toppers as t (t.b.id)}
           <g transform="translate({t.x} {t.y})">
-            <text x="0" y="-13" text-anchor="middle" class="st-name">{t.b.name}</text>
-            <text x="0" y="0" text-anchor="middle" class="st-ip">{t.b.ip}</text>
+            <text x="0" y="-13" text-anchor="middle" class="st-name" class:st-dim={t.quiet}>{t.b.name}</text>
+            <text x="0" y="0" text-anchor="middle" class="st-ip">{t.sub}</text>
           </g>
         {/each}
         {#each scene.rings as r (r.label)}
@@ -1739,6 +2085,99 @@
     </div>
   {/if}
 
+  {#if hostCard}
+    {@const c = hostCard}
+    <!-- The host card (DESIGN.md "Cards", "Living hosts"): presence,
+         last and first seen, events, and the two marks. The wording is
+         the 2D map's, word for word. -->
+    {#if hostPlace}
+      <svg class="leader" aria-hidden="true">
+        <path d="M{hostPlace.from.x} {hostPlace.from.y}L{hostPlace.to.x} {hostPlace.to.y}" stroke="var(--hair-2)" stroke-width="1" fill="none" />
+        <circle cx={hostPlace.from.x} cy={hostPlace.from.y} r="3" fill="var(--accent)" />
+      </svg>
+    {/if}
+    <div
+      class="bcard hcard"
+      class:pinned={hostPinned}
+      class:placed={hostPlace !== null}
+      style={hostPlace ? `left:${R2(hostPlace.left)}px;top:${R2(hostPlace.top)}px` : undefined}
+      bind:this={hcardEl}
+      role="dialog"
+      tabindex="-1"
+      aria-label="{c.b.name}: {PRESENCE_WORD[c.h.presence]}"
+      onpointerenter={hostGrace.hold}
+      onpointerleave={releaseHostCard}
+    >
+      <div class="bc-t">
+        <span class="n">{c.b.name}<small>{c.b.ip}</small></span>
+        <button
+          type="button"
+          class="pin"
+          class:on={hostPinned}
+          aria-pressed={hostPinned}
+          title={hostPinned ? 'pinned — click to let it go' : 'pin this card'}
+          onclick={toggleHostPin}>{hostPinned ? '✕' : '⊙'}</button
+        >
+      </div>
+
+      {#if c.h.presence === 'quiet'}
+        <div class="s dark">
+          <i class="sw dark"></i>quiet · not heard for <b>{quietFor(c.h.lastSeen, nowTick)}</b> (window {quietWindow})
+        </div>
+      {:else if c.h.presence === 'intended'}
+        <div class="s quiet"><i class="sw quiet"></i>quiet on purpose</div>
+      {:else}
+        <div class="s logged"><i class="sw logged"></i>live</div>
+      {/if}
+
+      <div class="s">
+        last seen {stamp(c.h.lastSeen)} · first seen {stamp(c.h.firstSeen)} · {c.h.events.toLocaleString()}
+        {c.h.events === 1 ? 'event' : 'events'} · {c.d.name}
+      </div>
+
+      {#if c.h.presence !== 'live'}
+        <div class="s">comes back by itself when the feed hears it again</div>
+      {/if}
+
+      {#if c.h.reason}
+        <blockquote class="quote">{c.h.reason}</blockquote>
+        <div class="s">{c.h.markedBy ?? 'unknown'}{c.h.markedAt ? ' · ' + stamp(c.h.markedAt) : ''}</div>
+      {/if}
+
+      {#if !c.h.key}
+        <!-- Nothing to write to: the register has not recorded this host
+             yet, so the marks would have no key to hang on. Said plainly
+             rather than offering a button that cannot work. -->
+        <div class="s">not in the host register yet · nothing to mark</div>
+      {/if}
+
+      {#if hostPinned && authState.canEdit && c.h.key && !c.h.reason}
+        <div class="form">
+          <label for="city-host-reason">QUIET ON PURPOSE — WHY?</label>
+          <input id="city-host-reason" bind:value={markReason} placeholder="why this machine is expected to be silent…" />
+          <div class="btns">
+            <button type="button" class="go" disabled={!markReason.trim() || markBusy} onclick={submitHostMark}>Mark</button>
+            <button type="button" class="no" onclick={() => (pinnedHost = null)}>cancel</button>
+            <span class="who">as {authState.username || 'you'}</span>
+          </div>
+        </div>
+      {/if}
+      {#if hostsState.error}<div class="s alarm">{hostsState.error}</div>{/if}
+
+      <div class="acts">
+        {#if authState.canEdit && c.h.key}
+          {#if c.h.reason}
+            <button type="button" class="hot" disabled={markBusy} onclick={unmarkHost}>unmark ▸</button>
+          {:else if !hostPinned}
+            <button type="button" onclick={openMarkForm}>mark quiet on purpose ▸</button>
+          {/if}
+          <button type="button" class="hot" disabled={markBusy} onclick={dismissHost}>dismiss ▸</button>
+        {/if}
+        <button type="button" class="dim" onclick={() => (appState.view = 'live')}>stream ▸</button>
+      </div>
+    </div>
+  {/if}
+
   <div class="mini" aria-label="Minimap: the viewport is one part of a much larger map">
     <h4>ESTATE MAP</h4>
     <button type="button" class="look" aria-label="Look there: click a place on the estate map to centre on it" onclick={onMinimapClick}>
@@ -1805,16 +2244,47 @@
   }
 
   /* #1026: `.flat` (template above) is the district plaques, street
-     toppers, borough-ring labels, bridge chips, gate badges and drop
-     labels -- already declared presentational (aria-hidden="true") and
-     drawn after `.plate`/`.blk`, so without this its own painted glyphs
-     and pill backgrounds could sit on top of a district plate's or a
+     toppers, borough-ring labels, bridge chips and drop labels --
+     already declared presentational (aria-hidden="true") and drawn
+     after `.plate`/`.blk`, so without this its own painted glyphs and
+     pill backgrounds could sit on top of a district plate's or a
      building's clickable area and eat the click meant for it, the same
      shape as Fall.svelte's flag-mark badge (#1026). Nothing in `.flat`
      carries a handler or a focus target, so passing every pointer
      straight through loses nothing. */
   .flat {
     pointer-events: none;
+  }
+
+  /* A building with a host behind it is pointable: hovering opens its
+     card, clicking stands on it (DESIGN.md "The reach"). */
+  .blk.hot {
+    cursor: pointer;
+  }
+
+  .blk.hot:hover {
+    filter: brightness(1.25);
+  }
+
+  /* The flagged halo hugs the building and breathes in place. It must
+     never ripple outward (DESIGN.md "Honesty and motion", owner
+     2026-09-07): a ring that grows reads as something spreading, and
+     nothing is spreading -- the flag is already open. */
+  .halo {
+    animation: halo 1.6s ease-in-out infinite;
+  }
+
+  @keyframes halo {
+    0%,
+    100% {
+      opacity: 0.45;
+      stroke-width: 1.2;
+    }
+
+    50% {
+      opacity: 1;
+      stroke-width: 2;
+    }
   }
 
   .p-name {
@@ -2116,6 +2586,12 @@
     fill: var(--fg-muted);
   }
 
+  /* A quiet building's own name recedes with it, so the street reads at
+     a glance as which machines are still talking. */
+  .st-name.st-dim {
+    fill: var(--fg-muted);
+  }
+
   .boro-t {
     font: 600 10px var(--font-mono);
     fill: var(--fg-dim);
@@ -2336,6 +2812,7 @@
   @media (prefers-reduced-motion: reduce) {
     .flow,
     .lamp,
+    .halo,
     .ripple {
       animation: none;
     }

@@ -12,7 +12,10 @@ import type { TunnelInterface } from '../tunnels.svelte'
 import type { Device, FirewallEvent } from '../types'
 import type { ZoneInfo } from '../zones.svelte'
 import { betterCoverage, gatesFromRules, type CityGate } from './gates'
+import { mergeZoneHosts, type CityHost } from './presence'
 import type { CityPeer } from './types'
+
+export type { CityHost } from './presence'
 
 export type { CityGate } from './gates'
 
@@ -28,7 +31,11 @@ export interface CityZone {
   id: string
   name: string
   cidr: string | null
-  hosts: { label: string; ip: string }[]
+  /** The buildings that stand on this plate: the event buffer's hosts
+   * and the register's, merged (presence.ts). Live first, so the
+   * plate's drawn cap costs a silent machine its slot before a talking
+   * one. */
+  hosts: CityHost[]
   hostCount: number
   eventCount: number
   /** The router this zone stands behind. */
@@ -162,6 +169,14 @@ export function cityInputFrom(
    * which is also the honest reading while the store cannot be read:
    * dark stays dark. */
   quietKeys: ReadonlySet<string> = new Set(),
+  /** The host presence register, already read against the clock
+   * (round 49, #1016 -- City.svelte calls `presenceOf` and hands the
+   * answers in, so this module keeps its promise not to touch a store).
+   * Defaults to none, which reads as "the register says nothing", and
+   * leaves every host exactly as the event buffer found it: live, and
+   * gone when it stops talking. That is the pre-#1016 behaviour, which
+   * is what every caller and test that predates this should still get. */
+  registeredHosts: CityHost[] = [],
 ): CityInput {
   let primary = primaryId ?? devices[0]?.id ?? ''
   const routers: CityRouter[] = devices.map((d) => ({ id: d.id, name: d.name, primary: d.id === primary, sourceIp: d.sourceIp }))
@@ -256,22 +271,42 @@ export function cityInputFrom(
   }
   const unloggedBoundaries = [...pairReading.entries()].filter(([, st]) => st !== 'logged').map(([k]) => k)
 
-  const cityZones: CityZone[] = zones
-    .filter((z) => !isTunnel(z.id))
-    .map((z) => {
-      const coverage = coverageOfZone(z.id)
-      return {
-        id: z.id,
-        name: z.name,
-        cidr: z.cidr,
-        hosts: z.hosts,
-        hostCount: z.hostCount,
-        eventCount: z.eventCount,
-        routerId: routerOf(z.id),
-        coverage,
-        dark: coverage === 'dark',
-      }
-    })
+  // Which plate a registered host stands on: the zone whose CIDR holds
+  // its address. A host no zone claims is not drawn -- there is no
+  // district to stand it on, and inventing one would be a claim about
+  // the network that nothing pushed supports.
+  const drawable = zones.filter((z) => !isTunnel(z.id))
+  const registeredByZone = new Map<string, CityHost[]>()
+  for (const h of registeredHosts) {
+    for (const z of drawable) {
+      if (!z.cidr) continue
+      const c = parseCidr(z.cidr)
+      if (!c || !addressInCidr(h.ip, c)) continue
+      const list = registeredByZone.get(z.id)
+      if (list) list.push(h)
+      else registeredByZone.set(z.id, [h])
+      break
+    }
+  }
+
+  const cityZones: CityZone[] = drawable.map((z) => {
+    const coverage = coverageOfZone(z.id)
+    const hosts = mergeZoneHosts(z.hosts, registeredByZone.get(z.id) ?? [])
+    return {
+      id: z.id,
+      name: z.name,
+      cidr: z.cidr,
+      hosts,
+      // A host the register kept but the buffer has forgotten is still a
+      // host on this plate, so the count -- and the plate's radius, and
+      // its `+N` -- has to know about it.
+      hostCount: Math.max(z.hostCount, hosts.length),
+      eventCount: z.eventCount,
+      routerId: routerOf(z.id),
+      coverage,
+      dark: coverage === 'dark',
+    }
+  })
 
   return {
     routers,
