@@ -2159,10 +2159,14 @@ describe('#701: the reach names its busiest pathway, and says the ranking is wei
     expect(container.textContent).toContain('nothing observed this window')
   })
 
-  it('stacks a counterpart\'s own pills rather than letting them land on each other (#976 item 3: "port pills overlap each other")', () => {
-    // All four combinations of direction and outcome toward the one
-    // counterpart -- out/accepted, out/blocked, in/accepted, in/blocked
-    // -- put four labels near the same membrane point (#976 item 3).
+  // #976 item 3 stacked a counterpart's four pills so they stopped
+  // landing on each other. Round 49 answers the same complaint by
+  // removing them: "Nothing is written on a road or strand -- no pill
+  // labels, on either surface; the ports live in the card" (DESIGN.md
+  // "The reach", and its Superseded list). The scenario is kept exactly
+  // as it was -- the four-way case that produced the overlap -- and the
+  // expectation inverted, so the pills cannot come back unnoticed.
+  it('writes nothing at all on a strand, whichever way the traffic ran (round 49, #1016)', () => {
     const container = openReach([
       talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 443, protocol: 'tcp', action: 'accept' }),
       talk({ outInterface: 'bridge2', dstIp: '10.0.2.9', dstHostName: 'nas', dstPort: 445, protocol: 'tcp', action: 'drop' }),
@@ -2190,14 +2194,17 @@ describe('#701: the reach names its busiest pathway, and says the ranking is wei
       }),
     ])
 
-    const pills = [...container.querySelectorAll('.membrane-layer .chip-t')]
-    expect(pills.length).toBe(4)
-    const ys = pills.map((p) => Number(p.getAttribute('y'))).sort((a, b) => a - b)
-    // Never mind their exact position -- no two of one counterpart's own
-    // pills may be closer than a line's height, or their text overlaps
-    // regardless of how far apart the lines they label are drawn.
-    for (let i = 1; i < ys.length; i++) {
-      expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(18)
+    // The four strands are still drawn -- nothing is removed, only
+    // dimmed -- so this is "the labels went", not "the traffic went".
+    expect(container.querySelectorAll('.membrane-layer .strand').length).toBe(4)
+    expect(container.querySelectorAll('.membrane-layer .chip-t').length).toBe(0)
+
+    // Nothing is written on any of them: no text of any kind sits inside
+    // a strand's own group. Asserted over every strand group rather than
+    // over one class name, so re-adding a label under a new class fails
+    // here too.
+    for (const g of container.querySelectorAll('.membrane-layer .strand-g')) {
+      expect(g.querySelector('text')).toBeNull()
     }
   })
 })
@@ -4073,6 +4080,368 @@ describe('brightness is the baseline (round 49, #1016)', () => {
       container.querySelector('.redge.established')!.parentElement!.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
       flushSync()
       expect(container.querySelector('.card[aria-label^="Off the baseline"]')).toBeNull()
+    })
+  })
+})
+
+// The reach on the 2D map, rebuilt to round 49 (#1016) -- round 49's own
+// `flat-reach` scene: nothing written on a strand, the line card
+// carrying what used to be printed there, and the same brightness rule
+// the ribs already follow.
+//
+// jsdom returns zeros from getBoundingClientRect and lays nothing out,
+// so nothing here asserts a pixel -- the placement is lib/cardAnchor's
+// own, tested there against real numbers. What these assert is the
+// decisions: which strand is drawn which way, what the card says, what
+// its actions do, and where Esc lands. Every count is scoped to
+// `.membrane-layer`, because the ribs and the city draw their own
+// `.flow` and `.nb-ring` into the same document.
+describe('the reach, drawn to round 49 (#1016)', () => {
+  let nextReachKey = 1
+
+  function reachOffLine(over: Partial<OffBaselineLine> = {}): OffBaselineLine {
+    return {
+      key: `reach${nextReachKey++}`,
+      srcIp: '10.0.10.21',
+      dstIp: '10.0.20.10',
+      port: 5001,
+      proto: 'tcp',
+      count: 40,
+      firstSeenToday: Date.parse('2026-09-07T21:26:00Z'),
+      outcome: 'accept',
+      ...over,
+    }
+  }
+
+  function seedOff(lines: OffBaselineLine[]) {
+    baselineState.off = { config: { days: 3, of: 14 }, generatedAt: Date.now(), count: lines.length, lines }
+  }
+
+  /** tom-desktop in the LAN, talking to the Servers lane -- round 49's
+   * own data story, cut to the two lanes these assertions need. */
+  function standOnDesktop(extra: ClientEvent[] = []) {
+    zonesState.pushed = [
+      { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
+      { address: '10.0.20.1/24', network: '10.0.20.0', interface: 'bridge2', comment: 'Servers' },
+    ]
+    appState.events = [
+      event({
+        inInterface: 'bridge1',
+        outInterface: 'bridge2',
+        srcIp: '10.0.10.21',
+        srcHostName: 'tom-desktop',
+        dstIp: '10.0.20.10',
+        dstHostName: 'nas',
+        dstPort: 445,
+        protocol: 'tcp',
+        action: 'accept',
+      }),
+      ...extra,
+    ]
+    const { container } = render(Topography)
+    flushSync()
+    container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    return container
+  }
+
+  /** Open a strand's card the way a reader does. */
+  function hoverStrand(container: HTMLElement, i = 0) {
+    const g = [...container.querySelectorAll('.membrane-layer .strand-g')][i]
+    g.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+    flushSync()
+    return container.querySelector<HTMLElement>('.line-card')
+  }
+
+  const rowFor = (card: HTMLElement, port: number) => card.querySelector(`tr[data-line-port="${port}"]`)
+
+  describe('nothing on the strand, everything in the card', () => {
+    it('opens a line card naming both ends when a strand is pointed at', () => {
+      const container = standOnDesktop()
+      expect(container.querySelector('.line-card')).toBeNull() // nothing until pointed at
+
+      const card = hoverStrand(container)
+      expect(card).not.toBeNull()
+      expect(card!.textContent).toContain('tom-desktop')
+      expect(card!.textContent).toContain('Servers')
+    })
+
+    it('reads the port, proto, accepted and dropped table out of reachLineSummary', () => {
+      // One port accepted and another dropped on the same pair. reachFor
+      // splits those into two strands; the card is about the line, so
+      // both have to land in one table.
+      const container = standOnDesktop([
+        event({
+          inInterface: 'bridge1',
+          outInterface: 'bridge2',
+          srcIp: '10.0.10.21',
+          dstIp: '10.0.20.10',
+          dstPort: 22,
+          protocol: 'tcp',
+          action: 'drop',
+          ruleLabel: '#17 default drop',
+        }),
+      ])
+      const card = hoverStrand(container)!
+
+      expect(rowFor(card, 445)!.textContent).toContain('tcp')
+      expect(rowFor(card, 445)!.querySelector('td.ok')!.textContent).toContain('1')
+      // Accepted and dropped are different columns, not one signed number.
+      expect(rowFor(card, 22)!.querySelector('td.al')!.textContent).toContain('1')
+      expect(rowFor(card, 22)!.querySelector('td.ok')).toBeNull()
+    })
+
+    it('states the totals and the tcp-versus-udp split', () => {
+      const container = standOnDesktop([
+        event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.10.21', dstIp: '10.0.20.10', dstPort: 53, protocol: 'udp', action: 'accept' }),
+      ])
+      const card = hoverStrand(container)!
+
+      const totals = card.querySelector('[data-line-totals]')!.textContent!.replace(/\s+/g, ' ')
+      expect(totals).toContain('tcp 1')
+      expect(totals).toContain('udp 1')
+      expect(totals).toContain('other 0')
+      // The same three numbers as the picture beside them.
+      expect(card.querySelectorAll('.protobar i').length).toBe(3)
+    })
+
+    it("names the rule that refused the line, in round 49's own wording", () => {
+      const container = standOnDesktop([
+        event({
+          inInterface: 'bridge1',
+          outInterface: 'bridge2',
+          srcIp: '10.0.10.21',
+          dstIp: '10.0.20.10',
+          dstPort: 22,
+          protocol: 'tcp',
+          action: 'drop',
+          ruleLabel: '#17 default drop',
+        }),
+      ])
+      const said = hoverStrand(container)!.querySelector('[data-refused-by]')!.textContent!.replace(/\s+/g, ' ').trim()
+      expect(said).toBe(':22 refused by #17 default drop')
+    })
+
+    it('never names a rule the drop did not carry', () => {
+      const container = standOnDesktop([
+        event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.10.21', dstIp: '10.0.20.10', dstPort: 22, action: 'drop', ruleLabel: '' }),
+      ])
+      const card = hoverStrand(container)!
+      expect(card.querySelector('[data-refused-by]')).toBeNull()
+      expect(card.textContent).toContain('the drop named no rule')
+    })
+  })
+
+  describe('the composer stays a draft', () => {
+    it('offers `draft the rule ▸` only on a refused line', () => {
+      expect(hoverStrand(standOnDesktop())!.querySelector('[data-draft-rule]')).toBeNull()
+    })
+
+    it("opens the composer from the refused line's card, and drafts rather than runs", () => {
+      const container = standOnDesktop([
+        event({
+          inInterface: 'bridge1',
+          outInterface: 'bridge2',
+          srcIp: '10.0.10.21',
+          dstIp: '10.0.20.10',
+          dstPort: 445,
+          protocol: 'tcp',
+          action: 'drop',
+          ruleLabel: '#17 default drop',
+        }),
+      ])
+      // The refused strand is the one drawn with the ✕ on it.
+      const refusedAt = [...container.querySelectorAll('.membrane-layer .strand-g')].findIndex((g) => g.querySelector('.strand-x') !== null)
+      expect(refusedAt).toBeGreaterThanOrEqual(0)
+
+      const draft = hoverStrand(container, refusedAt)!.querySelector<HTMLButtonElement>('[data-draft-rule]')!
+      expect(draft.textContent).toContain('draft the rule')
+      draft.click()
+      flushSync()
+
+      const composer = container.querySelector('.composer')
+      expect(composer).not.toBeNull()
+      // The same invariant the strand pill's door carried: a printed
+      // line for the operator to paste, and nothing sent to the router.
+      expect(composer!.textContent).toContain('mikroview never touches the router')
+    })
+  })
+
+  describe('every card pins', () => {
+    it('keeps the card up when the pointer leaves, once pinned', async () => {
+      const container = standOnDesktop()
+      const card = hoverStrand(container)!
+      card.querySelector<HTMLButtonElement>('.pin')!.click()
+      flushSync()
+
+      container.querySelector('.membrane-layer .strand-g')!.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+      card.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+      // Well past the grace period an unpinned card would close in.
+      await new Promise((r) => setTimeout(r, 260))
+      flushSync()
+
+      expect(container.querySelector('.line-card.pinned')).not.toBeNull()
+    })
+  })
+
+  describe('brightness is the baseline, on strands too', () => {
+    /** One strand to Servers (off-baseline below) and one inside the LAN
+     * (never off-baseline), so "one bright, one dim" is a claim the
+     * drawing can settle. */
+    const twoStrands = () => [
+      event({ inInterface: 'bridge1', outInterface: 'bridge1', srcIp: '10.0.10.21', dstIp: '10.0.10.34', dstPort: 443, protocol: 'tcp', action: 'accept' }),
+    ]
+
+    it('draws an established strand thin and dim, with no flow and no ring', () => {
+      seedOff([])
+      const container = standOnDesktop()
+      const layer = container.querySelector('.membrane-layer')!
+
+      expect(layer.querySelector('.strand.established')).not.toBeNull()
+      expect(layer.querySelector('.strand.offbase')).toBeNull()
+      expect(layer.querySelector('.flow')).toBeNull()
+      expect(layer.querySelector('.nb-ring')).toBeNull()
+    })
+
+    it('brings the off-baseline strand forward, with flow and a ring, and removes nothing', () => {
+      seedOff([reachOffLine()])
+      const layer = standOnDesktop(twoStrands()).querySelector('.membrane-layer')!
+
+      expect(layer.querySelectorAll('.strand.offbase').length).toBe(1)
+      expect(layer.querySelectorAll('.flow').length).toBe(1)
+      expect(layer.querySelectorAll('.nb-ring').length).toBe(1)
+      // Nothing was removed, only dimmed.
+      expect(layer.querySelectorAll('.strand.established').length).toBeGreaterThan(0)
+    })
+
+    it('draws the established strand thinner than the off-baseline one', () => {
+      seedOff([reachOffLine()])
+      const container = standOnDesktop(twoStrands())
+      const width = (sel: string) => {
+        const style = container.querySelector(`.membrane-layer ${sel}`)!.getAttribute('style') ?? ''
+        return Number(/stroke-width:\s*([\d.]+)px/.exec(style)![1])
+      }
+      expect(width('.strand.established')).toBeLessThan(width('.strand.offbase'))
+    })
+
+    it("is a strand's own question, not the whole host's: one bright line leaves its neighbour dim", () => {
+      // Off-baseline toward Servers only. A host-wide roll-up would
+      // light the LAN-internal strand too; a strand-level one must not.
+      seedOff([reachOffLine()])
+      const layer = standOnDesktop(twoStrands()).querySelector('.membrane-layer')!
+      expect(layer.querySelectorAll('.strand.offbase').length).toBe(1)
+      expect(layer.querySelectorAll('.strand.established').length).toBe(1)
+    })
+
+    it('draws a refused strand in alarm ink, ending in a ✕, and never as off-baseline', () => {
+      const layer = standOnDesktop([
+        event({
+          inInterface: 'bridge1',
+          outInterface: 'bridge2',
+          srcIp: '10.0.10.21',
+          dstIp: '10.0.20.10',
+          dstPort: 22,
+          protocol: 'tcp',
+          action: 'drop',
+          ruleLabel: '#17 default drop',
+        }),
+      ]).querySelector('.membrane-layer')!
+
+      const refused = layer.querySelector('.strand.refused')!
+      expect(refused.getAttribute('stroke')).toBe('var(--alarm)')
+      // Colour is the verdict; brightness is the baseline. Refused is red
+      // whatever the baseline says about it.
+      expect(refused.classList.contains('offbase')).toBe(false)
+      expect(refused.classList.contains('established')).toBe(false)
+      expect(layer.querySelectorAll('.strand-x').length).toBe(1)
+    })
+  })
+
+  describe("the crumb, in the city's words", () => {
+    it('reads name · ip · reaches N · reached by N · refused N · Esc surfaces ▸', () => {
+      const container = standOnDesktop([
+        event({
+          inInterface: 'bridge1',
+          outInterface: 'bridge2',
+          srcIp: '10.0.10.21',
+          dstIp: '10.0.20.10',
+          dstPort: 22,
+          protocol: 'tcp',
+          action: 'drop',
+          ruleLabel: '#17 default drop',
+        }),
+      ])
+      const crumb = container.querySelector('.crumb .path')!.textContent!.replace(/\s+/g, ' ').trim()
+      expect(crumb).toContain('tom-desktop')
+      expect(crumb).toContain('10.0.10.21')
+      expect(crumb).toContain('reaches 1')
+      expect(crumb).toContain('reached by 0')
+      expect(crumb).toContain('refused 1')
+      expect(crumb).toContain('Esc surfaces')
+      // The old trail is gone, not merely restyled.
+      expect(crumb).not.toContain('Network')
+    })
+  })
+
+  describe('clicking anything opens its reach, and Esc surfaces where you were', () => {
+    function oneLane() {
+      zonesState.pushed = [{ address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' }]
+      appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.10.21', srcHostName: 'tom-desktop' })]
+      const { container } = render(Topography)
+      flushSync()
+      return container
+    }
+
+    function jumpTo(container: HTMLElement, stop: string) {
+      const range = container.querySelector<HTMLInputElement>('.alt-range')!
+      range.value = stop
+      range.dispatchEvent(new Event('input', { bubbles: true }))
+      flushSync()
+    }
+
+    it("opens the router's own reach from the ground plan", () => {
+      const container = oneLane()
+      jumpTo(container, '2') // the zones stop, where the ground plan is drawn
+
+      const router = container.querySelector<SVGGElement>('[data-router]')
+      expect(router).not.toBeNull()
+      router!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+
+      expect(container.querySelector('.membrane-layer')).not.toBeNull()
+      expect(appState.view).toBe('topography') // the reach, never the stream
+    })
+
+    it('surfaces to the stop it was opened from, not to the default one', () => {
+      const container = oneLane()
+      jumpTo(container, '1') // the services stop
+
+      container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+      expect(container.querySelector('.membrane-layer')).not.toBeNull()
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      flushSync()
+
+      expect(container.querySelector('.membrane-layer')).toBeNull()
+      // Back where it was left: the reach is a mode of this scene, so
+      // the stop it was opened from is the stop it surfaces to.
+      expect(container.querySelector<HTMLInputElement>('.alt-range')!.value).toBe('1')
+    })
+
+    it('walks out of the card first, then the reach', () => {
+      const container = standOnDesktop()
+      hoverStrand(container)
+      expect(container.querySelector('.line-card')).not.toBeNull()
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      flushSync()
+      expect(container.querySelector('.line-card')).toBeNull()
+      expect(container.querySelector('.membrane-layer')).not.toBeNull() // still standing on it
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      flushSync()
+      expect(container.querySelector('.membrane-layer')).toBeNull()
     })
   })
 })

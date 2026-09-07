@@ -47,7 +47,7 @@
   import { edgeCoverage, type Coverage } from '../lib/coverageRule'
   import { composeCommand, reachComposeInput, refusingCommentFor } from '../lib/compose'
   import type { ReachStrand } from '../lib/reach'
-  import { portsLine, reachFor } from '../lib/reach'
+  import { portsLine, reachFor, reachLineSummary } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
   import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
@@ -958,11 +958,24 @@
     byPair: Map<string, OffBaselineLine[]>
     /** By host address, both ends -- a dot's and its spoke's. */
     byIp: Map<string, OffBaselineLine[]>
+    /** By `${host address}|${counterpart}` -- one reach strand's own key.
+     *
+     * A strand is one host against one counterpart, so neither of the two
+     * maps above can answer it: `byIp` lights every strand the host has
+     * the moment any one of its lines is off the baseline, and `byPair`
+     * knows nothing about which host inside the lane it was. The
+     * counterpart is spelled the way `reachFor` spells it -- the far
+     * interface, or 'internet' for the WAN -- so the drawing can look a
+     * strand up by the key it already holds, with no second mapping to
+     * keep in step. Built from the same one pass and the same `zoneOf`,
+     * so a strand and its rib can never disagree about a line. */
+    byHostCounterpart: Map<string, OffBaselineLine[]>
   }
 
   const offIndex = $derived.by((): OffIndex => {
     const byPair = new Map<string, OffBaselineLine[]>()
     const byIp = new Map<string, OffBaselineLine[]>()
+    const byHostCounterpart = new Map<string, OffBaselineLine[]>()
     const lanes = laneCidrs
     const wan = zonesState.wanInterface
     // One answer per distinct address rather than per line: an
@@ -998,12 +1011,22 @@
       if (l.dstIp !== l.srcIp) push(byIp, l.dstIp, l)
       const from = zoneOf(l.srcIp)
       const to = zoneOf(l.dstIp)
+      // Each end's own strand: the host at one end, keyed by the lane the
+      // *other* end sits in, spelled as `reachFor` spells a counterpart.
+      // Done before the rib test below, because a line inside one lane
+      // still has a strand -- it crosses no boundary, so it lights no
+      // rib, but the reach draws it all the same.
+      const far = (z: string | null): string | null => (z === null ? null : z === wan ? 'internet' : z)
+      const srcFar = far(to)
+      const dstFar = far(from)
+      if (srcFar !== null) push(byHostCounterpart, `${l.srcIp}|${srcFar}`, l)
+      if (dstFar !== null && l.dstIp !== l.srcIp) push(byHostCounterpart, `${l.dstIp}|${dstFar}`, l)
       // A line inside one lane crosses no boundary, so it lights no rib.
       // It still lights its own hosts' dots, above.
       if (from === null || to === null || from === to) continue
       push(byPair, `${from}|${to}`, l)
     }
-    return { byPair, byIp }
+    return { byPair, byIp, byHostCounterpart }
   })
 
   /** The lines one rib carries that are off the baseline today. */
@@ -1024,6 +1047,21 @@
   /** The lines one host is an end of, for its card's own count. */
   function offLinesForIp(ip: string): OffBaselineLine[] {
     return offIndex.byIp.get(ip) ?? []
+  }
+
+  /** The same roll-up again for one drawn reach strand: is this strand
+   * bright? "As bright as the brightest line it carries" is the same
+   * sentence for a strand as for a rib -- only the key differs, because
+   * a strand is one host against one counterpart rather than a zone
+   * pair. Answered off the centred host, so it is meaningless with no
+   * reach open. */
+  function strandOffBaseline(counterpart: string): boolean {
+    return reach !== null && offIndex.byHostCounterpart.has(`${reach.ip}|${counterpart}`)
+  }
+
+  /** The lines one strand carries off the baseline, for its line card. */
+  function strandOffLines(counterpart: string): OffBaselineLine[] {
+    return reach === null ? [] : (offIndex.byHostCounterpart.get(`${reach.ip}|${counterpart}`) ?? [])
   }
 
   /** The header's `⟡ off-baseline today · N`. Estate-wide, and the
@@ -1876,11 +1914,22 @@
   // there is nothing to put to sleep -- recorded for when they do).
   let reach = $state<{ zoneId: string; host: string; ip: string } | null>(null)
 
+  /** Standing on something.
+   *
+   * The stop is deliberately not changed: the reach is a mode of this
+   * scene, not a place of its own (#626), so the map stays at the
+   * altitude and position it was left at and `surface()` has nothing to
+   * restore -- "Esc surfaces to the stop and position you came from"
+   * holds because nothing moved. The city, whose camera *does* move to
+   * stand on a building, saves and restores it instead (City.svelte's
+   * `savedS`/`savedCentre`). */
   function descend(zoneId: string, host: string, ip: string) {
+    closeLineCard()
     reach = { zoneId, host, ip }
   }
 
   function surface() {
+    closeLineCard()
     reach = null
     compose = null
   }
@@ -1904,9 +1953,10 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      // Esc walks out one level: the node card first, then the composer,
-      // then the reach.
+      // Esc walks out one level: the open card first, then the composer,
+      // then the reach itself.
       if (nodeCard) nodeCard = null
+      else if (lineCard) closeLineCard()
       else if (compose) compose = null
       else if (reach) surface()
     }
@@ -1987,6 +2037,15 @@
 
   const reachSummary = $derived(reach ? reachFor(reach.ip, zonesState.wanInterface, appState.events) : null)
 
+  /** The crumb's `refused N`: distinct counterparts that were refused,
+   * counted the same way `reachFor` counts `reaches` and `reached by`, so
+   * the three numbers on one line are the same kind of number. Not the
+   * event count -- "refused 1" means one line was refused, which is what
+   * the drawing shows one ✕ for. */
+  const reachRefused = $derived(
+    reachSummary === null ? 0 : new Set(reachSummary.strands.filter((s) => s.outcome === 'blocked').map((s) => s.counterpart)).size,
+  )
+
   // The zone a strand's counterpart names, for its lane ink and label.
   function zoneIndex(id: string): number {
     return zones.findIndex((z) => z.id === id)
@@ -2032,7 +2091,16 @@
     return dir * (outcome === 'blocked' ? 18 : 8)
   }
 
-  function strandPath(counterpart: string, outcome: string, direction: string): string {
+  /** One strand's own three points: the host end, the far end, and the
+   * control point between them. Pulled out of `strandPath` so the ring
+   * and the card's leader can sit on the drawn line itself rather than
+   * on a second guess at where it runs (the same reason `halfMid` exists
+   * for a rib). */
+  function strandEnds(
+    counterpart: string,
+    outcome: string,
+    direction: string,
+  ): { from: { x: number; y: number }; to: { x: number; y: number }; mid: { x: number; y: number } } {
     const t = strandTarget(counterpart)
     const dx = t.x - MX
     const dy = t.y - MY
@@ -2046,7 +2114,29 @@
         ? { x: MX + (dx / len) * MR + ox, y: MY + (dy / len) * MR + oy }
         : { x: t.x - (dx / len) * 40 + ox, y: t.y - (dy / len) * 40 + oy }
     const mid = { x: (from.x + to.x) / 2 + ox * 0.6, y: (from.y + to.y) / 2 + oy * 0.6 }
-    return `M ${from.x} ${from.y} Q ${mid.x} ${mid.y}, ${to.x} ${to.y}`
+    return { from, to, mid }
+  }
+
+  function strandPath(counterpart: string, outcome: string, direction: string): string {
+    const e = strandEnds(counterpart, outcome, direction)
+    return `M ${e.from.x} ${e.from.y} Q ${e.mid.x} ${e.mid.y}, ${e.to.x} ${e.to.y}`
+  }
+
+  /** Where the off-baseline ring throbs: "a small ring throbbing in
+   * place at the end it arrived at". Out of the centred host, the
+   * traffic arrived at the far end; into it, at the host's own end. */
+  function strandRingPoint(s: ReachStrand): { x: number; y: number } {
+    const e = strandEnds(s.counterpart, s.outcome, s.direction)
+    return s.direction === 'out' ? e.to : e.from
+  }
+
+  /** The midpoint of the drawn strand, where its card's leader lands. */
+  function strandMid(counterpart: string): { x: number; y: number } {
+    const e = strandEnds(counterpart, 'accepted', 'out')
+    // The quadratic's own midpoint, not the chord's: at t=0.5 a Q curve
+    // sits halfway between the chord and the control point, which is
+    // where the line is actually drawn.
+    return { x: (e.from.x + 2 * e.mid.x + e.to.x) / 4, y: (e.from.y + 2 * e.mid.y + e.to.y) / 4 }
   }
 
   function membranePoint(counterpart: string, outcome: string, direction: string): { x: number; y: number; angle: number } {
@@ -2087,6 +2177,174 @@
   }
 
   const reachZoneInk = $derived(reach ? LANE_INKS[Math.max(0, zoneIndex(reach.zoneId)) % LANE_INKS.length] : 'var(--accent)')
+
+  /* ---------------- the line card (#1016, round 49) ---------------- */
+
+  // Round 49's `flat-reach` scene: nothing is written on a strand, and
+  // pointing at one opens the card that carries what used to be printed
+  // along it -- every port tried, the protocol, what landed and what was
+  // dropped, the totals, and on a refused line the rule that refused it.
+  //
+  // The reading is `reachLineSummary`, which merges a counterpart's
+  // strands back into one line: `reachFor` splits accepted from dropped
+  // and out from in, but "which ports were attempted here, and was each
+  // dropped or accepted" is a question about the pair. Keyed by
+  // counterpart for exactly that reason -- one card per drawn line, not
+  // one per strand, so hovering either half of a pair reads the same.
+  //
+  // Same one interaction and the same shared placement (lib/cardAnchor)
+  // as the boundary, host and off-baseline cards: beside its subject
+  // with a leader, a grace period for the pointer to travel to it, and a
+  // re-place when it changes size.
+  let lineCard = $state<{ counterpart: string } | null>(null)
+  let lineCardPinned = $state(false)
+  let lineCardEl = $state<HTMLDivElement>()
+  let lineCardPlace = $state<Placement | null>(null)
+  let lineCardTick = $state(0)
+  let membraneSvgEl = $state<SVGSVGElement>()
+  const lineGrace = grace()
+
+  /** The hovered line's own reading. Recomputed from the live summary
+   * rather than kept from when the card opened, so a strand that keeps
+   * carrying traffic keeps a card that says so. */
+  const lineCardSummary = $derived(lineCard && reachSummary ? reachLineSummary(reachSummary.strands, lineCard.counterpart) : null)
+
+  /** The strands behind the open card, for the actions it offers: the
+   * composer's door needs the refused strand itself, not the merged
+   * reading, because it drafts from that strand's own port hits. */
+  const lineCardStrands = $derived(lineCard && reachSummary ? reachSummary.strands.filter((s) => s.counterpart === lineCard!.counterpart) : [])
+
+  /** The refused strand a `draft the rule ▸` would compose from -- the
+   * busiest, matching how `reachLineSummary` picks the rule it names. */
+  const lineCardRefused = $derived(
+    lineCardStrands.filter((s) => s.outcome === 'blocked').reduce<ReachStrand | null>((best, s) => (best === null || s.count > best.count ? s : best), null),
+  )
+
+  /** The lines this strand carries off the baseline today, for the card's
+   * own bright note -- the same roll-up the strand is drawn by. */
+  const lineCardOffLines = $derived(lineCard ? strandOffLines(lineCard.counterpart) : [])
+
+  /** The counterpart's readable name: a zone's own name where the map has
+   * one, 'the internet' for the WAN, the interface otherwise. */
+  function counterpartName(id: string): string {
+    if (id === 'internet') return 'the internet'
+    return zones.find((z) => z.id === id)?.name ?? id
+  }
+
+  /** The counterpart's CIDR under the card's title, where the map has a
+   * pushed one. Blank rather than invented for the internet and for a
+   * boundary-derived zone with no address table. */
+  const lineCardCidr = $derived(lineCard ? (zones.find((z) => z.id === lineCard!.counterpart)?.cidr ?? '') : '')
+
+  /** The ports on this line that are off the baseline today, so the
+   * table can mark the new one the way the mockup does. */
+  const lineCardNewPorts = $derived(new Set(lineCardOffLines.map((l) => l.port).filter((p): p is number => p !== null)))
+
+  /** Everything the line carried, for the tcp/udp picture's own scale.
+   * The three counts total this by construction (lib/reach.ts). */
+  const lineCardTotal = $derived(lineCardSummary ? lineCardSummary.tcp + lineCardSummary.udp + lineCardSummary.other : 0)
+
+  /** The ports the refusal was about, as the card names them:
+   * `:22 refused by #17 default drop`. Every dropped port, not just the
+   * busiest -- naming one where three were refused would be a smaller
+   * claim than the events make. */
+  const lineCardRefusedPorts = $derived.by(() => {
+    const ports = (lineCardSummary?.ports ?? []).filter((p) => p.dropped > 0).map((p) => `:${p.port}`)
+    // Portless traffic can be refused too, and has no `:port` to print.
+    return ports.length > 0 ? ports.join(' ') : 'this line'
+  })
+
+  /** The stream, filtered to the centred host -- the same door the host
+   * card already offers, from the card that named the line. */
+  function openLineStream() {
+    if (!reach) return
+    appState.resetFilters()
+    appState.setFilter('srcQuery', reach.ip)
+    appState.view = 'live'
+    closeLineCard()
+  }
+
+  // A card describing a line that stopped existing (the buffer rolled,
+  // the reach changed) closes itself rather than standing there
+  // describing nothing -- the same rule the off-baseline card follows.
+  $effect(() => {
+    if (lineCard && lineCardStrands.length === 0) closeLineCard()
+  })
+
+  $effect(() => {
+    // Read first, so this re-runs on everything that moves the subject.
+    const open = lineCard
+    const svg = membraneSvgEl
+    const host = topoEl
+    const card = lineCardEl
+    void stageTick
+    void lineCardTick
+
+    if (!open || !svg || !host || !card) {
+      lineCardPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      lineCardPlace = null
+      return
+    }
+    const anchor = map(strandMid(open.counterpart))
+    // The card names two ends, so it must not sit on either: the centred
+    // host, and the counterpart cluster the strand runs to. Same
+    // reasoning as the boundary card's two plates.
+    const avoid = [mapRect(map, { x: MX - 56, y: MY - 56, w: 112, h: 112 })]
+    const ci = reachCounterparts.indexOf(open.counterpart)
+    if (ci >= 0) avoid.push(mapRect(map, { x: SLOTS[ci].x, y: SLOTS[ci].y, w: SLOTS[ci].w, h: 96 }))
+    // Every other cluster is worth keeping clear too, but only as a
+    // preference -- never at the cost of covering its own subject.
+    const softAvoid = reachCounterparts
+      .filter((c) => c !== open.counterpart)
+      .map((c) => SLOTS[reachCounterparts.indexOf(c)])
+      .filter((s) => s !== undefined)
+      .map((s) => mapRect(map, { x: s.x, y: s.y, w: s.w, h: 96 }))
+    lineCardPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
+  })
+
+  $effect(() => {
+    const card = lineCardEl
+    if (!card) return
+    return watchCardSize(card, () => lineCardTick++)
+  })
+
+  function openLineCard(counterpart: string) {
+    lineGrace.hold()
+    if (lineCard?.counterpart === counterpart) return
+    // A pinned card is kept until it is let go, whichever card it is.
+    if (lineCardPinned) return
+    lineCardPinned = false
+    lineCard = { counterpart }
+  }
+
+  /** The pointer has left the strand, or the card. It may be crossing
+   * between them, so nothing comes down until the grace period has
+   * passed with the pointer arriving at neither (#1027). */
+  function releaseLineCard() {
+    const open = lineCard
+    if (!open || lineCardPinned) return
+    lineGrace.release(() => {
+      if (!lineCardPinned && lineCard?.counterpart === open.counterpart) closeLineCard()
+    })
+  }
+
+  function closeLineCard() {
+    lineGrace.hold()
+    lineCard = null
+    lineCardPinned = false
+    lineCardPlace = null
+  }
+
+  /** Every card pins (DESIGN.md "Cards"). */
+  function pinLineCard() {
+    lineCardPinned = !lineCardPinned
+    if (!lineCardPinned) closeLineCard()
+  }
 
   const siblings = $derived.by(() => {
     if (!reach) return []
@@ -2953,23 +3211,26 @@
        already names the place, and a placeholder crumb was mockup
        residue (owner, 2026-08-30). -->
   {#if reach}
+    <!-- The crumb reads the city's own wording, on both surfaces, so the
+         two views read as one product (round 49; DESIGN.md "The reach":
+         `name · ip · reaches N · reached by N · refused N · Esc
+         surfaces ▸`). The old `Network ▸ Zone ▸ Host` path is gone: it
+         named the trail rather than the thing stood on, and both ends of
+         it did the same thing this one `Esc surfaces ▸` does. -->
     <div class="crumb">
       <div class="path">
-        <button class="crumb-link" onclick={surface}>Network</button>
-        <span class="sep">▸</span>
-        <button class="crumb-link" onclick={surface}>{zones.find((z) => z.id === reach?.zoneId)?.name ?? reach.zoneId}</button>
-        <span class="sep">▸</span>
         <span class="here">{reach.host}</span>
+        <span class="ip">{reach.ip}</span>
+        {#if reachSummary}
+          <i class="bar"></i>
+          <span>reaches <b>{reachSummary.reaches}</b></span>
+          <span>reached by <b>{reachSummary.reachedBy}</b></span>
+          <span class:alarm={reachRefused > 0}>refused <b>{reachRefused}</b></span>
+        {/if}
+        <i class="bar"></i>
+        <button class="crumb-link esc" onclick={surface}>Esc surfaces ▸</button>
       </div>
       {#if reachSummary}
-        <div class="sub">
-          reaches <b>{reachSummary.reaches}</b> · reached by <b>{reachSummary.reachedBy}</b>
-          {#if reachSummary.topBlocked}
-            {@const b = reachSummary.topBlocked}
-            {@const far = b.counterpart === 'internet' ? 'the internet' : b.counterpart}
-            · <b class="alarm">{b.direction === 'out' ? `blocked toward ${far}` : `knocked from ${far}, refused`} — {b.count}×</b>
-          {/if}
-        </div>
         <!-- Round 30 states this on the reach's own zone card
              (the-whole.html:1136); this build's reach is the membrane
              view, whose analogue of that facts line is this crumb sub,
@@ -3977,8 +4238,47 @@
         {#each ground.nodes as n (n.id)}
           {@const nx = FX(flatCam, n.u)}
           {@const ny = FY(flatCam, n.v)}
-          <circle class="gf-node" cx={nx} cy={ny} r={Math.max(4, n.R * flatCam.S * 0.6)} />
-          <text class="gf-node-label" x={nx} y={ny - n.R * flatCam.S * 0.6 - 4} text-anchor="middle">{n.name}</text>
+          {@const nr = Math.max(4, n.R * flatCam.S * 0.6)}
+          <!-- Clicking anything opens its reach (round 49, DESIGN.md
+               "The reach"). A router is a subject the reach already
+               understands: the city stands on the router building by the
+               very same address, `Building.ip` off the shared ground
+               model (lib/city/layout.ts), so this is the city's own
+               ratified subject rather than a second idea of what a
+               router's reach means. A bridge-head post is not -- its
+               `ip` is the words 'wan bridge', not an address -- so it
+               stays undrawn as a door rather than opening a reach on a
+               subject the events never carry. -->
+          {#if n.kind === 'router' || n.kind === 'router-ant'}
+            <g
+              class="gf-node-g"
+              role="button"
+              tabindex="0"
+              data-router={n.id}
+              aria-label="{n.name} — open its reach"
+              onclick={(e) => {
+                // Clicking off anywhere surfaces, so a door into the
+                // reach has to stop its own click reaching that -- the
+                // same guard the host dots carry.
+                e.stopPropagation()
+                descend(n.districtId ?? '', n.name, n.ip)
+              }}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  descend(n.districtId ?? '', n.name, n.ip)
+                }
+              }}
+            >
+              <title>{n.name} · {n.ip}</title>
+              <circle class="gf-node" cx={nx} cy={ny} r={nr} />
+              <text class="gf-node-label" x={nx} y={ny - nr - 4} text-anchor="middle">{n.name}</text>
+            </g>
+          {:else}
+            <circle class="gf-node" cx={nx} cy={ny} r={nr} />
+            <text class="gf-node-label" x={nx} y={ny - nr - 4} text-anchor="middle">{n.name}</text>
+          {/if}
         {/each}
         {#each flatCards as fc (fc.d.id)}
           <!-- The name and CIDR used to sit either side of the card's
@@ -4073,66 +4373,86 @@
     <!-- The membrane view. pointer-events pass through everywhere
          except its own content, so clicking off anywhere surfaces. -->
     <div class="membrane-layer" aria-label="The reach: {reach.host} and what it talks to">
-      <svg viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet">
+      <svg viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" bind:this={membraneSvgEl}>
         <circle cx={MX} cy={MY} r={MR} class="membrane" />
         <text x={MX} y="502" text-anchor="middle" class="n-sub">
           the membrane — lane-mates inside talk freely; every crossing needs a rule, per direction
         </text>
 
+        <!-- Nothing is written on a strand (round 49; DESIGN.md "The
+             reach", and its own Superseded list: "Pill labels on reach
+             strands and ports written along a road: the card carries
+             them"). The pills that used to stack from each counterpart's
+             anchor are gone, and with them the composer's old door --
+             `draft the rule ▸` on the refused line's card is the door
+             now, which is where the ports it drafts from are read
+             anyway.
+
+             What is left is the drawing saying it itself: colour is the
+             verdict, brightness is the baseline. An established line is
+             thin and dim with no flow; one off the baseline is full
+             width and bright with the flow moving on it and a ring
+             throbbing where it arrived; a refused one is red and ends in
+             a ✕ where the rule stopped it. Nothing is removed, only
+             dimmed. Same three-way treatment, and the same class names,
+             as the ribs above. -->
         {#each reachSummary.strands as s (s.key)}
-          {@const p = membranePoint(s.counterpart, s.outcome, s.direction)}
-          <path
-            class="strand"
-            d={strandPath(s.counterpart, s.outcome, s.direction)}
-            stroke={s.outcome === 'accepted' ? 'var(--accept)' : 'var(--alarm)'}
-            stroke-width={s.outcome === 'accepted' ? 2.2 : 2}
-          />
-          <!-- Each strand's own line still leaves from its own
-               membranePoint `p` above -- direction and outcome fan
-               those far enough apart to follow. Its pill does not: a
-               counterpart with all four of out/in x accepted/blocked
-               put four labels within a couple of those small offsets
-               of each other (#976 item 3, "port pills overlap each
-               other"). Every strand toward one counterpart instead
-               stacks its own line, in strandRank order, from that
-               counterpart's one shared anchor -- the same "stack
-               rather than let it overprint" #726 used for the edge
-               labels. -->
-          {@const anchor = counterpartAnchor(s.counterpart)}
-          {@const rank = strandRank(s)}
-          {#if s.outcome === 'blocked'}
-            <g transform="translate({p.x} {p.y}) rotate({p.angle})">
-              <line x1="-8" y1="0" x2="8" y2="0" stroke="var(--alarm)" stroke-width="3" />
-            </g>
-            <!-- The blocked label is the composer's door (scene 4): a
-                 denial becomes a rule in two clicks. -->
-            <text
-              x={anchor.x + 14}
-              y={anchor.y - 30 + rank * 18}
-              class="chip-t alarm-t strand-door"
-              role="button"
-              tabindex="0"
-              aria-label="Draft the rule: what may it say on this strand?"
-              onclick={(e) => {
+          {@const refused = s.outcome === 'blocked'}
+          {@const nb = !refused && strandOffBaseline(s.counterpart)}
+          {@const est = !refused && !nb}
+          {@const d = strandPath(s.counterpart, s.outcome, s.direction)}
+          <g
+            class="strand-g"
+            class:on={lineCard?.counterpart === s.counterpart}
+            role="button"
+            tabindex="0"
+            aria-label="{reach.host} {s.direction === 'out' ? '→' : '←'} {counterpartName(s.counterpart)} — the ports on this line"
+            onpointerenter={() => openLineCard(s.counterpart)}
+            onpointerleave={releaseLineCard}
+            onfocus={() => openLineCard(s.counterpart)}
+            onblur={releaseLineCard}
+            onclick={(e) => {
+              e.stopPropagation()
+              openLineCard(s.counterpart)
+              lineCardPinned = true
+            }}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
                 e.stopPropagation()
-                openCompose(s)
-              }}
-              onkeydown={(e) => {
-                if (e.key === 'Enter') {
-                  e.stopPropagation()
-                  openCompose(s)
-                }
-              }}
-            >
-              ⊣ {s.direction === 'out' ? 'dies at the membrane' : 'refused at the membrane'} · {portsLine(s.ports)} · {s.count}×{s.refusedBy
-                ? ` · ${s.refusedBy}`
-                : ''}
-            </text>
-          {:else}
-            <text x={anchor.x + 14} y={anchor.y - 30 + rank * 18} class="chip-t ok-t">
-              {s.direction === 'out' ? '→' : '→ in'} {portsLine(s.ports)} · {s.count}×
-            </text>
-          {/if}
+                openLineCard(s.counterpart)
+                lineCardPinned = true
+              }
+            }}
+          >
+            <title>{reach.host} {s.direction === 'out' ? '→' : '←'} {counterpartName(s.counterpart)}</title>
+            <!-- A wide invisible line, so the pointer can find a strand
+                 drawn 1.3px thin without having to trace it exactly. -->
+            <path class="strand-hit" {d} />
+            <path
+              class="strand"
+              class:established={est}
+              class:offbase={nb}
+              class:refused
+              {d}
+              stroke={refused ? 'var(--alarm)' : 'var(--accept)'}
+              style:stroke-width="{est ? 1.3 : 2.2}px"
+            />
+            {#if nb}
+              {@const rp = strandRingPoint(s)}
+              <path class="flow" {d} style:stroke="var(--accept)" style:stroke-width="1.1px" />
+              <circle class="nb-ring" cx={R2(rp.x)} cy={R2(rp.y)} r="7" />
+            {/if}
+            {#if refused}
+              <!-- The ✕ where the rule stopped it, at the membrane the
+                   strand died at (round-49/index.html:1319). -->
+              {@const p = membranePoint(s.counterpart, s.outcome, s.direction)}
+              <g class="strand-x" transform="translate({R2(p.x)} {R2(p.y)})">
+                <path d="M-5 -5L5 5M-5 5L5 -5" stroke="var(--alarm)" stroke-width="2" stroke-linecap="round" />
+                <circle r="9" fill="none" stroke="var(--alarm)" stroke-opacity="0.45" />
+              </g>
+            {/if}
+          </g>
         {/each}
 
         <!-- the host, centred, with its lane-mates inside. Its own node
@@ -4219,18 +4539,13 @@
         {/each}
 
         {#if reachHasInternet}
+          <!-- The internet's own band along the foot. Its peers and
+               ports used to be printed along it; round 49 supersedes
+               "ports written along a road" on both surfaces, so the band
+               is named and nothing else -- the internet strand's own
+               card carries what was on it. -->
           <path d="M 180 574 C 460 622, 940 622, 1220 574" fill="none" stroke="var(--hair-2)" stroke-width="1.1" />
           <text x="1250" y="580" class="n-sub">INTERNET</text>
-          {#each reachSummary.strands.filter((s) => s.counterpart === 'internet').slice(0, 3) as s, si (s.key)}
-            <text
-              x={280 + si * 300}
-              y={si % 2 === 0 ? 566 : 588}
-              class="n-sub"
-              fill={s.outcome === 'accepted' ? 'var(--fg-muted)' : 'var(--alarm)'}
-            >
-              {s.peers.slice(0, 1).join('')} {portsLine(s.ports)}
-            </text>
-          {/each}
         {/if}
 
         {#if reachSummary.strands.length === 0}
@@ -4238,6 +4553,130 @@
           <text x={MX} y={MY + 80} text-anchor="middle" class="n-sub">nothing observed this window</text>
         {/if}
       </svg>
+    </div>
+  {/if}
+
+  <!-- The line card (round 49's `flat-reach`, DESIGN.md "Cards": "Line
+       card in the reach: the port / proto / accepted / dropped table,
+       the totals, `:22 refused by #17 default drop`, and on a refused
+       strand the composer's `draft the rule ▸`").
+
+       This is where everything that used to be printed on the strands
+       went. Its reading is `reachLineSummary`, so the ports, the split
+       and the refusing rule are one shared implementation with the
+       city's own line card rather than a second one drawn from the same
+       events. Placed by lib/cardAnchor like every other card here. -->
+  {#if reach && lineCard && lineCardSummary}
+    {#if lineCardPlace}
+      <svg class="leader" aria-hidden="true">
+        <path
+          d="M{lineCardPlace.from.x} {lineCardPlace.from.y}L{lineCardPlace.to.x} {lineCardPlace.to.y}"
+          stroke="var(--hair-2)"
+          stroke-width="1"
+          fill="none"
+        />
+        <circle cx={lineCardPlace.from.x} cy={lineCardPlace.from.y} r="3" fill="var(--accent)" />
+      </svg>
+    {/if}
+    <div
+      class="card line-card"
+      class:pinned={lineCardPinned}
+      class:placed={lineCardPlace !== null}
+      style={lineCardPlace ? `left:${R2(lineCardPlace.left)}px;top:${R2(lineCardPlace.top)}px` : undefined}
+      bind:this={lineCardEl}
+      role="dialog"
+      tabindex="-1"
+      aria-label="{reach.host} → {counterpartName(lineCard.counterpart)}: the ports on this line"
+      onpointerenter={lineGrace.hold}
+      onpointerleave={releaseLineCard}
+    >
+      <div class="t">
+        <span class="n"
+          >{reach.host} → {counterpartName(lineCard.counterpart)}{#if lineCardCidr}<small>{lineCardCidr}</small>{/if}</span
+        >
+        <button
+          class="pin"
+          class:on={lineCardPinned}
+          aria-pressed={lineCardPinned}
+          title={lineCardPinned ? 'pinned — click to let it go' : 'pin this card'}
+          onclick={pinLineCard}
+        >
+          {lineCardPinned ? '✕' : '⊙'}
+        </button>
+      </div>
+
+      {#if lineCardSummary.ports.length > 0}
+        <table>
+          <thead>
+            <tr><th>PORT</th><th>PROTO</th><th class="n">ACCEPTED</th><th class="n">DROPPED</th></tr>
+          </thead>
+          <tbody>
+            {#each lineCardSummary.ports as p (`${p.port}|${p.proto}`)}
+              {@const fresh = lineCardNewPorts.has(p.port)}
+              <tr class:lit={fresh} data-line-port={p.port}>
+                <td
+                  >{p.port}{#if fresh}<span class="newmark"> new</span>{/if}</td
+                >
+                <!-- '' where the events named no protocol: unknown, never
+                     assumed TCP (lib/reach.ts says why). -->
+                <td class:dim={p.proto === ''}>{p.proto === '' ? 'unnamed' : p.proto}</td>
+                <td class="n" class:ok={p.accepted > 0} class:dim={p.accepted === 0}>{p.accepted > 0 ? p.accepted.toLocaleString() : '—'}</td>
+                <td class="n" class:al={p.dropped > 0} class:dim={p.dropped === 0}>{p.dropped > 0 ? p.dropped.toLocaleString() : '—'}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {:else}
+        <!-- Traffic with no destination port at all -- ICMP and friends.
+             It still totals below; an empty table is not an empty line. -->
+        <div class="s">no destination port was named on this line</div>
+      {/if}
+
+      <!-- The totals, and the same three numbers drawn as the picture
+           the design asks for: tcp against udp, with everything that is
+           neither in `other`, so the bar totals the line. -->
+      <div class="s totals" data-line-totals>
+        tcp <b>{lineCardSummary.tcp.toLocaleString()}</b> · udp <b>{lineCardSummary.udp.toLocaleString()}</b> · other
+        <b>{lineCardSummary.other.toLocaleString()}</b>
+      </div>
+      {#if lineCardTotal > 0}
+        <div class="protobar" aria-hidden="true">
+          <i class="tcp" style:width="{(lineCardSummary.tcp / lineCardTotal) * 100}%"></i>
+          <i class="udp" style:width="{(lineCardSummary.udp / lineCardTotal) * 100}%"></i>
+          <i class="oth" style:width="{(lineCardSummary.other / lineCardTotal) * 100}%"></i>
+        </div>
+      {/if}
+
+      {#if lineCardSummary.refusedBy}
+        <!-- The refusing rule, named from the events themselves and
+             never guessed at (#967). -->
+        <div class="s al" data-refused-by>
+          {lineCardRefusedPorts} refused by {lineCardSummary.refusedBy}
+        </div>
+      {:else if lineCardSummary.dropped > 0}
+        <div class="s al">{lineCardRefusedPorts} refused — the drop named no rule</div>
+      {/if}
+
+      {#each lineCardOffLines as l (l.key)}
+        <div class="s nb"><i class="sw nb"></i>{linePort(l)} first seen {lineFirstSeen(l)} · not on the baseline</div>
+      {/each}
+
+      <div class="acts">
+        {#if lineCardRefused}
+          <!-- The composer's door, which the removed strand pill used to
+               be. It drafts and never runs, the same invariant as
+               before: mikroview observes, it never connects. -->
+          <button
+            class="hot"
+            data-draft-rule
+            onclick={() => {
+              const s = lineCardRefused
+              if (s) openCompose(s)
+            }}>draft the rule ▸</button
+          >
+        {/if}
+        <button onclick={openLineStream}>stream ▸</button>
+      </div>
     </div>
   {/if}
 
@@ -4787,17 +5226,54 @@
     z-index: 2;
   }
 
+  /* `name · ip · reaches N · reached by N · refused N · Esc surfaces ▸`
+     -- the city's own crumb, one row, with the counts sized down from
+     the name so the thing stood on still reads first. */
   .crumb .path {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 11px;
+    align-items: baseline;
     font-size: 18px;
     font-weight: 550;
     letter-spacing: -0.01em;
     color: var(--fg);
   }
 
-  .crumb .sep {
+  .crumb .path > span:not(.here) {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 400;
     color: var(--fg-dim);
-    font-weight: 300;
-    padding: 0 8px;
+  }
+
+  .crumb .path > span > b {
+    color: var(--fg-muted);
+    font-weight: 550;
+  }
+
+  .crumb .path .ip {
+    color: var(--fg-muted);
+  }
+
+  .crumb .path span.alarm,
+  .crumb .path span.alarm > b {
+    color: var(--alarm);
+  }
+
+  /* The city's own divider: a hairline rule, not a printed separator. */
+  .crumb i.bar {
+    width: 1px;
+    height: 12px;
+    background: var(--hair-2);
+    align-self: center;
+  }
+
+  .crumb .esc {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--accent);
   }
 
   .crumb .here {
@@ -5448,6 +5924,65 @@
     color: var(--alarm);
   }
 
+  /* A dash rather than a zero: nothing was dropped here, which is a
+     different statement from "0 was dropped here". */
+  .card td.dim {
+    color: var(--fg-dim);
+  }
+
+  /* ---- the reach's line card (round 49's `flat-reach`) ---- */
+
+  /* Wider than the standard card: it carries a four-column table, and
+     round 49's own line card is 292px against the 264px default
+     (round-49/index.html:1138). */
+  .line-card {
+    width: 292px;
+  }
+
+  /* The port that is off the baseline today, marked in the table the way
+     the mockup marks it -- the row itself already reads at full strength
+     through `tr.lit`. */
+  .line-card .newmark {
+    color: var(--accept);
+    font-weight: 600;
+  }
+
+  .line-card .totals {
+    margin-top: 6px;
+  }
+
+  /* The tcp-versus-udp picture: the totals line drawn as one bar, so the
+     split reads at a glance rather than being three numbers to compare.
+     The three widths total the line by construction. */
+  .line-card .protobar {
+    display: flex;
+    height: 3px;
+    margin-top: 5px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: var(--hair);
+  }
+
+  .line-card .protobar i {
+    display: block;
+    height: 100%;
+  }
+
+  .line-card .protobar i.tcp {
+    background: var(--accept);
+    opacity: 0.85;
+  }
+
+  .line-card .protobar i.udp {
+    background: var(--nat, var(--accent));
+    opacity: 0.8;
+  }
+
+  .line-card .protobar i.oth {
+    background: var(--fg-dim);
+    opacity: 0.6;
+  }
+
   /* The per-line `expected ▸` and the form it opens, each under the line
      it is about. Same shape as the city road card's own rows, so a line
      reads the same on either side of the altitude slider (#1016). */
@@ -5947,10 +6482,61 @@
     outline: none;
   }
 
+  /* The strands, drawn to round 49's brightness table
+     (round-49/README.md "Brightness (the baseline)"), the same three
+     states and the same numbers as the ribs above: established .28 at
+     0.6x width with no flow, off-baseline .85 at full width with flow
+     and a ring, refused in alarm ink. Nothing is written on any of
+     them. */
   .strand {
     fill: none;
     stroke-linecap: round;
     opacity: 0.8;
+  }
+
+  .strand.established {
+    opacity: 0.28;
+  }
+
+  .strand.offbase {
+    opacity: 0.85;
+  }
+
+  .strand.refused {
+    opacity: 0.75;
+    filter: drop-shadow(0 0 5px rgba(255, 84, 112, 0.4));
+  }
+
+  /* The pointer's target: a strand is drawn as thin as 1.3px when it is
+     established, which is far too fine to hit. Invisible, wide, and
+     under the drawn line. */
+  .strand-hit {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 14px;
+    stroke-linecap: round;
+  }
+
+  .strand-g {
+    cursor: pointer;
+  }
+
+  .strand-g:hover .strand,
+  .strand-g.on .strand {
+    opacity: 1;
+  }
+
+  .strand-g:focus-visible {
+    outline: none;
+  }
+
+  .strand-g:focus-visible .strand {
+    opacity: 1;
+    stroke-dasharray: none;
+  }
+
+  .strand-x {
+    pointer-events: none;
   }
 
   .cluster {
@@ -6545,6 +7131,15 @@
 
   .gf-road-x {
     stroke: var(--alarm);
+  }
+
+  .gf-node-g {
+    cursor: pointer;
+  }
+
+  .gf-node-g:hover .gf-node,
+  .gf-node-g:focus-visible .gf-node {
+    fill: var(--accent);
   }
 
   .gf-node {
