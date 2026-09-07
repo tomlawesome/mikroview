@@ -223,6 +223,53 @@ function summarizeLongTasks(tasks, label) {
   return { total }
 }
 
+// Sign in, and if the door is not the one this probe expects, say what
+// was on the screen instead of what selector was missing (#1024).
+//
+// `page.fill` on the username field used to be the first thing this did.
+// When it timed out -- which is how perf:promotion failed in job 6360 --
+// all anyone got was the name of a locator, and every explanation for it
+// stayed a guess. There are three states behind that one selector
+// (App.svelte:202-208): AuthLogin, which has the field; AuthSetup's gate,
+// a lone Enter button shown while no account exists; and 'loading',
+// which draws neither. They fail identically and mean entirely different
+// things, so the probe reads the page and the session endpoint before it
+// gives up.
+//
+// What tells the two doors apart is the fields, not the button: both
+// label their button "Enter" (AuthScreen.svelte's gate branch and the
+// login form's submit read the same), and the gate is the one with no
+// inputs at all. `setupRequired` in the session body says the same thing
+// from the server's side, which is why both are printed.
+async function signIn(page) {
+  try {
+    await page.waitForSelector('input[autocomplete="username"]', { timeout: 30000 })
+  } catch {
+    let session = 'unreadable'
+    try {
+      session = JSON.stringify(await page.request.get(`${URL_BASE}/api/auth/session`).then((r) => r.json()))
+    } catch (e) {
+      session = `request failed: ${e.message}`
+    }
+    const seen = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      buttons: [...document.querySelectorAll('button')].map((b) => b.textContent?.trim()).filter(Boolean),
+      inputs: [...document.querySelectorAll('input')].map((i) => i.getAttribute('autocomplete') || i.type),
+      text: (document.body.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 400),
+    }))
+    console.error('probe-perf: no login field after 30s.')
+    console.error(`  url: ${seen.url}`)
+    console.error(`  title: ${seen.title}`)
+    console.error(`  inputs on the page: ${seen.inputs.length ? seen.inputs.join(', ') : 'none'}`)
+    console.error(`  buttons on the page: ${seen.buttons.length ? seen.buttons.join(' | ') : 'none'}`)
+    console.error(`  GET /api/auth/session: ${session}`)
+    console.error(`  body text: ${seen.text || '(empty -- the app rendered nothing)'}`)
+    throw new Error('probe-perf: the app never showed a login field; see the page state above')
+  }
+  await page.fill('input[autocomplete="username"]', USER)
+}
+
 async function main() {
   const browser = await chromium.launch()
   const context = await browser.newContext({ colorScheme: 'dark', ignoreHTTPSErrors: true })
@@ -249,7 +296,7 @@ async function main() {
   }
 
   await page.goto(URL_BASE, { waitUntil: 'networkidle' })
-  await page.fill('input[autocomplete="username"]', USER)
+  await signIn(page)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
   await page.waitForSelector('#main-content', { timeout: 15000 })
