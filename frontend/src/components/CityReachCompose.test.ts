@@ -153,9 +153,9 @@ describe('the composer prints the same line in the city as in 2D (#868)', () => 
     // Round 49: the city's composer opens from the refused line's own
     // card, so open that card and ask for the draft. What it then
     // prints is unchanged -- that is what this test is about.
-    const refused = city.container.querySelector('[data-road-hot^="mark:"], [data-road-hot]') as HTMLElement
-    expect(refused).not.toBeNull()
-    await fireEvent.pointerEnter(refused)
+    const refusedRoad = city.container.querySelector('[data-road-hot^="mark:"], [data-road-hot]') as HTMLElement
+    expect(refusedRoad).not.toBeNull()
+    await fireEvent.pointerEnter(refusedRoad)
     flushSync()
     await fireEvent.click(city.container.querySelector('[data-draft-rule]') as HTMLElement)
     flushSync()
