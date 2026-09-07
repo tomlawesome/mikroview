@@ -196,7 +196,7 @@ await range.fill('2')
 await page.waitForSelector('[data-card="topography"] .camera.cam-zones', { timeout: 5000 })
 check(true, 'moving the slider to zones applies the flat ground-plan camera')
 
-// #976 item 1: the lane-based trunk and traffic-lens edges used to stay
+// #976 item 1: the lane-based trunk and the traffic edges used to stay
 // on screen at zones -- present in the markup at every altitude like
 // every other camera layer, but never added to the stylesheet's
 // cam-zones hide list the way `.isl-card`/`.detail` were -- so the
@@ -214,16 +214,21 @@ const zonesVisibility = await page.evaluate(() => {
 })
 check(zonesVisibility.ground === true, `the ground plan is shown at zones (${JSON.stringify(zonesVisibility)})`)
 check(zonesVisibility.rib === false, `the lane-based trunk is hidden at zones (${JSON.stringify(zonesVisibility)})`)
-check(zonesVisibility.edge === false, `the traffic lens's own edges are hidden at zones, so they no longer paint over the ground plan (${JSON.stringify(zonesVisibility)})`)
+check(zonesVisibility.edge === false, `the traffic edges are hidden at zones, so they no longer paint over the ground plan (${JSON.stringify(zonesVisibility)})`)
 
 // --- node info cards ---------------------------------------------------------
 
-// #869's one ground plan: `zones` draws cards with a host count and no
-// per-host labels, and hosts get their own names one stop down. So the
-// host link this section follows lives at `clients`, not `zones`.
-await range.fill('0')
-await page.waitForSelector('[data-card="topography"] .host-link', { timeout: 10000 })
-await page.click('[data-card="topography"] .host-link >> text=192.168.1.60')
+// Round 49's living hosts (#1016): the `.host-link` list this section
+// used to follow is gone. Hosts are now drawn as a row of dots inside
+// each lane card at the `services` stop -- ten dots then `+N`, every
+// dot clickable to its reach (DESIGN.md "Living hosts") -- so that dot
+// is the way down to the host, and `descendFromHost` is what the click
+// runs. `.host-link` still has a stylesheet rule with no markup left to
+// match it, which is why waiting on it timed out rather than failing.
+await range.fill('1')
+await page.waitForSelector('[data-card="topography"] .hostrow .hot', { timeout: 10000 })
+await new Promise((r) => setTimeout(r, 700))
+await page.click('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.60"]')
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
 
 await page.click('[data-card="topography"] .host-node')
