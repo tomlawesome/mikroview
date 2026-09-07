@@ -64,6 +64,16 @@
   import { STOPS, R2, flatFit, FX, FY } from '../lib/city/project'
   import { layoutGround } from '../lib/city/layout'
   import { cityInputFrom } from '../lib/city/input'
+  import {
+    EXPECTED_LABEL,
+    EXPECTED_ONE_LABEL,
+    expectedAllLabel,
+    expectedPlaceholder,
+    expectedTargets,
+    expectedWho,
+    offersExpectedAll,
+    type ExpectedScope,
+  } from '../lib/city/expected'
   import type { District, Ground } from '../lib/city/types'
   import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
   import { cardSize, drawnRect, drawnRects, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
@@ -1588,6 +1598,11 @@
    * to say for itself. */
   let offReason = $state('')
   let offBusy = $state(false)
+  /** Which lines the open reason form will speak for: one named line
+   * (the default), or every line this rib carries off the baseline.
+   * Null means no form is open. The city road card holds exactly the
+   * same state, through the same lib/city/expected helpers. */
+  let offScope = $state<ExpectedScope | null>(null)
   const offGrace = grace()
 
   /** The open rib's own drawn half, taken live rather than kept from
@@ -1604,6 +1619,9 @@
    * under the card -- the register refreshed, or `expected` landed -- and
    * the card closes itself rather than standing there describing nothing. */
   const offCardLines = $derived(offCard ? offLinesFor(offCard.key) : [])
+
+  /** The lines the open form is about to speak for, and how many. */
+  const offScopeLines = $derived(offScope ? expectedTargets(offScope, offCardLines) : [])
 
   $effect(() => {
     if (offCard && offCardLines.length === 0) closeOffCard()
@@ -1654,6 +1672,7 @@
     if (offCardPinned || cardPinned || hostCardPinned) return
     baselineState.error = null
     offReason = ''
+    offScope = null
     offCardPinned = false
     offCard = { key }
   }
@@ -1675,41 +1694,70 @@
     offCardPinned = false
     offCardPlace = null
     offReason = ''
+    offScope = null
   }
 
-  /** The pin is what opens the form, as everywhere else on this map. */
+  /** The header pin, which keeps the card up. It no longer opens the
+   * form: the form belongs to a line now, and it is the line's own
+   * `expected ▸` (or the bulk control) that opens it. */
   function pinOffCard() {
     if (!isAdmin) {
       closeOffCard()
       return
     }
     offCardPinned = !offCardPinned
+    if (!offCardPinned) offScope = null
+  }
+
+  /** Open the reason form for one line -- the default action, one per
+   * listed line. Pinning keeps the card up while the reason is typed. */
+  function startExpectedOne(key: string) {
+    openExpectedForm({ kind: 'one', key })
+  }
+
+  /** Open the reason form for every line this rib carries off the
+   * baseline. Only ever reached from the control that said how many. */
+  function startExpectedAll() {
+    openExpectedForm({ kind: 'all' })
+  }
+
+  function openExpectedForm(scope: ExpectedScope) {
+    if (!isAdmin) return
+    offGrace.hold()
+    offCardPinned = true
+    offScope = scope
+    offReason = ''
+    baselineState.error = null
   }
 
   /**
-   * `expected` says the lines this card lists are meant to be there, and
-   * they read established from then on. The server stamps who and when
-   * from the session; the reason is ours to require.
+   * `expected` says the lines this write covers are meant to be there,
+   * and they read established from then on. The server stamps who and
+   * when from the session; the reason is ours to require.
    *
-   * The mockup draws one line and so one write ("this line only"). Where
-   * a rib carries several, one reason covers all of them -- the operator
-   * is answering the rib in front of them, and asking the same question
-   * once per row would be the map making work out of its own roll-up.
-   * The form says which it is either way.
+   * Per-line is the default (owner, 2026-09-07, #1016). Marking one of
+   * several leaves the rest in the register, so the other rows stay
+   * bright and the rib stays bright until nothing off-baseline is left
+   * on it -- nothing here has to model that, because the register is
+   * re-read on every success. A bulk mark is this same single-line write
+   * repeated with the same reason, never a second kind of record.
    */
   async function submitExpected() {
-    const lines = offCardLines
+    const targets = offScopeLines
     const reason = offReason.trim()
-    if (lines.length === 0 || reason === '') return
+    if (targets.length === 0 || reason === '' || offBusy) return
     offBusy = true
-    for (const l of lines) {
+    for (const l of targets) {
       // Stops at the first refusal rather than pressing on: the error is
       // shown, and a half-written statement the operator cannot see the
       // shape of is worse than none.
       if (!(await baselineState.expected(l.key, reason))) break
     }
     offBusy = false
-    if (baselineState.error === null) closeOffCard()
+    if (baselineState.error === null) {
+      offScope = null
+      offReason = ''
+    }
   }
 
   /** The stream, filtered to this rib's own pair. */
@@ -4480,6 +4528,31 @@
     </div>
   {/if}
 
+  <!-- The reason form, written once and rendered wherever it was opened:
+       under the line whose own `expected ▸` opened it, or under the bulk
+       control. The reason is the statement -- the server refuses an
+       empty one, and `expected` with nothing said for it would be a line
+       quietly leaving the sieve with no record of who decided. Same
+       words and same control order as the city road card, which renders
+       the identical wording out of lib/city/expected. -->
+  {#snippet expectedForm()}
+    {@const scope = offScope}
+    {#if scope}
+      <div class="form">
+        <label for="{uid}-expected-why">{EXPECTED_LABEL}</label>
+        <input id="{uid}-expected-why" bind:value={offReason} placeholder={expectedPlaceholder(scope, offScopeLines.length)} />
+        <div class="btns">
+          <button class="go" disabled={offBusy || !offReason.trim()} onclick={submitExpected}>Expected</button>
+          <button class="no" onclick={() => (offScope = null)}>cancel</button>
+          <span class="who">{expectedWho(authState.username, scope, offScopeLines.length)}</span>
+        </div>
+        {#if baselineState.error}
+          <p class="d-error">{baselineState.error}</p>
+        {/if}
+      </div>
+    {/if}
+  {/snippet}
+
   {#if openOffDrawn && offCardLines.length > 0 && !reach && !hostCard && !boundaryCard}
     <!-- The off-baseline card (round 49's `flat-new`, ported from
          round-49/index.html's `newLine`): the bright half hovered, and
@@ -4556,36 +4629,45 @@
               <td class="n" class:ok={l.outcome === 'accept'} class:al={l.outcome === 'drop'}>{l.count.toLocaleString()}</td>
               <td class="n">{lineFirstSeen(l)}</td>
             </tr>
+            {#if offScope?.kind === 'one' && offScope.key === l.key}
+              <tr class="formrow">
+                <td colspan="4">{@render expectedForm()}</td>
+              </tr>
+            {:else if isAdmin}
+              <!-- Per-line is the default: this button marks the line it
+                   sits under and nothing else, so the ones above and
+                   below it stay bright and the rib stays bright until
+                   none of them is left (#1016, owner 2026-09-07). -->
+              <tr class="actrow">
+                <td colspan="4"
+                  ><button type="button" class="linkact" data-expected-one={l.key} onclick={() => startExpectedOne(l.key)}>{EXPECTED_ONE_LABEL}</button
+                  ></td
+                >
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
 
-      <div class="s">{offCardVerdict}</div>
-
-      {#if offCardPinned && isAdmin}
-        <!-- The reason is the statement: the server refuses an empty one,
-             and `expected` with nothing said for it would be a line
-             quietly leaving the sieve with no record of who decided. -->
-        <div class="form">
-          <label for="{uid}-expected-why">EXPECTED — WHY?</label>
-          <input id="{uid}-expected-why" bind:value={offReason} placeholder="why this traffic is meant to be there…" />
-          {#if baselineState.error}
-            <p class="d-error">{baselineState.error}</p>
-          {/if}
-          <div class="btns">
-            <button class="go" disabled={offBusy || !offReason.trim()} onclick={submitExpected}>Expected</button>
-            <button class="no" onclick={closeOffCard}>cancel</button>
-            <span class="who"
-              >as {authState.username} · {offCardLines.length === 1 ? 'this line only' : `these ${offCardLines.length} lines`}</span
-            >
+      <!-- Accepting the lot, off the table and clearly apart from the
+           per-line buttons in it. It says its own count, so nobody can
+           retire several lines by clicking what looked like one line's
+           action. Never shown for a single line: that is what the button
+           in the row already does. Same words and same order as the city
+           road card, out of lib/city/expected. -->
+      {#if isAdmin && offersExpectedAll(offCardLines.length)}
+        {#if offScope?.kind === 'all'}
+          <div class="allof">{@render expectedForm()}</div>
+        {:else}
+          <div class="allof">
+            <button type="button" class="linkact all" disabled={offBusy} onclick={startExpectedAll}>{expectedAllLabel(offCardLines.length)}</button>
           </div>
-        </div>
+        {/if}
       {/if}
 
+      <div class="s">{offCardVerdict}</div>
+
       <div class="acts">
-        {#if isAdmin && !offCardPinned}
-          <button disabled={offBusy} onclick={pinOffCard}>expected ▸</button>
-        {/if}
         {#if offCardReach}
           <button
             onclick={() => {
@@ -5364,6 +5446,50 @@
 
   .card td.al {
     color: var(--alarm);
+  }
+
+  /* The per-line `expected ▸` and the form it opens, each under the line
+     it is about. Same shape as the city road card's own rows, so a line
+     reads the same on either side of the altitude slider (#1016). */
+  .card tr.actrow td,
+  .card tr.formrow td {
+    padding: 2px 0 8px;
+  }
+
+  .card .linkact {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: 10px var(--font-sans);
+    cursor: pointer;
+  }
+
+  .card .linkact:hover {
+    text-decoration: underline;
+  }
+
+  /* The bulk control sits below the table, ruled off from it, so it
+     reads as being about the whole list rather than about whichever row
+     it happens to sit under. Dim rather than accent: it is the
+     deliberate one, never the one the eye lands on first. */
+  .card .allof {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--hair-2);
+  }
+
+  .card .linkact.all {
+    color: var(--fg-dim);
+  }
+
+  .card .linkact.all:hover {
+    color: var(--accent);
+  }
+
+  .card .linkact:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .card .quote {

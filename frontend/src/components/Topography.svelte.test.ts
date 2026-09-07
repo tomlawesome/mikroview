@@ -3683,27 +3683,69 @@ describe('brightness is the baseline (round 49, #1016)', () => {
       return container.querySelector<HTMLDivElement>('.card[aria-label^="Off the baseline"]')
     }
 
+    /** The open card, re-read after a click has re-rendered it. */
+    function offCard(container: HTMLElement) {
+      return container.querySelector<HTMLDivElement>('.card[aria-label^="Off the baseline"]')!
+    }
+
     function act(card: HTMLElement, label: string) {
       return [...card.querySelectorAll<HTMLButtonElement>('.acts button')].find((b) => b.textContent?.trim() === label)
+    }
+
+    /** One line's own `expected ▸`, the default action (#1016). Keyed by
+     * the line rather than by position, so a test names which line it
+     * meant rather than trusting the table's order. */
+    function expectedFor(card: HTMLElement, key: string) {
+      return card.querySelector<HTMLButtonElement>(`.linkact[data-expected-one="${key}"]`)
+    }
+
+    /** Every per-line `expected ▸` the card is offering. */
+    function perLineActs(card: HTMLElement) {
+      return [...card.querySelectorAll<HTMLButtonElement>('.linkact[data-expected-one]')]
+    }
+
+    /** The bulk control, which is the only way to mark more than one. */
+    function bulkAct(card: HTMLElement) {
+      return card.querySelector<HTMLButtonElement>('.allof .linkact.all')
+    }
+
+    function typeReason(card: HTMLElement, reason: string) {
+      const input = card.querySelector<HTMLInputElement>('.form input')!
+      input.value = reason
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      flushSync()
+    }
+
+    /** The line keys every PUT actually wrote, in order. */
+    function written(calls: { url: string; init?: RequestInit }[]) {
+      return calls.filter((c) => c.init?.method === 'PUT').map((c) => /\/api\/baseline\/(.+)\/expected$/.exec(c.url)![1])
     }
 
     /** The register's own endpoints, answered rather than reached. The
      * assertion is what was written, so the write has to travel the real
      * path -- api.putBaselineExpected -- not a spy on the store. */
-    function stubApi() {
+    function stubApi(seeded: OffBaselineLine[] = []) {
       const calls: { url: string; init?: RequestInit }[] = []
+      // A line that has been spoken for stops being off the baseline, so
+      // the refresh that follows a write answers with the rest. Marking
+      // one of several has to leave the others in the register, or no
+      // test here can tell per-line from bulk (#1016).
+      const marked = new Set<string>()
       vi.stubGlobal(
         'fetch',
         vi.fn(async (url: string, init?: RequestInit) => {
           calls.push({ url, init })
           if (url.startsWith('/api/baseline/off')) {
+            const lines = seeded.filter((l) => !marked.has(l.key))
             return {
               ok: true,
               status: 200,
-              json: async () => ({ config: { days: 3, of: 14 }, generatedAt: 1, count: 0, lines: [], hostQuietAfterMs: 86_400_000 }),
+              json: async () => ({ config: { days: 3, of: 14 }, generatedAt: 1, count: lines.length, lines, hostQuietAfterMs: 86_400_000 }),
             } as unknown as Response
           }
-          return { ok: true, status: 200, json: async () => ({ key: 'line1' }), text: async () => '' } as unknown as Response
+          const put = init?.method === 'PUT' ? /\/api\/baseline\/(.+)\/expected$/.exec(url) : null
+          if (put) marked.add(put[1])
+          return { ok: true, status: 200, json: async () => ({ key: put?.[1] ?? 'line1' }), text: async () => '' } as unknown as Response
         }),
       )
       return calls
@@ -3764,37 +3806,34 @@ describe('brightness is the baseline (round 49, #1016)', () => {
     })
 
     it('asks for a reason before writing expected -- the reason is the statement', () => {
-      const calls = stubApi()
+      const line = offLine()
+      const calls = stubApi([line])
       twoLanes()
-      seedOff([offLine()])
+      seedOff([line])
       const { container } = render(Topography)
       flushSync()
 
-      act(openOffCard(container)!, 'expected ▸')!.click()
+      expectedFor(openOffCard(container)!, line.key)!.click()
       flushSync()
 
-      const card = container.querySelector<HTMLDivElement>('.card[aria-label^="Off the baseline"]')!
+      const card = offCard(container)
       expect(card.querySelector<HTMLButtonElement>('.form .go')!.disabled).toBe(true)
       expect(calls.some((c) => c.init?.method === 'PUT')).toBe(false)
     })
 
     it('writes the reason through the baseline register, for the line the card names', async () => {
-      const calls = stubApi()
-      twoLanes()
       const line = offLine()
+      const calls = stubApi([line])
+      twoLanes()
       seedOff([line])
       const { container } = render(Topography)
       flushSync()
 
-      act(openOffCard(container)!, 'expected ▸')!.click()
+      expectedFor(openOffCard(container)!, line.key)!.click()
       flushSync()
 
-      const card = container.querySelector<HTMLDivElement>('.card[aria-label^="Off the baseline"]')!
-      const input = card.querySelector<HTMLInputElement>('.form input')!
-      input.value = 'new backup job from the desktop to the nas'
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      flushSync()
-      card.querySelector<HTMLButtonElement>('.form .go')!.click()
+      typeReason(offCard(container), 'new backup job from the desktop to the nas')
+      offCard(container).querySelector<HTMLButtonElement>('.form .go')!.click()
 
       await vi.waitFor(() => expect(calls.some((c) => c.init?.method === 'PUT')).toBe(true))
       const put = calls.find((c) => c.init?.method === 'PUT')!
@@ -3806,14 +3845,15 @@ describe('brightness is the baseline (round 49, #1016)', () => {
     })
 
     it('shows who it will be recorded as, the way the declare form does', () => {
-      stubApi()
+      const line = offLine()
+      stubApi([line])
       authState.username = 'tom'
       twoLanes()
-      seedOff([offLine()])
+      seedOff([line])
       const { container } = render(Topography)
       flushSync()
 
-      act(openOffCard(container)!, 'expected ▸')!.click()
+      expectedFor(openOffCard(container)!, line.key)!.click()
       flushSync()
 
       const who = container.querySelector('.card[aria-label^="Off the baseline"] .form .who')!
@@ -3824,11 +3864,205 @@ describe('brightness is the baseline (round 49, #1016)', () => {
     it('offers no expected action to a viewer -- the affordance is absent, not disabled', () => {
       authState.role = 'viewer'
       twoLanes()
-      seedOff([offLine()])
+      seedOff([offLine(), offLine({ port: 22 })])
       const { container } = render(Topography)
       flushSync()
 
-      expect(act(openOffCard(container)!, 'expected ▸')).toBeUndefined()
+      const card = openOffCard(container)!
+      expect(perLineActs(card)).toHaveLength(0)
+      expect(bulkAct(card)).toBeNull()
+      expect(act(card, 'expected ▸')).toBeUndefined()
+    })
+
+    // Per-line is the default (owner, 2026-09-07). The screen is a
+    // sieve: waving a whole rib through on one click can retire
+    // something nobody looked at, so one click marks one line and
+    // marking several is only ever reachable from a control that says
+    // how many it covers.
+    //
+    // jsdom lays nothing out, so nothing below asserts a pixel. What is
+    // asserted is what the card decided: which keys were written, which
+    // lines are still listed, and whether the rib is still drawn lit.
+    describe('per-line by default, the lot only on purpose (#1016)', () => {
+      /** Three lines on the one rib, so "one of them" is a real claim. */
+      const three = () => [offLine(), offLine({ port: 22, srcIp: '10.0.10.22' }), offLine({ port: 445, outcome: 'drop' })]
+
+      /** Ribs only. The city draws its own roads into the same document
+       * and marks each with data-road; an unscoped count here would be
+       * answering for both surfaces at once. */
+      const litRibs = (container: HTMLElement) => container.querySelectorAll('.redge.offbase').length
+
+      it('offers one expected ▸ per listed line, not one for the whole rib', () => {
+        const lines = three()
+        stubApi(lines)
+        twoLanes()
+        seedOff(lines)
+        const { container } = render(Topography)
+        flushSync()
+
+        const card = openOffCard(container)!
+        expect(perLineActs(card).map((b) => b.dataset.expectedOne)).toEqual(lines.map((l) => l.key))
+        // And the card-level action is gone: the old one reason across
+        // every line is exactly what this replaced.
+        expect(act(card, 'expected ▸')).toBeUndefined()
+      })
+
+      it('marks only the line whose own action was clicked', async () => {
+        const lines = three()
+        const calls = stubApi(lines)
+        twoLanes()
+        seedOff(lines)
+        const { container } = render(Topography)
+        flushSync()
+
+        expectedFor(openOffCard(container)!, lines[1].key)!.click()
+        flushSync()
+        typeReason(offCard(container), 'the new monitoring agent')
+        offCard(container).querySelector<HTMLButtonElement>('.form .go')!.click()
+
+        await vi.waitFor(() => expect(written(calls)).toEqual([lines[1].key]))
+      })
+
+      it('leaves the other lines bright, and the rib bright, when one of three is spoken for', async () => {
+        const lines = three()
+        const calls = stubApi(lines)
+        twoLanes()
+        seedOff(lines)
+        const { container } = render(Topography)
+        flushSync()
+        expect(litRibs(container)).toBe(1)
+
+        expectedFor(openOffCard(container)!, lines[0].key)!.click()
+        flushSync()
+        typeReason(offCard(container), 'the new backup job')
+        offCard(container).querySelector<HTMLButtonElement>('.form .go')!.click()
+
+        // The register drops the line that was spoken for and keeps the
+        // rest, which is what the real endpoint does.
+        await vi.waitFor(() => expect(baselineState.off.lines.map((l) => l.key)).toEqual([lines[1].key, lines[2].key]))
+        flushSync()
+
+        // The two nobody has answered for are still listed, still
+        // offering their own action, and the rib is still lit.
+        const card = offCard(container)
+        expect(perLineActs(card).map((b) => b.dataset.expectedOne)).toEqual([lines[1].key, lines[2].key])
+        expect(litRibs(container)).toBe(1)
+        expect(card.textContent).toContain('2 off the baseline today')
+      })
+
+      it('lets the rib go dim only once its last off-baseline line is spoken for', async () => {
+        const lines = [offLine()]
+        const calls = stubApi(lines)
+        twoLanes()
+        seedOff(lines)
+        const { container } = render(Topography)
+        flushSync()
+
+        expectedFor(openOffCard(container)!, lines[0].key)!.click()
+        flushSync()
+        typeReason(offCard(container), 'the new backup job')
+        offCard(container).querySelector<HTMLButtonElement>('.form .go')!.click()
+
+        await vi.waitFor(() => expect(written(calls)).toEqual([lines[0].key]))
+        await vi.waitFor(() => expect(baselineState.off.lines).toEqual([]))
+        flushSync()
+        expect(litRibs(container)).toBe(0)
+        // Nothing was removed from the map: the rib is still drawn, it
+        // has just stopped being lit.
+        expect(container.querySelectorAll('.redge').length).toBe(2)
+      })
+
+      it('offers the lot behind a separate control that says how many it will mark', () => {
+        const lines = three()
+        stubApi(lines)
+        twoLanes()
+        seedOff(lines)
+        const { container } = render(Topography)
+        flushSync()
+
+        const bulk = bulkAct(openOffCard(container)!)!
+        expect(bulk.textContent!.trim()).toBe('mark all 3 expected ▸')
+        // It cannot be mistaken for a single line's action: it is not one
+        // of them, and it does not read like one.
+        expect(bulk.dataset.expectedOne).toBeUndefined()
+        expect(bulk.textContent!.trim()).not.toBe('expected ▸')
+      })
+
+      it('offers no bulk control when there is only one line -- there is no lot to accept', () => {
+        const lines = [offLine()]
+        stubApi(lines)
+        twoLanes()
+        seedOff(lines)
+        const { container } = render(Topography)
+        flushSync()
+
+        const card = openOffCard(container)!
+        expect(perLineActs(card)).toHaveLength(1)
+        expect(bulkAct(card)).toBeNull()
+      })
+
+      it('writes the same reason against every line the bulk control covers', async () => {
+        const lines = three()
+        const calls = stubApi(lines)
+        twoLanes()
+        seedOff(lines)
+        const { container } = render(Topography)
+        flushSync()
+
+        bulkAct(openOffCard(container)!)!.click()
+        flushSync()
+        typeReason(offCard(container), 'the whole rib is the new replication link')
+        offCard(container).querySelector<HTMLButtonElement>('.form .go')!.click()
+
+        await vi.waitFor(() => expect(written(calls)).toEqual(lines.map((l) => l.key)))
+        for (const c of calls.filter((x) => x.init?.method === 'PUT')) {
+          expect(JSON.parse(c.init!.body as string)).toEqual({ reason: 'the whole rib is the new replication link' })
+        }
+        await vi.waitFor(() => expect(baselineState.off.lines).toEqual([]))
+        flushSync()
+        expect(litRibs(container)).toBe(0)
+      })
+
+      it('says which it is: this line only, or all of them with the count', () => {
+        const lines = three()
+        stubApi(lines)
+        authState.username = 'tom'
+        twoLanes()
+        seedOff(lines)
+        const { container } = render(Topography)
+        flushSync()
+
+        expectedFor(openOffCard(container)!, lines[0].key)!.click()
+        flushSync()
+        expect(offCard(container).querySelector('.form .who')!.textContent).toBe('as tom · this line only')
+        expect(offCard(container).querySelector<HTMLInputElement>('.form input')!.placeholder).toBe('why this line is meant to be here…')
+
+        offCard(container).querySelector<HTMLButtonElement>('.form .no')!.click()
+        flushSync()
+        bulkAct(offCard(container))!.click()
+        flushSync()
+        expect(offCard(container).querySelector('.form .who')!.textContent).toBe('as tom · all 3 of these lines')
+        expect(offCard(container).querySelector<HTMLInputElement>('.form input')!.placeholder).toBe('why these 3 lines are meant to be here…')
+      })
+
+      it('opens one form at a time, under the line it belongs to', () => {
+        const lines = three()
+        stubApi(lines)
+        twoLanes()
+        seedOff(lines)
+        const { container } = render(Topography)
+        flushSync()
+
+        expectedFor(openOffCard(container)!, lines[1].key)!.click()
+        flushSync()
+
+        const card = offCard(container)
+        expect(card.querySelectorAll('.form')).toHaveLength(1)
+        // The other two still offer their own action; the one being
+        // answered has given its row over to the form.
+        expect(perLineActs(card).map((b) => b.dataset.expectedOne)).toEqual([lines[0].key, lines[2].key])
+        expect(card.querySelector('tr.formrow .form')).not.toBeNull()
+      })
     })
 
     it('opens no card on an established rib -- a rib on the pattern has nothing to say', () => {

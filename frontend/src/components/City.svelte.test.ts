@@ -954,4 +954,197 @@ describe('City: brightness by baseline', () => {
     expect(card.textContent).toContain('1 off the baseline today')
     expect(card.querySelector('.linkact')).toBeNull()
   })
+
+  // Per-line is the default (owner, 2026-09-07). The same decisions the
+  // 2D rib card is held to, asserted here on the city's own card,
+  // because the two views are one product and this is the surface that
+  // would drift.
+  describe('per-line by default, the lot only on purpose (#1016)', () => {
+    /** Three lines on the one road, so "one of them" is a real claim. */
+    function threeOn(pick: NonNullable<ReturnType<typeof pairRoad>>) {
+      const src = pick.a.buildings[0].ip
+      const dst = pick.b.buildings[0].ip
+      return [
+        aLine(src, dst, { key: 'k1' }),
+        aLine(src, dst, { key: 'k2', port: 22 }),
+        aLine(src, dst, { key: 'k3', port: 445, outcome: 'drop' }),
+      ]
+    }
+
+    /** A write that lands, and takes the line out of the register the
+     * way the real endpoint plus its refresh does. */
+    function acceptingWrites() {
+      return vi.spyOn(baselineState, 'expected').mockImplementation(async (key: string) => {
+        baselineState.off = offDoc(baselineState.off.lines.filter((l) => l.key !== key))
+        return true
+      })
+    }
+
+    async function openCard(container: Element, roadId: string) {
+      await fireEvent.pointerEnter(container.querySelector(`path.road-hot[data-road-hot="${roadId}"]`)!)
+      flushSync()
+      return container.querySelector('.bcard.rcard') as HTMLElement
+    }
+
+    const card = (container: Element) => container.querySelector('.bcard.rcard') as HTMLElement
+    const perLineActs = (c: Element) => [...c.querySelectorAll<HTMLButtonElement>('.linkact[data-expected-one]')]
+    const bulkAct = (c: Element) => c.querySelector<HTMLButtonElement>('.allof .linkact.all')
+
+    async function say(container: Element, reason: string) {
+      await fireEvent.input(card(container).querySelector('.form input') as HTMLInputElement, { target: { value: reason } })
+      flushSync()
+      await fireEvent.click(card(container).querySelector('.form .go') as HTMLButtonElement)
+      await tick()
+      flushSync()
+    }
+
+    beforeEach(() => {
+      authState.role = 'admin'
+      authState.username = 'tom'
+    })
+
+    it('offers one expected ▸ per listed line, not one for the whole road', async () => {
+      const pick = pairRoad()!
+      const lines = threeOn(pick)
+      baselineState.off = offDoc(lines)
+      const { container } = render(City, { props: { stop: 'district', ground } })
+
+      const c = await openCard(container, pick.r.id)
+      expect(perLineActs(c).map((b) => b.dataset.expectedOne)).toEqual(['k1', 'k2', 'k3'])
+    })
+
+    it('marks only the line whose own action was clicked', async () => {
+      const expected = acceptingWrites()
+      const pick = pairRoad()!
+      baselineState.off = offDoc(threeOn(pick))
+      const { container } = render(City, { props: { stop: 'district', ground } })
+
+      const c = await openCard(container, pick.r.id)
+      await fireEvent.click(perLineActs(c)[1])
+      flushSync()
+      await say(container, 'the new monitoring agent')
+
+      expect(expected.mock.calls.map((a) => a[0])).toEqual(['k2'])
+    })
+
+    it('leaves the other lines bright, and the road bright, when one of three is spoken for', async () => {
+      acceptingWrites()
+      const pick = pairRoad()!
+      baselineState.off = offDoc(threeOn(pick))
+      const { container } = render(City, { props: { stop: 'district', ground } })
+      expect(opacities(container, pick.r.id)).toContain('0.8')
+
+      const c = await openCard(container, pick.r.id)
+      await fireEvent.click(perLineActs(c)[0])
+      flushSync()
+      await say(container, 'the new backup job')
+
+      // The two nobody has answered for are still listed, still offering
+      // their own action, and the road is still lit.
+      expect(perLineActs(card(container)).map((b) => b.dataset.expectedOne)).toEqual(['k2', 'k3'])
+      expect(card(container).textContent).toContain('2 off the baseline today')
+      expect(opacities(container, pick.r.id)).toContain('0.8')
+    })
+
+    it('lets the road go dim only once its last off-baseline line is spoken for', async () => {
+      acceptingWrites()
+      const pick = pairRoad()!
+      baselineState.off = offDoc([aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip, { key: 'only' })])
+      const { container } = render(City, { props: { stop: 'district', ground } })
+
+      const c = await openCard(container, pick.r.id)
+      await fireEvent.click(perLineActs(c)[0])
+      flushSync()
+      await say(container, 'the new backup job')
+
+      expect(opacities(container, pick.r.id)).not.toContain('0.8')
+      // Nothing was removed: the road is still drawn, it has just
+      // stopped being lit.
+      expect(container.querySelectorAll(`path[data-road="${pick.r.id}"]`).length).toBeGreaterThan(0)
+    })
+
+    it('offers the lot behind a separate control that says how many it will mark', async () => {
+      const pick = pairRoad()!
+      baselineState.off = offDoc(threeOn(pick))
+      const { container } = render(City, { props: { stop: 'district', ground } })
+
+      const bulk = bulkAct(await openCard(container, pick.r.id))!
+      expect(bulk.textContent!.trim()).toBe('mark all 3 expected ▸')
+      expect(bulk.dataset.expectedOne).toBeUndefined()
+      expect(bulk.textContent!.trim()).not.toBe('expected ▸')
+    })
+
+    it('offers no bulk control when there is only one line -- there is no lot to accept', async () => {
+      const pick = pairRoad()!
+      baselineState.off = offDoc([aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip, { key: 'only' })])
+      const { container } = render(City, { props: { stop: 'district', ground } })
+
+      const c = await openCard(container, pick.r.id)
+      expect(perLineActs(c)).toHaveLength(1)
+      expect(bulkAct(c)).toBeNull()
+    })
+
+    it('writes the same reason against every line the bulk control covers', async () => {
+      const expected = acceptingWrites()
+      const pick = pairRoad()!
+      baselineState.off = offDoc(threeOn(pick))
+      const { container } = render(City, { props: { stop: 'district', ground } })
+
+      await fireEvent.click(bulkAct(await openCard(container, pick.r.id))!)
+      flushSync()
+      await say(container, 'the whole road is the new replication link')
+
+      expect(expected.mock.calls).toEqual([
+        ['k1', 'the whole road is the new replication link'],
+        ['k2', 'the whole road is the new replication link'],
+        ['k3', 'the whole road is the new replication link'],
+      ])
+      expect(opacities(container, pick.r.id)).not.toContain('0.8')
+    })
+
+    it('says which it is: this line only, or all of them with the count', async () => {
+      const pick = pairRoad()!
+      baselineState.off = offDoc(threeOn(pick))
+      const { container } = render(City, { props: { stop: 'district', ground } })
+
+      const c = await openCard(container, pick.r.id)
+      await fireEvent.click(perLineActs(c)[0])
+      flushSync()
+      expect(card(container).querySelector('.form .who')!.textContent).toBe('as tom · this line only')
+      expect(card(container).querySelector<HTMLInputElement>('.form input')!.placeholder).toBe('why this line is meant to be here…')
+
+      await fireEvent.click(card(container).querySelector('.form .no') as HTMLButtonElement)
+      flushSync()
+      await fireEvent.click(bulkAct(card(container))!)
+      flushSync()
+      expect(card(container).querySelector('.form .who')!.textContent).toBe('as tom · all 3 of these lines')
+      expect(card(container).querySelector<HTMLInputElement>('.form input')!.placeholder).toBe('why these 3 lines are meant to be here…')
+    })
+
+    it('opens one form at a time, under the line it belongs to', async () => {
+      const pick = pairRoad()!
+      baselineState.off = offDoc(threeOn(pick))
+      const { container } = render(City, { props: { stop: 'district', ground } })
+
+      const c = await openCard(container, pick.r.id)
+      await fireEvent.click(perLineActs(c)[1])
+      flushSync()
+
+      expect(card(container).querySelectorAll('.form')).toHaveLength(1)
+      expect(perLineActs(card(container)).map((b) => b.dataset.expectedOne)).toEqual(['k1', 'k3'])
+      expect(card(container).querySelector('tr.formrow .form')).not.toBeNull()
+    })
+
+    it('offers a reader neither control -- reading the lines is not the privilege', async () => {
+      authState.role = ''
+      const pick = pairRoad()!
+      baselineState.off = offDoc(threeOn(pick))
+      const { container } = render(City, { props: { stop: 'district', ground } })
+
+      const c = await openCard(container, pick.r.id)
+      expect(c.textContent).toContain('3 off the baseline today')
+      expect(perLineActs(c)).toHaveLength(0)
+      expect(bulkAct(c)).toBeNull()
+    })
+  })
 })
