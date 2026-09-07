@@ -14,15 +14,19 @@
   // pushed the zones degrade to boundary-derived names, with the router
   // card carrying the one statement that names the missing push and
   // every address slot saying what it truly holds (#802, round 36 --
-  // nothing floats over the map). The lens row carries round 30's and
-  // round 39's: two base lenses that repaint the pair lines, and two
-  // overlays -- flags and watch -- that place ledger objects on top
-  // of whichever base is showing (#715 item 3). The two families split
-  // by data source, which is why one is exclusive and the other is not:
-  // a base lens is a different reading of the same edges, an overlay is
-  // a different kind of thing marked on them. One fixed picture, tabs
-  // repaint it: the Coverage lens keeps every island where Traffic put
-  // it and swaps the observed ribs for what the pushed table logs.
+  // nothing floats over the map). There are no lens tabs any more
+  // (round 49, #1016): traffic is the picture, coverage is the material
+  // it is drawn in, and policy went in slice C. What is left of the row
+  // is two overlay pills -- flags and watch -- that mark ledger objects
+  // on the one picture (#715 item 3, round 49's own reduction).
+  //
+  // Coverage as material: a rib is two halves split at the pair's
+  // midpoint, the half nearest an end carrying the direction leaving
+  // that end, so one boundary reads logged one way and dark the other.
+  // Logged draws in the verdict ink, quiet on purpose in white, dark in
+  // grey dashes -- and no traffic is drawn across a dark or quiet
+  // direction at all, because a line there would claim a log line that
+  // was never written. Nothing is captioned that the material says.
   //
   // Deviation from #627's letter, declared on the issue: "the Map page
   // in the Live group's reserved slot" predates the deck -- topography
@@ -87,11 +91,8 @@
   /** Component-unique prefix for this instance's SVG ids. */
   const uid = $props.id()
 
-  // Which lens repaints the fixed picture. Reach layers on top of
-  // any of them (#626: a mode, not a place).
-  let lens = $state<'traffic' | 'coverage'>('traffic')
-  // The two overlays (#715 item 3). Independent of `lens` and of each
-  // other, both on by default, and session state like `lens` -- nothing
+  // The two overlays (#715 item 3, round 49's two pills). Independent
+  // of each other, both on by default, and session state -- nothing
   // here is persisted.
   let flagsOn = $state(true)
   let watchOn = $state(true)
@@ -283,11 +284,18 @@
     // A pair whose boundary the map has no island for (no address push
     // named it, nothing spoke on it) cannot be drawn honestly.
     if (!from || !to || (from.kind === 'any' && to.kind === 'any')) return null
-    const dx = to.x - from.x
-    const dy = to.y - from.y
+    // Round 49: the two directions of a pair no longer split to either
+    // side of a shared line -- they are the two halves of one rib, so
+    // they must be the same curve. The offset is taken from the pair's
+    // canonical order (the two boundary names sorted), which is the
+    // same vector whichever way round the direction is drawn. Its
+    // magnitude is unchanged, so an edge to "anywhere" still clears the
+    // same lane's edge to the internet by ANY_CLEAR (#726).
+    const [ax, bx] = fromIface <= toIface ? [from, to] : [to, from]
+    const dx = bx.x - ax.x
+    const dy = bx.y - ax.y
     const len = Math.hypot(dx, dy) || 1
     const spread = from.kind === 'any' || to.kind === 'any' ? SPLIT + ANY_CLEAR : SPLIT
-    // A→B and B→A split to either side of the pair's shared line.
     return { from, to, off: { x: (-dy / len) * spread, y: (dx / len) * spread }, crosses }
   }
 
@@ -347,6 +355,55 @@
     }
     const dp = deathPoint(l)
     return `M ${from.x + off.x} ${from.y + off.y} Q ${(from.x + dp.x) / 2 + off.x} ${(from.y + dp.y) / 2 + off.y}, ${dp.x} ${dp.y}`
+  }
+
+  // --- a rib is two halves (round 49) --------------------------------------
+  // The pair draws one curve; the half nearest an end carries the
+  // direction leaving that end. Both directions of a pair therefore
+  // have to agree on the curve itself, which is why `lineFor` takes the
+  // perpendicular offset from the pair's canonical order rather than
+  // from the direction being drawn -- A→B and B→A are then the same
+  // cubic, walked from opposite ends, and each direction's own first
+  // half is the half nearest its own island.
+  //
+  // Splitting a cubic at t=0.5 is de Casteljau, exactly the mockup's
+  // `bezRange` (round-49/index.html:563). A line that dies at the waist
+  // is not split: it already runs from its own end to the middle, so it
+  // is that direction's half.
+  type Pt = { x: number; y: number }
+
+  function cubicOf(l: Line): [Pt, Pt, Pt, Pt] | null {
+    if (!l.crosses) return null
+    const { from, to, off } = l
+    const at = (p: Pt): Pt => ({ x: p.x + off.x, y: p.y + off.y })
+    if (isInternetEdge(l)) {
+      const spread = internetSlotSpread(l)
+      const laneAnchor = from.kind === 'zone' ? from : to
+      const waistPt = { x: 700 + spread, y: 302 }
+      const laneCtrl = { x: laneAnchor.x + (700 - laneAnchor.x) * 0.25, y: 420 }
+      const waistCtrl = { x: 700 + spread * 2.2, y: 380 }
+      return from.kind === 'zone'
+        ? [at(laneAnchor), at(laneCtrl), at(waistCtrl), at(waistPt)]
+        : [at(waistPt), at(waistCtrl), at(laneCtrl), at(laneAnchor)]
+    }
+    const w = at(WAIST)
+    return [at(from), w, w, at(to)]
+  }
+
+  const mid = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
+
+  /** The half of this direction's own line nearest its own island. */
+  function halfPath(l: Line): string {
+    const c = cubicOf(l)
+    if (!c) return edgePath(l)
+    const [p0, p1, p2, p3] = c
+    const a = mid(p0, p1)
+    const b = mid(p1, p2)
+    const cc = mid(p2, p3)
+    const d = mid(a, b)
+    const e = mid(b, cc)
+    const f = mid(d, e)
+    return `M ${R2(p0.x)} ${R2(p0.y)} C ${R2(a.x)} ${R2(a.y)}, ${R2(d.x)} ${R2(d.y)}, ${R2(f.x)} ${R2(f.y)}`
   }
 
   // Where the ⊣ bar and the badges sit for a line.
@@ -636,20 +693,17 @@
     return Math.min(4.4, 1.3 + Math.log10(Math.max(1, r.events)))
   }
 
-  // Round 30's own ribs carry the lane's ink even once they stop being
-  // the placeholder volume line and become a real observed pair (the-
-  // whole.html:930-935: `.rib` is stroked var(--lan)/var(--srv)/etc, not
-  // one shared grey, whichever zone it touches). A pair not touching any
-  // recognised lane (internet-to-waist, or a boundary the address push
-  // has not named) has no lane ink to borrow, so it keeps the calm
-  // shared one -- never a fabricated colour. The one saturated colour
-  // stays alarm's alone: callers skip this for an unplanned pair.
-  function laneInkFor(fromIface: string, toIface: string): string {
-    const i = zones.findIndex((z) => z.id === fromIface)
-    if (i !== -1) return LANE_INKS[i % LANE_INKS.length]
-    const j = zones.findIndex((z) => z.id === toIface)
-    if (j !== -1) return LANE_INKS[j % LANE_INKS.length]
-    return 'var(--fg-muted)'
+  // Colour is the verdict (round 49, #1016), which is why an observed
+  // rib no longer takes the lane's own ink (#715's rule, round 30's
+  // `.rib` stroked var(--lan)/var(--srv)/etc): green where anything was
+  // accepted, red where the boundary only ever dropped. The lane inks
+  // stay everywhere else -- the lane dot, the client tier, the
+  // placeholder volume ribs before any pair has been observed -- so
+  // nothing lost its lane, only the ribs stopped saying two things at
+  // once. The one saturated colour is still reserved: the escalated
+  // unplanned pair takes it whole, undivided and glowing.
+  function verdictInk(r: RealityEdge): string {
+    return r.accepts > 0 ? 'var(--accept)' : 'var(--alarm)'
   }
 
   function realityBadge(r: RealityEdge): string {
@@ -660,23 +714,37 @@
     return `${mark} ${ports ? `${ports} · ` : ''}${n}×`
   }
 
-  // --- the coverage paint (#630: layer 4, the #392 model) ------------------
-  // Per boundary and direction: observed (a rule logs) draws solid,
-  // dark (rules, none logging) draws dotted and is labelled dark --
-  // drawn, never omitted, because an edge's absence is information.
-  // Declared-quiet boundaries arrive with the declarations store.
-  const drawnCoverage = $derived.by((): { drawn: DrawnEdge[]; undrawn: number } => {
-    const drawn: DrawnEdge[] = []
+  // --- coverage is the material (#630, #392; round 49 #1016) ---------------
+  // Not a lens any more: the state of a boundary-direction is how its
+  // own half of the rib is drawn, always. The three states come from
+  // coverageRule.ts, the one place the rule lives (slice A) -- logged
+  // takes the verdict ink, quiet on purpose white, dark grey dashes.
+  const covByKey = $derived(new Map(policyState.edges.map((e) => [e.key, edgeCoverage(e, quietKeys)] as const)))
+
+  /** A direction nothing logs: dark, or declared quiet on purpose.
+   * Nothing is drawn crossing one -- a traffic line there would claim a
+   * log line that was never written. */
+  function silentDir(key: string): boolean {
+    const st = covByKey.get(key)
+    return st === 'dark' || st === 'quiet'
+  }
+
+  // The halves the material draws by itself: every dark or quiet
+  // boundary-direction, whether or not anything was observed on it.
+  // A logged direction needs no half of its own -- the traffic drawn
+  // along it is already in the verdict ink, which is what logged means.
+  const drawnCoverage = $derived.by((): { drawn: (DrawnEdge & { cov: Coverage })[]; undrawn: number } => {
+    const drawn: (DrawnEdge & { cov: Coverage })[] = []
     let undrawn = 0
     for (const e of policyState.edges) {
-      // Coverage is about the boundary-direction, not passage: every
-      // pair draws the full crossing, logged or dark.
+      const cov = covByKey.get(e.key)
+      if (cov !== 'dark' && cov !== 'quiet') continue
       const line = drawn.length < EDGE_CAP ? lineFor(e.from, e.to, true) : null
       if (!line) {
         undrawn++
         continue
       }
-      drawn.push({ edge: e, line })
+      drawn.push({ edge: e, line, cov })
     }
     return { drawn, undrawn }
   })
@@ -687,7 +755,7 @@
   // caption anywhere. The fact is not lost -- it rides the map's own
   // accessible name instead, so nothing on the drawing carries it and
   // nothing about the map's incompleteness goes unsaid.
-  const undrawnPairs = $derived(lens === 'traffic' ? drawnReality.undrawn : drawnCoverage.undrawn)
+  const undrawnPairs = $derived(drawnReality.undrawn + drawnCoverage.undrawn)
   const undrawnNote = $derived(
     undrawnPairs > 0
       ? `. ${undrawnPairs} further pair${undrawnPairs === 1 ? '' : 's'} are not drawn — off this map's islands, or beyond its ${EDGE_CAP}-edge calm`
@@ -698,8 +766,16 @@
     return edgeCoverage(e, quietKeys)
   }
 
+  // The card's title, in the names the map itself draws: the zone's own
+  // name where the pushed address table gave it one (round 49 titles
+  // its boundary card `Guest → wan`, not `bridge4 → ether1`), the
+  // interface where it did not.
   function pairName(from: string, to: string): string {
-    const name = (i: string) => (i === zonesState.wanInterface ? 'the internet' : i === '' ? 'any lane' : i)
+    const name = (i: string) => {
+      if (i === zonesState.wanInterface) return 'the internet'
+      if (i === '') return 'any lane'
+      return zones.find((z) => z.id === i)?.name ?? i
+    }
     return `${name(from)} → ${name(to)}`
   }
 
@@ -713,13 +789,53 @@
     return `${pairName(e.from, e.to)}: dark — no rule on this boundary-direction logs`
   }
 
-  // The declare-a-gap interaction (#392: one acknowledgement, stored
-  // with its reason). Admin-only, per #490's grammar: for a viewer the
-  // affordance is absent, never disabled. Opened by clicking a dark or
-  // quiet edge in the Coverage lens.
-  let declarePanel = $state<{ key: string; from: string; to: string } | null>(null)
+  // --- the boundary card and the declare path (#392; round 49) -------------
+  // Cards are the one interaction: clicking a dark or quiet half opens
+  // its boundary card, which says what the rule does and what both
+  // directions are, and carries the actions. Pinning it opens the
+  // declare form -- reason, both directions, Declare, and who -- which
+  // is the only way a gap becomes quiet on purpose. A quiet boundary's
+  // card quotes the reason back with who and when, and offers to
+  // undeclare. Admin-only, per #490's grammar: for a viewer the
+  // affordance is absent, never disabled.
+  let boundaryCard = $state<{ key: string; from: string; to: string } | null>(null)
+  let cardPinned = $state(false)
   let declareReason = $state('')
+  /** Round 49 open question 7, drawn checked: one direction declared and
+   * the other still dark leaves the boundary grey and the card
+   * explaining why, which is nobody's intent. */
+  let declareBoth = $state(true)
   let declareBusy = $state(false)
+
+  const reverseKey = (from: string, to: string) => `${to}|${from}`
+
+  const cardCoverage = $derived(boundaryCard ? (covByKey.get(boundaryCard.key) ?? 'dark') : 'dark')
+  const cardBackCoverage = $derived(boundaryCard ? covByKey.get(reverseKey(boundaryCard.from, boundaryCard.to)) : undefined)
+  const cardEdge = $derived(boundaryCard ? (policyState.edges.find((e) => e.key === boundaryCard?.key) ?? null) : null)
+  const cardDeclaration = $derived(boundaryCard ? (coverageState.byKey.get(boundaryCard.key) ?? null) : null)
+
+  /** What the rule actually does on this direction, in one line: the
+   * card's own reason for existing is that the material cannot say it. */
+  const cardRuleLine = $derived.by((): string => {
+    const e = cardEdge
+    if (!boundaryCard) return ''
+    const pair = pairName(boundaryCard.from, boundaryCard.to)
+    if (!e) return `no pushed rule names ${pair}`
+    const what = e.accepted ? 'accepts' : e.refused ? 'refuses' : 'names'
+    const rules = `${e.ruleCount} rule${e.ruleCount === 1 ? '' : 's'}`
+    return `${rules} ${what} ${pair}, without log=yes`
+  })
+
+  /** The other direction of the same boundary, said in full: a wall has
+   * no direction, so the card lists both (round 49). */
+  const cardBackLine = $derived.by((): string => {
+    if (!boundaryCard) return ''
+    const back = pairName(boundaryCard.to, boundaryCard.from)
+    if (cardBackCoverage === undefined) return `${back} · no pushed rule names it`
+    if (cardBackCoverage === 'logged') return `${back} · logged`
+    if (cardBackCoverage === 'quiet') return `${back} · quiet on purpose`
+    return `${back} · dark — nothing logs it`
+  })
 
   // One placement pass per lens, over everything that lens draws: the
   // traffic lens's reality badges and its ghost-intent labels share a
@@ -764,86 +880,86 @@
         // The escalated pair keeps its slot in this array so every other
         // index still lines up; its own text is empty, so it takes no
         // space and draws no pill -- the card replaces it.
-        ...drawnReality.drawn.map((d) => ({ line: d.line, text: d === worstUnplanned ? '' : realityBadge(d.r) })),
+        // A silent direction draws no traffic and so carries no badge
+        // either; it keeps its slot, empty, for the same reason.
+        ...drawnReality.drawn.map((d) => ({
+          line: d.line,
+          text: d === worstUnplanned || silentDir(d.r.key) ? '' : realityBadge(d.r),
+        })),
         ...ghostIntents.map((g) => ({ line: g.line, text: 'never exercised', dy: -12 })),
       ],
       worstUnplannedCard,
     ),
   )
 
-  function coverageBadgeText(e: PolicyEdge): string {
+  function openBoundary(e: PolicyEdge) {
     const st = coverageOf(e)
-    if (st === 'logged') return ''
-    if (st === 'dark') return 'dark'
-    return `quiet · ${(coverageState.byKey.get(e.key)?.reason ?? '').slice(0, 28)}`
-  }
-
-  const coverageBadges = $derived(placeBadges(drawnCoverage.drawn.map((d) => ({ line: d.line, text: coverageBadgeText(d.edge) }))))
-
-  function openCoverage(e: PolicyEdge) {
-    if (!isAdmin || coverageOf(e) === 'logged') return
+    if (st === 'logged') return
     coverageState.error = null
     declareReason = coverageState.byKey.get(e.key)?.reason ?? ''
-    declarePanel = { key: e.key, from: e.from, to: e.to }
+    declareBoth = true
+    cardPinned = false
+    boundaryCard = { key: e.key, from: e.from, to: e.to }
+  }
+
+  function closeBoundary() {
+    boundaryCard = null
+    cardPinned = false
+  }
+
+  /** The pin is what opens the form (round 49): the card reads first,
+   * and acts only once it is kept. */
+  function pinBoundary() {
+    if (!isAdmin) return
+    cardPinned = !cardPinned
   }
 
   async function submitDeclaration() {
-    if (!declarePanel || !declareReason.trim()) return
+    if (!boundaryCard || !declareReason.trim()) return
     declareBusy = true
-    const ok = await coverageState.declare(declarePanel.key, declareReason.trim())
+    const reason = declareReason.trim()
+    // "Both directions" is two declarations, because the API's key is a
+    // boundary-direction (#392) -- there is no both-ways record to
+    // write, and inventing one here would be a second model of the same
+    // fact. The back direction is declared even where no pushed rule
+    // names it: the declaration is about the boundary, and a rule
+    // arriving later then lands on a gap already accounted for.
+    let ok = await coverageState.declare(boundaryCard.key, reason)
+    if (ok && declareBoth) ok = await coverageState.declare(reverseKey(boundaryCard.from, boundaryCard.to), reason)
     declareBusy = false
-    if (ok) declarePanel = null
+    if (ok) closeBoundary()
   }
 
   async function removeDeclaration() {
-    if (!declarePanel) return
+    if (!boundaryCard) return
     declareBusy = true
-    const ok = await coverageState.undeclare(declarePanel.key)
+    const back = reverseKey(boundaryCard.from, boundaryCard.to)
+    let ok = await coverageState.undeclare(boundaryCard.key)
+    if (ok && coverageState.byKey.has(back)) ok = await coverageState.undeclare(back)
     declareBusy = false
-    if (ok) declarePanel = null
+    if (ok) closeBoundary()
   }
 
   // Tune logging's other way in (#435 decision 2): a dark connection in
-  // this same panel is the thing prompting it. primaryDevice stands in
+  // this same card is the thing prompting it. primaryDevice stands in
   // for "which router" -- the map has no per-edge device attribution
   // (policyState aggregates every device's pushed table), the same
   // approximation waistSub above already makes for the rule count.
+  // This is the card's `rules ▸`: the rules for this very boundary,
+  // which is where the round-49 mockup's `rules #31 ▸` leads.
   function openTuneLoggingFromDark() {
-    if (!declarePanel || !primaryDevice) return
-    tuneLoggingNavState.request(primaryDevice.id, declarePanel.key)
+    if (!boundaryCard || !primaryDevice) return
+    tuneLoggingNavState.request(primaryDevice.id, boundaryCard.key)
     appState.view = 'tune-logging'
-    declarePanel = null
+    closeBoundary()
   }
 
-  // The zone card's coverage caption, kept on every lens (the shaped
-  // surface: the Coverage lens carries the full model, the others keep
-  // the captions). Toward/from the internet, per direction.
-  function zoneCaption(zoneId: string): string | null {
-    const wan = zonesState.wanInterface
-    if (!policyState.anyPushed || !wan) return null
-    const stateOf = (key: string): Coverage | 'none' => {
-      const e = policyState.edges.find((p) => p.key === key)
-      return e ? edgeCoverage(e, quietKeys) : 'none'
-    }
-    const out = stateOf(`${zoneId}|${wan}`)
-    const inward = stateOf(`${wan}|${zoneId}`)
-    const fine = (st: string) => st === 'logged' || st === 'quiet'
-    if (out === 'logged' && inward === 'logged') return 'LOGGED BOTH WAYS'
-    if (fine(out) && fine(inward)) return 'COVERED — logged or declared quiet'
-    if (out === 'quiet' && !fine(inward)) return 'DARK FROM WAN — quiet toward it by choice'
-    if (fine(out)) return 'DARK FROM WAN — no log rule inbound'
-    if (fine(inward)) return 'DARK TOWARD WAN — no log rule on this boundary'
-    return 'DARK BOTH WAYS — no log rule on this boundary'
-  }
-
-  // The coverage badge's own colour (#682): logged reads healthy green,
-  // dark reads alarm red, anything else (quiet, or logged-or-declared-
-  // quiet) stays the calm dim ink -- the same three-way split the
-  // ratified round-29 card wears, per zoneCaption's own vocabulary.
-  function covClass(caption: string): 'cov-l' | 'cov-d' | 'cov-q' {
-    if (caption.startsWith('DARK')) return 'cov-d'
-    if (caption.startsWith('LOGGED')) return 'cov-l'
-    return 'cov-q'
+  /** The card's `stream ▸`: the live view, filtered to this pair. */
+  function openStreamFromCard() {
+    if (!boundaryCard) return
+    const { from, to } = boundaryCard
+    closeBoundary()
+    openPair(from, to, [])
   }
 
   function realityLabel(r: RealityEdge): string {
@@ -1822,7 +1938,7 @@
   // and QUIET is exactly what round 30 draws on this card.
   const tunnelState = $derived(bridgeStateFor(tunnelApi?.apiState ?? null, tunnelEvents))
   const tunnelStateLabel = $derived(bridgeStateLabel(tunnelState))
-  const tunnelCovClass = $derived(tunnelState === 'up' ? 'cov-l' : tunnelState === 'down' ? 'cov-d' : 'cov-q')
+  const tunnelCovClass = $derived(tunnelState === 'down' ? 'cov-d' : 'cov-q')
 
   /**
    * `wg0 · 10.99.0.0/24`, as drawn: the tunnel's own row in the pushed
@@ -2165,57 +2281,35 @@
       </div>
     </div>
 
-  <!-- The lens selector (#682, ported from the scene's `.wlens2`): the
-       bottom-left bar, not a top-right tab strip -- round 29 has no
-       such strip beside the dials. -->
-  <div class="wlens2">
-    <div class="wl-tabs" role="tablist" aria-label="Map lenses">
-      {#if reach}
-        <span class="on" role="tab" aria-selected="true">reach</span>
-        <span role="tab" aria-selected="false">traffic</span>
-      {:else}
-        <button class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
-          traffic
-        </button>
-        <button class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
-          coverage
-        </button>
-      {/if}
-    </div>
-    {#if !reach}
-      <!-- The overlays sit outside the tablist, behind a hairline
-           (round-39:943). Two reasons, and they agree: a toggle inside
-           a tablist breaks its semantics, and the divider is what tells
-           a reader that these two latch while the three to their left
-           move a highlight. Both default on -- rounds 30 and 39 draw
-           the scene wearing them, and an overlay with nothing to show
-           paints nothing, so the calm default survives (Fable 5). -->
-      <span class="wl-div" aria-hidden="true"></span>
-      <div class="wl-overlays" role="group" aria-label="Map overlays">
-        <button
-          type="button"
-          class="wl-ov"
-          class:on={flagsOn}
-          aria-pressed={flagsOn}
-          aria-label={flagCountAll > 0
-            ? `Flags overlay — ${flagCountAll} open: mark flagged places on the map`
-            : 'Flags overlay — mark flagged places on the map'}
-          onclick={() => (flagsOn = !flagsOn)}
-        >
-          flags{#if flagCountAll > 0}&nbsp;<span class="ov-n">{flagCountAll}</span>{/if}
-        </button>
-        <button
-          type="button"
-          class="wl-ov"
-          class:on={watchOn}
-          aria-pressed={watchOn}
-          aria-label="Watch overlay — mark watched places on the map"
-          onclick={() => (watchOn = !watchOn)}
-        >
-          watch
-        </button>
-      </div>
-    {/if}
+  <!-- The lens row, reduced to two overlay pills (round 49, #1016,
+       ported from round-49/index.html:1498-1500). There is nothing to
+       choose between any more: traffic is the picture, coverage is the
+       material it is drawn in, and policy went in slice C. Both pills
+       are on by default, greyed when off, flag red and watcher purple
+       when on. They stay through the reach, which they also mark. -->
+  <div class="pills" role="group" aria-label="Map overlays">
+    <button
+      type="button"
+      class="pill f"
+      class:on={flagsOn}
+      aria-pressed={flagsOn}
+      aria-label={flagCountAll > 0
+        ? `Flags overlay — ${flagCountAll} open: mark flagged places on the map`
+        : 'Flags overlay — mark flagged places on the map'}
+      onclick={() => (flagsOn = !flagsOn)}
+    >
+      ⚑ flags{#if flagCountAll > 0}&nbsp;<b>{flagCountAll}</b>{/if}
+    </button>
+    <button
+      type="button"
+      class="pill w"
+      class:on={watchOn}
+      aria-pressed={watchOn}
+      aria-label="Watch overlay — mark watched places on the map"
+      onclick={() => (watchOn = !watchOn)}
+    >
+      ◉ watch{#if watcherTotal > 0}&nbsp;<b>{watcherTotal}</b>{/if}
+    </button>
   </div>
 
   <!-- While descended, the map stays beneath as the reach's backdrop —
@@ -2275,18 +2369,43 @@
           <path class="rib-ghost" d="M 1100 186 C 945 300, {gx + 95} 385, {gx} 476" />
         {/if}
       {/if}
-      {#if lens === 'traffic'}
-        {#if eps > 0}
-          <circle class="mote" r="2.5" fill="var(--accent)" />
-        {/if}
+      <!-- The material, under everything (round 49): every dark or quiet
+           boundary-direction, drawn as its own half of the pair's rib
+           whether or not anything crossed it. Dark is grey dashes,
+           quiet on purpose is white -- neither carries a caption,
+           because the material is the statement. Clicking one opens its
+           boundary card, which is where the words live. -->
+      {#each drawnCoverage.drawn as d (d.edge.key)}
+        <g
+          class="cov-g actionable"
+          role="button"
+          tabindex="0"
+          aria-label="Open this boundary: {coverageLabel(d.edge)}"
+          onclick={() => openBoundary(d.edge)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              openBoundary(d.edge)
+            }
+          }}
+        >
+          <title>{coverageLabel(d.edge)}</title>
+          <path class="edge-hit" d={halfPath(d.line)} />
+          <path class="cedge" class:dark={d.cov === 'dark'} class:quiet={d.cov === 'quiet'} d={halfPath(d.line)} />
+        </g>
+      {/each}
 
-        {#if drawnReality.drawn.length === 0}
-          <!-- Before pair-carrying traffic arrives, the lanes' simple
-               volume ribs keep the place alive. -->
-          {#each zones as z, i (z.id)}
-            <path class="rib" d={ribPath(i, zones.length)} stroke={LANE_INKS[i % LANE_INKS.length]} stroke-width="2.4" />
-          {/each}
-        {/if}
+      {#if eps > 0}
+        <circle class="mote" r="2.5" fill="var(--accent)" />
+      {/if}
+
+      {#if drawnReality.drawn.length === 0}
+        <!-- Before pair-carrying traffic arrives, the lanes' simple
+             volume ribs keep the place alive. -->
+        {#each zones as z, i (z.id)}
+          <path class="rib" d={ribPath(i, zones.length)} stroke={LANE_INKS[i % LANE_INKS.length]} stroke-width="2.4" />
+        {/each}
+      {/if}
 
         <!-- The reality overlay (#629): what actually happened, pair by
              pair. Accepted traffic crosses; drops die at the waist
@@ -2305,35 +2424,45 @@
              (that routing, the "lines overlapping each other" report, is
              a separate job -- see the code comment on ghostIntents). -->
         {#each drawnReality.drawn as d, di (d.r.key)}
-          <g
-            class="edge-g"
-            role="button"
-            tabindex="0"
-            aria-label="Open the stream filtered to this pair: {realityLabel(d.r)}"
-            onclick={() => openPair(d.r.from, d.r.to, d.r.topPorts)}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                openPair(d.r.from, d.r.to, d.r.topPorts)
-              }
-            }}
-          >
-            <title>{realityLabel(d.r)}</title>
-            <path class="edge-hit" d={edgePath(d.line)} />
-            <path
-              class="redge"
-              class:alarm={d.r.verdict === 'unplanned'}
-              d={edgePath(d.line)}
-              style:stroke-width="{realityWidth(d.r)}px"
-              style:stroke={d.r.verdict === 'unplanned' ? undefined : laneInkFor(d.r.from, d.r.to)}
-            />
-            {#if d.r.drops > 0}
-              {@const bar = edgeBarAt(d.line)}
-              <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
-                <line class="edge-bar" class:alarm-bar={d.r.verdict === 'unplanned'} x1="-7" y1="0" x2="7" y2="0" />
-              </g>
-            {/if}
-          </g>
+          <!-- Nothing is drawn across a dark or quiet direction: the
+               material's own half is already there, and a traffic line
+               beside it would claim a log line that was never written
+               (round 49). The escalated unplanned pair is the one rib
+               that stays undivided -- it is not a boundary's state,
+               it is the thing that should not be happening. -->
+          {#if !silentDir(d.r.key)}
+            {@const whole = d.r.verdict === 'unplanned'}
+            <g
+              class="edge-g"
+              role="button"
+              tabindex="0"
+              aria-label="Open the stream filtered to this pair: {realityLabel(d.r)}"
+              onclick={() => openPair(d.r.from, d.r.to, d.r.topPorts)}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  openPair(d.r.from, d.r.to, d.r.topPorts)
+                }
+              }}
+            >
+              <title>{realityLabel(d.r)}</title>
+              <path class="edge-hit" d={whole ? edgePath(d.line) : halfPath(d.line)} />
+              <path
+                class="redge"
+                class:alarm={whole}
+                class:dropped={!whole && d.r.accepts === 0}
+                d={whole ? edgePath(d.line) : halfPath(d.line)}
+                style:stroke-width="{realityWidth(d.r)}px"
+                style:stroke={whole ? undefined : verdictInk(d.r)}
+              />
+              {#if d.r.drops > 0}
+                {@const bar = edgeBarAt(d.line)}
+                <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
+                  <line class="edge-bar" class:alarm-bar={whole} x1="-7" y1="0" x2="7" y2="0" />
+                </g>
+              {/if}
+            </g>
+          {/if}
         {/each}
 
         <!-- The second delta: intent nothing arrived to fill. -->
@@ -2350,9 +2479,9 @@
                every later index still lines up, but the slot carries no
                text and so is sized for none: its pill would be a label
                at full width over a plate 12 wide, saying a second time
-               what the card below already says (#897 item 2). The
-               coverage lens skips its empty labels the same way. -->
-          {#if d !== worstUnplanned}
+               what the card below already says (#897 item 2). A silent
+               direction skips its empty label the same way. -->
+          {#if d !== worstUnplanned && !silentDir(d.r.key)}
             {@const badge = trafficBadges[di]}
             <g
               class="detail"
@@ -2424,67 +2553,7 @@
           </g>
         {/each}
 
-      {:else if lens === 'coverage'}
-        <!-- The coverage paint (#630): every boundary-direction with
-             rules, drawn by what it logs. Dark is drawn dark, never
-             omitted. Lines first, labels last -- same two-pass split as
-             the traffic lens above, same reason (#723). -->
-        {#each drawnCoverage.drawn as d, di (d.edge.key)}
-          {@const st = coverageOf(d.edge)}
-          <g
-            class="cov-g"
-            class:actionable={isAdmin && st !== 'logged'}
-            {...isAdmin && st !== 'logged'
-              ? { role: 'button', tabindex: 0, 'aria-label': `Declare or review this gap: ${coverageLabel(d.edge)}` }
-              : {}}
-            onclick={() => openCoverage(d.edge)}
-            onkeydown={(e) => {
-              if (e.key === 'Enter') openCoverage(d.edge)
-            }}
-          >
-            <title>{coverageLabel(d.edge)}</title>
-            <path class="edge-hit" d={edgePath(d.line)} />
-            {#if st === 'logged'}
-              <path class="cedge observed" d={edgePath(d.line)} />
-            {:else if st === 'quiet'}
-              <path class="cedge quiet" d={edgePath(d.line)} />
-            {:else}
-              <path class="cedge dark" d={edgePath(d.line)} />
-            {/if}
-          </g>
-        {/each}
 
-        {#each drawnCoverage.drawn as d, di (d.edge.key)}
-          {@const st = coverageOf(d.edge)}
-          {#if st !== 'logged'}
-            {@const badge = coverageBadges[di]}
-            <g
-              class="detail"
-              class:actionable={isAdmin}
-              {...isAdmin ? { role: 'button', tabindex: 0, 'aria-label': `Declare or review this gap: ${coverageLabel(d.edge)}` } : {}}
-              onclick={() => openCoverage(d.edge)}
-              onkeydown={(e) => {
-                if (e.key === 'Enter') openCoverage(d.edge)
-              }}
-            >
-              <title>{coverageLabel(d.edge)}</title>
-              <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-              <text class="edge-badge {st === 'dark' ? 'dark-t' : 'quiet-t'}" x={badge.x} y={badge.y} text-anchor="middle">
-                {coverageBadgeText(d.edge)}
-              </text>
-            </g>
-          {/if}
-        {/each}
-
-        {#if !policyState.anyPushed}
-          <g transform="translate(700 400)">
-            <text y="0" text-anchor="middle" class="n-sub">no rule table has been pushed yet — nothing is broken, this lens is waiting for data</text>
-            <text y="20" text-anchor="middle" class="n-sub">coverage is read from which pushed rules log; Settings → Run setup… prints the push script</text>
-          </g>
-        {:else if drawnCoverage.drawn.length === 0}
-          <text x="700" y="400" text-anchor="middle" class="n-sub">the pushed table has no forward rules — no boundary-direction to paint</text>
-        {/if}
-      {/if}
 
       <!-- Internet. The card itself is passive to the pointer, so a
            policy edge arriving beneath it stays clickable; its aggregate
@@ -2538,7 +2607,17 @@
                 >{tunnelIface}<tspan class="cidr-none">{' · no address pushed'}</tspan></text
               >
             {/if}
-            <text x="54" y="-4" class="n-cov {tunnelCovClass}">{tunnelStateLabel}</text>
+            <!-- Round 49: the card says `name · subnet`, and adds a
+                 word only where the drawing cannot. Round 30's UP and
+                 QUIET badges sat here in the coverage badge's own ink
+                 and vocabulary, saying what the ribs leaving the node
+                 now say themselves -- so they are gone with the rest of
+                 the coverage captions. A tunnel the router calls *down*
+                 is a different fact, and the one thing on this card no
+                 line on the 2D map draws, so it stays. -->
+            {#if tunnelState === 'down' || tunnelState === 'unknown'}
+              <text x="54" y="-4" class="n-cov {tunnelCovClass}">{tunnelStateLabel}</text>
+            {/if}
             {#if tunnelAggregate}
               {@render aggregateBar(tunnelAggregate, -84, 188, 32, 16, { id: tunnelIface, name: tunnelIface })}
             {/if}
@@ -2596,7 +2675,6 @@
       {#each zones as z, i (z.id)}
         {@const agg = zoneAggregate(z)}
         {@const shown = hostsShown(z)}
-        {@const capt = zoneCaption(z.id)}
         {@const ink = LANE_INKS[i % LANE_INKS.length]}
         <g
           transform="translate({laneX(i, zones.length)} 490)"
@@ -2664,17 +2742,17 @@
                 {#if shown.more > 0}<tspan> · +{shown.more}</tspan>{/if}
               </text>
             {/if}
-            {#if capt}
-              {@const [badge, detail] = capt.split(' — ')}
-              <!-- Two lines, badge over detail (#682, ratified round-29):
-                   collapsing them into one crammed sentence was the
-                   defect, not a design choice -- the badge's own y moves
-                   down 4px when a detail line follows it, matching the
-                   scene's own Guest card exactly. -->
-              <text x={-cardHalf + cardPad} y={detail ? 74 : 70} class="n-cov {covClass(capt)}">{badge}</text>
-              {#if detail}
-                <text x={-cardHalf + cardPad} y="88" class="n-sub">{detail}</text>
-              {/if}
+            <!-- Round 49: the card says `name · subnet` and stops.
+                 LOGGED / DARK / COVERED are gone from it -- the ribs
+                 leaving the lane already carry each boundary's own
+                 state, and a badge repeating them was the map saying
+                 twice what it had already drawn once.
+                 `no rule table pushed` stays, dim, because it is a
+                 different fact from dark: dark means a table exists and
+                 nothing on it logs this boundary; this means there is
+                 no table at all (#865's wording). -->
+            {#if !policyState.anyPushed}
+              <text x={-cardHalf + cardPad} y="74" class="n-sub no-table">no rule table pushed</text>
             {/if}
             <!-- Round 30's zone card carries name, subnet, hosts and the
                  coverage badge, and stops there (the-whole.html:1002-1008).
@@ -2919,16 +2997,12 @@
             />
             <text class="n-name" x={-fc.gr + 12} y={-fc.gh / 2 + 18}>{fc.d.name}</text>
             <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? 'from boundaries'}</text>
-            <!-- DARK used to sit right-anchored on this same row, the
-               exact side-by-side layout that overlapped the name and
-               CIDR above -- a card with a host count wide enough to
-               reach it printed "hostsARK" (found rendering a denser
-               estate for #976's own follow-up). A trailing tspan flows
-               after the count instead, so there is only ever one piece
-               of text to fit, never two racing across one line. -->
-            <text class="gf-count" x={-fc.gr + 12} y={-fc.gh / 2 + 48}
-              >{total} host{total === 1 ? '' : 's'}{#if fc.d.dark}{' '}<tspan class="zone-state bad">· DARK</tspan>{/if}</text
-            >
+            <!-- Round 49: `name · subnet`, and the zones stop's own
+                 host count. The DARK word that used to trail the count
+                 is gone with every other coverage caption -- the
+                 plate's own material says it, dashed and grey where
+                 every boundary of the district is dark. -->
+            <text class="gf-count" x={-fc.gr + 12} y={-fc.gh / 2 + 48}>{total} host{total === 1 ? '' : 's'}</text>
           </g>
         {/each}
       </g>
@@ -2953,18 +3027,17 @@
   {#if cityStop}
     <!-- The city (#863), joined to the map (#869): the same estate in
          isometric, at the three stops right of the diamond. The
-         ratified record gives both views the same lens tabs, header,
+         ratified record gives both views the same header, pills,
          badges and callout wording -- all the 2D map's, drawn once
-         above and reused here; threading Topography's own `lens` down
-         is "whatever lens plumbing City.svelte already has" until the
-         city grows lenses of its own. `ground` is the one shared layout
+         above and reused here. There is no lens to thread down any
+         more (round 49): coverage is the material on both surfaces and
+         policy went in slice C. `ground` is the one shared layout
          (#852) computed above, so this side and the zones stop can
          never disagree on a position. `initialS`/`initialCentre` and
          the two `on*` callbacks are the pan/reach carry described by
          crossAltitudeCentre's own doc comment, above. -->
     <City
       stop={cityStop}
-      lens={lens}
       ground={ground}
       initialS={cityView?.S}
       initialCentre={cityView?.centre}
@@ -3207,37 +3280,83 @@
     </div>
   {/if}
 
-  {#if declarePanel && lens === 'coverage' && !reach}
-    {@const existing = coverageState.byKey.get(declarePanel.key)}
-    <!-- The declare-a-gap panel (#392): one acknowledgement, with its
-         reason, on the record. Reached only by an admin clicking a
-         non-observed edge. -->
-    <div class="declare" role="dialog" aria-label="Declare this gap intentionally quiet">
-      <p class="d-pair">{pairName(declarePanel.from, declarePanel.to)}</p>
-      {#if existing}
-        <p class="d-meta">declared quiet by <b>{existing.declaredBy}</b> · {new Date(existing.declaredAt).toLocaleDateString()}</p>
+  {#if boundaryCard && !reach}
+    <!-- The boundary card (round 49, ported from round-49/index.html's
+         `.card`: title row with the pin, `.s` fact lines each with the
+         material's own swatch, an `.acts` row, and the form the pin
+         opens). It is the one interaction on a boundary: what the rule
+         does, what both directions are, and the three doors. The
+         declare form is behind the pin because the card reads first and
+         acts only once it is kept (#392 is still the record it writes:
+         one acknowledgement, with its reason and its author). -->
+    <div class="card" class:pinned={cardPinned} role="dialog" aria-label="The {pairName(boundaryCard.from, boundaryCard.to)} boundary">
+      <div class="t">
+        <span class="n">{pairName(boundaryCard.from, boundaryCard.to)}<small>boundary</small></span>
+        {#if isAdmin}
+          <button
+            class="pin"
+            class:on={cardPinned}
+            aria-pressed={cardPinned}
+            title={cardPinned ? 'pinned — click to let it go' : 'pin this card'}
+            onclick={pinBoundary}
+          >
+            {cardPinned ? '✕' : '⊙'}
+          </button>
+        {:else}
+          <button class="pin" title="close this card" onclick={closeBoundary}>✕</button>
+        {/if}
+      </div>
+
+      {#if cardCoverage === 'quiet' && cardDeclaration}
+        <div class="s qt"><i class="sw qt"></i>quiet on purpose</div>
+        <div class="quote">{cardDeclaration.reason}</div>
+        <div class="s">{cardDeclaration.declaredBy} · {new Date(cardDeclaration.declaredAt).toLocaleString()}</div>
+        <div class="s">{cardBackLine}</div>
       {:else}
-        <p class="d-meta">dark — nothing on this boundary-direction logs. If that is a choice, say why once and it stays said.</p>
+        <div class="s dk"><i class="sw dk"></i>dark — nothing logs this boundary</div>
+        <div class="s">{cardRuleLine}</div>
+        <div class="s dk"><i class="sw dk"></i>{cardBackLine}</div>
+        <div class="s">nothing drawn across it is a fact; nothing is known</div>
+      {/if}
+
+      {#if cardPinned && isAdmin && cardCoverage !== 'quiet'}
+        <!-- The declare form: a reason, both directions, and who. Both
+             directions is checked by default (round 49 item 7) because
+             one direction declared and the other still dark leaves the
+             boundary grey and this card explaining why. -->
+        <div class="form">
+          <label for="{uid}-declare-why">QUIET ON PURPOSE — WHY?</label>
+          <input id="{uid}-declare-why" bind:value={declareReason} placeholder="why this gap is intentional…" />
+          <label class="both">
+            <input type="checkbox" bind:checked={declareBoth} />
+            both directions
+          </label>
+          {#if coverageState.error}
+            <p class="d-error">{coverageState.error}</p>
+          {/if}
+          <div class="btns">
+            <button class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
+            <button class="no" onclick={closeBoundary}>cancel</button>
+            <span class="who">as {authState.username}</span>
+          </div>
+        </div>
+      {/if}
+
+      <div class="acts">
+        {#if cardCoverage === 'quiet'}
+          {#if isAdmin}
+            <button class="hot" disabled={declareBusy} onclick={removeDeclaration}>undeclare ▸</button>
+          {/if}
+        {:else if isAdmin && !cardPinned}
+          <button onclick={pinBoundary}>declare quiet on purpose ▸</button>
+        {/if}
         <!-- Tune logging (#435): the other remedy for a dark pair --
              switch logging on for what actually crosses it, rather than
-             declaring the silence a choice. Admin-only door, same tier
-             this whole panel is already gated to. -->
-        <button type="button" class="d-tune" disabled={!primaryDevice} onclick={openTuneLoggingFromDark}>
-          Tune logging for this connection →
-        </button>
-      {/if}
-      <textarea rows="2" placeholder="why this gap is intentional…" bind:value={declareReason}></textarea>
-      {#if coverageState.error}
-        <p class="d-error">{coverageState.error}</p>
-      {/if}
-      <div class="d-row">
-        <button class="d-primary" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>
-          {existing ? 'Update the reason' : 'Declare intentionally quiet'}
-        </button>
-        {#if existing}
-          <button class="d-danger" disabled={declareBusy} onclick={removeDeclaration}>Remove — it goes dark again</button>
+             declaring the silence a choice. -->
+        {#if isAdmin}
+          <button disabled={!primaryDevice} onclick={openTuneLoggingFromDark}>rules ▸</button>
         {/if}
-        <button class="d-quiet" onclick={() => (declarePanel = null)}>Cancel</button>
+        <button class="dim" onclick={openStreamFromCard}>stream ▸</button>
       </div>
     </div>
   {/if}
@@ -3375,63 +3494,51 @@
     font-weight: 550;
   }
 
-  /* The lens selector (#682, ported from the scene's `.wlens2`): the
-     bottom-left bar, exact position and type from round 29 -- not an
-     approximation of it as a top-right tab strip. */
-  .wlens2 {
+  /* The two overlay pills, in the lens row's old place (round 49,
+     ported from round-49/index.html:98-107). Outlined and grey when
+     off; flag red and watcher purple when on, so the row says which
+     marks are on the map without a legend. */
+  .pills {
     position: absolute;
     bottom: 12px;
     left: 26px;
     z-index: 2;
     display: flex;
-    gap: 14px;
-    font: 500 10.5px var(--font-sans);
-    color: var(--fg-dim);
-    opacity: 0.8;
+    gap: 8px;
   }
 
-  .wlens2 button {
-    background: none;
-    border: none;
-    padding: 0;
-    font: inherit;
-    color: inherit;
+  .pill {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    padding: 3px 11px 3px 9px;
+    border: 1px solid var(--hair-2);
+    border-radius: 999px;
+    background: transparent;
+    font: 600 10.5px var(--font-mono);
+    letter-spacing: 0.04em;
+    color: var(--fg-dim);
     cursor: pointer;
   }
 
-  .wlens2 span {
-    cursor: default;
+  .pill b {
+    font-weight: 600;
   }
 
-  .wlens2 .on {
-    color: var(--fg);
+  .pill:hover {
+    border-color: var(--fg-dim);
   }
 
-  /* The three tabs and the two overlays, split by a hairline
-     (round-39:943). The row is one flex line; the two groups are their
-     own so the divider sits between them rather than between any two
-     controls. */
-  .wl-tabs,
-  .wl-overlays {
-    display: flex;
-    gap: 14px;
-  }
-
-  .wl-div {
-    width: 1px;
-    align-self: stretch;
-    background: var(--hair-2);
-  }
-
-  /* An overlay's count wears the alarm ink, as round 39 draws it, but
-     only the digits -- the word stays the row's own colour so an
-     overlay that is merely available does not read as an alarm. */
-  .wl-ov.on {
-    color: var(--fg);
-  }
-
-  .wl-ov.on .ov-n {
+  .pill.on.f {
     color: var(--alarm);
+    border-color: rgba(255, 84, 112, 0.55);
+    background: rgba(255, 84, 112, 0.1);
+  }
+
+  .pill.on.w {
+    color: var(--marked);
+    border-color: rgba(167, 139, 250, 0.55);
+    background: rgba(167, 139, 250, 0.1);
   }
 
   .stage {
@@ -3462,6 +3569,16 @@
        on a dark fill (#715). fg-muted clears both (~7.4:1 / ~8:1). */
     fill: var(--fg-muted);
     font-size: 9.5px;
+  }
+
+  /* The one line left on a lane card that is not name, subnet or hosts:
+     a table exists nowhere, which is a different fact from dark and so
+     cannot be drawn by the material (round 49, #865's wording). Dim,
+     because it is a state of our own knowledge, not of the network. */
+  .n-sub.no-table {
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+    opacity: 0.85;
   }
 
   .n-hosts {
@@ -3558,17 +3675,27 @@
     stroke-width: 2.6;
   }
 
-  /* --- the reality overlay (#629) ---------------------------------------- */
+  /* --- the reality overlay (#629), in the verdict's ink (round 49) -------- */
+  /* A logged direction's own half: green where anything was accepted at
+     .55, red where the boundary only ever dropped at .7 -- the round-49
+     rule table's two opacities for a rib half. */
   .redge {
     fill: none;
     stroke: var(--fg-muted);
     stroke-linecap: round;
-    opacity: 0.65;
+    opacity: 0.55;
   }
 
+  .redge.dropped {
+    opacity: 0.7;
+  }
+
+  /* The escalated unplanned pair: undivided, alarm, and glowing, as
+     round 30 draws it and round 49 keeps it. */
   .redge.alarm {
     stroke: var(--alarm);
     opacity: 0.85;
+    filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.45));
   }
 
   .edge-bar.alarm-bar {
@@ -3590,29 +3717,29 @@
     font-style: italic;
   }
 
-  /* --- the coverage paint (#630) ----------------------------------------- */
+  /* --- coverage is the material (#630, #392; round 49) -------------------- */
+  /* The two treatments the rule table names, at the mockup's own inks
+     and opacities (round-49/index.html:1199-1200). `--fg` is the page
+     ink the mockup calls `--quiet` and `--fg-dim` the third ink it
+     calls `--dark` -- the same two hexes, already tokens here. */
   .cedge {
     fill: none;
     stroke-linecap: round;
   }
 
-  .cedge.observed {
-    stroke: var(--fg-muted);
-    stroke-width: 2;
-    opacity: 0.6;
-  }
-
-  /* Dark is drawn dark: a dotted line in the darkest ink, labelled. */
+  /* Dark: nothing logs this boundary-direction. */
   .cedge.dark {
-    stroke: var(--fg);
-    stroke-width: 1.6;
-    stroke-dasharray: 2 5;
-    opacity: 0.7;
+    stroke: var(--fg-dim);
+    stroke-width: 1.7;
+    stroke-dasharray: 3 6;
+    opacity: 0.5;
   }
 
-  .dark-t {
-    fill: var(--fg);
-    opacity: 0.8;
+  /* Quiet on purpose: declared, with a reason in its card. */
+  .cedge.quiet {
+    stroke: var(--fg);
+    stroke-width: 1.7;
+    opacity: 0.3;
   }
 
   .n-cov {
@@ -3620,12 +3747,6 @@
     font-size: 9px;
     font-weight: 700;
     letter-spacing: 0.08em;
-  }
-
-  /* The coverage badge's colour is not decoration -- it is the same
-     read as the zone's edges on the map (#682, ratified round-29). */
-  .n-cov.cov-l {
-    fill: var(--accept);
   }
 
   .n-cov.cov-q {
@@ -3636,22 +3757,6 @@
 
   .n-cov.cov-d {
     fill: var(--alarm);
-  }
-
-  /* Intentionally quiet: muted and named -- calmer than dark, dimmer
-     than observed. */
-  .cedge.quiet {
-    stroke: var(--fg-dim);
-    stroke-width: 1.6;
-    stroke-dasharray: 6 4;
-    opacity: 0.5;
-  }
-
-  .quiet-t {
-    /* fg-dim on the edge-plate's --bg reads ~3.3:1 (#715); fg-muted
-       clears the 4.5:1 floor at ~8:1. */
-    fill: var(--fg-muted);
-    font-style: italic;
   }
 
   .cov-g.actionable {
@@ -3667,110 +3772,231 @@
     outline: none;
   }
 
-  .declare {
+  /* --- the card (round 49, ported from round-49/index.html:174-230) ------
+     One card for anything you can point at; the boundary is the first
+     of them. Round 40's hovercard grown a title row, a swatch per fact,
+     an actions foot and the form the pin opens. It sits where the
+     declare panel sat -- the map's bottom-left, clear of the lanes --
+     rather than floating on a leader from the rib: the leader is the
+     mockup's, and placing one needs the stage's own pixel geometry,
+     which this SVG (viewBox, xMidYMid meet) does not hand out. */
+  .card {
     position: absolute;
     left: 24px;
     bottom: 34px;
     z-index: 3;
-    width: 320px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    width: 288px;
+    padding: 9px 12px;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 14px 16px;
-  }
-
-  .d-pair {
-    margin: 0;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--fg);
-  }
-
-  .d-meta {
-    margin: 0;
-    font-size: 11px;
-    color: var(--fg-dim);
-  }
-
-  .d-meta b {
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    font: 10.5px var(--font-mono);
     color: var(--fg-muted);
   }
 
-  .declare textarea {
-    resize: vertical;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--fg);
-    font: inherit;
-    font-size: 12.5px;
-    padding: 8px 9px;
-  }
-
-  .declare textarea:focus {
-    outline: none;
+  .card.pinned {
     border-color: var(--accent);
   }
 
-  .d-error {
-    margin: 0;
-    font-size: 11.5px;
-    color: var(--reject);
+  .card .t {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
   }
 
-  /* Tune logging's door out of this panel (#435) -- reads as a link
-     inline with the dark explanation above it, not a third boxed action
-     competing with declare/remove/cancel in .d-row below. */
-  .d-tune {
+  .card .t .n {
+    flex: 1;
+    font: 650 13.5px var(--font-sans);
+    color: var(--fg);
+  }
+
+  .card .t .n small {
+    margin-left: 6px;
+    font: 10.5px var(--font-mono);
+    color: var(--fg-dim);
+  }
+
+  .card .pin {
     align-self: flex-start;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 1px solid var(--hair-2);
+    background: transparent;
+    color: var(--fg-dim);
+    font: 11px var(--font-sans);
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .card .pin.on,
+  .card .pin:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .card .s {
+    margin-top: 3px;
+    color: var(--fg-muted);
+  }
+
+  .card .s.dk {
+    color: var(--fg-dim);
+  }
+
+  .card .s.qt {
+    color: var(--fg);
+    opacity: 0.7;
+  }
+
+  /* The material's own swatch, so a line about a boundary is read in
+     the same ink the boundary is drawn in. */
+  .card .sw {
+    display: inline-block;
+    width: 22px;
+    height: 3px;
+    border-radius: 2px;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+
+  .card .sw.dk {
+    background: repeating-linear-gradient(90deg, var(--fg-dim) 0 3px, transparent 3px 6px);
+  }
+
+  .card .sw.qt {
+    background: var(--fg);
+    opacity: 0.4;
+  }
+
+  .card .quote {
+    margin-top: 5px;
+    padding: 5px 8px;
+    border-left: 2px solid var(--hair-2);
+    color: var(--fg);
+    font: italic 11px var(--font-sans);
+  }
+
+  .card .acts {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px solid var(--hair-2);
+  }
+
+  .card .acts button {
     border: none;
     padding: 0;
     background: none;
     color: var(--accent);
-    text-decoration: underline;
-    font-size: 11.5px;
+    font: 10.5px var(--font-mono);
     cursor: pointer;
   }
 
-  .d-tune:disabled {
+  .card .acts button:hover {
+    text-decoration: underline;
+  }
+
+  .card .acts button.dim {
+    color: var(--fg-dim);
+  }
+
+  .card .acts button.hot {
+    color: var(--alarm);
+  }
+
+  .card .acts button:disabled {
     opacity: 0.5;
     cursor: default;
   }
 
-  .d-row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+  .card .form {
+    margin-top: 7px;
   }
 
-  .d-row button {
-    border-radius: 7px;
-    font-size: 11.5px;
-    padding: 6px 10px;
-    cursor: pointer;
+  .card .form label {
+    display: block;
+    margin-bottom: 3px;
+    font: 600 9px var(--font-mono);
+    letter-spacing: 0.1em;
+    color: var(--fg-dim);
+  }
+
+  .card .form input {
+    width: 100%;
+    padding: 5px 8px;
+    background: var(--bg);
     border: 1px solid var(--border);
-    background: transparent;
+    border-radius: 6px;
+    color: var(--fg);
+    font: 11px var(--font-sans);
+    outline: none;
+  }
+
+  .card .form input:focus {
+    border-color: var(--accent);
+  }
+
+  .card .form label.both {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 7px;
+    letter-spacing: 0.04em;
     color: var(--fg-muted);
   }
 
-  .d-primary {
-    background: var(--accent) !important;
-    border-color: var(--accent) !important;
-    color: var(--bg) !important;
-    font-weight: 600;
+  .card .form label.both input {
+    width: auto;
+    accent-color: var(--accent);
   }
 
-  .d-danger:hover {
-    color: var(--reject);
-    border-color: var(--reject);
+  .card .form .btns {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 7px;
   }
 
-  .d-row button:disabled {
+  .card .form .go {
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--fg);
+    font: 600 10.5px var(--font-mono);
+    cursor: pointer;
+  }
+
+  .card .form .go:hover {
+    border-color: var(--accent);
+  }
+
+  .card .form .go:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .card .form .no {
+    border: none;
+    background: none;
+    color: var(--fg-dim);
+    font: 10.5px var(--font-mono);
+    cursor: pointer;
+  }
+
+  .card .form .who {
+    margin-left: auto;
+    color: var(--fg-dim);
+  }
+
+  .d-error {
+    margin: 5px 0 0;
+    font-size: 11.5px;
+    color: var(--reject);
   }
 
   /* --- the composer (round 2 scene 4) ------------------------------------ */
@@ -4647,18 +4873,6 @@
 
   /* --- the depth layers (#699) and the zones stop's flat ground plan
      (#852, #869) ------------------------------------------------------ */
-  .zone-state {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    fill: var(--fg-dim);
-  }
-
-  .zone-state.bad {
-    fill: var(--alarm);
-  }
-
   .gf-river {
     fill: var(--fg-dim);
     fill-opacity: 0.08;
