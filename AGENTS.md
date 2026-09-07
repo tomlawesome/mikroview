@@ -273,9 +273,10 @@ because when `dev` sits still the loop re-runs the same commit instead of
 idling, up to 20 times, and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN`/
 `FLAKE` lines to `loop.log`. Repeat runs of one unmoving commit are what
 tell a flaky scenario (`FLAKE`, e.g. "failed 2 of 7 runs") from a real
-regression (still `NEWFAIL`/`FIXED`/`SAME`/`CLEAN`, now compared against
-the scenarios that failed in *every* run of a commit rather than a single
-run's raw result). It checks the loop's own commit out into
+regression. `NEWFAIL`/`FIXED`/`SAME` now compare the scenarios that failed
+in *every* run of a commit, rather than one run's raw result, so a flake
+no longer reads as a regression. `CLEAN` keeps its old meaning: this run
+had nothing failing. It checks the loop's own commit out into
 `~/projects/.worktrees/mikroview/gate-dev` by default (`MV_GATE_WORKTREE`)
 -- a path under `~/projects/.worktrees` survives worktree clean-up; the
 previous default under `.claude/worktrees` did not, and the loop died

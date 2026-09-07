@@ -95,7 +95,20 @@ echo "==> cloning $SRC into $WORK"
 reclaim
 rm -rf "$WORK"
 mkdir -p "$(dirname "$WORK")"
-git clone -q "$SRC" "$WORK"
+# --no-hardlinks is not a nicety here, it is the whole safety of running
+# on the same machine as the repository. A local `git clone` hardlinks
+# .git/objects into the copy, so the clone's pack files *are* the
+# original's, one inode with two names. The container then runs
+# `chown -R ci-gate /work` over that copy -- and changes the owner of
+# ~/projects/mikroview/.git's own packs, to a subuid this account cannot
+# read. That happened on 2026-09-07: git started refusing with
+# "packfile ... index not opened" and "invalid object", and every
+# worktree sharing the store went with it. Nothing was lost, but only
+# because the damage was ownership rather than content.
+#
+# gate-remote.sh never had to think about this: its clone lands on
+# another machine, where no inode is shared with anything here.
+git clone -q --no-hardlinks "$SRC" "$WORK"
 git -C "$WORK" checkout -q "$SHA"
 
 # A checkout git reports as clean can still be missing tracked files -- the
