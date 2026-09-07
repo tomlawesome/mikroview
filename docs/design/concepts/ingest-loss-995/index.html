@@ -1,0 +1,768 @@
+<!doctype html>
+<!--
+  Mockup for #995: the family of ingest-loss banners. Supersedes the
+  narrower syslog-full placement mockup (docs/design/concepts/syslog-full-77,
+  e6abf3b) whose frame, scene grammar and Settings row are carried forward
+  -- only the banner copy is re-cut, per the owner's "horribly verbose"
+  verdict on the old three-line prose.
+
+  Severity scale (owner-ratified): red = critical, orange = warning,
+  yellow = below warning, cyan = information.
+
+  Mapping (owner-ruled, 2026-09-06):
+    red    - Dropped (lines binned after receipt)
+    orange - RejectedConfigured (declared router locked out)
+    yellow - Rejected (undeclared flood), Oversized
+    cyan   - wsDropped (owner's copy, verbatim)
+
+  One data story throughout, carried from the earlier mockup and extended:
+  router branch-e4a1 - 43 turned away - 24 of 24 syslog slots - live rate
+  38/s - wsDropped 156 - Dropped 812 - Rejected (undeclared) 2,867 -
+  Oversized 7 from 10.20.3.9.
+
+  Colour tokens: red is the app's own -\-alarm, cyan is -\-log (the
+  connecting banner's ink). Neither orange nor yellow exists in app.css
+  for this meaning (-\-drop names a firewall verdict): -\-warn #f28a1e and
+  -\-caution #e8e04d are minted openly as proposed tokens, placed by the
+  dataviz validator so every banner pair separates (see README). Drawing only; nothing under frontend/src changes.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>#995 — ingest-loss banner family</title>
+<style>
+  /* ---------- the app's own tokens (frontend/src/app.css :root) ---------- */
+  :root {
+    --bg: #06080e;
+    --bg-elevated: #0f1422;
+    --bg-hover: rgba(160, 185, 230, 0.08);
+    --border: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --fg: #e9eefb;
+    --fg-muted: #97a4c4;
+    --fg-dim: #55628a;
+    --accent: #9db8e8;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e;
+    --accept-bg: rgba(62, 207, 126, 0.12);
+    --drop: #f5a623;
+    --drop-bg: rgba(245, 166, 35, 0.12);
+    --reject: #ef4444;
+    --reject-bg: rgba(239, 68, 68, 0.12);
+    --log: #38bdf8;
+    --log-bg: rgba(56, 189, 248, 0.12);
+    --accept-tinted: color-mix(in srgb, var(--accept) 85%, var(--accent) 15%);
+    --drop-tinted: color-mix(in srgb, var(--drop) 85%, var(--accent) 15%);
+    --reject-tinted: color-mix(in srgb, var(--reject) 85%, var(--accent) 15%);
+    --log-tinted: color-mix(in srgb, var(--log) 85%, var(--accent) 15%);
+    --row-drop-bg: color-mix(in srgb, var(--drop-tinted) 9%, transparent);
+    --row-log-bg: color-mix(in srgb, var(--log-tinted) 9%, transparent);
+    /* proposed new tokens — neither exists in app.css (see README) */
+    --warn: #f28a1e;
+    --caution: #e8e04d;
+    /* 'Liberation Sans' is a capture-host shim only: this host's system-ui
+       resolves to a single-face font with no weights, while the owner's
+       Windows desktop resolves it to Segoe UI, which has real ones. Segoe
+       still wins on Windows; the app's real token has no such entry. */
+    --font-sans: -apple-system, 'Segoe UI', 'Liberation Sans', system-ui, Roboto, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 15px;
+  }
+
+  /* ---------- case-study scaffold (not app chrome; labels the panels) ---------- */
+  .brief {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 24px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brief h1 { margin: 0 0 8px; font-size: 18px; font-weight: 700; color: var(--fg); }
+  .brief p {
+    margin: 0 0 8px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--fg-muted);
+    max-width: 900px;
+  }
+  .brief .figs { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); }
+  .brief .figs b { color: var(--now); font-weight: 600; }
+
+  /* the ratified severity scale, as a compact legend */
+  .scale {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+  .scale span { display: inline-flex; align-items: center; gap: 6px; }
+  .scale i {
+    width: 22px; height: 10px; border-radius: 3px; flex: none;
+  }
+
+  .scenes { max-width: 1180px; margin: 0 auto; padding: 4px 24px 60px; }
+  .scene { padding: 26px 0 10px; border-bottom: 1px solid var(--border); }
+  .scene:last-child { border-bottom: none; }
+  .case-label {
+    margin: 0 0 12px;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .case-note {
+    margin: 10px 0 0;
+    font-size: 11.5px;
+    font-style: italic;
+    line-height: 1.5;
+    color: var(--fg-dim);
+    max-width: 760px;
+  }
+  .bar-label {
+    margin: 16px 0 6px;
+    font: 600 10px var(--font-mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .bar-label:first-child { margin-top: 0; }
+  .bar-label b { color: var(--fg-muted); font-weight: 600; }
+
+  /* ---------- the app frame (a scene's own dark surface) ---------- */
+  .appframe {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  /* ---------- the banner slot (ConnectionBanner.svelte's), re-inked ---------- */
+  .banner {
+    position: relative;
+    padding: 8px 16px;
+    font-size: 13px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+  .banner strong { font-weight: 700; }
+  .banner-critical {
+    background: color-mix(in srgb, var(--alarm) 9%, transparent);
+    color: var(--alarm);
+  }
+  .banner-caution {
+    background: color-mix(in srgb, var(--caution) 8%, transparent);
+    color: var(--caution);
+  }
+  .banner-info {
+    background: var(--row-log-bg);
+    color: var(--log);
+  }
+  .banner-warn {
+    background: color-mix(in srgb, var(--warn) 9%, transparent);
+    color: var(--warn);
+  }
+  .banner .detail {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font: 600 10px var(--font-mono);
+    letter-spacing: 0.06em;
+    color: inherit;
+    opacity: 0.75;
+    text-decoration: none;
+    border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+    border-radius: 6px;
+    padding: 2px 8px;
+  }
+  .banner .more {
+    display: inline-block;
+    margin-left: 10px;
+    font: 600 10px var(--font-mono);
+    letter-spacing: 0.06em;
+    color: inherit;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+    border-radius: 6px;
+    padding: 2px 8px;
+    vertical-align: 1px;
+  }
+
+  /* ---------- SceneBar.svelte, ported field-for-field ---------- */
+  .scene-bar {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    padding: 12px 20px 4px;
+    flex-wrap: wrap;
+  }
+  .scene-bar.closed { padding-bottom: 12px; }
+  .wm { font-size: 15px; font-weight: 800; letter-spacing: 0.04em; color: var(--fg); }
+  .wm em { color: var(--accent); font-style: normal; }
+  .status-cluster { margin-left: auto; display: flex; gap: 16px; align-items: center; }
+
+  /* ConnectionIndicator.svelte */
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-muted); }
+  .conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accept-tinted); }
+
+  /* AlarmCluster.svelte */
+  .fmk, .wmk {
+    display: inline-flex; align-items: center; gap: 3px;
+    background: transparent; border: none; padding: 0;
+    font: 600 12px var(--font-mono);
+  }
+  .fmk { color: var(--alarm); }
+  .fmk.zero { color: var(--accept-tinted); }
+  .wmk { color: #a78bfa; }
+  .wmk svg { display: block; }
+
+  /* AccountMenu.svelte, minimal chip */
+  .acc-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-muted); }
+  .acc-avatar {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--bg-hover); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font: 700 9px var(--font-mono); color: var(--fg-dim);
+  }
+
+  /* ---------- Whisper.svelte, ported ---------- */
+  .whisper { display: flex; gap: 14px; align-items: center; padding: 10px 20px 6px; flex-wrap: wrap; }
+  .wbar { position: relative; flex: 1; min-width: 260px; }
+  .wsvg { width: 100%; height: 26px; display: block; }
+  .wline { stroke: var(--accent); stroke-width: 1.4; opacity: 0.8; }
+  .wtimes { display: flex; justify-content: space-between; margin-top: 2px; font: 9px var(--font-mono); color: var(--fg-dim); }
+  .wstat { flex: none; font: 11px var(--font-mono); color: var(--fg-dim); white-space: nowrap; }
+  .wstat .k { color: var(--fg-muted); font-weight: 600; }
+  .wstat .r { color: var(--drop); font-weight: 600; }
+  .hand { display: inline-flex; gap: 4px; }
+  .hand-btn {
+    padding: 3px 9px; border-radius: 6px; border: 1px solid transparent;
+    background: transparent; font: 600 10px var(--font-mono);
+    letter-spacing: 0.04em; color: var(--fg-dim);
+  }
+  .hand-btn.on { color: var(--now); border-color: color-mix(in srgb, var(--now) 50%, transparent); }
+  .wpill {
+    flex: none; font: 600 10px var(--font-mono); letter-spacing: 0.06em;
+    color: var(--fg-dim); background: transparent; border: 1px solid var(--hair-2);
+    border-radius: 6px; padding: 3px 9px;
+  }
+
+  /* ---------- LiveTable / EventRow / ActionBadge, ported ---------- */
+  .stream { padding: 4px 20px 18px; font-family: var(--font-mono); font-size: 12px; }
+  .stream-head, .stream-row {
+    display: grid;
+    grid-template-columns: 112px 78px 1fr 1fr 110px;
+    gap: 12px;
+    padding: 6px 8px;
+    align-items: center;
+  }
+  .stream-head {
+    font-size: 9.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+  }
+  .stream-row.band { background: var(--bg-hover); border-radius: 4px; }
+  .stream-row .t { color: var(--fg-dim); }
+  .stream-row .src, .stream-row .dst { color: var(--fg-muted); }
+  .stream-row .dev { color: var(--fg-dim); text-align: right; }
+  .badge {
+    display: inline-block; font: 700 10px var(--font-mono);
+    letter-spacing: 0.06em; padding: 0 6px; border-radius: 4px;
+    white-space: nowrap; width: fit-content;
+  }
+  .badge-accept { color: var(--accept); background: var(--accept-bg); }
+  .badge-drop { color: var(--drop); background: var(--drop-bg); }
+  .badge-reject { color: var(--reject); background: var(--reject-bg); }
+  .badge-log { color: var(--log); background: var(--log-bg); }
+
+  /* ---------- EngineRoom.svelte's settings-row grammar, ported ---------- */
+  .og {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    max-width: 900px;
+  }
+  .og h3 {
+    margin: 0 0 10px;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .stsection.wide { display: grid; grid-template-columns: 380px 1fr; column-gap: 32px; align-items: start; }
+  .stsection.wide > h3 { grid-column: 1 / -1; }
+  .stsection.wide > .wleft { grid-column: 1; min-width: 0; }
+  .stsection.wide > .wrows { grid-column: 2; min-width: 0; }
+  .oghint { margin: 6px 0 0; font-size: 11.5px; font-style: italic; color: var(--fg-dim); }
+  .stmem { width: 100%; height: auto; display: block; }
+  .sp-n { font-family: var(--font-mono); font-size: 9.5px; fill: var(--fg-dim); }
+  .sp-k { font-family: var(--font-mono); font-size: 10px; fill: var(--fg-muted); }
+
+  .orow {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 14px; padding: 7px 0; font-size: 12px;
+  }
+  .orow > span:first-child { color: var(--fg-dim); flex: none; }
+  .orow .ov { color: var(--fg-muted); text-align: right; }
+  .orow.sub { padding-left: 14px; }
+  .orow .ov.ink-critical { color: var(--alarm); font-weight: 600; }
+  .orow .ov.ink-warn { color: var(--warn); font-weight: 600; }
+  .orow .ov.ink-caution { color: var(--caution); font-weight: 600; }
+  .orow .ov.ink-info { color: var(--log); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .banner { animation: banner-in 0.22s ease-out; }
+    @keyframes banner-in {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="brief" id="brief">
+  <h1>The ingest-loss banner family — #995</h1>
+  <p>
+    MikroView can lose log data four distinct ways; today it surfaces only the one that is not a loss at
+    all. Each signal gets its own banner in the slot <code>ConnectionBanner.svelte</code> already owns,
+    one short line each, on the ratified severity scale. Healthy is silent — no banner, and a quiet
+    readout in Settings.
+  </p>
+  <p class="figs">
+    One story throughout: router <b>branch-e4a1</b> · <b>43</b> turned away · <b>24 of 24</b> syslog
+    slots · live <b>38/s</b> · dropped in hand <b>812</b> · undeclared refused <b>2,867</b> ·
+    oversized <b>7</b> · not shown in this tab <b>156</b>.
+  </p>
+  <div class="scale" role="img" aria-label="Severity scale: red critical, orange warning, yellow below warning, cyan information">
+    <span><i style="background:var(--alarm)"></i>red — critical</span>
+    <span><i style="background:var(--warn)"></i>orange — warning</span>
+    <span><i style="background:var(--caution)"></i>yellow — below warning</span>
+    <span><i style="background:var(--log)"></i>cyan — information</span>
+  </div>
+</header>
+
+<main class="scenes">
+
+  <!-- ============ Scene 1: healthy ============ -->
+  <section class="scene" id="scene-1-healthy">
+    <p class="case-label">1 — healthy: silent</p>
+    <div class="appframe">
+      <div class="scene-bar">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <div class="status-cluster">
+          <span class="conn"><span class="dot"></span>LIVE · 38/s</span>
+          <button class="fmk zero" type="button" aria-label="no open flags">⚑ 0</button>
+          <button class="wmk" type="button" aria-label="3 watchers held">
+            <svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true">
+              <path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+              <circle cx="7" cy="5" r="1.8" fill="currentColor" />
+            </svg>
+            3
+          </button>
+          <span class="acc-chip"><span class="acc-avatar">T</span>tom</span>
+        </div>
+      </div>
+
+      <div class="whisper" aria-label="The last 15 minutes, whispered">
+        <div class="wbar">
+          <svg class="wsvg" viewBox="0 0 1000 30" preserveAspectRatio="none" role="img" aria-label="Event rate curve, last 15 minutes">
+            <polyline class="wline" fill="none" points="0,20 80,17 160,19 240,12 320,15 400,9 480,14 560,11 640,16 720,10 800,13 880,8 960,12 1000,11" />
+          </svg>
+          <div class="wtimes"><span>14:17</span><span>14:32 · now</span></div>
+        </div>
+        <span class="wstat">
+          <b class="k">38/s</b> now · <b class="r">drops 1%</b> · top talker <b class="k">10.20.4.7</b> · top port <b class="k">53</b>
+        </span>
+        <span class="hand" role="group" aria-label="The stream's hand">
+          <button type="button" class="hand-btn on" aria-pressed="true">following</button>
+          <button type="button" class="hand-btn" aria-pressed="false">pause</button>
+          <button type="button" class="hand-btn" aria-pressed="false">group</button>
+        </span>
+        <button type="button" class="wpill">wipe</button>
+      </div>
+
+      <div class="stream">
+        <div class="stream-head"><span>time</span><span>action</span><span>src</span><span>dst</span><span>device</span></div>
+        <div class="stream-row band">
+          <span class="t">14:32:07.112</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51422</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:07.098</span><span><span class="badge badge-drop">DROP</span></span>
+          <span class="src">10.20.6.2:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.884</span><span><span class="badge badge-log">LOG</span></span>
+          <span class="src">10.20.4.7:22</span><span class="dst">10.20.4.1:51500</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:06.771</span><span><span class="badge badge-reject">REJECT</span></span>
+          <span class="src">10.20.9.14:443</span><span class="dst">10.20.0.5:8080</span><span class="dev">guest-e8b2</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.650</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51420</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+      </div>
+    </div>
+    <p class="case-note">
+      No counter above zero, no banner — the app never shouts when nothing is lost. The counters idle in
+      Settings (scene 6).
+    </p>
+  </section>
+
+  <!-- ============ Scene 2: the family ============ -->
+  <section class="scene" id="scene-2-family">
+    <p class="case-label">2 — the family: one line each, severity order</p>
+
+    <p class="bar-label"><b>Dropped</b> — received, then binned: ingest channel full · red</p>
+    <div class="appframe">
+      <div class="banner banner-critical" role="status">
+        <strong>Ingest queue full:</strong> <span class="dt">812 log lines lost</span>
+        <a class="detail" href="#scene-6-settings">details</a>
+      </div>
+    </div>
+
+    <p class="bar-label"><b>RejectedConfigured</b> — a declared router locked out · orange</p>
+    <div class="appframe">
+      <div class="banner banner-warn" role="status">
+        <strong>Syslog slots full:</strong> <span class="dt">43 refused (branch-e4a1 locked out)</span>
+        <a class="detail" href="#scene-6-settings">details</a>
+      </div>
+    </div>
+
+    <p class="bar-label"><b>Rejected</b> — undeclared sources held off (the flood defence) · yellow</p>
+    <div class="appframe">
+      <div class="banner banner-caution" role="status">
+        <strong>Undeclared sources:</strong> <span class="dt">2,867 connections refused</span>
+        <a class="detail" href="#scene-6-settings">details</a>
+      </div>
+    </div>
+
+    <p class="bar-label"><b>Oversized</b> — something is sending lines no RouterOS device produces · yellow</p>
+    <div class="appframe">
+      <div class="banner banner-caution" role="status">
+        <strong>Non-RouterOS sender:</strong> <span class="dt">7 oversized messages received from 10.20.3.9 were truncated</span>
+        <a class="detail" href="#scene-6-settings">details</a>
+      </div>
+    </div>
+
+    <p class="bar-label"><b>wsDropped</b> — this tab only; nothing lost · cyan · owner's copy, verbatim</p>
+    <div class="appframe">
+      <div class="banner banner-info" role="status">
+        <strong>Slow browser tab:</strong> <span class="dt">156 events not shown (but still logged)</span>
+      </div>
+    </div>
+
+    <p class="case-note">
+      The owner's copy, verbatim, set in two tiers: the label is the heading, bold and read first; the
+      detail follows at text weight, subordinate. One line, no trailing stop.
+      Counts, router name and IP substituted at render time (singular when a count is 1). The real-loss
+      banners carry a <em>details</em> link into the Settings readout; the cyan notice ends with the
+      reassurance that earns its info tier — the events are still logged.
+    </p>
+  </section>
+
+  <!-- ============ Scene 3: one banner in place ============ -->
+  <section class="scene" id="scene-3-in-place">
+    <p class="case-label">3 — in place: the locked-out router, alone</p>
+    <div class="appframe">
+      <div class="banner banner-warn" role="status">
+        <strong>Syslog slots full:</strong> <span class="dt">43 refused (branch-e4a1 locked out)</span>
+        <a class="detail" href="#scene-6-settings">details</a>
+      </div>
+      <div class="scene-bar">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <div class="status-cluster">
+          <span class="conn"><span class="dot"></span>LIVE · 38/s</span>
+          <button class="fmk zero" type="button" aria-label="no open flags">⚑ 0</button>
+          <button class="wmk" type="button" aria-label="3 watchers held">
+            <svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true">
+              <path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+              <circle cx="7" cy="5" r="1.8" fill="currentColor" />
+            </svg>
+            3
+          </button>
+          <span class="acc-chip"><span class="acc-avatar">T</span>tom</span>
+        </div>
+      </div>
+      <div class="whisper" aria-label="The last 15 minutes, whispered">
+        <div class="wbar">
+          <svg class="wsvg" viewBox="0 0 1000 30" preserveAspectRatio="none" role="img" aria-label="Event rate curve, last 15 minutes">
+            <polyline class="wline" fill="none" points="0,20 80,17 160,19 240,12 320,15 400,9 480,14 560,11 640,16 720,10 800,13 880,8 960,12 1000,11" />
+          </svg>
+          <div class="wtimes"><span>14:17</span><span>14:32 · now</span></div>
+        </div>
+        <span class="wstat">
+          <b class="k">38/s</b> now · <b class="r">drops 1%</b> · top talker <b class="k">10.20.4.7</b> · top port <b class="k">53</b>
+        </span>
+        <span class="hand" role="group" aria-label="The stream's hand">
+          <button type="button" class="hand-btn on" aria-pressed="true">following</button>
+          <button type="button" class="hand-btn" aria-pressed="false">pause</button>
+          <button type="button" class="hand-btn" aria-pressed="false">group</button>
+        </span>
+        <button type="button" class="wpill">wipe</button>
+      </div>
+      <div class="stream">
+        <div class="stream-head"><span>time</span><span>action</span><span>src</span><span>dst</span><span>device</span></div>
+        <div class="stream-row band">
+          <span class="t">14:32:07.112</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51422</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:07.098</span><span><span class="badge badge-drop">DROP</span></span>
+          <span class="src">10.20.6.2:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.884</span><span><span class="badge badge-log">LOG</span></span>
+          <span class="src">10.20.4.7:22</span><span class="dst">10.20.4.1:51500</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:06.771</span><span><span class="badge badge-reject">REJECT</span></span>
+          <span class="src">10.20.9.14:443</span><span class="dst">10.20.0.5:8080</span><span class="dev">guest-e8b2</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.650</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51420</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+      </div>
+    </div>
+    <p class="case-note">
+      The stream itself still looks perfectly healthy — the banner is the only witness. The three-line
+      explanation the old mockup put here now lives behind <em>details</em>.
+    </p>
+  </section>
+
+  <!-- ============ Scene 4: several at once, collapsed ============ -->
+  <section class="scene" id="scene-4-collapsed">
+    <p class="case-label">4 — several at once: one bar, worst first</p>
+    <div class="appframe">
+      <div class="banner banner-critical" role="status">
+        <strong>Ingest queue full:</strong> <span class="dt">812 log lines lost</span>
+        <button class="more" type="button" aria-expanded="false" aria-controls="stack-x">+3 more</button>
+        <a class="detail" href="#scene-6-settings">details</a>
+      </div>
+      <div class="scene-bar">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <div class="status-cluster">
+          <span class="conn"><span class="dot"></span>LIVE · 61/s</span>
+          <button class="fmk" type="button" aria-label="2 open flags">⚑ 2</button>
+          <button class="wmk" type="button" aria-label="3 watchers held">
+            <svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true">
+              <path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+              <circle cx="7" cy="5" r="1.8" fill="currentColor" />
+            </svg>
+            3
+          </button>
+          <span class="acc-chip"><span class="acc-avatar">T</span>tom</span>
+        </div>
+      </div>
+      <div class="whisper" aria-label="The last 15 minutes, whispered">
+        <div class="wbar">
+          <svg class="wsvg" viewBox="0 0 1000 30" preserveAspectRatio="none" role="img" aria-label="Event rate curve, last 15 minutes">
+            <polyline class="wline" fill="none" points="0,14 80,18 160,10 240,20 320,9 400,17 480,8 560,15 640,7 720,16 800,6 880,13 960,5 1000,9" />
+          </svg>
+          <div class="wtimes"><span>14:17</span><span>14:32 · now</span></div>
+        </div>
+        <span class="wstat">
+          <b class="k">61/s</b> now · <b class="r">drops 9%</b> · top talker <b class="k">10.20.4.7</b> · top port <b class="k">53</b>
+        </span>
+        <span class="hand" role="group" aria-label="The stream's hand">
+          <button type="button" class="hand-btn on" aria-pressed="true">following</button>
+          <button type="button" class="hand-btn" aria-pressed="false">pause</button>
+          <button type="button" class="hand-btn" aria-pressed="false">group</button>
+        </span>
+        <button type="button" class="wpill">wipe</button>
+      </div>
+      <div class="stream">
+        <div class="stream-head"><span>time</span><span>action</span><span>src</span><span>dst</span><span>device</span></div>
+        <div class="stream-row band">
+          <span class="t">14:32:07.112</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51422</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:07.098</span><span><span class="badge badge-drop">DROP</span></span>
+          <span class="src">10.20.6.2:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.884</span><span><span class="badge badge-log">LOG</span></span>
+          <span class="src">10.20.4.7:22</span><span class="dst">10.20.4.1:51500</span><span class="dev">branch-e4a1</span>
+        </div>
+        <div class="stream-row">
+          <span class="t">14:32:06.771</span><span><span class="badge badge-reject">REJECT</span></span>
+          <span class="src">10.20.9.14:443</span><span class="dst">10.20.0.5:8080</span><span class="dev">guest-e8b2</span>
+        </div>
+        <div class="stream-row band">
+          <span class="t">14:32:06.650</span><span><span class="badge badge-accept">ACCEPT</span></span>
+          <span class="src">10.20.4.7:51420</span><span class="dst">192.168.88.1:53</span><span class="dev">branch-e4a1</span>
+        </div>
+      </div>
+    </div>
+    <p class="case-note">
+      Four signals firing (the flood scenario: undeclared sources saturate the slots and the queue), one
+      bar's height paid. The bar wears the worst severity, leads with its message, and counts the rest —
+      the app is never pushed down more than one line without consent.
+    </p>
+  </section>
+
+  <!-- ============ Scene 5: several at once, expanded ============ -->
+  <section class="scene" id="scene-5-expanded">
+    <p class="case-label">5 — the same four, expanded by the chip</p>
+    <div class="appframe">
+      <div id="stack-x">
+        <div class="banner banner-critical" role="status">
+          <strong>Ingest queue full:</strong> <span class="dt">812 log lines lost</span>
+          <button class="more" type="button" aria-expanded="true" aria-controls="stack-x">less</button>
+          <a class="detail" href="#scene-6-settings">details</a>
+        </div>
+        <div class="banner banner-warn" role="status">
+          <strong>Syslog slots full:</strong> <span class="dt">43 refused (branch-e4a1 locked out)</span>
+        </div>
+        <div class="banner banner-caution" role="status">
+          <strong>Undeclared sources:</strong> <span class="dt">2,867 connections refused</span>
+        </div>
+        <div class="banner banner-info" role="status">
+          <strong>Slow browser tab:</strong> <span class="dt">156 events not shown (but still logged)</span>
+        </div>
+      </div>
+      <div class="scene-bar closed">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <div class="status-cluster">
+          <span class="conn"><span class="dot"></span>LIVE · 61/s</span>
+          <button class="fmk" type="button" aria-label="2 open flags">⚑ 2</button>
+          <span class="acc-chip"><span class="acc-avatar">T</span>tom</span>
+        </div>
+      </div>
+    </div>
+    <p class="case-note">
+      Severity order, top down; the same colours as scene 2, nothing restyled. Collapses back from the
+      same chip, and re-collapses itself when the counters stop moving.
+    </p>
+  </section>
+
+  <!-- ============ Scene 6: Settings ============ -->
+  <section class="scene" id="scene-6-settings">
+    <p class="case-label">6 — settings: the persistent readout, all five counters</p>
+    <div class="og">
+      <div class="stsection wide">
+        <h3>memory</h3>
+        <div class="wleft">
+          <svg class="stmem" viewBox="0 0 400 40" role="img" aria-label="The event buffer, hour by hour">
+            <rect x="6" y="15" width="380" height="10" rx="5" fill="var(--bg-hover)" />
+            <rect x="6" y="15" width="27" height="10" fill="var(--accent)" opacity="0.08" />
+            <rect x="33" y="15" width="27" height="10" fill="var(--accent)" opacity="0.14" />
+            <rect x="60" y="15" width="27" height="10" fill="var(--accent)" opacity="0.22" />
+            <rect x="87" y="15" width="27" height="10" fill="var(--accent)" opacity="0.3" />
+            <rect x="114" y="15" width="27" height="10" fill="var(--accent)" opacity="0.12" />
+            <rect x="141" y="15" width="27" height="10" fill="var(--accent)" opacity="0.26" />
+            <rect x="168" y="15" width="27" height="10" fill="var(--accent)" opacity="0.19" />
+            <rect x="195" y="15" width="27" height="10" fill="var(--accent)" opacity="0.09" />
+            <rect x="222" y="15" width="27" height="10" fill="var(--accent)" opacity="0.24" />
+            <rect x="249" y="15" width="27" height="10" fill="var(--accent)" opacity="0.16" />
+            <rect x="276" y="15" width="27" height="10" fill="var(--accent)" opacity="0.28" />
+            <rect x="303" y="15" width="27" height="10" fill="var(--accent)" opacity="0.2" />
+            <rect x="330" y="15" width="27" height="10" fill="var(--accent)" opacity="0.31" />
+            <rect x="357" y="15" width="27" height="10" fill="var(--accent)" opacity="0.15" />
+            <rect x="386" y="10" width="3" height="20" rx="1.5" fill="var(--now)" />
+            <text x="6" y="36" class="sp-n">14:32 yesterday — the oldest event still held</text>
+            <text x="392" y="36" text-anchor="end" class="sp-k">now</text>
+          </svg>
+          <p class="oghint">the oldest falls away as the newest arrives; darker stretches held more</p>
+        </div>
+        <div class="wrows">
+          <div class="orow">
+            <span>event buffer</span>
+            <span class="ov">612,480 of 750,000 events · ~14 h window</span>
+          </div>
+          <div class="orow">
+            <span>syslog slots</span>
+            <span class="ov">24 of 24 in use</span>
+          </div>
+          <div class="orow sub">
+            <span>lost after receipt</span>
+            <span class="ov ink-critical" role="status" aria-label="812 log lines lost after receipt since restart">812 since restart</span>
+          </div>
+          <div class="orow sub">
+            <span>declared routers refused</span>
+            <span class="ov ink-warn" role="status" aria-label="43 refusals of declared routers since restart, latest branch-e4a1">43 · branch-e4a1</span>
+          </div>
+          <div class="orow sub">
+            <span>undeclared refused</span>
+            <span class="ov ink-caution">2,867</span>
+          </div>
+          <div class="orow sub">
+            <span>oversized truncated</span>
+            <span class="ov ink-caution">7 · from 10.20.3.9</span>
+          </div>
+          <div class="orow sub">
+            <span>not shown in this tab</span>
+            <span class="ov ink-info">156 · resets on reconnect</span>
+          </div>
+          <div class="orow">
+            <span>on restart</span>
+            <span class="ov">kept 14 d, refilled from disk</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="oghint" style="max-width:760px;">
+      Healthy, the same rows sit in the ordinary muted ink — never shouting:
+    </p>
+    <div class="og" style="margin-top:8px; padding:8px 18px;">
+      <div class="orow">
+        <span>syslog slots</span>
+        <span class="ov">3 of 24 in use</span>
+      </div>
+      <div class="orow sub">
+        <span>lost after receipt</span>
+        <span class="ov">0 since restart</span>
+      </div>
+      <div class="orow sub">
+        <span>declared routers refused</span>
+        <span class="ov">0</span>
+      </div>
+      <div class="orow sub">
+        <span>undeclared refused</span>
+        <span class="ov">0</span>
+      </div>
+      <div class="orow sub">
+        <span>oversized truncated</span>
+        <span class="ov">0</span>
+      </div>
+      <div class="orow sub">
+        <span>not shown in this tab</span>
+        <span class="ov">0</span>
+      </div>
+    </div>
+    <p class="case-note">
+      The earlier mockup's Settings panel, kept — the one-line "syslog intake" row grows into a
+      per-counter block under the slots row. Colour only while the counter is above zero; the router name
+      on the refused row is the small backend change #995 names.
+    </p>
+  </section>
+
+</main>
+</body>
+</html>
