@@ -36,8 +36,22 @@ export interface Building {
   index: number
 }
 
+/** One direction across a boundary, for the gate's card: a wall has no
+ * direction, so its card lists both (round 49, #1016). */
+export interface GateDirection {
+  /** `from → to`, in the interfaces' own names. */
+  label: string
+  /** The declaration key for this direction, `from|to` -- what the
+   * declare API (#392) is called with. */
+  edgeKey: string
+  coverage: Coverage
+  /** Accept rules standing on this direction; 0 when none does. */
+  ruleCount: number
+}
+
 /** A break in a district's wall (#865): an accept rule crossing this
- * boundary, aimed at wherever its other side resolves to. */
+ * boundary, aimed at wherever its other side resolves to. One gate per
+ * neighbour, both its directions on it (round 49). */
 export interface DistrictGate {
   /** The boundary key -- fall.svelte.ts's boundaryKeyOf shape. */
   key: string
@@ -52,6 +66,13 @@ export interface DistrictGate {
   /** An accept rule on this exact boundary logs: the gate's lamp. */
   lamp: boolean
   ruleCount: number
+  /** The worse of this gate's two directions (dark worse than quiet
+   * worse than logged): accent posts and one lamp when logged, grey
+   * posts and no lamp otherwise, and the wall edge it stands in takes
+   * the same reading. */
+  coverage: Coverage
+  /** Both directions, for the card. */
+  directions: GateDirection[]
 }
 
 export interface District {
@@ -71,6 +92,12 @@ export interface District {
   /** Nothing logs on this boundary and nobody declared it quiet: plate
    * and buildings dim. `coverage === 'dark'`. */
   dark: boolean
+  /** Every one of this district's boundaries is dark -- the only case
+   * the plate itself goes grey and dashed (round 49, #1016). A district
+   * with one dark boundary and one declared quiet is not this: its dark
+   * wall edge says where the hole is, and the plate stays in its own
+   * ink. Narrower than `dark`, which is the lane's own reading. */
+  plateDark: boolean
   buildings: Building[]
   /** Hosts beyond the buildings drawn (the plate is bounded). */
   more: number
@@ -124,10 +151,9 @@ export interface Road {
   label: string
 }
 
-/** The lens tabs the ratified record gives both views. The city draws
- * the traffic reading for both today; coverage becomes city-aware when
- * its own issue lands. */
-export type CityLens = 'traffic' | 'coverage'
+/* Round 49 (#1016) removed the lens tabs and with them `CityLens`:
+   coverage is always on and is the material, traffic is the picture,
+   and the policy lens went in slice C. There is nothing left to switch. */
 
 /** A tunnel's peer, drawn as the far-bank hamlet (#866): a WireGuard
  * peer (by allowedAddress/comment) or a ppp-active session (by
@@ -161,6 +187,12 @@ export interface Bridge {
    * the API has no state for it at all (never a guessed down).
    */
   state: 'up' | 'quiet' | 'down' | 'unknown'
+  /** What the deck is drawn in (round 49, #1016): accent with lamps when
+   * a rule logs this boundary, white translucent and unlamped when the
+   * operator declared it quiet on purpose, grey with dashed rails when
+   * nothing logs. A different fact from `state`, which is whether the
+   * tunnel is up -- the chip still carries that. */
+  coverage: Coverage
   /** The far-bank hamlet: empty for the road bridge. */
   peers: CityPeer[]
 }

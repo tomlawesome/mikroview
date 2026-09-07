@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { cam } from './project'
 import { gateToward } from './roads'
-import { faceOf, facePoint, wallPiece, wallSegments, GATE_HALF_WIDTH } from './walls'
+import { faceCoverage, faceOf, facePoint, wallPiece, wallSegments, GATE_HALF_WIDTH } from './walls'
 
 const d = { u: 0, v: 0, r: 20 }
 
@@ -96,5 +96,24 @@ describe('wallPiece', () => {
     const d0 = wallPiece(c, d, { side: 'l', t0: 0, t1: 1 })
     expect(d0.startsWith('M')).toBe(true)
     expect(d0.endsWith('Z')).toBe(true)
+  })
+})
+
+// Round 49 (#1016): the material is the coverage. A wall has no
+// direction, so an edge takes the worse of the gates standing in it.
+describe('faceCoverage', () => {
+  it('an ungated face draws in the district’s own ink', () => {
+    expect(faceCoverage([])).toEqual({ l: 'logged', r: 'logged' })
+    expect(faceCoverage([{ side: 'r', coverage: 'dark' }]).l).toBe('logged')
+  })
+
+  it('takes the worse of the gates on that face, and only that face', () => {
+    const out = faceCoverage([
+      { side: 'l', coverage: 'logged' },
+      { side: 'l', coverage: 'dark' },
+      { side: 'r', coverage: 'quiet' },
+    ])
+    expect(out.l).toBe('dark')
+    expect(out.r).toBe('quiet')
   })
 })

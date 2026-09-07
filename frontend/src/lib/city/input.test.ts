@@ -93,6 +93,29 @@ describe('city input', () => {
     expect(nothing.zones[0].coverage).toBe('quiet')
   })
 
+  // Round 49 (#1016): no road crosses a boundary nothing logs, because a
+  // road there would claim a log line that was never written.
+  it('names the boundaries no road may cross, and leaves unnamed pairs alone', () => {
+    const devices = [device('rb', '10.0.0.1')]
+    const zones = [zone('vlan-guest', null)]
+    const edges = [policy('vlan-guest', 'ether1', false), policy('ether1', 'vlan-guest', false), policy('bridge1', 'ether1', true)]
+    const input = cityInputFrom(devices, zones, [], [], edges, true, 'rb', 'ether1')
+    expect(input.unloggedBoundaries).toEqual(['ether1|vlan-guest'])
+
+    // One direction that logs is a log line that was written, so the
+    // road is a fact and stays drawn.
+    const half = cityInputFrom(devices, zones, [], [], [policy('vlan-guest', 'ether1', true), policy('ether1', 'vlan-guest', false)], true, 'rb', 'ether1')
+    expect(half.unloggedBoundaries).toEqual([])
+
+    // A declared-quiet boundary is still one nothing logs: no road.
+    const quiet = cityInputFrom(devices, zones, [], [], edges, true, 'rb', 'ether1', [], [], new Set(['vlan-guest|ether1', 'ether1|vlan-guest']))
+    expect(quiet.unloggedBoundaries).toEqual(['ether1|vlan-guest'])
+
+    // With nothing pushed there is no boundary to read at all, so
+    // nothing is suppressed -- the plaque carries that fact instead.
+    expect(cityInputFrom(devices, zones, [], [], edges, false, 'rb', 'ether1').unloggedBoundaries).toEqual([])
+  })
+
   it('stands in a router when no device exists yet', () => {
     const input = cityInputFrom([], [], [], [], [], false, null, null)
     expect(input.routers).toHaveLength(1)
@@ -110,7 +133,14 @@ describe('city input', () => {
         peers: [{ id: 'wg0/wg/1', name: 'phone', address: '10.9.0.2', kind: 'wg' }],
       },
     ])
-    expect(input.tunnels).toEqual([{ iface: 'wg0', routerId: 'rb', apiState: 'down', events: 0, peers: [{ id: 'wg0/wg/1', name: 'phone', address: '10.9.0.2', kind: 'wg' }] }])
+    // `coverage` is the bridge's material (round 49, #1016). Nothing is
+    // pushed here, so there is no boundary to read as dark and nobody
+    // declared anything: the deck draws normally, and the plaque is what
+    // carries "no rule table pushed". A white deck would claim a
+    // declaration nobody made.
+    expect(input.tunnels).toEqual([
+      { iface: 'wg0', routerId: 'rb', apiState: 'down', events: 0, coverage: 'logged', peers: [{ id: 'wg0/wg/1', name: 'phone', address: '10.9.0.2', kind: 'wg' }] },
+    ])
   })
 
   it('finds the zone whose CIDR holds an address', () => {

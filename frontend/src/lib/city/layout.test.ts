@@ -4,7 +4,7 @@ import { bankV, layoutGround, plateRadius } from './layout'
 import { bezAt, bezTangent, dm, segsOf } from './roads'
 import type { CityInput } from './input'
 import type { Pt } from './project'
-import type { District, Ground, Road } from './types'
+import type { District, DistrictGate, Ground, Road } from './types'
 
 const ground: Ground = layoutGround(mockupEstate())
 
@@ -101,6 +101,13 @@ describe('city layout: roads', () => {
     expect(roads.find((r) => r.id === 'bridge-lan|vlan-iot')?.k).toBe('x')
     expect(roads.find((r) => r.id === 'bridge-lan|vlan-guest')?.stop).toBe('drop')
     expect(roads.find((r) => r.id === 'rb-wan')?.to).toBe('post:ether1')
+    // Round 49 (#1016): nothing logs the wg0 boundary -- it was declared
+    // quiet on purpose -- so no road crosses it, and the bridge itself
+    // carries none either. A road there would claim a log line that was
+    // never written.
+    expect(ids).not.toContain('bridge-lan|wg0')
+    expect(ids).not.toContain('rb-wg0')
+    expect(ids).not.toContain('wg0-span')
     expect(roads.find((r) => r.id === 'wan-span')?.fade).toBe(true)
   })
 
@@ -204,14 +211,45 @@ describe('city layout: gates', () => {
   it('opens a gate on the district a pushed accept rule actually names, aimed at the resolvable neighbour', () => {
     const lan = ground.districts.find((d) => d.id === 'bridge-lan') as District
     const srv = ground.districts.find((d) => d.id === 'vlan-srv') as District
-    const lanToSrv = lan.gates.find((g) => g.key === 'forward|bridge-lan|vlan-srv')
+    // One gate per neighbour, not one per rule direction (round 49):
+    // a wall has no direction, so the two directions across the same
+    // boundary are one break in it.
+    const lanToSrv = lan.gates.find((g) => g.toward === 'vlan-srv')
     expect(lanToSrv).toBeTruthy()
-    expect(lanToSrv?.lamp).toBe(true)
+    expect(lan.gates.filter((g) => g.toward === 'vlan-srv')).toHaveLength(1)
     expect(lanToSrv?.toward).toBe('vlan-srv')
     // The gate sits on the plate's own edge, not inside or outside it.
     expect(dm(lanToSrv!.p, [lan.u, lan.v])).toBeCloseTo(lan.r, 5)
-    const srvToLan = srv.gates.find((g) => g.key === 'forward|vlan-srv|bridge-lan')
-    expect(srvToLan?.lamp).toBe(false)
+    const srvToLan = srv.gates.find((g) => g.toward === 'bridge-lan')
+    expect(srvToLan).toBeTruthy()
+  })
+
+  it('takes the worse of a boundary\'s two directions, and lists both on the gate (round 49)', () => {
+    const lan = ground.districts.find((d) => d.id === 'bridge-lan') as District
+    const toSrv = lan.gates.find((g) => g.toward === 'vlan-srv') as DistrictGate
+    // bridge-lan -> vlan-srv logs; vlan-srv -> bridge-lan does not and
+    // nobody declared it. Dark is worse than logged, so the wall edge is
+    // dark and the gate is unlit -- the lamp is the whole boundary's,
+    // never one direction's.
+    expect(toSrv.coverage).toBe('dark')
+    expect(toSrv.lamp).toBe(false)
+    expect(toSrv.directions.map((x) => x.edgeKey)).toEqual(['bridge-lan|vlan-srv', 'vlan-srv|bridge-lan'])
+    expect(toSrv.directions.map((x) => x.coverage)).toEqual(['logged', 'dark'])
+    // The workshop's boundary logs both ways: accent posts and a lamp.
+    const wsh = ground.districts.find((d) => d.id === 'wlan-wsh') as District
+    const toLan = wsh.gates.find((g) => g.toward === 'bridge-lan') as DistrictGate
+    expect(toLan.coverage).toBe('logged')
+    expect(toLan.lamp).toBe(true)
+  })
+
+  it('greys the plate only when every one of a district\'s boundaries is dark (round 49)', () => {
+    // Guest has no gate at all, so its lane reading stands in; the LAN
+    // has gates and one of them logs a direction, so its plate keeps its
+    // own ink whatever the lane reading says.
+    const guest = ground.districts.find((d) => d.id === 'vlan-guest') as District
+    expect(guest.plateDark).toBe(true)
+    const wsh = ground.districts.find((d) => d.id === 'wlan-wsh') as District
+    expect(wsh.plateDark).toBe(false)
   })
 
   it('draws no gate at all for a boundary no accept rule crosses', () => {

@@ -5,13 +5,13 @@
 // data so layout.ts stays pure and testable without the stores.
 import { addressInCidr, parseCidr } from '../addressMatch'
 import type { RouterFilterRule } from '../api'
-import { boundaryCoverage, type Coverage } from '../coverageRule'
+import { boundaryCoverage, edgeCoverage, type Coverage } from '../coverageRule'
 import type { PolicyEdge } from '../policy.svelte'
 import type { RealityEdge } from '../reality'
 import type { TunnelInterface } from '../tunnels.svelte'
 import type { Device, FirewallEvent } from '../types'
 import type { ZoneInfo } from '../zones.svelte'
-import { gatesFromRules, type CityGate } from './gates'
+import { betterCoverage, gatesFromRules, type CityGate } from './gates'
 import type { CityPeer } from './types'
 
 export type { CityGate } from './gates'
@@ -83,6 +83,11 @@ export interface CityTunnel {
    * quiet reading (bridgeStateFor). */
   events: number
   peers: CityPeer[]
+  /** How this boundary reads under the one coverage rule -- the
+   * footbridge's deck wears it (round 49, #1016): accent with lamps when
+   * logged, white when declared quiet, grey with dashed rails when dark.
+   * A different fact from `apiState`, which is whether the tunnel is up. */
+  coverage: Coverage
 }
 
 export interface CityInput {
@@ -95,6 +100,11 @@ export interface CityInput {
    * lamped when true, unlit otherwise -- never up/down/quiet, per the
    * ratified record. */
   wanLogged: boolean
+  /** The WAN boundary's three-way reading, for the road bridge's own
+   * deck (round 49): logged, declared quiet, or dark. `wanLogged` is the
+   * same fact narrowed to the lamp, kept because the bridge's `state`
+   * still reads from it. */
+  wanCoverage: Coverage
   /** Every tunnel interface this build knows about, from events and/or
    * the pushed tunnel tables: each gets a footbridge. */
   tunnels: CityTunnel[]
@@ -102,6 +112,12 @@ export interface CityInput {
    * rulesPushed is false, so "nothing pushed" and "pushed with nothing
    * accepting" are never confused with each other downstream (#865). */
   gates: CityGate[]
+  /** Every boundary a pushed rule names on which nothing logs in either
+   * direction, as sorted `a|b` interface pairs. No road is drawn across
+   * one (round 49, #1016): a road there would claim a log line that was
+   * never written. A pair no pushed rule names at all is not in here --
+   * that is unplanned traffic, which the map must still show. */
+  unloggedBoundaries: string[]
   /** Whether any router has ever pushed a rule table at all -- distinct
    * from a zone being dark (a table WAS pushed and nothing on it logs).
    * The wall's own "says why" reads this. */
@@ -196,6 +212,14 @@ export function cityInputFrom(
   // accusing every lane of a hole.
   const coverageOfZone = (iface: string): Coverage => (anyPushed ? boundaryCoverage(iface, policyEdges, quietKeys) : 'quiet')
 
+  // The material reading (round 49, #1016): what a bridge deck is
+  // actually drawn in. It differs from coverageOfZone in the one case
+  // where nothing has been pushed at all -- there is nothing to read as
+  // dark, and nobody declared anything, so the element draws normally
+  // and the plaque carries "no rule table pushed" instead. A white deck
+  // there would claim a declaration nobody made.
+  const materialOf = (iface: string): Coverage => (anyPushed ? boundaryCoverage(iface, policyEdges, quietKeys) : 'logged')
+
   // A tunnel this build knows about either from its own events or from
   // a device's pushed tunnel table -- the first API entry to name it
   // wins when two devices happen to share an interface name, the same
@@ -213,8 +237,24 @@ export function cityInputFrom(
       apiState: api?.apiState ?? null,
       events: tunnelEvents.get(iface) ?? 0,
       peers: api?.peers ?? [],
+      coverage: materialOf(iface),
     }
   })
+
+  // The boundaries no road may cross (round 49). A pair reads by the
+  // kindest of its directions: one direction that logs is a log line
+  // that was written, so the road is a fact and is drawn.
+  const pairReading = new Map<string, Coverage>()
+  if (anyPushed) {
+    for (const e of policyEdges) {
+      if (!e.from || !e.to || e.from === e.to) continue
+      const key = [e.from, e.to].sort().join('|')
+      const st = edgeCoverage(e, quietKeys)
+      const had = pairReading.get(key)
+      pairReading.set(key, had ? betterCoverage(had, st) : st)
+    }
+  }
+  const unloggedBoundaries = [...pairReading.entries()].filter(([, st]) => st !== 'logged').map(([k]) => k)
 
   const cityZones: CityZone[] = zones
     .filter((z) => !isTunnel(z.id))
@@ -239,8 +279,10 @@ export function cityInputFrom(
     edges: edges.map((e) => ({ key: e.key, from: e.from, to: e.to, events: e.events, verdict: e.verdict, drops: e.drops, refusedBy: e.refusedBy })),
     wan,
     wanLogged,
+    wanCoverage: wan === null ? 'logged' : materialOf(wan),
     tunnels: cityTunnels,
-    gates: anyPushed ? gatesFromRules(rules) : [],
+    unloggedBoundaries,
+    gates: anyPushed ? gatesFromRules(rules, policyEdges, quietKeys) : [],
     rulesPushed: anyPushed,
   }
 }
