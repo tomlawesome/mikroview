@@ -3542,6 +3542,8 @@
       initialCentre={cityView?.centre}
       onCameraChange={(s, centre) => (cityView = { S: s, centre })}
       onStandChange={(b) => (cityStandBuilding = b)}
+      {flagsOn}
+      {watchOn}
     />
   {/if}
 
