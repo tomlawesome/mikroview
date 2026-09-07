@@ -62,8 +62,9 @@
   import { bridgeStateLabel } from '../lib/city/tunnelState'
   import { deviceKindFor } from '../lib/city/deviceKind'
   import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
-  import { faceCoverage, faceOf, facePoint, wallPiece, wallSegments, GATE_HALF_WIDTH, type WallBreak, type WallSide } from '../lib/city/walls'
+  import { faceCoverage, faceOf, facePoint, wallPiece, wallSegments, GATE_HALF_WIDTH, WALL_H, type WallBreak, type WallSide } from '../lib/city/walls'
   import { worseCoverage } from '../lib/city/gates'
+  import { cardSize, grace, mapRect, placeCard, stageRect, unitMapper, type Placement, type Rect } from '../lib/cardAnchor'
   import type { Coverage } from '../lib/coverageRule'
   import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
@@ -1133,8 +1134,15 @@
   // the 2D map's, because the two surfaces are drawn and worded to one
   // rule -- a boundary reads the same whichever side of the slider you
   // are on.
-  let hoverWall = $state<{ districtId: string; side: WallSide } | null>(null)
-  let pinnedWall = $state<{ districtId: string; side: WallSide } | null>(null)
+  /** Which wall a card is open on. One object, never an id without a
+   * side: `openWallCard` used to take the two apart, and the card's own
+   * `onpointerenter` passed it `openWall!.side` against an `openWall`
+   * that was already null by then (#1027). There is no longer anywhere
+   * to write that. */
+  type WallRef = { districtId: string; side: WallSide }
+
+  let hoverWall = $state<WallRef | null>(null)
+  let pinnedWall = $state<WallRef | null>(null)
   let declareReason = $state('')
   /** Declaring covers both directions by default: one direction declared
    * and the other still dark would leave the wall grey and the card
@@ -1145,7 +1153,7 @@
   const openWall = $derived(pinnedWall ?? hoverWall)
   const wallPinned = $derived(pinnedWall !== null)
 
-  function sameWall(a: { districtId: string; side: WallSide } | null, b: { districtId: string; side: WallSide } | null): boolean {
+  function sameWall(a: WallRef | null, b: WallRef | null): boolean {
     return a !== null && b !== null && a.districtId === b.districtId && a.side === b.side
   }
 
@@ -1179,12 +1187,26 @@
     return { d, gate, declaration }
   })
 
-  function openWallCard(districtId: string, side: WallSide) {
+  /** The card's grace period (#1027): shared with the 2D map, so the
+   * two surfaces cannot drift apart on how long the pointer has to get
+   * from a boundary to its own card. */
+  const cardGrace = grace()
+
+  function openWallCard(w: WallRef) {
     if (drag?.moved) return
-    hoverWall = { districtId, side }
+    cardGrace.hold()
+    hoverWall = w
   }
-  function closeWallCard(districtId: string, side: WallSide) {
-    if (sameWall(hoverWall, { districtId, side })) hoverWall = null
+
+  /** The pointer has left the wall, or the card. It may be on its way to
+   * the other one, so the card is not taken down until the grace period
+   * has passed with the pointer arriving nowhere. */
+  function releaseWallCard() {
+    const w = hoverWall
+    if (!w) return
+    cardGrace.release(() => {
+      if (sameWall(hoverWall, w)) hoverWall = null
+    })
   }
   function toggleWallPin() {
     const w = openWall
@@ -1238,6 +1260,86 @@
     tuneLoggingNavState.request(primaryDevice.id, c.gate.key)
     appState.view = 'tune-logging'
   }
+
+  /* ---------------- where the card floats ---------------- */
+
+  // Round 49 puts the card beside the boundary it describes, joined to
+  // it by a leader with an accent dot at the boundary's end. The drawing
+  // places each card by hand, per scene (round-49/index.html:1340-1350);
+  // here the subject moves, so the placement is worked out from the live
+  // camera and re-worked every time anything moves it. The rules
+  // themselves are in lib/cardAnchor.ts, shared with the 2D map.
+  let cityEl: HTMLDivElement | undefined = $state()
+  let bcardEl: HTMLDivElement | undefined = $state()
+  let cardPlace = $state<Placement | null>(null)
+  /** Bumped when the stage changes size under us, which no camera or
+   * stop change reports. */
+  let stageTick = $state(0)
+
+  /** A district's plate as a box on the stage, its wall included. */
+  function plateBox(d: { u: number; v: number; r: number }): Rect {
+    const x = X(viewCam, d.u - d.r)
+    const y = Y(viewCam, d.v - d.r, WALL_H)
+    return { x, y, w: X(viewCam, d.u + d.r) - x, h: Y(viewCam, d.v + d.r, 0) - y }
+  }
+
+  $effect(() => {
+    // Read first, so this re-runs on everything that moves the subject:
+    // which wall is open, the camera (pan and zoom alike), the stop, the
+    // card's own arrival in the DOM, and the stage's size.
+    const w = openWall
+    const c = viewCam
+    const svg = svgEl
+    const host = cityEl
+    const card = bcardEl
+    void effectiveStop
+    void stageTick
+
+    if (!w || !svg || !host || !card) {
+      cardPlace = null
+      return
+    }
+    const d = districtOf(w.districtId)
+    if (!d) {
+      cardPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      cardPlace = null
+      return
+    }
+    const a = facePoint(d, w.side, 0.5)
+    // Half way up the wall, and half way along it: the point the
+    // drawing's accent dot sits on.
+    const anchor = map({ x: X(c, a[0]), y: Y(c, a[1], WALL_H / 2) })
+    // Both ends of the boundary, not just this one. The card names two
+    // districts, and sitting on either of them hides half of what it is
+    // describing -- which is exactly what the corner panel did to
+    // DarkLane.
+    const toward = wallCard ? (ground.districts.find((x) => x.id === wallCard.gate.toward || x.name === wallCard.gate.toward) ?? null) : null
+    const ends = toward && toward.id !== d.id ? [d, toward] : [d]
+    const avoid = ends.map((x) => mapRect(map, plateBox(x)))
+    // Every other plate is worth keeping clear too, but only as a
+    // tie-break: at the city stop the whole estate is on screen and
+    // insisting would leave nowhere to put the card at all.
+    const softAvoid = ground.districts.filter((x) => !ends.some((e) => e.id === x.id)).map((x) => mapRect(map, plateBox(x)))
+    cardPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
+  })
+
+  // The stage's size is the one input nothing else reports: a window
+  // resize, a sidebar opening, the browser's own zoom. ResizeObserver
+  // where there is one, and the window as the fallback -- jsdom has
+  // neither laid out nor observed anything, and the card falls back to
+  // its unplaced position there rather than to a wrong one.
+  $effect(() => {
+    const host = cityEl
+    if (!host || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => stageTick++)
+    ro.observe(host)
+    return () => ro.disconnect()
+  })
 
   /* ---------------- the minimap ---------------- */
 
@@ -1317,7 +1419,7 @@
   {/each}
 {/snippet}
 
-<div class="city" data-stop={effectiveStop}>
+<div class="city" data-stop={effectiveStop} bind:this={cityEl}>
   <svg
     bind:this={svgEl}
     viewBox="0 0 {STAGE_W} {STAGE_H}"
@@ -1398,10 +1500,10 @@
                 tabindex="-1"
                 aria-label="{districtOf(w.districtId)?.name ?? w.districtId} wall, {COVERAGE_WORD[w.coverage]}"
                 data-wall="{w.districtId}:{w.side}"
-                onpointerenter={() => openWallCard(w.districtId, w.side)}
-                onpointerleave={() => closeWallCard(w.districtId, w.side)}
-                onclick={() => openWallCard(w.districtId, w.side)}
-                onkeydown={(e) => e.key === 'Enter' && openWallCard(w.districtId, w.side)}
+                onpointerenter={() => openWallCard({ districtId: w.districtId, side: w.side })}
+                onpointerleave={releaseWallCard}
+                onclick={() => openWallCard({ districtId: w.districtId, side: w.side })}
+                onkeydown={(e) => e.key === 'Enter' && openWallCard({ districtId: w.districtId, side: w.side })}
               >
                 {@render otherPaints(s.paints, s.lamps)}
               </g>
@@ -1541,14 +1643,27 @@
          opens the declare form. Quiet: the reason quoted, who and when,
          and undeclare. The wording is the 2D map's, so a boundary reads
          the same on either side of the slider. -->
+    {#if cardPlace}
+      <!-- The leader (round-49/index.html:1112): a hairline from the
+           card to the boundary it is about, with an accent dot at the
+           boundary's end. Without a viewBox an SVG's user units are its
+           own CSS pixels, which is the space the card is placed in. -->
+      <svg class="leader" aria-hidden="true">
+        <path d="M{cardPlace.from.x} {cardPlace.from.y}L{cardPlace.to.x} {cardPlace.to.y}" stroke="var(--hair-2)" stroke-width="1" fill="none" />
+        <circle cx={cardPlace.from.x} cy={cardPlace.from.y} r="3" fill="var(--accent)" />
+      </svg>
+    {/if}
     <div
       class="bcard"
       class:pinned={wallPinned}
+      class:placed={cardPlace !== null}
+      style={cardPlace ? `left:${R2(cardPlace.left)}px;top:${R2(cardPlace.top)}px` : undefined}
+      bind:this={bcardEl}
       role="dialog"
       tabindex="-1"
       aria-label="{c.d.name} to {c.gate.toward}: this boundary, {COVERAGE_WORD[c.gate.coverage]}"
-      onpointerenter={() => openWallCard(c.d.id, openWall!.side)}
-      onpointerleave={() => closeWallCard(c.d.id, openWall!.side)}
+      onpointerenter={cardGrace.hold}
+      onpointerleave={releaseWallCard}
     >
       <div class="bc-t">
         <span class="n">{c.d.name} → {c.gate.toward}<small>boundary</small></span>
@@ -1705,13 +1820,37 @@
     cursor: pointer;
   }
 
+  /* The open boundary stays marked for as long as its card is open,
+     pinned or not (DESIGN.md "Cards"). Ten grey dashed boundaries can
+     be on screen at once, and a card naming two of them in words alone
+     does not say which -- the leader points at one end, and this
+     accent glow says the wall it points at is the subject. It traces
+     the material rather than recolouring it, because the colour is the
+     coverage and would be a different statement. */
   .wall-hot.on {
-    filter: brightness(1.4);
+    filter: brightness(1.5) drop-shadow(0 0 3px var(--accent));
+  }
+
+  /* The leader, under the card it joins. It covers the whole view and
+     takes no pointer, so it can never come between the pointer and
+     either end of the journey it is drawing (#1027). */
+  .leader {
+    position: absolute;
+    inset: 0;
+    z-index: 8;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
   }
 
   .bcard {
     position: absolute;
     z-index: 9;
+    /* Where the card sits before it has been placed -- the drawing's
+       own corner, used for the frame between the card mounting and
+       being measured, and wherever there is nothing to measure. Once
+       `placed` lands, left/top come from lib/cardAnchor.ts instead. */
     right: 20px;
     bottom: 32px;
     width: 288px;
@@ -1722,6 +1861,13 @@
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     font: 10.5px var(--font-mono);
     color: var(--fg-muted);
+  }
+
+  /* Placed, the card is positioned from its own top-left, so the
+     corner anchoring above has to be released. */
+  .bcard.placed {
+    right: auto;
+    bottom: auto;
   }
 
   .bcard.pinned {

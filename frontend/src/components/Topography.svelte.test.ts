@@ -2674,4 +2674,98 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     expect(acts).toEqual(['stream ▸'])
     expect(card.querySelector('.form')).toBeNull()
   })
+
+  // The card is the one interaction, the same on both surfaces
+  // (DESIGN.md "Cards"), so the pointer's journey from a boundary to its
+  // own card is governed by the one rule in lib/cardAnchor.ts here as
+  // well as in the city -- see City.svelte.test.ts for the same journey
+  // on the other surface.
+  it('opens on hover and stays up while the pointer travels to it (#1027)', async () => {
+    vi.useFakeTimers()
+    try {
+      authState.role = 'admin'
+      guestDark()
+      const { container } = render(Topography)
+      flushSync()
+
+      const half = container.querySelector('.cov-g')!
+      half.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+      flushSync()
+      expect(container.querySelector('.card'), 'hovering a boundary did not open its card').toBeTruthy()
+
+      half.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+      flushSync()
+      const card = container.querySelector<HTMLElement>('.card')
+      expect(card, 'the card was gone before the pointer could reach it').toBeTruthy()
+
+      card!.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+      flushSync()
+      vi.advanceTimersByTime(5000)
+      flushSync()
+      expect(container.querySelector('.card'), 'the card closed while the pointer was on it').toBeTruthy()
+
+      container.querySelector<HTMLButtonElement>('.card .pin')!.click()
+      flushSync()
+      expect(container.querySelector('.card')?.classList.contains('pinned')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+      authState.role = ''
+    }
+  })
+
+  it('lets the card go once the pointer has arrived at neither the boundary nor the card', async () => {
+    vi.useFakeTimers()
+    try {
+      guestDark()
+      const { container } = render(Topography)
+      flushSync()
+      const half = container.querySelector('.cov-g')!
+      half.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+      flushSync()
+      expect(container.querySelector('.card')).toBeTruthy()
+      half.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+      flushSync()
+      vi.advanceTimersByTime(5000)
+      flushSync()
+      expect(container.querySelector('.card')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the open boundary marked, pinned as well as hovered', async () => {
+    authState.role = 'admin'
+    guestDark()
+    const { container } = render(Topography)
+    flushSync()
+    const half = container.querySelector('.cov-g')!
+    expect(half.classList.contains('on')).toBe(false)
+    openCard(container)
+    expect(half.classList.contains('on'), 'the open boundary is not marked').toBe(true)
+    container.querySelector<HTMLButtonElement>('.card .pin')!.click()
+    flushSync()
+    expect(container.querySelector('.cov-g')!.classList.contains('on'), 'the pinned boundary stopped being marked').toBe(true)
+    authState.role = ''
+  })
+
+  it('keeps a pinned card when the pointer brushes past another boundary', async () => {
+    // Hover opens cards, so without this a pinned card would be lost to
+    // the next boundary the pointer happened to cross. The city's
+    // `pinnedWall ?? hoverWall` says the same thing.
+    authState.role = 'admin'
+    guestDark()
+    const { container } = render(Topography)
+    flushSync()
+    const halves = [...container.querySelectorAll('.cov-g')]
+    expect(halves.length).toBeGreaterThan(1)
+    openCard(container)
+    container.querySelector<HTMLButtonElement>('.card .pin')!.click()
+    flushSync()
+    const pinned = container.querySelector('.card')?.getAttribute('aria-label')
+    halves[1].dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+    flushSync()
+    expect(container.querySelector('.card')?.getAttribute('aria-label')).toBe(pinned)
+    expect(container.querySelector('.card')?.classList.contains('pinned')).toBe(true)
+    authState.role = ''
+  })
 })

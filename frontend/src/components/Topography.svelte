@@ -66,6 +66,7 @@
   import { cityInputFrom } from '../lib/city/input'
   import type { District, Ground } from '../lib/city/types'
   import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
+  import { cardSize, grace, mapRect, placeCard, stageRect, unitMapper, type Placement, type Rect } from '../lib/cardAnchor'
   import { altitudeStopState } from '../lib/altitudeStop.svelte'
 
   // Five fixed lane inks. The fifth was --marked until #715 item 11 --
@@ -353,8 +354,21 @@
     if (l.crosses) {
       return `M ${from.x + off.x} ${from.y + off.y} C ${w.x} ${w.y}, ${w.x} ${w.y}, ${to.x + off.x} ${to.y + off.y}`
     }
+    const q = quadOf(l)
+    return `M ${q[0].x} ${q[0].y} Q ${q[1].x} ${q[1].y}, ${q[2].x} ${q[2].y}`
+  }
+
+  /** A line that dies at the waist, as its three quadratic points --
+   * pulled out of edgePath so the leader's own anchor is a point on the
+   * curve actually drawn, rather than a second guess at where it runs. */
+  function quadOf(l: Line): [Pt, Pt, Pt] {
+    const { from, off } = l
     const dp = deathPoint(l)
-    return `M ${from.x + off.x} ${from.y + off.y} Q ${(from.x + dp.x) / 2 + off.x} ${(from.y + dp.y) / 2 + off.y}, ${dp.x} ${dp.y}`
+    return [
+      { x: from.x + off.x, y: from.y + off.y },
+      { x: (from.x + dp.x) / 2 + off.x, y: (from.y + dp.y) / 2 + off.y },
+      { x: dp.x, y: dp.y },
+    ]
   }
 
   // --- a rib is two halves (round 49) --------------------------------------
@@ -404,6 +418,36 @@
     const e = mid(b, cc)
     const f = mid(d, e)
     return `M ${R2(p0.x)} ${R2(p0.y)} C ${R2(a.x)} ${R2(a.y)}, ${R2(d.x)} ${R2(d.y)}, ${R2(f.x)} ${R2(f.y)}`
+  }
+
+  /** The middle of the half actually drawn: where this boundary's card
+   * puts its accent dot, and where its leader starts (round 49). */
+  function halfMid(l: Line): Pt {
+    const c = cubicOf(l)
+    if (!c) {
+      const [a, b, cc] = quadOf(l)
+      return { x: (a.x + 2 * b.x + cc.x) / 4, y: (a.y + 2 * b.y + cc.y) / 4 }
+    }
+    // The same de Casteljau halving halfPath does, then the cubic's own
+    // midpoint: (p0 + 3c1 + 3c2 + p3) / 8.
+    const [p0, p1, p2, p3] = c
+    const a = mid(p0, p1)
+    const b = mid(p1, p2)
+    const cc = mid(p2, p3)
+    const d = mid(a, b)
+    const e = mid(b, cc)
+    const f = mid(d, e)
+    return { x: (p0.x + 3 * a.x + 3 * d.x + f.x) / 8, y: (p0.y + 3 * a.y + 3 * d.y + f.y) / 8 }
+  }
+
+  /** The island a line's end sits on, as a box in the map's own units:
+   * what a card anchored to that line must not cover. The numbers are
+   * the `.isl` rects drawn below, offset by their groups' transforms. */
+  function islandRect(a: EdgeAnchor): Rect {
+    if (a.kind === 'internet') return { x: 600, y: 38, w: 200, h: 60 }
+    if (a.kind === 'tunnel') return { x: 1044, y: 104, w: 188, h: 56 }
+    if (a.kind === 'zone') return { x: a.x - cardHalf, y: 484, w: cardW, h: 106 }
+    return { x: 572, y: 234, w: 256, h: degradedStatement ? 100 : 68 }
   }
 
   // Where the ⊣ bar and the badges sit for a line.
@@ -892,9 +936,22 @@
     ),
   )
 
+  /** The card's grace period (#1027), the same object the city uses:
+   * the pointer gets CARD_GRACE_MS to travel from a boundary to its own
+   * card, so the card is still there when it arrives. */
+  const cardGrace = grace()
+
   function openBoundary(e: PolicyEdge) {
     const st = coverageOf(e)
     if (st === 'logged') return
+    cardGrace.hold()
+    // Already open on this boundary: the pointer coming back to it is
+    // not a reason to throw away a half-typed reason.
+    if (boundaryCard?.key === e.key) return
+    // A pinned card is kept until it is let go (DESIGN.md "Cards"), so
+    // brushing past another boundary does not take it away -- the same
+    // rule as the city, where a pinned wall outranks a hovered one.
+    if (cardPinned) return
     coverageState.error = null
     declareReason = coverageState.byKey.get(e.key)?.reason ?? ''
     declareBoth = true
@@ -902,10 +959,91 @@
     boundaryCard = { key: e.key, from: e.from, to: e.to }
   }
 
+  /** The pointer has left the boundary, or the card. It may be crossing
+   * between them, so nothing is taken down until the grace period has
+   * passed with the pointer arriving at neither. */
+  function releaseBoundary() {
+    const open = boundaryCard
+    if (!open || cardPinned) return
+    cardGrace.release(() => {
+      if (!cardPinned && boundaryCard?.key === open.key) closeBoundary()
+    })
+  }
+
   function closeBoundary() {
+    cardGrace.hold()
     boundaryCard = null
     cardPinned = false
   }
+
+  /* ---------------- where the card floats ---------------- */
+
+  // Round 49 draws the card beside the boundary it is about, joined by
+  // a leader with an accent dot at the boundary's end. The rules are in
+  // lib/cardAnchor.ts, shared with the city -- one implementation, for
+  // the reason DESIGN.md already records about `worstUnplannedOf`.
+  let topoEl: HTMLDivElement | undefined = $state()
+  let mapSvgEl: SVGSVGElement | undefined = $state()
+  let cardEl: HTMLDivElement | undefined = $state()
+  let cardPlace = $state<Placement | null>(null)
+  /** Bumped when the stage changes size under us. */
+  let stageTick = $state(0)
+
+  /** The open boundary's own drawn half, taken live rather than kept
+   * from when the card opened: the lane row re-lays itself out as zones
+   * arrive, and a leader pointing where the rib used to be is worse
+   * than no leader at all. */
+  const openDrawn = $derived.by(() => {
+    const open = boundaryCard
+    if (!open) return null
+    return drawnCoverage.drawn.find((d) => d.edge.key === open.key) ?? null
+  })
+
+  $effect(() => {
+    // Read first, so this re-runs on everything that moves the subject:
+    // which boundary is open, where its rib is drawn, the altitude, the
+    // card's arrival in the DOM, and the stage's size.
+    const drawn = openDrawn
+    const svg = mapSvgEl
+    const host = topoEl
+    const card = cardEl
+    void altitude
+    void stageTick
+
+    if (!drawn || !svg || !host || !card || reach) {
+      cardPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      cardPlace = null
+      return
+    }
+    const anchor = map(halfMid(drawn.line))
+    // Both islands, not just the near one: the card names a pair, and
+    // sitting on either end hides half of what it is describing.
+    const avoid = [islandRect(drawn.line.from), islandRect(drawn.line.to)].map((r) => mapRect(map, r))
+    // Every other lane card is worth keeping clear too, but only as a
+    // tie-break: the lane row fills the foot of the map, and insisting
+    // would leave nowhere to put the card at all.
+    const softAvoid = zones
+      .map((_, i) => islandRect({ x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }))
+      .concat([islandRect({ ...WAIST, kind: 'any' }), islandRect({ x: 700, y: 104, kind: 'internet' })])
+      .map((r) => mapRect(map, r))
+    cardPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
+  })
+
+  // The stage's size is the one input nothing else reports. jsdom has
+  // no ResizeObserver and lays nothing out, so there the card keeps its
+  // unplaced position rather than taking a wrong one.
+  $effect(() => {
+    const host = topoEl
+    if (!host || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => stageTick++)
+    ro.observe(host)
+    return () => ro.disconnect()
+  })
 
   /** The pin is what opens the form (round 49): the card reads first,
    * and acts only once it is kept. */
@@ -2011,7 +2149,7 @@
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
-<div class="topo">
+<div class="topo" bind:this={topoEl}>
   <!-- The aggregate bar (#648, round 23): absent, purple-only, red-only,
        or split with a centre divider -- reused under every zone island
        and every reach counterpart cluster below. -->
@@ -2330,6 +2468,7 @@
     aria-label={reach ? 'Surface — back to the map as you left it' : undefined}
   >
     <svg
+      bind:this={mapSvgEl}
       viewBox="0 0 1400 720"
       preserveAspectRatio="xMidYMid meet"
       role="img"
@@ -2378,10 +2517,13 @@
       {#each drawnCoverage.drawn as d (d.edge.key)}
         <g
           class="cov-g actionable"
+          class:on={boundaryCard?.key === d.edge.key}
           role="button"
           tabindex="0"
           aria-label="Open this boundary: {coverageLabel(d.edge)}"
           onclick={() => openBoundary(d.edge)}
+          onpointerenter={() => openBoundary(d.edge)}
+          onpointerleave={releaseBoundary}
           onkeydown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
@@ -3289,7 +3431,28 @@
          declare form is behind the pin because the card reads first and
          acts only once it is kept (#392 is still the record it writes:
          one acknowledgement, with its reason and its author). -->
-    <div class="card" class:pinned={cardPinned} role="dialog" aria-label="The {pairName(boundaryCard.from, boundaryCard.to)} boundary">
+    {#if cardPlace}
+      <!-- The leader (round-49/index.html:1112): a hairline from the
+           card to the boundary it is about, with an accent dot at the
+           boundary's end. Without a viewBox an SVG's user units are its
+           own CSS pixels, which is the space the card is placed in. -->
+      <svg class="leader" aria-hidden="true">
+        <path d="M{cardPlace.from.x} {cardPlace.from.y}L{cardPlace.to.x} {cardPlace.to.y}" stroke="var(--hair-2)" stroke-width="1" fill="none" />
+        <circle cx={cardPlace.from.x} cy={cardPlace.from.y} r="3" fill="var(--accent)" />
+      </svg>
+    {/if}
+    <div
+      class="card"
+      class:pinned={cardPinned}
+      class:placed={cardPlace !== null}
+      style={cardPlace ? `left:${R2(cardPlace.left)}px;top:${R2(cardPlace.top)}px` : undefined}
+      bind:this={cardEl}
+      role="dialog"
+      tabindex="-1"
+      aria-label="The {pairName(boundaryCard.from, boundaryCard.to)} boundary"
+      onpointerenter={cardGrace.hold}
+      onpointerleave={releaseBoundary}
+    >
       <div class="t">
         <span class="n">{pairName(boundaryCard.from, boundaryCard.to)}<small>boundary</small></span>
         {#if isAdmin}
@@ -3768,6 +3931,18 @@
     opacity: 1;
   }
 
+  /* The open boundary stays marked for as long as its card is open,
+     pinned or not (DESIGN.md "Cards"). Ten grey dashed boundaries can
+     be on screen at once, and a card naming two of them in words alone
+     does not say which -- the leader points at one end, and this accent
+     glow says the rib half it points at is the subject. It traces the
+     material rather than recolouring it, because the colour is the
+     coverage and would be a different statement. */
+  .cov-g.on .cedge {
+    opacity: 1;
+    filter: drop-shadow(0 0 3px var(--accent));
+  }
+
   .cov-g:focus-visible {
     outline: none;
   }
@@ -3780,8 +3955,24 @@
      rather than floating on a leader from the rib: the leader is the
      mockup's, and placing one needs the stage's own pixel geometry,
      which this SVG (viewBox, xMidYMid meet) does not hand out. */
+  /* The leader, under the card it joins. It covers the whole view and
+     takes no pointer, so it can never come between the pointer and
+     either end of the journey it is drawing (#1027). */
+  .leader {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+  }
+
   .card {
     position: absolute;
+    /* Where the card sits before it has been placed, and wherever there
+       is nothing to measure. Once `placed` lands, left/top come from
+       lib/cardAnchor.ts instead. */
     left: 24px;
     bottom: 34px;
     z-index: 3;
@@ -3793,6 +3984,12 @@
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     font: 10.5px var(--font-mono);
     color: var(--fg-muted);
+  }
+
+  /* Placed, the card is positioned from its own top-left, so the corner
+     anchoring above has to be released. */
+  .card.placed {
+    bottom: auto;
   }
 
   .card.pinned {
