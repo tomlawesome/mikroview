@@ -56,7 +56,7 @@
   import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
-  import { parseCidr, addressInCidr } from '../lib/addressMatch'
+  import { parseCidr, addressInCidr, type ParsedCidr } from '../lib/addressMatch'
   import { FLAG_TYPE_LABELS } from '../lib/metricsSeries'
   import { nightlySummary } from '../lib/watchWindow'
   import type { Flag, WatchlistEntry } from '../lib/types'
@@ -76,6 +76,7 @@
   // browser's view of it.
   import { hostsState, presenceOf, HOST_QUIET_AFTER_MS, type HostPresence } from '../lib/hosts.svelte'
   import { baselineState } from '../lib/baseline.svelte'
+  import type { OffBaselineLine } from '../lib/baseline'
   import type { Host } from '../lib/api'
 
   // Five fixed lane inks. The fifth was --marked until #715 item 11 --
@@ -94,6 +95,12 @@
       coverageState.refresh()
       tunnelsState.refresh()
       hostsState.refresh()
+      // Today's off-baseline lines (#1016, round 49). Brightness is the
+      // baseline, so this is an input to the drawing itself and not an
+      // overlay -- without it every rib reads established, which is the
+      // honest picture while the register is unread and the wrong one
+      // the moment it lands.
+      baselineState.refresh()
     }
   })
 
@@ -558,6 +565,28 @@
     return { x: (p0.x + 3 * a.x + 3 * d.x + f.x) / 8, y: (p0.y + 3 * a.y + 3 * d.y + f.y) / 8 }
   }
 
+  /**
+   * Where an off-baseline rib's ring goes: the end the traffic arrived
+   * at, which is the last point of this direction's own curve.
+   *
+   * The ring throbs *in place*, hugging the shape -- it never pulses
+   * outward (owner, 2026-09-07): a travelling ring reads as something
+   * moving through the network, and nothing here moved.
+   *
+   * Null where the arrival end is the waist itself, which is every line
+   * toward the internet and every line to "anywhere": the drawing stops
+   * at the router there, so a ring would sit on the waist card naming no
+   * island at all. The mockup skips exactly these (round-49/index.html
+   * :1220, `r[1] !== 'rb'`).
+   */
+  function ringPoint(l: Line): Pt | null {
+    const c = cubicOf(l)
+    if (!c) return null
+    if (l.to.kind === 'any') return null
+    if (isInternetEdge(l) && l.from.kind === 'zone') return null
+    return c[3]
+  }
+
   /** The island a line's end sits on, as a box in the map's own units:
    * what a card anchored to that line must not cover. The numbers are
    * the `.isl` rects drawn below, offset by their groups' transforms. */
@@ -874,6 +903,149 @@
     if (r.accepts === 0) return `⊣ ${n}× ${r.verdict === 'holding' ? 'held' : 'dropped'}`
     const mark = r.verdict === 'unplanned' ? 'unplanned ·' : '→'
     return `${mark} ${ports ? `${ports} · ` : ''}${n}×`
+  }
+
+  // --- brightness is the baseline (#1016, round 49) ------------------------
+  // "Colour is the verdict; brightness is the baseline." A *line* is
+  // `source → destination · port · proto`; a line on the pattern is
+  // established and recedes, a line off it is bright. The register sends
+  // only today's off-baseline lines, never the established ones (see
+  // lib/baseline.ts for why that is the design and not an optimisation),
+  // so absence from this index *is* established. Nothing is ever removed
+  // from the map by any of this -- only dimmed.
+
+  /** The lanes whose CIDR the address push actually named, parsed once.
+   * A lane with no pushed CIDR claims no address, so a line can never be
+   * attributed to it -- which is right: the map would be guessing. */
+  const laneCidrs = $derived.by((): { id: string; cidr: ParsedCidr }[] => {
+    const out: { id: string; cidr: ParsedCidr }[] = []
+    for (const z of zones) {
+      const p = z.cidr ? parseCidr(z.cidr) : null
+      if (p) out.push({ id: z.id, cidr: p })
+    }
+    return out
+  })
+
+  /**
+   * The roll-up, indexed rather than searched.
+   *
+   * "A rib, lane or host dot is as bright as the brightest line it
+   * carries: one off-baseline line among a thousand lights the one place
+   * it happened." Asked the obvious way -- `offBaselineMatching(off,
+   * pred)` at every drawn element -- that is O(lines × elements) on
+   * every re-render, and it would put the cost back on traffic volume,
+   * which is the one thing this whole feature exists to escape. One pass
+   * over the lines answers it for every element at once; each element's
+   * own question is then a `Map.get`, whatever the register's size.
+   *
+   * The number of *drawn* elements does not grow with traffic either:
+   * one rib per zone pair, one dot per host, one spoke per client. This
+   * index adds no lines to the map, it only changes how the existing
+   * ones are drawn.
+   */
+  interface OffIndex {
+    /** By boundary-direction key, `${from}|${to}` -- a rib's own key. */
+    byPair: Map<string, OffBaselineLine[]>
+    /** By host address, both ends -- a dot's and its spoke's. */
+    byIp: Map<string, OffBaselineLine[]>
+  }
+
+  const offIndex = $derived.by((): OffIndex => {
+    const byPair = new Map<string, OffBaselineLine[]>()
+    const byIp = new Map<string, OffBaselineLine[]>()
+    const lanes = laneCidrs
+    const wan = zonesState.wanInterface
+    // One answer per distinct address rather than per line: an
+    // established network talks on the same routes, so even the
+    // off-baseline set repeats the same few machines, and the CIDR test
+    // is the expensive part of this loop.
+    const zoneCache = new Map<string, string | null>()
+    const zoneOf = (ip: string): string | null => {
+      const hit = zoneCache.get(ip)
+      if (hit !== undefined) return hit
+      let found: string | null = null
+      for (const l of lanes) {
+        if (addressInCidr(ip, l.cidr)) {
+          found = l.id
+          break
+        }
+      }
+      // Off every drawn lane and public: the far side of the WAN
+      // boundary, which is the only other end this map draws. A private
+      // address no lane claims stays unattributed rather than being
+      // drawn on a boundary it may never have crossed.
+      if (found === null && wan !== null && isPublicIp(ip)) found = wan
+      zoneCache.set(ip, found)
+      return found
+    }
+    const push = (m: Map<string, OffBaselineLine[]>, k: string, l: OffBaselineLine) => {
+      const at = m.get(k)
+      if (at) at.push(l)
+      else m.set(k, [l])
+    }
+    for (const l of baselineState.off.lines) {
+      push(byIp, l.srcIp, l)
+      if (l.dstIp !== l.srcIp) push(byIp, l.dstIp, l)
+      const from = zoneOf(l.srcIp)
+      const to = zoneOf(l.dstIp)
+      // A line inside one lane crosses no boundary, so it lights no rib.
+      // It still lights its own hosts' dots, above.
+      if (from === null || to === null || from === to) continue
+      push(byPair, `${from}|${to}`, l)
+    }
+    return { byPair, byIp }
+  })
+
+  /** The lines one rib carries that are off the baseline today. */
+  function offLinesFor(key: string): OffBaselineLine[] {
+    return offIndex.byPair.get(key) ?? []
+  }
+
+  /** The roll-up as the drawing asks it: is this rib bright? */
+  function ribOffBaseline(key: string): boolean {
+    return offIndex.byPair.has(key)
+  }
+
+  /** The same question for a host dot and its own spoke. */
+  function hostOffBaseline(ip: string): boolean {
+    return offIndex.byIp.has(ip)
+  }
+
+  /** The lines one host is an end of, for its card's own count. */
+  function offLinesForIp(ip: string): OffBaselineLine[] {
+    return offIndex.byIp.get(ip) ?? []
+  }
+
+  /** The header's `⟡ off-baseline today · N`. Estate-wide, and the
+   * register's own count rather than this index's: the index drops what
+   * the map has no lane for, and the header is reporting the register,
+   * not the drawing. */
+  const offBaselineCount = $derived(baselineState.count)
+
+  /** A host's own name where anything knows one, its address otherwise:
+   * the card's table says `tom-desktop → nas`, not two addresses. */
+  function addressLabel(ip: string): string {
+    for (const h of hostsState.hosts) {
+      if (h.ip === ip && h.label) return h.label
+    }
+    for (const z of zones) {
+      for (const h of z.hosts) {
+        if (h.ip === ip && h.label && h.label !== ip) return h.label
+      }
+    }
+    return ip
+  }
+
+  /** The `PORT` column: `5001/tcp`, and the proto alone where the event
+   * carried no destination port -- 0 is not a port (lib/baseline.ts). */
+  function linePort(l: OffBaselineLine): string {
+    return l.port === null ? l.proto : `${l.port}/${l.proto}`
+  }
+
+  /** The `FIRST` column. Every line in the register is today's by
+   * construction, so "today" is a fact here and not a guess. */
+  function lineFirstSeen(l: OffBaselineLine): string {
+    return `today ${formatHM(new Date(l.firstSeenToday).toISOString())}`
   }
 
   // --- coverage is the material (#630, #392; round 49 #1016) ---------------
@@ -1394,6 +1566,191 @@
       hostReason = ''
     }
   }
+
+  /* ---------------- the off-baseline card (#1016, round 49) ---------------- */
+
+  // Round 49's `flat-new` scene: the bright half hovered, and its card
+  // rolls the rib up -- a thousand established lines in one dim word,
+  // and the one line that is not on the pattern spelled out with when it
+  // was first seen and how often, then the two ways to answer it.
+  //
+  // Same one interaction, same shared placement (lib/cardAnchor) as the
+  // boundary and host cards: beside its own half with a leader, a grace
+  // period for the pointer to travel to it, and a re-place when the
+  // reason form makes it taller.
+  let offCard = $state<{ key: string } | null>(null)
+  let offCardPinned = $state(false)
+  let offCardEl = $state<HTMLDivElement>()
+  let offCardPlace = $state<Placement | null>(null)
+  let offCardTick = $state(0)
+  /** The reason, behind `expected ▸`. Required: the server refuses an
+   * empty one, and a statement with no reason stays said with nothing
+   * to say for itself. */
+  let offReason = $state('')
+  let offBusy = $state(false)
+  const offGrace = grace()
+
+  /** The open rib's own drawn half, taken live rather than kept from
+   * when the card opened -- the lane row re-lays itself out as zones
+   * arrive, and a leader pointing where the rib used to be is worse than
+   * no leader at all (the same reason `openDrawn` gives above). */
+  const openOffDrawn = $derived.by(() => {
+    const open = offCard
+    if (!open) return null
+    return drawnReality.drawn.find((d) => d.r.key === open.key) ?? null
+  })
+
+  /** The lines the card lists. Empty means the rib stopped being bright
+   * under the card -- the register refreshed, or `expected` landed -- and
+   * the card closes itself rather than standing there describing nothing. */
+  const offCardLines = $derived(offCard ? offLinesFor(offCard.key) : [])
+
+  $effect(() => {
+    if (offCard && offCardLines.length === 0) closeOffCard()
+  })
+
+  $effect(() => {
+    // Read first, so this re-runs on everything that moves the subject.
+    const drawn = openOffDrawn
+    const svg = mapSvgEl
+    const host = topoEl
+    const card = offCardEl
+    void altitude
+    void stageTick
+    void offCardTick
+
+    if (!drawn || !svg || !host || !card || reach) {
+      offCardPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      offCardPlace = null
+      return
+    }
+    const anchor = map(halfMid(drawn.line))
+    // Both plates: the card names a pair, and sitting on either end
+    // hides half of what it is describing. Measured off the drawing, for
+    // the reason the boundary card's own placement gives (#1028).
+    const avoid = zonePlates(host, [drawn.r.from, drawn.r.to])
+    const others = zones.map((z) => z.id).filter((id) => id !== drawn.r.from && id !== drawn.r.to)
+    const softAvoid = zonePlates(host, others).concat(
+      laneRowDrawn(host) ? [islandRect({ ...WAIST, kind: 'any' }), islandRect({ x: 700, y: 104, kind: 'internet' })].map((r) => mapRect(map, r)) : [],
+    )
+    offCardPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
+  })
+
+  $effect(() => {
+    const card = offCardEl
+    if (!card) return
+    return watchCardSize(card, () => offCardTick++)
+  })
+
+  function openOffCard(key: string) {
+    offGrace.hold()
+    if (offCard?.key === key) return
+    // A pinned card is kept until it is let go, whichever card it is.
+    if (offCardPinned || cardPinned || hostCardPinned) return
+    baselineState.error = null
+    offReason = ''
+    offCardPinned = false
+    offCard = { key }
+  }
+
+  /** The pointer has left the rib, or the card. It may be crossing
+   * between them, so nothing comes down until the grace period has
+   * passed with the pointer arriving at neither (#1027). */
+  function releaseOffCard() {
+    const open = offCard
+    if (!open || offCardPinned) return
+    offGrace.release(() => {
+      if (!offCardPinned && offCard?.key === open.key) closeOffCard()
+    })
+  }
+
+  function closeOffCard() {
+    offGrace.hold()
+    offCard = null
+    offCardPinned = false
+    offCardPlace = null
+    offReason = ''
+  }
+
+  /** The pin is what opens the form, as everywhere else on this map. */
+  function pinOffCard() {
+    if (!isAdmin) {
+      closeOffCard()
+      return
+    }
+    offCardPinned = !offCardPinned
+  }
+
+  /**
+   * `expected` says the lines this card lists are meant to be there, and
+   * they read established from then on. The server stamps who and when
+   * from the session; the reason is ours to require.
+   *
+   * The mockup draws one line and so one write ("this line only"). Where
+   * a rib carries several, one reason covers all of them -- the operator
+   * is answering the rib in front of them, and asking the same question
+   * once per row would be the map making work out of its own roll-up.
+   * The form says which it is either way.
+   */
+  async function submitExpected() {
+    const lines = offCardLines
+    const reason = offReason.trim()
+    if (lines.length === 0 || reason === '') return
+    offBusy = true
+    for (const l of lines) {
+      // Stops at the first refusal rather than pressing on: the error is
+      // shown, and a half-written statement the operator cannot see the
+      // shape of is worse than none.
+      if (!(await baselineState.expected(l.key, reason))) break
+    }
+    offBusy = false
+    if (baselineState.error === null) closeOffCard()
+  }
+
+  /** The stream, filtered to this rib's own pair. */
+  function openStreamFromOffCard() {
+    const drawn = openOffDrawn
+    if (!drawn) return
+    const { from, to } = drawn.r
+    closeOffCard()
+    openPair(from, to, [])
+  }
+
+  /** The card's own verdict sentence: what the router did, and that
+   * nothing decided it was wanted. Never a rule number for an accept --
+   * PolicyEdge carries a rule *count*, not an identity, and the mockup's
+   * `(rule #12)` would be invented here. A refusal names its catcher,
+   * because the events themselves say who caught it. */
+  const offCardVerdict = $derived.by((): string => {
+    const lines = offCardLines
+    if (lines.length === 0) return ''
+    const one = lines.length === 1
+    const it = one ? 'it' : 'them'
+    const dropped = lines.filter((l) => l.outcome === 'drop').length
+    const accepted = lines.length - dropped
+    const caught = openOffDrawn?.r.refusedBy
+    const by = caught ? ` (caught by ${caught})` : ''
+    if (dropped === 0) return `the router accepted ${it}; nothing decided ${one ? 'it was' : 'they were'} wanted`
+    if (accepted === 0) return `the router refused ${it}${by}`
+    return `the router accepted ${accepted} and refused ${dropped}${by}; nothing decided the accepted ${accepted === 1 ? 'one was' : 'ones were'} wanted`
+  })
+
+  /** The `reach ▸` action's subject: the first listed line's source,
+   * where that address is on a lane this map draws. Absent otherwise --
+   * there is nowhere to descend to. */
+  const offCardReach = $derived.by((): { zoneId: string; label: string; ip: string } | null => {
+    const l = offCardLines[0]
+    if (!l) return null
+    for (const lane of laneCidrs) {
+      if (addressInCidr(l.srcIp, lane.cidr)) return { zoneId: lane.id, label: addressLabel(l.srcIp), ip: l.srcIp }
+    }
+    return null
+  })
 
   /** The pin is what opens the form (round 49): the card reads first,
    * and acts only once it is kept. */
@@ -2776,6 +3133,23 @@
        are on by default, greyed when off, flag red and watcher purple
        when on. They stay through the reach, which they also mark. -->
   <div class="pills" role="group" aria-label="Map overlays">
+    <!-- `⟡ off-baseline today · N`, ahead of the ⚑ count, in the accept
+         ink (round-49/index.html's `chrome`, the `.nmk` mark, and
+         DESIGN.md's own wording with the separator). Not a control: it
+         is the sieve's own tally, and the places it counts are already
+         lit on the map behind it.
+
+         Drawn only above zero, the same rule the ⚑ count next to it
+         follows. Before the register has been read the count is zero
+         too, so a permanent `· 0` would be the map claiming an all-clear
+         it has not been told. -->
+    {#if offBaselineCount > 0}
+      <span
+        class="nmk"
+        title="{offBaselineCount} line{offBaselineCount === 1 ? '' : 's'} off the baseline today — a route or port not seen on {baselineState.off.config.days} of the last {baselineState.off.config.of} days, accepted or not"
+        >⟡ off-baseline <b>today</b> · {offBaselineCount}</span
+      >
+    {/if}
     <button
       type="button"
       class="pill f"
@@ -2928,8 +3302,21 @@
                it is the thing that should not be happening. -->
           {#if !silentDir(d.r.key)}
             {@const whole = d.r.verdict === 'unplanned'}
+            <!-- Brightness is the baseline (round 49, #1016). An accepted
+                 half carrying nothing off the pattern is *established*:
+                 thin (0.6×) and dim, no flow, because the same routes and
+                 ports every day are what a working network looks like and
+                 the map should not shout them. One off-baseline line among
+                 a thousand -- the roll-up in `offIndex` -- brings the whole
+                 half forward at full width with the flow moving on it and a
+                 ring where the traffic arrived. Refused and the escalated
+                 unplanned pair are unchanged: colour is still the verdict. -->
+            {@const accepted = !whole && d.r.accepts > 0}
+            {@const nb = accepted && ribOffBaseline(d.r.key)}
+            {@const est = accepted && !nb}
             <g
               class="edge-g"
+              class:on={offCard?.key === d.r.key}
               role="button"
               tabindex="0"
               aria-label="Open the stream filtered to this pair: {realityLabel(d.r)}"
@@ -2940,6 +3327,10 @@
                   openPair(d.r.from, d.r.to, d.r.topPorts)
                 }
               }}
+              onpointerenter={nb ? () => openOffCard(d.r.key) : undefined}
+              onpointerleave={nb ? releaseOffCard : undefined}
+              onfocus={nb ? () => openOffCard(d.r.key) : undefined}
+              onblur={nb ? releaseOffCard : undefined}
             >
               <title>{realityLabel(d.r)}</title>
               <path class="edge-hit" d={whole ? edgePath(d.line) : halfPath(d.line)} />
@@ -2947,10 +3338,27 @@
                 class="redge"
                 class:alarm={whole}
                 class:dropped={!whole && d.r.accepts === 0}
+                class:established={est}
+                class:offbase={nb}
                 d={whole ? edgePath(d.line) : halfPath(d.line)}
-                style:stroke-width="{realityWidth(d.r)}px"
+                style:stroke-width="{est ? Math.max(1, realityWidth(d.r) * 0.6) : realityWidth(d.r)}px"
                 style:stroke={whole ? undefined : verdictInk(d.r)}
               />
+              {#if nb}
+                {@const rp = ringPoint(d.line)}
+                <!-- The flow: dashes travelling the way the traffic ran, so
+                     the bright half reads as something happening now rather
+                     than a thicker line. -->
+                <path
+                  class="flow"
+                  d={halfPath(d.line)}
+                  style:stroke={verdictInk(d.r)}
+                  style:stroke-width="{Math.max(1.1, realityWidth(d.r) * 0.42)}px"
+                />
+                {#if rp}
+                  <circle class="nb-ring" cx={R2(rp.x)} cy={R2(rp.y)} r="6" />
+                {/if}
+              {/if}
               {#if d.r.drops > 0}
                 {@const bar = edgeBarAt(d.line)}
                 <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
@@ -3219,6 +3627,7 @@
               <g class="hostrow" clip-path="url(#{uid}-hosts)">
                 {#each row.dots as d, di (d.key)}
                   {@const w = nodeWarnings(d.ip)}
+                  {@const dotNb = hostOffBaseline(d.ip)}
                   <g
                     class="hot"
                     role="button"
@@ -3264,6 +3673,20 @@
                          through the network, and nothing here moved. -->
                     {#if flagsOn && w.flagCount > 0}
                       <circle class="h-halo" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 1.5} />
+                    {/if}
+                    <!-- The roll-up reaches the dot too (DESIGN.md's
+                         "a road, rib or host dot is as bright as the
+                         brightest line it carries"): a machine that spoke
+                         a line off the pattern today takes the accept
+                         ink's own ring, throbbing in place the way the
+                         rib's does. Pushed out past the flag halo when
+                         that is drawn as well, so the two facts stay two
+                         rings rather than merging into one. The mockup
+                         draws no dot ring -- it puts today's three lines
+                         on ribs -- so this is DESIGN.md's rule applied
+                         where the mockup is silent. -->
+                    {#if dotNb}
+                      <circle class="h-nb" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + (flagsOn && w.flagCount > 0 ? 3.5 : 1.5)} />
                     {/if}
                     <!-- Watched, and the watch pill is on: the same
                          purple this screen already uses for watchers. -->
@@ -3356,7 +3779,11 @@
                  bottom", #723) down to 636→696, comfortably clear at
                  every altitude stop. -->
             {#if Math.abs(dx) < 0.5}
-              <path class="cli-spoke" d="M{cx} 636 C {cx - 6} 644, {cx + 6} 647, {cx} 655" stroke={ink} />
+              <!-- One lane per host to its gate, and it takes the
+                   brightness of the brightest line it carries: dim while
+                   the machine is talking on the same routes it always
+                   does, forward the day it is not. -->
+              <path class="cli-spoke" class:offbase={hostOffBaseline(h.ip)} d="M{cx} 636 C {cx - 6} 644, {cx + 6} 647, {cx} 655" stroke={ink} />
               <circle
                 class="c-dot"
                 cx={cx}
@@ -3399,7 +3826,7 @@
                 }}>{h.label}</text
               >
             {:else}
-              <path class="cli-spoke" d="M{cx} 636 C {cx} 644, {x} 644, {x} 650" stroke={ink} />
+              <path class="cli-spoke" class:offbase={hostOffBaseline(h.ip)} d="M{cx} 636 C {cx} 644, {x} 644, {x} 650" stroke={ink} />
               <circle
                 class="c-dot"
                 cx={x}
@@ -3902,6 +4329,16 @@
         <div class="s">comes back by itself when the feed hears it again</div>
       {/if}
 
+      <!-- Why this dot is ringed. The lines themselves, and `expected ▸`,
+           live on the rib's own card: every one of these lines crosses a
+           boundary, so the roll-up that lit this dot lit that rib too,
+           and the answer belongs where the pair is named. -->
+      {#if hostOffBaseline(d.ip)}
+        <div class="s nb">
+          <i class="sw nb"></i><b>{offLinesForIp(d.ip).length} off the baseline today</b> — the lines are on the rib's card
+        </div>
+      {/if}
+
       {#if hostMarkOpen && isAdmin}
         <!-- The reason is the mark: internal/hosts keeps it as the thing
              that stays said, so there is nothing to write without it. -->
@@ -4039,6 +4476,126 @@
           <button disabled={!primaryDevice} onclick={openTuneLoggingFromDark}>rules ▸</button>
         {/if}
         <button class="dim" onclick={openStreamFromCard}>stream ▸</button>
+      </div>
+    </div>
+  {/if}
+
+  {#if openOffDrawn && offCardLines.length > 0 && !reach && !hostCard && !boundaryCard}
+    <!-- The off-baseline card (round 49's `flat-new`, ported from
+         round-49/index.html's `newLine`): the bright half hovered, and
+         the rib rolled up. A thousand established lines in one dim word,
+         the lines that are not on the pattern spelled out with when they
+         were first seen and how often, what the router actually did, and
+         the one way a line leaves the bright state early -- `expected`,
+         a reason that stays said.
+
+         Same furniture and the same shared placement as the two cards
+         above it, because a rib is read the same way: hover to open,
+         pin to keep, pin opens the form. -->
+    {#if offCardPlace}
+      <svg class="leader" aria-hidden="true">
+        <path
+          d="M{offCardPlace.from.x} {offCardPlace.from.y}L{offCardPlace.to.x} {offCardPlace.to.y}"
+          stroke="var(--hair-2)"
+          stroke-width="1"
+          fill="none"
+        />
+        <circle cx={offCardPlace.from.x} cy={offCardPlace.from.y} r="3" fill="var(--accent)" />
+      </svg>
+    {/if}
+    <div
+      class="card off-card"
+      class:pinned={offCardPinned}
+      class:placed={offCardPlace !== null}
+      style={offCardPlace ? `left:${R2(offCardPlace.left)}px;top:${R2(offCardPlace.top)}px` : undefined}
+      bind:this={offCardEl}
+      role="dialog"
+      tabindex="-1"
+      aria-label="Off the baseline on the {pairName(openOffDrawn.r.from, openOffDrawn.r.to)} rib"
+      onpointerenter={offGrace.hold}
+      onpointerleave={releaseOffCard}
+    >
+      <div class="t">
+        <span class="n">{pairName(openOffDrawn.r.from, openOffDrawn.r.to)}<small>rib</small></span>
+        {#if isAdmin}
+          <button
+            class="pin"
+            class:on={offCardPinned}
+            aria-pressed={offCardPinned}
+            title={offCardPinned ? 'pinned — click to let it go' : 'pin this card'}
+            onclick={pinOffCard}
+          >
+            {offCardPinned ? '✕' : '⊙'}
+          </button>
+        {:else}
+          <button class="pin" title="close this card" onclick={closeOffCard}>✕</button>
+        {/if}
+      </div>
+
+      <!-- The mockup says `established · 1,214 lines ...`. The count is
+           left out here, deliberately: the register sends only today's
+           off-baseline lines and never the established set, so any
+           number in that slot would be invented (lib/baseline.ts says
+           why the payload is built that way). The threshold itself is
+           the server's own, carried on the document. -->
+      <div class="s es">
+        <i class="sw es"></i>established · the same routes and ports on {baselineState.off.config.days} of the last
+        {baselineState.off.config.of} days
+      </div>
+      <div class="s nb"><i class="sw nb"></i><b>{offCardLines.length} off the baseline today</b></div>
+
+      <table>
+        <thead>
+          <tr><th>LINE</th><th>PORT</th><th class="n">SEEN</th><th class="n">FIRST</th></tr>
+        </thead>
+        <tbody>
+          {#each offCardLines as l (l.key)}
+            <tr class="lit">
+              <td>{addressLabel(l.srcIp)} → {addressLabel(l.dstIp)}</td>
+              <td>{linePort(l)}</td>
+              <td class="n" class:ok={l.outcome === 'accept'} class:al={l.outcome === 'drop'}>{l.count.toLocaleString()}</td>
+              <td class="n">{lineFirstSeen(l)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+
+      <div class="s">{offCardVerdict}</div>
+
+      {#if offCardPinned && isAdmin}
+        <!-- The reason is the statement: the server refuses an empty one,
+             and `expected` with nothing said for it would be a line
+             quietly leaving the sieve with no record of who decided. -->
+        <div class="form">
+          <label for="{uid}-expected-why">EXPECTED — WHY?</label>
+          <input id="{uid}-expected-why" bind:value={offReason} placeholder="why this traffic is meant to be there…" />
+          {#if baselineState.error}
+            <p class="d-error">{baselineState.error}</p>
+          {/if}
+          <div class="btns">
+            <button class="go" disabled={offBusy || !offReason.trim()} onclick={submitExpected}>Expected</button>
+            <button class="no" onclick={closeOffCard}>cancel</button>
+            <span class="who"
+              >as {authState.username} · {offCardLines.length === 1 ? 'this line only' : `these ${offCardLines.length} lines`}</span
+            >
+          </div>
+        </div>
+      {/if}
+
+      <div class="acts">
+        {#if isAdmin && !offCardPinned}
+          <button disabled={offBusy} onclick={pinOffCard}>expected ▸</button>
+        {/if}
+        {#if offCardReach}
+          <button
+            onclick={() => {
+              const r = offCardReach
+              closeOffCard()
+              if (r) descend(r.zoneId, r.label, r.ip)
+            }}>reach {offCardReach.label} ▸</button
+          >
+        {/if}
+        <button class="dim" onclick={openStreamFromOffCard}>stream ▸</button>
       </div>
     </div>
   {/if}
@@ -4187,6 +4744,24 @@
     z-index: 2;
     display: flex;
     gap: 8px;
+  }
+
+  /* The off-baseline mark (round-49/index.html:76-77's `.nmk`): the
+     sieve's own tally, in the accept ink, with `today` dropped back
+     because the count is the fact and the day is the qualifier. */
+  .nmk {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 2px;
+    font: 600 10.5px var(--font-mono);
+    letter-spacing: 0.04em;
+    color: var(--accept);
+  }
+
+  .nmk b {
+    margin: 0 0.35em;
+    font-weight: 400;
+    color: var(--fg-dim);
   }
 
   .pill {
@@ -4460,6 +5035,58 @@
     opacity: 0.7;
   }
 
+  /* Brightness is the baseline (round 49, #1016), at the mockup's own
+     two opacities (round-49/index.html:1201). Established recedes;
+     off-baseline comes forward. Neither is ever removed -- this is a
+     sieve, not a filter. */
+  .redge.established {
+    opacity: 0.26;
+  }
+
+  .redge.offbase {
+    opacity: 0.85;
+  }
+
+  /* The rib whose off-baseline card is open, marked as the subject the
+     card is about -- the same mark the boundary card leaves on its own
+     half (`.cov-g.on .cedge` below). Without it the card floats beside a
+     rib indistinguishable from its neighbours. */
+  .edge-g.on .redge {
+    opacity: 1;
+  }
+
+  /* The flow: dashes travelling the way the traffic ran, over an
+     off-baseline line only (round-49/index.html:163). An established
+     line has no flow at all -- that is most of what makes the map calm. */
+  .flow {
+    fill: none;
+    stroke-linecap: round;
+    stroke-dasharray: 7 11;
+    stroke-opacity: 0.9;
+    animation: flow 1.5s linear infinite;
+    pointer-events: none;
+  }
+
+  @keyframes flow {
+    to {
+      stroke-dashoffset: -18;
+    }
+  }
+
+  /* The ring where an off-baseline line arrived. It hugs the shape and
+     throbs in place -- opacity and stroke weight only, never the radius
+     -- for the same reason the flag halo does: a ring that travels
+     outward reads as something moving through the network, and nothing
+     here moved (owner, 2026-09-07). It borrows the halo's own keyframes
+     so the two can never drift apart. */
+  .nb-ring,
+  .h-nb {
+    fill: none;
+    stroke: var(--accept);
+    animation: h-halo 1.6s ease-in-out infinite;
+    pointer-events: none;
+  }
+
   /* The escalated unplanned pair: undivided, alarm, and glowing, as
      round 30 draws it and round 49 keeps it. */
   .redge.alarm {
@@ -4672,6 +5299,71 @@
   .card .sw.qt {
     background: var(--fg);
     opacity: 0.4;
+  }
+
+  /* The two baseline swatches, so a line about brightness is read in the
+     ink the map draws that brightness in (round-49/index.html:199-200):
+     established a thin dim rule, off-baseline the same green lit. */
+  .card .sw.es {
+    height: 2px;
+    background: var(--accept);
+    opacity: 0.3;
+  }
+
+  .card .sw.nb {
+    background: var(--accept);
+    box-shadow: 0 0 0 2px rgba(62, 207, 126, 0.3);
+  }
+
+  .card .s.es {
+    color: var(--fg-dim);
+  }
+
+  .card .s.nb {
+    color: var(--fg);
+  }
+
+  /* The card's own table (round-49/index.html:209-213): the off-baseline
+     lines, and the reach's port table before it. */
+  .card table {
+    width: 100%;
+    margin-top: 6px;
+    border-collapse: collapse;
+    font: 10.5px var(--font-mono);
+  }
+
+  .card th {
+    padding: 0 0 3px;
+    border-bottom: 1px solid var(--hair-2);
+    font: 600 9px var(--font-mono);
+    letter-spacing: 0.1em;
+    color: var(--fg-dim);
+    text-align: left;
+  }
+
+  .card td {
+    padding: 2px 0;
+    color: var(--fg-muted);
+  }
+
+  /* The line itself reads at full strength: it is the one thing on this
+     card that is not background. */
+  .card tr.lit td {
+    color: var(--fg);
+  }
+
+  .card th.n,
+  .card td.n {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .card td.ok {
+    color: var(--accept);
+  }
+
+  .card td.al {
+    color: var(--alarm);
   }
 
   .card .quote {
@@ -5057,10 +5749,20 @@
 
     /* Instant under reduced motion (DESIGN.md "Honesty and motion"): the
        halo still marks the flagged host, it just stops throbbing. */
-    .h-halo {
+    .h-halo,
+    .nb-ring,
+    .h-nb {
       animation: none;
       stroke-opacity: 1;
       stroke-width: 1.6;
+    }
+
+    /* The same rule for the flow: the off-baseline line stays at full
+       width and full brightness, it just stops moving, so nothing the
+       map was saying is lost (round-49/index.html:256-257). */
+    .flow {
+      animation: none;
+      stroke-dasharray: none;
     }
   }
 
@@ -5774,6 +6476,14 @@
     fill: none;
     stroke-width: 0.8;
     opacity: 0.3;
+  }
+
+  /* A host's own lane, as bright as the brightest line it carries
+     (round 49, #1016). Established is the 0.3 above -- already receding,
+     which is what the rule asks for. */
+  .cli-spoke.offbase {
+    stroke-width: 1.4;
+    opacity: 0.85;
   }
 
   .c-label,

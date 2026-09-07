@@ -15,6 +15,8 @@ import { topologyNavState } from '../lib/topologyNav.svelte'
 import { wizardState } from '../lib/wizard.svelte'
 import { altitudeStopState } from '../lib/altitudeStop.svelte'
 import { hostsState } from '../lib/hosts.svelte'
+import { baselineState } from '../lib/baseline.svelte'
+import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { Host } from '../lib/api'
 import type { RouterFilterRule, RouterIPAddress } from '../lib/api'
 import { emptyFilters, type ClientEvent, type Device, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
@@ -148,6 +150,11 @@ beforeEach(() => {
   // that seeds a quiet host would otherwise leave it quiet for the next.
   hostsState.hosts = []
   hostsState.error = null
+  // The baseline register is a module-level singleton too (#1016), so a
+  // test that seeds an off-baseline line would otherwise leave the next
+  // test's map lit by it.
+  baselineState.off = EMPTY_OFF_BASELINE
+  baselineState.error = null
   flagsState.list = []
   watchlistState.entries = []
   watchlistState.coverage = {}
@@ -3452,6 +3459,381 @@ describe('living hosts on the 2D map (#1016)', () => {
       expect(act(card, 'mark quiet on purpose ▸')).toBeUndefined()
       expect(act(card, 'dismiss ▸')).toBeUndefined()
       expect(card.textContent).toContain('has not answered for it yet')
+    })
+  })
+})
+
+// Round 49's second always-on rule (#1016): colour is the verdict,
+// brightness is the baseline. A line on the pattern recedes; a line off
+// it is bright, with a ring where it arrived. Nothing is ever removed
+// from the map by any of this -- the whole point is a sieve rather than
+// a filter, so every assertion below is about how something is drawn and
+// never about whether it is drawn at all.
+//
+// jsdom returns zeros from getBoundingClientRect and lays nothing out,
+// so nothing here asserts a pixel. What it asserts is the decisions: how
+// many elements light, which ones, what the card says, and what the
+// `expected` action actually writes.
+describe('brightness is the baseline (round 49, #1016)', () => {
+  let nextOffKey = 1
+
+  function offLine(over: Partial<OffBaselineLine> = {}): OffBaselineLine {
+    return {
+      key: `line${nextOffKey++}`,
+      srcIp: '10.0.10.21',
+      dstIp: '10.0.20.10',
+      port: 5001,
+      proto: 'tcp',
+      count: 40,
+      firstSeenToday: Date.parse('2026-09-07T21:26:00Z'),
+      outcome: 'accept',
+      ...over,
+    }
+  }
+
+  /** What the register answered. Only today's off-baseline lines are
+   * ever in it -- there is no established set to seed, which is exactly
+   * the fact the roll-up has to be built on. */
+  function seedOff(lines: OffBaselineLine[], count = lines.length) {
+    baselineState.off = { config: { days: 3, of: 14 }, generatedAt: Date.now(), count, lines }
+  }
+
+  function loggedEdge(from: string, to: string) {
+    return { key: `${from}|${to}`, from, to, accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: true }
+  }
+
+  /** Two lanes that log both ways and talk both ways: two accepted rib
+   * halves, so "one lit, one not" is a claim the drawing can settle. */
+  function twoLanes(extraEvents: ClientEvent[] = []) {
+    zonesState.pushed = [
+      { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
+      { address: '10.0.20.1/24', network: '10.0.20.0', interface: 'bridge2', comment: 'Servers' },
+    ]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.10.21', dstIp: '10.0.20.10', action: 'accept', dstPort: 5001 }),
+      event({ inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.20.10', dstIp: '10.0.10.21', action: 'accept', dstPort: 443 }),
+      ...extraEvents,
+    ]
+    policyState.anyPushed = true
+    policyState.edges = [loggedEdge('bridge1', 'bridge2'), loggedEdge('bridge2', 'bridge1')]
+  }
+
+  describe('the roll-up', () => {
+    it('lights the one half that carries an off-baseline line, and lets the other recede', () => {
+      twoLanes()
+      seedOff([offLine()]) // 10.0.10.21 -> 10.0.20.10 is bridge1 -> bridge2
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelectorAll('.redge.offbase').length).toBe(1)
+      expect(container.querySelectorAll('.redge.established').length).toBe(1)
+      // Nothing was removed: both halves are still drawn.
+      expect(container.querySelectorAll('.redge').length).toBe(2)
+    })
+
+    it('draws the established half thin and the off-baseline half at full width', () => {
+      twoLanes()
+      seedOff([offLine()])
+      const { container } = render(Topography)
+      flushSync()
+
+      const width = (sel: string) => {
+        const style = container.querySelector(sel)!.getAttribute('style') ?? ''
+        return Number(/stroke-width:\s*([\d.]+)px/.exec(style)![1])
+      }
+      expect(width('.redge.established')).toBeLessThan(width('.redge.offbase'))
+    })
+
+    it('gives the off-baseline half flow dashes and a ring, and the established half neither', () => {
+      twoLanes()
+      seedOff([offLine()])
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelectorAll('.flow').length).toBe(1)
+      expect(container.querySelectorAll('.nb-ring').length).toBe(1)
+      // The flow belongs to the lit half, not to the dim one.
+      expect(container.querySelector('.redge.offbase')!.parentElement!.querySelector('.flow')).not.toBeNull()
+      expect(container.querySelector('.redge.established')!.parentElement!.querySelector('.flow')).toBeNull()
+    })
+
+    it('lights one place for one off-baseline line among a thousand established ones', () => {
+      // A thousand events on the same pair is a thousand established
+      // lines the register never sends: the map only ever hears about
+      // the one that is off the pattern.
+      const busy: ClientEvent[] = []
+      for (let i = 0; i < 1000; i++) {
+        busy.push(event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.10.21', dstIp: '10.0.20.10', action: 'accept', dstPort: 443 }))
+      }
+      twoLanes(busy)
+      seedOff([offLine()])
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelectorAll('.redge.offbase').length).toBe(1)
+      expect(container.querySelectorAll('.nb-ring').length).toBe(1)
+    })
+
+    it('does not grow the drawing when the off-baseline set grows', () => {
+      twoLanes()
+      // Three hundred distinct lines, every one of them on the same
+      // zone pair: one rib per pair is the promise, whatever the volume.
+      seedOff(Array.from({ length: 300 }, (_, i) => offLine({ port: 5000 + i })))
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelectorAll('.redge').length).toBe(2)
+      expect(container.querySelectorAll('.redge.offbase').length).toBe(1)
+      expect(container.querySelectorAll('.nb-ring').length).toBe(1)
+    })
+
+    it('leaves every rib established when nothing is off the baseline', () => {
+      twoLanes()
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelectorAll('.redge.established').length).toBe(2)
+      expect(container.querySelector('.redge.offbase')).toBeNull()
+      expect(container.querySelector('.nb-ring')).toBeNull()
+    })
+
+    it('attributes a line to no rib at all when its addresses are on no lane the map draws', () => {
+      twoLanes()
+      seedOff([offLine({ srcIp: '172.16.9.4', dstIp: '172.16.9.5' })])
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelector('.redge.offbase')).toBeNull()
+      expect(container.querySelectorAll('.redge.established').length).toBe(2)
+    })
+
+    it('rings the host dot that carries an off-baseline line, and no other on its lane', () => {
+      twoLanes()
+      const seen = new Date().toISOString()
+      const at = (ip: string, label: string): Host => ({
+        key: `bridge1|${ip}`,
+        iface: 'bridge1',
+        ip,
+        label,
+        firstSeen: '2026-08-01T00:00:00Z',
+        lastSeen: seen,
+        events: 12,
+      })
+      hostsState.hosts = [at('10.0.10.21', 'tom-desktop'), at('10.0.10.22', 'phone-tom'), at('10.0.10.23', 'tablet')]
+      seedOff([offLine()]) // tom-desktop is this line's source
+      const { container } = render(Topography)
+      flushSync()
+
+      const lan = container.querySelector('g.zone[data-zone="bridge1"]')!
+      expect(lan.querySelectorAll('.h-nb').length).toBe(1)
+      // The other two are still drawn -- they only stopped being lit.
+      expect(lan.querySelectorAll('.h-dot').length).toBe(3)
+      // The ring is on tom-desktop's own dot, not on whichever came first.
+      expect(lan.querySelector('.h-nb')!.parentElement!.querySelector('title')!.textContent).toContain('tom-desktop')
+    })
+  })
+
+  describe('the header count', () => {
+    it('counts today’s off-baseline lines, before the flags count and in the accept ink', () => {
+      twoLanes()
+      seedOff([offLine(), offLine({ port: 22, srcIp: '10.0.10.22' }), offLine({ port: 445, outcome: 'drop' })])
+      const { container } = render(Topography)
+      flushSync()
+
+      const mark = container.querySelector('.pills .nmk')!
+      expect(mark.textContent).toContain('off-baseline')
+      expect(mark.textContent).toContain('3')
+      // Ahead of the ⚑ count, which is the next thing in the row.
+      expect(mark.nextElementSibling?.textContent).toContain('⚑')
+      expect(componentSource).toMatch(/\.nmk\s*\{[^}]*color:\s*var\(--accept\)/)
+    })
+
+    it('reports the register’s own count, not the map’s share of it', () => {
+      // A line on no lane this map draws still happened, and the header
+      // is reporting the register rather than the drawing.
+      twoLanes()
+      seedOff([offLine({ srcIp: '172.16.9.4', dstIp: '172.16.9.5' })])
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelector('.pills .nmk')!.textContent).toContain('1')
+    })
+
+    it('says nothing at all when nothing is off the baseline', () => {
+      // Zero is also what an unread register looks like, so a permanent
+      // "· 0" would be an all-clear the map has not been told.
+      twoLanes()
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(container.querySelector('.pills .nmk')).toBeNull()
+    })
+  })
+
+  describe('the off-baseline card and the expected write path', () => {
+    /** Hover the lit half, which is the card's one way in. */
+    function openOffCard(container: HTMLElement) {
+      container.querySelector('.redge.offbase')!.parentElement!.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+      flushSync()
+      return container.querySelector<HTMLDivElement>('.card[aria-label^="Off the baseline"]')
+    }
+
+    function act(card: HTMLElement, label: string) {
+      return [...card.querySelectorAll<HTMLButtonElement>('.acts button')].find((b) => b.textContent?.trim() === label)
+    }
+
+    /** The register's own endpoints, answered rather than reached. The
+     * assertion is what was written, so the write has to travel the real
+     * path -- api.putBaselineExpected -- not a spy on the store. */
+    function stubApi() {
+      const calls: { url: string; init?: RequestInit }[] = []
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          calls.push({ url, init })
+          if (url.startsWith('/api/baseline/off')) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({ config: { days: 3, of: 14 }, generatedAt: 1, count: 0, lines: [], hostQuietAfterMs: 86_400_000 }),
+            } as unknown as Response
+          }
+          return { ok: true, status: 200, json: async () => ({ key: 'line1' }), text: async () => '' } as unknown as Response
+        }),
+      )
+      return calls
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('rolls the rib up: the established word, the count, and the line spelled out', () => {
+      twoLanes()
+      seedOff([offLine()])
+      const { container } = render(Topography)
+      flushSync()
+
+      // Wrapped source text, so the reading is on one line of whitespace.
+      const said = openOffCard(container)!.textContent!.replace(/\s+/g, ' ')
+      const card = container.querySelector<HTMLDivElement>('.card[aria-label^="Off the baseline"]')!
+      expect(said).toContain('established')
+      // The threshold the server actually applied, not a hard-coded pair.
+      expect(said).toContain('3 of the last 14 days')
+      expect(said).toContain('1 off the baseline today')
+      const row = card.querySelector('tbody tr')!
+      expect(row.textContent).toContain('5001/tcp')
+      expect(row.textContent).toContain('40')
+      expect(row.textContent).toContain('today')
+    })
+
+    it('says plainly what the verdict was and what it means', () => {
+      twoLanes()
+      seedOff([offLine()])
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(openOffCard(container)!.textContent).toContain('the router accepted it; nothing decided it was wanted')
+    })
+
+    it('says so differently when the rule stopped it', () => {
+      twoLanes([
+        event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.10.21', dstIp: '10.0.20.10', action: 'drop', ruleLabel: '#17 default drop' }),
+      ])
+      seedOff([offLine({ outcome: 'drop' })])
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(openOffCard(container)!.textContent).toContain('the router refused it (caught by #17 default drop)')
+    })
+
+    it('names no established line count, because the register never sends one', () => {
+      twoLanes()
+      seedOff([offLine()])
+      const { container } = render(Topography)
+      flushSync()
+
+      // The mockup's "1,214 lines" would be invented here: only today's
+      // off-baseline lines are ever fetched (lib/baseline.ts).
+      expect(openOffCard(container)!.textContent).not.toMatch(/established · [\d,]+ lines/)
+    })
+
+    it('asks for a reason before writing expected -- the reason is the statement', () => {
+      const calls = stubApi()
+      twoLanes()
+      seedOff([offLine()])
+      const { container } = render(Topography)
+      flushSync()
+
+      act(openOffCard(container)!, 'expected ▸')!.click()
+      flushSync()
+
+      const card = container.querySelector<HTMLDivElement>('.card[aria-label^="Off the baseline"]')!
+      expect(card.querySelector<HTMLButtonElement>('.form .go')!.disabled).toBe(true)
+      expect(calls.some((c) => c.init?.method === 'PUT')).toBe(false)
+    })
+
+    it('writes the reason through the baseline register, for the line the card names', async () => {
+      const calls = stubApi()
+      twoLanes()
+      const line = offLine()
+      seedOff([line])
+      const { container } = render(Topography)
+      flushSync()
+
+      act(openOffCard(container)!, 'expected ▸')!.click()
+      flushSync()
+
+      const card = container.querySelector<HTMLDivElement>('.card[aria-label^="Off the baseline"]')!
+      const input = card.querySelector<HTMLInputElement>('.form input')!
+      input.value = 'new backup job from the desktop to the nas'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      flushSync()
+      card.querySelector<HTMLButtonElement>('.form .go')!.click()
+
+      await vi.waitFor(() => expect(calls.some((c) => c.init?.method === 'PUT')).toBe(true))
+      const put = calls.find((c) => c.init?.method === 'PUT')!
+      expect(put.url).toBe(`/api/baseline/${line.key}/expected`)
+      expect(JSON.parse(put.init!.body as string)).toEqual({ reason: 'new backup job from the desktop to the nas' })
+      // And the register is re-read, so the line reads established from
+      // then on rather than the map keeping its own stale copy.
+      await vi.waitFor(() => expect(calls.some((c) => c.url.startsWith('/api/baseline/off'))).toBe(true))
+    })
+
+    it('shows who it will be recorded as, the way the declare form does', () => {
+      stubApi()
+      authState.username = 'tom'
+      twoLanes()
+      seedOff([offLine()])
+      const { container } = render(Topography)
+      flushSync()
+
+      act(openOffCard(container)!, 'expected ▸')!.click()
+      flushSync()
+
+      const who = container.querySelector('.card[aria-label^="Off the baseline"] .form .who')!
+      expect(who.textContent).toContain('as tom')
+      expect(who.textContent).toContain('this line only')
+    })
+
+    it('offers no expected action to a viewer -- the affordance is absent, not disabled', () => {
+      authState.role = 'viewer'
+      twoLanes()
+      seedOff([offLine()])
+      const { container } = render(Topography)
+      flushSync()
+
+      expect(act(openOffCard(container)!, 'expected ▸')).toBeUndefined()
+    })
+
+    it('opens no card on an established rib -- a rib on the pattern has nothing to say', () => {
+      twoLanes()
+      const { container } = render(Topography)
+      flushSync()
+
+      container.querySelector('.redge.established')!.parentElement!.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+      flushSync()
+      expect(container.querySelector('.card[aria-label^="Off the baseline"]')).toBeNull()
     })
   })
 })
