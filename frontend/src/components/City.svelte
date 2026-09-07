@@ -71,6 +71,18 @@
   import { extractSourceIp, flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { HOST_QUIET_AFTER_MS, hostsState, presenceOf } from '../lib/hosts.svelte'
+  import { baselineState } from '../lib/baseline.svelte'
+  import {
+    EMPTY_ROAD_BASELINE,
+    addressName,
+    endName,
+    portWords,
+    rollUpRoads,
+    verdictWords,
+    type RoadBaselineEntry,
+  } from '../lib/city/baselineRoads'
+  import { formatHM } from '../lib/format'
+  import type { OffBaselineLine } from '../lib/baseline'
   import { presenceNote, quietFor, type CityHost, type HostPresence } from '../lib/city/presence'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
   import type { Building, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
@@ -156,6 +168,11 @@
     // themselves), and reading hostsState.hosts here would make this
     // effect its own trigger.
     void hostsState.refresh()
+    // The baseline register, on the same tick and for the same reason:
+    // brightness is a statement about today, and a line that stops being
+    // off-baseline (because someone said it was expected, here or on the
+    // 2D map) should stop being bright without a reload.
+    void baselineState.refresh()
     const t = setInterval(() => {
       nowTick = Date.now()
       // Re-read on the same tick, which is what makes "it comes back by
@@ -163,6 +180,7 @@
       // when the feed hears the host again, and this is where the map
       // finds out. Nothing in the browser has to model that rule.
       void hostsState.refresh()
+      void baselineState.refresh()
     }, PRESENCE_TICK_MS)
     return () => clearInterval(t)
   })
@@ -218,6 +236,31 @@
   const inkOf = (d: District) => LANE_INKS[d.ink % LANE_INKS.length]
   const districtOf = (id: string | null) => (id ? (ground.districts.find((d) => d.id === id) ?? null) : null)
   const allBuildings = $derived<Building[]>([...ground.nodes, ...ground.districts.flatMap((d) => d.buildings)])
+
+  /* ---------------- brightness by baseline (#1016) ---------------- */
+
+  // "Colour is the verdict; brightness is the baseline" (DESIGN.md, "The
+  // always-on picture"). Nothing is ever removed from the map -- an
+  // established road recedes, it does not disappear -- so this is a
+  // sieve rather than a filter.
+  //
+  // The roll-up lives here, in one $derived, for cost: the scene below
+  // is rebuilt on every camera frame, and this is not. It depends only
+  // on the ground and on the off-baseline document, so panning and
+  // zooming never re-run it; when it does run it is O(lines + roads),
+  // and the per-road drawing then reads it with a single Map lookup.
+  /** Opacity to two decimals. R2 is the coordinate rounder and answers
+   *  to one, which is right for a pixel and wrong for an opacity: the
+   *  baseline's dim road is .26, and a tenth of a unit would draw it at
+   *  .3 -- a value nobody ratified, and a visibly shallower gap between
+   *  established and off-baseline than the design asks for. */
+  const RO = (n: number): number => Math.round(n * 100) / 100
+
+  const roadBaseline = $derived(
+    baselineState.off.lines.length === 0
+      ? EMPTY_ROAD_BASELINE
+      : rollUpRoads(ground, baselineState.off, zonesState.wanInterface),
+  )
 
   /* ---------------- the camera ---------------- */
 
@@ -1030,14 +1073,29 @@
       if (r.lane && !showLanes) continue
       const own = !reachOverlay || reachOverlay.ownRoadIds.has(r.id)
       const col = VERDICT[r.k]
-      const w = Math.max(1.2, r.w * c.S * 0.3)
+      // Brightness is the baseline (round 49, #1016). An accepted road
+      // carrying nothing off today's pattern is *established*: thin, dim
+      // and with no flow, so it recedes without ever leaving the map.
+      // One off-baseline line among a thousand established ones brings
+      // the whole road up to full width and full brightness -- the road
+      // is as bright as the brightest line it carries.
+      //
+      // Only accepted roads take part. A refused road and the escalated
+      // unplanned pair are unchanged: their colour is already the point,
+      // and dimming a refusal because it happens every day would hide
+      // exactly the traffic this screen exists to show.
+      const nb = roadBaseline.get(r.id) ?? null
+      const est = r.k === 'a' && nb === null
+      const w = Math.max(est ? 1 : 1.2, r.w * c.S * (est ? 0.18 : 0.3))
       // Standing on a building (#868) fades every road that is not its
       // own.
-      const op = (r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : 0.52) * (own ? 1 : 0.16)
+      const op = (r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : r.k === 'd' ? 0.52 : est ? 0.26 : 0.8) * (own ? 1 : 0.16)
       // While standing, only this building's own roads flow, in the
-      // direction its own strand reads; otherwise the ordinary busy/
-      // alarm-road flow from before this build.
-      const flow = reachOverlay ? own : showLanes && (r.w > 1.4 || r.k === 'x') && !r.lane
+      // direction its own strand reads. Otherwise an accepted road flows
+      // exactly when it carries something off the baseline -- the flow
+      // dashes are part of the bright treatment, not a separate signal
+      // -- and every other kind keeps the busy/alarm flow from before.
+      const flow = reachOverlay ? own : r.k === 'a' ? nb !== null : showLanes && (r.w > 1.4 || r.k === 'x') && !r.lane
       const reversed = !!reachOverlay?.reverseIds.has(r.id)
       let cum = 0
       const pieces = roadPieces(r, ents)
@@ -1047,14 +1105,36 @@
         const d = 'M' + P(c, q[0]) + 'C' + P(c, q[1]) + ' ' + P(c, q[2]) + ' ' + P(c, q[3])
         const fade = r.fade ? Math.max(0, 1 - Math.max(0, p.gt - 0.35) * 1.75) : 1
         if (fade > 0) glowD.push(d)
-        const paints: Paint[] = [{ d, stroke: col, sw: R2(w), so: R2(op * fade), cls: r.k === 'x' ? 'road-alarm' : undefined }]
+        const paints: Paint[] = [{ d, stroke: col, sw: R2(w), so: RO(op * fade), cls: r.k === 'x' ? 'road-alarm' : undefined }]
         const fl: Paint | null = flow
-          ? { d, stroke: col, sw: R2(Math.max(1.1, w * 0.42)), so: R2(0.9 * fade), cls: reversed ? 'flow flow-rev' : 'flow', dash: String(R2(-cum)) }
+          ? { d, stroke: col, sw: R2(Math.max(1.1, w * 0.42)), so: RO(0.9 * fade), cls: reversed ? 'flow flow-rev' : 'flow', dash: String(R2(-cum)) }
           : null
         cum += Math.hypot(X(c, q[3][0]) - X(c, q[0][0]), Y(c, q[3][1]) - Y(c, q[0][1]))
         solids.push({ kind: 'piece', v: pieceDepth(p), paints, flow: fl, label: r.label, roadId: r.id })
       }
-      if (glowD.length) glows.push({ d: glowD.join(''), stroke: col, sw: R2(w + 4), so: 0.07 })
+      // The wide faint casing is part of the bright treatment: an
+      // established road drops it along with its width, which is what
+      // makes a dim road read as one hairline rather than as a soft band
+      // (round-49/index.html:869-871).
+      if (glowD.length && !est) glows.push({ d: glowD.join(''), stroke: col, sw: R2(w + 4), so: 0.07 })
+      // The ring, at the end the traffic arrived at. It hugs the road's
+      // end and throbs in place -- it never pulses outward, because a
+      // ring that grows reads as something spreading and nothing is
+      // spreading (DESIGN.md, owner 2026-09-07). The same `.halo` rule
+      // the flag pill uses, so there is one motion in the city, not two.
+      if (nb && r.k === 'a') {
+        const ringAt = (e: Pt) => {
+          const rr = R2(Math.max(5, c.S * 0.7))
+          solids.push({
+            kind: 'other',
+            v: e[1] + 8,
+            paints: [{ cx: R2(X(c, e[0])), cy: R2(Y(c, e[1])), rx: rr, ry: rr, stroke: col, sw: 1.4, cls: 'halo' }],
+            lamps: [],
+          })
+        }
+        if (nb.ring.start) ringAt(r.pts[0])
+        if (nb.ring.end) ringAt(r.pts[r.pts.length - 1])
+      }
       // #991: the district-pair aggregate has no per-building source to
       // name (only the reach's own strands, below, resolve to one host),
       // so this mark reads as the one plain word, "dropped".
@@ -1691,6 +1771,152 @@
     return watchCardSize(card, () => hostCardTick++)
   })
 
+  /* ------------- the off-baseline card (round 49, #1016) ------------- */
+
+  // The card on a bright road: what it carries that is off today's
+  // pattern, and the one way a line leaves the bright state early.
+  // Placement is cardAnchor's, exactly as the boundary and host cards do
+  // it -- the card sits beside its road on a leader, keeps off the
+  // plates actually drawn, survives the pointer travelling to it (#1027)
+  // and re-places when the reason form makes it taller (#1028).
+  let hoverRoad = $state<string | null>(null)
+  let pinnedRoad = $state<string | null>(null)
+  let expectedKey = $state<string | null>(null)
+  let expectedReason = $state('')
+  let expectedBusy = $state(false)
+  const roadGrace = grace()
+  let rcardEl: HTMLDivElement | undefined = $state()
+  let roadPlace = $state<Placement | null>(null)
+  let roadCardTick = $state(0)
+
+  const openRoadId = $derived(pinnedRoad ?? hoverRoad)
+  const roadPinned = $derived(pinnedRoad !== null)
+
+  /** The open road, its roll-up and the geometry the leader points at. */
+  const roadCard = $derived.by(() => {
+    const id = openRoadId
+    if (!id) return null
+    const entry = roadBaseline.get(id)
+    if (!entry) return null
+    const road = ground.roads.find((r) => r.id === id)
+    if (!road) return null
+    return { road, entry }
+  })
+
+  /** How many lines a road carries off the baseline, in plain words. */
+  const offCount = (n: number) => `${n} off the baseline today`
+
+  /** The road's accessible name: the two ends, and what it carries. */
+  function roadAria(id: string): string {
+    const e = roadBaseline.get(id)
+    if (!e) return 'road'
+    return `${endName(ground, e.ends.start)} → ${endName(ground, e.ends.end)} road, ${offCount(e.lines.length)}`
+  }
+
+  function openRoadCard(id: string) {
+    if (drag?.moved) return
+    // Only a road with something off the baseline has this card: an
+    // established road's answer is the drawing itself, and a card saying
+    // "nothing to report" on every road in the city would be noise of
+    // exactly the kind this screen exists to remove.
+    if (!roadBaseline.has(id)) return
+    roadGrace.hold()
+    hoverRoad = id
+  }
+
+  function releaseRoadCard() {
+    const id = hoverRoad
+    if (!id) return
+    roadGrace.release(() => {
+      if (hoverRoad === id) hoverRoad = null
+    })
+  }
+
+  function toggleRoadPin(id: string) {
+    if (pinnedRoad === id) {
+      pinnedRoad = null
+      expectedKey = null
+    } else {
+      pinnedRoad = id
+      hoverRoad = id
+    }
+  }
+
+  /** Open the reason form for one line; the reason is required. */
+  function startExpected(line: OffBaselineLine, roadId: string) {
+    pinnedRoad = roadId
+    hoverRoad = roadId
+    expectedKey = line.key
+    expectedReason = ''
+    baselineState.error = null
+  }
+
+  async function submitExpected() {
+    const key = expectedKey
+    const reason = expectedReason.trim()
+    if (!key || !reason || expectedBusy) return
+    expectedBusy = true
+    try {
+      // baselineState.expected re-reads the register on success, so the
+      // road goes dim by itself the moment the last of its lines is
+      // spoken for -- nothing here has to model that.
+      const ok = await baselineState.expected(key, reason)
+      if (ok) {
+        expectedKey = null
+        expectedReason = ''
+      }
+    } finally {
+      expectedBusy = false
+    }
+  }
+
+  $effect(() => {
+    // Everything that moves the subject, read first: which road is open,
+    // the camera, the stop, the card's arrival, and both size ticks.
+    const c = roadCard
+    const vc = viewCam
+    const svg = svgEl
+    const host = cityEl
+    const card = rcardEl
+    void effectiveStop
+    void stageTick
+    void roadCardTick
+
+    if (!c || !svg || !host || !card) {
+      roadPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      roadPlace = null
+      return
+    }
+    // The leader points at the road's middle waypoint, which is the part
+    // of it a reader is looking at -- not at either end, where the ring
+    // already has something to say.
+    const pts = c.road.pts
+    const mid = pts[Math.floor(pts.length / 2)] ?? pts[0]
+    const anchor = map({ x: X(vc, mid[0]), y: Y(vc, mid[1]) })
+    // Keep off the two plates this road joins, and off the others only
+    // as a tie-break -- the same reasoning the boundary card gives.
+    const shown = (x: { id: string }) => host.querySelector(`g.plate[data-cid="${CSS.escape(x.id)}"]`)
+    const drawnPlate = (x: { id: string; u: number; v: number; r: number }) => {
+      const el = shown(x)
+      return el !== null && drawnRect(el, host) !== null ? [mapRect(map, plateBox(x))] : []
+    }
+    const endIds = new Set([c.entry.ends.start, c.entry.ends.end])
+    const avoid = ground.districts.filter((x) => endIds.has(x.id)).flatMap(drawnPlate)
+    const softAvoid = ground.districts.filter((x) => !endIds.has(x.id)).flatMap(drawnPlate)
+    roadPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
+  })
+
+  $effect(() => {
+    const card = rcardEl
+    if (!card) return
+    return watchCardSize(card, () => roadCardTick++)
+  })
+
   /* ---------------- the minimap ---------------- */
 
   const MINI_W = 264
@@ -1759,7 +1985,10 @@
         stroke-linecap={p.cls === 'round' ? 'round' : undefined}
       />
     {:else}
-      <ellipse cx={p.cx} cy={p.cy} rx={p.rx} ry={p.ry} fill={p.fill ?? 'none'} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} />
+      <!-- `cls` carries the off-baseline ring's `halo`, which is what
+           makes it throb in place; the animation sets stroke-width, so
+           it overrides the attribute below by design. -->
+      <ellipse class={p.cls} cx={p.cx} cy={p.cy} rx={p.rx} ry={p.ry} fill={p.fill ?? 'none'} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} />
     {/if}
   {/each}
   {#each lamps as l, j (j)}
@@ -1835,6 +2064,35 @@
             {/each}
             {#if s.flow}
               <path d={s.flow.d} fill="none" stroke={s.flow.stroke} stroke-width={s.flow.sw} stroke-opacity={s.flow.so} class={s.flow.cls ?? 'flow'} stroke-dashoffset={s.flow.dash} data-road={s.roadId} />
+            {/if}
+            {#if s.roadId && roadBaseline.has(s.roadId) && s.paints[0]?.d}
+              <!-- A bright road is pointable, on a wide transparent
+                   stroke because the road itself is too thin to hit
+                   (round-49/index.html:1204). Its card is the off-
+                   baseline roll-up; while that card is open this stroke
+                   goes visible, which is how the subject stays marked. -->
+              {@const rid = s.roadId}
+              <path
+                class="road-hot"
+                class:on={openRoadId === rid}
+                d={s.paints[0].d}
+                fill="none"
+                stroke="transparent"
+                stroke-width="14"
+                role="button"
+                tabindex="-1"
+                aria-label={roadAria(rid)}
+                data-road-hot={rid}
+                onpointerenter={() => openRoadCard(rid)}
+                onpointerleave={releaseRoadCard}
+                onclick={() => toggleRoadPin(rid)}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    toggleRoadPin(rid)
+                  }
+                }}
+              />
             {/if}
           {:else if s.kind === 'other'}
             {#if s.wall}
@@ -2188,6 +2446,94 @@
     </div>
   {/if}
 
+  {#if roadCard}
+    {@const rc = roadCard}
+    {@const cfg = baselineState.off.config}
+    <!-- The off-baseline roll-up card (round-49/index.html "flat-new",
+         DESIGN.md "Saying it is expected"). What this road carries that
+         is off today's pattern, line by line, and the one way a line
+         leaves the bright state early. The wording is the 2D map's, so a
+         line reads the same on either side of the slider. -->
+    {#if roadPlace}
+      <svg class="leader" aria-hidden="true">
+        <path d="M{roadPlace.from.x} {roadPlace.from.y}L{roadPlace.to.x} {roadPlace.to.y}" stroke="var(--hair-2)" stroke-width="1" fill="none" />
+        <circle cx={roadPlace.from.x} cy={roadPlace.from.y} r="3" fill="var(--accent)" />
+      </svg>
+    {/if}
+    <div
+      class="bcard rcard"
+      class:pinned={roadPinned}
+      class:placed={roadPlace !== null}
+      style={roadPlace ? `left:${R2(roadPlace.left)}px;top:${R2(roadPlace.top)}px` : undefined}
+      bind:this={rcardEl}
+      role="dialog"
+      tabindex="-1"
+      aria-label={roadAria(rc.road.id)}
+      onpointerenter={roadGrace.hold}
+      onpointerleave={releaseRoadCard}
+    >
+      <div class="bc-t">
+        <span class="n">{endName(ground, rc.entry.ends.start)} → {endName(ground, rc.entry.ends.end)}<small>road</small></span>
+        <button
+          type="button"
+          class="pin"
+          class:on={roadPinned}
+          aria-pressed={roadPinned}
+          title={roadPinned ? 'pinned — click to let it go' : 'pin this card'}
+          onclick={() => toggleRoadPin(rc.road.id)}>{roadPinned ? '✕' : '⊙'}</button
+        >
+      </div>
+
+      <!-- How many lines are established here is deliberately not a
+           number. The register carries only today's off-baseline lines,
+           never the established ones -- on a busy network the
+           established set is the entire traffic set -- so absence from
+           it *is* establishment, and a count would be invented rather
+           than known (#865: said plainly, never guessed). What is known
+           is the threshold the server actually applied, so the card says
+           that instead. -->
+      <div class="s est"><i class="sw est"></i>established · everything else on this road, seen on {cfg.days} of the last {cfg.of} days</div>
+      <div class="s"><i class="sw nb"></i><b>{offCount(rc.entry.lines.length)}</b></div>
+
+      <table class="off">
+        <thead>
+          <tr><th>LINE</th><th>PORT</th><th class="n">SEEN</th><th class="n">FIRST</th></tr>
+        </thead>
+        <tbody>
+          {#each rc.entry.lines as l (l.key)}
+            <tr>
+              <td>{addressName(ground, l.srcIp)} → {addressName(ground, l.dstIp)}</td>
+              <td>{portWords(l)}</td>
+              <td class="n ok">{l.count}</td>
+              <td class="n">today {formatHM(new Date(l.firstSeenToday).toISOString())}</td>
+            </tr>
+            <tr class="why"><td colspan="4">{verdictWords(l.outcome)}</td></tr>
+            {#if expectedKey === l.key}
+              <tr class="formrow">
+                <td colspan="4">
+                  <div class="form">
+                    <label for="city-expected-reason">EXPECTED — WHY?</label>
+                    <input id="city-expected-reason" bind:value={expectedReason} placeholder="why this line is meant to be here…" />
+                    <div class="btns">
+                      <button type="button" class="go" disabled={!expectedReason.trim() || expectedBusy} onclick={submitExpected}>Expected</button>
+                      <button type="button" class="no" onclick={() => (expectedKey = null)}>cancel</button>
+                      <span class="who">as {authState.username || 'you'} · this line only</span>
+                    </div>
+                    {#if baselineState.error}<div class="s alarm">{baselineState.error}</div>{/if}
+                  </div>
+                </td>
+              </tr>
+            {:else if authState.isAdmin}
+              <tr class="actrow">
+                <td colspan="4"><button type="button" class="linkact" onclick={() => startExpected(l, rc.road.id)}>expected ▸</button></td>
+              </tr>
+            {/if}
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+
   <div class="mini" aria-label="Minimap: the viewport is one part of a much larger map">
     <h4>ESTATE MAP</h4>
     <button type="button" class="look" aria-label="Look there: click a place on the estate map to centre on it" onclick={onMinimapClick}>
@@ -2453,6 +2799,96 @@
   .bcard .sw.logged {
     background: var(--accept);
     opacity: 0.8;
+  }
+
+  /* The baseline's own two swatches (round-49/index.html:200-201): the
+     established line thin and faint, the off-baseline one full strength
+     with the ring's halo around it. Same two marks on both surfaces. */
+  .bcard .sw.est {
+    background: var(--accept);
+    height: 2px;
+    opacity: 0.3;
+  }
+
+  .bcard .sw.nb {
+    background: var(--accept);
+    box-shadow: 0 0 0 2px rgb(62 207 126 / 30%);
+  }
+
+  .bcard .s.est {
+    color: var(--fg-dim);
+  }
+
+  /* The lines themselves. Narrow type and tight rows because this table
+     can be long on a busy day, and it is a list to scan rather than to
+     read. */
+  .bcard table.off {
+    width: 100%;
+    margin-top: 6px;
+    border-collapse: collapse;
+    font: 10px/1.5 var(--font-mono);
+  }
+
+  .bcard table.off th {
+    padding: 2px 4px 2px 0;
+    border-bottom: 1px solid var(--hair);
+    color: var(--fg-dim);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-align: left;
+  }
+
+  .bcard table.off td {
+    padding: 3px 4px 3px 0;
+    color: var(--fg);
+    vertical-align: top;
+  }
+
+  .bcard table.off th.n,
+  .bcard table.off td.n {
+    text-align: right;
+    padding-right: 0;
+  }
+
+  .bcard table.off td.ok {
+    color: var(--accept);
+  }
+
+  /* The verdict in plain words, under the line it is about. */
+  .bcard table.off tr.why td {
+    padding-top: 0;
+    color: var(--fg-dim);
+    font: 10px/1.4 var(--font-sans);
+  }
+
+  .bcard table.off tr.actrow td,
+  .bcard table.off tr.formrow td {
+    padding: 2px 0 8px;
+  }
+
+  .bcard .linkact {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: 10px var(--font-sans);
+    cursor: pointer;
+  }
+
+  .bcard .linkact:hover {
+    text-decoration: underline;
+  }
+
+  /* A bright road is pointable on a wide invisible stroke, and stays
+     marked while its card is open -- the same job .wall-hot.on does for
+     a boundary, said the same way. */
+  .road-hot {
+    cursor: pointer;
+  }
+
+  .road-hot.on {
+    stroke: var(--accent);
+    stroke-opacity: 0.22;
   }
 
   .bcard .quote {

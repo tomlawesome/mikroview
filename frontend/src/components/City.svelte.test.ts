@@ -15,6 +15,8 @@ import { policyState } from '../lib/policy.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
 import { authState } from '../lib/auth.svelte'
 import { coverageState } from '../lib/coverage.svelte'
+import { baselineState } from '../lib/baseline.svelte'
+import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { ClientEvent, Device } from '../lib/types'
 import { emptyFilters } from '../lib/types'
 import City from './City.svelte'
@@ -720,5 +722,236 @@ describe('a released drag stays put (#975)', () => {
     appState.events = [...appState.events, event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge1', outInterface: 'vlan-iot' })]
     flushSync()
     expect(viewportX()).toBe(afterDrag)
+  })
+})
+
+// ---------------------------------------------------------------------
+// Brightness by baseline (#1016, round 49). "Colour is the verdict;
+// brightness is the baseline": an accepted road carrying nothing off
+// today's pattern recedes, and one off-baseline line among a thousand
+// established ones brings the whole road up.
+//
+// These test the decisions, not the pixels. jsdom lays nothing out --
+// getBoundingClientRect answers zero for everything -- so there is no
+// honest assertion to make here about where the card lands or how long a
+// road is. What is checked is what the component decided: which opacity,
+// whether a flow path exists, whether a ring exists, what the card says,
+// and what the write path sends.
+describe('City: brightness by baseline', () => {
+  /** The first accepted road joining two districts that both draw a
+   *  building, taken from the ground rather than hard-coded so the test
+   *  keeps meaning something when the fixture moves. */
+  function pairRoad() {
+    for (const r of ground.roads) {
+      if (r.lane || r.k !== 'a') continue
+      const bar = r.id.indexOf('|')
+      if (bar < 0) continue
+      const a = ground.districts.find((d) => d.id === r.id.slice(0, bar))
+      const b = ground.districts.find((d) => d.id === r.id.slice(bar + 1))
+      if (a?.buildings.length && b?.buildings.length) return { r, a, b }
+    }
+    return null
+  }
+
+  const offDoc = (lines: OffBaselineLine[]) => ({
+    config: { days: 3, of: 14 },
+    generatedAt: 1,
+    count: lines.length,
+    lines,
+  })
+
+  const aLine = (srcIp: string, dstIp: string, o: Partial<OffBaselineLine> = {}): OffBaselineLine => ({
+    key: 'line-1',
+    srcIp,
+    dstIp,
+    port: 5001,
+    proto: 'tcp',
+    count: 40,
+    firstSeenToday: Date.now(),
+    outcome: 'accept',
+    ...o,
+  })
+
+  beforeEach(() => {
+    // The mount effect re-reads the register; stubbed so a stray fetch
+    // cannot land after a test has set the document by hand.
+    vi.spyOn(baselineState, 'refresh').mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    baselineState.off = EMPTY_OFF_BASELINE
+    baselineState.error = null
+    authState.role = ''
+    authState.username = ''
+  })
+
+  /** Every stroke-opacity the body of one road was drawn at. */
+  const opacities = (container: Element, id: string) =>
+    [...container.querySelectorAll(`path[data-road="${id}"]`)].map((p) => p.getAttribute('stroke-opacity'))
+
+  it('draws a road bright when one line among its traffic is off the baseline, and dim when none is', () => {
+    const pick = pairRoad()
+    expect(pick).toBeTruthy()
+    const { r, a, b } = pick!
+    baselineState.off = offDoc([aLine(a.buildings[0].ip, b.buildings[0].ip)])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+
+    // The one road that carried it is at full brightness.
+    expect(opacities(container, r.id)).toContain('0.8')
+
+    // Every other accepted road is established, and recedes -- it is
+    // still drawn, which is the whole point: this is a sieve, not a
+    // filter, and nothing is ever removed from the map.
+    const others = ground.roads.filter((x) => x.k === 'a' && !x.lane && x.id !== r.id)
+    expect(others.length).toBeGreaterThan(0)
+    for (const o of others) {
+      const ops = opacities(container, o.id)
+      if (ops.length === 0) continue
+      expect(ops).toContain('0.26')
+      expect(ops).not.toContain('0.8')
+    }
+  })
+
+  it('rolls up: the number of bright roads does not grow with the number of lines', () => {
+    const pick = pairRoad()!
+    // Two hundred distinct lines across the same pair of districts.
+    const many = Array.from({ length: 200 }, (_, i) =>
+      aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip, { key: `k${i}`, port: 5000 + i }),
+    )
+    baselineState.off = offDoc(many)
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const bright = ground.roads.filter((x) => opacities(container, x.id).includes('0.8'))
+    expect(bright.map((x) => x.id)).toEqual([pick.r.id])
+  })
+
+  it('gives an off-baseline road flow dashes, and an established one none', () => {
+    const pick = pairRoad()!
+    baselineState.off = offDoc([aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip)])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    expect(container.querySelectorAll(`path.flow[data-road="${pick.r.id}"]`).length).toBeGreaterThan(0)
+    const other = ground.roads.find((x) => x.k === 'a' && !x.lane && x.id !== pick.r.id)!
+    expect(container.querySelectorAll(`path.flow[data-road="${other.id}"]`).length).toBe(0)
+  })
+
+  it('throbs a ring in place at the end the traffic arrived at, and none when nothing is off the baseline', () => {
+    const pick = pairRoad()!
+    const plain = render(City, { props: { stop: 'district', ground } })
+    const before = plain.container.querySelectorAll('ellipse.halo').length
+    plain.unmount()
+
+    baselineState.off = offDoc([aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip)])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    // One more ring than before: one line, arriving at one end. The
+    // ring's motion is the shared `.halo` rule, which breathes in place
+    // and never ripples outward.
+    expect(container.querySelectorAll('ellipse.halo').length).toBe(before + 1)
+  })
+
+  it('opens the off-baseline card from the road, naming the line, the port, the count and the verdict in plain words', async () => {
+    authState.role = 'admin'
+    authState.username = 'tom'
+    const pick = pairRoad()!
+    const src = pick.a.buildings[0]
+    const dst = pick.b.buildings[0]
+    baselineState.off = offDoc([aLine(src.ip, dst.ip)])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+
+    const hot = container.querySelector(`path.road-hot[data-road-hot="${pick.r.id}"]`)
+    expect(hot).toBeTruthy()
+    await fireEvent.pointerEnter(hot!)
+    flushSync()
+
+    const card = container.querySelector('.bcard.rcard') as HTMLElement
+    expect(card).toBeTruthy()
+    expect(card.textContent).toContain('1 off the baseline today')
+    // The threshold the server actually applied, not a hard-coded pair.
+    expect(card.textContent).toContain('seen on 3 of the last 14 days')
+    expect(card.textContent).toContain(`${src.name} → ${dst.name}`)
+    expect(card.textContent).toContain('5001/tcp')
+    expect(card.textContent).toContain('40')
+    expect(card.textContent).toContain('the router accepted it; nothing decided it was wanted')
+    expect(card.textContent).toContain('expected ▸')
+    // The subject stays marked while its card is open.
+    expect(hot!.classList.contains('on')).toBe(true)
+    // No form until it is asked for.
+    expect(card.querySelector('.form')).toBeNull()
+  })
+
+  it('will not open a card on an established road: its answer is the drawing', () => {
+    const other = ground.roads.find((x) => x.k === 'a' && !x.lane)!
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    expect(container.querySelector(`path.road-hot[data-road-hot="${other.id}"]`)).toBeNull()
+    expect(container.querySelector('.bcard.rcard')).toBeNull()
+  })
+
+  it('writes `expected` through the register, with the reason required', async () => {
+    authState.role = 'admin'
+    authState.username = 'tom'
+    const expected = vi.spyOn(baselineState, 'expected').mockResolvedValue(true)
+    const pick = pairRoad()!
+    baselineState.off = offDoc([aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip, { key: 'the-key' })])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+
+    await fireEvent.pointerEnter(container.querySelector(`path.road-hot[data-road-hot="${pick.r.id}"]`)!)
+    flushSync()
+    await fireEvent.click(container.querySelector('.bcard.rcard .linkact') as HTMLElement)
+    flushSync()
+
+    const card = container.querySelector('.bcard.rcard') as HTMLElement
+    expect(card.textContent).toContain('EXPECTED — WHY?')
+    // Who it will be recorded as, and how far the statement reaches.
+    expect(card.textContent).toContain('as tom · this line only')
+    // A reason is required -- the button stays refused until there is one.
+    const go = card.querySelector('.go') as HTMLButtonElement
+    expect(go.disabled).toBe(true)
+    await fireEvent.click(go)
+    expect(expected).not.toHaveBeenCalled()
+
+    const input = card.querySelector('.form input') as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'new backup job from the desktop to the nas' } })
+    flushSync()
+    await fireEvent.click(card.querySelector('.go') as HTMLButtonElement)
+    await tick()
+
+    expect(expected).toHaveBeenCalledWith('the-key', 'new backup job from the desktop to the nas')
+  })
+
+  it('surfaces a refused write beside the form rather than pretending it landed', async () => {
+    authState.role = 'admin'
+    authState.username = 'tom'
+    vi.spyOn(baselineState, 'expected').mockImplementation(async () => {
+      baselineState.error = 'a reason is required'
+      return false
+    })
+    const pick = pairRoad()!
+    baselineState.off = offDoc([aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip, { key: 'the-key' })])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    await fireEvent.pointerEnter(container.querySelector(`path.road-hot[data-road-hot="${pick.r.id}"]`)!)
+    flushSync()
+    await fireEvent.click(container.querySelector('.bcard.rcard .linkact') as HTMLElement)
+    flushSync()
+    const input = container.querySelector('.bcard.rcard .form input') as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'because' } })
+    flushSync()
+    await fireEvent.click(container.querySelector('.bcard.rcard .go') as HTMLButtonElement)
+    await tick()
+    flushSync()
+    // The form stays open with the failure beside it.
+    const card = container.querySelector('.bcard.rcard') as HTMLElement
+    expect(card.textContent).toContain('a reason is required')
+    expect(card.querySelector('.form')).toBeTruthy()
+  })
+
+  it('does not offer `expected` to a reader who cannot write', async () => {
+    authState.role = ''
+    const pick = pairRoad()!
+    baselineState.off = offDoc([aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip)])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    await fireEvent.pointerEnter(container.querySelector(`path.road-hot[data-road-hot="${pick.r.id}"]`)!)
+    flushSync()
+    const card = container.querySelector('.bcard.rcard') as HTMLElement
+    // The lines are still listed -- reading is not the privilege.
+    expect(card.textContent).toContain('1 off the baseline today')
+    expect(card.querySelector('.linkact')).toBeNull()
   })
 })
