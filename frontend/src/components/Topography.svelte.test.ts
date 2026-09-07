@@ -3550,8 +3550,13 @@ describe('brightness is the baseline (round 49, #1016)', () => {
       const { container } = render(Topography)
       flushSync()
 
-      expect(container.querySelectorAll('.flow').length).toBe(1)
-      expect(container.querySelectorAll('.nb-ring').length).toBe(1)
+      // Scoped to the ribs: the city draws its own roads into the same
+      // document and marks each with data-road, and an unscoped count
+      // here would be answering for both surfaces at once.
+      const ribs = (sel: string) =>
+        Array.from(container.querySelectorAll(sel)).filter((n) => n.closest('.edge-g'))
+      expect(ribs('.flow').length).toBe(1)
+      expect(ribs('.nb-ring').length).toBe(1)
       // The flow belongs to the lit half, not to the dim one.
       expect(container.querySelector('.redge.offbase')!.parentElement!.querySelector('.flow')).not.toBeNull()
       expect(container.querySelector('.redge.established')!.parentElement!.querySelector('.flow')).toBeNull()

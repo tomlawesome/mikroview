@@ -1091,11 +1091,14 @@
       // own.
       const op = (r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : r.k === 'd' ? 0.52 : est ? 0.26 : 0.8) * (own ? 1 : 0.16)
       // While standing, only this building's own roads flow, in the
-      // direction its own strand reads. Otherwise an accepted road flows
-      // exactly when it carries something off the baseline -- the flow
-      // dashes are part of the bright treatment, not a separate signal
-      // -- and every other kind keeps the busy/alarm flow from before.
-      const flow = reachOverlay ? own : r.k === 'a' ? nb !== null : showLanes && (r.w > 1.4 || r.k === 'x') && !r.lane
+      // direction its own strand reads. Otherwise a road flows exactly
+      // when it carries something off the baseline, or when it is the
+      // escalated unplanned pair -- the flow dashes are part of the
+      // bright treatment, not a separate signal. Volume does not earn
+      // flow: the ratified drawing (round 49, `flow: own ? mine :
+      // (r.k === 'x' || !!r.nb)`) animates only those two, so a settled
+      // network is still, however busy it is.
+      const flow = reachOverlay ? own : r.k === 'x' || nb !== null
       const reversed = !!reachOverlay?.reverseIds.has(r.id)
       let cum = 0
       const pieces = roadPieces(r, ents)
