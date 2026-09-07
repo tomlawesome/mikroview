@@ -388,6 +388,37 @@ describe('band status vocabulary matches the mockup (#700 fault 9, reworded by #
   })
 })
 
+describe('the flag badge never blocks the carrier it names (#1026)', () => {
+  // live-waterfall.mjs's own click-through scenario is the durable proof
+  // here: it drives a real browser and found the actual bug (a click on
+  // ".carrier-hit" timing out because the flag-mark g's painted subtree
+  // sat on top and ate the pointer event). jsdom does no hit-testing, so
+  // a unit test can't reproduce that click-through directly -- faking one
+  // would be a test that can't fail.
+  // A getComputedStyle assertion on pointer-events was tried and dropped:
+  // this suite's own render never puts the component's compiled <style>
+  // into the document at all (confirmed by inspection -- zero <style>
+  // tags and no adoptedStyleSheets after render), the same jsdom gap this
+  // file's header comment already names for colours and pixel positions.
+  // Such an assertion would report the browser default regardless of
+  // what Fall.svelte's stylesheet says, so it would fail the same way
+  // whether or not the CSS fix is present -- not a check, just a
+  // decoration. What's left checkable here is the markup itself: the
+  // badge is aria-hidden, i.e. already declared to carry nothing worth
+  // a screen reader's attention, which is the same declaration the CSS
+  // fix (pointer-events: none, unpinned by a test for the reason above)
+  // now honours for pointer input too.
+  it('renders the flag badge as aria-hidden, declaring it non-interactive', async () => {
+    const target = '198.51.100.60'
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', srcIp: target, dstPort: 443 })]
+    const flags = [makeFlag('critical_port', target)]
+    const { container } = await renderFall({ boundaries: [boundary()], events, flags })
+    const mark = container.querySelector('.flag-mark')
+    expect(mark).toBeTruthy()
+    expect(mark?.getAttribute('aria-hidden')).toBe('true')
+  })
+})
+
 describe('WATCH BROKEN: a per-boundary broken watch (#806)', () => {
   it('reads WATCH BROKEN in the alarm ink for a scoped, enabled entry whose ring broke on this boundary', async () => {
     const entries = [
