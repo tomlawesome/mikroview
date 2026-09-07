@@ -104,6 +104,30 @@ Numbered for reply; the counter continues from the session.
    card explaining why; default both?
 8. **`no rule table pushed`** stays on the plaque as a dim line. Keep,
    or move it into the card too?
+11. Adopt the baseline rule below for how bright a road or rib is, and
+    redraw before ratification?
+
+## Decisions (owner, 2026-09-07)
+
+- **The purpose** of flags, watchers and this map is one thing: make
+  potential threats easy to see and whittle the noise down to genuine
+  ones, without arbitrarily hiding anything that could be bad. Traffic
+  more than devices: an established network sits and talks on the same
+  routes and ports, so what matters is a line off that pattern.
+- **Quiet** is 24 hours of nothing, not minutes; configurable, 24 h
+  default. Presence is housekeeping, not the sieve.
+- **Established** is a line (source → destination · port · proto) seen
+  on 3 distinct days out of the last 14; configurable. Anything else is
+  off-baseline. Learned from recurrence, never maintained by hand.
+- New devices: maybe worth marking, but secondary to new traffic.
+
+Proposed on the back of those, awaiting question 11: established
+accepted lines draw thin and dim in the lane's ink; off-baseline
+accepted lines draw bright with the throbbing ring where they arrive;
+refused stays red; dark stays grey dashed; a header count
+`off-baseline today · N lines`; a card action `expected ▸` with a reason
+that drops a line to established at once. Nothing is removed, only
+dimmed.
 
 ## Superseded
 
@@ -114,4 +138,4 @@ Numbered for reply; the counter continues from the session.
 - LOGGED / DARK / QUIET words on plaques and lane captions.
 - Ports written along a reach strand: the line card carries them.
 
-Written by Claude Fable 5, 2026-09-06.
+Written by Claude Fable 5, 2026-09-07.
