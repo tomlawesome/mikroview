@@ -1,4 +1,4 @@
-// Screenshot round 49's nine scenes.
+// Screenshot round 49's ten scenes.
 // Run from frontend/ (playwright lives in the main checkout):
 //   node ../docs/design/concepts/round-49/capture.mjs
 // Shots land in shots/<scene>.png.
