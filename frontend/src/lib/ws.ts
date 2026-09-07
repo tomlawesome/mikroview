@@ -64,7 +64,7 @@ export class LiveSocket {
       appState.connState = 'open'
       // A new connection is a new server-side client registration, whose
       // dropped counter starts back at 0 -- see hub.go.
-      appState.wsDropped = 0
+      appState.resetWsDropped()
     }
 
     ws.onmessage = (ev) => {
@@ -79,8 +79,10 @@ export class LiveSocket {
         appState.appendLive(msg.events)
       }
       if (typeof msg.dropped === 'number') {
-        // Cumulative total for this connection, not a delta -- see ws.go.
-        appState.wsDropped = msg.dropped
+        // Cumulative total for this connection, not a delta -- see
+        // ws.go. noteWsDropped folds it into the #1015 freshness
+        // episode as well as updating the total.
+        appState.noteWsDropped(msg.dropped)
       }
     }
 

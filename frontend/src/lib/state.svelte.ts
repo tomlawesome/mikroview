@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { fetchDevices, fetchEvents, fetchStats } from './api'
+import { clearIngestLoss as clearIngestLossApi, fetchDevices, fetchEvents, fetchStats } from './api'
 import { matchesAddressQuery, type AddressCandidate } from './addressMatch'
 import { MAX_CLIENT_EVENTS } from './constants'
 import { LANDING_BY_CARD } from './deckCards'
 import { deckOrderState } from './deckOrder.svelte'
 import { matchesCountry, UNKNOWN_COUNTRY } from './countryMatch'
 import { countryFlag, isPublicIp } from './format'
+import {
+  EMPTY_WS_DROPPED_EPISODE,
+  noteWsDropped,
+  wsDroppedActive as isWsDroppedActive,
+  type WsDroppedEpisode,
+} from './ingestLossBanners'
 import { matchesPortQuery } from './portMatch'
 import { retentionState } from './retention.svelte'
 import {
@@ -131,7 +137,14 @@ class AppState {
   devices = $state<Device[]>([])
   stats = $state<Stats | null>(null)
   connState = $state<ConnState>('connecting')
+  // Cumulative total, as ws.ts reads it straight off the socket.
   wsDropped = $state(0)
+  // #1015: wsDropped's own episode, mirroring the freshness treatment
+  // the server now gives its four counters (see lib/ingestLossBanners.ts
+  // -- noteWsDropped/wsDroppedActive) since this one is a browser-side
+  // total the server has never seen. wsDroppedActive is declared below,
+  // beside `now`, which it depends on -- see that field's own comment.
+  wsDroppedEpisode = $state<WsDroppedEpisode>(EMPTY_WS_DROPPED_EPISODE)
   // ruleMatches holds the ids matching the current regex pattern, or
   // null when there is nothing usable to filter by. Kept here rather than
   // inside the Worker so eviction is handled where eviction already
@@ -278,6 +291,10 @@ class AppState {
   // in filteredEvents actually re-evaluates over time, not just when the
   // buffer itself changes.
   now = $state(Date.now())
+  // #1015: wsDropped's `active`, recomputed against `now` above so a tab
+  // that stopped dropping events falls quiet on the next tick without
+  // needing a new WS message to tell it to.
+  wsDroppedActive = $derived(isWsDroppedActive(this.wsDroppedEpisode, this.now))
 
   private pendingBuffer: ClientEvent[] = []
 
@@ -719,6 +736,37 @@ class AppState {
     const [devices, stats] = await Promise.all([fetchDevices(), fetchStats()])
     this.devices = devices
     this.stats = stats
+  }
+
+  // #1015: folds one new cumulative wsDropped total (ws.ts's onmessage)
+  // into its episode -- see noteWsDropped's own comment for the rule.
+  // wsDroppedActive above re-derives off `now`, ticked by tick() below,
+  // so a tab that stopped dropping events falls quiet without a new
+  // WS message telling it to.
+  noteWsDropped(total: number) {
+    this.wsDroppedEpisode = noteWsDropped(this.wsDroppedEpisode, total, this.now)
+    this.wsDropped = total
+  }
+
+  // A new WS connection is a new server-side client registration whose
+  // dropped counter starts back at 0 (ws.ts's onopen) -- the episode
+  // resets with it rather than carrying a stale lastAt across
+  // connections.
+  resetWsDropped() {
+    this.wsDropped = 0
+    this.wsDroppedEpisode = EMPTY_WS_DROPPED_EPISODE
+  }
+
+  // IngestLossDrawer.svelte's "Clear all" (#1015): clears the server's
+  // four ingest-loss counters, zeroes wsDropped locally (it is per-tab
+  // and the server has never seen it, so there is nothing server-side
+  // to clear), then refreshes stats immediately -- the drawer's
+  // disappearance is the confirmation, so it cannot wait for the next
+  // 5s poll.
+  async clearIngestLoss() {
+    await clearIngestLossApi()
+    this.resetWsDropped()
+    await this.refreshDevicesAndStats()
   }
 }
 

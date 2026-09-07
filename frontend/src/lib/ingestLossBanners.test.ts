@@ -2,196 +2,190 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  buildIngestLossBanners,
-  selectIngestLossBar,
+  EMPTY_WS_DROPPED_EPISODE,
+  noteWsDropped,
+  selectIngestLossRows,
+  shouldReopen,
   toIngestLossInputs,
-  type IngestLossInputs,
+  wsDroppedActive,
+  WS_DROPPED_WINDOW_MS,
+  type IngestLossBannerId,
+  type IngestLossRowInputs,
+  type WsDroppedEpisode,
 } from './ingestLossBanners'
+import type { SyslogIngestLoss } from './types'
 
-function inputs(overrides: Partial<IngestLossInputs> = {}): IngestLossInputs {
+function inactive(): SyslogIngestLoss {
   return {
-    dropped: 0,
-    rejectedConfigured: 0,
-    rejectedConfiguredHosts: [],
-    rejectedUndeclared: 0,
-    oversized: 0,
-    oversizedHost: '',
-    wsDropped: 0,
-    ...overrides,
+    dropped: { recent: 0, lastAt: null, active: false },
+    rejectedConfigured: { recent: 0, lastAt: null, active: false, hosts: [] },
+    rejected: { recent: 0, lastAt: null, active: false },
+    oversized: { recent: 0, lastAt: null, active: false },
   }
 }
 
-describe('buildIngestLossBanners', () => {
-  it('is empty when every counter is zero -- healthy is silent', () => {
-    expect(buildIngestLossBanners(inputs())).toEqual([])
+function rowInputs(overrides: Partial<SyslogIngestLoss> = {}, wsDropped = { recent: 0, active: false }): IngestLossRowInputs {
+  return { loss: { ...inactive(), ...overrides }, wsDropped }
+}
+
+describe('selectIngestLossRows', () => {
+  it('returns nothing when loss is absent -- stats not loaded yet, or an older server', () => {
+    expect(selectIngestLossRows({ wsDropped: { recent: 0, active: false } })).toEqual([])
   })
 
-  // #1001: the `details` link is a real-loss affordance. wsDropped lost
-  // nothing, so the drawing gives it the reassurance instead and no
-  // link (docs/design/concepts/ingest-loss-995, scene 2's note).
-  it('gives every real-loss banner a details target, and wsDropped none', () => {
-    const banners = buildIngestLossBanners(
-      inputs({
-        dropped: 812,
-        rejectedConfigured: 43,
-        rejectedConfiguredHosts: ['branch-e4a1'],
-        rejectedUndeclared: 2867,
-        oversized: 7,
-        oversizedHost: '10.20.3.9',
-        wsDropped: 156,
-      }),
-    )
-    const linked = banners.filter((b) => b.details).map((b) => b.id)
-    expect(linked.sort()).toEqual(
-      ['dropped', 'oversized', 'rejectedConfigured', 'rejectedUndeclared'].sort(),
-    )
-    expect(banners.find((b) => b.id === 'wsDropped')?.details).toBeUndefined()
-    expect(banners.every((b) => b.details === undefined || b.details === 'engineroom/ingest')).toBe(
-      true,
-    )
+  it('returns nothing when every counter is inactive, however large its total was', () => {
+    expect(selectIngestLossRows(rowInputs())).toEqual([])
   })
 
-  it('renders the owner-ratified copy verbatim for each signal', () => {
-    const banners = buildIngestLossBanners(
-      inputs({
-        dropped: 812,
-        rejectedConfigured: 43,
-        rejectedConfiguredHosts: ['branch-e4a1'],
-        rejectedUndeclared: 2867,
-        oversized: 7,
-        oversizedHost: '10.20.3.9',
-        wsDropped: 156,
-      }),
+  it('never shows a row for an inactive counter even if recent is somehow nonzero', () => {
+    // active is the gate, not recent -- a stale recent value from a
+    // counter that has since gone quiet must not resurrect its row.
+    const rows = selectIngestLossRows(
+      rowInputs({ dropped: { recent: 812, lastAt: '2026-09-06T19:00:00Z', active: false } }),
     )
-
-    const byId = Object.fromEntries(banners.map((b) => [b.id, b]))
-    expect(byId.dropped.label).toBe('Ingest queue full')
-    expect(byId.dropped.detail).toBe('812 log lines lost')
-    expect(byId.rejectedConfigured.label).toBe('Syslog slots full')
-    expect(byId.rejectedConfigured.detail).toBe('43 refused (branch-e4a1 locked out)')
-    expect(byId.rejectedUndeclared.label).toBe('Undeclared sources')
-    expect(byId.rejectedUndeclared.detail).toBe('2,867 connections refused')
-    expect(byId.oversized.label).toBe('Non-RouterOS sender')
-    expect(byId.oversized.detail).toBe('7 oversized messages received from 10.20.3.9 were truncated')
-    expect(byId.wsDropped.label).toBe('Slow browser tab')
-    expect(byId.wsDropped.detail).toBe('156 events not shown (but still logged)')
+    expect(rows).toEqual([])
   })
 
-  it('uses the singular form and verb when a count is exactly 1', () => {
-    const banners = buildIngestLossBanners(
-      inputs({
-        dropped: 1,
-        rejectedUndeclared: 1,
-        oversized: 1,
-        oversizedHost: '10.20.3.9',
-        wsDropped: 1,
+  it('shows exactly the active rows, worst severity first, regardless of input order', () => {
+    const rows = selectIngestLossRows(
+      rowInputs(
+        {
+          dropped: { recent: 812, lastAt: '2026-09-06T19:49:15Z', active: true },
+          rejectedConfigured: {
+            recent: 43,
+            lastAt: '2026-09-06T19:49:02Z',
+            active: true,
+            hosts: ['branch-e4a1'],
+          },
+          rejected: { recent: 2867, lastAt: '2026-09-06T19:49:00Z', active: true },
+          oversized: { recent: 7, lastAt: '2026-09-06T19:48:40Z', active: true, host: '10.20.3.9' },
+        },
+        { recent: 156, active: true },
+      ),
+    )
+    expect(rows.map((r) => r.id)).toEqual([
+      'dropped',
+      'rejectedConfigured',
+      'rejectedUndeclared',
+      'oversized',
+      'wsDropped',
+    ])
+    expect(rows.map((r) => r.severity)).toEqual(['critical', 'warn', 'caution', 'caution', 'info'])
+  })
+
+  it('renders the ratified copy using `recent`, never a total', () => {
+    const rows = selectIngestLossRows(
+      rowInputs({
+        dropped: { recent: 12, lastAt: '2026-09-06T19:49:15Z', active: true },
+        rejectedConfigured: {
+          recent: 3,
+          lastAt: '2026-09-06T19:49:02Z',
+          active: true,
+          hosts: ['branch-e4a1'],
+        },
+        rejected: { recent: 1, lastAt: '2026-09-06T19:49:00Z', active: true },
+        oversized: { recent: 7, lastAt: '2026-09-06T19:48:40Z', active: true, host: '10.20.3.9' },
       }),
     )
-    const byId = Object.fromEntries(banners.map((b) => [b.id, b]))
-    expect(byId.dropped.detail).toBe('1 log line lost')
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
+    expect(byId.dropped.detail).toBe('12 log lines lost')
+    expect(byId.rejectedConfigured.detail).toBe('3 refused (branch-e4a1 locked out)')
     expect(byId.rejectedUndeclared.detail).toBe('1 connection refused')
-    expect(byId.oversized.detail).toBe('1 oversized message received from 10.20.3.9 was truncated')
-    expect(byId.wsDropped.detail).toBe('1 event not shown (but still logged)')
+    expect(byId.oversized.detail).toBe('7 oversized messages received from 10.20.3.9 were truncated')
   })
 
   it('omits the locked-out router name when no host is retained', () => {
-    const [banner] = buildIngestLossBanners(inputs({ rejectedConfigured: 43, rejectedConfiguredHosts: [] }))
-    expect(banner.label).toBe('Syslog slots full')
-    expect(banner.detail).toBe('43 refused')
+    const [row] = selectIngestLossRows(
+      rowInputs({ rejectedConfigured: { recent: 43, lastAt: '2026-09-06T19:49:02Z', active: true, hosts: [] } }),
+    )
+    expect(row.detail).toBe('43 refused')
   })
 
   it('omits "received from" when no oversized sender host is known yet', () => {
-    const [banner] = buildIngestLossBanners(inputs({ oversized: 7, oversizedHost: '' }))
-    expect(banner.label).toBe('Non-RouterOS sender')
-    expect(banner.detail).toBe('7 oversized messages received were truncated')
+    const [row] = selectIngestLossRows(
+      rowInputs({ oversized: { recent: 7, lastAt: '2026-09-06T19:48:40Z', active: true } }),
+    )
+    expect(row.detail).toBe('7 oversized messages received were truncated')
   })
 
-  it('assigns the owner-ratified severity per signal', () => {
-    const banners = buildIngestLossBanners(
-      inputs({
-        dropped: 1,
-        rejectedConfigured: 1,
-        rejectedUndeclared: 1,
-        oversized: 1,
-        wsDropped: 1,
-      }),
-    )
-    const severityById = Object.fromEntries(banners.map((b) => [b.id, b.severity]))
-    expect(severityById.dropped).toBe('critical')
-    expect(severityById.rejectedConfigured).toBe('warn')
-    expect(severityById.rejectedUndeclared).toBe('caution')
-    expect(severityById.oversized).toBe('caution')
-    expect(severityById.wsDropped).toBe('info')
+  it('gives wsDropped no `details` target, unlike every real-loss row', () => {
+    const rows = selectIngestLossRows(rowInputs({}, { recent: 156, active: true }))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].id).toBe('wsDropped')
+    expect(rows[0].details).toBeUndefined()
+    expect(rows[0].detail).toBe('156 events not shown (but still logged)')
   })
 
   it('demotes the feed-drop notice: wsDropped is info, never warn', () => {
-    // This is the regression test for the issue's core demotion --
-    // ConnectionBanner.svelte used to render wsDropped as
-    // banner-warning, styled identically to a real data-loss banner.
-    // #995 demotes it to the cyan info tier.
-    const [banner] = buildIngestLossBanners(inputs({ wsDropped: 5 }))
-    expect(banner.severity).toBe('info')
-    expect(banner.severity).not.toBe('warn')
-  })
-
-  it('orders every combination worst-severity-first regardless of input order', () => {
-    const banners = buildIngestLossBanners(
-      inputs({
-        wsDropped: 1,
-        oversized: 1,
-        rejectedUndeclared: 1,
-        rejectedConfigured: 1,
-        dropped: 1,
-      }),
-    )
-    expect(banners.map((b) => b.severity)).toEqual(['critical', 'warn', 'caution', 'caution', 'info'])
+    const [row] = selectIngestLossRows(rowInputs({}, { recent: 5, active: true }))
+    expect(row.severity).toBe('info')
   })
 })
 
-describe('selectIngestLossBar', () => {
-  it('has no lead and no banners when healthy', () => {
-    const bar = selectIngestLossBar(inputs())
-    expect(bar.lead).toBeNull()
-    expect(bar.banners).toEqual([])
-    expect(bar.moreCount).toBe(0)
+describe('shouldReopen -- the reopen rule', () => {
+  it('does not reopen when every active kind was already seen at hide time', () => {
+    const hiddenAt = new Set<IngestLossBannerId>(['dropped', 'oversized'])
+    expect(shouldReopen(hiddenAt, ['dropped'])).toBe(false)
+    expect(shouldReopen(hiddenAt, ['dropped', 'oversized'])).toBe(false)
   })
 
-  it('leads with the single firing signal and reports no "more" when only one fires', () => {
-    const bar = selectIngestLossBar(inputs({ rejectedUndeclared: 3 }))
-    expect(bar.lead?.id).toBe('rejectedUndeclared')
-    expect(bar.moreCount).toBe(0)
-    expect(bar.banners).toHaveLength(1)
+  it('reopens when a kind outside the hidden-at set is active -- new, or come back', () => {
+    const hiddenAt = new Set<IngestLossBannerId>(['dropped'])
+    expect(shouldReopen(hiddenAt, ['dropped', 'wsDropped'])).toBe(true)
   })
 
-  it('collapses several firing signals to one lead, worst severity, plus a +N more count', () => {
-    const bar = selectIngestLossBar(
-      inputs({
-        dropped: 812,
-        rejectedConfigured: 43,
-        rejectedConfiguredHosts: ['branch-e4a1'],
-        rejectedUndeclared: 2867,
-        wsDropped: 156,
-      }),
-    )
-    // Scene 4 of the ratified drawing: four signals firing, one bar,
-    // the critical one leads, "+3 more" covers the rest.
-    expect(bar.lead?.id).toBe('dropped')
-    expect(bar.moreCount).toBe(3)
-    expect(bar.banners.map((b) => b.id)).toEqual(['dropped', 'rejectedConfigured', 'rejectedUndeclared', 'wsDropped'])
+  it('does not reopen with no active kinds at all', () => {
+    expect(shouldReopen(new Set(['dropped']), [])).toBe(false)
   })
 
-  it('re-collapses to the new worst lead once the previous worst clears', () => {
-    // The ratified behaviour ("re-collapses when counters go quiet")
-    // is a property of this being a pure function of current counts,
-    // not state carried between renders -- once `dropped` returns to
-    // 0 the lead simply becomes the next-worst signal on the next call.
-    const stillFiring = selectIngestLossBar(inputs({ rejectedConfigured: 1, rejectedUndeclared: 1 }))
-    expect(stillFiring.lead?.id).toBe('rejectedConfigured')
-    expect(stillFiring.moreCount).toBe(1)
+  it('reopens from an empty hidden-at set the moment anything is active', () => {
+    expect(shouldReopen(new Set(), ['oversized'])).toBe(true)
   })
 })
 
-describe('toIngestLossInputs', () => {
+describe('wsDropped episode tracking (noteWsDropped/wsDroppedActive)', () => {
+  it('starts empty and inactive', () => {
+    expect(wsDroppedActive(EMPTY_WS_DROPPED_EPISODE, Date.now())).toBe(false)
+  })
+
+  it('opens a fresh episode on the first increase', () => {
+    const episode = noteWsDropped(EMPTY_WS_DROPPED_EPISODE, 5, 1_000)
+    expect(episode).toEqual({ total: 5, recent: 5, lastAt: 1_000 })
+    expect(wsDroppedActive(episode, 1_000)).toBe(true)
+  })
+
+  it('accumulates within the window rather than restarting', () => {
+    let episode = noteWsDropped(EMPTY_WS_DROPPED_EPISODE, 5, 1_000)
+    episode = noteWsDropped(episode, 8, 1_000 + WS_DROPPED_WINDOW_MS - 1)
+    expect(episode.recent).toBe(8) // 5 + 3, still one episode
+    expect(episode.total).toBe(8)
+  })
+
+  it('restarts the episode once the gap since the last move exceeds the window', () => {
+    let episode = noteWsDropped(EMPTY_WS_DROPPED_EPISODE, 5, 1_000)
+    episode = noteWsDropped(episode, 8, 1_000 + WS_DROPPED_WINDOW_MS + 1)
+    expect(episode.recent).toBe(3) // only this move's delta, not 5 + 3
+  })
+
+  it('falls inactive once now moves past lastAt + window, with no new message', () => {
+    const episode = noteWsDropped(EMPTY_WS_DROPPED_EPISODE, 5, 1_000)
+    expect(wsDroppedActive(episode, 1_000 + WS_DROPPED_WINDOW_MS)).toBe(true)
+    expect(wsDroppedActive(episode, 1_000 + WS_DROPPED_WINDOW_MS + 1)).toBe(false)
+  })
+
+  it('an unchanged total leaves the episode untouched', () => {
+    const episode = noteWsDropped(EMPTY_WS_DROPPED_EPISODE, 5, 1_000)
+    expect(noteWsDropped(episode, 5, 50_000)).toBe(episode)
+  })
+
+  it('a total that goes backwards (a new WS connection) starts a clean episode', () => {
+    const episode = noteWsDropped(EMPTY_WS_DROPPED_EPISODE, 5, 1_000)
+    const reset: WsDroppedEpisode = noteWsDropped(episode, 0, 2_000)
+    expect(reset).toEqual({ total: 0, recent: 0, lastAt: null })
+  })
+})
+
+describe('toIngestLossInputs -- the totals-based path EngineRoom.svelte still uses', () => {
   it('derives the undeclared-only count from the two backend totals', () => {
     const result = toIngestLossInputs(
       {
