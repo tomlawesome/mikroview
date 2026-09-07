@@ -267,6 +267,137 @@ describe('City', () => {
     authState.role = ''
   })
 
+  // #1027: the card opened on hover and the pointer then had to travel
+  // to it to reach the pin. Setting off fired pointerleave on the wall,
+  // which nulled hoverWall, which unmounted the card -- so the pin could
+  // never be clicked, and the card's own pointerenter ran
+  // openWallCard(id, openWall!.side) against an openWall already null.
+  //
+  // Floating the card beside its wall shortens that journey but does not
+  // remove it, so this is about the journey itself, not the distance.
+  it('keeps the boundary card up while the pointer travels from the wall to it (#1027)', async () => {
+    vi.useFakeTimers()
+    try {
+      authState.role = 'admin'
+      authState.username = 'tom'
+      const { container } = render(City, { props: { stop: 'district', ground } })
+      const wall = [...container.querySelectorAll('[data-wall]')].find((w) => w.getAttribute('aria-label')?.includes('dark'))
+      await fireEvent.pointerEnter(wall!)
+      flushSync()
+      expect(container.querySelector('.bcard')).toBeTruthy()
+
+      // The pointer sets off for the card. Leaving the wall is reported
+      // before it has arrived anywhere.
+      await fireEvent.pointerLeave(wall!)
+      flushSync()
+      const card = container.querySelector('.bcard') as HTMLElement
+      expect(card, 'the card was gone before the pointer could reach it').toBeTruthy()
+
+      // It arrives, and the card stays for as long as it is there.
+      await fireEvent.pointerEnter(card)
+      flushSync()
+      vi.advanceTimersByTime(5000)
+      flushSync()
+      expect(container.querySelector('.bcard'), 'the card closed while the pointer was on it').toBeTruthy()
+
+      // The pin is reachable, which is the whole of #1027.
+      await fireEvent.click(container.querySelector('.bcard .pin') as HTMLElement)
+      flushSync()
+      expect(container.querySelector('.bcard')?.classList.contains('pinned')).toBe(true)
+      authState.role = ''
+      authState.username = ''
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('lets the card go once the pointer has arrived at neither the wall nor the card', async () => {
+    vi.useFakeTimers()
+    try {
+      const { container } = render(City, { props: { stop: 'district', ground } })
+      const wall = [...container.querySelectorAll('[data-wall]')].find((w) => w.getAttribute('aria-label')?.includes('dark'))
+      await fireEvent.pointerEnter(wall!)
+      flushSync()
+      expect(container.querySelector('.bcard')).toBeTruthy()
+      await fireEvent.pointerLeave(wall!)
+      flushSync()
+      // The grace period is a delay, not a card that never closes.
+      vi.advanceTimersByTime(5000)
+      flushSync()
+      expect(container.querySelector('.bcard')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the open wall marked, pinned as well as hovered', async () => {
+    // With ten grey dashed boundaries on screen, a card naming two of
+    // them in words alone does not say which is being described.
+    authState.role = 'admin'
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const wall = [...container.querySelectorAll('[data-wall]')].find((w) => w.getAttribute('aria-label')?.includes('dark'))!
+    expect(wall.classList.contains('on')).toBe(false)
+    await fireEvent.pointerEnter(wall)
+    flushSync()
+    expect(wall.classList.contains('on'), 'the hovered wall is not marked').toBe(true)
+    await fireEvent.click(container.querySelector('.bcard .pin') as HTMLElement)
+    flushSync()
+    const still = [...container.querySelectorAll('[data-wall]')].find((w) => w.getAttribute('aria-label')?.includes('dark'))!
+    expect(still.classList.contains('on'), 'the pinned wall stopped being marked').toBe(true)
+    authState.role = ''
+  })
+
+  // The whole chain, in the shape that catches a wrong pixel mapping: a
+  // container that is not the viewBox's own 2:1. jsdom lays nothing out
+  // and has no getScreenCTM, so both are supplied here exactly as a
+  // browser would report them for a 900x900 box -- 1400x700 meets it as
+  // 900x450, centred, so the drawing occupies y 225..675 and nothing
+  // else. A mapping that took its ratio from the container's height
+  // would spread the same drawing over the whole 0..900 and put the
+  // leader's dot somewhere the wall is not.
+  it('places the card and its leader correctly in a container that is not the viewBox’s shape', async () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const host = container.querySelector('.city') as HTMLElement
+    const svg = container.querySelector('.city > svg') as SVGSVGElement
+    const box = { left: 0, top: 0, width: 900, height: 900, right: 900, bottom: 900, x: 0, y: 0 }
+    host.getBoundingClientRect = () => box as DOMRect
+    svg.getBoundingClientRect = () => box as DOMRect
+    const s = 900 / 1400
+    ;(svg as unknown as { getScreenCTM: () => DOMMatrix }).getScreenCTM = () =>
+      ({ a: s, b: 0, c: 0, d: s, e: 0, f: (900 - 700 * s) / 2 }) as DOMMatrix
+
+    const wall = [...container.querySelectorAll('[data-wall]')].find((w) => w.getAttribute('aria-label')?.includes('dark'))
+    await fireEvent.pointerEnter(wall!)
+    flushSync()
+
+    const card = container.querySelector('.bcard') as HTMLElement
+    expect(card.classList.contains('placed'), 'the card never got a measured position').toBe(true)
+    const left = parseFloat(card.style.left)
+    const top = parseFloat(card.style.top)
+    expect(Number.isFinite(left) && Number.isFinite(top)).toBe(true)
+    // On the stage, card and all.
+    expect(left).toBeGreaterThanOrEqual(0)
+    expect(top).toBeGreaterThanOrEqual(0)
+    expect(left + 288).toBeLessThanOrEqual(900)
+    expect(top + 180).toBeLessThanOrEqual(900)
+
+    // The leader's dot is on the wall, which is inside the letterboxed
+    // band -- not spread over the container's full height.
+    const dot = container.querySelector('.leader circle') as SVGCircleElement
+    expect(dot, 'no leader was drawn').toBeTruthy()
+    const cy = parseFloat(dot.getAttribute('cy')!)
+    expect(cy).toBeGreaterThanOrEqual(225)
+    expect(cy).toBeLessThanOrEqual(675)
+
+    // And the leader actually joins the card it belongs to.
+    const d = container.querySelector('.leader path')!.getAttribute('d')!
+    const [, , ex, ey] = d.match(/M([-\d.]+) ([-\d.]+)L([-\d.]+) ([-\d.]+)/)!.slice(1).map(Number)
+    expect(ex).toBeGreaterThanOrEqual(left)
+    expect(ex).toBeLessThanOrEqual(left + 288)
+    expect(ey).toBeGreaterThanOrEqual(top)
+    expect(ey).toBeLessThanOrEqual(top + 180)
+  })
+
   it('marks a dropped aggregate road plainly as "dropped" (#991), not the refusing rule', () => {
     // The district-pair aggregate has no per-building source to name
     // (only a standing host's own strands, below, resolve to one) --
