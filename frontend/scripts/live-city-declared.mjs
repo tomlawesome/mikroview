@@ -3,10 +3,18 @@
 // #1014, a declared-quiet boundary against a running instance. The unit
 // tests prove the derivation on fixtures (coverageRule.ts, input.ts);
 // this walks the real thing end to end: push a lane whose rules log in
-// neither direction, read DARK on both surfaces that report a district
-// -- the 2D zones card and the city plaque -- then declare both
-// directions intentionally quiet through the real API and read the same
-// two surfaces again, where DARK must be gone.
+// neither direction, read it as dark on both surfaces that report a
+// district -- the 2D zones card and the city district -- then declare
+// both directions intentionally quiet through the real API and read the
+// same two surfaces again, where the dark reading must be gone.
+//
+// Round 49 (#1016) is why it is read that way. The words LOGGED, DARK
+// and QUIET are gone from plaques and lane captions, and the material
+// carries coverage instead: solid ink logged, white translucent
+// declared quiet, grey dashed dark. So the 2D card is read by whether
+// it is drawn dark, and the district by its own accessible name, which
+// still says "nothing logs here" in words -- the same fact the plaque
+// used to shout, from the surface that still states it.
 //
 // Both surfaces are checked because the bug was exactly that they
 // disagreed with the map's own lane cards: those read the declarations
@@ -22,9 +30,9 @@ import { session, check, done, feedRaw } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
-// The lane declared quiet, and a control lane that logs -- so a plaque
-// reading LOGGED proves the surface is actually being read, rather than
-// a selector quietly matching nothing.
+// The lane declared quiet, and a control lane that logs -- so a district
+// that never says "nothing logs here" proves the surface is actually
+// being read, rather than a selector quietly matching nothing.
 const QUIET = { iface: 'vlan-quiet', cidr: '10.0.70.1/24', comment: 'QuietLane' }
 const LIT = { iface: 'vlan-lit', cidr: '10.0.71.1/24', comment: 'LitLane' }
 const WAN = 'ether1'
@@ -102,8 +110,10 @@ async function toTopography() {
 
 const slider = () => page.locator('[data-card="topography"] .altitude input[type="range"]')
 
-// The 2D zones card: "N hosts · DARK" on the card whose accessible name
-// is the lane's (Topography.svelte's flatCards).
+// The 2D zones card, on the card whose accessible name is the lane's
+// (Topography.svelte's flatCards). The caption is "N hosts" alone now --
+// round 49 took the coverage word off it -- so the coverage reading is
+// the card's own `dark` class, which is the material.
 async function zonesCard(name) {
   await slider().fill('2') // the zones stop, the 2D stage
   await new Promise((r) => setTimeout(r, 900))
@@ -114,25 +124,26 @@ async function zonesCard(name) {
   }, name)
 }
 
-// The city plaque: the word under the district's name (City.svelte's
-// scene.plaques), plus what the plate itself says about the lane.
+// The city's own reading of a district, taken from the district's
+// accessible name (City.svelte ~963): `{name} district {cidr}, {n}
+// hosts` plus `, nothing logs here` while every boundary of it is dark.
 //
-// Read at the borough stop, not the city stop: the city stop draws the
-// compact plaque, which prints DARK or NO RULES and otherwise stays
-// silent, so a lane reading nothing there is ambiguous between "fixed"
-// and "selector matched nothing". The full plaque says LOGGED out loud,
-// which is what makes the control lane below worth checking.
-async function cityPlaque(name) {
-  await slider().fill('4') // the borough stop, full plaques
+// The plaque's `.cov` word went with round 49, so this is what the city
+// still states about coverage in words. Deliberately not read off the
+// district's walls: the boundary this scenario declares is the lane's
+// own boundary with the WAN, which the city draws as the river and its
+// bridge rather than as a wall between two districts. A district's walls
+// are its boundaries with its neighbours, so they answer a different
+// question and would report on lanes nobody here touched.
+//
+// Read at the borough stop, where one router's territory is in frame,
+// rather than the city stop where the whole estate is compressed.
+async function cityDistrict(name) {
+  await slider().fill('4') // the borough stop
   await new Promise((r) => setTimeout(r, 900))
   return page.evaluate((n) => {
-    const groups = [...document.querySelectorAll('[data-card="topography"] .city .flat > g')]
-    const g = groups.find((el) => el.querySelector('.p-name')?.textContent === n)
     const plate = [...document.querySelectorAll('[data-card="topography"] .city .plate')].find((p) => (p.getAttribute('aria-label') || '').startsWith(n + ' district'))
-    return {
-      cov: g ? (g.querySelector('.cov')?.textContent ?? '') : null,
-      aria: plate ? (plate.getAttribute('aria-label') ?? '') : null,
-    }
+    return { aria: plate ? (plate.getAttribute('aria-label') ?? '') : null }
   }, name)
 }
 
@@ -142,14 +153,16 @@ await toTopography()
 
 const darkCard = await zonesCard(QUIET.comment)
 check(!!darkCard, `the zones stop draws a card for the quiet lane (${JSON.stringify(darkCard)})`)
-check(darkCard?.count.includes('DARK') ?? false, `undeclared, the zones card reads DARK (${darkCard?.count})`)
+check(darkCard?.dim === true, `undeclared, the zones card is drawn dark (${JSON.stringify(darkCard)})`)
 
-const darkPlaque = await cityPlaque(QUIET.comment)
-check(darkPlaque?.cov === 'DARK', `undeclared, the city plaque reads DARK (${darkPlaque?.cov})`)
-check(darkPlaque?.aria?.includes('nothing logs here') ?? false, `undeclared, the district itself says nothing logs there (${darkPlaque?.aria})`)
+const darkDistrict = await cityDistrict(QUIET.comment)
+check(darkDistrict?.aria?.includes('nothing logs here') ?? false, `undeclared, the district itself says nothing logs there (${darkDistrict?.aria})`)
 
-const litPlaque = await cityPlaque(LIT.comment)
-check(litPlaque?.cov === 'LOGGED', `the logged control lane reads LOGGED on the same plaque (${litPlaque?.cov})`)
+const litDistrict = await cityDistrict(LIT.comment)
+check(
+  !!litDistrict?.aria && !litDistrict.aria.includes('nothing logs here'),
+  `the logged control lane's district never says it, on the same drawing (${litDistrict?.aria})`,
+)
 
 // --- Declare both directions intentionally quiet (#392) -------------------
 
@@ -174,22 +187,18 @@ await toTopography()
 
 const quietCard = await zonesCard(QUIET.comment)
 check(!!quietCard, `the zones stop still draws a card for the declared lane (${JSON.stringify(quietCard)})`)
-check(!(quietCard?.count.includes('DARK') ?? true), `declared quiet, the zones card no longer reads DARK (${quietCard?.count})`)
-check(quietCard?.dim === false, 'declared quiet, the zones card is not drawn dimmed either')
+check(quietCard?.dim === false, `declared quiet, the zones card is no longer drawn dark (${JSON.stringify(quietCard)})`)
 
-// "Not DARK", deliberately, rather than a word of its own: this slice
-// only fixes what the district is derived from. A declared lane
-// currently borrows the covered plaque's own wording; drawing declared
-// quiet distinctly is the next slice of #1016, and the assertion tightens
-// to that word when it lands.
-const quietPlaque = await cityPlaque(QUIET.comment)
-check(quietPlaque?.cov !== 'DARK', `declared quiet, the city plaque no longer reads DARK (${quietPlaque?.cov})`)
-check(!(quietPlaque?.aria?.includes('nothing logs here') ?? true), `declared quiet, the district no longer says nothing logs there (${quietPlaque?.aria})`)
+const quietDistrict = await cityDistrict(QUIET.comment)
+check(!(quietDistrict?.aria?.includes('nothing logs here') ?? true), `declared quiet, the district no longer says nothing logs there (${quietDistrict?.aria})`)
 
-// The declaration explains one lane, not the estate: the control lane
-// is untouched, and a lane nobody declared would still read DARK.
-const litAfter = await cityPlaque(LIT.comment)
-check(litAfter?.cov === 'LOGGED', `the logged lane is unchanged by somebody else's declaration (${litAfter?.cov})`)
+// The declaration explains one lane, not the estate: the control lane is
+// untouched, and a lane nobody declared would still read dark.
+const litAfter = await cityDistrict(LIT.comment)
+check(
+  !!litAfter?.aria && !litAfter.aria.includes('nothing logs here'),
+  `the logged lane is unchanged by somebody else's declaration (${litAfter?.aria})`,
+)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()

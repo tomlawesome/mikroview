@@ -27,12 +27,16 @@ await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
 // Descend on the host, then open the composer through the blocked
 // strand's own label.
-// #852/#869: the per-host name lives in `.isl-card`, hidden at zones the
-// same way `.detail` is -- see the coverage scenario for the full note.
-// Off zones and onto services before touching it.
+// Round 49's living hosts (#1016) replaced the `.host-link` list with a
+// row of dots inside each lane card at the `services` stop -- ten dots
+// then `+N`, every dot clickable to its reach (DESIGN.md "Living
+// hosts"). The stop is the same one; the way down to the host is the
+// dot. `.host-link` kept its stylesheet rule but has no markup left, so
+// the old click simply never resolved.
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
 await new Promise((r) => setTimeout(r, 700))
-await page.click('[data-card="topography"] .host-link >> text=192.168.1.77')
+await page.waitForSelector('[data-card="topography"] .hostrow .hot', { timeout: 10000 })
+await page.click('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.77"]')
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
 await page.click('[data-card="topography"] .strand-door >> nth=0')
 await page.waitForSelector('.composer', { timeout: 5000 })

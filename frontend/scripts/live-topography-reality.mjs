@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #629, map layer 3: the Traffic lens judges observed traffic against
-// the pushed intent. Feeds all three deltas through the real listeners:
+// #629, map layer 3: the map judges observed traffic against the pushed
+// intent. Round 49 made this the picture rather than one lens of three
+// (`traffic as a lens: it is the picture`, DESIGN.md "Superseded"), so
+// there is no tab to select first -- what it draws is what the map is.
+// Feeds all three deltas through the real listeners:
 // a planned flow (an accepting rule anticipated it), a held one (drops
 // on a refusing pair -- policy doing its job, calm), an unplanned one
 // (accepted traffic where the table only refuses -- the alarm), and an

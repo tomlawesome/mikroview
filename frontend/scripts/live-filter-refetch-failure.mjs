@@ -13,7 +13,7 @@
 // (LiveTable.svelte.test.ts) drive appState.fetchFailed directly, which
 // proves the rendering logic but not that a real fetch failure actually
 // sets it, propagates through a real debounce, and reaches a real
-// browser's DOM. This scenario reproduces the reach lens's own repro
+// browser's DOM. This scenario reproduces the live view's own repro
 // from the issue: route-intercept /api/events to fail, then narrow a
 // filter so refetchWithFilters() is what has to run to find a genuine
 // server-side match.
