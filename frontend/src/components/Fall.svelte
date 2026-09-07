@@ -1753,6 +1753,25 @@
     stroke-width: 1;
     stroke-dasharray: 2 6;
     opacity: 0.55;
+    /* Decorative: a dashed line drawn the full width of the rig, over
+       every band's own carrier-hit rects at that row. No handler, no
+       role -- same click-through shape as .flag-mark below. */
+    pointer-events: none;
+  }
+  /* #1026: the flag badge (ring, core dot and its "◉ type · time" label)
+     is declared presentational (aria-hidden, template above) but drew
+     with no pointer-events rule, so its own painted area -- the ring,
+     the label text, whichever the flag's own time happens to land on --
+     sat on top of the carrier-hit rect for the very carrier it names and
+     silently ate the click meant for it (live-waterfall.mjs's click on
+     ".carrier-hit" timed out, Playwright naming this g's subtree as the
+     interceptor). There is nothing on the badge worth clicking -- the
+     carrier underneath already opens the same boundary in Stream -- so
+     this passes every pointer straight through to it.
+     .flag-ring/.flag-core inherit this (SVG's pointer-events cascades
+     like any other presentation property; neither sets its own). */
+  .flag-mark {
+    pointer-events: none;
   }
   .flag-ring {
     fill: var(--fall-canvas);
