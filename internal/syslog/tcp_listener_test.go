@@ -310,7 +310,9 @@ func TestPerSourceConnectionCap(t *testing.T) {
 func TestRejectedConfiguredHostsTracksAndBoundsRecentLockouts(t *testing.T) {
 	prevConfigured := configuredSources.Load()
 	t.Cleanup(func() { configuredSources.Store(prevConfigured) })
-	prevHosts := rejectedConfiguredHostsSnapshot()
+	rejectedConfiguredHostsMu.Lock()
+	prevHosts := append([]rejectedConfiguredHostEntry(nil), rejectedConfiguredHosts...)
+	rejectedConfiguredHostsMu.Unlock()
 	t.Cleanup(func() {
 		rejectedConfiguredHostsMu.Lock()
 		rejectedConfiguredHosts = prevHosts
@@ -1225,5 +1227,166 @@ func TestTCPOversizedLineWithTerminatorInSameReadIsCapped(t *testing.T) {
 	}
 	if Stats().Oversized == before {
 		t.Error("the discarded remainder was not counted")
+	}
+}
+
+// TestLossEpisodeRestartsAfterWindow is issue #1015's central claim
+// about lossFreshness: a gap wider than the counter's window between
+// two hits starts a fresh episode at 1, rather than the episode
+// growing forever the way the monotonic total beside it already does.
+// Driven entirely against setLossClock's injected clock -- no real
+// sleeping, per this repo's own rule against timing-based tests (see
+// logging.Limiter's own now seam).
+func TestLossEpisodeRestartsAfterWindow(t *testing.T) {
+	tcpDroppedFreshness.clear()
+	prevDropped := tcpDropped.Swap(0)
+	t.Cleanup(func() {
+		tcpDroppedFreshness.clear()
+		tcpDropped.Store(prevDropped)
+	})
+
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() { setLossClock(nil) })
+
+	noteIngestDrop()
+	noteIngestDrop()
+	if got := Stats().Loss.Dropped.Recent; got != 2 {
+		t.Fatalf("episode after 2 hits inside the window = %d, want 2", got)
+	}
+
+	// A gap wider than lossWindowDropped: whatever was happening
+	// stopped, so this hit starts a new episode rather than becoming a
+	// third occurrence of the old one.
+	now = now.Add(lossWindowDropped + time.Second)
+	noteIngestDrop()
+	if got := Stats().Loss.Dropped.Recent; got != 1 {
+		t.Errorf("episode after a gap past the window = %d, want 1 (restarted, not accumulated to 3)", got)
+	}
+}
+
+// TestLossActiveFlipsFalseAfterWindow is #1015's other central claim:
+// active is computed fresh against now on every call, not latched once
+// true, so a counter that has gone quiet for longer than its window
+// must stop reporting active even though nothing cleared it.
+func TestLossActiveFlipsFalseAfterWindow(t *testing.T) {
+	tcpRejectedFreshness.clear()
+	prevRejected := tcpRejected.Swap(0)
+	prevConfigured := configuredSources.Load()
+	empty := map[string]bool{}
+	configuredSources.Store(&empty) // the probe host below must be undeclared
+	t.Cleanup(func() {
+		tcpRejectedFreshness.clear()
+		tcpRejected.Store(prevRejected)
+		configuredSources.Store(prevConfigured)
+	})
+
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() { setLossClock(nil) })
+
+	noteRejected("203.0.113.50")
+	loss := Stats().Loss.Rejected
+	if !loss.Active {
+		t.Fatalf("expected Rejected.Active immediately after a hit, got %+v", loss)
+	}
+	if loss.LastAt == nil {
+		t.Error("expected Rejected.LastAt to be set after a hit, got nil")
+	}
+
+	now = now.Add(lossWindowRejected + time.Second)
+	if got := Stats().Loss.Rejected; got.Active {
+		t.Errorf("expected Rejected.Active to flip false once the window elapsed with no new hit, got %+v", got)
+	}
+}
+
+// TestClearLossZeroesTotalsEpisodesAndHosts is issue #1015's "Clear
+// all": every one of the four totals, their episodes and lastAt, and
+// both host records, and ClearLoss's own return value carries the
+// totals as they stood immediately before the reset (what
+// handleSyslogLossClear audits).
+func TestClearLossZeroesTotalsEpisodesAndHosts(t *testing.T) {
+	prevDropped := tcpDropped.Load()
+	prevRejected := tcpRejected.Load()
+	prevRejectedConfigured := tcpRejectedConfigured.Load()
+	prevOversized := tcpOversized.Load()
+	prevConfigured := configuredSources.Load()
+	rejectedConfiguredHostsMu.Lock()
+	prevHosts := append([]rejectedConfiguredHostEntry(nil), rejectedConfiguredHosts...)
+	rejectedConfiguredHostsMu.Unlock()
+	tcpOversizedHostMu.Lock()
+	prevOversizedHost, prevOversizedHostLastAt := tcpOversizedHost, tcpOversizedHostLastAt
+	tcpOversizedHostMu.Unlock()
+	t.Cleanup(func() {
+		tcpDropped.Store(prevDropped)
+		tcpRejected.Store(prevRejected)
+		tcpRejectedConfigured.Store(prevRejectedConfigured)
+		tcpOversized.Store(prevOversized)
+		configuredSources.Store(prevConfigured)
+		rejectedConfiguredHostsMu.Lock()
+		rejectedConfiguredHosts = prevHosts
+		rejectedConfiguredHostsMu.Unlock()
+		tcpOversizedHostMu.Lock()
+		tcpOversizedHost, tcpOversizedHostLastAt = prevOversizedHost, prevOversizedHostLastAt
+		tcpOversizedHostMu.Unlock()
+		tcpDroppedFreshness.clear()
+		tcpRejectedFreshness.clear()
+		tcpRejectedConfiguredFreshness.clear()
+		tcpOversizedFreshness.clear()
+	})
+	tcpDropped.Store(0)
+	tcpRejected.Store(0)
+	tcpRejectedConfigured.Store(0)
+	tcpOversized.Store(0)
+	tcpDroppedFreshness.clear()
+	tcpRejectedFreshness.clear()
+	tcpRejectedConfiguredFreshness.clear()
+	tcpOversizedFreshness.clear()
+
+	configured := map[string]bool{"203.0.113.9": true}
+	configuredSources.Store(&configured)
+
+	noteIngestDrop()
+	noteRejected("203.0.113.9") // configured -- moves Rejected and RejectedConfigured together
+	tcpOversized.Add(1)
+	noteOversizedHost("203.0.113.10")
+
+	before := Stats()
+	if before.Dropped == 0 || before.Rejected == 0 || before.RejectedConfigured == 0 || before.Oversized == 0 {
+		t.Fatalf("setup did not move all four counters: %+v", before)
+	}
+	if len(before.RejectedConfiguredHosts) == 0 || before.OversizedHost == "" {
+		t.Fatalf("setup did not record host state: %+v", before)
+	}
+
+	result := ClearLoss()
+	if result.Dropped != before.Dropped || result.Rejected != before.Rejected ||
+		result.RejectedConfigured != before.RejectedConfigured || result.Oversized != before.Oversized {
+		t.Errorf("ClearLoss result = %+v, want the pre-clear totals %+v", result, before)
+	}
+
+	after := Stats()
+	if after.Dropped != 0 || after.Rejected != 0 || after.RejectedConfigured != 0 || after.Oversized != 0 {
+		t.Errorf("totals after ClearLoss = %+v, want all zero", after)
+	}
+	if len(after.RejectedConfiguredHosts) != 0 {
+		t.Errorf("RejectedConfiguredHosts after ClearLoss = %v, want empty", after.RejectedConfiguredHosts)
+	}
+	if after.OversizedHost != "" {
+		t.Errorf("OversizedHost after ClearLoss = %q, want empty", after.OversizedHost)
+	}
+	if after.Loss.Dropped.Recent != 0 || after.Loss.Dropped.Active || after.Loss.Dropped.LastAt != nil {
+		t.Errorf("Loss.Dropped after ClearLoss = %+v, want a zeroed, inactive, never-moved entry", after.Loss.Dropped)
+	}
+	if after.Loss.Rejected.Recent != 0 || after.Loss.Rejected.Active || after.Loss.Rejected.LastAt != nil {
+		t.Errorf("Loss.Rejected after ClearLoss = %+v, want a zeroed, inactive, never-moved entry", after.Loss.Rejected)
+	}
+	if after.Loss.RejectedConfigured.Recent != 0 || after.Loss.RejectedConfigured.Active ||
+		after.Loss.RejectedConfigured.LastAt != nil || len(after.Loss.RejectedConfigured.Hosts) != 0 {
+		t.Errorf("Loss.RejectedConfigured after ClearLoss = %+v, want zeroed with no hosts", after.Loss.RejectedConfigured)
+	}
+	if after.Loss.Oversized.Recent != 0 || after.Loss.Oversized.Active ||
+		after.Loss.Oversized.LastAt != nil || after.Loss.Oversized.Host != "" {
+		t.Errorf("Loss.Oversized after ClearLoss = %+v, want zeroed with no host", after.Loss.Oversized)
 	}
 }
