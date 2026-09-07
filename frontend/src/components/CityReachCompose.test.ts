@@ -150,6 +150,15 @@ describe('the composer prints the same line in the city as in 2D (#868)', () => 
     expect(building).not.toBeUndefined()
     await fireEvent.click(building!)
     flushSync()
+    // Round 49: the city's composer opens from the refused line's own
+    // card, so open that card and ask for the draft. What it then
+    // prints is unchanged -- that is what this test is about.
+    const refused = city.container.querySelector('[data-road-hot^="mark:"], [data-road-hot]') as HTMLElement
+    expect(refused).not.toBeNull()
+    await fireEvent.pointerEnter(refused)
+    flushSync()
+    await fireEvent.click(city.container.querySelector('[data-draft-rule]') as HTMLElement)
+    flushSync()
     const cmdCity = city.container.querySelector('.composer .cm-code')?.textContent
 
     expect(cmdCity).toBeTruthy()
