@@ -1,35 +1,42 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #1001: the ingest-loss banners' `details` link, end to end in a real
-// browser -- the ratified drawing (docs/design/concepts/ingest-loss-995,
-// scenes 4 and 5) gives every real-loss banner a small `details` control
-// on its right edge, and clicking it puts the operator in front of the
-// counters the banner is summarising.
+// #1001/#1015: the ingest-loss drawer end to end in a real browser --
+// the ratified spec (issue #1015) gives every real-loss row a small
+// `details` control on its right edge, and clicking it puts the
+// operator in front of the counters the row is summarising; the drawer
+// as a whole carries a `Clear all` that this scenario ends on.
 //
 // What only a real browser can show: that a loss counter moving on the
-// server actually produces the control; that clicking it lands on the
-// Settings view with the ingest section on screen, from wherever the
-// operator happened to be; and that a viewer -- who has no Settings card
-// at all (deckCards.ts, #785) -- is not offered a link into a view that
-// would be empty for them. ingestLossBanners.test.ts covers which
-// banners carry the field; sectionLink.ts's registry is what makes the
-// destination a compile-time name rather than a string. Neither can see
-// any of the above.
+// server actually produces the row and its control; that clicking
+// `details` lands on the Settings view with the ingest section on
+// screen, from wherever the operator happened to be; that a viewer --
+// who has no Settings card at all (deckCards.ts, #785) -- is not
+// offered a link into a view that would be empty for them; and that
+// `Clear all` actually removes the drawer rather than merely hiding it.
+// ingestLossBanners.test.ts covers which rows carry the `details` field
+// and the reopen rule in isolation; sectionLink.ts's registry is what
+// makes the destination a compile-time name rather than a string. None
+// of that proves what a real click in a real page does.
 //
-// **Named to sort last on purpose.** This scenario trips a real ingest
-// loss counter, and those never reset for the life of the instance, so
-// the banner it provokes would sit over the top of every scenario that
-// ran after it. `zz` keeps it behind live-ws-revocation.mjs, the last
-// scenario alphabetically before it.
+// **No longer named to sort last.** Before #1015, the counter this
+// scenario tripped was process-lifetime monotonic and never reset, so
+// the banner it raised sat over every scenario that ran after it --
+// `zz` was the workaround, keeping it last alphabetically. #1015 gives
+// the counter a freshness window and a `Clear all` that actually zeroes
+// it server-side; this scenario now ends by clicking it and asserting
+// the drawer is gone, so it leaves nothing for the scenario after it
+// and can run anywhere in filename order.
 //
-// Not covered here, deliberately: the expanded stack (scene 5), where
-// the lead row carries the link and the rows under it do not. That needs
-// two loss counters above zero at once, and the harness can raise only
-// one of them on demand -- `dropped` needs the ingest queue genuinely
+// Not covered here, deliberately: five rows at once (the ratified
+// "worst leads a graded stack" reading). That needs several loss
+// counters active together, and the harness can raise only one of them
+// on demand here without pushing the instance into a state later
+// scenarios would inherit -- `dropped` needs the ingest queue genuinely
 // overrun, `rejectedConfigured` needs the per-source connection limit
 // hit, and `wsDropped` is a browser-side counter for a tab falling
-// behind. ingestLossBanners.test.ts asserts which banners carry the
-// field, and ConnectionBanner.svelte renders it on `i === 0` only.
+// behind. ingestLossBanners.test.ts's selectIngestLossRows tests cover
+// the five-row ordering in isolation, and the screenshots attached to
+// #1015 show it rendered.
 
 import { session, feedRaw, check, done, goTo, launchBrowser } from './live-browser.mjs'
 
@@ -187,14 +194,35 @@ await viewerBrowser.close()
 
 // --- clean up the account, so a rerun starts where this one did -----------
 // Arm-then-confirm (round 28's gesture): a click arms remove, a second
-// click on the same button confirms it. The oversized counter cannot be
-// put back -- see the note at the top about why this scenario runs last.
+// click on the same button confirms it.
 
 const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`)
 await remove.click()
 await remove.click()
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
 check(true, 'the viewer account is removed again')
+
+// --- 5: Clear all removes the drawer, not just hides it --------------------
+// #1015's whole point: the oversized counter this scenario tripped is
+// no longer process-lifetime monotonic. Clear all zeroes it server-side
+// (POST /api/syslog/loss/clear) and the drawer's own reactive rows --
+// selectIngestLossRows reading `active` off the next stats poll -- make
+// it disappear on its own, with no page reload. This is what lets the
+// scenario run anywhere in filename order: it leaves the instance
+// exactly as it found it, for whichever scenario runs next.
+//
+// The drawer is a global overlay (App.svelte), mounted outside the
+// deck's view switching, so Clear all is on screen regardless of which
+// card the editor session is currently centred on -- no navigation
+// needed first.
+
+const CLEAR_ALL = '[data-testid="ingest-loss-clear-all"]'
+await page.click(CLEAR_ALL)
+await page.waitForSelector('#ingest-loss-drawer', { state: 'detached', timeout: 10000 })
+check(
+  (await page.locator('.banner').count()) === 0,
+  'Clear all removes the drawer entirely -- no banner is left on screen',
+)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)
 done()

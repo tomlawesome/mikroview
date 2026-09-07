@@ -13,6 +13,7 @@
   import BottomBar from './components/BottomBar.svelte'
   import { viewportState } from './lib/viewport.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
+  import IngestLossDrawer from './components/IngestLossDrawer.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import Fleet from './components/Fleet.svelte'
   import TuneLogging from './components/TuneLogging.svelte'
@@ -224,11 +225,18 @@
     <BottomBar />
   {/if}
   <div class="shell" class:with-bottom-bar={viewportState.isMobile}>
-    <!-- The banner tops the content column and pushes content rather than
-         overlaying it, per the ratified record; that is why the banners
-         live inside this column and not above the deck. -->
+    <!-- ConnectionBanner's connecting/disconnected line tops the content
+         column and pushes content rather than overlaying it, per the
+         ratified record. IngestLossDrawer is the one supersession of
+         that rule (#1015, owner-ratified 2026-09-06): it overlays this
+         column instead (position:absolute against .content's own
+         position:relative below), because its rows come and go on their
+         own as counters clear, and reflowing the full-viewport deck
+         underneath on every poll would be worse than covering it
+         briefly. The connection line is unaffected -- it still pushes. -->
     <div class="content">
       <ConnectionBanner />
+      <IngestLossDrawer />
       <ConfigProblemBanner />
       <main id="main-content" class:bare={inDeck && journeyState.phase !== 'attach'}>
         {#if journeyState.phase === 'attach'}
@@ -307,6 +315,10 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    /* #1015: the positioning context for IngestLossDrawer's overlay
+       (position:absolute; top:0; left:0; right:0) -- see this file's
+       own comment above the drawer's mount point. */
+    position: relative;
   }
 
   main {

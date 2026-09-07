@@ -532,6 +532,16 @@ export async function clearAllFlags(): Promise<number> {
   return body.cleared ?? 0
 }
 
+// clearIngestLoss (#1015) zeroes the four server-side ingest-loss
+// totals, their episodes and lastAt, and both host records -- the
+// drawer's "Clear all". Same role gate and CSRF header as
+// clearAllFlags/postJSON above (internal/api/flags.go:212-217's pattern,
+// reused for internal/api's ingest-loss handler).
+export async function clearIngestLoss(): Promise<void> {
+  const res = await postJSON('/api/syslog/loss/clear')
+  if (!res.ok) throw new ApiError(`clearIngestLoss: ${res.status}`, res.status)
+}
+
 // setFlagVerdict (#640) records an operator's judgement, and is the only
 // way one flag leaves the inbox: expected, checked and resolved clear it
 // server-side as part of the same request, investigate does not, and
