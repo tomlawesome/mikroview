@@ -75,7 +75,7 @@ const prePushed = preRules.ok() && (await preRules.json()).available
 if (!prePushed) {
   const preText = await page.locator('[data-card="topography"] .city').textContent()
   check(preText.includes('NO RULES PUSHED'), 'before any push, a district plaque says plainly that no rule table has been pushed yet')
-  check((await page.locator('[data-card="topography"] .city .gate-lab').count()) === 0, 'a router with no pushed rule table draws no gates at all')
+  check((await page.locator('[data-card="topography"] .city [data-gate]').count()) === 0, 'a router with no pushed rule table draws no gates at all')
   const plate = page.locator('[data-card="topography"] .city .plate').first()
   check((await plate.getAttribute('aria-label'))?.includes('no rule table has been pushed yet') ?? false, 'the district itself says why, not just the plaque')
 } else {
@@ -164,7 +164,7 @@ await toDistrictStop()
 
 await clickLens('Traffic')
 await new Promise((r) => setTimeout(r, 400))
-check((await page.locator('[data-card="topography"] .city .gate-lab').count()) === 0, 'the traffic lens leaves every gate quiet -- no gate pills lit')
+check((await page.locator('[data-card="topography"] .city [data-gate]').count()) === 0, 'the traffic lens leaves every gate quiet -- no gate pills lit')
 
 // --- Policy lens: every gate lights with a plain far-end label -------------
 //
@@ -175,7 +175,7 @@ check((await page.locator('[data-card="topography"] .city .gate-lab').count()) =
 
 await clickLens('Policy')
 await new Promise((r) => setTimeout(r, 400))
-const gateLabels = await page.locator('[data-card="topography"] .city .gate-lab').allTextContents()
+const gateLabels = await page.locator('[data-card="topography"] .city [data-gate]').allTextContents()
 check(gateLabels.length > 0, `the policy lens lights every gate with a far-end label (${JSON.stringify(gateLabels)})`)
 check(
   gateLabels.every((t) => ['vlan-srv', 'bridge-lan'].includes(t)),

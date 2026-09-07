@@ -1272,9 +1272,16 @@
             <text x="0" y="3.5" text-anchor="middle" class="chip-t">{ch.t}</text>
           </g>
         {/each}
+        <!-- data-gate is the gate's stable hook, deliberately separate from
+             whatever the pill happens to say. The label has already changed
+             once (#991 swapped the rule number for the far end's name) and
+             slice C of #1016 changes it again; a live check counting gates
+             through the label class silently passed while it named a class
+             nobody drew any more (#1022). The hook counts gates; the label
+             is only text. -->
         {#each scene.gateBadges as gb, i (i)}
           {@const w = R2(gb.text.length * 7.6 + 20)}
-          <g transform="translate({gb.x} {gb.y})">
+          <g transform="translate({gb.x} {gb.y})" data-gate={gb.text}>
             <path d="M0 12V4" stroke="var(--hair-2)" stroke-width="1" />
             <rect x={R2(-w / 2)} y="-12" width={w} height="24" rx="12" fill="#0a0f1c" fill-opacity="0.94"
               stroke={gb.lamp ? 'rgba(232,176,90,0.5)' : 'rgba(255,84,112,0.4)'} />
