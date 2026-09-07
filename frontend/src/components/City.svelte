@@ -1406,6 +1406,19 @@
     filter: brightness(1.25);
   }
 
+  /* #1026: `.flat` (template above) is the district plaques, street
+     toppers, borough-ring labels, bridge chips, gate badges and drop
+     labels -- already declared presentational (aria-hidden="true") and
+     drawn after `.plate`/`.blk`, so without this its own painted glyphs
+     and pill backgrounds could sit on top of a district plate's or a
+     building's clickable area and eat the click meant for it, the same
+     shape as Fall.svelte's flag-mark badge (#1026). Nothing in `.flat`
+     carries a handler or a focus target, so passing every pointer
+     straight through loses nothing. */
+  .flat {
+    pointer-events: none;
+  }
+
   .p-name {
     font: 600 12.5px var(--font-sans);
     fill: var(--fg);

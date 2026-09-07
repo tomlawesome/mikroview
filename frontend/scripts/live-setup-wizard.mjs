@@ -22,6 +22,20 @@ const URL_BASE = process.env.MV_URL
 // relaunch one, which is the same door.
 const { page, consoleErrors } = await session({ waitForEvents: 20, dismissSetup: false })
 
+// commandsSeen records every /api/setup/commands answer, from before the
+// modal is even opened, so the version pick below always has a pre-pick
+// response to compare against. Registered here rather than next to the
+// pick because the poll that produces these is the only thing that
+// refills it, and missing the last one would make the comparison itself
+// the flake.
+const commandsSeen = []
+page.on('response', (r) => {
+  if (!r.url().includes('/api/setup/commands')) return
+  r.json()
+    .then((body) => commandsSeen.push({ version: r.request().postDataJSON()?.version, body }))
+    .catch(() => {})
+})
+
 const modal = page.locator('.setup-wizard')
 if (await modal.count()) {
   await page.keyboard.press('Escape')
@@ -125,14 +139,12 @@ check(
   'no standing warning renders when no router has reported a version',
 )
 
-// --- Choosing a row re-renders, same dialect today -----------------------
+// --- Choosing a row re-renders the same dialect's commands --------------
 // Picking an explicit version feeds `version` into the commands request
 // (commandsKey above). The wizard keeps the old blocks on screen until
 // the new response lands, so a stale render would pass a text
 // comparison on its own: wait for the request the pick triggers, and
-// check the server answered it, before comparing. Every supported
-// version renders the same dialect today, so the answer must come back
-// byte-identical to the blocks already collected.
+// check the server answered it, before looking at what came back.
 const pickedLabel = versionOptions.find((label, i) => i > 0)
 // Matched on the request's own `version` field, not just the URL.
 // wizard.svelte.ts's refreshCommands runs on a 5s poll for as long as
@@ -167,9 +179,51 @@ for (let step = 1; step <= 5; step++) {
   reseen.push(...blocks)
 }
 check(reseen.length > 0, `the wizard still renders command blocks after picking ${pickedLabel} (${reseen.length})`)
+// The version pick only feeds `version` into the request, and every row
+// in dialects.go carries the same dialect today, so the steps that are
+// built from the dialect alone -- CA trust, syslog, rule tagging and
+// schedule -- must come back byte-identical. That is the real invariant,
+// and it is what the previous assertion was reaching for.
+//
+// It used to compare the whole DOM scrape instead, and that is why it
+// failed at 72ca083 (#1025): `seen` and `reseen` also contain the push
+// and backup blocks, which are built from the token, device and
+// pushKinds rather than the dialect. refreshCommands re-fires whenever
+// commandsKey changes, pushKinds is part of that key, and a backend
+// still catching up on an earlier scenario's push can flip it while this
+// scenario is mid-walk -- so the two scrapes could differ with nothing
+// about the version having changed. The diagnosis on the issue ("several
+// dialects ship now, so picking renders different text") did not hold:
+// all four rows are dialect "a", and a row's Note renders as `p.note`,
+// never as a `pre` block.
+//
+// Comparing the responses rather than the rendering also drops the
+// dependency on which step happens to be open when a block is scraped.
+const DIALECT_STEPS = ['caTrust', 'syslog', 'ruleTagging', 'schedule']
+const dialectSteps = (body) => DIALECT_STEPS.map((k) => body.steps[k].commands)
+const beforePick = commandsSeen.filter((c) => !c.version).at(-1)
+// Opening the modal issues one of these before anything is picked, and
+// the poll issues more while the step walk above runs, so this is only
+// ever absent if the wizard stopped asking at all -- worth failing on
+// rather than reading past.
+check(beforePick !== undefined, 'a commands response was recorded before the pick, to compare it against')
+if (beforePick) {
+  const before = dialectSteps(beforePick.body)
+  const after = dialectSteps(await pickResponse.json())
+  const differing = DIALECT_STEPS.filter((_, i) => before[i] !== after[i])
+  check(
+    differing.length === 0,
+    `picking ${pickedLabel} leaves the dialect-built commands unchanged, as one dialect requires (${differing.join(', ') || 'all four identical'})`,
+  )
+}
+
+// The blocks the pick does not control are still required to render --
+// this is what the old whole-scrape comparison was also catching, kept
+// as its own check so a blank render fails loudly instead of comparing
+// equal to another blank render.
 check(
-  JSON.stringify(reseen) === JSON.stringify(seen),
-  "picking a version re-requests the commands, and today's single dialect renders the same text back",
+  reseen.every((b) => b.length > 0),
+  `every command block still has content after picking ${pickedLabel} (${reseen.length} blocks)`,
 )
 
 // --- Observation lines reflect what the server observed ----------------
