@@ -400,15 +400,25 @@ describe('City', () => {
     expect(ey).toBeLessThanOrEqual(top + 180)
   })
 
-  it('marks a dropped aggregate road plainly as "dropped" (#991), not the refusing rule', () => {
-    // The district-pair aggregate has no per-building source to name
-    // (only a standing host's own strands, below, resolve to one) --
-    // ported from round 46's marks.html, whose only drawn drop pill
-    // reads one plain word.
+  it('names the refusing rule beside a dropped road’s mark, and says "dropped" when no event named one', () => {
+    // Round 49 (DESIGN.md's metaphor table, "with the refusing rule's
+    // name beside the mark", and "The reach"): the mark carries the
+    // rule. The name is the events' own label, carried on the ground
+    // model as `Road.refusedBy`; where no refusal on a pair carried one
+    // it is still the plain word, never a guess (#865/#967).
+    //
+    // The aggregate names no *source*, which is the part #991 settled:
+    // only a standing host's own strands resolve to one building.
     const { container } = render(City, { props: { stop: 'district', ground } })
-    const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent)
+    const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent ?? '')
     expect(labels.length).toBeGreaterThan(0)
-    for (const t of labels) expect(t).toBe('dropped')
+    const dropped = ground.roads.filter((r) => r.stop === 'drop')
+    expect(dropped.length).toBeGreaterThan(0)
+    for (const r of dropped) {
+      expect(labels).toContain(r.refusedBy ? `caught by ${r.refusedBy}` : 'dropped')
+    }
+    // Never a source: an aggregate has no one building to name.
+    for (const t of labels) expect(t).not.toMatch(/·/)
   })
 
 })
@@ -433,13 +443,27 @@ describe('standing on a building (#868)', () => {
     }
   }
 
+  /** An off-baseline document naming one line, so the road that carries
+   *  it is bright. Round 49 makes the flow dashes part of the bright
+   *  treatment rather than a mark of ownership, so a reach test that
+   *  wants to read direction off the flow has to say what is off the
+   *  pattern first. */
+  const offLine = (srcIp: string, dstIp: string) => ({
+    config: { days: 3, of: 14 },
+    generatedAt: 1,
+    count: 1,
+    lines: [{ key: 'reach-line', srcIp, dstIp, port: 990, proto: 'tcp', count: 40, firstSeenToday: Date.now(), outcome: 'accept' as const }],
+  })
+
   beforeEach(() => {
     matchMedia(true) // reduced motion: every camera move lands at once
     appState.events = []
+    vi.spyOn(baselineState, 'refresh').mockResolvedValue(undefined)
   })
 
   afterEach(() => {
     appState.events = []
+    baselineState.off = EMPTY_OFF_BASELINE
   })
 
   it('standing drops the camera at once under reduced motion, and animates otherwise', () => {
@@ -510,6 +534,8 @@ describe('standing on a building (#868)', () => {
       // road, one boundary over -- is unrelated to it.
       event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 990, protocol: 'tcp' }),
     ]
+    // The line is off today's pattern, so its road is bright and flows.
+    baselineState.off = offLine('10.10.0.10', '10.20.0.10')
     const { container } = render(City, { props: { stop: 'street', ground } })
     fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
     flushSync()
@@ -539,36 +565,46 @@ describe('standing on a building (#868)', () => {
 
   it('shows dashes moving toward the host when it was spoken to, not away', () => {
     appState.events = [event({ srcIp: '10.20.0.10', dstIp: '10.10.0.10', inInterface: 'vlan-srv', outInterface: 'bridge-lan', action: 'accept' })]
+    baselineState.off = offLine('10.20.0.10', '10.10.0.10')
     const { container } = render(City, { props: { stop: 'street', ground } })
     fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
     flushSync()
     expect(container.querySelector('[data-road="bridge-lan|vlan-srv"].flow.flow-rev')).not.toBeNull()
   })
 
-  it('reads plainly as "dropped" for the standing building\'s own refused outbound attempt (#991), whether or not the rule carried a label', () => {
-    // Direction 'out': lan-1 (the standing building) is the source, so
-    // the drop is on the building you are standing on -- the pill never
-    // names it back to itself, and never repeats the refusing rule
-    // either way (that detail lives on the composer card, below).
-    for (const ruleLabel of ['no-cross-router-cams', '']) {
-      appState.events = [
-        event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel }),
-      ]
-      const { container, unmount } = render(City, { props: { stop: 'street', ground } })
-      fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
-      flushSync()
-      const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent)
-      expect(labels).toContain('dropped')
-      for (const t of labels) expect(t).not.toMatch(/caught/)
-      unmount()
-    }
+  it('names the refusing rule at the wall for the standing building’s own refused attempt, and says "dropped" when no event named one', () => {
+    // Round 49 restores the rule's name beside the mark (DESIGN.md "The
+    // reach": bollards, the red mark and the refusing rule's name).
+    // Direction 'out': lan-1 is the source, so the drop is on the
+    // building you are standing on and the mark never names it back to
+    // itself -- #991's rule about the *source*, which is unchanged.
+    appState.events = [
+      event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel: 'no-cross-router-cams' }),
+    ]
+    const named = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(named.container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    const namedLabels = [...named.container.querySelectorAll('.drop-t')].map((e) => e.textContent)
+    expect(namedLabels).toContain('caught by no-cross-router-cams')
+    // No source: it would be naming lan-1 back to itself.
+    for (const t of namedLabels) expect(t).not.toMatch(/lan-1/)
+    named.unmount()
+
+    // A refusal no event named a rule for is still said plainly.
+    appState.events = [
+      event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel: '' }),
+    ]
+    const unnamed = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(unnamed.container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    expect([...unnamed.container.querySelectorAll('.drop-t')].map((e) => e.textContent)).toContain('dropped')
   })
 
   it('names the source only when the drop is not on the building you are standing on (#991)', () => {
     // Direction 'in': cam-porch tried to reach lan-1 (the standing
     // building) and was refused at lan-1's own wall -- the drop is not
-    // "at" lan-1, so the pill names the source, matching round 46's
-    // marks.html exactly ("cam-porch · dropped").
+    // "at" lan-1, so the mark names the source. Round 49 adds the
+    // refusing rule after it; the source rule itself is #991's, intact.
     appState.events = [
       event({ srcIp: '10.60.0.10', srcHostName: 'cam-porch', dstIp: '10.10.0.10', inInterface: 'wlan-cams', outInterface: 'bridge-lan', action: 'drop', ruleLabel: 'no-cross-router-cams' }),
     ]
@@ -576,10 +612,10 @@ describe('standing on a building (#868)', () => {
     fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
     flushSync()
     const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent)
-    expect(labels).toContain('cam-porch · dropped')
+    expect(labels).toContain('cam-porch · caught by no-cross-router-cams')
   })
 
-  it('the composer pins to the wall, drafted, never run, with what it has been asking for and the count', () => {
+  it('the composer opens from the refused line’s card, drafted, never run, with what it has been asking for and the count', () => {
     appState.events = Array.from({ length: 14 }, (_, i) =>
       event({
         id: i + 1,
@@ -596,6 +632,21 @@ describe('standing on a building (#868)', () => {
     const { container } = render(City, { props: { stop: 'street', ground } })
     expect(container.querySelector('.composer')).toBeNull()
     fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    // Round 49: the composer is behind the refused line's own
+    // `draft the rule ▸`, not open the moment you stand on a building.
+    expect(container.querySelector('.composer')).toBeNull()
+    // The lan -> cams boundary logs nothing, so no road is drawn across
+    // it -- one there would claim a log line nobody wrote. The mark at
+    // the wall where the line stopped carries its card instead.
+    const road = container.querySelector('[data-road-hot="mark:wlan-cams"]') as Element
+    expect(road).not.toBeNull()
+    fireEvent.pointerEnter(road)
+    flushSync()
+    const draft = container.querySelector('[data-draft-rule]') as HTMLElement
+    expect(draft).not.toBeNull()
+    expect(draft.textContent).toContain('draft the rule ▸')
+    fireEvent.click(draft)
     flushSync()
     const composer = container.querySelector('.composer') as HTMLElement
     expect(composer).not.toBeNull()
@@ -627,6 +678,359 @@ describe('standing on a building (#868)', () => {
     expect(crumb.textContent).toContain('reached by')
     expect(crumb.textContent).toContain('1')
     expect(crumb.textContent).toContain('Esc surfaces')
+  })
+
+  it('the crumb counts refused counterparts too, and offers Esc surfaces ▸ (round 49)', () => {
+    appState.events = [
+      // Two accepted counterparts out, and two refused ones -- refused
+      // is counted by distinct counterpart, the same way `reaches` and
+      // `reached by` are, so two strands to one counterpart still count
+      // once.
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv' }),
+      event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', dstPort: 445, protocol: 'tcp' }),
+      event({ srcIp: '10.10.0.10', dstIp: '10.60.0.11', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', dstPort: 22, protocol: 'tcp' }),
+      event({ srcIp: '10.10.0.10', dstIp: '10.40.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-guest', action: 'drop', dstPort: 22, protocol: 'tcp' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    const crumb = container.querySelector('.crumb') as HTMLElement
+    const spans = [...crumb.querySelectorAll('span')].map((s) => s.textContent?.replace(/\s+/g, ' ').trim())
+    expect(spans).toContain('refused 2')
+    expect(spans).toContain('Esc surfaces ▸')
+  })
+
+  it('writes nothing on a road: the ports live in the card, on either surface', () => {
+    appState.events = [
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 990, protocol: 'tcp' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    // No port pill, chip or label anywhere on the drawing.
+    expect(container.querySelector('.port-t')).toBeNull()
+    const svgText = [...container.querySelectorAll('.city svg text')].map((t) => t.textContent ?? '')
+    for (const t of svgText) expect(t).not.toMatch(/:\d/)
+  })
+})
+
+describe('the reach’s line card (round 49, #1016)', () => {
+  const LAN1 = 'bridge-lan/10.10.0.10'
+  let nextId = 1
+  const event = (over: Partial<ClientEvent> = {}): ClientEvent => ({
+    id: nextId++,
+    time: '2026-09-03T12:00:00Z',
+    receivedAt: Date.now(),
+    deviceId: 'rb5009',
+    sourceIp: '10.10.0.10',
+    action: 'accept',
+    ruleLabel: 'r',
+    chain: 'forward',
+    raw: '',
+    ...over,
+  })
+
+  beforeEach(() => {
+    matchMedia(true)
+    appState.events = []
+    vi.spyOn(baselineState, 'refresh').mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    appState.events = []
+    baselineState.off = EMPTY_OFF_BASELINE
+  })
+
+  /** Stand on lan-1 and hover the road toward Servers. */
+  function openLine(events: ClientEvent[]) {
+    appState.events = events
+    const r = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(r.container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    const road = r.container.querySelector('[data-road-hot="bridge-lan|vlan-srv"]') as Element
+    expect(road).not.toBeNull()
+    fireEvent.pointerEnter(road)
+    flushSync()
+    return r
+  }
+
+  const cell = (row: Element) => [...row.querySelectorAll('td')].map((td) => td.textContent?.trim())
+
+  it('lists every port the line carried, its protocol, and what each drew', () => {
+    const { container } = openLine([
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 445, protocol: 'tcp' }),
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 445, protocol: 'tcp' }),
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 53, protocol: 'udp' }),
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 22, protocol: 'tcp', action: 'drop', ruleLabel: 'default drop' }),
+    ])
+    const card = container.querySelector('.lcard') as HTMLElement
+    expect(card).not.toBeNull()
+    // The mockup's own header row.
+    expect([...card.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['PORT', 'PROTO', 'ACCEPTED', 'DROPPED'])
+    const rows = [...card.querySelectorAll('tbody tr')]
+    // Busiest first: 445 twice, then 53 and 22 once each by port order.
+    expect(cell(rows[0])).toEqual(['445', 'tcp', '2', '—'])
+    expect(rows.map((r) => cell(r)[0])).toEqual(['445', '22', '53'])
+    // A port nothing was accepted on shows the drop, and vice versa.
+    const refused = rows.find((r) => cell(r)[0] === '22')!
+    expect(cell(refused)).toEqual(['22', 'tcp', '—', '1'])
+  })
+
+  it('states the tcp-versus-udp picture, with everything else in `other`', () => {
+    const { container } = openLine([
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 445, protocol: 'tcp' }),
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 53, protocol: 'udp' }),
+      // Portless: it still counts toward the split, so the three total
+      // the line's own events rather than quietly dropping any.
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', protocol: 'icmp' }),
+    ])
+    const totals = container.querySelector('.lcard .totals') as HTMLElement
+    expect(totals.textContent?.replace(/\s+/g, ' ').trim()).toBe('tcp 1 · udp 1 · other 1')
+  })
+
+  it('names the rule that refused the line, and says so plainly when no event named one', () => {
+    const named = openLine([
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 22, protocol: 'tcp', action: 'drop', ruleLabel: '#17 default drop' }),
+    ])
+    expect(named.container.querySelector('.lcard .s.alarm')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(':22 refused by #17 default drop')
+    named.unmount()
+
+    const unnamed = openLine([
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 22, protocol: 'tcp', action: 'drop', ruleLabel: '' }),
+    ])
+    expect(unnamed.container.querySelector('.lcard .s.alarm')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(':22 refused, no rule named')
+  })
+
+  it('offers `draft the rule ▸` only where something was refused', () => {
+    const clean = openLine([
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 445, protocol: 'tcp' }),
+    ])
+    expect(clean.container.querySelector('.lcard')).not.toBeNull()
+    expect(clean.container.querySelector('.lcard [data-draft-rule]')).toBeNull()
+    clean.unmount()
+
+    const refused = openLine([
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 22, protocol: 'tcp', action: 'drop', ruleLabel: 'default drop' }),
+    ])
+    expect(refused.container.querySelector('.lcard [data-draft-rule]')).not.toBeNull()
+  })
+
+  it('pins, like every other card, and lets go when the pin is clicked again', () => {
+    const { container } = openLine([
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 445, protocol: 'tcp' }),
+    ])
+    const pin = container.querySelector('.lcard .pin') as HTMLElement
+    expect(pin.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(pin)
+    flushSync()
+    expect(container.querySelector('.lcard')?.classList.contains('pinned')).toBe(true)
+    // Pinned, it survives the pointer leaving the road entirely.
+    fireEvent.pointerLeave(container.querySelector('[data-road-hot="bridge-lan|vlan-srv"]') as Element)
+    flushSync()
+    expect(container.querySelector('.lcard')).not.toBeNull()
+    fireEvent.click(container.querySelector('.lcard .pin') as HTMLElement)
+    flushSync()
+    expect(container.querySelector('.lcard')?.classList.contains('pinned')).toBeFalsy()
+  })
+
+  it('goes through the shared placement, and is joined to its subject by a leader', () => {
+    // The decision, not the pixels: this card asks lib/cardAnchor for a
+    // position like every other card rather than placing itself, and it
+    // is drawn joined to the thing it describes. Where it lands is
+    // cardAnchor's own tested business, and jsdom measures everything as
+    // zero anyway -- so the container is given a size, and nothing here
+    // asserts a coordinate.
+    appState.events = [
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 445, protocol: 'tcp' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    const host = container.querySelector('.city') as HTMLElement
+    const svg = container.querySelector('.city > svg') as SVGSVGElement
+    const box = { left: 0, top: 0, width: 900, height: 900, right: 900, bottom: 900, x: 0, y: 0 }
+    host.getBoundingClientRect = () => box as DOMRect
+    svg.getBoundingClientRect = () => box as DOMRect
+    const s = 900 / 1400
+    ;(svg as unknown as { getScreenCTM: () => DOMMatrix }).getScreenCTM = () =>
+      ({ a: s, b: 0, c: 0, d: s, e: 0, f: (900 - 700 * s) / 2 }) as DOMMatrix
+
+    fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    fireEvent.pointerEnter(container.querySelector('[data-road-hot="bridge-lan|vlan-srv"]') as Element)
+    flushSync()
+
+    const card = container.querySelector('.lcard') as HTMLElement
+    expect(card, 'no line card opened').not.toBeNull()
+    expect(card.classList.contains('placed'), 'the line card never got a measured position').toBe(true)
+    expect(Number.isFinite(parseFloat(card.style.left)) && Number.isFinite(parseFloat(card.style.top))).toBe(true)
+    expect(container.querySelector('svg.leader path'), 'no leader joined the card to its road').not.toBeNull()
+  })
+
+  it('opens no line card on a road the standing building does not own', () => {
+    const { container } = openLine([
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 445, protocol: 'tcp' }),
+    ])
+    // wlan-wsh is one boundary over and nothing in the buffer names it,
+    // so it fades and takes no pointer.
+    expect(container.querySelector('[data-road-hot="bridge-lan|wlan-wsh"]')).toBeNull()
+  })
+})
+
+describe('the reach follows the brightness rule (round 49, #1016)', () => {
+  const LAN1 = 'bridge-lan/10.10.0.10'
+  let nextId = 1
+  const event = (over: Partial<ClientEvent> = {}): ClientEvent => ({
+    id: nextId++,
+    time: '2026-09-03T12:00:00Z',
+    receivedAt: Date.now(),
+    deviceId: 'rb5009',
+    sourceIp: '10.10.0.10',
+    action: 'accept',
+    ruleLabel: 'r',
+    chain: 'forward',
+    raw: '',
+    ...over,
+  })
+
+  beforeEach(() => {
+    matchMedia(true)
+    appState.events = [
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 990, protocol: 'tcp' }),
+    ]
+    vi.spyOn(baselineState, 'refresh').mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    appState.events = []
+    baselineState.off = EMPTY_OFF_BASELINE
+  })
+
+  const stand = () => {
+    const r = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(r.container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    return r
+  }
+
+  const road = (c: Element) => c.querySelector('path[data-road="bridge-lan|vlan-srv"]') as SVGPathElement
+
+  it('an established road the standing building owns recedes: thinner, dimmer and still', () => {
+    // Nothing off the baseline: its own road is established, and the
+    // reach does not exempt it. Ownership decides what fades, not what
+    // is bright -- DESIGN.md's "the same rule as everywhere else".
+    const dim = stand()
+    const dimOp = Number(road(dim.container).getAttribute('stroke-opacity'))
+    const dimW = Number(road(dim.container).getAttribute('stroke-width'))
+    expect(dim.container.querySelector('[data-road="bridge-lan|vlan-srv"].flow')).toBeNull()
+    dim.unmount()
+
+    baselineState.off = {
+      config: { days: 3, of: 14 },
+      generatedAt: 1,
+      count: 1,
+      lines: [{ key: 'l', srcIp: '10.10.0.10', dstIp: '10.20.0.10', port: 990, proto: 'tcp', count: 40, firstSeenToday: Date.now(), outcome: 'accept' as const }],
+    }
+    const bright = stand()
+    expect(Number(road(bright.container).getAttribute('stroke-opacity'))).toBeGreaterThan(dimOp)
+    expect(Number(road(bright.container).getAttribute('stroke-width'))).toBeGreaterThan(dimW)
+    // Bright brings the flow dashes and the ring at the arrival end.
+    expect(bright.container.querySelector('[data-road="bridge-lan|vlan-srv"].flow')).not.toBeNull()
+    expect(bright.container.querySelector('.city ellipse.halo, .city circle.halo')).not.toBeNull()
+  })
+
+  it('the standing building’s own lane takes part in the rule too, not the scenery ink', () => {
+    const dim = stand()
+    const laneOf = (c: Element) => c.querySelector('path[data-road="lane:' + LAN1 + '"]') as SVGPathElement | null
+    const before = laneOf(dim.container)
+    expect(before).not.toBeNull()
+    const dimOp = Number(before!.getAttribute('stroke-opacity'))
+    dim.unmount()
+
+    baselineState.off = {
+      config: { days: 3, of: 14 },
+      generatedAt: 1,
+      count: 1,
+      lines: [{ key: 'l', srcIp: '10.10.0.10', dstIp: '10.20.0.10', port: 990, proto: 'tcp', count: 40, firstSeenToday: Date.now(), outcome: 'accept' as const }],
+    }
+    const bright = stand()
+    expect(Number(laneOf(bright.container)!.getAttribute('stroke-opacity'))).toBeGreaterThan(dimOp)
+  })
+})
+
+describe('clicking anything opens its reach (round 49, #1016)', () => {
+  beforeEach(() => {
+    matchMedia(true)
+    appState.events = []
+  })
+
+  const cityStop = (c: Element) => c.querySelector('.city')?.getAttribute('data-stop')
+
+  it('a district plate opens the district’s reach, and Esc surfaces to where you came from', () => {
+    const { container } = render(City, { props: { stop: 'city', ground } })
+    const before = container.querySelector('.mini rect.viewport')?.getAttribute('x')
+    expect(container.querySelector('.crumb')).toBeNull()
+    const plate = container.querySelector('.plate[data-cid="bridge-lan"]') as Element
+    expect(plate).not.toBeNull()
+    fireEvent.click(plate)
+    flushSync()
+    expect(cityStop(container)).toBe('district')
+    const crumb = container.querySelector('.crumb') as HTMLElement
+    expect(crumb).not.toBeNull()
+    expect(crumb.textContent).toContain('Esc surfaces ▸')
+
+    plate.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    flushSync()
+    expect(cityStop(container)).toBe('city')
+    expect(container.querySelector('.crumb')).toBeNull()
+    expect(container.querySelector('.mini rect.viewport')?.getAttribute('x')).toBe(before)
+  })
+
+  it('a district’s reach fades every road that is not its own', () => {
+    const { container } = render(City, { props: { stop: 'city', ground } })
+    fireEvent.click(container.querySelector('.plate[data-cid="bridge-lan"]') as Element)
+    flushSync()
+    const own = container.querySelector('path[data-road="bridge-lan|vlan-srv"]') as SVGPathElement
+    const other = container.querySelector('path[data-road="ether1|vlan-iot"]') as SVGPathElement
+    expect(own).not.toBeNull()
+    expect(other).not.toBeNull()
+    expect(Number(own.getAttribute('stroke-opacity'))).toBeGreaterThan(Number(other.getAttribute('stroke-opacity')))
+  })
+
+  it('a road opens its own reach, and the crumb surfaces from it', async () => {
+    baselineState.off = {
+      config: { days: 3, of: 14 },
+      generatedAt: 1,
+      count: 1,
+      lines: [
+        { key: 'l', srcIp: '10.10.0.10', dstIp: '10.20.0.10', port: 990, proto: 'tcp', count: 40, firstSeenToday: Date.now(), outcome: 'accept' as const },
+      ],
+    }
+    vi.spyOn(baselineState, 'refresh').mockResolvedValue(undefined)
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const hot = container.querySelector('[data-road-hot="bridge-lan|vlan-srv"]') as Element
+    expect(hot).not.toBeNull()
+    await fireEvent.click(hot)
+    flushSync()
+    expect(cityStop(container)).toBe('street')
+    expect(container.querySelector('.crumb')).not.toBeNull()
+    // Only that road stays lit.
+    const own = container.querySelector('path[data-road="bridge-lan|vlan-srv"]') as SVGPathElement
+    const other = container.querySelector('path[data-road="bridge-lan|wlan-wsh"]') as SVGPathElement
+    expect(Number(own.getAttribute('stroke-opacity'))).toBeGreaterThan(Number(other.getAttribute('stroke-opacity')))
+
+    await fireEvent.click(container.querySelector('.crumb') as Element)
+    flushSync()
+    expect(cityStop(container)).toBe('district')
+    baselineState.off = EMPTY_OFF_BASELINE
+  })
+
+  it('works from any city stop, not just one', () => {
+    for (const stop of ['city', 'borough', 'district', 'street'] as const) {
+      const r = render(City, { props: { stop, ground } })
+      fireEvent.click(r.container.querySelector('.plate[data-cid="bridge-lan"]') as Element)
+      flushSync()
+      expect(r.container.querySelector('.crumb')).not.toBeNull()
+      r.unmount()
+    }
   })
 })
 

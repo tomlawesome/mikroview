@@ -55,7 +55,7 @@
     type Stop,
   } from '../lib/city/project'
   import { gateToward, lerpP, roadPieces, type Entity } from '../lib/city/roads'
-  import { reachFor, type ReachStrand } from '../lib/reach'
+  import { reachFor, reachLineSummary, type ReachStrand } from '../lib/reach'
   import { composeCommand, reachComposeInput } from '../lib/compose'
   import { riverScene } from '../lib/city/river'
   import { P, type Paint } from '../lib/city/paint'
@@ -90,7 +90,9 @@
     rollUpRoads,
     verdictWords,
     type RoadBaselineEntry,
+    type RoadRing,
   } from '../lib/city/baselineRoads'
+  import { EMPTY_REACH_LANES, rollUpLanes, type LaneSubject, type ReachLaneEntry } from '../lib/city/reachRoads'
   import { formatHM } from '../lib/format'
   import type { OffBaselineLine } from '../lib/baseline'
   import { presenceNote, quietFor, type CityHost, type HostPresence } from '../lib/city/presence'
@@ -282,14 +284,25 @@
   // copy of them. `savedS`/`savedCentre` are the camera as it stood the
   // instant before standing -- not recomputed on surfacing, so Esc and
   // the crumb land on the exact pan position, never a default.
+  //
+  // Round 49 widens what can be stood on: "Clicking anything on the
+  // map, at any stop, opens its reach -- a building, a host dot, a
+  // district, a road" (DESIGN.md "The reach"). `kind` says which, and
+  // everything that differs between them -- the height the camera drops
+  // to, what counts as "its own" roads, what the crumb can honestly say
+  // -- reads it. Surfacing is one path for all three.
+  type StandKind = 'building' | 'district' | 'road'
   interface Stand {
+    kind: StandKind
     districtId: string | null
     id: string
     savedS: number
     savedCentre: Pt
   }
   let stand = $state<Stand | null>(null)
-  const effectiveStop = $derived<Stop>(stand ? 'street' : stop)
+  /** A district's reach frames the district; a building's and a road's
+   * drop to the street, where the buildings and their labels are. */
+  const effectiveStop = $derived<Stop>(stand ? (stand.kind === 'district' ? 'district' : 'street') : stop)
 
   // Geometry is built at the stop's own height with the camera at the
   // origin; S and centre are what the viewer sees, and the group's
@@ -418,9 +431,15 @@
   // left to mean and the effect below surfaces on its own.
   const standBuilding = $derived.by((): Building | null => {
     const s = stand
-    if (!s) return null
+    if (!s || s.kind !== 'building') return null
     return s.districtId ? (districtOf(s.districtId)?.buildings.find((b) => b.id === s.id) ?? null) : (ground.nodes.find((n) => n.id === s.id) ?? null)
   })
+
+  /** The district whose reach is open, when one is. */
+  const standDistrict = $derived(stand?.kind === 'district' ? (districtOf(stand.id) ?? null) : null)
+
+  /** The road whose reach is open, when one is. */
+  const standRoad = $derived(stand?.kind === 'road' ? (ground.roads.find((r) => r.id === stand!.id) ?? null) : null)
 
   // Reports the stood-on building back to whoever asked (#869: crossing
   // the slider's centre while standing on a host hands it to the 2D
@@ -432,6 +451,19 @@
   // reachFor is #626/#485's own strand model, unchanged: the city draws
   // exactly what it derives, never a second reading of the same events.
   const standReach = $derived(standBuilding ? reachFor(standBuilding.ip, zonesState.wanInterface, appState.events) : null)
+
+  /** The crumb's third count (round 49, DESIGN.md "The reach": `name ·
+   * ip · reaches N · reached by N · refused N`).
+   *
+   * Counted the same way `reachFor` counts the other two -- distinct
+   * counterparts, not events and not strands -- so the three numbers in
+   * the crumb are the same kind of thing and add up the way a reader
+   * assumes they do. It is derived here rather than in reach.ts because
+   * both surfaces derive it from `strands` identically, and reach.ts is
+   * shared ground neither surface's slice edits. */
+  const standRefused = $derived(
+    standReach === null ? 0 : new Set(standReach.strands.filter((s) => s.outcome === 'blocked').map((s) => s.counterpart)).size,
+  )
 
   /**
    * The composer (#868, DESIGN.md "The reach"): a card pinned to the
@@ -460,26 +492,61 @@
   function standOn(districtId: string | null, id: string) {
     const b = districtId ? districtOf(districtId)?.buildings.find((x) => x.id === id) : ground.nodes.find((n) => n.id === id)
     if (!b) return
-    // Re-standing on another building (from within the reach) keeps the
+    open({ kind: 'building', districtId, id }, [b.u, b.v])
+    focus = { districtId, id }
+  }
+
+  /** A district's own reach (round 49): the camera frames it and every
+   * road that is not the district's own fades, the same sentence
+   * standing on a building reads. */
+  function standOnDistrict(id: string) {
+    const d = districtOf(id)
+    if (!d) return
+    open({ kind: 'district', districtId: id, id }, [d.u, d.v])
+    focus = { districtId: null, id }
+  }
+
+  /** A road's own reach (round 49): the road alone, everything else
+   * faded, at the height its buildings are labelled at. */
+  function standOnRoad(id: string) {
+    const r = ground.roads.find((x) => x.id === id)
+    if (!r || r.pts.length === 0) return
+    const mid = r.pts[Math.floor(r.pts.length / 2)] ?? r.pts[0]
+    open({ kind: 'road', districtId: null, id }, mid)
+  }
+
+  function open(subject: { kind: StandKind; districtId: string | null; id: string }, at: Pt) {
+    // Re-standing on something else from within a reach keeps the
     // original saved camera -- surfacing always returns to where you
-    // stood before the first click, not to whichever building you last
+    // stood before the first click, not to whichever subject you last
     // passed through.
     const savedS = stand ? stand.savedS : S
     const savedCentre = stand ? stand.savedCentre : centre
-    stand = { districtId, id, savedS, savedCentre }
-    focus = { districtId, id }
-    moveCamera(STOP_HEIGHT.street, [b.u, b.v])
+    stand = { ...subject, savedS, savedCentre }
+    // Each reach starts from the drawing: the last building's draft does
+    // not follow you to the next one.
+    composerOpen = false
+    // Any card the previous stop had open is about the previous stop.
+    hoverRoad = null
+    pinnedRoad = null
+    moveCamera(STOP_HEIGHT[subject.kind === 'district' ? 'district' : 'street'], at)
   }
 
   function standSurface() {
     if (!stand) return
     const { savedS, savedCentre } = stand
     stand = null
+    composerOpen = false
     moveCamera(savedS, savedCentre)
   }
 
+  // A reach whose subject the ground no longer draws surfaces by itself
+  // rather than standing on nothing -- a host that went away, a district
+  // or road that a fresh rule table stopped drawing.
   $effect(() => {
-    if (stand && !standBuilding) standSurface()
+    if (!stand) return
+    const gone = stand.kind === 'building' ? !standBuilding : stand.kind === 'district' ? !standDistrict : !standRoad
+    if (gone) standSurface()
   })
 
   function onWindowKeydown(e: KeyboardEvent) {
@@ -564,11 +631,27 @@
     void focusItem(f)
   }
 
-  /** A building click stands on it (#868) rather than merely focusing
-   * it -- a district plate keeps the plain focus/pan onItemClick above. */
+  /** A building click stands on it (#868). */
   function onBuildingClick(districtId: string | null, id: string) {
     if (dragged) return
     standOn(districtId, id)
+  }
+
+  /** Round 49: a district plate opens its reach too, rather than merely
+   * focusing and panning. Its keyboard focus still moves, so the walk
+   * that Enter uses is unchanged. */
+  function onDistrictClick(id: string) {
+    if (dragged) return
+    standOnDistrict(id)
+  }
+
+  /** Round 49: and so does a road. The card is still hover's, and the
+   * pin is still the pin button's -- clicking the road itself is the
+   * "click anything for its reach" the mockup's own minimap caption
+   * promises. */
+  function onRoadClick(id: string) {
+    if (dragged) return
+    standOnRoad(id)
   }
 
   function isBuildingFocus(f: Focus): boolean {
@@ -759,6 +842,19 @@
     ownRoadIds: Set<string>
     /** Own road ids whose flow should animate reversed (toward, not away). */
     reverseIds: Set<string>
+    /** Own road id -> the strand counterpart it draws, which is what
+     * `reachLineSummary` merges a line back together by. This is the
+     * whole join between the drawing and the line card: hovering a road
+     * asks this map which line it is, and asks reach.ts what that line
+     * says. Only roads that carry a strand are in it, so an own road
+     * with nothing behind it (a peer's lane, a bridge leg) opens no
+     * line card rather than an empty one. */
+    lineOf: Map<string, string>
+    /** The lanes this reach lights, and whose host each belongs to --
+     * what lib/city/reachRoads rolls today's off-baseline lines onto so
+     * a lane takes part in the brightness rule like every other road
+     * the standing host owns. */
+    laneSubjects: LaneSubject[]
     /** Buildings the standing host actually reaches or is reached by,
      * always including itself. */
     litBuildingIds: Set<string>
@@ -767,7 +863,7 @@
      * arrived rather than left (#991: the drop is not on the building
      * you are standing on, so the source is named; your own outbound
      * attempt just reads "dropped"). */
-    dropMarks: { p: Pt; source?: string }[]
+    dropMarks: { id: string; counterpart: string; p: Pt; source?: string; rule?: string }[]
     /** Where the busiest blocked strand's own road crosses the wall --
      * the composer's own pin point -- computed regardless of whether a
      * fresh bollard mark was drawn there or an existing one already
@@ -775,6 +871,69 @@
      * stopped"), so the composer never loses its anchor merely because
      * the mark it is pinned beside was #865's own. */
     composerAnchor: Pt | null
+  }
+
+  /** How a drop mark's own subject id is told apart from a road id. A
+   * road id is a district pair (`a|b`), a lane (`lane:<id>`) or a bridge
+   * leg, so this prefix collides with none of them. */
+  const MARK_PREFIX = 'mark:'
+
+  /** True when this road has the given district as one of its ends.
+   * Pair roads are keyed `[a,b].sort().join('|')` by layout.ts and lanes
+   * name their host in `from`, so both are answered from the ground's
+   * own ids rather than from geometry. */
+  function roadTouches(r: { id: string; lane?: boolean; from: string | null }, d: District): boolean {
+    if (r.lane) return d.buildings.some((b) => b.id === r.from)
+    const bar = r.id.indexOf('|')
+    if (bar < 0) return false
+    return r.id.slice(0, bar) === d.id || r.id.slice(bar + 1) === d.id
+  }
+
+  /**
+   * A district's reach (round 49). DESIGN.md widens the click to "a
+   * building, a host dot, a district, a road" and gives one behaviour
+   * for all of them -- the camera comes to the subject and every road
+   * that is not its own fades -- but describes the crumb's counts only
+   * for a host, which is the only subject `reachFor` can answer for. So
+   * this lights the district's own roads and says nothing it cannot
+   * derive: no strand counts, no composer, no drop marks the district
+   * pair roads do not already draw for themselves.
+   */
+  function placeOverlay(d: District): ReachOverlay {
+    const ownRoadIds = new Set<string>()
+    const litBuildingIds = new Set<string>(d.buildings.map((b) => b.id))
+    for (const r of ground.roads) {
+      if (!roadTouches(r, d)) continue
+      ownRoadIds.add(r.id)
+      // The far end of each pair road is a place this district reaches,
+      // so it stays lit rather than fading with the rest of the map.
+      const bar = r.id.indexOf('|')
+      if (!r.lane && bar >= 0) {
+        const far = r.id.slice(0, bar) === d.id ? r.id.slice(bar + 1) : r.id.slice(0, bar)
+        for (const b of districtOf(far)?.buildings ?? []) litBuildingIds.add(b.id)
+        litBuildingIds.add(far)
+      }
+    }
+    return { ownRoadIds, reverseIds: new Set(), lineOf: new Map(), laneSubjects: [], litBuildingIds, dropMarks: [], composerAnchor: null }
+  }
+
+  /** A road's own reach (round 49): that road alone, and the ends it
+   * joins. Everything else on the map fades, which is the same sentence
+   * every other reach reads. */
+  function roadOverlay(r: (typeof ground.roads)[number]): ReachOverlay {
+    const litBuildingIds = new Set<string>()
+    if (r.from) litBuildingIds.add(r.from)
+    if (r.to) litBuildingIds.add(r.to)
+    for (const d of ground.districts) if (roadTouches(r, d)) for (const b of d.buildings) litBuildingIds.add(b.id)
+    return {
+      ownRoadIds: new Set([r.id]),
+      reverseIds: new Set(),
+      lineOf: new Map(),
+      laneSubjects: [],
+      litBuildingIds,
+      dropMarks: [],
+      composerAnchor: null,
+    }
   }
 
   /**
@@ -789,13 +948,17 @@
    * occasion.
    */
   const reachOverlay = $derived.by((): ReachOverlay | null => {
+    if (standDistrict) return placeOverlay(standDistrict)
+    if (standRoad) return roadOverlay(standRoad)
     const b = standBuilding
     const summary = standReach
     if (!b || !summary) return null
     const ownRoadIds = new Set<string>()
     const reverseIds = new Set<string>()
+    const lineOf = new Map<string, string>()
+    const laneSubjects: LaneSubject[] = []
     const litBuildingIds = new Set<string>([b.id])
-    const dropMarks: { p: Pt; source?: string }[] = []
+    const dropMarks: { id: string; counterpart: string; p: Pt; source?: string; rule?: string }[] = []
     const wan = zonesState.wanInterface
     const myToken = b.districtId ?? b.id
     const myDistrict = b.districtId ? districtOf(b.districtId) : null
@@ -803,6 +966,11 @@
     const lane = b.districtId ? (ground.roads.find((r) => r.lane && r.from === b.id) ?? null) : null
     if (lane && summary.busiest) {
       ownRoadIds.add(lane.id)
+      laneSubjects.push({ roadId: lane.id, ip: b.ip })
+      // The standing host's own lane carries every line it has, so the
+      // card it opens is the busiest of them -- the same strand the
+      // flow's own direction already reads.
+      lineOf.set(lane.id, summary.busiest.counterpart)
       if (flowReversed(lane.pts, summary.busiest.direction, b.u, b.v)) reverseIds.add(lane.id)
     }
 
@@ -834,12 +1002,21 @@
         const road = ground.roads.find((r) => !r.lane && r.id === pairId)
         if (road) {
           ownRoadIds.add(road.id)
+          // First strand on this road wins the line card. `strands` is
+          // sorted busiest first, so that is the busiest line the road
+          // carries -- and every strand on one counterpart resolves to
+          // the same road anyway, so the only case this decides is two
+          // counterparts sharing a road, where busiest is the honest
+          // pick rather than whichever was found last.
+          if (!lineOf.has(road.id)) lineOf.set(road.id, s.counterpart)
           if (flowReversed(road.pts, s.direction, b.u, b.v)) reverseIds.add(road.id)
         }
         const bridge = ground.bridges.find((br) => br.iface === counterpartToken)
         if (bridge) {
           ownRoadIds.add('rb-' + bridge.id)
           ownRoadIds.add(bridge.id + '-span')
+          if (!lineOf.has('rb-' + bridge.id)) lineOf.set('rb-' + bridge.id, s.counterpart)
+          if (!lineOf.has(bridge.id + '-span')) lineOf.set(bridge.id + '-span', s.counterpart)
         }
       }
       if (s.outcome === 'accepted') {
@@ -848,7 +1025,14 @@
           if (!peer) continue
           litBuildingIds.add(peer.id)
           const peerLane = ground.roads.find((r) => r.lane && r.from === peer.id)
-          if (peerLane) ownRoadIds.add(peerLane.id)
+          if (peerLane) {
+            ownRoadIds.add(peerLane.id)
+            laneSubjects.push({ roadId: peerLane.id, ip: peer.ip })
+            // A lit peer's lane is the last stretch of this strand's own
+            // line, so it opens the same card the pair road does rather
+            // than none -- one line, however many roads draw it.
+            if (!lineOf.has(peerLane.id)) lineOf.set(peerLane.id, s.counterpart)
+          }
         }
       }
       if (s.outcome === 'blocked' && myDistrict) {
@@ -864,12 +1048,39 @@
         // was refused here, so the counterpart is named; an 'out' strand
         // was this building's own attempt, so it just reads "dropped".
         const source = s.direction === 'in' ? (s.peers[0] ?? (s.counterpart === 'internet' ? 'the internet' : s.counterpart)) : undefined
-        if (!already) dropMarks.push({ p: wallCrossingFor(counterpartToken || myToken), source })
+        // Round 49, DESIGN.md "The reach" and the metaphor table: a
+        // refused road ends at the wall with bollards, the red mark
+        // *and the refusing rule's name*. The name is the strand's own
+        // `refusedBy` -- the event's rule label, absent when no refusal
+        // on this strand carried one, and then said plainly rather than
+        // guessed (#865/#967).
+        // The mark carries its own line, so a refused strand whose road
+        // was never drawn -- an unlogged boundary draws none, and a road
+        // there would claim a log line nobody wrote -- still has
+        // somewhere to open its card from. That is the wall the design
+        // pins the composer to anyway.
+        if (!already) {
+          const id = MARK_PREFIX + s.counterpart
+          if (!lineOf.has(id)) {
+            lineOf.set(id, s.counterpart)
+            dropMarks.push({ id, counterpart: s.counterpart, p: wallCrossingFor(counterpartToken || myToken), source, rule: s.refusedBy })
+          }
+        }
       }
     }
 
-    return { ownRoadIds, reverseIds, litBuildingIds, dropMarks, composerAnchor }
+    return { ownRoadIds, reverseIds, lineOf, laneSubjects, litBuildingIds, dropMarks, composerAnchor }
   })
+
+  /** The reach's own lanes under the brightness rule (round 49, #1016).
+   *
+   * `rollUpRoads` covers district-pair roads only and says why: a lane
+   * belongs to the reach, which is the one surface that draws per line.
+   * This is that half, kept out of the scene derived so panning never
+   * re-runs it -- the same reasoning `roadBaseline` gives above. */
+  const reachLaneBaseline = $derived(
+    reachOverlay === null || baselineState.off.lines.length === 0 ? EMPTY_REACH_LANES : rollUpLanes(baselineState.off, reachOverlay.laneSubjects),
+  )
 
   /** Everything on the ground, in the geometry camera. */
   const scene = $derived.by(() => {
@@ -1048,12 +1259,21 @@
     // wall, not just where the district-pair aggregate already draws
     // one. `e` is the ground point the mark centres on (depth reads its
     // v, same as every other solid).
-    // #991: the label is one plain word, "dropped" -- the source named
-    // only when the drop is not on the building you are standing on
-    // (`source` absent otherwise), never the refusing rule (that detail
-    // moved to the composer card, #868's own click card for the reach).
-    function dropMarkAt(e: Pt, alarm: boolean, source?: string) {
-      const text = source ? source + ' · dropped' : 'dropped'
+    // What the label says, in order of what is actually known:
+    //
+    // - the refusing rule's name where the events carried one. Round 49
+    //   restores it (DESIGN.md's metaphor table, "with the refusing
+    //   rule's name beside the mark", and "The reach": bollards, the red
+    //   mark and the refusing rule's name). #991 had moved it to the
+    //   composer, which is the older text.
+    // - otherwise the plain word "dropped": a refusal nothing named is
+    //   said plainly, never guessed at (#865/#967).
+    //
+    // The source is prefixed either way, and only when the drop is not
+    // on the building you are standing on -- #991's own rule, unchanged.
+    function dropMarkAt(e: Pt, alarm: boolean, source?: string, rule?: string) {
+      const what = rule ? 'caught by ' + rule : 'dropped'
+      const text = source ? source + ' · ' + what : what
       const col2 = alarm ? 'var(--alarm)' : 'var(--drop)'
       const px = X(c, e[0])
       const py = Y(c, e[1])
@@ -1073,16 +1293,22 @@
         ],
         lamps: [],
       })
-      // The refusing rule's own name, beside the mark -- the event's
-      // rule label, exactly as the 2D reach does; said plainly when
-      // no event on this pair carried one, never guessed (#865).
       dropLabels.push({ x: mx, y: my - 14 * k, text, alarm })
     }
 
     for (const r of g.roads) {
       if (r.lane && !showLanes) continue
       const own = !reachOverlay || reachOverlay.ownRoadIds.has(r.id)
-      const col = VERDICT[r.k]
+      // Round 49, DESIGN.md "The reach": the standing building's own
+      // roads take the brightness rule "the same rule as everywhere
+      // else", and its lanes are among them. A lane is laid down in
+      // unjudged ink (layout.ts, `k: 'q'`) because outside the reach it
+      // is scenery with no line behind it; inside the reach it is a
+      // drawn line, so it is judged like one -- and takes the verdict's
+      // own colour rather than staying grey.
+      const laneInReach = reachOverlay !== null && own && !!r.lane
+      const laneNb: ReachLaneEntry | null = laneInReach ? (reachLaneBaseline.get(r.id) ?? null) : null
+      const col = laneNb ? VERDICT[laneNb.kind] : VERDICT[r.k]
       // Brightness is the baseline (round 49, #1016). An accepted road
       // carrying nothing off today's pattern is *established*: thin, dim
       // and with no flow, so it recedes without ever leaving the map.
@@ -1094,21 +1320,29 @@
       // unplanned pair are unchanged: their colour is already the point,
       // and dimming a refusal because it happens every day would hide
       // exactly the traffic this screen exists to show.
-      const nb = roadBaseline.get(r.id) ?? null
-      const est = r.k === 'a' && nb === null
+      const nb: { lines: OffBaselineLine[]; ring: RoadRing } | null = roadBaseline.get(r.id) ?? laneNb
+      // Which roads the rule judges at all: accepted pair roads always,
+      // and the reach's own lanes while it is open.
+      const judged = r.k === 'a' || laneInReach
+      const est = judged && nb === null
       const w = Math.max(est ? 1 : 1.2, r.w * c.S * (est ? 0.18 : 0.3))
       // Standing on a building (#868) fades every road that is not its
       // own.
-      const op = (r.k === 'x' ? 0.95 : r.k === 'q' ? 0.42 : r.k === 'd' ? 0.52 : est ? 0.26 : 0.8) * (own ? 1 : 0.16)
-      // While standing, only this building's own roads flow, in the
-      // direction its own strand reads. Otherwise a road flows exactly
-      // when it carries something off the baseline, or when it is the
-      // escalated unplanned pair -- the flow dashes are part of the
-      // bright treatment, not a separate signal. Volume does not earn
-      // flow: the ratified drawing (round 49, `flow: own ? mine :
-      // (r.k === 'x' || !!r.nb)`) animates only those two, so a settled
-      // network is still, however busy it is.
-      const flow = reachOverlay ? own : r.k === 'x' || nb !== null
+      const op = (r.k === 'x' ? 0.95 : !judged && r.k === 'q' ? 0.42 : !judged && r.k === 'd' ? 0.52 : est ? 0.26 : 0.8) * (own ? 1 : 0.16)
+      // A road flows exactly when it carries something off the baseline
+      // or is the escalated unplanned pair -- the flow dashes are part
+      // of the bright treatment, not a separate signal. Volume does not
+      // earn flow, so a settled network is still, however busy it is.
+      //
+      // Standing narrows that to this building's own roads; it does not
+      // widen it. The round-49 mockup flows every own road in the reach
+      // (`flow: own ? mine : ...`), but DESIGN.md's brightness rule --
+      // which wins where the two disagree -- puts established roads at
+      // "thin, dim, no flow" and says the reach follows "the same rule
+      // as everywhere else". So an established road the standing host
+      // owns recedes exactly like any other, and the dashes stay the
+      // mark of a line off the pattern rather than of ownership.
+      const flow = (!reachOverlay || own) && (r.k === 'x' || nb !== null)
       const reversed = !!reachOverlay?.reverseIds.has(r.id)
       let cum = 0
       const pieces = roadPieces(r, ents)
@@ -1135,7 +1369,7 @@
       // ring that grows reads as something spreading and nothing is
       // spreading (DESIGN.md, owner 2026-09-07). The same `.halo` rule
       // the flag pill uses, so there is one motion in the city, not two.
-      if (nb && r.k === 'a') {
+      if (nb && judged) {
         const ringAt = (e: Pt) => {
           const rr = R2(Math.max(5, c.S * 0.7))
           solids.push({
@@ -1150,14 +1384,27 @@
       }
       // #991: the district-pair aggregate has no per-building source to
       // name (only the reach's own strands, below, resolve to one host),
-      // so this mark reads as the one plain word, "dropped".
-      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x')
+      // so this mark names no source. It does name the refusing rule
+      // where the ground model carried one -- `Road.refusedBy` is the
+      // events' own rule label, which #865 put there for exactly this
+      // mark.
+      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x', undefined, r.refusedBy)
     }
     // #991: "gone from the street stop" -- the road port chips (#868's
     // "ports on the road") are dropped entirely; the ports live on the
     // building's card and the gate's card instead. Nothing else about
     // roads changes.
-    if (reachOverlay) for (const dm2 of reachOverlay.dropMarks) dropMarkAt(dm2.p, false, dm2.source)
+    // The reach's own marks are pointable, and open the same line card
+    // the road would have. A refused strand across a boundary nothing
+    // logs draws no road at all -- one there would claim a log line
+    // nobody wrote -- so without this its line would have nowhere to
+    // open its card, and `draft the rule ▸` with it.
+    const markHits: { id: string; x: number; y: number }[] = []
+    if (reachOverlay)
+      for (const dm2 of reachOverlay.dropMarks) {
+        dropMarkAt(dm2.p, false, dm2.source, dm2.rule)
+        markHits.push({ id: dm2.id, x: R2(X(c, dm2.p[0])), y: R2(Y(c, dm2.p[1]) - 1.8 * c.S * ZK) })
+      }
 
     // Buildings flat on the district plate (#986 dropped height and the
     // plinth, #867's own concept): the device symbol stamped on top
@@ -1334,7 +1581,7 @@
       bridgeChips.push({ x, y, w: R2(w), t, stroke })
     }
 
-    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, dropLabels, claim }
+    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, dropLabels, markHits, claim }
   })
 
   /** Names float over buildings at the street stop, for what the
@@ -1809,10 +2056,14 @@
   const openRoadId = $derived(pinnedRoad ?? hoverRoad)
   const roadPinned = $derived(pinnedRoad !== null)
 
-  /** The open road, its roll-up and the geometry the leader points at. */
+  /** The open road, its roll-up and the geometry the leader points at.
+   *
+   * Null while standing: in the reach the same road opens the line card
+   * below instead, which is the card DESIGN.md "Cards" gives that
+   * surface. One road never has two cards at once. */
   const roadCard = $derived.by(() => {
     const id = openRoadId
-    if (!id) return null
+    if (!id || reachOverlay) return null
     const entry = roadBaseline.get(id)
     if (!entry) return null
     const road = ground.roads.find((r) => r.id === id)
@@ -1820,23 +2071,111 @@
     return { road, entry }
   })
 
+  /* ---------------- the line card (round 49, #1016) ----------------
+     Hovering one of the standing building's roads: what that line
+     carried, port by port, from lib/reach's own `reachLineSummary`.
+     The 2D map builds its line card from the same function, so the two
+     surfaces read as one product rather than as two summaries that
+     happened to agree on the day they were written (DESIGN.md, #865's
+     `worstUnplannedOf` reasoning applied to this card).
+
+     It reuses the road card's hover state, grace, element ref and
+     placement: only one of the two can be open, because one needs the
+     reach and the other refuses to draw inside it. */
+
+  /** The hovered road's line, and everything the card says about it. */
+  const lineCard = $derived.by(() => {
+    const id = openRoadId
+    const overlay = reachOverlay
+    const b = standBuilding
+    const summary = standReach
+    if (!id || !overlay || !b || !summary) return null
+    const counterpart = overlay.lineOf.get(id)
+    if (counterpart === undefined) return null
+    // The subject is a line, and two things can draw one: the road it
+    // runs along, and -- where the boundary logs nothing and so draws no
+    // road -- the mark at the wall it stopped at. The leader points at
+    // whichever of the two the reader is looking at.
+    const road = ground.roads.find((r) => r.id === id) ?? null
+    const mark = road ? null : (overlay.dropMarks.find((m) => m.id === id) ?? null)
+    const anchor: Pt | null = road ? (road.pts[Math.floor(road.pts.length / 2)] ?? road.pts[0] ?? null) : (mark?.p ?? null)
+    if (!anchor) return null
+
+    const line = reachLineSummary(summary.strands, counterpart)
+    // The strands on this counterpart, busiest first -- `strands` is
+    // already in that order, so the first is the one whose direction and
+    // peer the title reads. `reachLineSummary` deliberately drops
+    // direction (the drawn flow says it), so the title takes it from
+    // here rather than inventing one.
+    const lead = summary.strands.find((s) => s.counterpart === counterpart) ?? null
+    const peerName = lead?.peers[0] ?? (counterpart === 'internet' ? 'the internet' : counterpart)
+    const peerAddr = lead?.peerAddrs[0] ?? null
+    // The port the refusal was about: the busiest one anything was
+    // dropped on. `ports` is already busiest first.
+    const refusedPort = line.ports.find((p) => p.dropped > 0) ?? null
+    // The plates this line runs between, for the card to keep off --
+    // the standing building's own district and the counterpart's, the
+    // same two ends `roadEnds` gives the off-baseline card.
+    const token = counterpart === 'internet' ? (zonesState.wanInterface ?? '') : counterpart
+    const endIds = new Set([b.districtId, districtOf(token)?.id].filter((x): x is string => typeof x === 'string'))
+    return { id, anchor, line, lead, peerName, peerAddr, refusedPort, host: b, endIds }
+  })
+
+  /** The line card's title, in the order the traffic went: the same
+   * `a → b` the composer already prints for a strand. */
+  const lineTitle = (hostName: string, peerName: string, direction: ReachStrand['direction'] | null): string =>
+    direction === 'in' ? `${peerName} → ${hostName}` : `${hostName} → ${peerName}`
+
+  /** The card's accessible name, and the road's while the reach is open. */
+  function lineAria(id: string): string | null {
+    const overlay = reachOverlay
+    const b = standBuilding
+    const summary = standReach
+    if (!id || !overlay || !b || !summary) return null
+    const counterpart = overlay.lineOf.get(id)
+    if (counterpart === undefined) return null
+    const lead = summary.strands.find((s) => s.counterpart === counterpart) ?? null
+    const peerName = lead?.peers[0] ?? (counterpart === 'internet' ? 'the internet' : counterpart)
+    return `${lineTitle(b.name, peerName, lead?.direction ?? null)} line, ports and what each drew`
+  }
+
+  /** The composer, shown only when asked for (round 49): the card on a
+   * refused line offers `draft the rule ▸`, and this is what that opens.
+   * Reset on surfacing, so standing on the next building starts from the
+   * drawing rather than from the last building's draft. */
+  let composerOpen = $state(false)
+
   /** How many lines a road carries off the baseline, in plain words. */
   const offCount = (n: number) => `${n} off the baseline today`
 
-  /** The road's accessible name: the two ends, and what it carries. */
+  /** The road's accessible name: the two ends, and what it carries.
+   * Inside the reach it is the line's name instead, because that is the
+   * card the road opens there. */
   function roadAria(id: string): string {
+    const inReach = lineAria(id)
+    if (inReach) return inReach
     const e = roadBaseline.get(id)
     if (!e) return 'road'
     return `${endName(ground, e.ends.start)} → ${endName(ground, e.ends.end)} road, ${offCount(e.lines.length)}`
   }
 
+  /** Which roads are pointable: one carrying something off the baseline,
+   * and -- while standing -- one of the standing building's own that has
+   * a line behind it. */
+  function roadHasCard(id: string): boolean {
+    if (reachOverlay) return reachOverlay.lineOf.has(id)
+    return roadBaseline.has(id)
+  }
+
   function openRoadCard(id: string) {
     if (drag?.moved) return
-    // Only a road with something off the baseline has this card: an
-    // established road's answer is the drawing itself, and a card saying
-    // "nothing to report" on every road in the city would be noise of
-    // exactly the kind this screen exists to remove.
-    if (!roadBaseline.has(id)) return
+    // Only a road with something to say has a card. Outside the reach
+    // that is a road carrying something off the baseline: an established
+    // road's answer is the drawing itself, and a card saying "nothing to
+    // report" on every road in the city would be noise of exactly the
+    // kind this screen exists to remove. Inside the reach it is a road
+    // the standing building owns, whose card is its line.
+    if (!roadHasCard(id)) return
     roadGrace.hold()
     hoverRoad = id
   }
@@ -1913,7 +2252,12 @@
   $effect(() => {
     // Everything that moves the subject, read first: which road is open,
     // the camera, the stop, the card's arrival, and both size ticks.
-    const c = roadCard
+    //
+    // The road card and the line card are the same subject placed the
+    // same way -- a road, its middle waypoint, the plates it joins --
+    // and only one of them is ever open, so they share this placement
+    // rather than keeping two copies of it that could drift.
+    const c = roadCard ?? lineCard
     const vc = viewCam
     const svg = svgEl
     const host = cityEl
@@ -1934,10 +2278,10 @@
     }
     // The leader points at the road's middle waypoint, which is the part
     // of it a reader is looking at -- not at either end, where the ring
-    // already has something to say.
-    const pts = c.road.pts
-    const mid = pts[Math.floor(pts.length / 2)] ?? pts[0]
-    const anchor = map({ x: X(vc, mid[0]), y: Y(vc, mid[1]) })
+    // already has something to say. The line card brings its own anchor,
+    // because its subject can be a mark at a wall rather than a road.
+    const at: Pt = 'entry' in c ? (c.road.pts[Math.floor(c.road.pts.length / 2)] ?? c.road.pts[0]) : c.anchor
+    const anchor = map({ x: X(vc, at[0]), y: Y(vc, at[1]) })
     // Keep off the two plates this road joins, and off the others only
     // as a tie-break -- the same reasoning the boundary card gives.
     const shown = (x: { id: string }) => host.querySelector(`g.plate[data-cid="${CSS.escape(x.id)}"]`)
@@ -1945,7 +2289,7 @@
       const el = shown(x)
       return el !== null && drawnRect(el, host) !== null ? [mapRect(map, plateBox(x))] : []
     }
-    const endIds = new Set([c.entry.ends.start, c.entry.ends.end])
+    const endIds = 'entry' in c ? new Set([c.entry.ends.start, c.entry.ends.end]) : c.endIds
     const avoid = ground.districts.filter((x) => endIds.has(x.id)).flatMap(drawnPlate)
     const softAvoid = ground.districts.filter((x) => !endIds.has(x.id)).flatMap(drawnPlate)
     roadPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
@@ -2073,7 +2417,7 @@
             tabindex={tabbable(p.d.id)}
             data-cid={p.d.id}
             aria-label={p.aria}
-            onclick={() => onItemClick({ districtId: null, id: p.d.id })}
+            onclick={() => onDistrictClick(p.d.id)}
             onkeydown={onKey}
           >
             <title>{p.aria}</title>
@@ -2105,12 +2449,14 @@
             {#if s.flow}
               <path d={s.flow.d} fill="none" stroke={s.flow.stroke} stroke-width={s.flow.sw} stroke-opacity={s.flow.so} class={s.flow.cls ?? 'flow'} stroke-dashoffset={s.flow.dash} data-road={s.roadId} />
             {/if}
-            {#if s.roadId && roadBaseline.has(s.roadId) && s.paints[0]?.d}
-              <!-- A bright road is pointable, on a wide transparent
+            {#if s.roadId && roadHasCard(s.roadId) && s.paints[0]?.d}
+              <!-- A road with a card is pointable, on a wide transparent
                    stroke because the road itself is too thin to hit
-                   (round-49/index.html:1204). Its card is the off-
-                   baseline roll-up; while that card is open this stroke
-                   goes visible, which is how the subject stays marked. -->
+                   (round-49/index.html:1204). Outside the reach that
+                   card is the off-baseline roll-up; inside it, it is the
+                   standing building's own line card. While either is
+                   open this stroke goes visible, which is how the
+                   subject stays marked. -->
               {@const rid = s.roadId}
               <path
                 class="road-hot"
@@ -2125,11 +2471,11 @@
                 data-road-hot={rid}
                 onpointerenter={() => openRoadCard(rid)}
                 onpointerleave={releaseRoadCard}
-                onclick={() => toggleRoadPin(rid)}
+                onclick={() => onRoadClick(rid)}
                 onkeydown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault()
-                    toggleRoadPin(rid)
+                    onRoadClick(rid)
                   }
                 }}
               />
@@ -2257,13 +2603,39 @@
         {#each scene.dropLabels as dl, i (i)}
           <text x={dl.x} y={dl.y} text-anchor="middle" class="drop-t" class:alarm-t={dl.alarm}>{dl.text}</text>
         {/each}
+        {#each scene.markHits as mh (mh.id)}
+          <!-- The mark where a refused line stopped, pointable so that
+               line has a card even when its boundary draws no road. -->
+          <circle
+            class="road-hot"
+            class:on={openRoadId === mh.id}
+            cx={mh.x}
+            cy={mh.y}
+            r="14"
+            fill="transparent"
+            role="button"
+            tabindex="-1"
+            aria-label={roadAria(mh.id)}
+            data-road-hot={mh.id}
+            onpointerenter={() => openRoadCard(mh.id)}
+            onpointerleave={releaseRoadCard}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                toggleRoadPin(mh.id)
+              }
+            }}
+          />
+        {/each}
       </g>
     </g>
   </svg>
 
   {#if standBuilding && standReach}
-    <!-- The crumb (#868, DESIGN.md "The reach"): name · address ·
-         reaches N · reached by N · Esc surfaces -- the 2D map's own
+    <!-- The crumb (#868, round 49 #1016, DESIGN.md "The reach"): name ·
+         ip · reaches N · reached by N · refused N · Esc surfaces ▸ --
+         the one wording on both surfaces. `refused N` and the ▸ are
+         round 49's; the rest is the 2D map's own
          "reaches <b>N</b> · reached by <b>N</b>" wording (Topography.svelte's
          reach crumb), the round-40 mockup's layout and its own literal
          "Esc surfaces" for the rest. It is itself the other way to
@@ -2275,12 +2647,31 @@
       <i></i>
       <span>reaches <b>{standReach.reaches}</b></span>
       <span>reached by <b>{standReach.reachedBy}</b></span>
+      <span>refused <b>{standRefused}</b></span>
       <i></i>
-      <span class="esc">Esc surfaces</span>
+      <span class="esc">Esc surfaces ▸</span>
+    </button>
+  {:else if standDistrict || standRoad}
+    {@const name = standDistrict ? standDistrict.name : (standRoad?.label ?? 'road')}
+    {@const sub = standDistrict ? (standDistrict.cidr ?? 'no address pushed') : null}
+    <!-- The same crumb for a district's or a road's reach (round 49's
+         "click anything"), carrying only what the app knows about that
+         subject. `reaches N · reached by N · refused N` are counts of
+         distinct counterparts a *host* spoke to, which is what
+         `reachFor` answers; neither a district nor a road has that
+         reading, and stating one derived some other way would be a
+         second, quietly different meaning for the same three words.
+         So they are left out rather than invented -- the crumb still
+         names the subject and still says how to surface. -->
+    <button type="button" class="crumb" aria-label="Standing on {name}. Activate to surface." onclick={standSurface}>
+      <b>{name}</b>
+      {#if sub}<span>{sub}</span>{/if}
+      <i></i>
+      <span class="esc">Esc surfaces ▸</span>
     </button>
   {/if}
 
-  {#if standBuilding && standReach?.topBlocked}
+  {#if composerOpen && standBuilding && standReach?.topBlocked}
     {@const s = standReach.topBlocked}
     {@const peerName = s.peers[0] ?? (s.counterpart === 'internet' ? 'the internet' : s.counterpart)}
     {@const top = s.portHits[0]}
@@ -2609,6 +3000,99 @@
     </div>
   {/if}
 
+  {#if lineCard}
+    {@const lc = lineCard}
+    {@const l = lc.line}
+    <!-- The line card in the reach (round-49/index.html's `nasLine`,
+         DESIGN.md "Cards"). Its markup and wording are the mockup's:
+         the port / proto / accepted / dropped table, the totals line,
+         `:22 refused by #17 default drop`, and on a refused line the
+         composer's `draft the rule ▸`. Every number in it comes from
+         lib/reach's `reachLineSummary`, which the 2D map's own line card
+         also reads -- one function, so the two surfaces cannot drift
+         into two readings of the same traffic. Nothing here is written
+         on the road: this card is where the ports live. -->
+    {#if roadPlace}
+      <svg class="leader" aria-hidden="true">
+        <path d="M{roadPlace.from.x} {roadPlace.from.y}L{roadPlace.to.x} {roadPlace.to.y}" stroke="var(--hair-2)" stroke-width="1" fill="none" />
+        <circle cx={roadPlace.from.x} cy={roadPlace.from.y} r="3" fill="var(--accent)" />
+      </svg>
+    {/if}
+    <div
+      class="bcard rcard lcard"
+      class:pinned={roadPinned}
+      class:placed={roadPlace !== null}
+      style={roadPlace ? `left:${R2(roadPlace.left)}px;top:${R2(roadPlace.top)}px` : undefined}
+      bind:this={rcardEl}
+      role="dialog"
+      tabindex="-1"
+      aria-label={roadAria(lc.id)}
+      onpointerenter={roadGrace.hold}
+      onpointerleave={releaseRoadCard}
+    >
+      <div class="bc-t">
+        <span class="n"
+          >{lineTitle(lc.host.name, lc.peerName, lc.lead?.direction ?? null)}{#if lc.peerAddr}<small>{lc.peerAddr}</small>{/if}</span
+        >
+        <button
+          type="button"
+          class="pin"
+          class:on={roadPinned}
+          aria-pressed={roadPinned}
+          title={roadPinned ? 'pinned — click to let it go' : 'pin this card'}
+          onclick={() => toggleRoadPin(lc.id)}>{roadPinned ? '✕' : '⊙'}</button
+        >
+      </div>
+
+      {#if l.ports.length > 0}
+        <table class="ports">
+          <thead>
+            <tr><th>PORT</th><th>PROTO</th><th class="n">ACCEPTED</th><th class="n">DROPPED</th></tr>
+          </thead>
+          <tbody>
+            {#each l.ports as p (`${p.port}|${p.proto}`)}
+              <tr>
+                <td>{p.port}</td>
+                <!-- '' is "the events named no protocol", which is not
+                     the same as tcp: an em dash rather than a guess. -->
+                <td class:dim={!p.proto}>{p.proto || '—'}</td>
+                <td class="n" class:ok={p.accepted > 0} class:dim={p.accepted === 0}>{p.accepted > 0 ? p.accepted : '—'}</td>
+                <td class="n" class:al={p.dropped > 0} class:dim={p.dropped === 0}>{p.dropped > 0 ? p.dropped : '—'}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {:else}
+        <!-- Portless traffic only (ICMP and friends) still has a
+             protocol split to show, and saying so beats an empty table. -->
+        <div class="s">no destination port was named on this line</div>
+      {/if}
+
+      <!-- The tcp-versus-udp picture. `other` carries everything that is
+           neither, portless traffic included, so the three total the
+           line's own events rather than quietly dropping any. -->
+      <div class="s totals">tcp <b>{l.tcp}</b> · udp <b>{l.udp}</b> · other {l.other}</div>
+
+      {#if lc.refusedPort}
+        <!-- The mockup's own line: `:22 refused by #17 default drop`.
+             The rule is the events' own label; where no refusal on this
+             line carried one it is said plainly rather than guessed
+             (#865/#967), which is also what `refusedBy` being absent
+             means. -->
+        <div class="s alarm">:{lc.refusedPort.port} {l.refusedBy ? `refused by ${l.refusedBy}` : 'refused, no rule named'}</div>
+      {/if}
+
+      {#if lc.refusedPort}
+        <div class="acts">
+          <!-- The composer, on the card that names the refusal (round
+               49). Drafted, never run -- the same invariant as the 2D
+               composer, and the same printed line. -->
+          <button type="button" class="linkact" data-draft-rule onclick={() => (composerOpen = true)}>draft the rule ▸</button>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <div class="mini" aria-label="Minimap: the viewport is one part of a much larger map">
     <h4>ESTATE MAP</h4>
     <button type="button" class="look" aria-label="Look there: click a place on the estate map to centre on it" onclick={onMinimapClick}>
@@ -2851,6 +3335,16 @@
     color: var(--alarm);
   }
 
+  /* The totals sit just clear of the table they sum, as in the mockup. */
+  .bcard .s.totals {
+    margin-top: 6px;
+  }
+
+  .bcard .s.totals b {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
   /* The same three treatments the wall wears, as a swatch: solid for
      logged, flat white for declared quiet, dashed grey for dark. */
   .bcard .sw {
@@ -2897,14 +3391,16 @@
   /* The lines themselves. Narrow type and tight rows because this table
      can be long on a busy day, and it is a list to scan rather than to
      read. */
-  .bcard table.off {
+  .bcard table.off,
+  .bcard table.ports {
     width: 100%;
     margin-top: 6px;
     border-collapse: collapse;
     font: 10px/1.5 var(--font-mono);
   }
 
-  .bcard table.off th {
+  .bcard table.off th,
+  .bcard table.ports th {
     padding: 2px 4px 2px 0;
     border-bottom: 1px solid var(--hair);
     color: var(--fg-dim);
@@ -2913,20 +3409,35 @@
     text-align: left;
   }
 
-  .bcard table.off td {
+  .bcard table.off td,
+  .bcard table.ports td {
     padding: 3px 4px 3px 0;
     color: var(--fg);
     vertical-align: top;
   }
 
   .bcard table.off th.n,
-  .bcard table.off td.n {
+  .bcard table.off td.n,
+  .bcard table.ports th.n,
+  .bcard table.ports td.n {
     text-align: right;
     padding-right: 0;
+    font-variant-numeric: tabular-nums;
   }
 
-  .bcard table.off td.ok {
+  .bcard table.off td.ok,
+  .bcard table.ports td.ok {
     color: var(--accept);
+  }
+
+  /* A count that was refused, and a cell with nothing in it. The em dash
+     is "none of these", not zero-as-a-measurement, so it recedes. */
+  .bcard table.ports td.al {
+    color: var(--alarm);
+  }
+
+  .bcard table.ports td.dim {
+    color: var(--fg-dim);
   }
 
   /* The verdict in plain words, under the line it is about. */
