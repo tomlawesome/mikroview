@@ -21,6 +21,7 @@ import {
   stageRect,
   unitMapper,
   userToBox,
+  watchCardSize,
   type Rect,
 } from './cardAnchor'
 
@@ -376,6 +377,79 @@ describe('cardSize', () => {
   it('falls back to the drawn size before anything has been laid out', () => {
     expect(cardSize(null)).toEqual({ w: 288, h: 180 })
     expect(cardSize({ offsetWidth: 300, offsetHeight: 210 } as HTMLElement)).toEqual({ w: 300, h: 210 })
+  })
+})
+
+describe('watchCardSize — the card that grows under its own placement (#1028)', () => {
+  // One fake observer, so a test can report a size change the way a
+  // browser would. jsdom has none of its own.
+  const fire: (() => void)[] = []
+  let disconnected = 0
+  class FakeResizeObserver {
+    constructor(private readonly cb: () => void) {}
+    observe() {
+      fire.push(this.cb)
+    }
+    unobserve() {}
+    disconnect() {
+      disconnected++
+    }
+  }
+
+  const el = (h: number) => ({ offsetWidth: 288, offsetHeight: h }) as HTMLElement
+
+  afterEach(() => {
+    fire.length = 0
+    disconnected = 0
+    vi.unstubAllGlobals()
+  })
+
+  it('reports the card’s new size when the declare form makes it taller', () => {
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    const card = el(180)
+    const seen: { w: number; h: number }[] = []
+    watchCardSize(card, (s) => seen.push(s))
+
+    fire[0]()
+    ;(card as { offsetHeight: number }).offsetHeight = 420
+    fire[0]()
+
+    expect(seen).toEqual([
+      { w: 288, h: 180 },
+      { w: 288, h: 420 },
+    ])
+  })
+
+  // The recompute must not be able to chase its own tail. Moving a card
+  // cannot resize it, so a browser has nothing new to report -- but
+  // ResizeObserver does re-report an unchanged box when the layout
+  // around it churns, and answering that with another placement is how
+  // a card ends up walking across the map.
+  it('says nothing when the size has not actually changed, so a move cannot start another', () => {
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    const card = el(420)
+    const seen: { w: number; h: number }[] = []
+    watchCardSize(card, (s) => seen.push(s))
+
+    fire[0]()
+    fire[0]()
+    fire[0]()
+
+    expect(seen).toEqual([{ w: 288, h: 420 }])
+  })
+
+  it('stops watching when the card goes', () => {
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    watchCardSize(el(180), () => {})()
+    expect(disconnected).toBe(1)
+  })
+
+  it('watches nothing rather than guessing where there is no ResizeObserver', () => {
+    vi.stubGlobal('ResizeObserver', undefined)
+    let called = 0
+    const stop = watchCardSize(el(180), () => called++)
+    stop()
+    expect(called).toBe(0)
   })
 })
 

@@ -32,6 +32,32 @@ import componentSource from './Topography.svelte?raw'
 // flags.svelte.test.ts and watchlist.svelte.test.ts drive their stores
 // without mocking ../lib/api.
 
+// jsdom has no ResizeObserver at all, and the card's placement is
+// re-worked on one (#1028). This stand-in records which callbacks are
+// watching which element, so a test can report a size change to exactly
+// the element that grew -- and report it to nothing, which is what the
+// unfixed code deserves, rather than throwing.
+const resizeWatchers = new Map<Element, Set<() => void>>()
+
+class FakeResizeObserver {
+  constructor(private readonly cb: () => void) {}
+  observe(el: Element) {
+    const set = resizeWatchers.get(el) ?? new Set<() => void>()
+    set.add(this.cb)
+    resizeWatchers.set(el, set)
+  }
+  unobserve(el: Element) {
+    resizeWatchers.get(el)?.delete(this.cb)
+  }
+  disconnect() {
+    for (const set of resizeWatchers.values()) set.delete(this.cb)
+  }
+}
+
+const reportResize = (el: Element) => {
+  for (const cb of [...(resizeWatchers.get(el) ?? [])]) cb()
+}
+
 let nextEventId = 1
 let nextFlagId = 1
 let nextEntryId = 1
@@ -2543,6 +2569,35 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     ]
   }
 
+  // A full lane row with a dark boundary between two neighbouring lanes:
+  // the shape #1028's screenshot was taken in. With the foot of the map
+  // occupied there is nowhere below the boundary for a card to go, so a
+  // card that grows has to be placed again rather than left where it was.
+  const laneRowDark = (): void => {
+    const names = ['Guest', 'IoT', 'LitLane', 'Staff', 'Cams']
+    zonesState.pushed = names.map((comment, i) => ({
+      address: `10.0.8${i}.1/24`,
+      network: `10.0.8${i}.0`,
+      interface: `bridge${i + 1}`,
+      comment,
+    }))
+    appState.events = names.map((_, i) => event({ inInterface: `bridge${i + 1}`, srcIp: `10.0.8${i}.9` }))
+    policyState.anyPushed = true
+    const edge = (from: string, to: string) => ({
+      key: `${from}|${to}`,
+      from,
+      to,
+      accepted: true,
+      refused: false,
+      acceptPorts: [],
+      refusePorts: [],
+      comment: '',
+      ruleCount: 1,
+      logged: false,
+    })
+    policyState.edges = [edge('bridge2', 'bridge3'), edge('bridge3', 'bridge2')]
+  }
+
   function openCard(container: HTMLElement): HTMLElement {
     const half = container.querySelector('.cov-g')!
     half.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -2767,5 +2822,94 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     expect(container.querySelector('.card')?.getAttribute('aria-label')).toBe(pinned)
     expect(container.querySelector('.card')?.classList.contains('pinned')).toBe(true)
     authState.role = ''
+  })
+
+  // #1028: the card's side was chosen from how big the card was at the
+  // moment it opened. Clicking the pin reveals the declare form, the
+  // card gets taller, and nothing re-ran the rule -- so the grown card
+  // came down on the zone plate named in its own title and hid the very
+  // thing it was describing (round-49/compare/flat-declare.png).
+  //
+  // jsdom lays nothing out and has no ResizeObserver, so the three
+  // things a browser would report are supplied here: the map's rendered
+  // box, its matrix, and the card's own size before and after the form.
+  it('re-places the card when the declare form grows it, so it never covers either end of its own boundary (#1028)', () => {
+    resizeWatchers.clear()
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    try {
+      laneRowDark()
+      const { container } = render(Topography)
+      flushSync()
+
+      // The map's own 1400x720 rendered at 1400x720: user units and
+      // container pixels then agree, so every number below is readable.
+      const host = container.querySelector('.topo') as HTMLElement
+      const svg = [...container.querySelectorAll('svg')].find((s) => s.getAttribute('viewBox') === '0 0 1400 720') as SVGSVGElement
+      const box = { left: 0, top: 0, width: 1400, height: 720, right: 1400, bottom: 720, x: 0, y: 0 }
+      host.getBoundingClientRect = () => box as DOMRect
+      svg.getBoundingClientRect = () => box as DOMRect
+      ;(svg as unknown as { getScreenCTM: () => DOMMatrix }).getScreenCTM = () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }) as DOMMatrix
+
+      // The two lane plates the boundary runs between, read off the
+      // drawing rather than restated from the component: these are the
+      // boxes the screenshot shows the card sitting on.
+      const plateOf = (name: string) => {
+        const g = [...container.querySelectorAll('g.zone')].find((z) => z.getAttribute('aria-label')?.includes(name)) as SVGGElement
+        const [tx, ty] = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(g.getAttribute('transform') ?? '')!.slice(1).map(Number)
+        const isl = g.querySelector('rect.isl') as SVGRectElement
+        return {
+          x: tx + Number(isl.getAttribute('x')),
+          y: ty + Number(isl.getAttribute('y')),
+          w: Number(isl.getAttribute('width')),
+          h: Number(isl.getAttribute('height')),
+        }
+      }
+      const ends = [plateOf('IoT'), plateOf('LitLane')]
+
+      type Box = { x: number; y: number; w: number; h: number }
+      const hits = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+      const drawn = (h: number): Box => {
+        const el = container.querySelector('.card') as HTMLElement
+        return { x: parseFloat(el.style.left), y: parseFloat(el.style.top), w: 288, h }
+      }
+
+      // The IoT ⇄ LitLane boundary, which is what the card will name.
+      const half = [...container.querySelectorAll('.cov-g')].find((g) => {
+        const l = g.getAttribute('aria-label') ?? ''
+        return l.includes('IoT') && l.includes('LitLane')
+      })!
+      half.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+
+      const card = container.querySelector('.card') as HTMLElement
+      expect(card, 'no card opened on the boundary').not.toBeNull()
+      expect(card.classList.contains('placed'), 'the card never got a measured position').toBe(true)
+      // Unpinned it is the fallback height, and it clears both ends --
+      // otherwise the growth below would prove nothing.
+      for (const end of ends) expect(hits(drawn(180), end), 'the card was on an end of its own boundary before it ever grew').toBe(false)
+
+      card.querySelector<HTMLButtonElement>('.pin')!.click()
+      flushSync()
+      expect(container.querySelector('.card .form'), 'the declare form never opened').not.toBeNull()
+
+      // The form is in, so the card is taller. This is the moment the
+      // placement has to be worked out again.
+      const grown = 420
+      const open = container.querySelector('.card') as HTMLElement
+      Object.defineProperty(open, 'offsetWidth', { value: 288, configurable: true })
+      Object.defineProperty(open, 'offsetHeight', { value: grown, configurable: true })
+      reportResize(open)
+      flushSync()
+
+      const after = drawn(grown)
+      for (const end of ends) expect(hits(after, end), 'the grown card came down on an end of the boundary named in its own title').toBe(false)
+      // And it is still a card on the stage, not one shoved off it.
+      expect(after.x).toBeGreaterThanOrEqual(0)
+      expect(after.y).toBeGreaterThanOrEqual(0)
+      expect(after.x + after.w).toBeLessThanOrEqual(1400)
+      expect(after.y + after.h).toBeLessThanOrEqual(720)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

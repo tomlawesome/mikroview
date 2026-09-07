@@ -66,7 +66,7 @@
   import { cityInputFrom } from '../lib/city/input'
   import type { District, Ground } from '../lib/city/types'
   import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
-  import { cardSize, grace, mapRect, placeCard, stageRect, unitMapper, type Placement, type Rect } from '../lib/cardAnchor'
+  import { cardSize, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
   import { altitudeStopState } from '../lib/altitudeStop.svelte'
 
   // Five fixed lane inks. The fifth was --marked until #715 item 11 --
@@ -988,6 +988,10 @@
   let cardPlace = $state<Placement | null>(null)
   /** Bumped when the stage changes size under us. */
   let stageTick = $state(0)
+  /** Bumped when the card itself changes size -- the declare form going
+   * in makes it taller, and where it can sit depends on how tall it is
+   * (#1028). */
+  let cardTick = $state(0)
 
   /** The open boundary's own drawn half, taken live rather than kept
    * from when the card opened: the lane row re-lays itself out as zones
@@ -1009,6 +1013,7 @@
     const card = cardEl
     void altitude
     void stageTick
+    void cardTick
 
     if (!drawn || !svg || !host || !card || reach) {
       cardPlace = null
@@ -1043,6 +1048,16 @@
     const ro = new ResizeObserver(() => stageTick++)
     ro.observe(host)
     return () => ro.disconnect()
+  })
+
+  // And the card's own size, which nothing else reports either: the
+  // declare form goes in behind the pin and the card gets taller
+  // (#1028). watchCardSize is the city's too -- one rule, both surfaces
+  // -- and it says there why this cannot move the card round in circles.
+  $effect(() => {
+    const card = cardEl
+    if (!card) return
+    return watchCardSize(card, () => cardTick++)
   })
 
   /** The pin is what opens the form (round 49): the card reads first,

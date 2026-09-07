@@ -378,6 +378,49 @@ export function cardSize(el: HTMLElement | null | undefined): Size {
 }
 
 /**
+ * Tell a surface when its card's own rendered size changes (#1028).
+ *
+ * Placement was worked out once, from the size the card happened to be
+ * when it opened. The pin then reveals the declare form, the card gets
+ * taller, and the rule that says "cover neither end of your own
+ * boundary" was left holding a box that is no longer the box being
+ * drawn -- so the grown card came down on the very zone plate its own
+ * title names. The card's height is an input to `placeCard` like any
+ * other, and every other input already re-places it.
+ *
+ * `onChange` should re-run the surface's ordinary placement, not a
+ * placement of its own: the whole point of this module is that there is
+ * one path, and both surfaces call this the same way.
+ *
+ * It cannot chase its own tail, for two independent reasons:
+ *
+ *  1. A placement only ever writes `left` and `top`. The card is
+ *     absolutely positioned at a fixed width with its height set by its
+ *     content, so moving it cannot change how big it is, and there is
+ *     no second report to answer.
+ *  2. Even so, a report that measures the same size as the one last
+ *     passed on is dropped here. ResizeObserver does re-report a box
+ *     unchanged when the layout around it churns, and `cardSize` reads
+ *     whole pixels, so sub-pixel jitter cannot get through either.
+ *
+ * Returns the function that stops watching. Where there is no
+ * ResizeObserver -- jsdom has none -- nothing is watched and the card
+ * keeps the placement it was given, rather than taking a wrong one.
+ */
+export function watchCardSize(el: HTMLElement, onChange: (size: Size) => void): () => void {
+  if (typeof ResizeObserver === 'undefined') return () => {}
+  let last: Size | null = null
+  const ro = new ResizeObserver(() => {
+    const now = cardSize(el)
+    if (last !== null && last.w === now.w && last.h === now.h) return
+    last = now
+    onChange(now)
+  })
+  ro.observe(el)
+  return () => ro.disconnect()
+}
+
+/**
  * The card's grace period, as one small object per card (#1027).
  *
  * `hold()` while the pointer is on the subject or on the card, and
