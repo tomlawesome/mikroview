@@ -571,10 +571,16 @@ gate:scripts:
 # CPU as noise in its own numbers, and a second `hold` would simply
 # refuse while the first is active.
 #
-# Timeout arithmetic: npm ci ~90s, quiet-host hold and wait-quiet-host's
-# drain together up to 600s worst case, the probe itself measured at 38s
-# on this workstation (frontend/scripts/probe-perf.mjs, run twice). Sum
-# ~730s, doubled and rounded up: 25 minutes.
+# Timeout arithmetic, corrected 2026-09-06 from the job's first four runs
+# on the runner rather than from workstation figures: npm ci measured 11,
+# 13, 14 and 21s, not the ~90s originally assumed; quiet-host hold applied
+# in 5s, and wait-quiet-host's drain is bounded at 600s because it gives
+# up and fails there (scripts/wait-quiet-host.sh, MAX_WAIT_S); the probe
+# took 38s unseeded, and will be longer now it renders 3000 events.
+#
+# The drain cap sets the bound, not npm ci. Worst case is roughly 60s
+# npm ci + 60s hold + 600s drain + 180s probe, about 16 minutes, so the
+# 25 stands -- 1.6x worst case, not the 11x a 134s run makes it look.
 perf:promotion:
   stage: gate
   tags: [big]
@@ -594,6 +600,22 @@ perf:promotion:
     - 't2=$(date +%s); echo "hold+drain wall seconds: $((t2 - t1))"'
     - eval "$(scripts/live-env.sh up)"
     - trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT
+    # Seed before measuring. Without this the probe rendered an empty
+    # instance: `up` creates no events, and the 300-event baseline other
+    # suites feed comes from run-scenarios.sh, which this job does not
+    # call. The first successful run (job 5833) measured 16.7ms frames
+    # and zero long tasks on every surface -- which is what an idle app
+    # with nothing on screen looks like, not a result. A gate that
+    # renders an empty screen passes exactly the regressions that only
+    # appear with rows on it, which is the failure #690 describes.
+    #
+    # 3000 is a gate number, not a realistic one: enough to fill the
+    # docket, the stream and the entity lists, well short of the demo's
+    # pathological hour (~8000 events, 2462 New device episodes, #690),
+    # and fixed so run-to-run comparison stays meaningful. Change it and
+    # the baseline must be regenerated -- perf-compare.mjs would
+    # otherwise be diffing two different workloads.
+    - scripts/live-env.sh syslog 3000 perf-seed
     - t3=$(date +%s)
     - node frontend/scripts/probe-perf.mjs --json perf-current.json
     - 't4=$(date +%s); echo "probe wall seconds: $((t4 - t3))"'
