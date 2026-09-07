@@ -227,13 +227,12 @@
   <div class="shell" class:with-bottom-bar={viewportState.isMobile}>
     <!-- ConnectionBanner's connecting/disconnected line tops the content
          column and pushes content rather than overlaying it, per the
-         ratified record. IngestLossDrawer is the one supersession of
-         that rule (#1015, owner-ratified 2026-09-06): it overlays this
-         column instead (position:absolute against .content's own
-         position:relative below), because its rows come and go on their
-         own as counters clear, and reflowing the full-viewport deck
-         underneath on every poll would be worse than covering it
-         briefly. The connection line is unaffected -- it still pushes. -->
+         ratified record. IngestLossDrawer sits directly under it and
+         does the same (#1015): it is where the ingest-loss banners
+         always were, and what it adds is folding away to a 3px line
+         rather than holding that space open for good. It overlaid the
+         column in a first cut, which covered each scene's own bar --
+         see the drawer's own header comment. -->
     <div class="content">
       <ConnectionBanner />
       <IngestLossDrawer />
@@ -315,10 +314,6 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    /* #1015: the positioning context for IngestLossDrawer's overlay
-       (position:absolute; top:0; left:0; right:0) -- see this file's
-       own comment above the drawer's mount point. */
-    position: relative;
   }
 
   main {
