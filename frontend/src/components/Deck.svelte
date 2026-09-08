@@ -35,7 +35,7 @@
   import LiveTable from './LiveTable.svelte'
   import Whisper from './Whisper.svelte'
   import Docket from './Docket.svelte'
-  import Topography from './Topography.svelte'
+  import GhostRows from './GhostRows.svelte'
   import Entities from './Entities.svelte'
   import EngineRoom from './EngineRoom.svelte'
   import Fleet from './Fleet.svelte'
@@ -62,6 +62,43 @@
   function mounted(i: number): boolean {
     return deckCardMounted(i, activeIndex, cards[i]?.key, visibleKeys)
   }
+
+  // #1033: Topography -- and the City it draws once the altitude slider
+  // is past the city stop -- is far the heaviest scene on the deck, and
+  // nothing the app opens with needs a byte of it. So it is imported
+  // dynamically: Rollup emits it as its own chunk, and first paint stops
+  // paying for a map most sessions never roll to. Nothing else imports
+  // the component statically, which is what keeps it out of the entry
+  // chunk; a static import anywhere reachable from main.ts would pull it
+  // straight back in and this would buy nothing.
+  //
+  // The fetch is driven by the same mount rule as every other scene
+  // above, so the deck's own 25% lookahead margin normally has the chunk
+  // in hand before the card reaches the screen.
+  type MapModule = typeof import('./Topography.svelte')
+  let mapModule = $state<MapModule | undefined>(undefined)
+  let mapFailed = $state(false)
+  let mapLoading = false
+
+  async function loadMap() {
+    if (mapModule || mapLoading) return
+    mapLoading = true
+    mapFailed = false
+    try {
+      mapModule = await import('./Topography.svelte')
+    } catch {
+      // A chunk that never arrives -- offline, or a service worker
+      // holding a precache that no longer matches the deployed build --
+      // must say so and offer another go, not leave the card blank.
+      mapFailed = true
+    } finally {
+      mapLoading = false
+    }
+  }
+
+  $effect(() => {
+    if (cards.some((c, i) => c.key === 'topography' && mounted(i))) void loadMap()
+  })
 
   let deckEl: HTMLElement | undefined
   let cardEls: Record<string, HTMLElement> = {}
@@ -164,7 +201,17 @@
             <SceneBar scene={card.views.includes(appState.view) ? appState.view : card.views[0]} />
             <div class="card-body">
               {#if card.key === 'topography'}
-                <Topography />
+                {#if mapModule}
+                  {@const Topography = mapModule.default}
+                  <Topography />
+                {:else if mapFailed}
+                  <div class="map-failed">
+                    <p role="alert">The map could not be loaded.</p>
+                    <button onclick={loadMap}>Try again</button>
+                  </div>
+                {:else}
+                  <GhostRows label="Loading the map…" rows={4} />
+                {/if}
               {:else if card.key === 'metrics'}
                 <Metrics />
               {:else if card.key === 'live'}
@@ -260,6 +307,20 @@
        unnecessary here and everywhere else that copied it. */
     padding: 0 14px 14px;
     min-height: 0;
+  }
+
+  /* #1033: the map chunk failing to arrive is the one state the deck
+     cannot draw its way out of, so it gets a plain centred message and
+     a retry rather than an empty card. */
+  .map-failed {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--fg-muted);
+    font-size: 13px;
   }
 
   .roll-rail {

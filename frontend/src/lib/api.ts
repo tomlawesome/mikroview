@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { parseAddress, parseCidr } from './addressMatch'
+import type { OffBaseline } from './baseline'
 import type {
   ApiToken,
   AuditResult,
@@ -1170,6 +1171,69 @@ export async function deleteCoverageDeclaration(key: string): Promise<string | n
   return (await res.text()) || `deleteCoverageDeclaration: ${res.status}`
 }
 
+// HostMarkKind: what an operator said about a quiet host (#1016).
+// 'intended' means quiet on purpose and stays said; 'dismissed' means
+// take it off the map, and the server clears it by itself the next time
+// that host appears in the feed.
+export type HostMarkKind = 'intended' | 'dismissed'
+
+// HostMark mirrors internal/hosts.Mark. `by`/`at` are always server-set,
+// never sent by the client, same convention as CoverageDeclaration's
+// `declaredBy`/`declaredAt` above.
+export interface HostMark {
+  kind: HostMarkKind
+  reason?: string
+  by: string
+  at: string
+}
+
+// Host mirrors internal/hosts.Host -- one host the syslog feed has
+// shown, keyed `"<iface>|<ip>"`. `lastSeen` is what tells the map how
+// long a host has been quiet; `label` is the last hostname seen for the
+// address and may be absent, because a host nothing names is still a
+// host.
+export interface Host {
+  key: string
+  iface: string
+  ip: string
+  label?: string
+  firstSeen: string
+  lastSeen: string
+  events: number
+  mark?: HostMark
+}
+
+// fetchHosts/putHostMark/deleteHostMark: the host presence register
+// (#1016). Reading is open to any signed-in user, same tier as
+// fetchCoverageDeclarations above; both writes are user tier
+// server-side and audit-logged.
+export async function fetchHosts(): Promise<Host[]> {
+  const res = await fetch('/api/hosts')
+  if (!res.ok) throw new ApiError(`fetchHosts: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.hosts ?? []
+}
+
+// putHostMark creates or replaces the mark on one host, identified by
+// key -- the server's own single PUT-as-upsert primitive (see
+// internal/api's handleHostMarkPut). `reason` is required for
+// 'intended' and optional for 'dismissed'.
+export async function putHostMark(
+  key: string,
+  kind: HostMarkKind,
+  reason = '',
+): Promise<Host | string> {
+  const res = await putJSON(`/api/hosts/${encodeURIComponent(key)}/mark`, { kind, reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `putHostMark: ${res.status}`
+}
+
+export async function deleteHostMark(key: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/hosts/${encodeURIComponent(key)}/mark`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteHostMark: ${res.status}`
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Settings (#796)
 //
@@ -1356,4 +1420,89 @@ export async function fetchTuneLoggingRender(
   const res = await postJSON('/api/tune-logging/render', req)
   if (res.ok) return res.json()
   return (await res.text()) || `fetchTuneLoggingRender: ${res.status}`
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Baseline (#1016, round 49)
+//
+// Appended as its own delimited block at the end of the file, for the
+// reason the settings block above gives: this file's other in-flight
+// changes and this one should not land on the same lines.
+// ─────────────────────────────────────────────────────────────────────
+
+// OffBaselineResponse is the wire shape of GET /api/baseline/off: the
+// OffBaseline document the drawing code works with, plus the host quiet
+// window.
+//
+// That window rides along because it is a threshold, not a host: it
+// belongs with the other two this endpoint already carries, and the
+// alternative was a second request on every page load to fetch one
+// number. It is deliberately outside `config`, so a caller reading
+// config.days/config.of sees exactly the two-field object baseline.ts
+// declares.
+export interface OffBaselineResponse extends OffBaseline {
+  hostQuietAfterMs: number
+}
+
+// BaselineLineRecord is the whole stored line, which the expected
+// endpoints echo back on success. Wider than OffBaselineLine: it carries
+// the recurrence bookkeeping the register decides with, which the map
+// does not draw.
+export interface BaselineLineRecord {
+  key: string
+  srcIp: string
+  dstIp: string
+  port?: number
+  proto?: string
+  days: number
+  anchor: number
+  firstSeen: string
+  lastSeen: string
+  countToday: number
+  firstSeenToday?: string
+  outcomeToday?: 'accept' | 'drop'
+  expected?: { reason: string; by: string; at: string }
+}
+
+// fetchOffBaseline reads today's off-baseline lines -- the lines seen
+// today that are not on the established pattern -- with the threshold
+// that judged them and how many there are.
+//
+// There is deliberately no call for the established lines: the server
+// has no endpoint serving them, because on a busy network they are the
+// entire traffic set (see internal/api's handleBaselineOff). Absence
+// from this list is what "established" means on the client.
+//
+// Throws on failure like fetchHosts, rather than returning a string:
+// this is a read the map retries on its own schedule, and the caller
+// that swallows the failure is baselineState.refresh.
+export async function fetchOffBaseline(): Promise<OffBaselineResponse> {
+  const res = await fetch('/api/baseline/off')
+  if (!res.ok) throw new ApiError(`fetchOffBaseline: ${res.status}`, res.status)
+  return res.json()
+}
+
+// putBaselineExpected records that a line is meant to be there, with the
+// reason the operator gave. The server stamps who and when from the
+// session, never from this body, and the line reads established from
+// then on.
+//
+// `reason` is required -- the server refuses an empty one with a 400,
+// which arrives here as the error string.
+export async function putBaselineExpected(
+  key: string,
+  reason: string,
+): Promise<BaselineLineRecord | string> {
+  const res = await putJSON(`/api/baseline/${encodeURIComponent(key)}/expected`, { reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `putBaselineExpected: ${res.status}`
+}
+
+// deleteBaselineExpected withdraws that statement, putting the line back
+// to whatever its own recurrence says it is -- which may well be
+// off-baseline again on the next read.
+export async function deleteBaselineExpected(key: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/baseline/${encodeURIComponent(key)}/expected`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteBaselineExpected: ${res.status}`
 }

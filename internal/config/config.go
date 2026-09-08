@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/tomlawesome/mikroview/internal/baseline"
 )
 
 // DefaultDataDir is where every optional persistence path defaults to
@@ -390,6 +392,71 @@ type Entities struct {
 type Coverage struct {
 	StorePath string `yaml:"storePath"`
 }
+
+// Hosts configures internal/hosts' host presence register (issue
+// #1016): every host the syslog feed has shown, so the map can grey out
+// one that has gone quiet instead of silently dropping it, plus the
+// marks an operator has put on quiet hosts. StorePath left empty is a
+// fully supported, deliberate choice, same optional-persistence
+// contract as Coverage.StorePath above: the register still works, it
+// just rebuilds from the feed after a restart and the marks do not
+// survive.
+type Hosts struct {
+	StorePath string `yaml:"storePath"`
+}
+
+// Baseline configures internal/baseline's line register (issue #1016,
+// round 49): which source/destination/port/protocol lines the feed has
+// shown, on which of the last few days, so the map can draw a line that
+// is off the established pattern brightly and let every settled one
+// recede.
+//
+// Unlike Hosts.StorePath above, StorePath left empty here is supported
+// but genuinely lossy, and worth saying plainly: the register rebuilds
+// from the feed, but recurrence is *time*, not volume, so a restart
+// leaves every line looking like it was first seen today. The map would
+// then light up everything for the first Days days after every restart.
+// It works, and it is the wrong picture; set a path.
+type Baseline struct {
+	// StorePath is where the register persists. See the note above on
+	// what an empty path really costs here.
+	StorePath string `yaml:"storePath"`
+	// Days and Of are the establishment threshold: a line seen on Days
+	// distinct days out of the last Of is established and recedes.
+	// Defaults are the owner-ratified 3-of-14 (2026-09-07,
+	// docs/design/screens/city/DESIGN.md).
+	//
+	// They are here rather than in internal/settings because that package
+	// is deliberately narrow -- "not a second configuration system", only
+	// values whose whole point is being adjusted against live evidence on
+	// a settings screen. These are deployment shape: how much recurrence
+	// this network needs before it counts as a habit.
+	Days int `yaml:"days"`
+	// Of is the window Days is counted within, in days. Capped at
+	// baseline.MaxDays by the width of the per-line recurrence bitmap, so
+	// a longer window is refused rather than silently truncated.
+	Of int `yaml:"of"`
+	// HostQuietAfter is how long a host may be silent before the map
+	// draws it as quiet. 24 hours by owner ratification (2026-09-07),
+	// replacing a ten-minute default that made an idle laptop look like a
+	// disappearance: "a host silent for ten minutes means nothing".
+	//
+	// It sits in this block rather than under Hosts because it is the
+	// same kind of number as Days and Of -- how patient the map is before
+	// it calls something unusual -- and the owner asked for the three to
+	// be configurable together.
+	HostQuietAfter time.Duration `yaml:"hostQuietAfter"`
+}
+
+// DefaultHostQuietAfter is how long a host may be silent before the map
+// calls it quiet, owner-ratified at 24 hours on 2026-09-07.
+//
+// The number it replaced was ten minutes, chosen in slice B before
+// anything drew it. The owner's correction was that ten minutes is not
+// evidence of anything -- a laptop with its lid shut over lunch is not a
+// host that has gone away -- and that presence is only worth drawing at
+// the scale of a working day.
+const DefaultHostQuietAfter = 24 * time.Hour
 
 // Audit configures internal/audit's persisted admin-action accountability
 // log (issue #112) -- who created a user, changed a detector setting,
@@ -990,6 +1057,8 @@ type Config struct {
 	Auth       Auth       `yaml:"auth"`
 	Entities   Entities   `yaml:"entities"`
 	Coverage   Coverage   `yaml:"coverage"`
+	Hosts      Hosts      `yaml:"hosts"`
+	Baseline   Baseline   `yaml:"baseline"`
 	Audit      Audit      `yaml:"audit"`
 	Setup      Setup      `yaml:"setup"`
 	Watchlist  Watchlist  `yaml:"watchlist"`
@@ -1133,6 +1202,18 @@ func defaults() Config {
 		},
 		Coverage: Coverage{
 			StorePath: DefaultDataDir + "/coverage.json",
+		},
+		Hosts: Hosts{
+			StorePath: DefaultDataDir + "/hosts.json",
+		},
+		Baseline: Baseline{
+			StorePath: DefaultDataDir + "/baseline.json",
+			// Taken from internal/baseline rather than restated, so the
+			// shipped default and the register's own fallback can never
+			// drift into disagreeing about what 3-of-14 means.
+			Days:           baseline.DefaultDays,
+			Of:             baseline.DefaultOf,
+			HostQuietAfter: DefaultHostQuietAfter,
 		},
 		Audit: Audit{
 			StorePath: DefaultDataDir + "/audit.json",
@@ -1539,6 +1620,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_COVERAGE_STORE_PATH"); v != "" {
 		cfg.Coverage.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_HOSTS_STORE_PATH"); v != "" {
+		cfg.Hosts.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_BASELINE_STORE_PATH"); v != "" {
+		cfg.Baseline.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
 		cfg.Audit.StorePath = v

@@ -22,6 +22,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/hosts"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
@@ -56,6 +57,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	}
 	ru, _ := rules.Open("")
 	cs, _ := coverage.Open("")
+	hr, _ := hosts.Open("")
 	as, _ := audit.Open("")
 	ss, _ := suggest.Open("")
 	// matchlog.Open has no in-memory-only mode (see internal/matchlog's
@@ -75,6 +77,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Entities:      es,
 		Rules:         ru,
 		Coverage:      cs,
+		Hosts:         hr,
 		Audit:         as,
 		Suggest:       ss,
 		MatchLog:      ml,

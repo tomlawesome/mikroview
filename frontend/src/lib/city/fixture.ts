@@ -3,9 +3,10 @@
 // The mockup's estate as CityInput, for the city tests: two routers,
 // six zones, the WAN and two tunnels, roads of every verdict.
 import type { CityInput } from './input'
+import { bufferHost } from './presence'
 
 const hosts = (n: number, prefix: string, base: string) =>
-  Array.from({ length: n }, (_, i) => ({ label: prefix + '-' + (i + 1), ip: base + (10 + i) }))
+  Array.from({ length: n }, (_, i) => bufferHost(prefix + '-' + (i + 1), base + (10 + i)))
 
 export function mockupEstate(): CityInput {
   return {
@@ -14,12 +15,12 @@ export function mockupEstate(): CityInput {
       { id: 'hapax3', name: 'hAP ax3', primary: false, sourceIp: '10.10.0.40' },
     ],
     zones: [
-      { id: 'bridge-lan', name: 'LAN', cidr: '10.10.0.0/24', hosts: hosts(6, 'lan', '10.10.0.'), hostCount: 9, eventCount: 900, routerId: 'rb5009', dark: false },
-      { id: 'vlan-srv', name: 'Servers', cidr: '10.20.0.0/24', hosts: hosts(4, 'srv', '10.20.0.'), hostCount: 4, eventCount: 600, routerId: 'rb5009', dark: false },
-      { id: 'vlan-iot', name: 'IoT', cidr: '10.30.0.0/24', hosts: hosts(5, 'iot', '10.30.0.'), hostCount: 5, eventCount: 300, routerId: 'rb5009', dark: false },
-      { id: 'vlan-guest', name: 'Guest', cidr: '10.40.0.0/24', hosts: hosts(1, 'guest', '10.40.0.'), hostCount: 1, eventCount: 40, routerId: 'rb5009', dark: true },
-      { id: 'wlan-wsh', name: 'Workshop', cidr: '10.50.0.0/24', hosts: hosts(3, 'wsh', '10.50.0.'), hostCount: 3, eventCount: 60, routerId: 'hapax3', dark: false },
-      { id: 'wlan-cams', name: 'Cameras', cidr: '10.60.0.0/24', hosts: hosts(2, 'cam', '10.60.0.'), hostCount: 2, eventCount: 20, routerId: 'hapax3', dark: false },
+      { id: 'bridge-lan', name: 'LAN', cidr: '10.10.0.0/24', hosts: hosts(6, 'lan', '10.10.0.'), hostCount: 9, eventCount: 900, routerId: 'rb5009', coverage: 'logged', dark: false },
+      { id: 'vlan-srv', name: 'Servers', cidr: '10.20.0.0/24', hosts: hosts(4, 'srv', '10.20.0.'), hostCount: 4, eventCount: 600, routerId: 'rb5009', coverage: 'logged', dark: false },
+      { id: 'vlan-iot', name: 'IoT', cidr: '10.30.0.0/24', hosts: hosts(5, 'iot', '10.30.0.'), hostCount: 5, eventCount: 300, routerId: 'rb5009', coverage: 'logged', dark: false },
+      { id: 'vlan-guest', name: 'Guest', cidr: '10.40.0.0/24', hosts: hosts(1, 'guest', '10.40.0.'), hostCount: 1, eventCount: 40, routerId: 'rb5009', coverage: 'dark', dark: true },
+      { id: 'wlan-wsh', name: 'Workshop', cidr: '10.50.0.0/24', hosts: hosts(3, 'wsh', '10.50.0.'), hostCount: 3, eventCount: 60, routerId: 'hapax3', coverage: 'logged', dark: false },
+      { id: 'wlan-cams', name: 'Cameras', cidr: '10.60.0.0/24', hosts: hosts(2, 'cam', '10.60.0.'), hostCount: 2, eventCount: 20, routerId: 'hapax3', coverage: 'logged', dark: false },
     ],
     edges: [
       { key: 'bridge-lan|ether1', from: 'bridge-lan', to: 'ether1', events: 500, verdict: 'planned' },
@@ -36,15 +37,22 @@ export function mockupEstate(): CityInput {
     ],
     wan: 'ether1',
     wanLogged: true,
+    wanCoverage: 'logged',
+    // The WireGuard boundary was declared quiet on purpose, so nothing
+    // logs it and no road runs to wg0 (round 49) -- a road there would
+    // claim a log line that was never written. The bridge still stands,
+    // white and unlamped; the deck is what says so.
+    unloggedBoundaries: ['bridge-lan|wg0'],
     rulesPushed: true,
     gates: [
-      // lan -> srv is a lit gate (an accept rule that logs); the reverse
-      // direction is a real gate too, but unlit -- two different gates
-      // on the same boundary, so a lamp is never assumed symmetric.
-      { key: 'forward|bridge-lan|vlan-srv', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'vlan-srv', logged: true, ruleCount: 3, comment: 'nas access' },
-      { key: 'forward|vlan-srv|bridge-lan', chain: 'forward', inInterface: 'vlan-srv', outInterface: 'bridge-lan', logged: false, ruleCount: 1, comment: '' },
+      // lan -> srv logs; srv -> lan is a real gate too but logs nothing
+      // and nobody declared it. Round 49 (#1016) folds the two into one
+      // break in the wall, wearing the worse of them: the edge is dark
+      // and the gate unlit, and the card lists both directions.
+      { key: 'forward|bridge-lan|vlan-srv', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'vlan-srv', logged: true, ruleCount: 3, ordinal: 4, comment: 'nas access', edgeKey: 'bridge-lan|vlan-srv', reverseEdgeKey: 'vlan-srv|bridge-lan', coverage: 'logged', reverseCoverage: 'dark' },
+      { key: 'forward|vlan-srv|bridge-lan', chain: 'forward', inInterface: 'vlan-srv', outInterface: 'bridge-lan', logged: false, ruleCount: 1, ordinal: 9, comment: '', edgeKey: 'vlan-srv|bridge-lan', reverseEdgeKey: 'bridge-lan|vlan-srv', coverage: 'dark', reverseCoverage: 'logged' },
       // The second router's workshop opens onto the primary LAN too.
-      { key: 'forward|wlan-wsh|bridge-lan', chain: 'forward', inInterface: 'wlan-wsh', outInterface: 'bridge-lan', logged: true, ruleCount: 2, comment: '' },
+      { key: 'forward|wlan-wsh|bridge-lan', chain: 'forward', inInterface: 'wlan-wsh', outInterface: 'bridge-lan', logged: true, ruleCount: 2, ordinal: 12, comment: 'workshop to lan', edgeKey: 'wlan-wsh|bridge-lan', reverseEdgeKey: 'bridge-lan|wlan-wsh', coverage: 'logged', reverseCoverage: 'logged' },
       // Nothing accepts vlan-iot -> bridge-lan or vlan-guest -> bridge-lan
       // at all: those walls stand with no gate, matching the unplanned
       // and holding verdicts above -- no rule anticipated the first, and
@@ -57,8 +65,10 @@ export function mockupEstate(): CityInput {
         apiState: 'up',
         events: 3,
         peers: [{ id: 'l2tp-out1/ppp/branch', name: 'branch-office', address: '10.90.0.2', kind: 'ppp' }],
+        coverage: 'logged',
       },
-      { iface: 'wg0', routerId: 'rb5009', apiState: 'down', events: 0, peers: [] },
+      // wg0 was declared quiet on purpose: a white deck, no lamps, no road.
+      { iface: 'wg0', routerId: 'rb5009', apiState: 'down', events: 0, peers: [], coverage: 'quiet' },
     ],
   }
 }

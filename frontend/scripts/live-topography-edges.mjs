@@ -14,7 +14,7 @@
 // like one thick line, which is the fault this scenario exists for.
 //
 // Also asserts the decision that came out of the diagnosis (#726, Fable
-// 5): the waist-to-internet corridor carries one trunk in every lens,
+// 5): the waist-to-internet corridor carries exactly one trunk,
 // and lanes fan at the waist card instead of running up the corridor
 // side by side.
 
@@ -144,27 +144,36 @@ check(
   'the filter-rule table is accepted through the real ingest endpoint',
 )
 
-async function openLens(name) {
+// Round 49 deleted the lens row: traffic is the picture and coverage is
+// always on, so there is no tab to pick before the map can be read. What
+// is left of `openLens` is getting to a 2D stop.
+async function open2D() {
   await page.reload()
   await page.click('.rail-name >> text=Topography')
-  // #869: off the city default and onto zones before touching lenses or
-  // waiting on anything the 2D map draws -- see the coverage scenario
-  // for the full note.
+  // #869: off the city default and onto zones before waiting on anything
+  // the 2D map draws -- see the coverage scenario for the full note.
   await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
   await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
-  await page.waitForSelector('[data-card="topography"] [aria-label="Map lenses"]', { timeout: 10000 })
-  await page.click(`[data-card="topography"] [aria-label="Map lenses"] >> text=${name}`)
   await page.waitForTimeout(600)
 }
 
-await openLens('Policy')
-await page.waitForSelector('[data-card="topography"] .edge-g', { timeout: 10000 })
+await open2D()
+await page.waitForSelector('[data-card="topography"] .cedge', { timeout: 10000 })
 
 // Walk each rendered path in the browser: 61 points apiece, in the
 // SVG's own user units, which is the space the map's geometry is
 // written in.
+//
+// Every boundary line the map draws, not just the coverage material.
+// Under the old lens row this read `path.cedge` because the Coverage
+// lens drew one for every boundary-direction. Round 49 keeps coverage
+// material only where nothing logs (Topography.svelte's
+// `drawnCoverage`) and lets the traffic picture carry the rest, so
+// `.cedge` alone is now a handful of paths and would let two traffic
+// edges run along each other unnoticed -- which is the exact fault
+// #726 is about.
 const runs = await page.evaluate(() => {
-  const paths = [...document.querySelectorAll('[data-card="topography"] path.edge')]
+  const paths = [...document.querySelectorAll('[data-card="topography"] path.cedge, [data-card="topography"] path.redge')]
   const sample = (p) => {
     const len = p.getTotalLength()
     return Array.from({ length: 61 }, (_, i) => {
@@ -188,7 +197,7 @@ const runs = await page.evaluate(() => {
   return { count: paths.length, pairs: out }
 })
 
-check(runs.count >= 4, `the pushed table draws its edges (${runs.count} paths)`)
+check(runs.count >= 4, `the pushed table draws its boundary lines (${runs.count} paths)`)
 
 const worst = runs.pairs.reduce((w, p) => (p.shared > w.shared ? p : w), { shared: 0, a: -1, b: -1 })
 check(
@@ -196,15 +205,14 @@ check(
   `no two edges are drawn along each other (worst pair ${worst.a}/${worst.b} shares ${(worst.shared * 100).toFixed(0)}% of its run)`,
 )
 
-// The corridor carries one trunk, in every lens -- the ratified answer
-// to "several lanes heading for the internet" (#726).
-for (const lens of ['Policy', 'Traffic', 'Coverage']) {
-  await openLens(lens)
-  const trunks = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-card="topography"] path.rib')].filter((p) => (p.getAttribute('d') ?? '').replace(/\s+/g, ' ').trim() === 'M700 104 V 232').length,
-  )
-  check(trunks === 1, `the ${lens} lens draws exactly one waist-to-internet trunk (${trunks})`)
-}
+// The corridor carries one trunk -- the ratified answer to "several
+// lanes heading for the internet" (#726). This used to be checked once
+// per lens; with the lens row gone there is one picture to check it in.
+await open2D()
+const trunks = await page.evaluate(() =>
+  [...document.querySelectorAll('[data-card="topography"] path.rib')].filter((p) => (p.getAttribute('d') ?? '').replace(/\s+/g, ' ').trim() === 'M700 104 V 232').length,
+)
+check(trunks === 1, `the map draws exactly one waist-to-internet trunk (${trunks})`)
 
 // The waist card, against a real push (#715 item 7, #701 fact 2). Round
 // 30 draws "RouterOS <version> · the waist · <N> rules", and the count
@@ -216,7 +224,7 @@ for (const lens of ['Policy', 'Traffic', 'Coverage']) {
 // when the card is actually showing the router this scenario pushed to.
 // Asserting the string outright would fail on a neighbour's device and
 // report a defect that is not there.
-await openLens('Policy')
+await open2D()
 const waist = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"] .isl.waist')?.parentElement
   return {
@@ -245,46 +253,50 @@ if (mine && waist.name === mine.name) {
   console.log(`  - waist count skipped: the map's primary device is "${waist.name}", not this scenario's "${mine?.name}"`)
 }
 
-// The lens row in a real browser (#715 item 3): three exclusive base
-// tabs and two independent overlay toggles, both latched on. Asserted
+// The pill row in a real browser (#715 item 3, as round 49 left it).
+// The two exclusive base lens tabs are gone -- traffic is the picture,
+// coverage is always on, policy was deleted -- so what the row has to
+// carry now is exactly two overlay toggles and nothing else. Asserted
 // here rather than in a scenario of its own because the row is on every
 // screen this file already drives.
-await openLens('Policy')
+await open2D()
 const row = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
-  const tabs = [...(card?.querySelectorAll('[aria-label="Map lenses"] button') ?? [])].map((b) => b.textContent.trim())
-  const ovs = [...(card?.querySelectorAll('[aria-label="Map overlays"] button') ?? [])].map((b) => ({
-    text: b.textContent.trim(),
-    pressed: b.getAttribute('aria-pressed'),
-  }))
-  return { tabs, ovs }
+  return {
+    lensRows: card?.querySelectorAll('[aria-label="Map lenses"]').length ?? 0,
+    ovs: [...(card?.querySelectorAll('[aria-label="Map overlays"] button') ?? [])].map((b) => ({
+      text: b.textContent.trim(),
+      pressed: b.getAttribute('aria-pressed'),
+    })),
+  }
 })
-check(row.tabs.length === 3, `three base lenses (${row.tabs.join(' · ')})`)
-check(row.ovs.length === 2, `two overlay toggles (${row.ovs.map((o) => o.text).join(' · ')})`)
+check(row.lensRows === 0, `no lens row is drawn at all (${row.lensRows})`)
+check(row.ovs.length === 2, `two overlay toggles and no more (${row.ovs.map((o) => o.text).join(' · ')})`)
+check(
+  row.ovs.some((o) => o.text.includes('flags')) && row.ovs.some((o) => o.text.includes('watch')),
+  `the two are flags and watch (${row.ovs.map((o) => o.text).join(' · ')})`,
+)
 check(
   row.ovs.every((o) => o.pressed === 'true'),
-  'both overlays arrive switched on, as rounds 30 and 39 draw the scene',
+  'both overlays arrive switched on, as round 49 draws the scene',
 )
 
-// A toggle latches and leaves the base lens alone -- the whole point of
-// the two families being different controls.
+// A toggle latches, and latches on its own: switching one leaves the
+// other where it was. That independence is what made them a different
+// family from the lens tabs, and it outlived the tabs.
 //
 // The click and the read are two steps on purpose. Svelte 5 applies a
 // state change to the DOM in a microtask, so clicking and reading
 // aria-pressed inside one page.evaluate always reads the value the
 // click was about to replace -- the assertion fails on a control that
-// works. Drive the page the way openLens above does: Playwright clicks,
-// the page settles, a separate evaluate reads.
+// works. Playwright clicks, the page settles, a separate evaluate reads.
 await page.click('[data-card="topography"] [aria-label="Map overlays"] button >> nth=0')
 await page.waitForTimeout(300)
-const afterToggle = await page.evaluate(() => {
-  const card = document.querySelector('[data-card="topography"]')
-  const btn = card.querySelector('[aria-label="Map overlays"] button')
-  const on = [...card.querySelectorAll('[aria-label="Map lenses"] button')].find((b) => b.classList.contains('on'))
-  return { pressed: btn.getAttribute('aria-pressed'), lens: on?.textContent.trim() ?? '' }
-})
-check(afterToggle.pressed === 'false', `an overlay latches off when clicked (${afterToggle.pressed})`)
-check(afterToggle.lens === 'policy', `toggling an overlay leaves the base lens where it was (${afterToggle.lens})`)
+const afterToggle = await page.evaluate(() =>
+  [...document.querySelectorAll('[data-card="topography"] [aria-label="Map overlays"] button')].map((b) => b.getAttribute('aria-pressed')),
+)
+check(afterToggle[0] === 'false', `an overlay latches off when clicked (${afterToggle[0]})`)
+check(afterToggle[1] === 'true', `and leaves the other overlay where it was (${afterToggle[1]})`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()

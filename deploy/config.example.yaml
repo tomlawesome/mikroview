@@ -338,6 +338,36 @@ store:
 # coverage:
 #   storePath: /var/lib/mikroview/coverage.json
 
+# Optional: the host presence register (#1016) -- every host the syslog
+# feed has shown, so a host that stops talking goes quiet on the map
+# instead of disappearing, plus your own marks on the quiet ones
+# (intended, or dismissed). Rebuilt from the feed on every restart if
+# unset; only the marks genuinely need persisting. Bounded at 10,000
+# hosts. storePath already defaults to /var/lib/mikroview/hosts.json;
+# only uncomment this block to move that path. See
+# docs/configuration.md's "Host presence register" section.
+# hosts:
+#   storePath: /var/lib/mikroview/hosts.json
+
+# Optional: the baseline line register (#1016) -- which source/
+# destination/port/protocol lines the feed has shown, and on how many of
+# the last few days, so the map can draw a line off its established
+# pattern brightly and let every settled one recede. storePath already
+# defaults to /var/lib/mikroview/baseline.json, but unlike the stores
+# above, leaving it unset is genuinely lossy: recurrence is counted in
+# days, so a register rebuilt from the feed after a restart sees every
+# line as first seen today. days/of are the establishment threshold (a
+# line seen on `days` distinct days out of the last `of` counts as
+# established); of is capped at 32, the width of the per-line recurrence
+# bitmap. hostQuietAfter is how long a host may go silent before the map
+# draws it as quiet. Bounded at 50,000 lines. See docs/configuration.md's
+# "Baseline line register" section.
+# baseline:
+#   storePath: /var/lib/mikroview/baseline.json
+#   days: 3
+#   of: 14
+#   hostQuietAfter: 24h
+
 # Optional: the persisted, admin-only accountability log of every admin-
 # privileged mutation (user create, entity upsert/delete, token create/
 # revoke, detector setting change, flag exclusion removal) -- who did it

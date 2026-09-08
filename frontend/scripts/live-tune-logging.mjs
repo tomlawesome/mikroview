@@ -35,9 +35,11 @@ const fixtureExport = readFileSync(
 const { page, consoleErrors } = await session({ waitForEvents: 20 })
 
 // --- Reach the page the way the wizard's finish screen offers it ------
-// (#435 decision 2's other way in is a dark pair on the topography's
-// coverage lens; the wizard's link is used here because it needs no
-// particular boundary state to be set up first).
+// (#435 decision 2's other way in is a dark boundary's own card on the
+// map -- round 49 made coverage always-on material rather than a lens,
+// so `rules ▸` on that card is the other door. The wizard's link is
+// used here because it needs no particular boundary state set up
+// first).
 await goTo(page, 'Run setup…')
 const modal = page.locator('.setup-wizard')
 await modal.waitFor({ state: 'visible' })

@@ -13,11 +13,13 @@ import (
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
+	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/hosts"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/naming"
@@ -155,6 +157,32 @@ type Server struct {
 	// empty, unpersisted store), same always-usable convention as
 	// Entities/Flags/Definitions above.
 	Coverage *coverage.Store
+	// Hosts is the host presence register (issue #1016): every host the
+	// syslog feed has shown, so the map can grey out one that has gone
+	// quiet instead of silently dropping it, plus whatever an operator
+	// has said about a quiet host. Backs GET /api/hosts and the mark
+	// endpoints (see hosts.go). Always non-nil (internal/hosts.Open("")
+	// returns a usable, empty, unpersisted register), same
+	// always-usable convention as Coverage above.
+	Hosts *hosts.Register
+	// Baseline is the line register (issue #1016, round 49): which
+	// source/destination/port/protocol lines the feed has shown and on
+	// which of the last few days, so the map can draw a line that is off
+	// the established pattern brightly and let every settled one recede.
+	// Backs GET /api/baseline/off and the expected endpoints (see
+	// baseline.go). Always non-nil (internal/baseline.Open("", cfg)
+	// returns a usable, empty, unpersisted register), same always-usable
+	// convention as Hosts above.
+	Baseline *baseline.Register
+	// HostQuietAfter is how long a host may be silent before the map
+	// draws it quiet (config baseline.hostQuietAfter, 24 hours by owner
+	// ratification on 2026-09-07). Served to the browser on
+	// GET /api/baseline/off, which is where the other two thresholds
+	// already travel -- see offBaselineResponse for why it rides there
+	// rather than on GET /api/hosts. The zero value is treated as the
+	// default by that handler's caller, so a Server built without it in a
+	// test is still coherent.
+	HostQuietAfter time.Duration
 	// Audit is the persisted, admin-only accountability log of every
 	// admin-privileged mutation (issue #112) -- who created a user,
 	// changed a detector setting, upserted/deleted an entity, created or
@@ -436,6 +464,19 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/coverage/declarations", s.handleCoverageList},
 		{http.MethodPut, "/api/coverage/declarations/{key}", s.handleCoveragePut},
 		{http.MethodDelete, "/api/coverage/declarations/{key}", s.handleCoverageDelete},
+
+		// The host presence register (issue #1016) -- see hosts.go.
+		{http.MethodGet, "/api/hosts", s.handleHostsList},
+		{http.MethodPut, "/api/hosts/{key}/mark", s.handleHostMarkPut},
+		{http.MethodDelete, "/api/hosts/{key}/mark", s.handleHostMarkDelete},
+
+		// The baseline line register (issue #1016, round 49). Only
+		// today's off-baseline lines are reachable -- there is
+		// deliberately no endpoint serving the established ones, see
+		// handleBaselineOff.
+		{http.MethodGet, "/api/baseline/off", s.handleBaselineOff},
+		{http.MethodPut, "/api/baseline/{key}/expected", s.handleBaselineExpectedPut},
+		{http.MethodDelete, "/api/baseline/{key}/expected", s.handleBaselineExpectedDelete},
 
 		// The match log query -- a read over evidence already collected,
 		// and the one thing on the retired /api/watchlist prefix the
