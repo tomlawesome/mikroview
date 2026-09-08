@@ -132,6 +132,11 @@
     onStandChange?: (building: Building | null) => void
   } = $props()
 
+  /** Unique per mount, so the declare form's label and input are the 2D
+   * map's line for line rather than a hard-coded id that would collide
+   * if this were ever mounted twice (#1031). */
+  const uid = $props.id()
+
   const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--lane-5)']
   const VERDICT: Record<RoadKind, string> = { a: 'var(--accept)', d: 'var(--drop)', x: 'var(--alarm)', q: 'var(--fg-dim)' }
   const VOID = '#080d18'
@@ -2773,18 +2778,29 @@
       {/if}
 
       {#if wallPinned && authState.isAdmin && !c.declaration}
+        <!-- The declare form: a reason, both directions, and who. Both
+             directions is checked by default (round 49 item 7) because
+             one direction declared and the other still dark leaves the
+             boundary grey and this card explaining why.
+             Written out in the 2D map's own order and markup, tag for
+             tag (#1031) -- DESIGN.md "Cards" ratifies one interaction,
+             the same on both surfaces, and it is the footer's shape a
+             reader notices when the slider crosses. -->
         <div class="form">
-          <label for="city-declare-reason">QUIET ON PURPOSE — WHY?</label>
-          <input id="city-declare-reason" bind:value={declareReason} placeholder="why this gap is intentional…" />
+          <label for="{uid}-declare-why">QUIET ON PURPOSE — WHY?</label>
+          <input id="{uid}-declare-why" bind:value={declareReason} placeholder="why this gap is intentional…" />
+          <label class="both">
+            <input type="checkbox" bind:checked={declareBoth} />
+            both directions
+          </label>
+          {#if coverageState.error}
+            <p class="d-error">{coverageState.error}</p>
+          {/if}
           <div class="btns">
-            <button type="button" class="go" disabled={!declareReason.trim() || declareBusy} onclick={submitDeclaration}>Declare</button>
+            <button type="button" class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
             <button type="button" class="no" onclick={() => (pinnedWall = null)}>cancel</button>
-            <label class="who">
-              <input type="checkbox" bind:checked={declareBoth} />
-              as {authState.username || 'you'} · both directions
-            </label>
+            <span class="who">as {authState.username}</span>
           </div>
-          {#if coverageState.error}<div class="s alarm">{coverageState.error}</div>{/if}
         </div>
       {/if}
 
@@ -3551,23 +3567,29 @@
     color: var(--alarm);
   }
 
+  /* The declare form, property for property with the 2D map's
+     `.card .form` (#1031). The two footers had drifted -- "both
+     directions" on its own line here, tucked in beside the buttons
+     there -- and the two rule sets had drifted with them, as far as the
+     city painting its Declare button `var(--raised)`, a token this app
+     never defines. Keep the two blocks in step. */
   .bcard .form {
     margin-top: 7px;
   }
 
-  .bcard .form > label {
+  .bcard .form label {
     display: block;
+    margin-bottom: 3px;
     font: 600 9px var(--font-mono);
     letter-spacing: 0.1em;
     color: var(--fg-dim);
-    margin-bottom: 3px;
   }
 
-  .bcard .form input:not([type]) {
+  .bcard .form input {
     width: 100%;
     padding: 5px 8px;
-    background: #080c16;
-    border: 1px solid var(--hair-2);
+    background: var(--bg);
+    border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--fg);
     font: 11px var(--font-sans);
@@ -3578,18 +3600,32 @@
     border-color: var(--accent);
   }
 
+  .bcard .form label.both {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 7px;
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+  }
+
+  .bcard .form label.both input {
+    width: auto;
+    accent-color: var(--accent);
+  }
+
   .bcard .form .btns {
     display: flex;
     gap: 8px;
-    margin-top: 7px;
     align-items: center;
+    margin-top: 7px;
   }
 
   .bcard .form .go {
     padding: 4px 12px;
     border-radius: 999px;
-    border: 1px solid var(--hair-2);
-    background: var(--raised);
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
     color: var(--fg);
     font: 600 10.5px var(--font-mono);
     cursor: pointer;
@@ -3605,8 +3641,8 @@
   }
 
   .bcard .form .no {
-    background: none;
     border: 0;
+    background: none;
     padding: 0;
     color: var(--fg-dim);
     font: 10.5px var(--font-mono);
@@ -3615,12 +3651,13 @@
 
   .bcard .form .who {
     margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
     color: var(--fg-dim);
-    font: 10.5px var(--font-mono);
-    cursor: pointer;
+  }
+
+  .bcard .d-error {
+    margin: 5px 0 0;
+    font-size: 11.5px;
+    color: var(--reject);
   }
 
   /* The plaque's dim second line. The coverage words that used to sit

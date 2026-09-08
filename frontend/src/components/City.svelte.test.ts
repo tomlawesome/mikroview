@@ -222,7 +222,7 @@ describe('City', () => {
     expect(pinned.textContent).toContain('as tom')
     // Both directions is checked by default: one declared and the other
     // still dark would leave the wall grey and the card explaining why.
-    expect((pinned.querySelector('.who input[type="checkbox"]') as HTMLInputElement).checked).toBe(true)
+    expect((pinned.querySelector('.both input[type="checkbox"]') as HTMLInputElement).checked).toBe(true)
     // A reason is required -- Declare stays refused until there is one.
     expect((pinned.querySelector('.go') as HTMLButtonElement).disabled).toBe(true)
     authState.role = ''
