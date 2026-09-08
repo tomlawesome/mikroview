@@ -206,5 +206,21 @@ await page.click('[data-testid="ingest-loss-handle"]')
 await page.waitForSelector('#ingest-loss-drawer.closed', { timeout: 15000 })
 await checkOverlaps('The fall (fresh load, mobile landing)')
 
+// --- phone-width shots ---------------------------------------------------
+// Added for the closed-state rebuild (#1015, owner verdict 2026-09-07):
+// `Clear all` moved off the sill and into the top row, which takes its
+// room out of that row's padding. At 390px that padding is a large share
+// of the row, so the narrow width has to be looked at, not assumed. The
+// viewport is already 390x844 here and the drawer is already closed --
+// but only just: the first shot taken here caught the rows halfway
+// through the 180ms collapse, showing a half-height row above the line.
+// Wait it out, as the desktop closed shots above already do.
+await page.waitForTimeout(300)
+await shoot('phone-closed')
+await page.click('[data-testid="ingest-loss-handle"]')
+await page.waitForSelector('#ingest-loss-drawer:not(.closed)', { timeout: 15000 })
+await page.waitForTimeout(300)
+await shoot('phone-open')
+
 await browser.close()
 console.log(`\nScreenshots written to ${OUT_DIR}`)
