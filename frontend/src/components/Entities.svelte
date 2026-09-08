@@ -97,7 +97,7 @@
   } from '../lib/api'
   import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
-  import { formatRelative, formatHM } from '../lib/format'
+  import { formatRelative, formatSpacedAge, formatHM } from '../lib/format'
   import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
   import { instanceAddress, portOf } from '../lib/setupsteps'
   import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
@@ -323,14 +323,17 @@
       })
   })
 
+  // formatSpacedAge, not formatRelative: round 38's `#ent` writes these
+  // columns as a bare "412 d" / "2 m" / "now", with no "ago" suffix
+  // anywhere in the table (lib/format.ts carries the idiom).
   function lastSeenOf(row: Row): string {
-    if (row.mac) return formatRelative(row.mac.lastSeen, appState.now)
+    if (row.mac) return formatSpacedAge(row.mac.lastSeen, appState.now)
     const t = thingRows.find((t) => t.key === row.key)
-    return t?.fallbackLastSeen ? formatRelative(t.fallbackLastSeen, appState.now) : '—'
+    return t?.fallbackLastSeen ? formatSpacedAge(t.fallbackLastSeen, appState.now) : '—'
   }
 
   function firstSeenOf(row: Row): string {
-    return row.mac ? formatRelative(row.mac.firstSeen, appState.now) : '—'
+    return row.mac ? formatSpacedAge(row.mac.firstSeen, appState.now) : '—'
   }
 
   // --- rules tab: every pushed rule, named or not, fired or not (#681)
@@ -782,7 +785,7 @@
               <td class="dim">{row.chain ?? '—'}</td>
               <td class="dim">{row.action ?? '—'}</td>
               <td class={row.lastFired ? '' : 'dim'}>
-                {row.lastFired ? formatRelative(row.lastFired, appState.now) : 'has not fired'}
+                {row.lastFired ? formatSpacedAge(row.lastFired, appState.now) : 'has not fired'}
               </td>
             </tr>
             {#if isRenaming('rule', row.key) && renameError}
@@ -827,7 +830,7 @@
                 {/if}
               </td>
               <td>{row.key}</td>
-              <td class={row.lastSeen ? '' : 'dim'}>{row.lastSeen ? formatRelative(row.lastSeen, appState.now) : '—'}</td>
+              <td class={row.lastSeen ? '' : 'dim'}>{row.lastSeen ? formatSpacedAge(row.lastSeen, appState.now) : '—'}</td>
             </tr>
             {#if isRenaming('port', row.key) && renameError}
               <tr><td colspan="3" class="rename-error">{renameError}</td></tr>
