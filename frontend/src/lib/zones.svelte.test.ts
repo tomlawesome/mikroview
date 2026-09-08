@@ -26,7 +26,7 @@ function event(overrides: Partial<ClientEvent> = {}): ClientEvent {
 
 // A pushed tunnel interface, as tunnelsState holds one per device.
 function tunnel(iface: string, kind: 'wg' | 'ppp' = 'wg', apiState: TunnelInterface['apiState'] = 'up'): TunnelInterface {
-  return { iface, routerId: 'router1', kind, apiState, peers: [] }
+  return { iface, routerId: 'router1', kind, apiState, peers: [], lastHeard: null }
 }
 
 beforeEach(() => {
@@ -126,7 +126,7 @@ describe('the lane row is ordered by how busy each lane is', () => {
   })
 })
 
-describe('the drawn tunnel leaves the lane row (#877)', () => {
+describe('the drawn tunnels leave the lane row (#877, #890)', () => {
   it('keeps a pushed WireGuard interface out of the lanes and names it as the node', () => {
     // Before this, a WireGuard interface could only ever be a lane:
     // zones swallowed every observed non-WAN boundary. Round 30 draws
@@ -138,7 +138,7 @@ describe('the drawn tunnel leaves the lane row (#877)', () => {
       event({ id: 3, deviceId: 'router1', inInterface: 'bridge1', srcIp: '192.168.1.5' }),
     ]
 
-    expect(zonesState.tunnelInterface).toBe('wg0')
+    expect(zonesState.tunnelOrder).toEqual(['wg0'])
     const laneIds = zonesState.zones.map((z) => z.id)
     expect(laneIds).not.toContain('wg0')
     expect(laneIds).toContain('bridge1')
@@ -171,11 +171,13 @@ describe('the drawn tunnel leaves the lane row (#877)', () => {
     tunnelsState.byDevice = new Map([['router1', [tunnel('l2tp-in1', 'ppp')]]])
     appState.events = [event({ id: 1, deviceId: 'router1', inInterface: 'l2tp-in1', srcIp: '10.90.0.2' })]
 
-    expect(zonesState.tunnelInterface).toBeNull()
+    expect(zonesState.tunnelOrder).toEqual([])
     expect(zonesState.zones.map((z) => z.id)).toContain('l2tp-in1')
   })
 
-  it('gives the node to the busiest tunnel and leaves the others as lanes', () => {
+  // Round 52 (#890) struck out the single-tunnel selection #877 shipped
+  // with: every pushed tunnel is drawn, so none of them is ever a lane.
+  it('orders the tunnels busiest first and keeps every one of them out of the lanes', () => {
     tunnelsState.byDevice = new Map([['router1', [tunnel('wg0'), tunnel('wg1')]]])
     appState.events = [
       event({ id: 1, deviceId: 'router1', inInterface: 'wg1', srcIp: '10.99.1.2' }),
@@ -183,17 +185,33 @@ describe('the drawn tunnel leaves the lane row (#877)', () => {
       event({ id: 3, deviceId: 'router1', inInterface: 'wg0', srcIp: '10.99.0.2' }),
     ]
 
-    expect(zonesState.tunnelInterface).toBe('wg1')
-    // wg0 stays visible as a lane rather than vanishing with nowhere
-    // to be drawn -- a second tunnel node is a design question.
-    expect(zonesState.zones.map((z) => z.id)).toContain('wg0')
+    expect(zonesState.tunnelOrder).toEqual(['wg1', 'wg0'])
+    // The lane-row fallback is gone: wg0 is a tunnel, so it is drawn as
+    // one rather than left standing in the row.
+    expect(zonesState.zones.map((z) => z.id)).not.toContain('wg0')
+    expect(zonesState.zones.map((z) => z.id)).not.toContain('wg1')
   })
 
-  it('picks alphabetically when nothing has been observed on any tunnel', () => {
-    // Otherwise the node hops between tunnels as the buffer turns over,
-    // with every count still zero.
+  it('orders alphabetically when nothing has been observed on any tunnel', () => {
+    // Otherwise the group reshuffles as the buffer turns over, with
+    // every count still zero.
     tunnelsState.byDevice = new Map([['router1', [tunnel('wg9'), tunnel('wg0')]]])
-    expect(zonesState.tunnelInterface).toBe('wg0')
+    expect(zonesState.tunnelOrder).toEqual(['wg0', 'wg9'])
+  })
+
+  it('does not spend lane slots on a second and third tunnel either', () => {
+    // The #877 build left every tunnel past the first in the lane row,
+    // where three of them would have pushed real lanes off a five-slot
+    // map. Round 52 draws them all as tunnels instead.
+    tunnelsState.byDevice = new Map([['router1', [tunnel('wg0'), tunnel('wg1'), tunnel('wg2')]]])
+    appState.events = [
+      ...['wg0', 'wg1', 'wg2'].map((iface, i) => event({ id: 1 + i, deviceId: 'router1', inInterface: iface, srcIp: '10.99.0.2' })),
+      ...['bridge1', 'bridge2', 'bridge3', 'bridge4', 'bridge5'].map((iface, i) =>
+        event({ id: 10 + i, deviceId: 'router1', inInterface: iface, srcIp: `192.168.${i + 1}.5` }),
+      ),
+    ]
+
+    expect(new Set(zonesState.zones.map((z) => z.id))).toEqual(new Set(['bridge1', 'bridge2', 'bridge3', 'bridge4', 'bridge5']))
   })
 
   it('draws no tunnel node until a tunnel table has been pushed', () => {
@@ -202,7 +220,7 @@ describe('the drawn tunnel leaves the lane row (#877)', () => {
     // from a name that looks like one.
     appState.events = [event({ id: 1, deviceId: 'router1', inInterface: 'wg0', srcIp: '10.99.0.2' })]
 
-    expect(zonesState.tunnelInterface).toBeNull()
+    expect(zonesState.tunnelOrder).toEqual([])
     expect(zonesState.zones.map((z) => z.id)).toContain('wg0')
   })
 
