@@ -400,25 +400,27 @@ describe('City', () => {
     expect(ey).toBeLessThanOrEqual(top + 180)
   })
 
-  it('names the refusing rule beside a dropped road’s mark, and says "dropped" when no event named one', () => {
-    // Round 49 (DESIGN.md's metaphor table, "with the refusing rule's
-    // name beside the mark", and "The reach"): the mark carries the
-    // rule. The name is the events' own label, carried on the ground
-    // model as `Road.refusedBy`; where no refusal on a pair carried one
-    // it is still the plain word, never a guess (#865/#967).
+  it('marks a refused road with the plain word `dropped`, never the refusing rule’s name (#1036)', () => {
+    // DESIGN.md's metaphor table: "the plain mark only, reading
+    // `dropped`; the refusing rule's name is NOT written on the
+    // drawing -- it lives in the card". Nothing is written on a road or
+    // a strand, and that is one rule, not two: if it names something,
+    // it is in a card. The rule's name is still on the ground model as
+    // `Road.refusedBy`, and the line card and the composer both read it.
     //
-    // The aggregate names no *source*, which is the part #991 settled:
-    // only a standing host's own strands resolve to one building.
+    // The aggregate names no *source* either, which is the part #991
+    // settled: only a standing host's own strands resolve to one
+    // building.
     const { container } = render(City, { props: { stop: 'district', ground } })
     const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent ?? '')
     expect(labels.length).toBeGreaterThan(0)
     const dropped = ground.roads.filter((r) => r.stop === 'drop')
     expect(dropped.length).toBeGreaterThan(0)
-    for (const r of dropped) {
-      expect(labels).toContain(r.refusedBy ? `caught by ${r.refusedBy}` : 'dropped')
-    }
-    // Never a source: an aggregate has no one building to name.
-    for (const t of labels) expect(t).not.toMatch(/·/)
+    // At least one of these fixtures names a rule, so the test would go
+    // quiet rather than red if the fixture ever stopped carrying one.
+    expect(dropped.some((r) => r.refusedBy)).toBe(true)
+    for (const t of labels) expect(t).toBe('dropped')
+    for (const r of dropped) if (r.refusedBy) expect(labels.join(' ')).not.toContain(r.refusedBy)
   })
 
 })
@@ -572,12 +574,12 @@ describe('standing on a building (#868)', () => {
     expect(container.querySelector('[data-road="bridge-lan|vlan-srv"].flow.flow-rev')).not.toBeNull()
   })
 
-  it('names the refusing rule at the wall for the standing building’s own refused attempt, and says "dropped" when no event named one', () => {
-    // Round 49 restores the rule's name beside the mark (DESIGN.md "The
-    // reach": bollards, the red mark and the refusing rule's name).
+  it('marks the standing building’s own refused attempt `dropped`, with no rule name on the drawing (#1036)', () => {
     // Direction 'out': lan-1 is the source, so the drop is on the
     // building you are standing on and the mark never names it back to
     // itself -- #991's rule about the *source*, which is unchanged.
+    // The refusing rule's name is the card's to carry, never the
+    // strand's (#1036, DESIGN.md "The reach").
     appState.events = [
       event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel: 'no-cross-router-cams' }),
     ]
@@ -585,7 +587,8 @@ describe('standing on a building (#868)', () => {
     fireEvent.click(named.container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
     flushSync()
     const namedLabels = [...named.container.querySelectorAll('.drop-t')].map((e) => e.textContent)
-    expect(namedLabels).toContain('caught by no-cross-router-cams')
+    expect(namedLabels).toContain('dropped')
+    for (const t of namedLabels) expect(t).not.toContain('no-cross-router-cams')
     // No source: it would be naming lan-1 back to itself.
     for (const t of namedLabels) expect(t).not.toMatch(/lan-1/)
     named.unmount()
@@ -603,8 +606,9 @@ describe('standing on a building (#868)', () => {
   it('names the source only when the drop is not on the building you are standing on (#991)', () => {
     // Direction 'in': cam-porch tried to reach lan-1 (the standing
     // building) and was refused at lan-1's own wall -- the drop is not
-    // "at" lan-1, so the mark names the source. Round 49 adds the
-    // refusing rule after it; the source rule itself is #991's, intact.
+    // "at" lan-1, so the mark names the source. The source is the one
+    // thing the mark says beyond the plain word: the refusing rule is
+    // the card's (#1036).
     appState.events = [
       event({ srcIp: '10.60.0.10', srcHostName: 'cam-porch', dstIp: '10.10.0.10', inInterface: 'wlan-cams', outInterface: 'bridge-lan', action: 'drop', ruleLabel: 'no-cross-router-cams' }),
     ]
@@ -612,7 +616,8 @@ describe('standing on a building (#868)', () => {
     fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
     flushSync()
     const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent)
-    expect(labels).toContain('cam-porch · caught by no-cross-router-cams')
+    expect(labels).toContain('cam-porch · dropped')
+    for (const t of labels) expect(t).not.toContain('no-cross-router-cams')
   })
 
   it('the composer opens from the refused line’s card, drafted, never run, with what it has been asking for and the count', () => {

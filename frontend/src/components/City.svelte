@@ -1259,21 +1259,19 @@
     // wall, not just where the district-pair aggregate already draws
     // one. `e` is the ground point the mark centres on (depth reads its
     // v, same as every other solid).
-    // What the label says, in order of what is actually known:
+    // What the label says is the plain word "dropped", and nothing else
+    // (#1036, DESIGN.md's metaphor table: "the plain mark only, reading
+    // `dropped`; the refusing rule's name is not written on the drawing
+    // -- it lives in the card"). Nothing is written on a road or a
+    // strand: if it names something, it is in a card. The refusing rule
+    // is still carried -- `Road.refusedBy` on the ground model and
+    // `ReachStrand.refusedBy` in the reach -- and the line card and the
+    // composer are where it is read.
     //
-    // - the refusing rule's name where the events carried one. Round 49
-    //   restores it (DESIGN.md's metaphor table, "with the refusing
-    //   rule's name beside the mark", and "The reach": bollards, the red
-    //   mark and the refusing rule's name). #991 had moved it to the
-    //   composer, which is the older text.
-    // - otherwise the plain word "dropped": a refusal nothing named is
-    //   said plainly, never guessed at (#865/#967).
-    //
-    // The source is prefixed either way, and only when the drop is not
-    // on the building you are standing on -- #991's own rule, unchanged.
-    function dropMarkAt(e: Pt, alarm: boolean, source?: string, rule?: string) {
-      const what = rule ? 'caught by ' + rule : 'dropped'
-      const text = source ? source + ' · ' + what : what
+    // The source is prefixed, and only when the drop is not on the
+    // building you are standing on -- #991's own rule, unchanged.
+    function dropMarkAt(e: Pt, alarm: boolean, source?: string) {
+      const text = source ? source + ' · dropped' : 'dropped'
       const col2 = alarm ? 'var(--alarm)' : 'var(--drop)'
       const px = X(c, e[0])
       const py = Y(c, e[1])
@@ -1384,11 +1382,10 @@
       }
       // #991: the district-pair aggregate has no per-building source to
       // name (only the reach's own strands, below, resolve to one host),
-      // so this mark names no source. It does name the refusing rule
-      // where the ground model carried one -- `Road.refusedBy` is the
-      // events' own rule label, which #865 put there for exactly this
-      // mark.
-      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x', undefined, r.refusedBy)
+      // so this mark names no source. Nor does it name the refusing rule
+      // -- `Road.refusedBy` is the events' own rule label, and #1036
+      // keeps it off the drawing and in the card.
+      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x')
     }
     // #991: "gone from the street stop" -- the road port chips (#868's
     // "ports on the road") are dropped entirely; the ports live on the
@@ -1402,7 +1399,7 @@
     const markHits: { id: string; x: number; y: number }[] = []
     if (reachOverlay)
       for (const dm2 of reachOverlay.dropMarks) {
-        dropMarkAt(dm2.p, false, dm2.source, dm2.rule)
+        dropMarkAt(dm2.p, false, dm2.source)
         markHits.push({ id: dm2.id, x: R2(X(c, dm2.p[0])), y: R2(Y(c, dm2.p[1]) - 1.8 * c.S * ZK) })
       }
 
