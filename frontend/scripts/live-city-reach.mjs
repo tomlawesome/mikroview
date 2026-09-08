@@ -117,11 +117,13 @@ await new Promise((r) => setTimeout(r, 900))
 const firstDistrict = page.locator('[data-card="topography"] .city .plate[tabindex="0"]')
 await firstDistrict.focus()
 let stoodOnLan1 = false
+let lan1Cid = null
 for (let i = 0; i < 4 && !stoodOnLan1; i++) {
   await page.keyboard.press('ArrowRight')
   const cid = await page.evaluate(() => document.activeElement?.getAttribute('data-cid') ?? null)
   if (cid && cid.endsWith(LAN1)) {
     stoodOnLan1 = true
+    lan1Cid = cid
     break
   }
   await page.keyboard.press('ArrowDown')
@@ -169,7 +171,21 @@ check(srv1Opacity !== null, `the peer building is found (fill-opacity ${srv1Opac
 // building()'s dim styling drops this same paint to 0.22; lit stands at 0.4.
 check(Number(srv1Opacity) > 0.3, `the accepted peer, reached through the gate, is not dimmed (${srv1Opacity})`)
 
-// --- the composer, pinned at the refused road, drafted never run ------
+// --- the composer, opened from the standing host's card ---------------
+//
+// It used to open itself the moment you stood on a host, pinned at the
+// refused road, so this read `.composer` straight off. #1035 put it
+// behind a door instead -- `draft the rule ▸` on the standing host's own
+// card -- because a reach that drafts a rule before being asked to is a
+// draft nobody wanted. Hovering the building opens that card whether or
+// not the keyboard walk left the focus on it, which is what
+// live-city-walls.mjs's `draftFrom` does for the same door.
+await page.locator(`[data-card="topography"] .city [data-cid="${lan1Cid}"]`).first().hover()
+await new Promise((r) => setTimeout(r, 400))
+const draftDoor = page.locator('[data-card="topography"] .city .bcard.hcard [data-draft-rule]')
+check((await draftDoor.count()) > 0, 'the standing host card offers `draft the rule ▸` (#1035)')
+await draftDoor.first().click()
+await new Promise((r) => setTimeout(r, 400))
 
 const composerText = await page.locator('[data-card="topography"] .composer').textContent()
 check((composerText ?? '').includes("it's been asking"), 'the composer states what it has been asking for')
