@@ -107,6 +107,52 @@ export function boundsOf(points: readonly Point[]): Rect {
   return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y }
 }
 
+/** How thick a drawn line is taken to be when it is kept off, in the
+ * pixels the placement works in. The ribs and walls are 1-3px of
+ * stroke; a rectangle that thin is one the card can straddle without
+ * ever registering as covering it, so the line is given a little body.
+ * `CARD_GAP` is the clearance on top of this. */
+export const LINE_GIRTH = 8
+
+/**
+ * A drawn line, as the rectangles the placement has to keep off (#1030).
+ *
+ * The boundary card kept clear of the two zone plates its own title
+ * names and of nothing else, so the boundary line running between them
+ * -- the one thing the card is about -- ran in under the card's left
+ * edge and its tail was hidden.
+ *
+ * A line is not a rectangle, and which of the two it is treated as
+ * matters. One box round a diagonal claims the whole triangle either
+ * side of it and pushes the card right out of the area it is
+ * describing; a box per sampled segment claims only the ground the line
+ * is really on, and leaves the clear corner beside it usable. So: one
+ * box where the line is already thin in an axis -- a horizontal rib is
+ * its own bounding rectangle, and extra boxes would only cost the
+ * placement search -- and a box per segment where it is not.
+ *
+ * `points` are samples along the line in the placement's own pixels;
+ * `drawnPathRects` is what takes them off a real path.
+ */
+export function pathBoxes(points: readonly Point[], girth: number = LINE_GIRTH): Rect[] {
+  const pts = points.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+  if (pts.length === 0) return []
+  // A hairline has no area, and a rectangle with no area is one nothing
+  // can overlap -- so every box gets at least `girth`, grown about the
+  // line rather than off to one side of it.
+  const bodied = (r: Rect): Rect => ({
+    x: r.w < girth ? r.x - (girth - r.w) / 2 : r.x,
+    y: r.h < girth ? r.y - (girth - r.h) / 2 : r.y,
+    w: Math.max(r.w, girth),
+    h: Math.max(r.h, girth),
+  })
+  const whole = boundsOf(pts)
+  if (pts.length < 2 || whole.w <= girth || whole.h <= girth) return [bodied(whole)]
+  const out: Rect[] = []
+  for (let i = 1; i < pts.length; i++) out.push(bodied(boundsOf([pts[i - 1], pts[i]])))
+  return out
+}
+
 export interface PlaceRequest {
   /** The point on the subject the leader starts from, in the same
    * pixel space as everything else here. */
@@ -482,6 +528,72 @@ export function drawnRects(els: Iterable<Element>, container: Element): Rect[] {
     if (r !== null) out.push(r)
   }
   return out
+}
+
+/** How many samples a line is walked at. Six segments is enough to
+ * follow the curve of a rib without the placement search paying for
+ * dozens of rectangles it has to score against every candidate. */
+export const PATH_SAMPLES = 6
+
+/** Whether a shape paints its inside, in which case its own box -- not
+ * its outline -- is what a card would be covering.
+ *
+ * Both the presentation attribute and the computed style are asked, and
+ * either saying `none` settles it: a browser answers through the
+ * cascade (a stroked rib says `fill: none` in CSS), while jsdom applies
+ * no presentation attributes at all and computes SVG's initial black
+ * for everything. Anything else counts as filled, which is the safe
+ * way round -- the card keeps off more than it strictly must, rather
+ * than walking the outline of something solid and sitting in it. */
+function isFilled(el: Element): boolean {
+  const none = (v: string | null | undefined): boolean => {
+    const s = (v ?? '').trim()
+    return s === 'none' || s === 'transparent'
+  }
+  const cs = typeof getComputedStyle === 'function' ? getComputedStyle(el) : null
+  if (none(el.getAttribute('fill')) || none(cs?.fill)) return false
+  for (const o of [cs?.fillOpacity, el.getAttribute('fill-opacity')]) {
+    const n = Number.parseFloat(o ?? '')
+    if (!Number.isNaN(n) && n <= 0.05) return false
+  }
+  return true
+}
+
+/**
+ * A drawn shape as the boxes a card must keep off, in `container`'s
+ * pixels (#1030).
+ *
+ * A stroked path -- a boundary's rib on the 2D map -- is walked with
+ * the browser's own `getPointAtLength`, through the element's own
+ * screen matrix, so every transform above it is carried. `pathBoxes`
+ * then turns the samples into the rectangles the placement scores
+ * against. Anything else is its own bounding rectangle: a filled shape
+ * such as a city wall covers its inside too, and walking its outline
+ * would leave the middle of it fair game.
+ *
+ * Empty where the shape is not drawn, so a caller drops it from the
+ * avoidance set rather than avoiding the container's corner -- the
+ * reason `drawnRect` returns null, and the reason this is empty in
+ * jsdom, which lays nothing out and has no `getScreenCTM`.
+ */
+export function drawnPathRects(el: Element, container: Element, samples: number = PATH_SAMPLES): Rect[] {
+  const whole = drawnRect(el, container)
+  if (whole === null) return []
+  const path = el as unknown as Partial<SVGPathElement>
+  if (typeof path.getTotalLength !== 'function' || typeof path.getPointAtLength !== 'function' || typeof path.getScreenCTM !== 'function') return [whole]
+  if (isFilled(el)) return [whole]
+  const ctm = path.getScreenCTM()
+  if (ctm === null || ctm === undefined) return [whole]
+  const len = path.getTotalLength()
+  if (!(len > 0) || !(samples > 0)) return [whole]
+  const origin = container.getBoundingClientRect()
+  const pts: Point[] = []
+  for (let i = 0; i <= samples; i++) {
+    const p = path.getPointAtLength((len * i) / samples)
+    pts.push({ x: p.x * ctm.a + p.y * ctm.c + ctm.e - origin.left, y: p.x * ctm.b + p.y * ctm.d + ctm.f - origin.top })
+  }
+  const boxes = pathBoxes(pts)
+  return boxes.length > 0 ? boxes : [whole]
 }
 
 /** A rectangle in user units, as its bounding box in container pixels.

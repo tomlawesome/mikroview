@@ -76,7 +76,7 @@
   } from '../lib/city/expected'
   import type { District, Ground } from '../lib/city/types'
   import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
-  import { cardSize, drawnRect, drawnRects, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
+  import { cardSize, drawnPathRects, drawnRect, drawnRects, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
   import { altitudeStopState } from '../lib/altitudeStop.svelte'
   // Living hosts (#1016). The register is the source of presence, not
   // the event buffer: zonesState derives its host list from the lines
@@ -1354,6 +1354,24 @@
     return drawnRects(els, host)
   }
 
+  /**
+   * The open boundary's own line, as boxes the card keeps off (#1030).
+   *
+   * The plates named in the card's title were in the avoid-set and the
+   * line between them was not, so the card came down on the tail of the
+   * very boundary it was describing. Taken off the drawing rather than
+   * recomputed from `halfPath`, for the reason `zonePlates` gives:
+   * whatever is on screen is what the card has to clear.
+   *
+   * `drawnPathRects` walks the rib, so a diagonal is a chain of boxes
+   * along it rather than one box round the whole sweep -- the card
+   * stays beside its own line instead of being pushed off it.
+   */
+  function openEdgeRects(host: Element): Rect[] {
+    const el = host.querySelector('g.cov-g.on path.cedge')
+    return el === null ? [] : drawnPathRects(el, host)
+  }
+
   /** Whether the lane row is the drawing on screen, as opposed to the
    * ground plan that replaces it at the zones stop. */
   function laneRowDrawn(host: Element): boolean {
@@ -1406,7 +1424,11 @@
     // nobody can see, and the card cleared those while coming down on
     // the ground-plan plate its title names. `zonePlates` returns
     // whichever layer is really on screen.
-    const avoid = zonePlates(host, [open.from, open.to])
+    //
+    // And the boundary's own line with them (#1030): a card sitting on
+    // the line hides the tail of the one thing it is about, which the
+    // two plates alone never stopped.
+    const avoid = zonePlates(host, [open.from, open.to]).concat(openEdgeRects(host))
     // Every other plate is worth keeping clear too, but only as a
     // tie-break: the plates fill the map, and insisting would leave
     // nowhere to put the card at all.
@@ -4929,7 +4951,13 @@
         <!-- The declare form: a reason, both directions, and who. Both
              directions is checked by default (round 49 item 7) because
              one direction declared and the other still dark leaves the
-             boundary grey and this card explaining why. -->
+             boundary grey and this card explaining why.
+             The city writes this out tag for tag (#1031) -- DESIGN.md
+             "Cards" ratifies one interaction, the same on both surfaces,
+             and it is the footer's shape a reader notices when the
+             slider crosses. `type="button"` is said rather than assumed:
+             a <button> with no type is a submit button, harmless here
+             only because no <form> encloses it. -->
         <div class="form">
           <label for="{uid}-declare-why">QUIET ON PURPOSE — WHY?</label>
           <input id="{uid}-declare-why" bind:value={declareReason} placeholder="why this gap is intentional…" />
@@ -4941,8 +4969,8 @@
             <p class="d-error">{coverageState.error}</p>
           {/if}
           <div class="btns">
-            <button class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
-            <button class="no" onclick={closeBoundary}>cancel</button>
+            <button type="button" class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
+            <button type="button" class="no" onclick={closeBoundary}>cancel</button>
             <span class="who">as {authState.username}</span>
           </div>
         </div>
@@ -6128,7 +6156,12 @@
     cursor: pointer;
   }
 
-  .card .form .go:hover {
+  /* Kept in step with the city's `.bcard .form` block, property for
+     property (#1031): one interaction, the same on both surfaces, and
+     the footer is where the two had drifted. `:not(:disabled)` because
+     Declare is refused until there is a reason, and a refused button
+     lighting up under the pointer offers something it will not do. */
+  .card .form .go:hover:not(:disabled) {
     border-color: var(--accent);
   }
 
@@ -6138,8 +6171,9 @@
   }
 
   .card .form .no {
-    border: none;
+    border: 0;
     background: none;
+    padding: 0;
     color: var(--fg-dim);
     font: 10.5px var(--font-mono);
     cursor: pointer;
