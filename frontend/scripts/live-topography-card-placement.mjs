@@ -16,6 +16,12 @@
 // rendered rectangle does not intersect the rendered rectangle of any
 // subject named in the card's own title -- the zone plates on the 2D
 // map, the district plates in the city.
+//
+// #1030 adds the boundary's own line to that. The plates were kept off
+// and the line between them never was, so the line ran in under the
+// card's left edge and its tail was gone. A line is not a rectangle, so
+// it is asserted as the browser draws it: points sampled along the
+// highlighted path, none of which may fall inside the card.
 
 import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
 
@@ -180,11 +186,36 @@ const READ_SURFACE = ({ cardSel, titleSel, surface }) => {
     }
   }
 
+  // The boundary's own line, as the browser draws it (#1030). Sampled
+  // rather than boxed: a rib sweeps diagonally, and its bounding
+  // rectangle is mostly clear ground the card is perfectly entitled to
+  // sit on -- so what is asserted is that no point actually on the line
+  // is underneath the card.
+  //
+  // The highlighted shape is the one the card is about: `g.cov-g.on`
+  // holds the open boundary's rib on the 2D map, `g.wall-hot.on` the
+  // open wall in the city.
+  const lineSel = surface === 'flat' ? 'g.cov-g.on path.cedge' : 'g.wall-hot.on path'
+  const lineEls = Array.from(document.querySelectorAll('[data-card="topography"] ' + lineSel))
+  const line = { what: lineSel, found: lineEls.length > 0, visible: false, points: [] }
+  for (const el of lineEls) {
+    if (hiddenReason(el) !== null) continue
+    const ctm = typeof el.getScreenCTM === 'function' ? el.getScreenCTM() : null
+    const len = typeof el.getTotalLength === 'function' ? el.getTotalLength() : 0
+    if (!ctm || !(len > 0)) continue
+    line.visible = true
+    for (let i = 0; i <= 40; i++) {
+      const p = el.getPointAtLength((len * i) / 40)
+      line.points.push({ x: p.x * ctm.a + p.y * ctm.c + ctm.e, y: p.x * ctm.b + p.y * ctm.d + ctm.f })
+    }
+  }
+
   return {
     card: measured(card, surface === 'flat' ? 'the boundary card' : 'the wall card'),
     formOpen: !!(card && card.querySelector('.form')),
     names,
     subjects,
+    line,
     searched: JSON.stringify(searched),
   }
 }
@@ -259,6 +290,20 @@ function assertClear(surface, m) {
         ` — card ${show(m.card.rect)}, plate ${show(s.rect)}, overlap ${r2(area)}px²`,
     )
   }
+
+  // #1030: the boundary line itself, which is the card's whole subject.
+  // An empty sample set would pass the assertion below while proving
+  // nothing, exactly as an empty `subjects` would, so it fails in its
+  // own right.
+  check(m.line.visible && m.line.points.length > 0, `${surface}: the highlighted boundary line is drawn and measurable (${m.line.what})`)
+  const inside = (p) => p.x >= m.card.rect.x && p.x <= m.card.rect.x + m.card.rect.w && p.y >= m.card.rect.y && p.y <= m.card.rect.y + m.card.rect.h
+  const buried = m.line.points.filter(inside)
+  check(
+    buried.length === 0,
+    `${surface}: the card does not cover the boundary line it describes (#1030)` +
+      ` — card ${show(m.card.rect)}, ${buried.length} of ${m.line.points.length} sampled points under it` +
+      (buried.length > 0 ? `, first at ${r2(buried[0].x)},${r2(buried[0].y)}` : ''),
+  )
 }
 
 /* ---------------- the 2D map ---------------- */
