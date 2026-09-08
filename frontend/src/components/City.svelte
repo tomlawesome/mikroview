@@ -736,6 +736,11 @@
         /** Present on a wall piece: which district's edge it is, so
          * pointing at it opens that boundary's card. */
         wall?: { districtId: string; side: WallSide; coverage: Coverage }
+        /** Present on a gate post: which gate it belongs to, so pointing
+         * at it opens that gate's own card rather than the worst gate
+         * standing in the same edge, and so a live check can count the
+         * gates the city drew (#1022). */
+        gate?: { districtId: string; side: WallSide; gateKey: string; toward: string; coverage: Coverage }
       }
     | {
         kind: 'building'
@@ -1243,7 +1248,13 @@
             lit && sgn === 1
               ? [{ x: R2(X(c, m[0])), y: R2(Y(c, m[1], GATE_POST_H)), h: Math.max(2, c.S * 0.3), r: R2(Math.max(1.9, c.S * 0.3)), rr: R2(Math.max(4.5, c.S * 0.8)) }]
               : []
-          solids.push({ kind: 'other', v: m[1] + 0.8, paints, lamps })
+          solids.push({
+            kind: 'other',
+            v: m[1] + 0.8,
+            paints,
+            lamps,
+            gate: { districtId: d.id, side: f.side, gateKey: gate.key, toward: gate.toward, coverage: gate.coverage },
+          })
         }
       }
     }
@@ -1620,7 +1631,16 @@
    * `onpointerenter` passed it `openWall!.side` against an `openWall`
    * that was already null by then (#1027). There is no longer anywhere
    * to write that. */
-  type WallRef = { districtId: string; side: WallSide }
+  type WallRef = {
+    districtId: string
+    side: WallSide
+    /** Which gate in that edge the reader pointed at. A wall piece names
+     * none -- an edge takes the worse of the gates standing in it, and
+     * that is the one its card describes -- but a gate post names its
+     * own, so a card opened from a post is about the gate under the
+     * pointer (#1016). */
+    gateKey?: string
+  }
 
   let hoverWall = $state<WallRef | null>(null)
   let pinnedWall = $state<WallRef | null>(null)
@@ -1662,8 +1682,11 @@
     if (!d) return null
     const here = d.gates.filter((gt) => faceOf(d, gt.p)?.side === w.side)
     if (here.length === 0) return null
-    let gate = here[0]
-    for (const g of here) if (worseCoverage(gate.coverage, g.coverage) === g.coverage && g.coverage !== gate.coverage) gate = g
+    // Pointed at from a gate post, the card is that gate's. Pointed at
+    // from the wall it stands in, it is the worst-covered gate in the
+    // edge -- the one that gave the edge its material.
+    let gate = (w.gateKey ? here.find((g) => g.key === w.gateKey) : null) ?? here[0]
+    if (!w.gateKey) for (const g of here) if (worseCoverage(gate.coverage, g.coverage) === g.coverage && g.coverage !== gate.coverage) gate = g
     const declaration = gate.directions.map((x) => coverageState.byKey.get(x.edgeKey)).find((x) => x !== undefined) ?? null
     return { d, gate, declaration }
   })
@@ -1696,7 +1719,7 @@
       pinnedWall = null
       return
     }
-    pinnedWall = { districtId: w.districtId, side: w.side }
+    pinnedWall = { districtId: w.districtId, side: w.side, gateKey: w.gateKey }
     // Pinned, the card opens the declare form with whatever reason is
     // already on record, so an existing declaration is edited rather
     // than silently replaced by an empty one.
@@ -2500,6 +2523,28 @@
               >
                 {@render otherPaints(s.paints, s.lamps)}
               </g>
+            {:else if s.gate}
+              <!-- A gate post is pointable too, and opens the same card
+                   the wall it stands in opens -- about this gate rather
+                   than the worst one in the edge. `data-gate` is what a
+                   live check counts gates by (#1022): the posts are the
+                   only thing the city draws per gate, and before this
+                   they were anonymous geometry with nothing to ask. -->
+              {@const gt = s.gate}
+              <g
+                class="wall-hot"
+                class:on={sameWall(openWall, { districtId: gt.districtId, side: gt.side })}
+                role="button"
+                tabindex="-1"
+                aria-label="{districtOf(gt.districtId)?.name ?? gt.districtId} gate toward {gt.toward}, {COVERAGE_WORD[gt.coverage]}"
+                data-gate="{gt.districtId}:{gt.gateKey}"
+                onpointerenter={() => openWallCard(gt)}
+                onpointerleave={releaseWallCard}
+                onclick={() => openWallCard(gt)}
+                onkeydown={(e) => e.key === 'Enter' && openWallCard(gt)}
+              >
+                {@render otherPaints(s.paints, s.lamps)}
+              </g>
             {:else}
               {@render otherPaints(s.paints, s.lamps)}
             {/if}
@@ -2737,6 +2782,16 @@
           onclick={toggleWallPin}>{wallPinned ? '✕' : '⊙'}</button
         >
       </div>
+
+      {#if c.gate.ruleOrdinal >= 0}
+        <!-- Which rule this opening in the wall is (owner, 2026-09-08 on
+             #1016), numbered as RouterOS numbers it so "go look at rule
+             4" means what it says. The name is that rule's own comment;
+             a rule with none is shown by its number alone rather than
+             given an invented name. It is said here and nowhere else --
+             nothing is written on the drawing. -->
+        <div class="s" data-gate-rule>rule {c.gate.ruleOrdinal}{c.gate.ruleName ? ` · ${c.gate.ruleName}` : ''}</div>
+      {/if}
 
       {#each c.gate.directions as dir (dir.edgeKey)}
         <div class="s {dir.coverage}">

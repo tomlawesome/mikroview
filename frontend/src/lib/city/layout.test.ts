@@ -224,6 +224,21 @@ describe('city layout: gates', () => {
     expect(srvToLan).toBeTruthy()
   })
 
+  it('names the gate by the lowest-numbered rule that opens it, and that rule\'s own comment (#1016)', () => {
+    // One break in the wall folds both directions of the boundary
+    // together, so the rule the card names is the lowest-numbered of
+    // all of them -- the first line of the table that opens this gate
+    // at all -- with that rule's own comment. In the fixture that is
+    // rule 4, `nas access`, on bridge-lan -> vlan-srv; the way back is
+    // rule 9 and carries no comment.
+    const lan = ground.districts.find((d) => d.id === 'bridge-lan') as District
+    const toSrv = lan.gates.find((g) => g.toward === 'vlan-srv') as DistrictGate
+    expect([toSrv.ruleOrdinal, toSrv.ruleName]).toEqual([4, 'nas access'])
+    const srv = ground.districts.find((d) => d.id === 'vlan-srv') as District
+    const toLan = srv.gates.find((g) => g.toward === 'bridge-lan') as DistrictGate
+    expect([toLan.ruleOrdinal, toLan.ruleName]).toEqual([4, 'nas access'])
+  })
+
   it('takes the worse of a boundary\'s two directions, and lists both on the gate (round 49)', () => {
     const lan = ground.districts.find((d) => d.id === 'bridge-lan') as District
     const toSrv = lan.gates.find((g) => g.toward === 'vlan-srv') as DistrictGate

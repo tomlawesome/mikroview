@@ -59,35 +59,23 @@ for (let i = 0; i < 3; i++) {
 await new Promise((r) => setTimeout(r, 900))
 await toDistrictStop()
 
-// #1022, and why there is no gate count here any more.
+// The gate count, back after #1022 (owner decision on #1016).
 //
-// This scenario used to assert that a router with no pushed rule table
-// draws no gates, by counting `.city .gate-n` and expecting 0.
-// City.svelte has not drawn `gate-n` since #991, so the count was 0
-// whatever the city did: the check could not fail, and proved nothing.
+// This scenario used to count `.city .gate-n` and expect 0 before any
+// push. City.svelte had not drawn `gate-n` since #991, so the count was
+// 0 whatever the city did: the check could not fail. #1022's own fix
+// moved the hook to the policy lens's gate pill, and round 49 deleted
+// the lens, leaving the gate posts as anonymous geometry with no class,
+// id or attribute -- "how many gates" could not be asked of the DOM at
+// all, so the question was dropped rather than asked vacuously.
 //
-// It is removed rather than repaired, because the city currently offers
-// nothing honest to point it at. Gate posts are pushed into the drawing
-// as anonymous geometry with no class, id or data attribute of their
-// own, so "how many gates" cannot be asked of the DOM directly. The one
-// tell the design gives a gate is its lamp -- DESIGN.md, "Lamp on a
-// gate | the rule logs | a lit post", and round 49's table, "City gate |
-// logged: accent posts, one lamp" -- and on a live instance with a
-// logging accept rule pushed (`lan to servers`, below) the city draws
-// no `circle.lamp` at all, at any city stop, while its own walls report
-// `logged`. Measured 2026-09-07 on a clean instance at 844cb48.
-//
-// So every available reading is either absent or constant, and a check
-// written against one now would be as vacuous as the one it replaced.
-//
-// #1022's own fix (836fffab) put a `data-gate` hook on the policy
-// lens's gate pill, which was the only named gate element there was.
-// Round 49 removes the policy lens from both map surfaces, so that pill
-// and its hook are gone with it, and the DOM is back to offering
-// nothing countable. Repairing this needs a stable hook on the gate
-// posts themselves, in City.svelte, and belongs with whoever owns that
-// file. What this scenario still proves about the same honesty is
-// below: the plaque and the district both say a table was never pushed.
+// The hook is now on the posts themselves, `data-gate`, one per post
+// and two posts per gate: the only thing the city draws per gate, and
+// the thing that survives a redraw of everything around it. A gate on
+// one of the two back edges the camera cannot see draws nothing, so
+// this counts what faces the reader -- which before any push is nothing
+// at all, because a router that has pushed no rule table has no gates
+// to draw and the city must not invent one.
 const preRules = await page.request.get(`${URL_BASE}/api/routeros/${DEVICE}/rules`)
 const prePushed = preRules.ok() && (await preRules.json()).available
 if (!prePushed) {
@@ -99,6 +87,9 @@ if (!prePushed) {
 
   const plate = page.locator('[data-card="topography"] .city .plate').first()
   check((await plate.getAttribute('aria-label'))?.includes('no rule table has been pushed yet') ?? false, 'the district itself says why, not just the plaque')
+
+  const preGates = await page.locator('[data-card="topography"] .city [data-gate]').count()
+  check(preGates === 0, `before any push the walls stand with no gates (${preGates} gate posts)`)
 } else {
   check(true, 'an earlier scenario already pushed a rule table -- the pre-push honesty state is asserted on standalone runs')
 }
@@ -180,6 +171,12 @@ for (let i = 0; i < 9; i++) {
 }
 
 await toDistrictStop()
+
+// And with a table pushed, the one accept rule on it opens a gate the
+// city actually draws -- the other half of the count above, so neither
+// reading can go quiet without the other going red.
+const gatePosts = await page.locator('[data-card="topography"] .city [data-gate]').count()
+check(gatePosts > 0, `the pushed accept rule opens a gate the city draws (${gatePosts} gate posts)`)
 
 // --- The no-rule-label pair, read off its own host (#969) ------------------
 //
