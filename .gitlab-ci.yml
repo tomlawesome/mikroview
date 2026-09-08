@@ -154,22 +154,10 @@ variables:
   - "**/*.Dockerfile"
   - "**/Dockerfile"
   - "**/Makefile"
-  # The same extensions again without the `**/`, in case this GitLab's
-  # matcher does not let `**/` stand for zero directories. Untested here
-  # (no pipeline may be run from this branch), and a duplicate pattern
-  # costs nothing, whereas a root file falling through both lists on a
-  # mixed diff would not.
-  - "*.go"
-  - "*.js"
-  - "*.mjs"
-  - "*.json"
-  - "*.yml"
-  - "*.yaml"
-  - "*.sh"
-  - "*.py"
-  - "*.Dockerfile"
-  - "Dockerfile"
-  - "Makefile"
+  # No root-only duplicates (`*.go` beside `**/*.go`): GitLab matches
+  # with Ruby's fnmatch, where `**/` stands for zero or more directories,
+  # so `**/*.go` already covers main.go at the root. A `changes:` list is
+  # capped at 50 entries, and pipeline 726 refused the file at 56.
   # Every tree except docs/. A new top-level directory belongs on this
   # list the day it is created: until it is, a change inside it only
   # runs the full set on its own, and a diff pairing it with a README
