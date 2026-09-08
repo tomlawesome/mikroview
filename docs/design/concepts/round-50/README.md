@@ -40,6 +40,14 @@ the column and the router's shoulder (`-crop.png`, 1800×1400).
 
 ## Verdict
 
-<!-- owner's verdict goes here -->
+Owner, 2026-09-08, verbatim: "It's ok but the column idea needs to go -
+just place them in the map, we have pan and zoom, and the default zoom
+should be set to be dynamically adjusted so it fits the map broadly in
+the view at the starting level."
+
+So: the strands, the busiest-first order and the fold survive as ideas;
+the stacked column under wg0 is dead. Round 51 places each tunnel in
+the map as its own stop, and the map opens at a zoom that fits the
+whole of it. #890.
 
 Drawn by Claude Opus 5, 2026-09-08.
