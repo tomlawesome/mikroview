@@ -61,7 +61,21 @@
   import { nightlySummary } from '../lib/watchWindow'
   import type { Flag, WatchlistEntry } from '../lib/types'
   import City from './City.svelte'
-  import { STOPS, R2, flatFit, FX, FY } from '../lib/city/project'
+  import { STOPS, R2, flatFit, FX, FY, ease, reducedMotion } from '../lib/city/project'
+  // The tunnel cluster's geometry (#890, round 52): pure arithmetic in
+  // its own module, so the packing rule and the frame are unit-testable
+  // without a component. lib/fit.ts is the fit rule the city's cityFitS
+  // and this map's own frame now share rather than each writing it.
+  import type { Box } from '../lib/fit'
+  import {
+    cardBox,
+    packCluster,
+    samplePath,
+    topographyFrame,
+    viewBoxOf,
+    zoomPercent,
+    type Placed,
+  } from '../lib/topography/cluster'
   import { layoutGround, plateHalfWidth } from '../lib/city/layout'
   import { cityInputFrom } from '../lib/city/input'
   import {
@@ -340,10 +354,23 @@
     return n === 1 ? 0 : -55 + (110 / (n - 1)) * i
   }
 
-  function ribPath(i: number, n: number): string {
+  /** A lane rib's own four control points -- the one place its shape is
+   * written, so the drawn path and the box the tunnel cluster packs
+   * around it cannot drift apart (#890). */
+  function ribCurve(i: number, n: number): [[number, number], [number, number], [number, number], [number, number]] {
     const x = laneX(i, n)
     const spread = slotSpread(i, n)
-    return `M ${700 + spread} 302 C ${700 + spread * 2.2} 380, ${x + (700 - x) * 0.25} 420, ${x} 480`
+    return [
+      [700 + spread, 302],
+      [700 + spread * 2.2, 380],
+      [x + (700 - x) * 0.25, 420],
+      [x, 480],
+    ]
+  }
+
+  function ribPath(i: number, n: number): string {
+    const c = ribCurve(i, n)
+    return `M ${c[0][0]} ${c[0][1]} C ${c[1][0]} ${c[1][1]}, ${c[2][0]} ${c[2][1]}, ${c[3][0]} ${c[3][1]}`
   }
 
   // The stream, filtered to a zone's own boundary -- what the reach's
@@ -367,12 +394,12 @@
   // anchor rather than being re-derived from the edge's position.
   type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'tunnel' | 'any'; idx?: number }
 
-  // The tunnel node's own place on the stage, ported from round 30
-  // (the-whole.html:986, `translate(1128 132)`). Its card is drawn
-  // asymmetrically about this point -- -84 to +104 -- exactly as the
-  // mockup does; TUNNEL_ANCHOR is the underside its lines leave from.
-  const TUNNEL = { x: 1128, y: 132 }
-  const TUNNEL_ANCHOR = { x: 1080, y: 186 }
+  // Where the tunnels stand, and where their lines leave them, is
+  // lib/topography/cluster.ts's now (#890): round 30's single seat
+  // (the-whole.html:986, `translate(1128 132)`) is the first card's,
+  // and every other is packed around it. The card is drawn
+  // asymmetrically about its own point -- -84 to +104 -- exactly as the
+  // mockup does.
 
   function anchorOf(iface: string): EdgeAnchor | null {
     if (iface === '') return { ...WAIST, kind: 'any' }
@@ -380,7 +407,8 @@
     // Before the lane row is consulted: the tunnel left it (#877), and
     // an edge that used to find its lane card must now find the node
     // rather than fall through to null and be dropped silently.
-    if (iface === tunnelIface) return { ...TUNNEL_ANCHOR, kind: 'tunnel' }
+    const t = drawnTunnels.find((d) => d.iface === iface)
+    if (t) return { x: t.placed.anchor.x, y: t.placed.anchor.y, kind: 'tunnel' }
     const i = zones.findIndex((z) => z.id === iface)
     if (i === -1) return null
     return { x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }
@@ -2053,6 +2081,18 @@
   })
 
   function onKeydown(e: KeyboardEvent) {
+    // The map's own pan (#890 item 4), on the same keys the city pans on.
+    if (e.key.startsWith('Arrow') && mapTakesArrows(e.target)) {
+      const step = mapBox.w / 5
+      const vstep = mapBox.h / 5
+      const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
+      const dy = e.key === 'ArrowUp' ? -vstep : e.key === 'ArrowDown' ? vstep : 0
+      if (dx !== 0 || dy !== 0) {
+        e.preventDefault()
+        panMap(dx, dy)
+        return
+      }
+    }
     if (e.key === 'Escape') {
       // Esc walks out one level: the open card first, then the composer,
       // then the reach itself.
@@ -3187,30 +3227,23 @@
     zonesState.pushed.find((a) => !!a.interface && a.interface === zonesState.wanInterface)?.address ?? null,
   )
 
-  // --- the tunnel node (#877, #701's fact 3 as split) ----------------------
-  // Round 30 draws a second upper node beside Internet: `WireGuard` /
-  // `wg0 · 10.99.0.0/24` / `QUIET`, with its own watch bar
-  // (the-whole.html:986-1006). Nothing drew it before because a tunnel
-  // was not a thing this scene had -- a WireGuard interface could only
-  // land in the lane row, which is what zonesState.tunnelInterface now
-  // takes it out of.
-  const tunnelIface = $derived(zonesState.tunnelInterface)
+  // --- the tunnel cluster (#877, then #890's round 52) ---------------------
+  // Round 30 drew one tunnel node beside Internet: `WireGuard` /
+  // `wg0 · 10.99.0.0/24`, with its own watch bar (the-whole.html:986).
+  // #877 built that one and left a second tunnel as a design question;
+  // rounds 50-52 answered it and #890 builds the answer. Every pushed
+  // tunnel now gets that same card, in one group in the space right of
+  // the router, packed by lib/topography/cluster.ts's rule -- busiest
+  // nearest the router, the busiest keeping round 30's literal seat, so
+  // with one tunnel nothing moves. None of them is a lane any more:
+  // zonesState.tunnelOrder is what the lane row drops.
+  const tunnelIfaces = $derived(zonesState.tunnelOrder)
 
-  const tunnelApi = $derived(tunnelIface ? (tunnelsState.list.find((t) => t.iface === tunnelIface) ?? null) : null)
-
-  /** The tunnel's own events in this window: what separates an API
-   * `up` that is carrying traffic from one that is lit and empty. */
-  const tunnelEvents = $derived(
-    tunnelIface
-      ? appState.events.filter((e) => e.inInterface === tunnelIface || e.outInterface === tunnelIface).length
-      : 0,
-  )
-
-  // 'quiet' is mikroview's own reading on top of the API's vocabulary,
-  // and QUIET is exactly what round 30 draws on this card.
-  const tunnelState = $derived(bridgeStateFor(tunnelApi?.apiState ?? null, tunnelEvents))
-  const tunnelStateLabel = $derived(bridgeStateLabel(tunnelState))
-  const tunnelCovClass = $derived(tunnelState === 'down' ? 'cov-d' : 'cov-q')
+  /** One tunnel's own events in this window: what separates an API `up`
+   * that is carrying traffic from one that is lit and empty. */
+  function tunnelEventsOf(iface: string): number {
+    return appState.events.filter((e) => e.inInterface === iface || e.outInterface === iface).length
+  }
 
   /**
    * `wg0 · 10.99.0.0/24`, as drawn: the tunnel's own row in the pushed
@@ -3223,31 +3256,106 @@
    * rather than inferring a range from a peer's allowed address, which
    * is a /32 of one peer and not the tunnel's subnet at all.
    */
-  const tunnelSubnet = $derived.by((): string | null => {
-    if (!tunnelIface) return null
-    const row = zonesState.pushed.find((a) => a.interface === tunnelIface)
+  function tunnelSubnetOf(iface: string): string | null {
+    const row = zonesState.pushed.find((a) => a.interface === iface)
     if (!row) return null
     const slash = row.address.indexOf('/')
     const prefix = slash === -1 ? '' : row.address.slice(slash + 1)
     if (row.network && prefix) return `${row.network}/${prefix}`
     return row.address || null
+  }
+
+  /** How long since this tunnel was last heard from, in the card's own
+   * wording -- the `3 d` of round 52's quiet footprint. Null where no
+   * peer carried a handshake the server could date: "how long" is then
+   * not a question the pushed data answers. */
+  function tunnelQuietFor(lastHeard: string | null): string | null {
+    if (!lastHeard) return null
+    const t = Date.parse(lastHeard)
+    if (Number.isNaN(t)) return null
+    return spanLabel(nowMs - t)
+  }
+
+  /** What the map draws for one tunnel, before it is given a place. */
+  interface TunnelCard {
+    iface: string
+    subnet: string | null
+    state: ReturnType<typeof bridgeStateFor>
+    stateLabel: string
+    covClass: string
+    /** Not heard for a while: round 52 draws its footprint dashed, with
+     * the span at the card's right edge. */
+    quiet: boolean
+    quietFor: string | null
+    aggregate: ZoneAggregate | null
+  }
+
+  const tunnelCards = $derived.by((): TunnelCard[] =>
+    tunnelIfaces.map((iface): TunnelCard => {
+      const api = tunnelsState.list.find((t) => t.iface === iface) ?? null
+      const events = tunnelEventsOf(iface)
+      // 'quiet' is mikroview's own reading on top of the API's
+      // vocabulary; the state words themselves are the city's.
+      const state = bridgeStateFor(api?.apiState ?? null, events)
+      const subnet = tunnelSubnetOf(iface)
+      return {
+        iface,
+        subnet,
+        state,
+        stateLabel: bridgeStateLabel(state),
+        covClass: state === 'down' ? 'cov-d' : 'cov-q',
+        quiet: state === 'down',
+        quietFor: state === 'down' ? tunnelQuietFor(api?.lastHeard ?? null) : null,
+        /** The node's watch bar. Correlated exactly as a lane's is --
+         * through the pushed CIDR -- so no third correlation rule enters
+         * the scene, and absent entirely while no address names the
+         * tunnel's range, which is the same refusal zoneAggregate makes. */
+        aggregate: subnet
+          ? zoneAggregate({ id: iface, name: iface, cidr: subnet, hosts: [], hostCount: 0, eventCount: events })
+          : null,
+      }
+    }),
+  )
+
+  /** The furniture the cluster packs around: what is already drawn, in
+   * map units. A pocket may touch none of it. */
+  const mapFurniture = $derived.by(() => {
+    // The Internet island (200x60 about its own point) with the
+    // aggregate bar that hangs under it, and the waist -- which grows
+    // to hold the degraded statement, so the box grows with it.
+    const boxes: Box[] = [
+      { x: 600, y: 38, w: 200, h: 80 },
+      { x: 572, y: 234, w: 256, h: degradedStatement ? 100 : 68 },
+    ]
+    const curves = [
+      samplePath([
+        [700, 104],
+        [700, 150],
+        [700, 190],
+        [700, 232],
+      ]),
+    ]
+    zones.forEach((_z, i) => {
+      // The lane card, its label above it and its aggregate bar below.
+      boxes.push({ x: laneX(i, zones.length) - cardHalf, y: 466, w: cardW, h: 150 })
+      curves.push(samplePath(ribCurve(i, zones.length)))
+    })
+    return { boxes, curves }
   })
 
-  /** The node's watch bar. Correlated exactly as a lane's is -- through
-   * the pushed CIDR -- so no third correlation rule enters the scene,
-   * and absent entirely while no address names the tunnel's range,
-   * which is the same refusal zoneAggregate already makes. */
-  const tunnelAggregate = $derived.by((): ZoneAggregate | null => {
-    if (!tunnelIface || !tunnelSubnet) return null
-    return zoneAggregate({
-      id: tunnelIface,
-      name: tunnelIface,
-      cidr: tunnelSubnet,
-      hosts: [],
-      hostCount: 0,
-      eventCount: tunnelEvents,
+  /** Every tunnel with the place the packing rule gave it. */
+  const drawnTunnels = $derived.by((): (TunnelCard & { placed: Placed })[] => {
+    const placed = packCluster({
+      count: tunnelCards.length,
+      bars: tunnelCards.map((t) => t.aggregate !== null),
+      obstacles: mapFurniture,
     })
+    return tunnelCards.map((t, i) => ({ ...t, placed: placed[i] }))
   })
+
+  /** The busiest tunnel -- the one that keeps round 30's seat, and the
+   * one the ghost reference line belongs to. */
+  const tunnelIface = $derived(tunnelIfaces[0] ?? null)
 
   /**
    * The ghost reference line's far end: the lane the tunnel's traffic
@@ -3279,6 +3387,182 @@
     })
     return best === -1 ? null : best
   })
+
+  // --- the frame, and moving inside it (#890 items 3 and 4) ----------------
+  // Round 49 drew this scene on a fixed 1400x720 frame, so a tunnel
+  // packed past its edge would simply have been off the map. Round 51's
+  // rule -- carried into 52 -- is that the frame fits the map: the union
+  // of that nominal frame and every drawn node's bounds plus 40 px of
+  // air, and never closer than 1:1, so a map that fits opens exactly
+  // where it always did and the frame only ever grows.
+  //
+  // What the frame is grown around is what can move: the tunnel cards
+  // the packing rule places, and the lane row, whose width follows the
+  // number of lanes. The Internet island and the waist stand exactly
+  // where round 49 put them, and the nominal frame is the frame round 49
+  // drew around them -- padding those two again would push the default
+  // map a couple of pixels off round 49's own drawing for no reason.
+  const mapNodeBoxes = $derived.by((): Box[] => {
+    const boxes: Box[] = zones.map((_z, i) => ({ x: laneX(i, zones.length) - cardHalf, y: 466, w: cardW, h: 150 }))
+    for (const t of drawnTunnels) boxes.push(cardBox(t.placed, t.aggregate !== null))
+    return boxes
+  })
+
+  const mapFrame = $derived(topographyFrame(mapNodeBoxes))
+
+  /** Where the operator has zoomed and panned to, or null for the
+   * fitted frame -- the same viewBox by another route. */
+  let mapView = $state<Box | null>(null)
+  const mapBox = $derived(mapView ?? mapFrame)
+  const mapViewBox = $derived(viewBoxOf(mapBox))
+  /** The fit chip's percentage: this box's scale against the nominal
+   * frame's, so a fitted map that needed no extra frame reads 100 %. */
+  const mapZoom = $derived(zoomPercent(mapBox))
+
+  let mapAnim: number | null = null
+
+  function stopMapAnim() {
+    if (mapAnim !== null) cancelAnimationFrame(mapAnim)
+    mapAnim = null
+  }
+
+  /** Back to the fitted frame. Eased, unless the reader has asked for
+   * reduced motion -- the city's own decision, read from the one place
+   * that makes it (project.ts's reducedMotion). */
+  function fitMap() {
+    stopMapAnim()
+    const from = mapView
+    if (!from || reducedMotion() || typeof requestAnimationFrame !== 'function') {
+      mapView = null
+      return
+    }
+    const to = mapFrame
+    const t0 = performance.now()
+    const step = (now: number) => {
+      const t = ease((now - t0) / 240)
+      if (t >= 1) {
+        mapView = null
+        mapAnim = null
+        return
+      }
+      mapView = {
+        x: from.x + (to.x - from.x) * t,
+        y: from.y + (to.y - from.y) * t,
+        w: from.w + (to.w - from.w) * t,
+        h: from.h + (to.h - from.h) * t,
+      }
+      mapAnim = requestAnimationFrame(step)
+    }
+    mapAnim = requestAnimationFrame(step)
+  }
+
+  $effect(() => () => stopMapAnim())
+
+  /** Map units per client pixel, for `xMidYMid meet`. */
+  function mapScale(): number {
+    if (!mapSvgEl) return 1
+    const r = mapSvgEl.getBoundingClientRect()
+    if (!r.width || !r.height) return 1
+    return Math.max(mapBox.w / r.width, mapBox.h / r.height)
+  }
+
+  // How far out the map may be taken by hand, either way, against the
+  // frame it fits at: close enough to read a host dot, far enough to see
+  // a cluster that has grown well past the frame.
+  const MAP_ZOOM_IN = 0.25
+  const MAP_ZOOM_OUT = 3
+
+  function clampBox(b: Box): Box {
+    const w = Math.min(mapFrame.w * MAP_ZOOM_OUT, Math.max(mapFrame.w * MAP_ZOOM_IN, b.w))
+    const h = b.h * (w / b.w)
+    return { x: b.x + (b.w - w) / 2, y: b.y + (b.h - h) / 2, w, h }
+  }
+
+  let mapDrag: { x: number; y: number; box: Box; moved: boolean } | null = null
+  /** A drag ends with a click on whatever is under the pointer; that
+   * click must not also open the thing the pan happened to finish over. */
+  let mapDragged = false
+
+  function onMapPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return
+    mapDragged = false
+    stopMapAnim()
+    mapDrag = { x: e.clientX, y: e.clientY, box: { ...mapBox }, moved: false }
+  }
+
+  function onMapPointerMove(e: PointerEvent) {
+    if (!mapDrag) return
+    const k = mapScale()
+    const dx = (e.clientX - mapDrag.x) * k
+    const dy = (e.clientY - mapDrag.y) * k
+    if (!mapDrag.moved) {
+      if (Math.abs(dx) + Math.abs(dy) < 3 * k) return
+      mapDrag.moved = true
+      // Capture only once a real drag is under way (#977's lesson from
+      // City.svelte): capturing on pointerdown makes every plain click
+      // land on the svg instead of the card under the pointer.
+      ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+    }
+    mapView = { ...mapDrag.box, x: mapDrag.box.x - dx, y: mapDrag.box.y - dy }
+  }
+
+  function onMapPointerUp() {
+    mapDragged = mapDrag?.moved ?? false
+    mapDrag = null
+  }
+
+  function onMapClickCapture(e: MouseEvent) {
+    if (!mapDragged) return
+    mapDragged = false
+    e.stopPropagation()
+    e.preventDefault()
+  }
+
+  /** Wheel zoom about the pointer, so the thing under the cursor stays
+   * under it. Attached by hand rather than as an attribute: Svelte adds
+   * `passive` to a wheel listener, and a passive listener cannot stop
+   * the page scrolling behind the map. */
+  function onMapWheel(e: WheelEvent) {
+    if (!mapSvgEl) return
+    e.preventDefault()
+    stopMapAnim()
+    const r = mapSvgEl.getBoundingClientRect()
+    if (!r.width || !r.height) return
+    const k = Math.max(mapBox.w / r.width, mapBox.h / r.height)
+    // `xMidYMid meet` letterboxes, so the drawn map is centred in the
+    // element: take the offset off before converting to map units.
+    const ox = (r.width - mapBox.w / k) / 2
+    const oy = (r.height - mapBox.h / k) / 2
+    const px = mapBox.x + (e.clientX - r.left - ox) * k
+    const py = mapBox.y + (e.clientY - r.top - oy) * k
+    const f = Math.exp(e.deltaY * 0.0015)
+    const next = clampBox({ x: mapBox.x, y: mapBox.y, w: mapBox.w * f, h: mapBox.h * f })
+    // Keep (px, py) where it was: shift by how much the box grew about it.
+    const s = next.w / mapBox.w
+    mapView = { ...next, x: px - (px - mapBox.x) * s, y: py - (py - mapBox.y) * s }
+  }
+
+  $effect(() => {
+    const el = mapSvgEl
+    if (!el) return
+    el.addEventListener('wheel', onMapWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onMapWheel)
+  })
+
+  /** Arrow keys pan, a fifth of the frame at a time. Only while the map
+   * itself is what the keyboard is on: anything focused that wants its
+   * own arrows keeps them. */
+  function panMap(dx: number, dy: number) {
+    stopMapAnim()
+    mapView = { ...mapBox, x: mapBox.x + dx, y: mapBox.y + dy }
+  }
+
+  function mapTakesArrows(target: EventTarget | null): boolean {
+    if (reach || cityStop !== null || nodeCard || lineCard || compose) return false
+    if (!(target instanceof Element)) return true
+    if (target === document.body) return true
+    return target === mapSvgEl || target.closest('.stage') !== null
+  }
 </script>
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
@@ -3624,12 +3908,24 @@
     role={reach ? 'button' : undefined}
     aria-label={reach ? 'Surface — back to the map as you left it' : undefined}
   >
+    <!-- The frame fits the map (#890 item 3), and the operator may take
+         it by hand from there (item 4): drag or arrow keys to pan, the
+         wheel to zoom, and the fit chip below to come back. The wheel
+         listener is attached in script, not here, because Svelte marks a
+         wheel attribute passive and a passive listener cannot stop the
+         page scrolling under the map. -->
     <svg
       bind:this={mapSvgEl}
-      viewBox="0 0 1400 720"
+      viewBox={mapViewBox}
       preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label="The network map: internet above, the router at the waist, observed lanes below{undrawnNote}"
+      class="pannable"
+      onpointerdown={onMapPointerDown}
+      onpointermove={onMapPointerMove}
+      onpointerup={onMapPointerUp}
+      onpointercancel={onMapPointerUp}
+      onclickcapture={onMapClickCapture}
     >
       <defs>
         <!-- The host row's clip. Every lane card shares one local
@@ -3662,12 +3958,26 @@
            would claim a lane this line does not touch, so it takes the
            trunk's accent instead -- the same relationship the trunk
            draws, an upper node joined to the router. -->
-      {#if tunnelIface}
-        <path class="rib" d="M1080 186 C 990 215, 880 240, 830 252" stroke="var(--accent)" stroke-width="1.7" />
-        {#if tunnelGhostLane !== null}
-          {@const gx = laneX(tunnelGhostLane, zones.length)}
-          <path class="rib-ghost" d="M 1100 186 C 945 300, {gx + 95} 385, {gx} 476" />
-        {/if}
+      <!-- Round 52 (#890): one strand per tunnel, each to the router's
+           right shoulder (or its top edge, for a card in the pocket
+           left of the first one, beside the Internet rib). Drawn here,
+           before the cards, so a strand that has to run under a nearer
+           card passes beneath it -- as the Guest rib runs under the
+           Guest card. A tunnel not heard for a while draws its strand
+           in the dark ink, dashed, the same grammar the material uses. -->
+      {#each drawnTunnels as t (t.iface)}
+        <path
+          class="rib"
+          class:tunnel-quiet={t.quiet}
+          data-tunnel-strand={t.iface}
+          d={t.placed.strand}
+          stroke={t.quiet ? 'var(--fg-muted)' : 'var(--accent)'}
+          stroke-width="1.7"
+        />
+      {/each}
+      {#if tunnelIface && tunnelGhostLane !== null}
+        {@const gx = laneX(tunnelGhostLane, zones.length)}
+        <path class="rib-ghost" d="M 1100 186 C 945 300, {gx + 95} 385, {gx} 476" />
       {/if}
       <!-- The material, under everything (round 49): every dark or quiet
            boundary-direction, drawn as its own half of the pair's rib
@@ -3938,18 +4248,24 @@
            Drawn only when a WireGuard interface has actually been
            pushed: no placeholder node, and no "unknown" card standing
            in for a tunnel nobody has told us about. -->
-      {#if tunnelIface}
-        <g transform="translate(1128 132)" class="passive">
+      {#each drawnTunnels as t (t.iface)}
+        <g transform="translate({t.placed.x} {t.placed.y})" class="passive" data-tunnel={t.iface}>
           <g class="isl-card">
-            <rect class="isl" x="-84" y="-28" width="188" height="56" rx="12" />
+            <!-- Not heard for a while: round 52 draws the footprint
+                 dashed in the dark ink, and writes how long at the
+                 card's right edge -- the host rule, on a tunnel. -->
+            <rect class="isl" class:quiet-print={t.quiet} x="-84" y="-28" width="188" height="56" rx="12" />
+            {#if t.quiet && t.quietFor}
+              <text x="100" y="-14" class="n-quiet" text-anchor="end">quiet · {t.quietFor}</text>
+            {/if}
             <text x="-66" y="-2" class="n-name tn-name">WireGuard</text>
-            {#if tunnelSubnet}
-              <text x="-66" y="14" class="n-cidr">{tunnelIface}{` · ${tunnelSubnet}`}</text>
+            {#if t.subnet}
+              <text x="-66" y="14" class="n-cidr">{t.iface}{` · ${t.subnet}`}</text>
             {:else}
               <!-- One interface's own missing row, not the whole map's
                    degraded state, so this is not `.cidr-deg`'s toggle. -->
               <text x="-66" y="14" class="n-cidr"
-                >{tunnelIface}<tspan class="cidr-none">{' · no address pushed'}</tspan></text
+                >{t.iface}<tspan class="cidr-none">{' · no address pushed'}</tspan></text
               >
             {/if}
             <!-- Round 49: the card says `name · subnet`, and adds a
@@ -3960,11 +4276,11 @@
                  the coverage captions. A tunnel the router calls *down*
                  is a different fact, and the one thing on this card no
                  line on the 2D map draws, so it stays. -->
-            {#if tunnelState === 'down' || tunnelState === 'unknown'}
-              <text x="54" y="-4" class="n-cov {tunnelCovClass}">{tunnelStateLabel}</text>
+            {#if t.state === 'down' || t.state === 'unknown'}
+              <text x="54" y="-4" class="n-cov {t.covClass}">{t.stateLabel}</text>
             {/if}
-            {#if tunnelAggregate}
-              {@render aggregateBar(tunnelAggregate, -84, 188, 32, 16, { id: tunnelIface, name: tunnelIface })}
+            {#if t.aggregate}
+              {@render aggregateBar(t.aggregate, -84, 188, 32, 16, { id: t.iface, name: t.iface })}
             {/if}
           </g>
           <!-- The removed survey stop used to draw every node as a plain
@@ -3977,7 +4293,7 @@
                The card above already names the tunnel; nothing here was
                a second fact. -->
         </g>
-      {/if}
+      {/each}
 
       <!-- The waist. Passive like the internet: every policy edge
            routes through here, and the island must not eat their clicks. -->
@@ -4502,6 +4818,27 @@
       </g>
       </g>
     </svg>
+    <!-- The fit chip (round 51, carried into 52): how far out the frame
+         is, and the way back to it. `NN%` is this view's scale against
+         the map's nominal frame, so a fitted map that needed no extra
+         frame reads 100 %; clicking returns to the fitted frame. Hidden
+         under a reach, where the map is a blurred backdrop whose one
+         affordance is surfacing. -->
+    {#if !reach}
+      <button
+        type="button"
+        class="fitchip"
+        class:hand={mapView !== null}
+        aria-label={mapView !== null ? 'Zoomed by hand — fit the whole map' : 'The whole map, fitted'}
+        title={mapView !== null ? 'zoomed by hand — click to fit the whole map' : 'the whole map, fitted'}
+        onclick={(e) => {
+          e.stopPropagation()
+          fitMap()
+        }}
+      >
+        <span class="z">{mapZoom}%</span><span class="sep"></span><span class:dimt={mapView === null}>⤢ fit</span>
+      </button>
+    {/if}
     {#if reach}
       <!-- The ascend control (#682, ported from the scene): inside the
            map's own flow, top-left of the stage -- not a fixed pill
@@ -5552,6 +5889,75 @@
 
   .stage svg text {
     font-family: inherit;
+  }
+
+  /* The map is dragged to pan (#890 item 4). `touch-action: none` so a
+     drag on a touch screen pans the map rather than scrolling the deck
+     out from under it. */
+  .stage svg.pannable {
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .stage svg.pannable:active {
+    cursor: grabbing;
+  }
+
+  /* The fit chip (round 51/52): bottom right of the stage, clear of the
+     legend row. Dim until the view has been moved by hand, when the
+     accent says there is somewhere to come back from. */
+  .fitchip {
+    position: absolute;
+    right: 16px;
+    bottom: 12px;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 9px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-elevated);
+    font: 500 10.5px var(--font-mono);
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .fitchip .z {
+    color: var(--fg);
+  }
+
+  .fitchip .sep {
+    width: 1px;
+    height: 9px;
+    background: var(--border);
+  }
+
+  .fitchip .dimt {
+    color: var(--fg-dim);
+  }
+
+  .fitchip.hand {
+    border-color: var(--accent);
+    color: var(--fg);
+  }
+
+  /* A tunnel not heard for a while (#890): the footprint dashed in the
+     dark ink, and the span at the card's right edge -- the same
+     grammar a dark boundary and a quiet host already use. */
+  .isl.quiet-print {
+    stroke: var(--fg-muted);
+    stroke-dasharray: 3 6;
+  }
+
+  .n-quiet {
+    fill: var(--fg-muted);
+    font-size: 9px;
+    font-family: var(--font-mono);
+  }
+
+  .rib.tunnel-quiet {
+    stroke-dasharray: 3 6;
   }
 
   .n-name {

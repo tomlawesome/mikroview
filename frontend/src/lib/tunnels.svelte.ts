@@ -23,6 +23,27 @@ export interface TunnelInterface {
   kind: 'wg' | 'ppp'
   apiState: 'up' | 'down' | 'unknown'
   peers: TunnelPeer[]
+  /** When this interface was last heard from: the most recent handshake
+   * the server could date (its `since`, the push time minus the reported
+   * elapsed time), across every peer attached to it. Null where no peer
+   * carried a handshake this build could parse -- "how long" is then not
+   * a question the pushed data answers, and the card says nothing rather
+   * than guessing a span (#890, round 52's quiet footprint). */
+  lastHeard: string | null
+}
+
+/** The most recent dated handshake across an interface's peers. */
+function lastHeardOf(peers: { since?: string }[]): string | null {
+  let best: string | null = null
+  let bestMs = Number.NEGATIVE_INFINITY
+  for (const p of peers) {
+    if (!p.since) continue
+    const t = Date.parse(p.since)
+    if (Number.isNaN(t) || t <= bestMs) continue
+    bestMs = t
+    best = p.since
+  }
+  return best
 }
 
 /** A WireGuard peer's own name: an operator's comment first, then the
@@ -58,6 +79,7 @@ class TunnelsState {
             routerId: d.id,
             kind: 'wg',
             apiState: iface.state,
+            lastHeard: lastHeardOf(iface.peers),
             peers: iface.peers.map((p, i) => ({
               id: iface.name + '/wg/' + (p.publicKey || String(i)),
               name: wgPeerName(p),
@@ -81,6 +103,10 @@ class TunnelsState {
             // (#874) -- there is no separate "down but configured"
             // reading this endpoint can offer.
             apiState: 'up',
+            // /ppp/active reports a session's uptime, not a last-heard
+            // time: a row here is live by definition, so there is no
+            // quiet span to write.
+            lastHeard: null,
             peers: [pppPeer(sess)],
           })
         }
