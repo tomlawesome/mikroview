@@ -44,7 +44,10 @@
   // off the left gutter (the ratified drum's own margins, round 20-29,
   // are symmetric too) -- just enough for the oldest tick's time label.
   const LEFT = 30
-  const RIGHT = 18
+  // Wide enough for the foot's 'the brink' label, which is centred on
+  // the brink edge itself and so needs half its own width of margin
+  // beyond it (round 30 leaves the same room: x=1360 in a 1400 box).
+  const RIGHT = 30
   const MIN_WIDTH = 420
   // This floor keeps a cramped viewport at a readable height rather than
   // squashing the trace unreadably thin.
@@ -110,11 +113,15 @@
     return plotX0 + (i / (n - 1)) * (plotX1 - plotX0)
   }
 
-  // Every tenth minute, plus the brink -- enough to place the hour
-  // without a ruled grid competing with the strokes.
-  const timeTicks = $derived(
-    n === 0 ? [] : Array.from({ length: n }, (_, i) => i).filter((i) => (n - 1 - i) % 10 === 0),
-  )
+  // The hour is placed at its two ends and nowhere else, as every
+  // ratified round of the drum draws it (round 30's `#mv-seis`, carried
+  // unchanged through rounds 36-39): the oldest minute written at the
+  // bottom-left, the words "the brink" under the brink's own edge at
+  // the bottom-right. This used to be a label every tenth minute along
+  // the top with a full-height rule dropped under each one -- a ruled
+  // grid the mockup draws nowhere, and the same fault the fall carried
+  // until #700 ("round 30 draws no grid at all").
+  const oldestLabel = $derived(n === 0 ? '' : formatHM(hour.axis[0]))
 
   const cursorX = $derived(cursor >= 0 ? snapLine(xOf(cursor), dpr) : 0)
 
@@ -147,23 +154,9 @@
       aria-label={label}
       onpointerdown={selectFromPointer}
     >
-      <!-- the hour, placed once at the top -->
-      {#each timeTicks as i (i)}
-        <text
-          class="time"
-          class:brink={i === n - 1}
-          x={snapFill(xOf(i), dpr)}
-          y={TOP - 14}
-          text-anchor={i === n - 1 ? 'end' : 'middle'}>{formatHM(hour.axis[i])}</text
-        >
-        <line
-          class="decade"
-          x1={snapLine(xOf(i), dpr)}
-          x2={snapLine(xOf(i), dpr)}
-          y1={TOP - 6}
-          y2={height - BOTTOM + 4}
-        />
-      {/each}
+      <!-- the hour, written at its two ends and nowhere between -->
+      <text class="time" x={plotX0} y={height - BOTTOM + 18}>{oldestLabel}</text>
+      <text class="time" x={snapFill(plotX1, dpr)} y={height - BOTTOM + 18} text-anchor="middle">the brink</text>
 
       <line class="midline" x1={plotX0} x2={plotX1} y1={snapLine(midlineY, dpr)} y2={snapLine(midlineY, dpr)} />
 
@@ -186,7 +179,10 @@
       {#if cursor >= 0}
         <rect class="cursor-band" x={cursorX - 4} y={TOP - 6} width="8" height={height - BOTTOM - TOP + 6} />
         <line class="cursor" x1={cursorX} x2={cursorX} y1={TOP - 6} y2={height - BOTTOM} />
-        <text class="time brink cursor-label" x={cursorX} y={height - BOTTOM + 18} text-anchor="middle"
+        <!-- above its own line, as the drawing puts it: the cursor's
+             minute is the one amber word at the top of the paper, clear
+             of the two dim end-labels along the foot. -->
+        <text class="time brink cursor-label" x={cursorX} y={TOP - 16} text-anchor="middle"
           >{formatHM(hour.axis[cursor])}</text
         >
       {/if}
@@ -237,13 +233,6 @@
 
   .stroke.inner {
     stroke: var(--chart-refused);
-  }
-
-  .decade {
-    stroke: var(--border);
-    stroke-width: 1;
-    opacity: 0.45;
-    shape-rendering: crispEdges;
   }
 
   .time {
