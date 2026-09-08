@@ -10,7 +10,11 @@
   // rule holds for this family too, and the connecting/disconnected
   // line in ConnectionBanner.svelte above it is unchanged. Folding is
   // the whole difference from the old banners: open it takes the room a
-  // banner strip always took, closed it is a 3px line.
+  // banner strip always took, closed it is a 2px line with a small
+  // arrow pull tab centred on it. The 20px sill an earlier cut put
+  // under the rows is gone: the owner rejected it as too thick
+  // (2026-09-07) -- "no more than a thin bright orange line with a
+  // little arrow pull tab in the centre".
   //
   // An earlier cut of this overlaid the column instead
   // (position:absolute, z-index 35), to avoid reflowing the deck's
@@ -115,8 +119,23 @@
   >
     <div class="rows-clip">
       <div class="rows">
-        {#each rows as row (row.id)}
-          <div class="banner banner-{row.severity}" role="status">
+        {#each rows as row, i (row.id)}
+          <div
+            class="banner banner-{row.severity}"
+            class:has-clear={i === 0 && canEdit}
+            class:has-detail={!!row.details && canEdit}
+            role="status"
+          >
+            {#if i === 0 && canEdit}
+              <button
+                type="button"
+                class="clear-all"
+                data-testid="ingest-loss-clear-all"
+                onclick={clearAll}
+              >
+                Clear all
+              </button>
+            {/if}
             <strong>{row.label}:</strong> <span class="dt">{row.detail}</span>
             {#if row.details && canEdit}
               <button class="detail" type="button" onclick={() => goToSection(row.details!)}>
@@ -127,7 +146,7 @@
         {/each}
       </div>
     </div>
-    <div class="sill">
+    <div class="line">
       <button
         type="button"
         class="handle"
@@ -140,11 +159,6 @@
       >
         <span class="handle-mark" aria-hidden="true"></span>
       </button>
-      {#if canEdit}
-        <button type="button" class="clear-all" data-testid="ingest-loss-clear-all" onclick={clearAll}>
-          Clear all
-        </button>
-      {/if}
     </div>
   </div>
 {/if}
@@ -174,6 +188,18 @@
   .rows {
     overflow: hidden;
     min-height: 0;
+    /* Clipping alone leaves the buttons in here focusable by keyboard
+       while the drawer is folded shut. The old sill placement made
+       Clear all `pointer-events: none` when closed for that reason;
+       now that it sits in a row, the guarantee has to come from here
+       -- and `details` gets it too, which clipping never gave it.
+       Delayed to the end of the fold so the collapse still animates. */
+    visibility: visible;
+    transition: visibility 0s linear 0s;
+  }
+  .ingest-loss-drawer.closed .rows {
+    visibility: hidden;
+    transition: visibility 0s linear 180ms;
   }
 
   .banner {
@@ -182,6 +208,20 @@
     font-size: 13px;
     text-align: center;
     border-bottom: 1px solid var(--border);
+  }
+  /* The line below is the drawer's bottom edge; without this the last
+     row draws its own on top of it and the "thin" line is 3px. */
+  .banner:last-child {
+    border-bottom: none;
+  }
+  /* Clear all takes its room out of this row, per the owner's
+     "should cut into the banner next to it's space". Both sides, so
+     the row's centred text stays centred and clears `details` on the
+     right as well -- that link is asserted to sit within 40px of the
+     right edge (#1001), so it cannot move to make room. */
+  .banner.has-clear {
+    padding-left: 92px;
+    padding-right: 92px;
   }
   .banner strong {
     font-weight: 700;
@@ -221,38 +261,32 @@
     cursor: pointer;
   }
 
-  /* --- the sill: 20px open, a 3px worst-colour line closed --- */
-  .sill {
+  /* --- the line: the drawer's bottom edge, 2px in both states ---
+     It does not resize, so there is no height to animate and nothing
+     that reads as a strip: open it is an ordinary rule under the last
+     row, closed it carries the worst row's colour and is the only
+     thing left on screen besides the tab. --- */
+  .line {
     position: relative;
-    height: 20px;
-    min-height: 20px;
-    display: flex;
-    align-items: center;
-    background: var(--bg-elevated);
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-    transition:
-      height 180ms ease-out,
-      border-color 180ms ease-out;
+    height: 2px;
+    background: var(--border);
+    transition: background-color 180ms ease-out;
   }
-  .ingest-loss-drawer.closed .sill {
-    height: 3px;
-    min-height: 3px;
-    border-color: transparent;
+  .ingest-loss-drawer.closed .line {
     background: var(--worst-color);
   }
 
-  /* The handle: centred, hit area >=72x24 always. Open, it is
-     vertically centred on the 20px sill; closed, its box top-aligns to
-     the sill/line's own top so the visible mark below (top-aligned
-     within the box) sits flush with the line and hangs 5px past its
-     3px height -- "straddling the line, 5px of it below" per the
-     ratified spec. The invisible remainder of the 24px hit box hangs
-     below that, over whatever scene is centred beneath it. */
+  /* The pull tab: a 72x24 hit area, mostly invisible, centred on the
+     line and hanging just below it in *both* states, so toggling turns
+     the arrow over and moves nothing. Below rather than above because
+     a row's text is centred too: an open-state tab sitting on the line
+     would land on the last row's own words. What it hangs over instead
+     is the scene under the drawer, which is what the z-index in the
+     header comment is for. */
   .handle {
     position: absolute;
     left: 50%;
-    top: 50%;
+    top: 2px;
     width: 72px;
     height: 24px;
     margin: 0;
@@ -262,20 +296,19 @@
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    transform: translate(-50%, -12px);
+    transform: translateX(-50%);
     cursor: pointer;
   }
-  .ingest-loss-drawer.closed .handle {
-    top: 0;
-    transform: translateX(-50%);
-  }
 
-  /* Open: a small chevron, up (collapse) -- CSS triangle, no icon font
-     or SVG asset needed for one shape that only ever points two ways. */
+  /* An arrow both ways, 10x6 -- CSS triangles, no icon font or SVG
+     asset for one shape that only ever points two ways. It replaces
+     the 48x8 lozenge the owner rejected: that was six times the width
+     and, sitting under a 3px line, read as a second bar rather than as
+     something to pull. */
   .handle-mark {
     width: 0;
     height: 0;
-    margin-top: 7px;
+    margin-top: 2px;
     border-left: 5px solid transparent;
     border-right: 5px solid transparent;
     border-bottom: 6px solid var(--fg-dim);
@@ -284,27 +317,33 @@
   .handle:hover .handle-mark {
     border-bottom-color: var(--fg);
   }
-  /* Closed: the chevron triangle is replaced outright by the 48x8
-     lozenge -- no count and no text on the line, severity is its
-     colour alone, the count lives in the tooltip/aria-label above. */
+  /* Closed: the same arrow, turned over to point down at what it will
+     open, and taking the line's colour so the two read as one mark.
+     No count and no text on the line -- severity is the colour alone,
+     and the count is in the tooltip and the aria-label. */
   .ingest-loss-drawer.closed .handle-mark {
-    width: 48px;
-    height: 8px;
-    border: none;
-    border-radius: 4px;
-    background: var(--worst-color);
-    margin-top: 0;
+    border-bottom: none;
+    border-top: 6px solid var(--worst-color);
+  }
+  .ingest-loss-drawer.closed .handle:hover .handle-mark {
+    border-top-color: color-mix(in srgb, var(--worst-color) 65%, var(--fg));
   }
 
-  /* --- Clear all: same size and ink as .detail above, so the right
-     edge reads as one actions column -- details per row, Clear all for
-     the whole stack. Hidden closed: "no text on the line". --- */
+  /* --- Clear all: mirrors .detail exactly, on the opposite edge of
+     the top row -- same size, same ink, same box. One control for the
+     whole stack, so it renders once, on the first row only; per-row it
+     would read as clearing that row. Left, because `details` owns the
+     right edge and the owner's ruling was to move it aside rather than
+     let the two collide. --- */
   .clear-all {
-    margin-left: auto;
-    margin-right: 16px;
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
     font: 600 10px var(--font-mono);
     letter-spacing: 0.06em;
-    color: var(--fg-dim);
+    color: inherit;
+    opacity: 0.75;
     border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
     border-radius: 6px;
     padding: 2px 8px;
@@ -312,17 +351,13 @@
     cursor: pointer;
   }
   .clear-all:hover {
-    color: var(--fg);
-  }
-  .ingest-loss-drawer.closed .clear-all {
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 120ms ease-out;
+    opacity: 1;
   }
 
   @media (prefers-reduced-motion: reduce) {
     .rows-clip,
-    .sill,
+    .rows,
+    .line,
     .handle,
     .handle-mark,
     .clear-all {
@@ -330,7 +365,26 @@
     }
   }
 
-  /* Phone widths: rows wrap to two lines by ordinary text flow (no
-     white-space:nowrap is set anywhere above) -- nothing else changes,
-     per the ratified spec. */
+  /* Phone widths: rows wrap by ordinary text flow (no white-space is
+     set anywhere above). What does change is the padding. Both controls
+     are absolutely positioned over a centred line of text, and at 390px
+     there is no longer room for that: rendered at phone width, `details`
+     sat on top of its own row's words on every row that carried one.
+     So the rule the owner set for Clear all -- a control cuts into the
+     banner's space rather than over its text -- is applied to `details`
+     too, but only here, where it actually collides. Desktop is wide
+     enough and is deliberately left as it was ratified. */
+  @media (max-width: 640px) {
+    .banner.has-clear {
+      padding-left: 84px;
+      padding-right: 16px;
+    }
+    .banner.has-detail {
+      padding-right: 84px;
+    }
+    .banner.has-clear.has-detail {
+      padding-left: 84px;
+      padding-right: 84px;
+    }
+  }
 </style>
