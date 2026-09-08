@@ -110,7 +110,7 @@ function internetCardCidr(container: HTMLElement): Element | null {
 // A pushed tunnel interface (#874's tables, as tunnelsState holds
 // them). The 2D map's node is WireGuard only, so `kind` matters.
 function tunnel(overrides: Partial<TunnelInterface> = {}): TunnelInterface {
-  return { iface: 'wg0', routerId: 'router1', kind: 'wg', apiState: 'up', peers: [], ...overrides }
+  return { iface: 'wg0', routerId: 'router1', kind: 'wg', apiState: 'up', peers: [], lastHeard: null, ...overrides }
 }
 
 // The tunnel node's own card, found by its name rather than document
@@ -118,6 +118,39 @@ function tunnel(overrides: Partial<TunnelInterface> = {}): TunnelInterface {
 function tunnelCard(container: HTMLElement): Element | null {
   const name = [...container.querySelectorAll('.n-name')].find((n) => n.textContent?.trim() === 'WireGuard')
   return name?.parentElement ?? null
+}
+
+// Every tunnel card the cluster drew (#890), with the place it was
+// packed into -- read off the group transform, which is where the card
+// actually is on the map.
+function tunnelCards(container: HTMLElement): { iface: string; x: number; y: number; card: Element }[] {
+  return [...container.querySelectorAll('.n-name')]
+    .filter((n) => n.textContent?.trim() === 'WireGuard')
+    .map((n) => {
+      const card = n.parentElement as Element
+      const g = card.parentElement as Element
+      const m = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(g.getAttribute('transform') ?? '')
+      return {
+        iface: (card.querySelector('.n-cidr')?.textContent ?? '').replace(/\s+/g, ' ').trim().split(' ')[0],
+        x: Number(m?.[1] ?? NaN),
+        y: Number(m?.[2] ?? NaN),
+        card,
+      }
+    })
+}
+
+function mapViewBox(container: HTMLElement): string {
+  return container.querySelector('.stage > svg')?.getAttribute('viewBox') ?? ''
+}
+
+// The slider opens on the city (#869), where the 2D stage is hidden.
+// Anything that reads the map as the surface in front of the operator --
+// its keyboard, its wheel -- has to move to a 2D stop first.
+function showTheMap(container: HTMLElement) {
+  const range = container.querySelector<HTMLInputElement>('.alt-range')!
+  range.value = '1' // "services"
+  range.dispatchEvent(new Event('input', { bubbles: true }))
+  flushSync()
 }
 
 function watchEntry(overrides: Partial<WatchlistEntry> = {}): WatchlistEntry {
@@ -2508,6 +2541,231 @@ describe('the tunnel node (#877)', () => {
     const card = tunnelCard(container)
     expect(card?.querySelector('.hb-w')).not.toBeNull()
     expect(card?.querySelector('.hbt.wp')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('◉ 1')
+  })
+})
+
+// Round 52 (#890): a second tunnel is no longer a design question. Every
+// pushed tunnel is drawn as its own card in one group where wg0 is, and
+// the frame fits whatever that group turns out to need.
+describe('the tunnel cluster (#890, round 52)', () => {
+  const wg = (iface: string, overrides: Partial<TunnelInterface> = {}) => tunnel({ iface, ...overrides })
+
+  // Busiest first is what the packing order is, so give each one a
+  // different number of lines and the order is decided rather than
+  // alphabetical.
+  function pushTunnels(names: string[]) {
+    tunnelsState.byDevice = new Map([['router1', names.map((n) => wg(n))]])
+    zonesState.pushed = names.map((n, i) => address({ interface: n, address: `10.9${i}.0.1/24`, network: `10.9${i}.0.0` }))
+    appState.events = [
+      event({ id: 1, inInterface: 'bridge1', srcIp: '192.168.1.5' }),
+      ...names.flatMap((n, i) =>
+        Array.from({ length: names.length - i }, (_x, k) => event({ id: 100 + i * 20 + k, inInterface: n, srcIp: `10.9${i}.0.2` })),
+      ),
+    ]
+  }
+
+  it('draws a card for every pushed tunnel, not just the busiest', () => {
+    for (const n of [2, 3, 5]) {
+      const names = Array.from({ length: n }, (_x, i) => `wg${i}`)
+      pushTunnels(names)
+      const { container, unmount } = render(Topography)
+      flushSync()
+
+      const cards = tunnelCards(container)
+      expect(cards.map((c) => c.iface).sort(), `at ${n} tunnels`).toEqual(names.slice().sort())
+      unmount()
+    }
+  })
+
+  it('leaves the busiest exactly where round 30 drew it, and its rib with it', () => {
+    // "With one tunnel nothing moves" -- the round-52 README. The
+    // busiest keeps the seat whatever else is packed around it.
+    pushTunnels(['wg0', 'wg1', 'wg2'])
+    const { container } = render(Topography)
+    flushSync()
+
+    const busiest = tunnelCards(container).find((c) => c.iface === 'wg0')
+    expect([busiest?.x, busiest?.y]).toEqual([1128, 132])
+    const ribs = [...container.querySelectorAll('path.rib')].map((p) => p.getAttribute('d'))
+    expect(ribs).toContain('M1080 186 C 990 215, 880 240, 830 252')
+  })
+
+  it('never overlaps two cards', () => {
+    pushTunnels(['wg0', 'wg1', 'wg2', 'wg3', 'wg4'])
+    const { container } = render(Topography)
+    flushSync()
+
+    // The card is drawn -84..+104 about its own point, 56 tall.
+    const boxes = tunnelCards(container).map((c) => ({ x: c.x - 84, y: c.y - 28, w: 188, h: 56 }))
+    expect(boxes).toHaveLength(5)
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const [a, b] = [boxes[i], boxes[j]]
+        expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h, `cards ${i} and ${j} overlap`).toBe(false)
+      }
+    }
+  })
+
+  it('gives every tunnel its own strand, and no two the same', () => {
+    pushTunnels(['wg0', 'wg1', 'wg2'])
+    const { container } = render(Topography)
+    flushSync()
+
+    const strands = [...container.querySelectorAll('path[data-tunnel-strand]')]
+    expect(strands.map((p) => p.getAttribute('data-tunnel-strand')).sort()).toEqual(['wg0', 'wg1', 'wg2'])
+    // Each leaves its own card: the path starts on one of that card's
+    // own edges (its left, its top or its bottom).
+    for (const c of tunnelCards(container)) {
+      const d = strands.find((p) => p.getAttribute('data-tunnel-strand') === c.iface)?.getAttribute('d') ?? ''
+      const [sx, sy] = /^M([-\d.]+) ([-\d.]+)/.exec(d)!.slice(1).map(Number)
+      const onEdge = (sx === c.x - 84 && Math.abs(sy - c.y) <= 28) || (sx === c.x && Math.abs(Math.abs(sy - c.y) - 28) < 0.01)
+      // wg0 keeps round 30's literal rib, which leaves from under its card.
+      expect(onEdge || d === 'M1080 186 C 990 215, 880 240, 830 252', `${c.iface}: ${d}`).toBe(true)
+    }
+    expect(new Set(strands.map((p) => p.getAttribute('d'))).size).toBe(3)
+  })
+
+  it('keeps every tunnel out of the lane row, not just the busiest (#890 item 5)', () => {
+    // The #877 build drew one and left the rest standing in the lane
+    // row, where the same interface could read as a lane and a tunnel.
+    pushTunnels(['wg0', 'wg1', 'wg2'])
+    const { container } = render(Topography)
+    flushSync()
+
+    const laneCidrs = [...container.querySelectorAll('.zone .n-cidr')].map((n) => n.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+    for (const n of ['wg0', 'wg1', 'wg2']) expect(laneCidrs.some((t) => t.startsWith(n))).toBe(false)
+    // And each is on the map exactly once, as its own card.
+    expect(tunnelCards(container)).toHaveLength(3)
+  })
+
+  it('draws a tunnel not heard for a while with a dashed footprint and how long', () => {
+    const heard = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+    tunnelsState.byDevice = new Map([['router1', [wg('wg0', { apiState: 'down', lastHeard: heard })]]])
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = tunnelCard(container)
+    expect(card?.querySelector('.isl')?.classList.contains('quiet-print')).toBe(true)
+    expect(card?.querySelector('.n-quiet')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('quiet · 3 d')
+  })
+
+  it('writes no span when no handshake the server could date has been pushed', () => {
+    // "How long" is not a question that data answers, so the card does
+    // not answer it -- the same refusal the subnet slot makes.
+    tunnelsState.byDevice = new Map([['router1', [wg('wg0', { apiState: 'down', lastHeard: null })]]])
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(tunnelCard(container)?.querySelector('.n-quiet')).toBeNull()
+    expect(tunnelCard(container)?.querySelector('.isl')?.classList.contains('quiet-print')).toBe(true)
+  })
+})
+
+describe('the frame fits the map, and the operator may move inside it (#890 items 3 and 4)', () => {
+  it('opens on round 49\u2019s own frame while everything fits', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(mapViewBox(container)).toBe('0 0 1400 720')
+  })
+
+  it('stays on that frame at two, three and five tunnels', () => {
+    for (const n of [2, 3, 5]) {
+      const names = Array.from({ length: n }, (_x, i) => `wg${i}`)
+      tunnelsState.byDevice = new Map([['router1', names.map((iface) => tunnel({ iface }))]])
+      const { container, unmount } = render(Topography)
+      flushSync()
+      expect(mapViewBox(container), `at ${n} tunnels`).toBe('0 0 1400 720')
+      unmount()
+    }
+  })
+
+  it('grows, never shrinks, once the group needs more room', () => {
+    const names = Array.from({ length: 12 }, (_x, i) => `wg${i}`)
+    tunnelsState.byDevice = new Map([['router1', names.map((iface) => tunnel({ iface }))]])
+    const { container } = render(Topography)
+    flushSync()
+
+    const [x, y, w, h] = mapViewBox(container).split(' ').map(Number)
+    expect(w).toBeGreaterThanOrEqual(1400)
+    expect(h).toBeGreaterThanOrEqual(720)
+    // And it holds every card it drew, with the 40 px of air.
+    for (const c of tunnelCards(container)) {
+      expect(c.x - 84 - 40).toBeGreaterThanOrEqual(x)
+      expect(c.y - 28 - 40).toBeGreaterThanOrEqual(y)
+      expect(c.x + 104 + 40).toBeLessThanOrEqual(x + w)
+      expect(c.y + 28 + 40).toBeLessThanOrEqual(y + h)
+    }
+  })
+
+  it('carries a fit chip reading the zoom, and reads under 100 % once the frame has grown', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    const bare = render(Topography)
+    flushSync()
+    const chip = bare.container.querySelector('.fitchip')
+    expect(chip?.textContent?.replace(/\s+/g, ' ').trim()).toBe('100%⤢ fit')
+    expect(chip?.getAttribute('aria-label')).toBe('The whole map, fitted')
+    bare.unmount()
+
+    const names = Array.from({ length: 12 }, (_x, i) => `wg${i}`)
+    tunnelsState.byDevice = new Map([['router1', names.map((iface) => tunnel({ iface }))]])
+    const { container } = render(Topography)
+    flushSync()
+    const pct = Number(/(\d+)%/.exec(container.querySelector('.fitchip')?.textContent ?? '')?.[1])
+    expect(pct).toBeLessThan(100)
+  })
+
+  it('pans on the arrow keys, and the fit chip comes back to the fitted frame', () => {
+    // Reduced motion, so the return is immediate and the test is not
+    // racing an animation frame -- and so this covers that path too.
+    const original = window.matchMedia
+    window.matchMedia = ((q: string) => ({ matches: q.includes('reduced-motion'), media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia
+    try {
+      tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+      const { container } = render(Topography)
+      flushSync()
+      // Off the city default and onto the 2D map: the arrow keys belong
+      // to whichever surface is actually on screen.
+      showTheMap(container)
+      expect(mapViewBox(container)).toBe('0 0 1400 720')
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      flushSync()
+      const [x] = mapViewBox(container).split(' ').map(Number)
+      expect(x).toBeGreaterThan(0)
+      const chip = container.querySelector('.fitchip')!
+      expect(chip.classList.contains('hand')).toBe(true)
+      expect(chip.getAttribute('aria-label')).toBe('Zoomed by hand — fit the whole map')
+
+      chip.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+      expect(mapViewBox(container)).toBe('0 0 1400 720')
+    } finally {
+      window.matchMedia = original
+    }
+  })
+
+  it('zooms on the wheel about the pointer, and never past its own bounds', () => {
+    tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
+    const { container } = render(Topography)
+    flushSync()
+
+    const svg = container.querySelector('.stage > svg') as SVGSVGElement
+    const box = { left: 0, top: 0, width: 1400, height: 700, right: 1400, bottom: 700, x: 0, y: 0 }
+    svg.getBoundingClientRect = () => box as DOMRect
+
+    svg.dispatchEvent(new WheelEvent('wheel', { deltaY: -240, clientX: 700, clientY: 350, bubbles: true, cancelable: true }))
+    flushSync()
+    const zoomed = mapViewBox(container).split(' ').map(Number)
+    expect(zoomed[2]).toBeLessThan(1400)
+
+    // A wheel held down does not run away with the map.
+    for (let i = 0; i < 60; i++) {
+      svg.dispatchEvent(new WheelEvent('wheel', { deltaY: -240, clientX: 700, clientY: 350, bubbles: true, cancelable: true }))
+    }
+    flushSync()
+    expect(mapViewBox(container).split(' ').map(Number)[2]).toBeGreaterThanOrEqual(1400 * 0.25 - 0.5)
   })
 })
 

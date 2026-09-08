@@ -117,48 +117,40 @@ class ZonesState {
   )
 
   /**
-   * The tunnel the map draws as its own upper node (#877): a tunnel is
-   * not a lane, so this one is dropped from the lane row below.
+   * Every drawn tunnel, busiest first (#890, round 52). A tunnel is not
+   * a lane, so all of these are dropped from the lane row below.
    *
-   * Round 30 draws exactly one (the-whole.html:986), so the busiest
-   * pushed WireGuard interface takes the slot -- alphabetical where
-   * nothing has been observed on any of them, so the node does not hop
-   * between tunnels on every poll. Any others stay in the lane row
-   * rather than vanishing: a second tunnel node is a design question,
-   * not a rendering one, the same call the five-lane cap makes.
+   * #877 drew exactly one -- round 30's single node -- and left the
+   * others in the lane row, which round 52 struck out: the map now
+   * groups every pushed tunnel where wg0 is, so none of them is a lane
+   * and none of them is hidden. The order is what the group is packed
+   * in: busiest nearest the router, alphabetical where nothing has been
+   * observed on any of them, so the group does not reshuffle itself on
+   * every poll.
    */
-  tunnelInterface = $derived.by((): string | null => {
+  tunnelOrder = $derived.by((): string[] => {
     const tunnels = this.tunnelInterfaces
-    if (tunnels.size === 0) return null
+    if (tunnels.size === 0) return []
     const counts = new Map<string, number>()
     for (const e of appState.events) {
       for (const iface of [e.inInterface, e.outInterface]) {
         if (iface && tunnels.has(iface)) counts.set(iface, (counts.get(iface) ?? 0) + 1)
       }
     }
-    let best: string | null = null
-    let bestN = -1
-    for (const iface of [...tunnels].sort()) {
-      const n = counts.get(iface) ?? 0
-      if (n > bestN) {
-        best = iface
-        bestN = n
-      }
-    }
-    return best
+    return [...tunnels].sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || (a < b ? -1 : a > b ? 1 : 0))
   })
 
   /** The lanes: every observed non-wan boundary, busiest first, capped
    * at five (the map is spare by design; a sixth lane is a design
-   * question, not a rendering one). The drawn tunnel is excluded too --
-   * it stands beside the internet as its own node (#877). */
+   * question, not a rendering one). Every drawn tunnel is excluded too --
+   * they stand beside the internet as their own group (#877, #890). */
   zones = $derived.by((): ZoneInfo[] => {
     const wans = this.wanInterfaces
-    const tunnel = this.tunnelInterface
+    const tunnels = this.tunnelInterfaces
     const byIface = new Map<string, { count: number; hosts: Map<string, { label: string; n: number }> }>()
     for (const e of appState.events) {
       for (const iface of [e.inInterface, e.outInterface]) {
-        if (!iface || wans.has(iface) || iface === tunnel) continue
+        if (!iface || wans.has(iface) || tunnels.has(iface)) continue
         let z = byIface.get(iface)
         if (!z) {
           z = { count: 0, hosts: new Map() }
@@ -183,7 +175,7 @@ class ZonesState {
     // draws config, not just traffic.
     const byPush = new Map<string, RouterIPAddress>()
     for (const a of this.pushed) {
-      if (a.interface && !wans.has(a.interface) && a.interface !== tunnel) byPush.set(a.interface, a)
+      if (a.interface && !wans.has(a.interface) && !tunnels.has(a.interface)) byPush.set(a.interface, a)
     }
     const ifaces = new Set([...byPush.keys(), ...byIface.keys()])
     return [...ifaces]

@@ -13,6 +13,7 @@
 //
 // One map; every stop is a camera onto it. The stop sets the height S,
 // pan sets the centre, and nothing here knows what it is projecting.
+import { fitScale } from '../fit'
 export const IK = 1.02
 export const VK = 0.5
 export const ZK = 0.72
@@ -113,8 +114,10 @@ export function minimapCam(bounds: GroundRect, W: number, H: number, pad = 6): C
  * in. The pad keeps edge plates and their labels clear of the frame.
  */
 export function cityFitS(bounds: GroundRect, w = STAGE_W, h = STAGE_H, pad = 40): number {
-  const s = Math.min((w - 2 * pad) / ((bounds.u1 - bounds.u0) * IK || 1), (h - 2 * pad) / ((bounds.v1 - bounds.v0) * VK || 1))
-  return Math.min(STOP_HEIGHT.city, s)
+  // The arithmetic itself is lib/fit.ts's now (#890): the 2D topography
+  // fits its own frame by the same rule, so it is written once and each
+  // map supplies its own content extent and its own cap.
+  return fitScale((bounds.u1 - bounds.u0) * IK, (bounds.v1 - bounds.v0) * VK, w, h, pad, STOP_HEIGHT.city)
 }
 
 /** Whether the reader has asked for reduced motion -- the one place the
