@@ -19,5 +19,6 @@ pipeline 773's on the same host. Five scenarios across three shards died
 each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 2/4 · `live-history-control`, `live-memory-slider`
+- 2026-09-08 · 70d828ec (dev) · pipeline 776, gate:scenarios 2/4 · `live-memory-slider` again: `goTo("Stream") timed out waiting for card "live"` 10 s (#1011's family); second sighting for this scenario. Retried without a local run: the merge's diff (CI/docs, City.svelte) cannot reach the Stream card.
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 3/4 · `live-metrics-views` (and `live-rule-regex`, counted above)
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 4/4 · `live-topography-furniture`
