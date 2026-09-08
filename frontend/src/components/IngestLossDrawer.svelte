@@ -188,6 +188,16 @@
   .rows {
     overflow: hidden;
     min-height: 0;
+    /* The deck's scene rail is `position: fixed; right: 0` and floats
+       over the right edge of every scene, the drawer included -- so the
+       rows ran under it and `details` was drawn across its letters
+       (#1040, and the owner on mobile: "the scroll bar overlaps the
+       banners"). app.css already carries the clearance every card's
+       content reserves for exactly this (--deck-rail-gutter, #721);
+       the rows take the same one rather than a second figure.
+       The line below is deliberately left full width: it is the app's
+       own edge, not content, and it was ratified spanning the window. */
+    padding-right: var(--deck-rail-gutter, 36px);
     /* Clipping alone leaves the buttons in here focusable by keyboard
        while the drawer is folded shut. The old sill placement made
        Clear all `pointer-events: none` when closed for that reason;
