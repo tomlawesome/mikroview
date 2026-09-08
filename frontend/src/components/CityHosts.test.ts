@@ -165,53 +165,99 @@ describe('presence, on a building', () => {
   })
 })
 
-describe('the two overlay pills, on a building', () => {
-  const flagged = () => {
-    flagsState.list = [{ target: '10.10.0.12', cleared: false }] as unknown as typeof flagsState.list
-  }
-  const watched = () => {
-    watchlistState.entries = [{ id: 'w1', source: { ip: '10.10.0.12' }, destIp: null }] as unknown as typeof watchlistState.entries
-  }
+describe('the marks on a building (#981, round 46)', () => {
+  // A mark exists only while there is something behind it, and there is
+  // no toggle -- owner, 2026-09-08: "something that's always there is
+  // easy to ignore; if it's not always there you know it's there for a
+  // reason." So every mark here is driven by the host's own counts, and
+  // an unmarked neighbour is the control in each case.
+  const PLAIN = host('10.10.0.13', 'nas')
+  const marked = (over: Partial<CityHost>) => groundWith([host('10.10.0.12', 'tom-desktop', over), PLAIN])
 
-  // "A red halo that hugs the shape and throbs in place" -- never
-  // pulsing outward (owner, 2026-09-07).
-  it('rings a flagged building in alarm ink, throbbing in place', () => {
-    flagged()
-    const { container } = render(City, { props: { stop: 'street', ground, flagsOn: true } })
-    const ring = blk(container, 'tom-desktop').querySelector('circle')
-    expect(ring).toBeTruthy()
-    expect(ring!.getAttribute('stroke')).toBe('var(--alarm)')
-    expect(ring!.classList.contains('halo')).toBe(true)
+  /** The widest this path reaches from the symbol's own origin -- how a
+   * silhouette pushed outward is told from the one it was pushed off. */
+  const reach = (d: string) => Math.max(...(d.match(/-?\d*\.?\d+/g) ?? []).map((n) => Math.abs(Number(n))))
+
+  it('re-stamps a flagged building in alarm ink and strokes one silhouette round it', () => {
+    const { container } = render(City, { props: { stop: 'street', ground: marked({ flags: 1 }) } })
+    const g = blk(container, 'tom-desktop')
+
+    const fill = g.querySelector('.mk-fill')
+    expect(fill).toBeTruthy()
+    expect(fill!.getAttribute('opacity')).toBe('0.45')
+
+    // ONE line round the silhouette, not a stroke per face: the owner on
+    // the first attempt, "These overlapping planes are weird ... I can't
+    // even tell what you're trying to show me."
+    const rims = g.querySelectorAll('path.mk-rim')
+    expect(rims.length).toBe(1)
+    expect(rims[0].getAttribute('stroke')).toBe('var(--alarm)')
+    expect(rims[0].getAttribute('stroke-width')).toBe('1')
+
+    // And the neighbour with nothing behind it wears nothing at all.
+    expect(blk(container, 'nas').querySelector('.mark')).toBeNull()
   })
 
-  it('draws no halo when the flags pill is off', () => {
-    flagged()
-    const { container } = render(City, { props: { stop: 'street', ground, flagsOn: false } })
-    expect(blk(container, 'tom-desktop').querySelector('circle')).toBeNull()
+  it('makes the fill more solid and the rim bolder the more flags there are', () => {
+    const { container } = render(City, { props: { stop: 'street', ground: marked({ flags: 3 }) } })
+    const g = blk(container, 'tom-desktop')
+    expect(g.querySelector('.mk-fill')!.getAttribute('opacity')).toBe('0.75')
+    expect(g.querySelector('path.mk-rim')!.getAttribute('stroke-width')).toBe('2')
   })
 
-  it('rings a watched building in the watcher ink, and does not throb it', () => {
-    watched()
-    const { container } = render(City, { props: { stop: 'street', ground, watchOn: true } })
-    const ring = blk(container, 'tom-desktop').querySelector('circle')
-    expect(ring).toBeTruthy()
-    expect(ring!.getAttribute('stroke')).toBe('var(--marked)')
-    expect(ring!.classList.contains('halo')).toBe(false)
+  it('strokes a watched building once in the watcher ink', () => {
+    const { container } = render(City, { props: { stop: 'street', ground: marked({ watch: 1 }) } })
+    const g = blk(container, 'tom-desktop')
+
+    const watch = g.querySelectorAll('path.mk-watch')
+    expect(watch.length).toBe(1)
+    expect(watch[0].getAttribute('stroke')).toBe('var(--marked)')
+    expect(watch[0].getAttribute('stroke-width')).toBe('1.5')
+    // Watched is not flagged: no red anywhere on it.
+    expect(g.querySelector('.mk-fill')).toBeNull()
+    expect(g.querySelector('path.mk-rim')).toBeNull()
   })
 
-  it('draws no watcher ring when the watch pill is off', () => {
-    watched()
-    const { container } = render(City, { props: { stop: 'street', ground, watchOn: false } })
-    expect(blk(container, 'tom-desktop').querySelector('circle')).toBeNull()
+  it('puts the watch line outside the flag rim when a building carries both', () => {
+    const { container } = render(City, { props: { stop: 'street', ground: marked({ flags: 1, watch: 1 }) } })
+    const g = blk(container, 'tom-desktop')
+
+    const rim = g.querySelector('path.mk-rim')!
+    const watch = g.querySelector('path.mk-watch')!
+    expect(g.querySelectorAll('path.mk-rim, path.mk-watch').length).toBe(2)
+    // Side by side, never on top of one another.
+    expect(reach(watch.getAttribute('d')!)).toBeGreaterThan(reach(rim.getAttribute('d')!))
   })
 
-  // The louder fact is the one to see.
-  it('lets the flag win when a building is both flagged and watched', () => {
-    flagged()
-    watched()
-    const { container } = render(City, { props: { stop: 'street', ground } })
-    const ring = blk(container, 'tom-desktop').querySelector('circle')
-    expect(ring!.getAttribute('stroke')).toBe('var(--alarm)')
+  it('breathes the rim of an activity spike, and only of an activity spike', () => {
+    const { container } = render(City, { props: { stop: 'street', ground: marked({ flags: 2, spike: true }) } })
+    const spiking = blk(container, 'tom-desktop')
+    expect(spiking.querySelector('path.mk-rim')!.classList.contains('mk-spike-rim')).toBe(true)
+    // The glow is a second, blurred copy of the same line.
+    expect(spiking.querySelectorAll('path.mk-spike-glow').length).toBe(1)
+
+    const still = render(City, { props: { stop: 'street', ground: marked({ flags: 2 }) } })
+    const plainRim = blk(still.container, 'tom-desktop').querySelector('path.mk-rim')!
+    expect(plainRim.classList.contains('mk-spike-rim')).toBe(false)
+    expect(still.container.querySelectorAll('path.mk-spike-glow').length).toBe(0)
+  })
+
+  // "I said to remove these rings with numbers. Get rid of them
+  // completely" -- owner, on the round's first crops. No disc, ring,
+  // number, glyph or tally on the map, at any stop.
+  it('draws no disc, ring or number on a marked building', () => {
+    const { container } = render(City, { props: { stop: 'street', ground: marked({ flags: 2, watch: 1, spike: true }) } })
+    const g = blk(container, 'tom-desktop')
+    expect(g.querySelector('circle')).toBeNull()
+    expect(g.querySelector('text')).toBeNull()
+  })
+
+  it('tells a screen reader what the mark means, not only how it is drawn', () => {
+    const { container } = render(City, { props: { stop: 'street', ground: marked({ flags: 2, watch: 1, spike: true }) } })
+    const aria = blk(container, 'tom-desktop').getAttribute('aria-label') ?? ''
+    expect(aria).toContain('2 flags')
+    expect(aria).toContain('watched')
+    expect(aria).toContain('activity spike')
   })
 })
 
@@ -269,6 +315,22 @@ describe('the host card', () => {
     expect(card.textContent).toContain('first seen')
     expect(card.textContent).toContain('1,204')
     expect(card.textContent).toContain('events')
+  })
+
+  // Counts exist as words on the card and nowhere else (#981, round 46):
+  // cam-porch's line in the drawing reads exactly this.
+  it('says how many flags and watchers, as plain words in their own inks', async () => {
+    const g = groundWith([host('10.10.0.12', 'tom-desktop', { flags: 2, watch: 1 })])
+    const { card } = await open('tom-desktop', g)
+    const line = card.querySelector('[data-marks]')
+    expect(line?.textContent?.replace(/\s+/g, ' ').trim()).toBe('2 flags · 1 watch')
+    expect(line!.querySelector('.fw')?.textContent).toBe('2 flags')
+    expect(line!.querySelector('.ww')?.textContent).toBe('1 watch')
+  })
+
+  it('says no counts at all on a host nothing is behind', async () => {
+    const { card } = await open('tv-lounge')
+    expect(card.querySelector('[data-marks]')).toBeNull()
   })
 
   it('offers the two marks, worded as the 2D map words them', async () => {
