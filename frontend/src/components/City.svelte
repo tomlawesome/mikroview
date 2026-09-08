@@ -23,6 +23,7 @@
   import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
   import { realityEdges } from '../lib/reality'
   import { symbolFor } from '../lib/city/blocks'
+  import { markFor, type BuildingMark } from '../lib/city/marks'
   import { buildingDepth, paintOrder, pieceDepth } from '../lib/city/depth'
   import { cityInputFrom } from '../lib/city/input'
   import { layoutGround } from '../lib/city/layout'
@@ -68,7 +69,7 @@
   import type { Coverage } from '../lib/coverageRule'
   import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
-  import { extractSourceIp, flagsState } from '../lib/flags.svelte'
+  import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { HOST_QUIET_AFTER_MS, hostsState, presenceOf } from '../lib/hosts.svelte'
   import { baselineState } from '../lib/baseline.svelte'
@@ -96,7 +97,7 @@
   import { EMPTY_REACH_LANES, rollUpLanes, type LaneSubject, type ReachLaneEntry } from '../lib/city/reachRoads'
   import { formatHM } from '../lib/format'
   import type { OffBaselineLine } from '../lib/baseline'
-  import { presenceNote, quietFor, type CityHost, type HostPresence } from '../lib/city/presence'
+  import { hostMarksFrom, presenceNote, quietFor, type CityHost, type HostPresence } from '../lib/city/presence'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
   import type { Building, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
 
@@ -107,19 +108,9 @@
     initialCentre,
     onCameraChange,
     onStandChange,
-    flagsOn = true,
-    watchOn = true,
   }: {
     stop: Stop
     ground?: Ground
-    /** The two overlay pills (DESIGN.md "The always-on picture"), which
-     * live in the slider's own row and apply to both views. They are
-     * Topography.svelte's state, since that is where the row is drawn;
-     * these are how it reaches this side. Both default to on, which is
-     * the ratified default, so the city draws flags and watchers even
-     * while nothing threads them through. */
-    flagsOn?: boolean
-    watchOn?: boolean
     /** The pan this side had when the slider last crossed away from it
      * (#869): Topography saves what onCameraChange reports below and
      * hands it back here across City's own mount/unmount, since a fresh
@@ -219,17 +210,21 @@
       reason: h.mark?.reason ?? null,
       markedBy: h.mark?.by ?? null,
       markedAt: h.mark?.at ?? null,
+      // The register knows nothing about flags or watchers; cityInputFrom
+      // puts the marks on from `hostMarks` below, for registered and
+      // buffer-only hosts alike.
+      flags: 0,
+      watch: 0,
+      spike: false,
     })),
   )
 
-  /** Flagged and watched, read exactly as Topography.svelte's own
-   * `nodeWarnings` reads them (its flags are the uncleared ones, matched
-   * on the flag target's source address; its watchers are entries with
-   * this address at either end). Two readings of one fact would agree
-   * today and part on the first change to either. */
-  const activeFlags = $derived(flagsState.list.filter((f) => !f.cleared))
-  const flagCountFor = (ip: string): number => (ip ? activeFlags.filter((f) => extractSourceIp(f.target) === ip).length : 0)
-  const isWatched = (ip: string): boolean => (ip ? watchlistState.entries.some((e) => e.source?.ip === ip || e.destIp === ip) : false)
+  /** What each address is flagged and watched with (#981). One reading
+   * for both surfaces -- `hostMarksFrom` is the same function the 2D
+   * map's own row calls -- so a host cannot be red on one side and
+   * plain on the other. Only used by the fallback ground below: in the
+   * app Topography hands the ground down with the marks already on it. */
+  const hostMarks = $derived(hostMarksFrom(flagsState.list, watchlistState.entries))
 
   const ground: Ground = $derived(
     groundProp ??
@@ -247,6 +242,7 @@
           policyState.pushed,
           new Set(coverageState.byKey.keys()),
           registeredHosts,
+          hostMarks,
         ),
       ),
   )
@@ -823,9 +819,9 @@
          * #1016). Always 'live' for a router or a bridge post, which
          * are not hosts the feed hears. */
         pres: HostPresence
-        /** The flagged halo or the watcher's ring, when a pill asks for
-         * one; null when neither applies. */
-        ring: { cy: number; r: number; stroke: string; throb: boolean } | null
+        /** The red fill, the flag rim and the watch line this
+         * building wears, or null when nothing is behind it (#981). */
+        mark: BuildingMark | null
         paints: Paint[]
         stamp: { x: number; y: number; k: number }
         aria: string
@@ -1613,10 +1609,13 @@
         },
       ]
       const what = b.kind === 'router' ? 'router' : b.kind === 'router-ant' ? 'router with antennas' : b.kind === 'post' ? 'bridge post' : 'host'
-      // The overlay pills gate the marks on the drawing, so what a
-      // screen reader is told and what the ring shows stay one fact.
-      const flagCount = flagsOn ? flagCountFor(b.ip) : 0
-      const watched = watchOn && isWatched(b.ip)
+      // The mark (#981, round 46): whatever the flag and watchlist
+      // ledgers say about this machine, and nothing else. There is no
+      // pill in front of it any more -- a mark is drawn while there is
+      // something behind it and gone when there is not (owner,
+      // 2026-09-08), so what a screen reader is told and what is drawn
+      // are the same fact by construction.
+      const mark = b.host ? markFor(b.kind, b.host) : null
       const note = b.host ? presenceNote(b.host, nowTick) : null
       const aria =
         b.name +
@@ -1625,24 +1624,10 @@
         what +
         (d ? ' in ' + d.name : '') +
         (note ? ' · ' + note : '') +
-        (flagCount ? ' · ' + flagCount + (flagCount === 1 ? ' flag' : ' flags') : '') +
-        (watched ? ' · watched' : '')
-      // The ring hugs the shape and throbs in place; it never pulses
-      // outward (DESIGN.md "Honesty and motion", owner 2026-09-07). Red
-      // for a flag, the watcher's own ink for a watcher, and a flag wins
-      // when a building is both -- the louder fact is the one to see.
+        (mark && mark.flags ? ' · ' + mark.flags + (mark.flags === 1 ? ' flag' : ' flags') : '') +
+        (mark && mark.watch ? ' · watched' : '') +
+        (mark?.spike ? ' · activity spike' : '')
       const k = (R * 0.74 * c.S) / SREF
-      const ring =
-        flagCount || watched
-          ? {
-              cy: R2(-symbolFor(b.kind).top * k - 2),
-              r: R2(Math.max(3.5, 4 * k)),
-              stroke: flagCount ? 'var(--alarm)' : 'var(--marked)',
-              // Only the flag throbs. A watcher is a standing statement,
-              // not something that just happened, so its ring is still.
-              throb: flagCount > 0,
-            }
-          : null
       solids.push({
         kind: 'building',
         v: buildingDepth(b),
@@ -1651,7 +1636,7 @@
         ink,
         dim,
         pres,
-        ring,
+        mark,
         paints,
         stamp: { x: R2(X(c, b.u)), y: R2(Y(c, b.v, h)), k: R2(k) },
         aria,
@@ -2907,20 +2892,41 @@
                     <path d={p.d} fill={p.fill === 'void' ? VOID : 'currentColor'} fill-opacity={p.fillOpacity} stroke={p.fill === 'body' ? 'currentColor' : undefined} stroke-opacity={p.strokeOpacity} stroke-width={p.strokeWidth} />
                   {/each}
                 </g>
-                {#if s.ring}
-                  <!-- The flagged halo and the watcher ring (round 49's
-                       two pills): both hug the building, and only the
-                       flag's throbs -- in place, never outward. -->
-                  <circle
-                    class:halo={s.ring.throb}
-                    cx="0"
-                    cy={s.ring.cy}
-                    r={s.ring.r}
-                    fill="none"
-                    stroke={s.ring.stroke}
-                    stroke-width="1.4"
-                    stroke-opacity={s.ring.throb ? undefined : 0.8}
-                  />
+                {#if s.mark}
+                  <!-- The mark (#981, round 46): the symbol re-stamped in
+                       alarm ink over its ordinary self, one convex-hull
+                       silhouette per fact, and nothing else. No disc, no
+                       ring, no number, no glyph -- the counts are words
+                       on the click card and nowhere else. -->
+                  <g class="mark" transform="scale({s.stamp.k})">
+                    {#if s.mark.flags > 0}
+                      <!-- The re-stamp is a sibling of the base stamp, so
+                           it inherits no ink of its own: every shape the
+                           symbol is built from takes the alarm colour at
+                           its own normal per-face shading, over the
+                           district-ink stamp below it. -->
+                      <g class="mk-fill" opacity={s.mark.fillOpacity} style:color="var(--alarm)">
+                        {#each symbolFor(s.b.kind).paths as p, j (j)}
+                          <path d={p.d} fill={p.fill === 'void' ? VOID : 'currentColor'} fill-opacity={p.fillOpacity} stroke={p.fill === 'body' ? 'currentColor' : undefined} stroke-opacity={p.strokeOpacity} stroke-width={p.strokeWidth} />
+                        {/each}
+                      </g>
+                      {#if s.mark.spike}
+                        <!-- An activity spike is the one flag kind that is
+                             happening now, so its rim breathes and a soft
+                             blurred copy swells alongside it. Red
+                             throughout: the animation moves opacity and
+                             width, never hue (owner, ratifying #981). -->
+                        <path class="mk-glow mk-spike-glow" d={s.mark.rimD} fill="none" stroke="var(--alarm)" stroke-width={s.mark.glowWidth} stroke-linejoin="round" />
+                      {/if}
+                      <path class="mk-rim" class:mk-spike-rim={s.mark.spike} d={s.mark.rimD} fill="none" stroke="var(--alarm)" stroke-width={s.mark.rimWidth} stroke-linejoin="round" />
+                    {/if}
+                    {#if s.mark.watch > 0}
+                      <!-- A touch proud of the flag rim when there is one,
+                           so the two lines sit side by side rather than on
+                           top of one another. -->
+                      <path class="mk-watch" d={s.mark.watchD} fill="none" stroke="var(--marked)" stroke-width={s.mark.watchWidth} stroke-linejoin="round" />
+                    {/if}
+                  </g>
                 {/if}
               </g>
             </g>
@@ -3249,6 +3255,16 @@
         last seen {stamp(c.h.lastSeen)} · first seen {stamp(c.h.firstSeen)} · {c.h.events.toLocaleString()}
         {c.h.events === 1 ? 'event' : 'events'} · {c.d.name}
       </div>
+
+      {#if c.h.flags > 0 || c.h.watch > 0}
+        <!-- How many, as plain words (#981, round 46): "2 flags · 1
+             watch", the flag words in the alarm ink and the watch words
+             in the watcher's. Counts exist here and nowhere else -- the
+             map carries no number, no disc and no glyph. -->
+        <div class="s counts" data-marks>
+          {#if c.h.flags > 0}<b class="fw">{c.h.flags} {c.h.flags === 1 ? 'flag' : 'flags'}</b>{/if}{#if c.h.flags > 0 && c.h.watch > 0}<span class="sep">&nbsp;·&nbsp;</span>{/if}{#if c.h.watch > 0}<b class="ww">{c.h.watch} watch</b>{/if}
+        </div>
+      {/if}
 
       {#if c.h.presence !== 'live'}
         <div class="s">comes back by itself when the feed hears it again</div>
@@ -3683,6 +3699,46 @@
     }
   }
 
+  /* The activity-spike pulse (#981, round 46). The rim's opacity
+     breathes and a blurred copy of it swells from almost nothing to a
+     wide bloom, on a 2s loop. The swing is deliberately wide: a first
+     draft breathed 0.6->1 over 2px->6px and the dim and bright
+     freeze-frames were nearly indistinguishable. The red fill itself
+     does not animate; only the rim and the glow do, and neither ever
+     moves the hue. */
+  .mk-spike-rim {
+    animation: mk-spike-rim 2s ease-in-out infinite;
+  }
+
+  .mk-spike-glow {
+    filter: blur(3px);
+    animation: mk-spike-glow 2s ease-in-out infinite;
+  }
+
+  @keyframes mk-spike-rim {
+    0%,
+    100% {
+      stroke-opacity: 0.45;
+    }
+
+    50% {
+      stroke-opacity: 1;
+    }
+  }
+
+  @keyframes mk-spike-glow {
+    0%,
+    100% {
+      stroke-width: 1.5px;
+      opacity: 0.12;
+    }
+
+    50% {
+      stroke-width: 9px;
+      opacity: 0.75;
+    }
+  }
+
   .p-name {
     font: 600 12.5px var(--font-sans);
     fill: var(--fg);
@@ -3817,6 +3873,18 @@
   }
 
   /* The totals sit just clear of the table they sum, as in the mockup. */
+  /* The marked host's counts line (#981): flag words in the alarm ink,
+     watch words in the watcher's, no glyphs. */
+  .bcard .s.counts .fw {
+    color: var(--alarm);
+    font-weight: 600;
+  }
+
+  .bcard .s.counts .ww {
+    color: var(--marked);
+    font-weight: 600;
+  }
+
   .bcard .s.totals {
     margin-top: 6px;
   }
@@ -4371,6 +4439,21 @@
 
     .flow {
       stroke-dasharray: none;
+    }
+
+    /* A pulse cannot reduce to nothing without losing the signal it
+       exists to carry -- "is this happening now" -- so the spike holds
+       at a steady bright rim and a mid-bright glow instead of being
+       switched off (#981). */
+    .mk-spike-rim {
+      animation: none;
+      stroke-opacity: 1;
+    }
+
+    .mk-spike-glow {
+      animation: none;
+      stroke-width: 6px;
+      opacity: 0.55;
     }
   }
 </style>

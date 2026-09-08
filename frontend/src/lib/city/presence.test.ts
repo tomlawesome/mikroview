@@ -3,7 +3,8 @@
 // Living hosts (round 49, #1016): what the city draws a host as, and
 // which hosts get a building at all.
 import { describe, expect, it } from 'vitest'
-import { bufferHost, mergeZoneHosts, presenceNote, quietFor, type CityHost } from './presence'
+import { bufferHost, hostMarksFrom, mergeZoneHosts, presenceNote, quietFor, type CityHost } from './presence'
+import type { Flag, WatchlistEntry } from '../types'
 
 const H = 3_600_000
 const NOW = Date.parse('2026-09-07T12:00:00Z')
@@ -20,9 +21,17 @@ function reg(ip: string, over: Partial<CityHost> = {}): CityHost {
     reason: null,
     markedBy: null,
     markedAt: null,
+    flags: 0,
+    watch: 0,
+    spike: false,
     ...over,
   }
 }
+
+const openFlag = (type: string, target: string, over: Partial<Flag> = {}): Flag =>
+  ({ id: type + '/' + target, type, target, detail: '', count: 1, firstSeen: '', lastSeen: '', cleared: false, ...over }) as Flag
+
+const watch = (over: Partial<WatchlistEntry>): WatchlistEntry => ({ id: 'w', ...over }) as WatchlistEntry
 
 describe('quietFor', () => {
   it('says how long in hours, the ratified wording of `quiet · 26 h`', () => {
@@ -136,5 +145,54 @@ describe('mergeZoneHosts', () => {
     expect(out).toEqual([bufferHost('a', '10.0.10.1')])
     expect(out[0].presence).toBe('live')
     expect(out[0].key).toBe('')
+  })
+})
+
+describe('hostMarksFrom (#981)', () => {
+  it('counts the open flags on an address and ignores the cleared ones', () => {
+    const m = hostMarksFrom(
+      [openFlag('port_scan', '10.0.10.5'), openFlag('critical_port', '10.0.10.5'), openFlag('repeated_drops', '10.0.10.5', { cleared: true })],
+      [],
+    )
+    expect(m.get('10.0.10.5')?.flags).toBe(2)
+  })
+
+  // A flag whose target is a port, a rule label or `global` names no
+  // host, so it marks none rather than being mis-attributed to one.
+  it('counts nothing for a flag whose target is not a single address', () => {
+    const m = hostMarksFrom([openFlag('distributed_brute_force', 'port 22'), openFlag('global_spike', 'global')], [])
+    expect(m.size).toBe(0)
+  })
+
+  // repeated_drops writes `<ip> -> port <N>`; the address is what the
+  // building is, and the port belongs on the flag's own card.
+  it('reads the address out of a target that carries a port with it', () => {
+    const m = hostMarksFrom([openFlag('repeated_drops', '10.0.10.5 -> port 22')], [])
+    expect(m.get('10.0.10.5')?.flags).toBe(1)
+  })
+
+  it('says so when one of those flags is an activity spike, and only then', () => {
+    expect(hostMarksFrom([openFlag('activity_spike', '10.0.10.5')], []).get('10.0.10.5')?.spike).toBe(true)
+    expect(hostMarksFrom([openFlag('port_scan', '10.0.10.5')], []).get('10.0.10.5')?.spike).toBe(false)
+  })
+
+  it('counts a watchlist entry against each end it names', () => {
+    const m = hostMarksFrom([], [watch({ source: { ip: '10.0.10.5' }, destIp: '10.0.10.9' } as Partial<WatchlistEntry>)])
+    expect(m.get('10.0.10.5')?.watch).toBe(1)
+    expect(m.get('10.0.10.9')?.watch).toBe(1)
+  })
+
+  it('counts one entry naming the same address at both ends once', () => {
+    const m = hostMarksFrom([], [watch({ source: { ip: '10.0.10.5' }, destIp: '10.0.10.5' } as Partial<WatchlistEntry>)])
+    expect(m.get('10.0.10.5')?.watch).toBe(1)
+  })
+})
+
+describe('mergeZoneHosts puts the marks on (#981)', () => {
+  it('marks a registered host and a buffer-only one alike, and leaves an unmarked one at zero', () => {
+    const marks = new Map([['10.0.10.1', { flags: 2, watch: 1, spike: true }]])
+    const out = mergeZoneHosts([{ label: 'a', ip: '10.0.10.1' }, { label: 'b', ip: '10.0.10.2' }], [reg('10.0.10.2')], marks)
+    expect(out.find((h) => h.ip === '10.0.10.1')).toMatchObject({ flags: 2, watch: 1, spike: true })
+    expect(out.find((h) => h.ip === '10.0.10.2')).toMatchObject({ flags: 0, watch: 0, spike: false })
   })
 })

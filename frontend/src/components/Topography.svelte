@@ -64,6 +64,7 @@
   import { STOPS, R2, flatFit, FX, FY } from '../lib/city/project'
   import { layoutGround, plateHalfWidth } from '../lib/city/layout'
   import { cityInputFrom } from '../lib/city/input'
+  import { hostMarksFrom } from '../lib/city/presence'
   import {
     EXPECTED_LABEL,
     EXPECTED_ONE_LABEL,
@@ -119,16 +120,11 @@
   /** Component-unique prefix for this instance's SVG ids. */
   const uid = $props.id()
 
-  // The two overlays (#715 item 3, round 49's two pills). Independent
-  // of each other, both on by default, and session state -- nothing
-  // here is persisted.
-  let flagsOn = $state(true)
-  let watchOn = $state(true)
-  // Estate-wide, deliberately: this is the same number the dial and the
-  // scene bar show, and a second map-scoped flag count on one screen
-  // would fight them. Drawn only above zero -- no round draws "flags 0",
-  // and a zero is not a thing to report.
-  const flagCountAll = $derived(flagsState.activeCount)
+  // The two overlay pills are gone (#981, owner 2026-09-08): "something
+  // that's always there is easy to ignore; if it's not always there you
+  // know it's there for a reason." A mark exists while there is
+  // something behind it and vanishes when there is not, on both
+  // surfaces, and nothing switches it.
 
   const zones = $derived(zonesState.zones)
   const eps = $derived(appState.stats?.eventsPerSecond ?? 0)
@@ -2503,6 +2499,12 @@
   // declared boundary dark on the plaque and the zones card (#1014).
   const quietKeys = $derived(new Set(coverageState.byKey.keys()))
 
+  // What each address is flagged and watched with (#981). Computed once
+  // here and carried down inside the ground plan, so the city's marks
+  // and this map's own halo and ring are two drawings of one reading
+  // rather than two readings that agree today.
+  const cityHostMarks = $derived(hostMarksFrom(flagsState.list, watchlistState.entries))
+
   const ground = $derived<Ground>(
     layoutGround(
       cityInputFrom(
@@ -2517,6 +2519,8 @@
         tunnelsState.list,
         policyState.pushed,
         quietKeys,
+        [],
+        cityHostMarks,
       ),
     ),
   )
@@ -3559,12 +3563,12 @@
       </div>
     </div>
 
-  <!-- The lens row, reduced to two overlay pills (round 49, #1016,
-       ported from round-49/index.html:1498-1500). There is nothing to
-       choose between any more: traffic is the picture, coverage is the
-       material it is drawn in, and policy went in slice C. Both pills
-       are on by default, greyed when off, flag red and watcher purple
-       when on. They stay through the reach, which they also mark. -->
+  <!-- What is left of the lens row (round 49 reduced it to two pills;
+       #981 took those too). There is nothing to choose between: traffic
+       is the picture, coverage is the material it is drawn in, policy
+       went in slice C, and the flag and watch marks are drawn by the
+       data rather than switched on. The off-baseline tally stays -- it
+       is a count, not a control. -->
   <div class="pills" role="group" aria-label="Map overlays">
     <!-- `⟡ off-baseline today · N`, ahead of the ⚑ count, in the accept
          ink (round-49/index.html's `chrome`, the `.nmk` mark, and
@@ -3583,28 +3587,6 @@
         >⟡ off-baseline <b>today</b> · {offBaselineCount}</span
       >
     {/if}
-    <button
-      type="button"
-      class="pill f"
-      class:on={flagsOn}
-      aria-pressed={flagsOn}
-      aria-label={flagCountAll > 0
-        ? `Flags overlay — ${flagCountAll} open: mark flagged places on the map`
-        : 'Flags overlay — mark flagged places on the map'}
-      onclick={() => (flagsOn = !flagsOn)}
-    >
-      ⚑ flags{#if flagCountAll > 0}&nbsp;<b>{flagCountAll}</b>{/if}
-    </button>
-    <button
-      type="button"
-      class="pill w"
-      class:on={watchOn}
-      aria-pressed={watchOn}
-      aria-label="Watch overlay — mark watched places on the map"
-      onclick={() => (watchOn = !watchOn)}
-    >
-      ◉ watch{#if watcherTotal > 0}&nbsp;<b>{watcherTotal}</b>{/if}
-    </button>
   </div>
 
   <!-- While descended, the map stays beneath as the reach's backdrop —
@@ -4114,12 +4096,14 @@
                     {#if d.presence === 'quiet'}
                       <circle class="h-foot" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 2} />
                     {/if}
-                    <!-- Flagged, and the flags pill is on: a halo that
-                         hugs the dot and throbs in place. It never
-                         pulses outward (owner, 2026-09-07) -- a
-                         travelling ring reads as something moving
-                         through the network, and nothing here moved. -->
-                    {#if flagsOn && w.flagCount > 0}
+                    <!-- Flagged: a halo that hugs the dot and throbs in
+                         place. It never pulses outward (owner,
+                         2026-09-07) -- a travelling ring reads as
+                         something moving through the network, and
+                         nothing here moved. Drawn whenever the host has
+                         an open flag and never otherwise (#981): there
+                         is no pill in front of it. -->
+                    {#if w.flagCount > 0}
                       <circle class="h-halo" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 1.5} />
                     {/if}
                     <!-- The roll-up reaches the dot too (DESIGN.md's
@@ -4134,11 +4118,12 @@
                          on ribs -- so this is DESIGN.md's rule applied
                          where the mockup is silent. -->
                     {#if dotNb}
-                      <circle class="h-nb" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + (flagsOn && w.flagCount > 0 ? 3.5 : 1.5)} />
+                      <circle class="h-nb" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + (w.flagCount > 0 ? 3.5 : 1.5)} />
                     {/if}
-                    <!-- Watched, and the watch pill is on: the same
-                         purple this screen already uses for watchers. -->
-                    {#if watchOn && w.watchCount > 0}
+                    <!-- Watched: the same purple this screen already uses
+                         for watchers, drawn whenever something watches
+                         this host (#981). -->
+                    {#if w.watchCount > 0}
                       <circle class="h-watch" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 2.5} />
                     {/if}
                     {#if hostCard?.key === d.key}
@@ -4537,8 +4522,6 @@
       initialCentre={cityView?.centre}
       onCameraChange={(s, centre) => (cityView = { S: s, centre })}
       onStandChange={(b) => (cityStandBuilding = b)}
-      {flagsOn}
-      {watchOn}
     />
   {/if}
 
@@ -5473,10 +5456,9 @@
     font-weight: 550;
   }
 
-  /* The two overlay pills, in the lens row's old place (round 49,
-     ported from round-49/index.html:98-107). Outlined and grey when
-     off; flag red and watcher purple when on, so the row says which
-     marks are on the map without a legend. */
+  /* What the lens row is now: the off-baseline tally alone. The two
+     overlay pills that stood beside it went with #981 -- the marks are
+     drawn by the data, not by a switch. */
   .pills {
     position: absolute;
     bottom: 12px;
@@ -5502,40 +5484,6 @@
     margin: 0 0.35em;
     font-weight: 400;
     color: var(--fg-dim);
-  }
-
-  .pill {
-    display: inline-flex;
-    gap: 6px;
-    align-items: center;
-    padding: 3px 11px 3px 9px;
-    border: 1px solid var(--hair-2);
-    border-radius: 999px;
-    background: transparent;
-    font: 600 10.5px var(--font-mono);
-    letter-spacing: 0.04em;
-    color: var(--fg-dim);
-    cursor: pointer;
-  }
-
-  .pill b {
-    font-weight: 600;
-  }
-
-  .pill:hover {
-    border-color: var(--fg-dim);
-  }
-
-  .pill.on.f {
-    color: var(--alarm);
-    border-color: rgba(255, 84, 112, 0.55);
-    background: rgba(255, 84, 112, 0.1);
-  }
-
-  .pill.on.w {
-    color: var(--marked);
-    border-color: rgba(167, 139, 250, 0.55);
-    background: rgba(167, 139, 250, 0.1);
   }
 
   .stage {

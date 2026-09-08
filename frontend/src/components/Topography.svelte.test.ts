@@ -602,23 +602,22 @@ describe('crossing the altitude centre (#869)', () => {
     flushSync()
   }
 
-  // There is no lens to carry any more (round 49, #1016): coverage is
-  // the material on both surfaces and policy went in slice C. What the
-  // two views still share is the overlay pills, so they are what has to
-  // survive the crossing.
-  it('keeps the overlay pills as they were set, crossing the centre either way', () => {
+  // Nothing on the row is a control any more. Round 49 (#1016) left the
+  // two overlay pills as the one piece of state the crossing carried;
+  // #981 took those too, because a mark is drawn by its own data on both
+  // sides and there is nothing to remember across the centre. What the
+  // crossing still carries -- the reach, and the camera -- is asserted
+  // below.
+  it('carries no overlay state across the centre, because there is none to carry', () => {
     const { container } = render(Topography)
     flushSync()
-    const flags = container.querySelector<HTMLButtonElement>('.pill.f')!
-    flags.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    flushSync()
-    expect(flags.classList.contains('on')).toBe(false)
+    expect(container.querySelectorAll('.pills .pill').length).toBe(0)
 
     crossTo(container, '2') // to zones: the 2D side
-    expect(container.querySelector('.pill.f')?.classList.contains('on')).toBe(false)
+    expect(container.querySelectorAll('.pills .pill').length).toBe(0)
 
     crossTo(container, '4') // back across, to borough
-    expect(container.querySelector('.pill.f')?.classList.contains('on')).toBe(false)
+    expect(container.querySelectorAll('.pills .pill').length).toBe(0)
   })
 
   it('hands a 2D reach across the centre to the same host, standing on it in the city', () => {
@@ -974,8 +973,8 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
   })
 })
 
-describe('the lens row is two pills (round 49, #1016)', () => {
-  it('renders two overlay pills in the row\'s old place, and no lens tabs at all', () => {
+describe('the lens row (round 49 reduced it to two pills; #981 took those)', () => {
+  it("renders no lens tabs and no overlay pills at all", () => {
     const { container } = render(Topography)
     flushSync()
 
@@ -983,32 +982,11 @@ describe('the lens row is two pills (round 49, #1016)', () => {
     expect(container.querySelector('.wlens2')).toBeNull() // the lens bar itself
     expect(container.querySelector('[role="tablist"]')).toBeNull()
 
-    const pills = [...container.querySelectorAll('.pills .pill')].map((b) => b.textContent?.trim())
-    expect(pills).toEqual(['⚑ flags', '◉ watch'])
-  })
-
-  it('has both pills on by default, and greys one that is switched off', () => {
-    const { container } = render(Topography)
-    flushSync()
-
-    const [flags, watch] = [...container.querySelectorAll<HTMLButtonElement>('.pills .pill')]
-    expect(flags.classList.contains('on')).toBe(true)
-    expect(watch.classList.contains('on')).toBe(true)
-    expect(flags.getAttribute('aria-pressed')).toBe('true')
-
-    flags.click()
-    flushSync()
-    expect(flags.classList.contains('on')).toBe(false)
-    expect(watch.classList.contains('on')).toBe(true)
-  })
-
-  it('wears the flag ink and the watcher ink rather than one shared highlight', () => {
-    const { container } = render(Topography)
-    flushSync()
-
-    expect(componentSource).toContain('.pill.on.f {')
-    expect(componentSource.slice(componentSource.indexOf('.pill.on.f {'))).toContain('color: var(--alarm)')
-    expect(componentSource.slice(componentSource.indexOf('.pill.on.w {'))).toContain('color: var(--marked)')
+    // Owner, 2026-09-08 (#981): there is no toggle -- "something that's
+    // always there is easy to ignore; if it's not always there you know
+    // it's there for a reason."
+    expect(container.querySelectorAll('.pills .pill').length).toBe(0)
+    expect(container.querySelectorAll('[aria-label="Map overlays"] button').length).toBe(0)
   })
 })
 
@@ -2351,93 +2329,25 @@ describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () =
   })
 })
 
-describe('#715 item 3: the flags and watch overlays', () => {
+describe('#715 item 3, as #981 left it: the marks are the data, not an overlay', () => {
   const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
 
-  function overlays(container: HTMLElement) {
-    return [...container.querySelectorAll('[aria-label="Map overlays"] button')]
-  }
-
-  it('draws two independent toggles and nothing else in the row, both on', () => {
+  it('leaves nothing in the overlay row but the off-baseline tally', () => {
     const { container } = render(Topography)
     flushSync()
 
-    const ov = overlays(container)
-    expect(ov.length).toBe(2)
-    expect(ov.map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'true'])
-    // Nothing exclusive is left beside them (round 49): no lens tabs.
+    expect([...container.querySelectorAll('[aria-label="Map overlays"] button')].length).toBe(0)
     expect(container.querySelector('[role="tablist"]')).toBeNull()
   })
 
-  it('shows no digit when nothing is flagged, and the count when something is', () => {
-    flagsState.list = []
-    const { container } = render(Topography)
-    flushSync()
-    expect(overlays(container)[0].textContent?.trim()).toBe('⚑ flags')
-
-    flagsState.list = [flag('port_scan', '10.0.1.20'), flag('critical_port', '10.0.1.21'), flag('repeated_drops', '10.0.1.22')]
-    flushSync()
-    expect(overlays(container)[0].textContent?.replace(/\s+/g, ' ').trim()).toBe('⚑ flags 3')
-  })
-
-  it('leaves the aggregate-bar counts alone: they are drawn in every round, overlay or not', () => {
+  it('draws the aggregate-bar counts as it always did: they were never an overlay', () => {
     zonesState.pushed = oneLane
     appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'desk' })]
     flagsState.list = [flag('port_scan', '10.0.1.20')]
     const { container } = render(Topography)
     flushSync()
 
-    const before = container.querySelectorAll('.fchip').length
-    expect(before).toBeGreaterThan(0)
-
-    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    overlays(container)[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    flushSync()
-
-    expect(container.querySelectorAll('.fchip').length).toBe(before)
-  })
-
-  it('never repaints the picture itself: the material stays whatever the pills do', () => {
-    zonesState.pushed = oneLane
-    policyState.anyPushed = true
-    policyState.edges = [
-      { key: 'bridge1|ether1', from: 'bridge1', to: 'ether1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: false },
-    ]
-    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }), event({ inInterface: 'ether1', srcIp: '8.8.8.8' })]
-    const { container } = render(Topography)
-    flushSync()
-    const before = container.querySelectorAll('.cedge.dark').length
-    expect(before).toBeGreaterThan(0)
-
-    for (const b of overlays(container)) {
-      b.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      flushSync()
-    }
-
-    expect(container.querySelectorAll('.cedge.dark').length).toBe(before)
-  })
-
-  // #897 item 1. The gate read the toggle as not latching. It does --
-  // this is the assertion the scenario meant to make, on the attribute
-  // a screen reader announces rather than the class the styling uses.
-  it('latches off on a click and back on with the next', () => {
-    const { container } = render(Topography)
-    flushSync()
-
-    expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('true')
-
-    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    flushSync()
-    expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('false')
-    expect(overlays(container)[0].classList.contains('on')).toBe(false)
-
-    // A latch, not a one-way switch.
-    overlays(container)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    flushSync()
-    expect(overlays(container)[0].getAttribute('aria-pressed')).toBe('true')
-
-    // The other toggle is untouched throughout.
-    expect(overlays(container)[1].getAttribute('aria-pressed')).toBe('true')
+    expect(container.querySelectorAll('.fchip').length).toBeGreaterThan(0)
   })
 })
 
@@ -3235,17 +3145,28 @@ describe('living hosts on the 2D map (#1016)', () => {
       expect(dots(container).every((d) => d.getAttribute('cy') === '56')).toBe(true)
     })
 
-    it('halos a flagged host and rings a watched one, each only while its own pill is on', () => {
+    // #981: no toggle. The halo is there because the host has an open
+    // flag and the ring because something watches it -- there is no pill
+    // in the row that could have switched either on, and none that could
+    // switch them off. Take the flag and the watcher away and both marks
+    // go with them, which is the whole of the rule.
+    it('halos a flagged host and rings a watched one, with no pill anywhere on the page', () => {
       laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop' }))
       flagsState.list = [flag('port_scan', '10.0.1.20')]
       watchlistState.entries = [watchEntry({ destIp: '10.0.1.20' })]
       const { container } = render(Topography)
       flushSync()
 
+      expect(container.querySelectorAll('.pills .pill').length).toBe(0)
       expect(container.querySelector('.zone .hostrow .h-halo')).not.toBeNull()
       expect(container.querySelector('.zone .hostrow .h-watch')).not.toBeNull()
+    })
 
-      for (const pill of container.querySelectorAll<HTMLButtonElement>('.pills .pill')) pill.click()
+    it('draws neither mark on a host with nothing behind it', () => {
+      laneOf(host({ ip: '10.0.1.20', label: 'tom-desktop' }))
+      flagsState.list = []
+      watchlistState.entries = []
+      const { container } = render(Topography)
       flushSync()
 
       expect(container.querySelector('.zone .hostrow .h-halo')).toBeNull()
@@ -3655,8 +3576,9 @@ describe('brightness is the baseline (round 49, #1016)', () => {
       const mark = container.querySelector('.pills .nmk')!
       expect(mark.textContent).toContain('off-baseline')
       expect(mark.textContent).toContain('3')
-      // Ahead of the ⚑ count, which is the next thing in the row.
-      expect(mark.nextElementSibling?.textContent).toContain('⚑')
+      // It is the whole of the row now: the ⚑ and ◉ pills it used to sit
+      // ahead of went with #981, and a count is not a control.
+      expect(mark.nextElementSibling).toBeNull()
       expect(componentSource).toMatch(/\.nmk\s*\{[^}]*color:\s*var\(--accept\)/)
     })
 
