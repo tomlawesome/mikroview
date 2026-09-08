@@ -10,6 +10,7 @@ import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
 import { layoutGround } from '../lib/city/layout'
 import { faceOf } from '../lib/city/walls'
+import type { CityGate } from '../lib/city/gates'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { policyState } from '../lib/policy.svelte'
@@ -495,7 +496,7 @@ describe('City', () => {
     // on a gate the one thing that says the rule logs, so a gate with no
     // lamp reads exactly like a dark boundary.
     const est = mockupEstate()
-    const wanGate = { key: 'forward|bridge-lan|ether1', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'ether1', logged: true, ruleCount: 1, comment: 'lan to wan' }
+    const wanGate: CityGate = { key: 'forward|bridge-lan|ether1', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'ether1', logged: true, ruleCount: 1, ordinal: 1, comment: 'lan to wan', edgeKey: 'bridge-lan|ether1', reverseEdgeKey: 'ether1|bridge-lan', coverage: 'logged', reverseCoverage: 'logged' }
     // wanLogged false so the road bridge's own lamp cannot stand in for
     // the gate's -- every circle.lamp counted below is a gate's.
     const litGround = layoutGround({ ...est, wanLogged: false, gates: [wanGate] })
@@ -504,14 +505,19 @@ describe('City', () => {
     expect(faceOf(lan, lan.gates[0].p)).toBeNull()
 
     const lit = render(City, { props: { stop: 'district', ground: litGround } })
-    expect(lit.container.querySelectorAll('circle.lamp').length).toBeGreaterThan(0)
+    const litLamps = lit.container.querySelectorAll('circle.lamp').length
+    expect(litLamps).toBeGreaterThan(0)
     lit.unmount()
 
-    // And the same gate with nothing logging on it draws no lamp, so
-    // this cannot pass by lighting every gate regardless.
-    const darkGround = layoutGround({ ...est, wanLogged: false, gates: [{ ...wanGate, logged: false }] })
+    // And the same gate with nothing logging on it draws no lamp of its
+    // own, so this cannot pass by lighting every gate regardless. Round
+    // 49 lamps other coverage too (bridges, plates), so the comparison
+    // is against the same estate with only this gate gone dark: fewer
+    // lamps, since the gate's own goes and so does any plate lamp its
+    // logging alone lit.
+    const darkGround = layoutGround({ ...est, wanLogged: false, gates: [{ ...wanGate, logged: false, coverage: 'dark', reverseCoverage: 'dark' }] })
     const dark = render(City, { props: { stop: 'district', ground: darkGround } })
-    expect(dark.container.querySelectorAll('circle.lamp').length).toBe(0)
+    expect(dark.container.querySelectorAll('circle.lamp').length).toBeLessThan(litLamps)
   })
 })
 
