@@ -928,7 +928,7 @@
      * arrived rather than left (#991: the drop is not on the building
      * you are standing on, so the source is named; your own outbound
      * attempt just reads "dropped"). */
-    dropMarks: { id: string; counterpart: string; p: Pt; source?: string; rule?: string }[]
+    dropMarks: { id: string; counterpart: string; p: Pt; source?: string }[]
     /** Where the busiest blocked strand's own road crosses the wall --
      * the composer's own pin point -- computed regardless of whether a
      * fresh bollard mark was drawn there or an existing one already
@@ -1066,7 +1066,7 @@
     const lineOf = new Map<string, string>()
     const laneSubjects: LaneSubject[] = []
     const litBuildingIds = new Set<string>([b.id])
-    const dropMarks: { id: string; counterpart: string; p: Pt; source?: string; rule?: string }[] = []
+    const dropMarks: { id: string; counterpart: string; p: Pt; source?: string }[] = []
     const wan = zonesState.wanInterface
     const myToken = b.districtId ?? b.id
     const myDistrict = b.districtId ? districtOf(b.districtId) : null
@@ -1157,11 +1157,13 @@
         // was this building's own attempt, so it just reads "dropped".
         const source = s.direction === 'in' ? (s.peers[0] ?? (s.counterpart === 'internet' ? 'the internet' : s.counterpart)) : undefined
         // Round 49, DESIGN.md "The reach" and the metaphor table: a
-        // refused road ends at the wall with bollards, the red mark
-        // *and the refusing rule's name*. The name is the strand's own
-        // `refusedBy` -- the event's rule label, absent when no refusal
-        // on this strand carried one, and then said plainly rather than
-        // guessed (#865/#967).
+        // refused road ends at the wall with bollards and the red mark,
+        // and nothing is written on the drawing. The refusing rule's
+        // name is the strand's own `refusedBy` -- the event's rule
+        // label, absent when no refusal on this strand carried one, and
+        // then said plainly rather than guessed (#865/#967) -- but
+        // #1036 keeps it on the card the mark opens, so the mark itself
+        // carries no name to write.
         // The mark carries its own line, so a refused strand whose road
         // was never drawn -- an unlogged boundary draws none, and a road
         // there would claim a log line nobody wrote -- still has
@@ -1171,7 +1173,7 @@
           const id = MARK_PREFIX + s.counterpart
           if (!lineOf.has(id)) {
             lineOf.set(id, s.counterpart)
-            dropMarks.push({ id, counterpart: s.counterpart, p: wallCrossingFor(counterpartToken || myToken), source, rule: s.refusedBy })
+            dropMarks.push({ id, counterpart: s.counterpart, p: wallCrossingFor(counterpartToken || myToken), source })
           }
         }
       }
