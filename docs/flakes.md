@@ -11,16 +11,6 @@ testing-and-ci skill (owner, 2026-09-08).
 - 2026-09-08 · 3fb82271 (!1002) · pipeline 763, gate:scenarios 3/4 · `page.waitForFunction: Timeout 10000ms exceeded` at `live-browser.mjs:385` from `live-rule-regex.mjs:32`; the other 20 scenarios in the shard passed. Same family as #1011 (goTo never settles under runner load).
 - 2026-09-08 · 237d4d84 (!1003) · pipeline 770, gate:scenarios 3/4 · `exited 1 without printing a result`; pipeline 773 on the same branch (one merge later, City.svelte only) passed it. 770's gate stage overlapped 773's on the same runner host.
 
-## live-memory-slider: goTo("Stream") settles ~700 px past the deck top — #1049
-
-Three sightings, so it has an issue and leaves this record when #1049 closes.
-`offsetFromDeckTop` is −687 / −720 with the card mounted: not #1011's
-"click never changed the view", a roll that overshoots and stays there.
-
-- 2026-09-08 · 237d4d84 (!1003) · pipeline 770, gate:scenarios 2/4 · `exited 1 without printing a result` under an overlapping gate stage (#831's contention; also counted under the heading below).
-- 2026-09-08 · 70d828ec (dev) · pipeline 775, gate:scenarios 2/4, job 8448 · `goTo("Stream") timed out waiting for card "live"` 10 s, `offsetFromDeckTop: -687`. 775's gate stage overlapped 776's on the same host.
-- 2026-09-08 · 70d828ec (!980) · pipeline 776, gate:scenarios 2/4, job 8473 · same, `offsetFromDeckTop: -720`. Retry 8523 passed without a local run: the merge's diff (CI/docs, City.svelte) cannot reach the Stream card.
-
 ## live-flags-watchlist: the reconnaissance row never appears (5 s)
 
 - 2026-09-08 · 70d828ec (dev) · pipeline 775, gate:scenarios 2/4, job 8448 · `locator.waitFor: Timeout 5000ms exceeded` at `live-flags-watchlist.mjs:130` waiting for `tr.frow.mem` for 192.168.1.61 with text "Internal reconnaissance"; 776's job 8473 ran the same shard on the same commit and passed it.
