@@ -456,21 +456,58 @@ describe('FilterBar, the column chooser (#729)', () => {
     await openColumns()
 
     // Time and Rule are each a unique label in this list -- a plain
-    // queryByRole miss proves no checkbox exists for either. (Address and
-    // Port repeat between source/destination and are checked separately
-    // below via a count, since a name lookup on a repeated label throws.)
+    // queryByRole miss proves no checkbox exists for either.
     for (const key of PINNED_COLUMNS) {
       const label = COLUMNS.find((c) => c.key === key)?.label as string
       expect(screen.queryByRole('checkbox', { name: `${label} column` })).toBeNull()
     }
 
-    // 15 columns, 2 pinned -- 13 checkboxes total, regardless of how many
-    // labels repeat.
+    // 15 columns, 2 pinned -- 13 checkboxes total.
     expect(screen.getAllByRole('checkbox').length).toBe(COLUMNS.length - PINNED_COLUMNS.size)
 
     // Spot-check a couple of ordinary columns with unique labels.
     expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
     expect(screen.getByRole('checkbox', { name: 'Chain column' })).toBeTruthy()
+  })
+
+  // #710: "Address column" used to name two different checkboxes (source's
+  // and destination's), which is exactly the kind of thing an accessible
+  // name is supposed to rule out. Each one now carries its own
+  // disambiguated aria-label even though the two read identically on
+  // screen ("address" under each of two headings) -- this is what makes a
+  // by-name lookup for either possible at all.
+  it('disambiguates the address/port/MAC checkboxes that repeat visually, by aria-label', async () => {
+    render(FilterBar)
+    await expandRow()
+    await openColumns()
+
+    expect(screen.getByRole('checkbox', { name: 'Source address column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Destination address column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Source port column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Destination port column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Source MAC column' })).toBeTruthy()
+  })
+
+  // The visible word is the bare column name, not "<Label> column" --
+  // the "column" suffix and the disambiguation both still exist, just in
+  // the aria-label (checked above), not on screen where two "Address
+  // column"s side by side is what read as clunky in the first place.
+  it('draws the bare column name on screen, grouped under source/destination headings for the repeated ones', async () => {
+    render(FilterBar)
+    await expandRow()
+    await openColumns()
+
+    const panel = document.querySelector('.col-panel') as HTMLElement
+    const labelTexts = Array.from(panel.querySelectorAll('.col-toggle')).map((el) => el.textContent?.trim())
+    expect(labelTexts).toContain('device')
+    expect(labelTexts).toContain('NAT')
+    // "address" appears twice on screen -- once per heading -- which is
+    // exactly the point: the heading, not the checkbox's own text, is
+    // what tells the two apart now.
+    expect(labelTexts.filter((t) => t === 'address').length).toBe(2)
+
+    const headings = Array.from(panel.querySelectorAll('.col-group-heading')).map((el) => el.textContent?.trim())
+    expect(headings).toEqual(['source', 'destination'])
   })
 
   it('defaults every checkbox to checked -- the shipped default stays all fifteen columns', async () => {
