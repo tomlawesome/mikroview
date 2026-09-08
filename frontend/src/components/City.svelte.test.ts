@@ -10,7 +10,6 @@ import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
 import { layoutGround } from '../lib/city/layout'
 import { faceOf } from '../lib/city/walls'
-import type { CityGate } from '../lib/city/gates'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { policyState } from '../lib/policy.svelte'
@@ -496,28 +495,45 @@ describe('City', () => {
     // on a gate the one thing that says the rule logs, so a gate with no
     // lamp reads exactly like a dark boundary.
     const est = mockupEstate()
-    const wanGate: CityGate = { key: 'forward|bridge-lan|ether1', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'ether1', logged: true, ruleCount: 1, ordinal: 1, comment: 'lan to wan', edgeKey: 'bridge-lan|ether1', reverseEdgeKey: 'ether1|bridge-lan', coverage: 'logged', reverseCoverage: 'logged' }
-    // wanLogged false so the road bridge's own lamp cannot stand in for
-    // the gate's -- every circle.lamp counted below is a gate's.
-    const litGround = layoutGround({ ...est, wanLogged: false, gates: [wanGate] })
+    // Round 49 (#1016) folds a boundary's two directions into one break
+    // in the wall, so a gate now carries both readings and the fixture
+    // has to state both: the reading this test is about is the folded
+    // one, and a gate given only its outbound half reads dark whatever
+    // its own direction logs.
+    const wanGate = {
+      key: 'forward|bridge-lan|ether1',
+      chain: 'forward',
+      inInterface: 'bridge-lan',
+      outInterface: 'ether1',
+      logged: true,
+      ruleCount: 1,
+      ordinal: 1,
+      comment: 'lan to wan',
+      edgeKey: 'bridge-lan|ether1',
+      reverseEdgeKey: 'ether1|bridge-lan',
+      coverage: 'logged' as const,
+      reverseCoverage: 'logged' as const,
+    }
+    // Nothing else on the map may lamp, so every circle.lamp counted
+    // below is this gate's: the WAN deck reads dark (round 49 took that
+    // from `wanCoverage`, not from `wanLogged`, which now only sets the
+    // deck's up/unknown state) and there are no tunnel footbridges to
+    // lamp either.
+    const quiet = { ...est, wanLogged: false, wanCoverage: 'dark' as const, tunnels: [] }
+    const litGround = layoutGround({ ...quiet, gates: [wanGate] })
     const lan = litGround.districts.find((d) => d.id === 'bridge-lan')!
     expect(lan.gates[0].lamp).toBe(true)
     expect(faceOf(lan, lan.gates[0].p)).toBeNull()
 
     const lit = render(City, { props: { stop: 'district', ground: litGround } })
-    const litLamps = lit.container.querySelectorAll('circle.lamp').length
-    expect(litLamps).toBeGreaterThan(0)
+    expect(lit.container.querySelectorAll('circle.lamp').length).toBeGreaterThan(0)
     lit.unmount()
 
-    // And the same gate with nothing logging on it draws no lamp of its
-    // own, so this cannot pass by lighting every gate regardless. Round
-    // 49 lamps other coverage too (bridges, plates), so the comparison
-    // is against the same estate with only this gate gone dark: fewer
-    // lamps, since the gate's own goes and so does any plate lamp its
-    // logging alone lit.
-    const darkGround = layoutGround({ ...est, wanLogged: false, gates: [{ ...wanGate, logged: false, coverage: 'dark', reverseCoverage: 'dark' }] })
+    // And the same gate with nothing logging on it draws no lamp, so
+    // this cannot pass by lighting every gate regardless.
+    const darkGround = layoutGround({ ...quiet, gates: [{ ...wanGate, logged: false, coverage: 'dark' as const, reverseCoverage: 'dark' as const }] })
     const dark = render(City, { props: { stop: 'district', ground: darkGround } })
-    expect(dark.container.querySelectorAll('circle.lamp').length).toBeLessThan(litLamps)
+    expect(dark.container.querySelectorAll('circle.lamp').length).toBe(0)
   })
 })
 
@@ -1809,5 +1825,93 @@ describe('City: brightness by baseline', () => {
       expect(perLineActs(c)).toHaveLength(0)
       expect(bulkAct(c)).toBeNull()
     })
+  })
+})
+
+describe('the drop card (#1002)', () => {
+  beforeEach(() => {
+    matchMedia(true)
+    appState.events = []
+  })
+
+  // The fixture already draws two aggregate drop marks -- the holding
+  // guest boundary and the one escalated unplanned pair. Only the guest
+  // one is given a breakdown, so the same ground answers both halves of
+  // the question: a mark with rules to name opens a card, and a mark
+  // with none stays exactly as it was drawn.
+  //
+  // The counts go in deliberately out of order: "largest first" is the
+  // card's own promise, so the card is what has to keep it.
+  const GUEST_ROAD = 'bridge-lan|vlan-guest'
+  function dropGround() {
+    const input = mockupEstate()
+    const guest = input.edges.find((e) => e.key === 'vlan-guest|bridge-lan')!
+    guest.dropsByRule = [
+      { rule: 'guest-isolation', count: 2 },
+      { rule: null, count: 3 },
+      { rule: 'lan-guard', count: 7 },
+    ]
+    return layoutGround(input)
+  }
+
+  const dropCard = (c: Element) => c.querySelector('.bcard.dcard') as HTMLElement | null
+
+  it('opens from the aggregate drop mark, a row per refusing rule, busiest first, and a total that reconciles', async () => {
+    const { container } = render(City, { props: { stop: 'district', ground: dropGround() } })
+    const mark = container.querySelector(`[data-drop-hot="${GUEST_ROAD}"]`) as Element
+    expect(mark).not.toBeNull()
+    // The mark is the control, the way a district plate and a building
+    // already are: a button in the keyboard order, not a new affordance.
+    expect(mark.getAttribute('role')).toBe('button')
+    expect(mark.getAttribute('tabindex')).toBe('0')
+    // A mark with nothing to break down is left exactly as drawn --
+    // there is no dead click on it.
+    expect(container.querySelector('[data-drop-hot="bridge-lan|vlan-iot"]')).toBeNull()
+    expect(dropCard(container)).toBeNull()
+
+    // Hover opens it, as it does every other card on this surface.
+    await fireEvent.pointerEnter(mark)
+    flushSync()
+    const card = dropCard(container) as HTMLElement
+    expect(card).not.toBeNull()
+    // The composer's own phrasing, so a refusal reads the same wherever
+    // it is said.
+    expect(card.textContent).toContain('Guest → LAN · refused at this wall')
+    // One row per rule, largest first, and the composer's own words for
+    // the drops that carried no rule at all.
+    expect([...card.querySelectorAll('[data-drop-rule]')].map((r) => r.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      'lan-guard · 7',
+      'caught, no rule named · 3',
+      'guest-isolation · 2',
+    ])
+    // The footer reconciles with the mark: every drop the mark stands for.
+    expect(card.querySelector('[data-drop-total]')?.textContent).toContain('12')
+
+    // Every card pins (DESIGN.md "Cards").
+    await fireEvent.click(card.querySelector('.pin') as HTMLElement)
+    flushSync()
+    expect(dropCard(container)?.classList.contains('pinned')).toBe(true)
+  })
+
+  it('takes the card down before it surfaces from standing', async () => {
+    const { container } = render(City, { props: { stop: 'district', ground: dropGround() } })
+    // Activating the mark pins its card, so the card is still open when
+    // the next click stands somewhere.
+    await fireEvent.click(container.querySelector(`[data-drop-hot="${GUEST_ROAD}"]`) as Element)
+    flushSync()
+    expect(dropCard(container)).not.toBeNull()
+
+    await fireEvent.click(container.querySelector('.plate[data-cid="bridge-lan"]') as Element)
+    flushSync()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    // First Escape is the card's; standing is untouched.
+    key(document.body, 'Escape')
+    expect(dropCard(container)).toBeNull()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    // Second Escape surfaces, exactly as it did before there was a card.
+    key(document.body, 'Escape')
+    expect(container.querySelector('.crumb')).toBeNull()
   })
 })

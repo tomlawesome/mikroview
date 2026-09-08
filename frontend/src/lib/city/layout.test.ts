@@ -220,6 +220,40 @@ describe('city layout: roads', () => {
     expect(guest.stop).toBe('drop')
     expect(guest.refusedBy).toBe('guest-isolation')
   })
+
+  // #1002: the aggregate drop mark's own breakdown -- every rule that
+  // refused a crossing on the pair, and how many events each one caught.
+  it('carries a single-rule breakdown alongside refusedBy for a drop road', () => {
+    const input = mockupEstate()
+    const edge = input.edges.find((e) => e.key === 'vlan-iot|bridge-lan')!
+    edge.dropsByRule = [{ rule: 'iot-egress-drop', count: 12 }]
+    const g = layoutGround(input)
+    const worst = g.roads.find((r) => r.id === 'bridge-lan|vlan-iot') as Road
+    expect(worst.dropBreakdown).toEqual([{ rule: 'iot-egress-drop', count: 12 }])
+  })
+
+  it('sums a rule that caught drops on both directions of the same pair', () => {
+    const input = mockupEstate()
+    const guest = input.edges.find((e) => e.key === 'vlan-guest|bridge-lan')!
+    guest.dropsByRule = [{ rule: 'guest-isolation', count: 5 }]
+    // The fold in layout.ts's `pairs` map keys on the sorted pair, so an
+    // edge running the other way merges into the same road -- a second
+    // rule catching traffic the other direction must add to the total,
+    // not replace it.
+    input.edges.push({ key: 'bridge-lan|vlan-guest', from: 'bridge-lan', to: 'vlan-guest', events: 2, drops: 2, verdict: 'holding', dropsByRule: [{ rule: 'guest-isolation', count: 1 }, { rule: 'egress-block', count: 1 }] })
+    const g = layoutGround(input)
+    const road = g.roads.find((r) => r.id === 'bridge-lan|vlan-guest') as Road
+    expect(road.dropBreakdown).toEqual([
+      { rule: 'guest-isolation', count: 6 },
+      { rule: 'egress-block', count: 1 },
+    ])
+  })
+
+  it('gives a road with no drops at all an empty breakdown, not undefined', () => {
+    const planned = roads.find((r) => r.id === 'bridge-lan|vlan-srv') as Road
+    expect(planned.stop).toBeUndefined()
+    expect(planned.dropBreakdown).toEqual([])
+  })
 })
 
 describe('city layout: gates', () => {

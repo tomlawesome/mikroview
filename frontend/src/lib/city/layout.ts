@@ -16,7 +16,7 @@ import { zoneHolding } from './input'
 import { worseCoverage, type CityGate } from './gates'
 import type { Coverage } from '../coverageRule'
 import { bridgeStateFor } from './tunnelState'
-import type { Borough, Bridge, Building, District, CityPeer, GateDirection, Ground, River, Road, RoadKind } from './types'
+import type { Borough, Bridge, Building, CityPeer, CityRuleDrop, District, GateDirection, Ground, River, Road, RoadKind } from './types'
 
 /** The mockup's primary router. */
 const ROUTER: Pt = [-10, 10]
@@ -422,7 +422,18 @@ export function layoutGround(input: CityInput): Ground {
     d.plateDark = d.gates.length > 0 ? d.gates.every((x) => x.coverage === 'dark') : d.dark
   }
 
-  const connect = (id: string, a: End, b: End, w: number, k: RoadKind, label: string, stop?: 'drop', refusedBy?: string) => {
+  /** Folds two directions' rule-drop counts into one, summing a rule's
+   * count when both sides caught something under it (#1002: a district
+   * pair's aggregate mark stands for traffic either way, so its
+   * breakdown must too). */
+  const mergeRuleDrops = (a: CityRuleDrop[], b: CityRuleDrop[]): CityRuleDrop[] => {
+    const m = new Map<string | null, number>()
+    for (const d of a) m.set(d.rule, (m.get(d.rule) ?? 0) + d.count)
+    for (const d of b) m.set(d.rule, (m.get(d.rule) ?? 0) + d.count)
+    return [...m.entries()].map(([rule, count]) => ({ rule, count })).sort((x, y) => y.count - x.count)
+  }
+
+  const connect = (id: string, a: End, b: End, w: number, k: RoadKind, label: string, stop?: 'drop', refusedBy?: string, dropBreakdown?: CityRuleDrop[]) => {
     const exempt = new Set<string>()
     let pts: Pt[] = []
     let from: string | null = null
@@ -452,7 +463,7 @@ export function layoutGround(input: CityInput): Ground {
     const inner = routeRound(pts.slice(head - 1, pts.length - tail + 1), districts, { exempt })
     const bent = bulge(inner, id)
     pts = [...pts.slice(0, head - 1), ...bent, ...pts.slice(pts.length - tail + 1)]
-    roads.push({ id, pts, w, k, from, to, stop, refusedBy, label })
+    roads.push({ id, pts, w, k, from, to, stop, refusedBy, dropBreakdown: dropBreakdown ?? [], label })
   }
 
   // One road per pair whichever way the traffic runs: both directions
@@ -470,6 +481,7 @@ export function layoutGround(input: CityInput): Ground {
         events: had.events + e.events,
         drops: (had.drops ?? 0) + (e.drops ?? 0),
         refusedBy: had.refusedBy || e.refusedBy,
+        dropsByRule: mergeRuleDrops(had.dropsByRule ?? [], e.dropsByRule ?? []),
         verdict: RANK[e.verdict] > RANK[had.verdict] ? e.verdict : had.verdict,
       })
   }
@@ -499,13 +511,13 @@ export function layoutGround(input: CityInput): Ground {
     if (isWan(e.from) || isWan(e.to)) {
       const end = endOf(isWan(e.from) ? e.to : e.from)
       if (!end || end.kind !== 'district') continue
-      connect(e.key, end, { kind: 'node', n: routerNode(end.d.routerId) }, w, k, label, stop, e.refusedBy)
+      connect(e.key, end, { kind: 'node', n: routerNode(end.d.routerId) }, w, k, label, stop, e.refusedBy, e.dropsByRule)
       continue
     }
     const a = endOf(e.from)
     const b = endOf(e.to)
     if (!a || !b) continue
-    connect(e.key, a, b, w, k, label, stop, e.refusedBy)
+    connect(e.key, a, b, w, k, label, stop, e.refusedBy, e.dropsByRule)
   }
   // Router to each bridge head, then the crossing and what is beyond it.
   for (const b of bridges) {
