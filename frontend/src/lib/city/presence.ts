@@ -19,7 +19,9 @@
 // The rule this draws (DESIGN.md "Living hosts"): quiet is 24 hours of
 // nothing, a quiet host is never removed, and neither quiet nor quiet on
 // purpose claims more than "not heard".
+import { extractSourceIp } from '../flags.svelte'
 import type { HostPresence } from '../hosts.svelte'
+import type { Flag, WatchlistEntry } from '../types'
 
 export type { HostPresence }
 
@@ -50,6 +52,67 @@ export interface CityHost {
   reason: string | null
   markedBy: string | null
   markedAt: string | null
+  /** Open, un-cleared flags whose target names this address (#981,
+   * round 46). A mark exists only while there is something behind it,
+   * so this is the whole of what makes a building red -- there is no
+   * toggle, on either surface (owner, 2026-09-08). */
+  flags: number
+  /** Watchlist entries with this address at either end. */
+  watch: number
+  /** One of those open flags is an activity spike -- the one flag kind
+   * that is happening *now*, so its rim breathes and nothing else
+   * does. Never true with `flags` at zero: the pulse is drawn inside
+   * the flagged branch, so a pulsing mark is always a flagged mark. */
+  spike: boolean
+}
+
+/** What one address is marked with, before it is put on a host. */
+export interface HostMarks {
+  flags: number
+  watch: number
+  spike: boolean
+}
+
+/** Nothing is behind this address: no mark is drawn at all. */
+export const NO_MARKS: HostMarks = { flags: 0, watch: 0, spike: false }
+
+/** The one flag type whose mark pulses (round 46, #981): activity is
+ * the only flag kind that is happening now, so motion fits it and
+ * nothing else. */
+export const SPIKE_FLAG_TYPE = 'activity_spike'
+
+/**
+ * Every marked address, from the two lists that carry the marks.
+ *
+ * The readings are Topography.svelte's own, which the 2D map already
+ * draws its halo and ring from: a flag counts against the source
+ * address its target names (`extractSourceIp` -- a detector whose
+ * target is a port, a rule label or `global` names no host and counts
+ * against none), and a watchlist entry counts once against each end it
+ * states. One entry naming the same address at both ends is still one
+ * watcher, not two.
+ */
+export function hostMarksFrom(flags: readonly Flag[], entries: readonly WatchlistEntry[]): Map<string, HostMarks> {
+  const out = new Map<string, HostMarks>()
+  const at = (ip: string): HostMarks => {
+    let m = out.get(ip)
+    if (!m) out.set(ip, (m = { flags: 0, watch: 0, spike: false }))
+    return m
+  }
+  for (const f of flags) {
+    if (f.cleared) continue
+    const ip = extractSourceIp(f.target)
+    if (!ip) continue
+    const m = at(ip)
+    m.flags += 1
+    if (f.type === SPIKE_FLAG_TYPE) m.spike = true
+  }
+  for (const e of entries) {
+    const ends = new Set<string>()
+    for (const ip of [e.source?.ip, e.destIp]) if (ip) ends.add(ip)
+    for (const ip of ends) at(ip).watch += 1
+  }
+  return out
 }
 
 /** A live host the event buffer has seen and the register has not (yet). */
@@ -65,6 +128,9 @@ export function bufferHost(label: string, ip: string): CityHost {
     reason: null,
     markedBy: null,
     markedAt: null,
+    flags: 0,
+    watch: 0,
+    spike: false,
   }
 }
 
@@ -117,7 +183,11 @@ export function presenceNote(h: CityHost, now: number): string | null {
  * (internal/hosts.Register.Observe), so nothing in the browser has to
  * remember it.
  */
-export function mergeZoneHosts(buffer: { label: string; ip: string }[], registered: CityHost[]): CityHost[] {
+export function mergeZoneHosts(
+  buffer: { label: string; ip: string }[],
+  registered: CityHost[],
+  marks: ReadonlyMap<string, HostMarks> = new Map(),
+): CityHost[] {
   const byIp = new Map<string, CityHost>()
   for (const h of registered) {
     const had = byIp.get(h.ip)
@@ -154,7 +224,15 @@ export function mergeZoneHosts(buffer: { label: string; ip: string }[], register
     if (taken.has(ip) || h.presence === 'dismissed') continue
     out.push({ ...h, label: h.label || ip })
   }
-  return out
+  // The marks go on last, over whatever either source carried: they are
+  // a fact about the flag and watchlist ledgers, not about the register,
+  // and applying them here means a buffer-only host wears them exactly
+  // as a registered one does. A host nothing has marked keeps the zeros
+  // it was built with -- and a building with zeros draws no mark at all.
+  return out.map((h) => {
+    const m = marks.get(h.ip)
+    return m ? { ...h, flags: m.flags, watch: m.watch, spike: m.spike } : h
+  })
 }
 
 const ORDER: Record<HostPresence, number> = { live: 0, quiet: 1, intended: 2, dismissed: 3 }
