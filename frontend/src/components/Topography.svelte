@@ -1374,6 +1374,22 @@
     return el === null ? [] : drawnPathRects(el, host)
   }
 
+  /**
+   * The open rib's own line, as boxes the card keeps off (#1030).
+   *
+   * The same fault `openEdgeRects` fixes for the boundary card, and the
+   * same fix: the off-baseline card kept clear of the two zone plates
+   * its title names and of nothing else, so the rib running between
+   * them -- the one thing the card is about -- ran in under the card.
+   *
+   * The open rib carries `on`, the way the open boundary half does, so
+   * this is the drawn line and not one of the others.
+   */
+  function openRibRects(host: Element): Rect[] {
+    const el = host.querySelector('g.edge-g.on path.redge')
+    return el === null ? [] : drawnPathRects(el, host)
+  }
+
   /** Whether the lane row is the drawing on screen, as opposed to the
    * ground plan that replaces it at the zones stop. */
   function laneRowDrawn(host: Element): boolean {
@@ -1713,7 +1729,12 @@
     // Both plates: the card names a pair, and sitting on either end
     // hides half of what it is describing. Measured off the drawing, for
     // the reason the boundary card's own placement gives (#1028).
-    const avoid = zonePlates(host, [drawn.r.from, drawn.r.to])
+    //
+    // And the rib itself with them (#1030): the plates alone never
+    // stopped the card coming down on the line between them, which is
+    // the whole subject. The boundary card was given its own line here;
+    // this one was left out.
+    const avoid = zonePlates(host, [drawn.r.from, drawn.r.to]).concat(openRibRects(host))
     const others = zones.map((z) => z.id).filter((id) => id !== drawn.r.from && id !== drawn.r.to)
     const softAvoid = zonePlates(host, others).concat(
       laneRowDrawn(host) ? [islandRect({ ...WAIST, kind: 'any' }), islandRect({ x: 700, y: 104, kind: 'internet' })].map((r) => mapRect(map, r)) : [],
