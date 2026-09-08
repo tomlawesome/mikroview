@@ -4081,6 +4081,90 @@ describe('brightness is the baseline (round 49, #1016)', () => {
       flushSync()
       expect(container.querySelector('.card[aria-label^="Off the baseline"]')).toBeNull()
     })
+
+    // #1030, again, for the off-baseline card. The boundary card was
+    // given its own line to keep off; this one was not, so it kept clear
+    // of the two zone plates its title names and then came down on the
+    // rib running between them -- the one thing it is about.
+    //
+    // The same honest limit as the #1028 test above: jsdom lays nothing
+    // out, so this cannot say where the rib really is, and a test that
+    // invents coordinates and then checks its own arithmetic proves
+    // nothing. What it can settle is *which* rectangles the card is told
+    // to keep off. So the rib is given a hand-built rectangle -- a band
+    // through the leader's own anchor, which is where the rib is by
+    // construction -- handed over at the one boundary the component
+    // reads the browser through, and the assertion is that the card
+    // clears it. `scripts/live-topography-card-placement.mjs` is still
+    // the gate that reads real rectangles out of a real browser.
+    it('keeps off the rib it is describing, not only the two plates its title names (#1030)', () => {
+      resizeWatchers.clear()
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+      try {
+        twoLanes()
+        seedOff([offLine()])
+        const { container } = render(Topography)
+        flushSync()
+
+        // Down onto the 2D map. Every test starts at the city, where the
+        // stage carries `hidden` and nothing on it is drawn at all.
+        const range = container.querySelector<HTMLInputElement>('.alt-range')!
+        range.value = '1' // "services"
+        range.dispatchEvent(new Event('input', { bubbles: true }))
+        flushSync()
+
+        // The map's own 1400x720 rendered at 1400x720: user units and
+        // container pixels agree, so every number below is readable.
+        const host = container.querySelector('.topo') as HTMLElement
+        const svg = [...container.querySelectorAll('svg')].find((s) => s.getAttribute('viewBox') === '0 0 1400 720') as SVGSVGElement
+        const box = { left: 0, top: 0, width: 1400, height: 720, right: 1400, bottom: 720, x: 0, y: 0 }
+        host.getBoundingClientRect = () => box as DOMRect
+        svg.getBoundingClientRect = () => box as DOMRect
+
+        type Box = { x: number; y: number; w: number; h: number }
+        const hits = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+        const stub = (el: Element, b: Box) => {
+          el.getBoundingClientRect = () => ({ left: b.x, top: b.y, width: b.w, height: b.h, right: b.x + b.w, bottom: b.y + b.h, x: b.x, y: b.y }) as DOMRect
+        }
+
+        const card = openOffCard(container)!
+        expect(card, 'no card opened on the lit rib').not.toBeNull()
+        expect(card.classList.contains('placed'), 'the card never got a measured position').toBe(true)
+        card.querySelector<HTMLButtonElement>('.pin')!.click()
+        flushSync()
+
+        // Where the leader starts is where the rib is: the placement's
+        // own `from` point, drawn as the accent dot. The band is that
+        // point given some length and `LINE_GIRTH`'s body, which is the
+        // shape `pathBoxes` gives a rib that is thin in one axis.
+        // The off card's own leader, not one of the other two cards'.
+        const dot = (container.querySelector('.off-card')!.previousElementSibling as Element).querySelector('circle') as SVGCircleElement
+        expect(dot, 'the card drew no leader to read the anchor off').not.toBeNull()
+        const ax = Number(dot.getAttribute('cx'))
+        const ay = Number(dot.getAttribute('cy'))
+        const rib: Box = { x: ax - 300, y: ay - 4, w: 600, h: 8 }
+        stub(container.querySelector('g.edge-g.on path.redge') as Element, rib)
+
+        // Growing the card is what makes the placement run again.
+        const open = offCard(container)
+        Object.defineProperty(open, 'offsetWidth', { value: 288, configurable: true })
+        Object.defineProperty(open, 'offsetHeight', { value: 340, configurable: true })
+        reportResize(open)
+        flushSync()
+
+        const placed = offCard(container)
+        const drawn: Box = { x: parseFloat(placed.style.left), y: parseFloat(placed.style.top), w: 288, h: 340 }
+        expect(hits(drawn, rib), 'the card came down on the rib it is describing').toBe(false)
+
+        // And it is still a card on the stage, not one shoved off it.
+        expect(drawn.x).toBeGreaterThanOrEqual(0)
+        expect(drawn.y).toBeGreaterThanOrEqual(0)
+        expect(drawn.x + drawn.w).toBeLessThanOrEqual(1400)
+        expect(drawn.y + drawn.h).toBeLessThanOrEqual(720)
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
   })
 })
 
