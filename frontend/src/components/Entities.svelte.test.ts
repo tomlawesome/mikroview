@@ -772,7 +772,8 @@ describe('Entities rules view (#681, reachable again since #804)', () => {
 
     const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('LAN to WAN'))
     expect(row).toBeTruthy()
-    expect(row?.textContent).toMatch(/[45]m ago/)
+    // Round 38's own idiom: a bare "5 m", no "ago" suffix (lib/format.ts).
+    expect(row?.textContent).toMatch(/[45] m/)
     expect(row?.textContent).not.toContain('has not fired')
   })
 

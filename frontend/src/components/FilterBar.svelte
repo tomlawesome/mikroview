@@ -1193,10 +1193,23 @@
     color: var(--alarm);
   }
 
+  /* Round 30 draws "× clear" and "fold ▸" together at the right end of
+     the strip (`stream-bar-out.png`). `× clear` only mounts while a
+     filter is set, so its own margin-left:auto could not carry fold
+     across on an empty filter -- fold sat at the left of the row the
+     column chooser's flex-basis:100% pushes it onto. Fold claims the
+     free space itself, and gives it up again when clear is there to
+     claim it first, so the pair stays adjacent rather than splitting
+     the row between two auto margins. */
   .tf-fold {
     color: var(--accent);
     font-family: var(--font-mono);
     font-size: 10.5px;
+    margin-left: auto;
+  }
+
+  .tf-clear ~ .tf-fold {
+    margin-left: 0;
   }
 
   /* #729: the column chooser. Same fb-field/fb-label shape every other
