@@ -253,50 +253,45 @@ if (mine && waist.name === mine.name) {
   console.log(`  - waist count skipped: the map's primary device is "${waist.name}", not this scenario's "${mine?.name}"`)
 }
 
-// The pill row in a real browser (#715 item 3, as round 49 left it).
-// The two exclusive base lens tabs are gone -- traffic is the picture,
-// coverage is always on, policy was deleted -- so what the row has to
-// carry now is exactly two overlay toggles and nothing else. Asserted
-// here rather than in a scenario of its own because the row is on every
-// screen this file already drives.
+// The row where the lens tabs and the overlay pills used to be, in a
+// real browser. Round 49 deleted the tabs; #981 deleted the two pills
+// with them -- a mark is drawn while there is something behind it and
+// gone when there is not, on both surfaces, and nothing switches it
+// (owner, 2026-09-08). So the row carries no control of any kind, and
+// what is left on it is a tally: `⟡ off-baseline today · N`, a count of
+// what the map is already showing rather than a switch over it.
+//
+// Asserted here rather than in a scenario of its own because the row is
+// on every screen this file already drives. The absence is worth
+// checking on its own terms -- a check that quietly stopped looking is
+// how a switch would creep back unnoticed -- and the marks the pills
+// used to gate are driven end to end, onto a real building and off it
+// again, by live-city-marks.mjs.
 await open2D()
 const row = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
+  const overlays = card?.querySelector('[aria-label="Map overlays"]') ?? null
   return {
     lensRows: card?.querySelectorAll('[aria-label="Map lenses"]').length ?? 0,
-    ovs: [...(card?.querySelectorAll('[aria-label="Map overlays"] button') ?? [])].map((b) => ({
-      text: b.textContent.trim(),
-      pressed: b.getAttribute('aria-pressed'),
-    })),
+    // Anything a reader could operate, not just the pills' own tag: a
+    // switch that came back as a checkbox or a link would pass a count
+    // of `button` and still be the control this row is not to have.
+    controls: [...(overlays?.querySelectorAll('button, input, select, a, [role="button"], [role="switch"], [role="checkbox"], [aria-pressed], [tabindex]') ?? [])].map(
+      (el) => `${el.tagName.toLowerCase()}${el.className ? '.' + String(el.className).trim().split(/\s+/).join('.') : ''}`,
+    ),
+    text: (overlays?.textContent ?? '').replace(/\s+/g, ' ').trim(),
   }
 })
 check(row.lensRows === 0, `no lens row is drawn at all (${row.lensRows})`)
-check(row.ovs.length === 2, `two overlay toggles and no more (${row.ovs.map((o) => o.text).join(' · ')})`)
+check(row.controls.length === 0, `nothing on the overlay row is a control (${row.controls.join(' · ') || 'none'})`)
 check(
-  row.ovs.some((o) => o.text.includes('flags')) && row.ovs.some((o) => o.text.includes('watch')),
-  `the two are flags and watch (${row.ovs.map((o) => o.text).join(' · ')})`,
+  !/flags|watch/i.test(row.text),
+  `neither the flag nor the watch mark is offered as a switch (${JSON.stringify(row.text)})`,
 )
 check(
-  row.ovs.every((o) => o.pressed === 'true'),
-  'both overlays arrive switched on, as round 49 draws the scene',
+  row.text === '' || /off-baseline/.test(row.text),
+  `what the row still carries is the off-baseline tally, a count and not a control (${JSON.stringify(row.text)})`,
 )
-
-// A toggle latches, and latches on its own: switching one leaves the
-// other where it was. That independence is what made them a different
-// family from the lens tabs, and it outlived the tabs.
-//
-// The click and the read are two steps on purpose. Svelte 5 applies a
-// state change to the DOM in a microtask, so clicking and reading
-// aria-pressed inside one page.evaluate always reads the value the
-// click was about to replace -- the assertion fails on a control that
-// works. Playwright clicks, the page settles, a separate evaluate reads.
-await page.click('[data-card="topography"] [aria-label="Map overlays"] button >> nth=0')
-await page.waitForTimeout(300)
-const afterToggle = await page.evaluate(() =>
-  [...document.querySelectorAll('[data-card="topography"] [aria-label="Map overlays"] button')].map((b) => b.getAttribute('aria-pressed')),
-)
-check(afterToggle[0] === 'false', `an overlay latches off when clicked (${afterToggle[0]})`)
-check(afterToggle[1] === 'true', `and leaves the other overlay where it was (${afterToggle[1]})`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()
