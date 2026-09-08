@@ -6687,6 +6687,17 @@
   }
 
   .strand-g {
+    /* `.membrane-layer` is pointer-events: none so that clicking off
+       anywhere surfaces, and everything in it that can be pointed at
+       opts back in -- `.sibling`, `.host-node`, `.cluster-g`. The strand
+       used to opt in through the `.strand-door` pill sitting on it;
+       round 49 (#1016) moved the interaction onto the whole strand and
+       deleted the pill, and the opt-in went with it. Every strand was
+       then unhittable: no hover, no click, so no line card, and the
+       composer behind that card could not be reached by pointer at all
+       -- only by tabbing to the strand, because focus does not care
+       about pointer-events. */
+    pointer-events: auto;
     cursor: pointer;
   }
 
