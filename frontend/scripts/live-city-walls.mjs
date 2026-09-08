@@ -79,8 +79,13 @@ await toDistrictStop()
 //
 // So every available reading is either absent or constant, and a check
 // written against one now would be as vacuous as the one it replaced.
-// Repairing it needs a stable hook on the gate posts in City.svelte,
-// which is #1022's own proposed fix and belongs with whoever owns that
+//
+// #1022's own fix (836fffab) put a `data-gate` hook on the policy
+// lens's gate pill, which was the only named gate element there was.
+// Round 49 removes the policy lens from both map surfaces, so that pill
+// and its hook are gone with it, and the DOM is back to offering
+// nothing countable. Repairing this needs a stable hook on the gate
+// posts themselves, in City.svelte, and belongs with whoever owns that
 // file. What this scenario still proves about the same honesty is
 // below: the plaque and the district both say a table was never pushed.
 const preRules = await page.request.get(`${URL_BASE}/api/routeros/${DEVICE}/rules`)
