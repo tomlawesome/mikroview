@@ -11,20 +11,36 @@
 // detector raising a real flag against a real host, the building going
 // red, and the mark disappearing again when the flag is judged.
 //
-// One lane of its own (`vlan-mark`), one host on it. A district draws at
-// most eight buildings (MAX_BUILDINGS), and this runs on an instance
-// shared with every other city scenario -- on a lane those scenarios
-// already fill, the host this one is about could be the one that does
-// not fit, and the check would fail for a reason that has nothing to do
-// with marks.
+// One address of its own, on a lane its neighbours already declare.
+// This runs on an instance shared with every other city scenario, and
+// both of that instance's caps have to be respected:
+//
+//   - a district draws at most eight buildings (MAX_BUILDINGS), so the
+//     host this scenario is about could be the one that does not fit and
+//     the check would fail for a reason that has nothing to do with
+//     marks. A real port scan is the busiest thing on any lane here --
+//     tens of events against the neighbours' handful -- and a zone
+//     orders its hosts busiest-first before that cut, so this one is
+//     always inside it. The address is used by no other scenario, which
+//     is what keeps other traffic from marking or unmarking it.
+//   - the lane row itself is capped at five, busiest first
+//     (`zonesState.zones`), over the whole shared event buffer. A lane
+//     of this scenario's own would sit in that row for the rest of the
+//     run carrying more events than any real lane, and evict one that a
+//     later scenario needs -- which is exactly what `vlan-mark` did to
+//     live-city-reach's `wlan-wsh` and live-city-walls's `vlan-guest`.
+//     So the scan stands on `vlan-iot`, the lane live-city-reach,
+//     live-city-stops and live-city-walls all declare with this same
+//     range and name, and no sixth lane is ever created.
 
 import { session, check, done, feedRaw, waitForFlag } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
-// Unused by every other scenario in this directory: its own lane, its
-// own address, so nothing else's traffic can mark or unmark it.
-const LANE = 'vlan-mark'
-const MARKED_IP = '10.0.77.44'
+// The lane is shared with this file's neighbours on purpose (see the
+// header); the address is not -- it is used by no other scenario, so
+// nothing else's traffic can mark or unmark this host.
+const LANE = 'vlan-iot'
+const MARKED_IP = '10.0.20.44'
 const PORTS = 25
 
 const { page, consoleErrors } = await session()
@@ -60,7 +76,7 @@ check(
     routerosVersion: '7.23.3 (stable)',
     records: [
       { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge-lan', comment: 'LAN' },
-      { address: '10.0.77.1/24', network: '10.0.77.0', interface: LANE, comment: 'Marks' },
+      { address: '10.0.20.1/24', network: '10.0.20.0', interface: LANE, comment: 'IoT' },
     ],
   })) === 200,
   'the lane the marked host stands on is pushed',
