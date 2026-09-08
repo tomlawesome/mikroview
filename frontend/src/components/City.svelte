@@ -2136,8 +2136,10 @@
     return `${lineTitle(b.name, peerName, lead?.direction ?? null)} line, ports and what each drew`
   }
 
-  /** The composer, shown only when asked for (round 49): the card on a
-   * refused line offers `draft the rule ▸`, and this is what that opens.
+  /** The composer, shown only when asked for (round 49): two cards
+   * offer `draft the rule ▸` and this is what either opens -- the
+   * refused line's own card, and the standing host's card, which is the
+   * one that is always there to be asked (#1035).
    * Reset on surfacing, so standing on the next building starts from the
    * drawing rather than from the last building's draft. */
   let composerOpen = $state(false)
@@ -2861,6 +2863,20 @@
       {#if hostsState.error}<div class="s alarm">{hostsState.error}</div>{/if}
 
       <div class="acts">
+        {#if standBuilding?.id === c.b.id && standReach?.topBlocked}
+          <!-- The composer's door (#1035). It used to hang on the line
+               card alone, which needs a road or a mark to hover; a
+               strand across a district pair that already ends in a drop
+               draws neither of its own, so on those hosts -- the ones
+               with most to draft -- nothing on screen opened the
+               composer at all. The host card is open the moment you are
+               standing on the building, so the door is here, on the
+               subject the composer is about. Only that host's card: the
+               composer drafts `standReach.topBlocked`, and offering it
+               on another building's card would draft a rule for a
+               building the reader is not looking at. -->
+          <button type="button" data-draft-rule onclick={() => (composerOpen = true)}>draft the rule ▸</button>
+        {/if}
         {#if authState.canEdit && c.h.key}
           {#if c.h.reason}
             <button type="button" class="hot" disabled={markBusy} onclick={unmarkHost}>unmark ▸</button>
