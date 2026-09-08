@@ -606,6 +606,7 @@ gate:scripts:
     - make live-check-scripts 2>&1 | tee gate-scripts.log
     - deploy/quiet-host/quiet-host-apply.test.sh
     - scripts/quiet-host.test.sh
+    - scripts/assert-ui-built.test.sh
   artifacts:
     when: always
     paths:

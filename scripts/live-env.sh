@@ -233,7 +233,34 @@ build() {
   # touch .gitkeep for the same reason the Makefile's frontend target
   # does: rm -rf takes the only tracked file in here with it, and a live
   # check should not leave the tree dirty (#353).
-  rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/ && touch web/dist/.gitkeep
+  #
+  # Each step says which one failed rather than being chained with `&&`.
+  # As one chain this was silent: on the `big` runner `rm` was refused
+  # ("cannot remove 'web/dist/.gitkeep': Permission denied", #1003), the
+  # rest of the chain never ran, and the build below still succeeded --
+  # an empty dist/ is a legal build, because API-only is a supported
+  # product and web/embed.go's .gitkeep exists precisely so `go build`
+  # works without a UI. The failure only surfaced 30 seconds later as a
+  # probe timing out looking for a login field, and three perf runs were
+  # measured against a binary with no app in it before anyone noticed.
+  if ! rm -rf web/dist; then
+    echo "live-env: could not clear web/dist -- the checkout is not writable by $(id -un) (uid $(id -u))." >&2
+    echo "live-env: $(ls -ld web/dist 2>/dev/null || echo 'web/dist is missing')" >&2
+    exit 1
+  fi
+  mkdir -p web/dist || { echo "live-env: could not create web/dist." >&2; exit 1; }
+  cp -r frontend/dist/. web/dist/ || { echo "live-env: could not copy frontend/dist into web/dist." >&2; exit 1; }
+  touch web/dist/.gitkeep || { echo "live-env: could not touch web/dist/.gitkeep." >&2; exit 1; }
+
+  # And then prove it, rather than trusting that the four steps above
+  # did what they said. This is what makes a UI-less live binary
+  # impossible rather than merely unlikely: every live check, every
+  # scenario and the perf probe alike is built through this function, so
+  # one assertion here covers all of them. web/embed.go's HasUI() answers
+  # the same question at runtime, but by then the binary exists and the
+  # answer arrives as a page of prose in a browser 30 seconds later.
+  scripts/assert-ui-built.sh web/dist || exit 1
+
   # -buildvcs=false: this binary is a throwaway built into a temp dir,
   # run by the scenarios and deleted, so nothing ever reads its VCS
   # stamp. Stamping it also fails outright in a linked git worktree --
