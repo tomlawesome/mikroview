@@ -160,6 +160,41 @@ broke a test for a reason that had nothing to do with the code — worth
 checking for similar defaults mismatches before assuming a GitLab-only
 failure is a real regression.
 
+### The docs-only lane
+
+#1038: `.gitlab-ci.yml` skips the jobs a prose change cannot break. Two
+lists at the top of that file, `*docs_only_paths` and `*code_paths`, and
+every gated job asks them in one order: a code path changed → run; else a
+docs path changed → never; else run. The last rung is the safety property.
+Skipping is opt-in against the docs list and is never a fallback, so a path
+in neither list, an empty diff, or a pipeline whose diff GitLab cannot
+compute runs the full set. Do not reorder those rungs, and do not try to
+express "docs only" in a single `changes:` — it asks whether *any* listed
+path changed, so one list alone would skip a merge request that touched
+`main.go` and `README.md` together.
+
+Four jobs stay outside the lane on purpose, and each says so in a comment
+where it is defined:
+
+- `test:go` — five tests read and assert on `docs/configuration.md`.
+- `test:build-checks` — runs the markdown anchor and link check.
+- `security:gitleaks` — a secret pastes into prose as easily as into code.
+- `gate:image` — near-free when `live-check.Dockerfile` is unchanged, and
+  three other jobs pull the tag it publishes.
+
+`policy:promotion-hop` and `sync:mirror-to-github` are outside it too:
+neither keys off the diff at all.
+
+`lint:changed-paths-guard` closes the one gap the ladder cannot: it runs
+unconditionally and goes red naming any changed path in neither list, with
+the instruction to add its tree to `*code_paths`. Its script reads the lists
+from `.gitlab-ci.yml`; `scripts/ci-changed-paths-guard.test.sh` is its test.
+
+Adding a job: it gets `<<: *dev_or_mr_code` (or `*dev_or_mr_code_frontend`)
+only if a documentation change genuinely cannot fail it. If in doubt use
+plain `*dev_or_mr` — running a job that did not need to run costs minutes;
+skipping one that did costs a green pipeline that tested nothing.
+
 ## The second host live-check runs on
 
 Live-check is slow and it holds the workstation while it runs, which is
@@ -221,23 +256,37 @@ gate failure) if another run already holds it (#809); run
 frees instead of refusing (#811). If the holder looks dead, follow the
 `ssh ... rm -r ~/gate-lock` hint the refusal prints.
 
-**The host's standing tenant is the `dev` loop.** `scripts/gate-dev-loop.sh`
-runs the gate on every new `dev` commit on the `gitlab` remote through the same script and
-lock, keeps each log as `~/projects/.gate-logs/mikroview/gate-<sha>.log`
-and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN` lines to `loop.log` there.
-It checks the loop's own commit out into `~/projects/.worktrees/mikroview/gate-dev`
-by default (`MV_GATE_WORKTREE`) -- a path under `~/projects/.worktrees` survives
-worktree clean-up; the previous default under `.claude/worktrees` did not, and
-the loop died silently for four hours before anyone noticed (#831). It
-takes the lock like any other run, so a manual
-`make live-check-remote` simply waits its turn -- or refuses, if the loop
-is mid-run; check `loop.log` for a `START` without an `END` before
-clearing a lock that looks stale. A run that dies before producing a
-result (a build failure, e.g. #861's IPv6 Docker Hub token fetch) prints
-`LOST` instead of `END`, is retried next tick, and leaves a
-`gate-<sha>.lost` file so the loss stays on record even if that commit is
-superseded before the retry lands; a later success for the same commit
-also prints `RECOVERED`.
+**The `dev` loop no longer lives here (#831).** This host started running
+GitLab CI as well once mikroview moved to GitLab-first delivery, so a
+`scripts/gate-dev-loop.sh` run landing here fought CI for the same CPU,
+and a scenario that died of that contention got recorded as `dev` being
+broken. The loop now runs on the workstation instead, driving
+`scripts/gate-local.sh` -- same container, same checks, no SSH -- and
+this host goes back to being what it was before: available for a
+deliberate manual `scripts/gate-remote.sh` run, e.g. while the
+workstation itself is busy with something else, taking the lock exactly
+as before.
+
+The loop keeps a log per *run*, not per commit --
+`~/projects/.gate-logs/mikroview/gate-<sha>-<n>.log`, `n` starting at 1 --
+because when `dev` sits still the loop re-runs the same commit instead of
+idling, up to 20 times, and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN`/
+`FLAKE` lines to `loop.log`. Repeat runs of one unmoving commit are what
+tell a flaky scenario (`FLAKE`, e.g. "failed 2 of 7 runs") from a real
+regression. `NEWFAIL`/`FIXED`/`SAME` now compare the scenarios that failed
+in *every* run of a commit, rather than one run's raw result, so a flake
+no longer reads as a regression. `CLEAN` keeps its old meaning: this run
+had nothing failing. It checks the loop's own commit out into
+`~/projects/.worktrees/mikroview/gate-dev` by default (`MV_GATE_WORKTREE`)
+-- a path under `~/projects/.worktrees` survives worktree clean-up; the
+previous default under `.claude/worktrees` did not, and the loop died
+silently for four hours before anyone noticed (#831 again -- the issue
+that also prompted this move). A run that dies before producing a result
+(a build failure, e.g. #861's IPv6 Docker Hub token fetch) prints `LOST`
+instead of `END`, is retried next tick without spending one of the 20
+repeats, and leaves a `gate-<sha>.lost` file so the loss stays on record
+even if that commit is superseded before the retry lands; a later success
+for the same commit also prints `RECOVERED`.
 
 `git push` rather than rsync or a clone, because authentication then
 happens from this side: nothing has to live over there. Only new objects
@@ -259,7 +308,9 @@ else. If a step seems to need one, the step is wrong.
 **Quiet host (#1003).** perf:promotion writes `/srv/quiet-host/hold` on
 this box before it measures; a root-owned unit sets `concurrent = 1` on
 the runner until the flag goes or expires, so no sibling job starts
-mid-measurement. This loop skips a poll while the flag exists. Install
+mid-measurement. The `dev` loop no longer runs on this host (see above)
+and no longer checks this flag -- a manual `scripts/gate-remote.sh` run
+here can still collide with a hold, same as any other job would. Install
 steps: `deploy/quiet-host/README.md`. Stuck with `concurrent = 1` and
 nothing measuring: `rm /srv/quiet-host/hold`.
 
@@ -489,20 +540,25 @@ opening a second host only turned the queue into stacked PRs.
 So:
 
 - **A PR merges on green CI plus review.** Nobody waits for a gate run.
-- **The gate runs on `dev` continuously** on the second host: each run
-  starts when the last ends, from a fresh `dev`, and its log is kept with
-  the SHA it ran. A failure that the previous run did not show is filed
-  the same session against the merges in that window and fixed forward
-  before the next promotion. A tripwire, not a turnstile.
+- **The gate runs on `dev` continuously** on the workstation, not the
+  second host (#831 -- the second host now also carries GitLab CI, so a
+  gate run landing there fought CI for the same CPU and a scenario lost
+  to that contention read as `dev` being broken): each run starts when
+  the last ends, from a fresh `dev`, or repeats the same commit up to 20
+  times when `dev` is not moving, and its log is kept with the SHA and
+  run number. A failure that repeat runs show as consistent, not a flake,
+  is filed the same session against the merges in that window and fixed
+  forward before the next promotion. A tripwire, not a turnstile.
 - **One clean run is mandatory before `dev -> preview`.** That is the
   only place it blocks.
 - **CI runs it too, sharded, since #1004** -- the `gate` stage, four
   slices of the browser phase in parallel plus the standalone scripts,
-  on every MR and `dev` pipeline. It is `allow_failure` until it has read
-  green on `dev` for a run of pipelines; flipping it to blocking is the
-  moment the second-host loop can retire, and that decision goes on
-  #1004. Until then the loop is the gate of record and a red CI gate is
-  read, not ignored: it is the same suite on the same host.
+  on every MR and `dev` pipeline, on the second host's runner. It is
+  `allow_failure` until it has read green on `dev` for a run of
+  pipelines; flipping it to blocking is the moment the loop can retire,
+  and that decision goes on #1004. Until then the loop is the gate of
+  record and a red CI gate is read, not ignored: it is the same suite,
+  just run on a different, deliberately quieter, host now.
 
 The cost is accepted: a regression can sit on `dev` for a run before it is
 seen, and work stacks on it meanwhile. `dev` is not released from.

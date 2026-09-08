@@ -29,5 +29,5 @@
 # that tracked examples never resemble working credentials. These two
 # entries exist because history cannot be rewritten to remove what was
 # already published, and the scan is deliberately over full history.
-6a358d734c31f50cbe539048a33ca7a5546976d7:recovery_prompt_test.go:generic-api-key:69
-6a358d734c31f50cbe539048a33ca7a5546976d7:recovery_prompt_test.go:generic-api-key:150
+92996eff44ad15621c33ae51d17f2328bc7a1752:recovery_prompt_test.go:generic-api-key:69
+92996eff44ad15621c33ae51d17f2328bc7a1752:recovery_prompt_test.go:generic-api-key:150
