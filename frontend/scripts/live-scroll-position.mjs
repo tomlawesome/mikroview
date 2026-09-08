@@ -81,8 +81,34 @@ if (await mint.count()) {
   const { devices } = await page.request.get(`${process.env.MV_URL}/api/devices`).then((r) => r.json())
   const withEvents = devices.find((d) => d.eventCount > 0) ?? devices[0]
   if (withEvents) {
-    await mint.locator('select').selectOption(withEvents.id)
-    await mint.locator('button.primary').click()
+    // #1041: driving this form is best-effort, because the wizard may
+    // already have minted without being asked. SetupWizard's step-4
+    // effect mints on entry when it knows exactly one router -- the
+    // picker only stands in for "entry" when there are several -- and
+    // the devices it reads are polled, so that can fire before this
+    // block runs or while it is running. Either way the button is
+    // disabled and reads "Creating…", and the whole .mint form is
+    // inside `{#if !token}`, so it is torn out of the DOM the moment
+    // the token lands. Insisting the click connects turned that
+    // success into a TimeoutError ("element is not enabled", then
+    // "element was detached"). So only drive the form while it is
+    // still present and idle, and swallow a control that goes away
+    // underneath: what this step actually wants is a minted token, and
+    // the pre.script wait below is the one thing that can tell.
+    const button = mint.locator('button.primary')
+    const idle = await button
+      .waitFor({ state: 'visible', timeout: 5000 })
+      .then(() => button.isEnabled())
+      .catch(() => false)
+    if (idle) {
+      try {
+        await mint.locator('select').selectOption(withEvents.id)
+        await button.click({ timeout: 10000 })
+      } catch {
+        // Disabled or detached between the check and the click: the
+        // mint got there first, which is the outcome, not a failure.
+      }
+    }
   }
 }
 await page.locator('.setup-wizard pre.script').waitFor({ state: 'visible' })
