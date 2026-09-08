@@ -46,8 +46,8 @@
   import { coverageState } from '../lib/coverage.svelte'
   import { edgeCoverage, type Coverage } from '../lib/coverageRule'
   import { composeCommand, reachComposeInput, refusingCommentFor } from '../lib/compose'
-  import type { ReachStrand } from '../lib/reach'
-  import { portsLine, reachFor, reachLineSummary } from '../lib/reach'
+  import type { ReachStrand, ReachSubject } from '../lib/reach'
+  import { hostSubject, portsLine, reachFor, reachLineSummary } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
   import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
@@ -346,8 +346,9 @@
     return `M ${700 + spread} 302 C ${700 + spread * 2.2} 380, ${x + (700 - x) * 0.25} 420, ${x} 480`
   }
 
-  // Click-through per the shaped surface: a zone lands on the live view
-  // filtered to its boundary; the whole map never navigates on a miss.
+  // The stream, filtered to a zone's own boundary -- what the reach's
+  // own `stream ▸` leads to when the subject is a zone. The whole map
+  // never navigates on a miss.
   function openZone(id: string) {
     appState.setFilter('interface', id)
     appState.view = 'live'
@@ -1152,13 +1153,14 @@
   // name where the pushed address table gave it one (round 49 titles
   // its boundary card `Guest → wan`, not `bridge4 → ether1`), the
   // interface where it did not.
+  function laneName(i: string): string {
+    if (i === zonesState.wanInterface) return 'the internet'
+    if (i === '') return 'any lane'
+    return zones.find((z) => z.id === i)?.name ?? i
+  }
+
   function pairName(from: string, to: string): string {
-    const name = (i: string) => {
-      if (i === zonesState.wanInterface) return 'the internet'
-      if (i === '') return 'any lane'
-      return zones.find((z) => z.id === i)?.name ?? i
-    }
-    return `${name(from)} → ${name(to)}`
+    return `${laneName(from)} → ${laneName(to)}`
   }
 
   function coverageLabel(e: PolicyEdge): string {
@@ -1912,7 +1914,22 @@
   // were. The map stays beneath, blurred, at the level you left
   // (round 24); zoom and pan sleep while descended (none exist yet, so
   // there is nothing to put to sleep -- recorded for when they do).
-  let reach = $state<{ zoneId: string; host: string; ip: string } | null>(null)
+  /** What the reach is centred on, and how the crumb and the centre
+   * node read it. `subject` is what lib/reach answers for (#1016: a
+   * host, a zone or a rib); `zoneId` is the lane the subject belongs to,
+   * for its ink and for the composer's own "from" side; `host`/`ip` are
+   * the two lines the centre node and the crumb print -- a name and an
+   * address for a host, a name and a subnet for a zone, and the pair's
+   * own name and nothing for a rib, which has no address of its own to
+   * state and is not given an invented one. */
+  let reach = $state<{ subject: ReachSubject; zoneId: string; host: string; ip: string } | null>(null)
+
+  /** Only a host's reach can draft a rule, filter the stream by an
+   * address or be handed across the slider to a city building: all
+   * three are about one machine. A zone's or a rib's reach draws and
+   * says everything else the same way. */
+  const reachIsHost = $derived(reach?.subject.kind === 'host')
+
 
   /** Standing on something.
    *
@@ -1925,7 +1942,48 @@
    * `savedS`/`savedCentre`). */
   function descend(zoneId: string, host: string, ip: string) {
     closeLineCard()
-    reach = { zoneId, host, ip }
+    reach = { subject: hostSubject(ip), zoneId, host, ip }
+  }
+
+  /** The two zones a ground-plan road joins, or null when it joins none
+   * -- which of the roads is a rib. layout.ts keys a pair road by
+   * `[a,b].sort().join('|')` over the district ids, and a district id is
+   * the zone's own boundary interface, so the ends are read from the id
+   * rather than guessed from where the road runs. A lane (`lane:<id>`)
+   * is one building's own street and a bridge leg is a crossing, so
+   * neither is a line between two zones. */
+  function ribEndsOf(r: { id: string; lane?: boolean }): [string, string] | null {
+    if (r.lane) return null
+    const bar = r.id.indexOf('|')
+    if (bar <= 0) return null
+    const a = r.id.slice(0, bar)
+    const b = r.id.slice(bar + 1)
+    if (!b) return null
+    const isDistrict = (id: string) => ground.districts.some((d) => d.id === id)
+    return isDistrict(a) && isDistrict(b) ? [a, b] : null
+  }
+
+  /** A zone's own reach (#1016): the plate is the subject, and its
+   * boundary interface is the side lib/reach matches against. */
+  function descendZone(z: { id: string; name: string; cidr: string | null }) {
+    closeLineCard()
+    reach = { subject: { kind: 'zone', iface: z.id }, zoneId: z.id, host: z.name, ip: z.cidr ?? '' }
+  }
+
+  /** A rib's own reach (#1016): the line between two zones. Direction is
+   * read from `a`, so the rib is opened with the end the reader clicked
+   * from first -- `from → to` the way the drawn half already runs. */
+  function descendRib(a: string, b: string) {
+    // An event can name only one of its two interfaces, and reality.ts
+    // keys that pair with an empty end. There is no line between two
+    // zones there, so there is no rib to stand on: the stream, filtered
+    // to whatever the pair does name, is the honest door instead.
+    if (!a || !b) {
+      openPair(a, b, [])
+      return
+    }
+    closeLineCard()
+    reach = { subject: { kind: 'rib', a, b }, zoneId: a, host: pairName(a, b), ip: '' }
   }
 
   function surface() {
@@ -2035,7 +2093,7 @@
     }
   }
 
-  const reachSummary = $derived(reach ? reachFor(reach.ip, zonesState.wanInterface, appState.events) : null)
+  const reachSummary = $derived(reach ? reachFor(reach.subject, zonesState.wanInterface, appState.events) : null)
 
   /** The crumb's `refused N`: distinct counterparts that were refused,
    * counted the same way `reachFor` counts `reaches` and `reached by`, so
@@ -2176,6 +2234,11 @@
     return reachSummary!.strands.filter((x) => x.counterpart === s.counterpart).indexOf(s)
   }
 
+  /** The reach's own side of a line, for the sentences that read
+   * `subject → counterpart`. A rib is already a pair, so it reads from
+   * its near end rather than printing `LAN → Servers → Servers`. */
+  const reachSideName = $derived(reach ? (reach.subject.kind === 'rib' ? laneName(reach.subject.a) : reach.host) : '')
+
   const reachZoneInk = $derived(reach ? LANE_INKS[Math.max(0, zoneIndex(reach.zoneId)) % LANE_INKS.length] : 'var(--accent)')
 
   /* ---------------- the line card (#1016, round 49) ---------------- */
@@ -2254,13 +2317,22 @@
     return ports.length > 0 ? ports.join(' ') : 'this line'
   })
 
-  /** The stream, filtered to the centred host -- the same door the host
-   * card already offers, from the card that named the line. */
+  /** The stream, filtered to whatever the reach is centred on -- the
+   * same door the host card already offers, from the card that named
+   * the line, and asked of the subject rather than always of an address
+   * a zone and a rib do not have. */
   function openLineStream() {
     if (!reach) return
-    appState.resetFilters()
-    appState.setFilter('srcQuery', reach.ip)
-    appState.view = 'live'
+    const subj = reach.subject
+    if (subj.kind === 'host') {
+      appState.resetFilters()
+      appState.setFilter('srcQuery', subj.ip)
+      appState.view = 'live'
+    } else if (subj.kind === 'zone') {
+      openZone(subj.iface)
+    } else {
+      openPair(subj.a, subj.b, [])
+    }
     closeLineCard()
   }
 
@@ -2347,7 +2419,9 @@
   }
 
   const siblings = $derived.by(() => {
-    if (!reach) return []
+    // A rib stands between two lanes rather than in one, so it draws no
+    // lane-mates: the hosts that use it are on its own line's card.
+    if (!reach || reach.subject.kind === 'rib') return []
     const z = zones.find((zz) => zz.id === reach!.zoneId)
     return (z?.hosts ?? []).filter((h) => h.ip !== reach!.ip).slice(0, 2)
   })
@@ -2575,7 +2649,7 @@
 
   function crossAltitudeCentre(intoCity: boolean) {
     if (intoCity) {
-      if (reach) {
+      if (reach && reachIsHost) {
         // Handed to City's own pending-descend effect (#868's own
         // consumer, shared with the flags "where" link) rather than
         // duplicated here: it already resolves an ip to a building, or
@@ -3220,7 +3294,10 @@
     <div class="crumb">
       <div class="path">
         <span class="here">{reach.host}</span>
-        <span class="ip">{reach.ip}</span>
+        <!-- A host's address, a zone's pushed subnet, and nothing at all
+             for a rib: it has neither, and an invented one would be the
+             app stating a fact it does not have (#1016). -->
+        {#if reach.ip}<span class="ip">{reach.ip}</span>{/if}
         {#if reachSummary}
           <i class="bar"></i>
           <span>reaches <b>{reachSummary.reaches}</b></span>
@@ -3250,7 +3327,7 @@
           {@const hit = bp.portHits[0]}
           <div class="sub">
             the busiest pathway, weighted toward now:
-            {bp.direction === 'out' ? `${reach.host} → ${peer}` : `${peer} → ${reach.host}`}{hit ? ` · ${hit.proto}/${hit.port}` : ''}
+            {bp.direction === 'out' ? `${reachSideName} → ${peer}` : `${peer} → ${reachSideName}`}{hit ? ` · ${hit.proto}/${hit.port}` : ''}
             · {#if bp.outcome === 'blocked'}<b class="alarm">refused</b>{:else}accepted{/if}
           </div>
         {/if}
@@ -3628,12 +3705,16 @@
               class:on={offCard?.key === d.r.key}
               role="button"
               tabindex="0"
-              aria-label="Open the stream filtered to this pair: {realityLabel(d.r)}"
-              onclick={() => openPair(d.r.from, d.r.to, d.r.topPorts)}
+              aria-label="{realityLabel(d.r)} — open this rib's reach"
+              onclick={(e) => {
+                e.stopPropagation()
+                descendRib(d.r.from, d.r.to)
+              }}
               onkeydown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
-                  openPair(d.r.from, d.r.to, d.r.topPorts)
+                  e.stopPropagation()
+                  descendRib(d.r.from, d.r.to)
                 }
               }}
               onpointerenter={nb ? () => openOffCard(d.r.key) : undefined}
@@ -3700,12 +3781,16 @@
               class="detail"
               role="button"
               tabindex="0"
-              aria-label="Open the stream filtered to this pair: {realityLabel(d.r)}"
-              onclick={() => openPair(d.r.from, d.r.to, d.r.topPorts)}
+              aria-label="{realityLabel(d.r)} — open this rib's reach"
+              onclick={(e) => {
+                e.stopPropagation()
+                descendRib(d.r.from, d.r.to)
+              }}
               onkeydown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
-                  openPair(d.r.from, d.r.to, d.r.topPorts)
+                  e.stopPropagation()
+                  descendRib(d.r.from, d.r.to)
                 }
               }}
             >
@@ -3895,12 +3980,19 @@
           role="button"
           tabindex="0"
           data-zone={z.id}
-          aria-label="Open the stream filtered to {z.name}"
-          onclick={() => openZone(z.id)}
+          aria-label="{z.name} — open its reach"
+          onclick={(e) => {
+            // Clicking off anywhere surfaces, so a door into the reach
+            // has to stop its own click reaching that -- the same guard
+            // the host dots and the router carry.
+            e.stopPropagation()
+            descendZone(z)
+          }}
           onkeydown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
-              openZone(z.id)
+              e.stopPropagation()
+              descendZone(z)
             }
           }}
         >
@@ -4233,7 +4325,37 @@
           <line class="gf-belong" x1={R2(b.x1)} y1={R2(b.y1)} x2={R2(b.x2)} y2={R2(b.y2)} />
         {/each}
         {#each ground.roads as r (r.id)}
-          <path class="gf-road gf-road-{r.k}" d={'M' + r.pts.map((p) => `${R2(FX(flatCam, p[0]))} ${R2(FY(flatCam, p[1]))}`).join(' L')} />
+          {@const d = 'M' + r.pts.map((p) => `${R2(FX(flatCam, p[0]))} ${R2(FY(flatCam, p[1]))}`).join(' L')}
+          {@const rib = ribEndsOf(r)}
+          {#if rib}
+            <!-- Clicking a rib opens its reach, the same as clicking one
+                 on the lens above (#1016). Nothing is written on the
+                 road itself: what it carried is on the card its own line
+                 opens, and round 49 put no words on a road. -->
+            <g
+              class="gf-road-g"
+              role="button"
+              tabindex="0"
+              aria-label="{pairName(rib[0], rib[1])} — open this rib's reach"
+              onclick={(e) => {
+                e.stopPropagation()
+                descendRib(rib[0], rib[1])
+              }}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  descendRib(rib[0], rib[1])
+                }
+              }}
+            >
+              <title>{pairName(rib[0], rib[1])}</title>
+              <path class="gf-road-hit" {d} />
+              <path class="gf-road gf-road-{r.k}" {d} />
+            </g>
+          {:else}
+            <path class="gf-road gf-road-{r.k}" {d} />
+          {/if}
         {/each}
         {#each ground.nodes as n (n.id)}
           {@const nx = FX(flatCam, n.u)}
@@ -4298,12 +4420,16 @@
             role="button"
             tabindex="0"
             data-zone={fc.d.id}
-            aria-label="Open the stream filtered to {fc.d.name}"
-            onclick={() => openZone(fc.d.id)}
+            aria-label="{fc.d.name} — open its reach"
+            onclick={(e) => {
+              e.stopPropagation()
+              descendZone(fc.d)
+            }}
             onkeydown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
-                openZone(fc.d.id)
+                e.stopPropagation()
+                descendZone(fc.d)
               }
             }}
           >
@@ -4406,7 +4532,7 @@
             class:on={lineCard?.counterpart === s.counterpart}
             role="button"
             tabindex="0"
-            aria-label="{reach.host} {s.direction === 'out' ? '→' : '←'} {counterpartName(s.counterpart)} — the ports on this line"
+            aria-label="{reachSideName} {s.direction === 'out' ? '→' : '←'} {counterpartName(s.counterpart)} — the ports on this line"
             onpointerenter={() => openLineCard(s.counterpart)}
             onpointerleave={releaseLineCard}
             onfocus={() => openLineCard(s.counterpart)}
@@ -4425,7 +4551,7 @@
               }
             }}
           >
-            <title>{reach.host} {s.direction === 'out' ? '→' : '←'} {counterpartName(s.counterpart)}</title>
+            <title>{reachSideName} {s.direction === 'out' ? '→' : '←'} {counterpartName(s.counterpart)}</title>
             <!-- A wide invisible line, so the pointer can find a strand
                  drawn 1.3px thin without having to trace it exactly. -->
             <path class="strand-hit" {d} />
@@ -4586,13 +4712,13 @@
       bind:this={lineCardEl}
       role="dialog"
       tabindex="-1"
-      aria-label="{reach.host} → {counterpartName(lineCard.counterpart)}: the ports on this line"
+      aria-label="{reachSideName} → {counterpartName(lineCard.counterpart)}: the ports on this line"
       onpointerenter={lineGrace.hold}
       onpointerleave={releaseLineCard}
     >
       <div class="t">
         <span class="n"
-          >{reach.host} → {counterpartName(lineCard.counterpart)}{#if lineCardCidr}<small>{lineCardCidr}</small>{/if}</span
+          >{reachSideName} → {counterpartName(lineCard.counterpart)}{#if lineCardCidr}<small>{lineCardCidr}</small>{/if}</span
         >
         <button
           class="pin"
@@ -4662,10 +4788,13 @@
       {/each}
 
       <div class="acts">
-        {#if lineCardRefused}
+        {#if lineCardRefused && reachIsHost}
           <!-- The composer's door, which the removed strand pill used to
                be. It drafts and never runs, the same invariant as
-               before: mikroview observes, it never connects. -->
+               before: mikroview observes, it never connects.
+               Only on a host's reach: the line it prints names one
+               machine as its source, and a zone's or a rib's refused
+               line is a statement about many (#1016). -->
           <button
             class="hot"
             data-draft-rule
@@ -7131,6 +7260,25 @@
 
   .gf-road-x {
     stroke: var(--alarm);
+  }
+
+  /* A road drawn 1.5 wide is not a pointer target, so every rib carries
+     a wide invisible line for the pointer to find -- the same
+     `edge-hit`/`strand-hit` trick the lens and the membrane already
+     use. */
+  .gf-road-g {
+    cursor: pointer;
+  }
+
+  .gf-road-hit {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 12;
+  }
+
+  .gf-road-g:hover .gf-road,
+  .gf-road-g:focus-visible .gf-road {
+    stroke-width: 2.6;
   }
 
   .gf-node-g {

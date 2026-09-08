@@ -159,7 +159,7 @@ const READ_SURFACE = ({ cardSel, titleSel, surface }) => {
     const groups = Array.from(document.querySelectorAll('[data-card="topography"] g.zone[aria-label], [data-card="topography"] g.gf-card[aria-label]'))
     searched = groups.map((g) => g.getAttribute('class') + ' :: ' + g.getAttribute('aria-label'))
     for (const name of names) {
-      for (const g of groups.filter((el) => el.getAttribute('aria-label') === 'Open the stream filtered to ' + name)) {
+      for (const g of groups.filter((el) => el.getAttribute('aria-label') === name + ' — open its reach')) {
         // The plate itself, not the whole group: a lane group also holds
         // the host dots hanging below its card.
         const plate = g.querySelector('rect.isl, rect.gf-plate')
