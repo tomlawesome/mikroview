@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { RECENCY_HALF_LIFE_MS, portsLine, reachFor, reachLineSummary } from './reach'
+import { RECENCY_HALF_LIFE_MS, hostSubject, portsLine, reachFor, reachLineSummary } from './reach'
 import type { ClientEvent } from './types'
 
 const NOW = 1_780_000_000_000
@@ -121,6 +121,155 @@ describe('refusedBy names the latest rule, not the first (#967)', () => {
 
     const { strands } = reachFor(HOST, null, events, NOW)
     expect(strands[0].refusedBy).toBeUndefined()
+  })
+})
+
+describe('a reach is centred on a host, a zone or a rib (#1016)', () => {
+  // The owner's ratified reading (2026-09-08): a reach answers "where
+  // does this thing connect to", and the thing is whatever was clicked.
+  // The events are the same either way -- only what counts as "this
+  // side" changes.
+
+  /** in:LAN out:SRV -- LAN1 asking SRV1 for :443. */
+  const lanToSrv = (over: Partial<ClientEvent> = {}) =>
+    event({
+      srcIp: HOST,
+      dstIp: '10.0.9.9',
+      srcHostName: 'lan1',
+      dstHostName: 'srv1',
+      inInterface: 'bridge-lan',
+      outInterface: 'vlan-srv',
+      protocol: 'tcp',
+      dstPort: 443,
+      ...over,
+    })
+
+  /** in:SRV out:LAN -- the same pair, answering back. */
+  const srvToLan = (over: Partial<ClientEvent> = {}) =>
+    event({
+      srcIp: '10.0.9.9',
+      dstIp: HOST,
+      srcHostName: 'srv1',
+      dstHostName: 'lan1',
+      inInterface: 'vlan-srv',
+      outInterface: 'bridge-lan',
+      protocol: 'tcp',
+      dstPort: 12345,
+      ...over,
+    })
+
+  it('centres on a host exactly as it always has', () => {
+    // hostSubject and a bare address are the same call, so no existing
+    // call site had to change to keep the reading it already had.
+    const events = [lanToSrv(), srvToLan()]
+
+    const bare = reachFor(HOST, null, events, NOW)
+    const subject = reachFor(hostSubject(HOST), null, events, NOW)
+
+    expect(subject).toEqual(bare)
+    expect(bare.strands.map((s) => [s.counterpart, s.direction])).toEqual([
+      ['vlan-srv', 'out'],
+      ['vlan-srv', 'in'],
+    ])
+    expect([bare.reaches, bare.reachedBy]).toEqual([1, 1])
+  })
+
+  it("a zone's own side is its interface, and the far side is the other one", () => {
+    // Standing on the LAN: traffic that entered through bridge-lan left
+    // the zone ('out'), traffic that left through it arrived ('in').
+    const { strands, reaches, reachedBy } = reachFor({ kind: 'zone', iface: 'bridge-lan' }, null, [lanToSrv(), srvToLan()], NOW)
+
+    expect(strands.map((s) => [s.counterpart, s.direction])).toEqual([
+      ['vlan-srv', 'out'],
+      ['vlan-srv', 'in'],
+    ])
+    expect([reaches, reachedBy]).toEqual([1, 1])
+    // The peers are the far-side hosts, never the zone's own.
+    expect(strands.find((s) => s.direction === 'out')?.peers).toEqual(['srv1'])
+    expect(strands.find((s) => s.direction === 'in')?.peers).toEqual(['srv1'])
+  })
+
+  it("spells a zone's WAN counterpart 'internet', like a host's", () => {
+    const { strands } = reachFor({ kind: 'zone', iface: 'bridge-lan' }, 'ether1', [lanToSrv({ outInterface: 'ether1' })], NOW)
+
+    expect(strands.map((s) => s.counterpart)).toEqual(['internet'])
+  })
+
+  it('skips traffic that never left the zone', () => {
+    // In and out through the same interface crossed no boundary, so it
+    // is not part of the zone's reach: counting it would invent a
+    // pathway from the zone to itself.
+    const events = [lanToSrv({ outInterface: 'bridge-lan', dstIp: '10.0.1.7', dstHostName: 'lan2' }), lanToSrv()]
+
+    const { strands } = reachFor({ kind: 'zone', iface: 'bridge-lan' }, null, events, NOW)
+
+    expect(strands.map((s) => s.counterpart)).toEqual(['vlan-srv'])
+    expect(strands[0].count).toBe(1)
+  })
+
+  it('says nothing about a zone no event names', () => {
+    const { strands, busiest } = reachFor({ kind: 'zone', iface: 'vlan-guest' }, null, [lanToSrv(), srvToLan()], NOW)
+
+    expect(strands).toEqual([])
+    expect(busiest).toBeNull()
+  })
+
+  it('a rib matches both directions between its two ends, read from a', () => {
+    const { strands, reaches, reachedBy } = reachFor({ kind: 'rib', a: 'bridge-lan', b: 'vlan-srv' }, null, [lanToSrv(), srvToLan()], NOW)
+
+    // One line, both ways: the counterpart is the far end whichever way
+    // the packet ran, so the two strands merge into one drawn line.
+    expect(strands.map((s) => [s.counterpart, s.direction])).toEqual([
+      ['vlan-srv', 'out'],
+      ['vlan-srv', 'in'],
+    ])
+    expect([reaches, reachedBy]).toEqual([1, 1])
+  })
+
+  it("reads a rib's direction the other way round when a and b swap", () => {
+    const events = [lanToSrv(), srvToLan()]
+
+    const one = reachFor({ kind: 'rib', a: 'bridge-lan', b: 'vlan-srv' }, null, events, NOW)
+    const other = reachFor({ kind: 'rib', a: 'vlan-srv', b: 'bridge-lan' }, null, events, NOW)
+
+    expect(one.strands.find((s) => s.direction === 'out')?.ports).toEqual([443])
+    expect(other.strands.find((s) => s.direction === 'out')?.ports).toEqual([12345])
+  })
+
+  it('lists the hosts at both ends of a rib, so the surface can light them', () => {
+    const { strands } = reachFor({ kind: 'rib', a: 'bridge-lan', b: 'vlan-srv' }, null, [lanToSrv()], NOW)
+
+    expect(strands[0].peers.sort()).toEqual(['lan1', 'srv1'])
+    expect(strands[0].peerAddrs.sort()).toEqual(['10.0.9.9', HOST])
+  })
+
+  it('ignores traffic that does not cross between the rib\'s own ends', () => {
+    const events = [lanToSrv(), lanToSrv({ outInterface: 'vlan-guest', dstIp: '10.0.8.8', dstHostName: 'guest1' })]
+
+    const { strands } = reachFor({ kind: 'rib', a: 'bridge-lan', b: 'vlan-srv' }, null, events, NOW)
+
+    expect(strands.map((s) => s.counterpart)).toEqual(['vlan-srv'])
+    expect(strands[0].count).toBe(1)
+  })
+
+  it("a rib's card is its line list, both directions merged", () => {
+    // What a rib can say that the drawing cannot: which ports were
+    // attempted across it, and whether each landed.
+    const events = [
+      lanToSrv(),
+      lanToSrv({ id: 2, action: 'drop', ruleLabel: 'block-ssh', dstPort: 22 }),
+      srvToLan({ id: 3, dstPort: 443 }),
+    ]
+
+    const { strands } = reachFor({ kind: 'rib', a: 'bridge-lan', b: 'vlan-srv' }, null, events, NOW)
+    const line = reachLineSummary(strands, 'vlan-srv')
+
+    expect(line.ports).toEqual([
+      { port: 443, proto: 'tcp', accepted: 2, dropped: 0 },
+      { port: 22, proto: 'tcp', accepted: 0, dropped: 1 },
+    ])
+    expect([line.accepted, line.dropped]).toEqual([2, 1])
+    expect(line.refusedBy).toBe('block-ssh')
   })
 })
 
