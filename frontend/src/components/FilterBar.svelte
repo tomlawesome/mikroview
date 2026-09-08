@@ -64,6 +64,18 @@
   // must be independently togglable.
   let expanded = $state(false)
 
+  // #710 round-30 fidelity: the column chooser's own disclosure. Round
+  // 30 draws filters, the column chooser, clear and fold on one strip
+  // (stream-bar-out.png) -- the build instead gave `.columns-field` a
+  // `flex-basis: 100%` that forced it, and everything after it, onto a
+  // row of its own. Fifteen columns minus the two pinned ones is too
+  // many checkboxes to add to that same one-line strip honestly, so
+  // this follows the strip's own "fold ▸" idiom one level deeper: a
+  // quiet toggle takes the checkboxes' place in the row, and they open
+  // in a panel that floats over the strip rather than pushing it onto a
+  // second line.
+  let columnsOpen = $state(false)
+
   // DOM refs for the outside-click close below: a click only counts as
   // "away from the box" once it lands outside both the trigger
   // (`.fbox`) and the strip it opens (`.bar.thin`), so picking a value
@@ -74,9 +86,22 @@
   // markup), so it -- not the box div, which has no tabstop -- is where
   // keyboard focus goes back to on close.
   let hintEl: HTMLInputElement | undefined = $state()
+  // Same "outside click closes it" shape as fboxEl/barEl above, one
+  // level down: a click inside the open columns panel picks a checkbox
+  // rather than dismissing it.
+  let columnsMenuEl: HTMLDivElement | undefined = $state()
+  let columnsTriggerEl: HTMLButtonElement | undefined = $state()
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key !== 'Escape') return
+    // Closes its own popover first, same as any nested disclosure --
+    // Escape while choosing columns closes the column panel, not the
+    // whole filter strip underneath it.
+    if (columnsOpen) {
+      columnsOpen = false
+      columnsTriggerEl?.focus()
+      return
+    }
     if (drawerOpen) drawerOpen = false
     if (expanded) {
       expanded = false
@@ -107,6 +132,7 @@
   function onWindowClick(e: MouseEvent) {
     if (viewportState.isMobile || !expanded) return
     const path = e.composedPath()
+    if (columnsOpen && columnsMenuEl && !path.includes(columnsMenuEl)) columnsOpen = false
     if ((fboxEl && path.includes(fboxEl)) || (barEl && path.includes(barEl))) return
     expanded = false
   }
@@ -532,30 +558,67 @@
          is every column on, and this only ever narrows from there. Time
          and Rule are pinned -- no checkbox for either, since neither is
          ever offered as a toggle. -->
-    <div class="fb-field columns-field">
-      <span class="fb-label">Columns</span>
-      <div class="col-toggles" role="group" aria-label="Choose which columns the stream shows">
-        {#each COLUMNS as col (col.key)}
-          {#if !PINNED_COLUMNS.has(col.key)}
-            <!-- The visible text reads "{label} column", not the bare
-                 column name -- several of these (Device, Chain, Proto,
-                 Port, Interface) are also the exact visible name of an
-                 existing field elsewhere in this same strip, and giving a
-                 checkbox and an unrelated select the identical accessible
-                 name would leave a screen-reader or voice-control user
-                 unable to tell them apart. -->
-            <label class="col-toggle">
-              <input
-                type="checkbox"
-                checked={columnState.isColumnVisible(col.key)}
-                onchange={() => columnState.toggleColumn(col.key)}
-              />
-              {col.label} column
-            </label>
-          {/if}
-        {/each}
+    {#snippet columnCheckboxes()}
+      {#each COLUMNS as col (col.key)}
+        {#if !PINNED_COLUMNS.has(col.key)}
+          <!-- The visible text reads "{label} column", not the bare
+               column name -- several of these (Device, Chain, Proto,
+               Port, Interface) are also the exact visible name of an
+               existing field elsewhere in this same strip, and giving a
+               checkbox and an unrelated select the identical accessible
+               name would leave a screen-reader or voice-control user
+               unable to tell them apart. -->
+          <label class="col-toggle">
+            <input
+              type="checkbox"
+              checked={columnState.isColumnVisible(col.key)}
+              onchange={() => columnState.toggleColumn(col.key)}
+            />
+            {col.label} column
+          </label>
+        {/if}
+      {/each}
+    {/snippet}
+
+    {#if viewportState.isMobile}
+      <!-- The mobile drawer is already a vertical stack with room to
+           spare (#85's 44px-row convention below), so it keeps the
+           always-open list -- the one-strip problem this fixes is a
+           desktop-thin-bar problem only. -->
+      <div class="fb-field columns-field">
+        <span class="fb-label">Columns</span>
+        <div class="col-toggles" role="group" aria-label="Choose which columns the stream shows">
+          {@render columnCheckboxes()}
+        </div>
       </div>
-    </div>
+    {:else}
+      <!-- Desktop: folded behind a toggle, "fold ▸"'s own idiom one
+           level deeper (see columnsOpen's doc comment). The panel floats
+           over the strip instead of joining its flow, so opening it
+           never pushes clear/fold (or anything else) onto another
+           line. -->
+      <div class="columns-menu" bind:this={columnsMenuEl}>
+        <button
+          type="button"
+          class="tf-columns"
+          class:on={columnsOpen}
+          bind:this={columnsTriggerEl}
+          onclick={(e) => {
+            e.stopPropagation()
+            columnsOpen = !columnsOpen
+          }}
+          aria-haspopup="true"
+          aria-expanded={columnsOpen}
+          aria-label="Choose which columns the stream shows"
+          title="Choose which columns the stream shows">columns ▸</button
+        >
+        {#if columnsOpen}
+          <div class="col-toggles col-panel" role="group" aria-label="Choose which columns the stream shows">
+            {@render columnCheckboxes()}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     {#if appState.hasActiveFilters && !viewportState.isMobile}
       <button class="tf-clear" onclick={() => appState.resetFilters()} aria-label="Clear all filters" title="Clear every term">× clear</button>
@@ -586,6 +649,7 @@
         class="tf-fold"
         onclick={() => {
           expanded = false
+          columnsOpen = false
           hintEl?.focus()
         }}
         aria-label="Fold filters back into the box"
@@ -1212,10 +1276,10 @@
     margin-left: 0;
   }
 
-  /* #729: the column chooser. Same fb-field/fb-label shape every other
-     control in this strip already uses -- a row of checkboxes, not a new
-     kind of control, since round 30 allows no new apparatus beyond the
-     control itself. */
+  /* #729: the column chooser, mobile drawer only -- the desktop thin bar
+     uses .columns-menu/.tf-columns below instead. Same fb-field/fb-label
+     shape every other control in the drawer already uses -- a row of
+     checkboxes, not a new kind of control. */
   .columns-field {
     flex-basis: 100%;
   }
@@ -1224,6 +1288,61 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px 14px;
+  }
+
+  /* #710 round-30 fidelity: the desktop toggle. Sits in the strip's
+     normal flow, same as any other .fb-field, so it rides ahead of
+     clear/fold's own margin-left:auto exactly where the always-open
+     checkbox row used to sit -- the fix is folding the checkboxes away,
+     not moving where they live. */
+  .columns-menu {
+    position: relative;
+    align-self: center;
+  }
+
+  .tf-columns {
+    background: none;
+    border: none;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .tf-columns:hover,
+  .tf-columns.on {
+    color: var(--accent);
+  }
+
+  .tf-columns:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* Floats over the strip (the account menu's dress, same as
+     FilterPresetsMenu's .fpmenu) instead of joining its flex flow, so
+     opening it never pushes clear/fold or anything after it onto
+     another line -- the one-strip fix holds whether the panel is open
+     or closed. */
+  .col-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    /* Right-anchored, not left: the trigger sits near the strip's own
+       right end (clear/fold ride just after it), so a panel opening
+       rightward from there would run past the viewport edge -- caught
+       on a live instance opening exactly that way (#710). Opening
+       leftward keeps it over the strip that's already on screen. */
+    right: 0;
+    z-index: 40;
+    width: 320px;
+    max-width: 80vw;
+    padding: 10px 14px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    cursor: default;
   }
 
   .col-toggle {
