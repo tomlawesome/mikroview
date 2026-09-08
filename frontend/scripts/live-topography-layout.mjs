@@ -85,11 +85,11 @@ LANES.forEach((l, li) => {
 })
 check((await push({ kind: 'dhcp-lease', page: 1, pages: 1, records: leases })) === 200, 'the lease table names the hosts')
 
-// A rule table too: without one the coverage caption on each card and
-// the coverage lens both stay in their waiting-for-data state, so the
-// card's two-line caption and the survey dot's DARK mark would never be
-// exercised. Guest is deliberately left with no outbound log rule, so
-// one lane really is dark.
+// A rule table too: without one the coverage material stays in its
+// waiting-for-data state and no boundary is ever drawn dark, so the
+// labels this scenario measures for collisions would never be there to
+// collide. Guest is deliberately left with no outbound log rule, so one
+// lane really is dark.
 check(
   (await push({
     kind: 'filter-rule',
@@ -332,33 +332,36 @@ for (const width of WIDTHS) {
   await slider.fill('2')
   await new Promise((r) => setTimeout(r, 600))
 
-  // The other two lenses draw their own labels, and their own plates
-  // have to clear each other the same way.
-  for (const lensName of ['policy', 'coverage']) {
-    await page.click(`[data-card="topography"] .wlens2 >> text=${lensName}`)
-    await new Promise((r) => setTimeout(r, 700))
-    const lm = await measure()
-    let lc = 0
-    for (let a = 0; a < lm.plates.length; a++) {
-      for (let b = a + 1; b < lm.plates.length; b++) {
-        const p1 = lm.plates[a]
-        const p2 = lm.plates[b]
-        if (p1.x < p2.right - 1 && p2.x < p1.right - 1 && p1.y < p2.bottom - 1 && p2.y < p1.bottom - 1) lc++
-      }
+  // Round 49 (#1016) deleted the lens row, and `.wlens2` with it. This
+  // block used to switch to the coverage lens and repeat the same
+  // overlap measurements against the labels that lens drew on its own.
+  // Coverage is now always on and its material is drawn under the one
+  // picture measured just above, so those labels are already in `lm`
+  // -- there is no second surface left to switch to and measure.
+  //
+  // Kept as one measurement rather than deleted outright, because the
+  // fact it defended (a plate must clear its neighbours and must not
+  // bury a label under an island) still holds for the coverage plates:
+  // they are simply part of the map the loop above already walks.
+  const lm = await measure()
+  let lc = 0
+  for (let a = 0; a < lm.plates.length; a++) {
+    for (let b = a + 1; b < lm.plates.length; b++) {
+      const p1 = lm.plates[a]
+      const p2 = lm.plates[b]
+      if (p1.x < p2.right - 1 && p2.x < p1.right - 1 && p1.y < p2.bottom - 1 && p2.y < p1.bottom - 1) lc++
     }
-    check(lc === 0, `${at}: the ${lensName} lens's plates clear each other (${lm.plates.length} plates, ${lc} overlapping pairs)`)
-    let lb = 0
-    for (const p1 of lm.plates) {
-      for (const isl of lm.islands) {
-        if (p1.x < isl.right - 1 && isl.x < p1.right - 1 && p1.y < isl.bottom - 1 && isl.y < p1.bottom - 1) lb++
-      }
-    }
-    check(lb === 0, `${at}: the ${lensName} lens buries no label under an island (${lb})`)
-    check(!lm.texts.some((t) => /pairs? not drawn/.test(t)), `${at}: the ${lensName} lens draws no "pairs not drawn" caption`)
-    if (width === 1600) await page.screenshot({ path: `${OUT}/${lensName}-${width}.png` })
   }
-  await page.click(`[data-card="topography"] .wlens2 >> text=traffic`)
-  await new Promise((r) => setTimeout(r, 400))
+  check(lc === 0, `${at}: the coverage material's plates clear each other (${lm.plates.length} plates, ${lc} overlapping pairs)`)
+  let lb = 0
+  for (const p1 of lm.plates) {
+    for (const isl of lm.islands) {
+      if (p1.x < isl.right - 1 && isl.x < p1.right - 1 && p1.y < isl.bottom - 1 && isl.y < p1.bottom - 1) lb++
+    }
+  }
+  check(lb === 0, `${at}: no coverage label is buried under an island (${lb})`)
+  check(!lm.texts.some((t) => /pairs? not drawn/.test(t)), `${at}: the map draws no "pairs not drawn" caption`)
+  if (width === 1600) await page.screenshot({ path: `${OUT}/coverage-${width}.png` })
 }
 
 // #972: leave the shared instance as found -- the two watches this

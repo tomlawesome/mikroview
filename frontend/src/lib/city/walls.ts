@@ -10,6 +10,8 @@
 // terms (0..1 along a face), so City.svelte only ever turns a Cam and a
 // district into paths -- no SVG string built in the component itself.
 import { R2, X, Y, ZK, type Cam, type Pt } from './project'
+import { worseCoverage } from './gates'
+import type { Coverage } from '../coverageRule'
 
 export type WallSide = 'l' | 'r'
 
@@ -77,6 +79,21 @@ export function wallSegments(d: { r: number }, breaks: WallBreak[], halfWidth = 
     }
     if (cursor < 1 - 1e-9) out.push({ side, t0: cursor, t1: 1 })
   }
+  return out
+}
+
+/**
+ * faceCoverage says what each of the two visible faces is drawn in
+ * (round 49, #1016). A wall has no direction, so an edge takes the worse
+ * of the gates standing in it -- dark worse than quiet worse than
+ * logged. An edge with no gate draws in the district's own ink as
+ * normal: the alternative, every ungated edge grey, would make a
+ * one-gate district almost all grey for no reason anyone could act on
+ * (round 49's item 6, kept as drawn).
+ */
+export function faceCoverage(gated: readonly { side: WallSide; coverage: Coverage }[]): Record<WallSide, Coverage> {
+  const out: Record<WallSide, Coverage> = { l: 'logged', r: 'logged' }
+  for (const g of gated) out[g.side] = worseCoverage(out[g.side], g.coverage)
   return out
 }
 

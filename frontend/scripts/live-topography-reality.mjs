@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #629, map layer 3: the Traffic lens judges observed traffic against
-// the pushed intent. Feeds all three deltas through the real listeners:
+// #629, map layer 3: the map judges observed traffic against the pushed
+// intent. Round 49 made this the picture rather than one lens of three
+// (`traffic as a lens: it is the picture`, DESIGN.md "Superseded"), so
+// there is no tab to select first -- what it draws is what the map is.
+// Feeds all three deltas through the real listeners:
 // a planned flow (an accepting rule anticipated it), a held one (drops
 // on a refusing pair -- policy doing its job, calm), an unplanned one
 // (accepted traffic where the table only refuses -- the alarm), and an
 // accepting rule nothing exercises, drawn as a ghost.
 //
-// Runs after live-topography-policy.mjs by filename order and leans on
-// the tables it pushed (bridge1→ether1 accepts, ether1→bridge1 drop);
-// pushes one extra lane and one extra never-exercised rule of its own.
+// Self-contained: pushes its own address and filter-rule tables whole,
+// including the extra lane and the never-exercised rule the ghost needs.
 
 import { session, check, done, feedRaw, feedSyslog as syslog } from './live-browser.mjs'
 
@@ -112,7 +114,7 @@ for (let i = 0; i < 20; i++) {
 }
 
 // Reload so the freshly pushed tables are re-fetched alongside the
-// freshly arrived events (same honest path the policy scenario takes).
+// freshly arrived events (the same honest path the map's first load takes).
 await new Promise((r) => setTimeout(r, 1200))
 await page.reload()
 await page.click('.rail-name >> text=Topography')

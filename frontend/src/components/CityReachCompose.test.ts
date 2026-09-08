@@ -127,7 +127,16 @@ describe('the composer prints the same line in the city as in 2D (#868)', () => 
     flushSync()
     topologyNavState.pendingDescend = { zoneId: 'bridge1', host: HOST_IP, ip: HOST_IP }
     flushSync()
-    const door = topo.container.querySelector('.strand-door') as HTMLElement
+    // Round 49 took the labels off the strands (#1016), and with them
+    // the pill that used to be the composer's door. The door is now
+    // `draft the rule ▸` on the refused line's own card, which opens by
+    // pointing at the strand -- the composer behind it, and the line it
+    // prints, are unchanged, which is what this test is about.
+    const refused = [...topo.container.querySelectorAll('.membrane-layer .strand-g')].find((g) => g.querySelector('.strand-x') !== null)
+    expect(refused).not.toBeUndefined()
+    await fireEvent.pointerEnter(refused!)
+    flushSync()
+    const door = topo.container.querySelector('[data-draft-rule]') as HTMLElement
     expect(door).not.toBeNull()
     await fireEvent.click(door)
     flushSync()
@@ -140,6 +149,15 @@ describe('the composer prints the same line in the city as in 2D (#868)', () => 
     const building = [...city.container.querySelectorAll('[data-cid]')].find((el) => el.getAttribute('aria-label')?.includes(HOST_IP))
     expect(building).not.toBeUndefined()
     await fireEvent.click(building!)
+    flushSync()
+    // Round 49: the city's composer opens from the refused line's own
+    // card, so open that card and ask for the draft. What it then
+    // prints is unchanged -- that is what this test is about.
+    const refusedRoad = city.container.querySelector('[data-road-hot^="mark:"], [data-road-hot]') as HTMLElement
+    expect(refusedRoad).not.toBeNull()
+    await fireEvent.pointerEnter(refusedRoad)
+    flushSync()
+    await fireEvent.click(city.container.querySelector('[data-draft-rule]') as HTMLElement)
     flushSync()
     const cmdCity = city.container.querySelector('.composer .cm-code')?.textContent
 

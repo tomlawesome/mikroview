@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 )
 
@@ -40,6 +41,7 @@ func (c *Config) Validate() Result {
 	c.validateListen(fatal)
 	c.validateStore(fatal, warn)
 	c.validateWatchlist(warn)
+	c.validateBaseline(warn)
 	c.validateSnapshot(warn)
 	c.validateHistory(warn)
 	c.validateAuth(fatal)
@@ -103,6 +105,17 @@ var examplesByCode = map[string]string{
 
 	"CFG-0042": `watchlist:
   matchLogRetention: 168h  # 7 days`,
+
+	"CFG-0090": `baseline:
+  days: 3
+  of: 14`,
+
+	"CFG-0091": `baseline:
+  days: 3
+  of: 14  # at most 32: the per-line recurrence bitmap is 32 bits wide`,
+
+	"CFG-0092": `baseline:
+  hostQuietAfter: 24h`,
 
 	"CFG-0020": `auth:
   sessionTTL: 24h`,
@@ -537,4 +550,50 @@ var (
 	defaultMatchLogPath      = defaults().Watchlist.MatchLogPath
 	defaultMatchLogCapacity  = defaults().Watchlist.MatchLogCapacity
 	defaultMatchLogRetention = defaults().Watchlist.MatchLogRetention
+	defaultBaselineDays      = defaults().Baseline.Days
+	defaultBaselineOf        = defaults().Baseline.Of
+	defaultHostQuietAfter    = defaults().Baseline.HostQuietAfter
 )
+
+// validateBaseline clamps the establishment threshold to something the
+// register can actually answer (issue #1016).
+//
+// Order matters: Of is checked first, because Days is only meaningful
+// relative to it -- asking for 20 days out of 14 is a different mistake
+// depending on which of the two the operator got wrong, and clamping the
+// window first means the second check compares against a sane number
+// rather than compounding the first error.
+func (c *Config) validateBaseline(warn warnFunc) {
+	if c.Baseline.Of <= 0 || c.Baseline.Of > baseline.MaxDays {
+		was := c.Baseline.Of
+		c.Baseline.Of = defaultBaselineOf
+		warn("CFG-0091", "baseline.of",
+			fmt.Sprintf("%d is not a usable baseline window -- it must be between 1 and %d days, the width of the per-line recurrence bitmap", was, baseline.MaxDays),
+			fmt.Sprintf("%d", c.Baseline.Of),
+			fmt.Sprintf("set a window of 1 to %d days, e.g. 14", baseline.MaxDays))
+	}
+	if c.Baseline.Days <= 0 || c.Baseline.Days > c.Baseline.Of {
+		was := c.Baseline.Days
+		c.Baseline.Days = defaultBaselineDays
+		if c.Baseline.Days > c.Baseline.Of {
+			c.Baseline.Days = c.Baseline.Of
+		}
+		warn("CFG-0090", "baseline.days",
+			fmt.Sprintf("%d is not a usable establishment threshold against a %d-day window -- a line cannot be seen on more days than the window holds, and a threshold of zero or less would make every line established the moment it appeared", was, c.Baseline.Of),
+			fmt.Sprintf("%d", c.Baseline.Days),
+			"set how many distinct days a line must be seen on before it counts as established, e.g. 3")
+	}
+	// A non-positive quiet window would call every host quiet the instant
+	// it was heard, which is worse than useless: it would grey out a
+	// working network. Clamped rather than fatal, same as every other
+	// threshold in this file -- a bad number here should not stop the
+	// server serving.
+	if c.Baseline.HostQuietAfter <= 0 {
+		was := c.Baseline.HostQuietAfter
+		c.Baseline.HostQuietAfter = defaultHostQuietAfter
+		warn("CFG-0092", "baseline.hostQuietAfter",
+			fmt.Sprintf("%s is not a usable quiet window -- every host would be drawn quiet the moment it was heard from", was),
+			c.Baseline.HostQuietAfter.String(),
+			"set how long a host may be silent before the map greys it out, e.g. 24h")
+	}
+}

@@ -629,10 +629,13 @@ test:container:
 # does the scheduling instead of a lock file. The standalone scripts are
 # one unit and run once, in gate:scripts.
 #
-# Three jobs, all `allow_failure: true` for now: a tripwire, not a
-# turnstile. The second-host loop stays the gate of record until this one
-# has read green on dev for a run of pipelines; flipping these to blocking
-# is the trigger for retiring that loop, and is recorded on #1004.
+# Three jobs, all blocking: a turnstile, not a tripwire. They ran as
+# `allow_failure: true` from #1004 until 2026-09-08, with a loop on the
+# workstation as the gate of record -- but a gate nobody is made to read
+# is not a gate (owner). Now a red shard stops the merge by itself. A red
+# that looks like the host, not the code, is reproduced with
+# scripts/gate-local.sh on the quieter workstation and recorded in
+# docs/flakes.md; the job is retried only once that run is green.
 #
 # The image is the same one gate-remote.sh builds on the second host
 # (live-check.Dockerfile: node, Go, the three Playwright engines, ~1.5 GB).
@@ -659,7 +662,6 @@ gate:image:
   # no tag to pull.
   <<: *dev_or_mr
   needs: []
-  allow_failure: true
   # #952: pushes to the registry -- never cut mid-write.
   interruptible: false
   timeout: 45m
@@ -697,7 +699,6 @@ gate:scenarios:
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
   <<: [*dev_or_mr_code, *git_safe]
   parallel: 4
-  allow_failure: true
   timeout: 30m
   script:
     - set -o pipefail
@@ -797,7 +798,6 @@ gate:scripts:
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
   <<: [*dev_or_mr_code, *git_safe]
-  allow_failure: true
   timeout: 30m
   script:
     - set -o pipefail

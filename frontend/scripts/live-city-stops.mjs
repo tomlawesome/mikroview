@@ -230,25 +230,36 @@ for (let i = 0; i < STOPS.length; i++) {
 const first = await page.evaluate(() => {
   // .blk buildings are not DOM descendants of their .plate district --
   // they live in a separate paint-order layer -- so ownership is read
-  // off the "<district>/<host>" data-cid convention instead. A plain
-  // element.focus() also will not do: the component tracks "current"
-  // in its own $state, set only by a click (or by a previous keyboard
-  // walk), never by a native focus event -- so ArrowRight would judge
-  // the walk against whatever that state defaults to, not against the
-  // element the DOM says is focused. Clicking the plate is what a real
-  // user does before walking its buildings, so it is what this does too.
+  // off the "<district>/<host>" data-cid convention instead.
   const blkCids = [...document.querySelectorAll('.city .blk')].map((b) => b.dataset.cid)
   const plate = [...document.querySelectorAll('.city .plate')].find((p) => blkCids.some((cid) => cid?.startsWith(p.dataset.cid + '/')))
-  if (plate) plate.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   return plate ? plate.dataset.cid : null
 })
+const activeCid = () => page.evaluate(() => document.activeElement?.dataset.cid ?? null)
 const hasWalkable = !!first
 check(hasWalkable, 'a district with at least one building is on the map to walk the keyboard into')
 if (hasWalkable) {
-  // The click's focusItem() recentres the camera and focuses the plate
-  // asynchronously (a tick, then el.focus()); give it a moment to land
-  // before judging where the keyboard walk starts from.
+  // This used to click the plate to focus it. Round 49 (#1016) made a
+  // district one of the three things a reach opens from, so clicking one
+  // now *stands on* it -- the camera drops into the district, the DOM
+  // focus never moves, and every key press after it went to the body.
+  // That took the three keyboard checks below and the reduced-motion one
+  // with it, because the run was left standing inside a reach.
+  //
+  // So the walk starts the way live-city-walls.mjs starts it: focus the
+  // one plate the city leaves tabbable and walk with the keyboard alone,
+  // which is also the path this check is about. Down steps district to
+  // district, so it is pressed until the walk reaches the district that
+  // actually has buildings for Right to walk into.
+  await page.locator('[data-card="topography"] .city .plate[tabindex="0"]').focus()
   await new Promise((r) => setTimeout(r, 300))
+  let landed = (await activeCid()) === first
+  for (let i = 0; i < 8 && !landed; i++) {
+    await page.keyboard.press('ArrowDown')
+    await new Promise((r) => setTimeout(r, 250))
+    landed = (await activeCid()) === first
+  }
+  check(landed, `Down walks the districts as far as the one with buildings (${first})`)
   await page.keyboard.press('ArrowRight')
   await new Promise((r) => setTimeout(r, 200))
   const walked = await page.evaluate(() => ({ cid: document.activeElement?.dataset.cid, cls: document.activeElement?.getAttribute('class') }))

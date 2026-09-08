@@ -27,14 +27,58 @@ await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
 // Descend on the host, then open the composer through the blocked
 // strand's own label.
-// #852/#869: the per-host name lives in `.isl-card`, hidden at zones the
-// same way `.detail` is -- see the coverage scenario for the full note.
-// Off zones and onto services before touching it.
+// Round 49's living hosts (#1016) replaced the `.host-link` list with a
+// row of dots inside each lane card at the `services` stop -- ten dots
+// then `+N`, every dot clickable to its reach (DESIGN.md "Living
+// hosts"). The stop is the same one; the way down to the host is the
+// dot. `.host-link` kept its stylesheet rule but has no markup left, so
+// the old click simply never resolved.
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
 await new Promise((r) => setTimeout(r, 700))
-await page.click('[data-card="topography"] .host-link >> text=192.168.1.77')
+await page.waitForSelector('[data-card="topography"] .hostrow .hot', { timeout: 10000 })
+await page.click('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.77"]')
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
-await page.click('[data-card="topography"] .strand-door >> nth=0')
+
+// Round 49 (#1016) deleted `.strand-door`: nothing is written on a
+// strand any more, so the pill that used to sit on it and open the
+// composer is gone -- only its stylesheet rule survived, and this click
+// resolved against nothing. The words moved onto cards, and the
+// composer's door moved with them: hover the refused strand, and its
+// line card offers `draft the rule ▸` (the city does the same thing
+// from the standing host's card -- live-city-walls.mjs `draftFrom`).
+//
+// Hovering an SVG path needs a point that is actually on it: a curved
+// strand's bounding box is mostly empty, so the middle of the box is
+// usually some other shape. This walks the box for a point the strand
+// really answers at, the same way live-topography-coverage.mjs reaches
+// the dark material.
+async function hoverShape(locator) {
+  const handle = await locator.elementHandle()
+  if (!handle) return null
+  const point = await page.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    if (!(r.width > 0) || !(r.height > 0)) return null
+    for (let i = 1; i <= 15; i++) {
+      for (let j = 1; j <= 15; j++) {
+        const x = r.left + (r.width * i) / 16
+        const y = r.top + (r.height * j) / 16
+        const top = document.elementFromPoint(x, y)
+        if (top !== null && (top === el || el.contains(top))) return { x, y }
+      }
+    }
+    return null
+  }, handle)
+  await handle.dispose()
+  if (!point) return null
+  await page.mouse.move(point.x, point.y)
+  return point
+}
+
+const refusedStrand = page.locator('[data-card="topography"] .strand-g:has(.strand.refused)').first()
+await refusedStrand.waitFor({ timeout: 10000 })
+check((await hoverShape(refusedStrand)) !== null, 'the refused strand can be pointed at')
+await page.waitForSelector('[data-card="topography"] .line-card [data-draft-rule]', { timeout: 5000 })
+await page.click('[data-card="topography"] .line-card [data-draft-rule]')
 await page.waitForSelector('.composer', { timeout: 5000 })
 
 const panelText = await page.textContent('.composer .portpanel')
@@ -52,9 +96,16 @@ check(cmd.includes('action=drop') && cmd.includes('named block'), 'the named blo
 const noteText = await page.textContent('.composer .cmdnote')
 check(noteText.includes('mikroview never touches the router'), 'the invariant is said where the command is')
 
-// Esc walks out one level at a time: composer, then the reach.
+// Esc walks out one level at a time. Round 49 put a card in that stack:
+// the line card is where `draft the rule ▸` lives, and Topography's own
+// onKeydown walks out the open card, then the composer, then the reach.
+// So the first Esc takes the card the composer was opened from and the
+// second takes the composer, with the reach still standing under both.
 await page.keyboard.press('Escape')
-check(!(await page.isVisible('.composer')), 'Escape closes the composer first')
+check(!(await page.isVisible('[data-card="topography"] .line-card')), 'Escape closes the open card first')
+check(await page.isVisible('.composer'), 'the composer that card opened is still there')
+await page.keyboard.press('Escape')
+check(!(await page.isVisible('.composer')), 'the next Escape closes the composer')
 check(await page.isVisible('[data-card="topography"] .membrane-layer svg'), 'the reach stays beneath it')
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)

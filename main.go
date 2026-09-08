@@ -43,6 +43,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/coverage"
@@ -51,6 +52,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
+	"github.com/tomlawesome/mikroview/internal/hosts"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
@@ -659,6 +661,44 @@ func main() {
 	coverageStore, err := coverage.OpenWithBackend(coverageBackend)
 	mustOpenStore(coverageLog, err)
 
+	// The host presence register (issue #1016): every host the feed has
+	// shown, so a host that stops talking goes quiet on the map instead
+	// of silently disappearing, plus whatever an operator has said about
+	// a quiet one -- backing GET /api/hosts and the mark endpoints.
+	// Same optional-persistence contract as coverage above, but written
+	// behind rather than synchronously: this is updated on every
+	// ingested event (see ingestOneRecovered).
+	hostsLog := logging.New("hosts")
+	hostsBackend, err := persistence.backendFor(bootCtx, "hosts", cfg.Hosts.StorePath)
+	if err != nil {
+		hostsLog.Warn(err.Error())
+	}
+	hostRegister, err := hosts.OpenWithBackend(hostsBackend)
+	mustOpenStore(hostsLog, err)
+
+	// The baseline line register (issue #1016, round 49): which
+	// source/destination/port/protocol lines the feed has shown and on
+	// which of the last few days, so the map can draw a line off the
+	// established pattern brightly and let every settled one recede --
+	// backing GET /api/baseline/off and the expected endpoints. Sits
+	// beside the host register above because it is fed from the same
+	// place, on the same terms: one map update per ingested event, a
+	// rate-limited encode, never a disk write on that path.
+	//
+	// Unlike the host register, an unpersisted one is genuinely lossy:
+	// recurrence is time rather than volume, so a register that starts
+	// empty reads every established line as new. See config.Baseline.
+	baselineLog := logging.New("baseline")
+	baselineBackend, err := persistence.backendFor(bootCtx, "baseline", cfg.Baseline.StorePath)
+	if err != nil {
+		baselineLog.Warn(err.Error())
+	}
+	baselineRegister, err := baseline.OpenWithBackend(baselineBackend, baseline.Config{
+		Days: cfg.Baseline.Days,
+		Of:   cfg.Baseline.Of,
+	})
+	mustOpenStore(baselineLog, err)
+
 	// Tokens (issue #101): read-only API bearer tokens for service-to-
 	// service access. Persistence itself is optional -- a missing/
 	// unconfigured path just means token creation refuses with
@@ -1115,7 +1155,7 @@ func main() {
 	// process runs. See history_runtime.go.
 	hist := newHistoryRuntime(logging.New("history"), cfg, settingsStore, st)
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister)
 	go eng.Run(ctx)
 	// One driver for every Ticked definition (issue #405). Deliberately
 	// one goroutine at the finest cadence any shipped definition
@@ -1373,6 +1413,9 @@ func main() {
 		Definitions:       definitions,
 		Entities:          entityStore,
 		Coverage:          coverageStore,
+		Hosts:             hostRegister,
+		Baseline:          baselineRegister,
+		HostQuietAfter:    cfg.Baseline.HostQuietAfter,
 		Naming:            names,
 		Rules:             ru,
 		Audit:             auditStore,
@@ -1665,7 +1708,7 @@ func main() {
 	// Best-effort: each store already logs its own save failures, so a
 	// Close error here is just the shutdown-budget case, worth one
 	// line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions)
+	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, hostRegister, baselineRegister)
 
 	// One last snapshot, for the same reason and under the same budget
 	// (#795). Ingest and evaluation have both stopped by now, so this
@@ -2353,14 +2396,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister)
 		}
 	}
 }
@@ -2371,7 +2414,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -2479,6 +2522,31 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	// what the store itself just counted (see internal/rules.Store.Touch's
 	// doc comment for why this lives here rather than as a separate pass).
 	ru.Touch(stored.RuleLabel, stored.ReceivedAt)
+	// The host presence register (issue #1016): the map used to derive
+	// its hosts from the browser's own event buffer alone, so a host
+	// that stopped talking scrolled out of the buffer and vanished. This
+	// is the record that it was there, kept off the hot path the same
+	// way ru.Touch above is -- one mutex-protected map update, and a
+	// rate-limited encode handed to a write-behind writer, never a disk
+	// write here. hosts.Registers decides what counts as a host, and
+	// mirrors the browser's own rule exactly.
+	hostRegister.Observe(stored.InInterface, stored.SrcIP, stored.SrcHostName, stored.ReceivedAt)
+	// The baseline line register (issue #1016 round 49), fed from this
+	// same hand-off and on the same terms as the host register above:
+	// one mutex-protected map update and a rate-limited encode, never a
+	// disk write here. baseline.Registers decides what counts as a line,
+	// and defers to hosts.Registers for the source half so the two
+	// cannot disagree about what a host is.
+	//
+	// Only accept and drop are verdicts, so everything that is not a
+	// refusal is recorded as an accept -- see baseline.Outcome. Reject
+	// counts as a drop: the traffic was refused, and which way the
+	// router said no is the rule's business, not the baseline's.
+	outcome := baseline.OutcomeAccept
+	if stored.Action == store.ActionDrop || stored.Action == store.ActionReject {
+		outcome = baseline.OutcomeDrop
+	}
+	baselineRegister.Observe(stored.InInterface, stored.SrcIP, stored.DstIP, stored.DstPort, stored.Protocol, outcome, stored.ReceivedAt)
 }
 
 // resolveTransferTarget works out which account admin is moving to,

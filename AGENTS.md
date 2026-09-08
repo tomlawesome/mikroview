@@ -148,7 +148,7 @@ every merge anyway.
 Credentials, names only — values are never written down here. The agent's
 `glab` config lives in `~/.config/glab-claude/` (`GLAB_CONFIG_DIR`, host
 `gitlab.tomlawson.io`); git over HTTPS to `gitlab` uses that same token
-through `GIT_ASKPASS`; the gate loop uses a read-only deploy token in
+through `GIT_ASKPASS`; `scripts/gate-local.sh` uses a read-only deploy token in
 `~/.config/mikroview/gitlab-credentials`. On the GitLab side, the CI/CD
 variables are `GITHUB_MIRROR_SSH_KEY` (file, protected), `MIRROR_TO_GITHUB`
 (protected) and `GITLAB_MR_TOKEN`.
@@ -256,37 +256,16 @@ gate failure) if another run already holds it (#809); run
 frees instead of refusing (#811). If the holder looks dead, follow the
 `ssh ... rm -r ~/gate-lock` hint the refusal prints.
 
-**The `dev` loop no longer lives here (#831).** This host started running
-GitLab CI as well once mikroview moved to GitLab-first delivery, so a
-`scripts/gate-dev-loop.sh` run landing here fought CI for the same CPU,
-and a scenario that died of that contention got recorded as `dev` being
-broken. The loop now runs on the workstation instead, driving
-`scripts/gate-local.sh` -- same container, same checks, no SSH -- and
-this host goes back to being what it was before: available for a
-deliberate manual `scripts/gate-remote.sh` run, e.g. while the
-workstation itself is busy with something else, taking the lock exactly
-as before.
-
-The loop keeps a log per *run*, not per commit --
-`~/projects/.gate-logs/mikroview/gate-<sha>-<n>.log`, `n` starting at 1 --
-because when `dev` sits still the loop re-runs the same commit instead of
-idling, up to 20 times, and prints `NEWFAIL`/`FIXED`/`SAME`/`CLEAN`/
-`FLAKE` lines to `loop.log`. Repeat runs of one unmoving commit are what
-tell a flaky scenario (`FLAKE`, e.g. "failed 2 of 7 runs") from a real
-regression. `NEWFAIL`/`FIXED`/`SAME` now compare the scenarios that failed
-in *every* run of a commit, rather than one run's raw result, so a flake
-no longer reads as a regression. `CLEAN` keeps its old meaning: this run
-had nothing failing. It checks the loop's own commit out into
-`~/projects/.worktrees/mikroview/gate-dev` by default (`MV_GATE_WORKTREE`)
--- a path under `~/projects/.worktrees` survives worktree clean-up; the
-previous default under `.claude/worktrees` did not, and the loop died
-silently for four hours before anyone noticed (#831 again -- the issue
-that also prompted this move). A run that dies before producing a result
-(a build failure, e.g. #861's IPv6 Docker Hub token fetch) prints `LOST`
-instead of `END`, is retried next tick without spending one of the 20
-repeats, and leaves a `gate-<sha>.lost` file so the loss stays on record
-even if that commit is superseded before the retry lands; a later success
-for the same commit also prints `RECOVERED`.
+**No loop runs here (#831), and none runs anywhere since 2026-09-08.**
+This host also carries GitLab CI, so a `scripts/gate-dev-loop.sh` run
+landing here fought CI for the same CPU and a scenario lost to that
+contention read as `dev` being broken. The loop moved to the workstation,
+then retired when the CI gate became blocking (see "The gate blocks the
+merge, in CI"). What remains: `scripts/gate-local.sh` -- same container,
+same checks, no SSH -- to reproduce a red CI gate job on the workstation,
+and this host available for a deliberate manual `scripts/gate-remote.sh`
+run, taking the lock as before. `gate-dev-loop.sh` is kept, unused; its
+logs went to `~/projects/.gate-logs/mikroview/`.
 
 `git push` rather than rsync or a clone, because authentication then
 happens from this side: nothing has to live over there. Only new objects
@@ -308,7 +287,7 @@ else. If a step seems to need one, the step is wrong.
 **Quiet host (#1003).** perf:promotion writes `/srv/quiet-host/hold` on
 this box before it measures; a root-owned unit sets `concurrent = 1` on
 the runner until the flag goes or expires, so no sibling job starts
-mid-measurement. The `dev` loop no longer runs on this host (see above)
+mid-measurement. No gate loop runs any more (see above)
 and no longer checks this flag -- a manual `scripts/gate-remote.sh` run
 here can still collide with a hold, same as any other job would. Install
 steps: `deploy/quiet-host/README.md`. Stuck with `concurrent = 1` and
@@ -529,39 +508,28 @@ from design judgement rather than from process.
 (the body, per the issues rule below), so the next person implements
 against a written model rather than re-deriving it.
 
-## The gate runs on `dev`, after the merge
+## The gate blocks the merge, in CI
 
 `make live-check` stands up the real binary with the real UI and drives it
-in a real browser. It is the project's real test, and it is no longer a
-step before a PR merges. Owner decision, 2026-09-02: a ~45-minute run per
-PR, one per host, put the gate on the critical path of every merge, and
-opening a second host only turned the queue into stacked PRs.
+in a real browser. It is the project's real test, and since 2026-09-08 it
+is the gate of record on every MR and `dev` pipeline: the `gate` stage
+(#1004), four slices of the browser phase in parallel plus the standalone
+scripts, on the second host's runner, **blocking**. Sharding is what made
+that affordable -- a nine-minute window, not the 45-minute run that the
+2026-09-02 decision took off the critical path.
 
 So:
 
-- **A PR merges on green CI plus review.** Nobody waits for a gate run.
-- **The gate runs on `dev` continuously** on the workstation, not the
-  second host (#831 -- the second host now also carries GitLab CI, so a
-  gate run landing there fought CI for the same CPU and a scenario lost
-  to that contention read as `dev` being broken): each run starts when
-  the last ends, from a fresh `dev`, or repeats the same commit up to 20
-  times when `dev` is not moving, and its log is kept with the SHA and
-  run number. A failure that repeat runs show as consistent, not a flake,
-  is filed the same session against the merges in that window and fixed
-  forward before the next promotion. A tripwire, not a turnstile.
-- **One clean run is mandatory before `dev -> preview`.** That is the
-  only place it blocks.
-- **CI runs it too, sharded, since #1004** -- the `gate` stage, four
-  slices of the browser phase in parallel plus the standalone scripts,
-  on every MR and `dev` pipeline, on the second host's runner. It is
-  `allow_failure` until it has read green on `dev` for a run of
-  pipelines; flipping it to blocking is the moment the loop can retire,
-  and that decision goes on #1004. Until then the loop is the gate of
-  record and a red CI gate is read, not ignored: it is the same suite,
-  just run on a different, deliberately quieter, host now.
-
-The cost is accepted: a regression can sit on `dev` for a run before it is
-seen, and work stacks on it meanwhile. `dev` is not released from.
+- **An MR merges on green CI plus review, and green includes the gate.**
+  No local gate run before a cut: a gate nobody is made to read is not a
+  gate (owner, 2026-09-08), which is why the `allow_failure` tripwire and
+  the workstation loop (`scripts/gate-dev-loop.sh`, #831) have retired.
+- **A red gate job is either the code or the host.** Reproduce it with
+  `scripts/gate-local.sh` on the quieter workstation: green there means a
+  flake -- add its line to `docs/flakes.md` (testing-and-ci skill) and
+  retry the job; red there is the defect, fixed on the branch.
+- **`dev -> preview` still needs one clean gate**, which the `dev`
+  pipeline supplies.
 
 Still true: this is not a substitute for the test suite, and the suite is
 not a substitute for this. Nearly every defect worth finding in this
@@ -573,10 +541,8 @@ operator stayed locked out; a filter that became unevaluable only once
 matching events arrived.
 
 Add a scenario for the change -- `frontend/scripts/live-<thing>.mjs` --
-in the same PR, so the loop exercises it on the next run. Running the
-gate on the branch before the PR is still worth it for a change that
-reworks a surface (the fix is cheaper before the merge than after), but
-it is a choice, not a rule. See `.claude/skills/live-check/SKILL.md`.
+in the same MR, so the gate exercises it on that pipeline. See
+`.claude/skills/live-check/SKILL.md`.
 
 Where something genuinely cannot be exercised here (no RouterOS device, no
 external identity provider), say so plainly in the PR rather than letting

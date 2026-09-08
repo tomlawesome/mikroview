@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { mockupEstate } from './fixture'
-import { bankV, layoutGround, plateRadius } from './layout'
+import { bankV, layoutGround, plateHalfWidth, plateRadius } from './layout'
 import { bezAt, bezTangent, dm, segsOf } from './roads'
 import type { CityInput } from './input'
 import type { Pt } from './project'
-import type { District, Ground, Road } from './types'
+import type { District, DistrictGate, Ground, Road } from './types'
 
 const ground: Ground = layoutGround(mockupEstate())
 
@@ -24,6 +24,21 @@ describe('city layout: the ground plan', () => {
     expect(plateRadius(0)).toBe(13)
     expect(plateRadius(2)).toBe(16)
     expect(plateRadius(40)).toBe(21)
+  })
+
+  it("sizes a plate's half-width by its own text, not just its hosts (#1013)", () => {
+    const S = 4 // representative flat-map scale
+    const hostOnly = { r: plateRadius(2), name: 'lan', cidr: '10.0.0.0/24' }
+    // A short name never needs more than the host-count size gives it.
+    expect(plateHalfWidth(hostOnly, S)).toBeCloseTo(Math.max(38, hostOnly.r * S * 0.9), 5)
+
+    // A long name on a tiny (2-host) zone: the host-count floor alone
+    // (Topography's old `Math.max(38, d.r * flatCam.S * 0.9)`) is far
+    // narrower than the name needs, and used to run the name off the
+    // plate (#1013).
+    const longName = { r: plateRadius(2), name: "uplink -- inside rb5009's LAN", cidr: '10.0.0.0/24' }
+    const hostFloor = Math.max(38, longName.r * S * 0.9)
+    expect(plateHalfWidth(longName, S)).toBeGreaterThan(hostFloor)
   })
 
   it('lays out every zone as a plate, none overlapping', () => {
@@ -101,6 +116,13 @@ describe('city layout: roads', () => {
     expect(roads.find((r) => r.id === 'bridge-lan|vlan-iot')?.k).toBe('x')
     expect(roads.find((r) => r.id === 'bridge-lan|vlan-guest')?.stop).toBe('drop')
     expect(roads.find((r) => r.id === 'rb-wan')?.to).toBe('post:ether1')
+    // Round 49 (#1016): nothing logs the wg0 boundary -- it was declared
+    // quiet on purpose -- so no road crosses it, and the bridge itself
+    // carries none either. A road there would claim a log line that was
+    // never written.
+    expect(ids).not.toContain('bridge-lan|wg0')
+    expect(ids).not.toContain('rb-wg0')
+    expect(ids).not.toContain('wg0-span')
     expect(roads.find((r) => r.id === 'wan-span')?.fade).toBe(true)
   })
 
@@ -198,20 +220,100 @@ describe('city layout: roads', () => {
     expect(guest.stop).toBe('drop')
     expect(guest.refusedBy).toBe('guest-isolation')
   })
+
+  // #1002: the aggregate drop mark's own breakdown -- every rule that
+  // refused a crossing on the pair, and how many events each one caught.
+  it('carries a single-rule breakdown alongside refusedBy for a drop road', () => {
+    const input = mockupEstate()
+    const edge = input.edges.find((e) => e.key === 'vlan-iot|bridge-lan')!
+    edge.dropsByRule = [{ rule: 'iot-egress-drop', count: 12 }]
+    const g = layoutGround(input)
+    const worst = g.roads.find((r) => r.id === 'bridge-lan|vlan-iot') as Road
+    expect(worst.dropBreakdown).toEqual([{ rule: 'iot-egress-drop', count: 12 }])
+  })
+
+  it('sums a rule that caught drops on both directions of the same pair', () => {
+    const input = mockupEstate()
+    const guest = input.edges.find((e) => e.key === 'vlan-guest|bridge-lan')!
+    guest.dropsByRule = [{ rule: 'guest-isolation', count: 5 }]
+    // The fold in layout.ts's `pairs` map keys on the sorted pair, so an
+    // edge running the other way merges into the same road -- a second
+    // rule catching traffic the other direction must add to the total,
+    // not replace it.
+    input.edges.push({ key: 'bridge-lan|vlan-guest', from: 'bridge-lan', to: 'vlan-guest', events: 2, drops: 2, verdict: 'holding', dropsByRule: [{ rule: 'guest-isolation', count: 1 }, { rule: 'egress-block', count: 1 }] })
+    const g = layoutGround(input)
+    const road = g.roads.find((r) => r.id === 'bridge-lan|vlan-guest') as Road
+    expect(road.dropBreakdown).toEqual([
+      { rule: 'guest-isolation', count: 6 },
+      { rule: 'egress-block', count: 1 },
+    ])
+  })
+
+  it('gives a road with no drops at all an empty breakdown, not undefined', () => {
+    const planned = roads.find((r) => r.id === 'bridge-lan|vlan-srv') as Road
+    expect(planned.stop).toBeUndefined()
+    expect(planned.dropBreakdown).toEqual([])
+  })
 })
 
 describe('city layout: gates', () => {
   it('opens a gate on the district a pushed accept rule actually names, aimed at the resolvable neighbour', () => {
     const lan = ground.districts.find((d) => d.id === 'bridge-lan') as District
     const srv = ground.districts.find((d) => d.id === 'vlan-srv') as District
-    const lanToSrv = lan.gates.find((g) => g.key === 'forward|bridge-lan|vlan-srv')
+    // One gate per neighbour, not one per rule direction (round 49):
+    // a wall has no direction, so the two directions across the same
+    // boundary are one break in it.
+    const lanToSrv = lan.gates.find((g) => g.toward === 'vlan-srv')
     expect(lanToSrv).toBeTruthy()
-    expect(lanToSrv?.lamp).toBe(true)
+    expect(lan.gates.filter((g) => g.toward === 'vlan-srv')).toHaveLength(1)
     expect(lanToSrv?.toward).toBe('vlan-srv')
     // The gate sits on the plate's own edge, not inside or outside it.
     expect(dm(lanToSrv!.p, [lan.u, lan.v])).toBeCloseTo(lan.r, 5)
-    const srvToLan = srv.gates.find((g) => g.key === 'forward|vlan-srv|bridge-lan')
-    expect(srvToLan?.lamp).toBe(false)
+    const srvToLan = srv.gates.find((g) => g.toward === 'bridge-lan')
+    expect(srvToLan).toBeTruthy()
+  })
+
+  it('names the gate by the lowest-numbered rule that opens it, and that rule\'s own comment (#1016)', () => {
+    // One break in the wall folds both directions of the boundary
+    // together, so the rule the card names is the lowest-numbered of
+    // all of them -- the first line of the table that opens this gate
+    // at all -- with that rule's own comment. In the fixture that is
+    // rule 4, `nas access`, on bridge-lan -> vlan-srv; the way back is
+    // rule 9 and carries no comment.
+    const lan = ground.districts.find((d) => d.id === 'bridge-lan') as District
+    const toSrv = lan.gates.find((g) => g.toward === 'vlan-srv') as DistrictGate
+    expect([toSrv.ruleOrdinal, toSrv.ruleName]).toEqual([4, 'nas access'])
+    const srv = ground.districts.find((d) => d.id === 'vlan-srv') as District
+    const toLan = srv.gates.find((g) => g.toward === 'bridge-lan') as DistrictGate
+    expect([toLan.ruleOrdinal, toLan.ruleName]).toEqual([4, 'nas access'])
+  })
+
+  it('takes the worse of a boundary\'s two directions, and lists both on the gate (round 49)', () => {
+    const lan = ground.districts.find((d) => d.id === 'bridge-lan') as District
+    const toSrv = lan.gates.find((g) => g.toward === 'vlan-srv') as DistrictGate
+    // bridge-lan -> vlan-srv logs; vlan-srv -> bridge-lan does not and
+    // nobody declared it. Dark is worse than logged, so the wall edge is
+    // dark and the gate is unlit -- the lamp is the whole boundary's,
+    // never one direction's.
+    expect(toSrv.coverage).toBe('dark')
+    expect(toSrv.lamp).toBe(false)
+    expect(toSrv.directions.map((x) => x.edgeKey)).toEqual(['bridge-lan|vlan-srv', 'vlan-srv|bridge-lan'])
+    expect(toSrv.directions.map((x) => x.coverage)).toEqual(['logged', 'dark'])
+    // The workshop's boundary logs both ways: accent posts and a lamp.
+    const wsh = ground.districts.find((d) => d.id === 'wlan-wsh') as District
+    const toLan = wsh.gates.find((g) => g.toward === 'bridge-lan') as DistrictGate
+    expect(toLan.coverage).toBe('logged')
+    expect(toLan.lamp).toBe(true)
+  })
+
+  it('greys the plate only when every one of a district\'s boundaries is dark (round 49)', () => {
+    // Guest has no gate at all, so its lane reading stands in; the LAN
+    // has gates and one of them logs a direction, so its plate keeps its
+    // own ink whatever the lane reading says.
+    const guest = ground.districts.find((d) => d.id === 'vlan-guest') as District
+    expect(guest.plateDark).toBe(true)
+    const wsh = ground.districts.find((d) => d.id === 'wlan-wsh') as District
+    expect(wsh.plateDark).toBe(false)
   })
 
   it('draws no gate at all for a boundary no accept rule crosses', () => {

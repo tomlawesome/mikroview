@@ -5,6 +5,8 @@
 // here knows about pixels or a camera. This is the one ground plan both
 // views share (docs/design/screens/city/DESIGN.md): the zones stop
 // draws it flat (#869), the city stops draw it in isometric.
+import type { Coverage } from '../coverageRule'
+import type { CityHost } from './presence'
 import type { Pt } from './project'
 
 /** What a building is, for the device library's stamp (#864). Until
@@ -33,10 +35,31 @@ export interface Building {
   routerId: string
   /** Sequence within the district, for the keyboard walk. */
   index: number
+  /** What the host register and the event buffer between them know
+   * about this building (round 49, #1016): its presence, when it was
+   * last and first heard, and any mark on it. Absent on a router, a
+   * bridge post or anything else that is not a host -- presence is a
+   * statement about a machine the syslog feed hears, and the router is
+   * the thing doing the hearing. */
+  host?: CityHost
+}
+
+/** One direction across a boundary, for the gate's card: a wall has no
+ * direction, so its card lists both (round 49, #1016). */
+export interface GateDirection {
+  /** `from → to`, in the interfaces' own names. */
+  label: string
+  /** The declaration key for this direction, `from|to` -- what the
+   * declare API (#392) is called with. */
+  edgeKey: string
+  coverage: Coverage
+  /** Accept rules standing on this direction; 0 when none does. */
+  ruleCount: number
 }
 
 /** A break in a district's wall (#865): an accept rule crossing this
- * boundary, aimed at wherever its other side resolves to. */
+ * boundary, aimed at wherever its other side resolves to. One gate per
+ * neighbour, both its directions on it (round 49). */
 export interface DistrictGate {
   /** The boundary key -- fall.svelte.ts's boundaryKeyOf shape. */
   key: string
@@ -51,6 +74,25 @@ export interface DistrictGate {
   /** An accept rule on this exact boundary logs: the gate's lamp. */
   lamp: boolean
   ruleCount: number
+  /** The RouterOS number of the lowest-numbered accept rule that opened
+   * this gate, and that rule's own comment. The card reads them as
+   * `rule 4 · nas access` (owner, 2026-09-08 on #1016) -- numbered as
+   * RouterOS numbers them, so "go look at rule 4" means what it says.
+   * `ruleName` is '' when the rule carries no comment: a gate with no
+   * name is shown with none, never one invented for it. `ruleOrdinal`
+   * is -1 when no rule is known, which is the state a ground model
+   * built without a rule table is in -- the card then says nothing
+   * rather than printing `rule 0`. Never drawn on the gate itself:
+   * nothing is written on the drawing. */
+  ruleOrdinal: number
+  ruleName: string
+  /** The worse of this gate's two directions (dark worse than quiet
+   * worse than logged): accent posts and one lamp when logged, grey
+   * posts and no lamp otherwise, and the wall edge it stands in takes
+   * the same reading. */
+  coverage: Coverage
+  /** Both directions, for the card. */
+  directions: GateDirection[]
 }
 
 export interface District {
@@ -64,8 +106,18 @@ export interface District {
   /** Which lane ink (Topography's LANE_INKS index) tints it. */
   ink: number
   routerId: string
-  /** Nothing logs on this boundary: plate and buildings dim. */
+  /** The lane's three-way coverage reading, carried through from
+   * CityZone (see its own note): logged, declared quiet, or dark. */
+  coverage: Coverage
+  /** Nothing logs on this boundary and nobody declared it quiet: plate
+   * and buildings dim. `coverage === 'dark'`. */
   dark: boolean
+  /** Every one of this district's boundaries is dark -- the only case
+   * the plate itself goes grey and dashed (round 49, #1016). A district
+   * with one dark boundary and one declared quiet is not this: its dark
+   * wall edge says where the hole is, and the plate stays in its own
+   * ink. Narrower than `dark`, which is the lane's own reading. */
+  plateDark: boolean
   buildings: Building[]
   /** Hosts beyond the buildings drawn (the plate is bounded). */
   more: number
@@ -94,6 +146,15 @@ export interface Borough {
  * wall), unplanned (the alarm), quiet (unjudged ink). */
 export type RoadKind = 'a' | 'd' | 'x' | 'q'
 
+/** One rule's share of everything a drop mark aggregates (#1002): how
+ * many refused events on this pair carried that rule's label. `rule` is
+ * null for the bucket of drops that carried no label at all -- said
+ * plainly, never folded into a named rule's count. */
+export interface CityRuleDrop {
+  rule: string | null
+  count: number
+}
+
 export interface Road {
   id: string
   /** Waypoints in ground space; the curve is Catmull-Rom through them. */
@@ -111,6 +172,15 @@ export interface Road {
    * event on this pair carried a rule label: said plainly beside the
    * mark, never guessed (#865). */
   refusedBy?: string
+  /** Every rule that refused a crossing on this pair, and how many it
+   * caught, busiest first (#1002: the owner's ruling that the aggregate
+   * drop mark aggregates every dropped item, broken down per rule with a
+   * count rather than a flat list of events). Only meaningful when stop
+   * is 'drop'; [] when nothing refused on this pair carried any events
+   * at all. This is the data the mark's own click would open -- where
+   * and how it opens is not settled here (#1002's own note), so nothing
+   * in City.svelte reads this field yet. */
+  dropBreakdown?: CityRuleDrop[]
   /** Fades along its length (the highway leaving town). */
   fade?: boolean
   /** A building's own street to its district's edge. */
@@ -119,10 +189,9 @@ export interface Road {
   label: string
 }
 
-/** The lens tabs the ratified record gives both views (only the two
- * that change how the city itself draws are city-aware today; the
- * others default to the traffic reading until their own issues land). */
-export type CityLens = 'traffic' | 'policy' | 'coverage'
+/* Round 49 (#1016) removed the lens tabs and with them `CityLens`:
+   coverage is always on and is the material, traffic is the picture,
+   and the policy lens went in slice C. There is nothing left to switch. */
 
 /** A tunnel's peer, drawn as the far-bank hamlet (#866): a WireGuard
  * peer (by allowedAddress/comment) or a ppp-active session (by
@@ -156,6 +225,12 @@ export interface Bridge {
    * the API has no state for it at all (never a guessed down).
    */
   state: 'up' | 'quiet' | 'down' | 'unknown'
+  /** What the deck is drawn in (round 49, #1016): accent with lamps when
+   * a rule logs this boundary, white translucent and unlamped when the
+   * operator declared it quiet on purpose, grey with dashed rails when
+   * nothing logs. A different fact from `state`, which is whether the
+   * tunnel is up -- the chip still carries that. */
+  coverage: Coverage
   /** The far-bank hamlet: empty for the road bridge. */
   peers: CityPeer[]
 }

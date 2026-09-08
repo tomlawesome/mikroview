@@ -1,17 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // #877, the tunnel node in a real browser: round 30 draws a second
-// upper node beside Internet -- `WireGuard` / `wg0 · 10.99.0.0/24` /
-// `QUIET`, with its own watch bar -- and the build drew neither it nor
-// its two connecting lines.
+// upper node beside Internet -- `WireGuard` / `wg0 · 10.99.0.0/24`,
+// with its own watch bar -- and the build drew neither it nor its two
+// connecting lines.
 //
 // The complement to live-city-river.mjs, which deliberately pushes no
 // tunnel table at all so the city's "state not pushed" path is what a
 // real instance shows. This one pushes the real tables through the real
 // ingest endpoint, so the state on the card is a router's answer rather
-// than a fixture's: a peer whose last handshake is seconds old makes
-// the interface up, and no traffic having crossed it makes the card
-// read QUIET rather than claiming traffic it never saw.
+// than a fixture's.
+//
+// Round 49 (#1016) cut the card's vocabulary back. Round 30's `UP` and
+// `QUIET` badges sat here in the retired coverage badge's own ink,
+// saying what the ribs leaving the node now say themselves, and went
+// with the rest of the coverage captions -- nothing is written on the
+// map that the drawing already says. Two facts no line can draw stayed:
+// a tunnel the router calls *down*, and one whose state was never
+// pushed. So this scenario reads both sides of that rule -- an up
+// tunnel carrying nothing says nothing, and the same tunnel pushed down
+// says DOWN -- which is also what stops either half passing on its own.
 //
 // It also pins the half that unit tests cannot see: that the tunnel has
 // left the lane row. A wg0 lane card and a wg0 node would both look
@@ -106,7 +114,10 @@ check(
 
 await page.reload()
 await page.click('.rail-name >> text=Topography')
-await page.waitForSelector('[data-card="topography"] [aria-label="Map lenses"]', { timeout: 10000 })
+// Round 49 deleted the lens row; the overlay pills are what is left of
+// it, and they mount with the map's own furniture, so waiting on them
+// is the same "the map is up" signal the lens row used to give.
+await page.waitForSelector('[data-card="topography"] [aria-label="Map overlays"]', { timeout: 10000 })
 await page.waitForTimeout(1200)
 
 const node = await page.evaluate(() => {
@@ -131,10 +142,10 @@ const node = await page.evaluate(() => {
 check(!!node?.drawn, 'the tunnel is drawn as its own node beside Internet')
 check(node?.cidr === 'wg0 · 10.99.0.0/24', `the node names its interface and subnet (got ${node?.cidr})`)
 
-// The router says up; nothing has crossed it in this window. QUIET is
-// mikroview's own reading of that pair, and what round 30 draws here.
-check(node?.badge === 'QUIET', `a lit but empty tunnel reads QUIET (got ${node?.badge})`)
-check(!node?.badgeClass.includes('cov-d'), `QUIET is never the alarm ink (class: ${node?.badgeClass})`)
+// The router says up; nothing has crossed it in this window. Round 49:
+// the ribs leaving the node carry that, so the card writes nothing --
+// a word here would be the map saying twice what it already draws once.
+check(node?.badge === null, `an up tunnel carrying nothing writes no state word on its card (got ${JSON.stringify(node?.badge)})`)
 
 // The watch bar is absent with no watcher inside the tunnel's range --
 // present only when something correlates, the same refusal a degraded
@@ -155,6 +166,52 @@ check(
   (node?.ribs ?? []).includes('M1080 186 C 990 215, 880 240, 830 252'),
   'the tunnel is joined to the router by its own line',
 )
+
+// --- The word that survived round 49 (#1016) ------------------------
+//
+// The other half of the silence above. A tunnel the router calls down is
+// the one thing about this node no line on the 2D map draws, so it is
+// the one thing the card still writes. Push the same peer with a stale
+// handshake -- the server classifies from the reported elapsed time, so
+// this is the router's own answer changing, not a fixture's -- and the
+// word has to come back. Without this the silence check would pass on a
+// card that had simply stopped speaking altogether.
+check(
+  (await push({
+    kind: 'wireguard-peer',
+    page: 1,
+    pages: 1,
+    routerosVersion: '7.23.3 (stable)',
+    records: [
+      {
+        publicKey: 'not-a-real-wireguard-key-peer',
+        allowedAddress: ['10.99.0.2/32'],
+        endpointAddress: '198.51.100.30',
+        comment: 'phone-tom',
+        lastHandshake: '3d4h20m',
+        interface: 'wg0',
+      },
+    ],
+  })) === 200,
+  'the same peer is pushed again with a handshake days old',
+)
+
+await page.reload()
+await page.click('.rail-name >> text=Topography')
+await page.waitForSelector('[data-card="topography"] [aria-label="Map overlays"]', { timeout: 10000 })
+await page.waitForTimeout(1200)
+
+const down = await page.evaluate(() => {
+  const card = document.querySelector('[data-card="topography"]')
+  const name = [...card.querySelectorAll('.n-name')].find((n) => n.textContent?.trim() === 'WireGuard')
+  const g = name?.parentElement
+  return {
+    badge: g?.querySelector('.n-cov')?.textContent?.trim() ?? null,
+    badgeClass: g?.querySelector('.n-cov')?.getAttribute('class') ?? '',
+  }
+})
+check(down.badge === 'DOWN', `a tunnel the router calls down still says so on its card (got ${JSON.stringify(down.badge)})`)
+check(down.badgeClass.includes('cov-d'), `and says it in the down ink, not the retired coverage ink (class: ${down.badgeClass})`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 
