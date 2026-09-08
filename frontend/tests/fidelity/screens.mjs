@@ -33,8 +33,19 @@ const here = dirname(fileURLToPath(import.meta.url))
 const baselines = resolve(here, 'baselines')
 const artifacts = resolve(here, '../../test-results/fidelity')
 
-const APP = process.env.FIDELITY_APP ?? 'https://192.0.2.30:19892/'
-const MOCKUPS = process.env.FIDELITY_MOCKUPS ?? 'http://192.0.2.30:8311/'
+// These defaulted to the owner's own machine, which meant the script worked
+// for one person and quietly pointed everyone else at a host they could not
+// reach (#1044). There is no default that is both safe to publish and useful,
+// so it is required: an unset variable now says which one and what it wants,
+// rather than failing later as a connection error naming an address nobody
+// recognises.
+const required = (name, example) =>
+  process.env[name] ?? (() => {
+    throw new Error(`set ${name} to ${example}`)
+  })()
+
+const APP = required('FIDELITY_APP', "the running app, e.g. https://192.0.2.30:19892/")
+const MOCKUPS = required('FIDELITY_MOCKUPS', "the mockup host, e.g. http://192.0.2.30:8311/")
 const CREDS = process.env.FIDELITY_CREDS ?? '/tmp/mikroview-atlas-demo/credentials.txt'
 
 // Orbit's numbers, unchanged: a per-pixel threshold loose enough to ignore
