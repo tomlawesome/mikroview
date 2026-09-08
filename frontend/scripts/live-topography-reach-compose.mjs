@@ -38,7 +38,47 @@ await new Promise((r) => setTimeout(r, 700))
 await page.waitForSelector('[data-card="topography"] .hostrow .hot', { timeout: 10000 })
 await page.click('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.77"]')
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
-await page.click('[data-card="topography"] .strand-door >> nth=0')
+
+// Round 49 (#1016) deleted `.strand-door`: nothing is written on a
+// strand any more, so the pill that used to sit on it and open the
+// composer is gone -- only its stylesheet rule survived, and this click
+// resolved against nothing. The words moved onto cards, and the
+// composer's door moved with them: hover the refused strand, and its
+// line card offers `draft the rule ▸` (the city does the same thing
+// from the standing host's card -- live-city-walls.mjs `draftFrom`).
+//
+// Hovering an SVG path needs a point that is actually on it: a curved
+// strand's bounding box is mostly empty, so the middle of the box is
+// usually some other shape. This walks the box for a point the strand
+// really answers at, the same way live-topography-coverage.mjs reaches
+// the dark material.
+async function hoverShape(locator) {
+  const handle = await locator.elementHandle()
+  if (!handle) return null
+  const point = await page.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    if (!(r.width > 0) || !(r.height > 0)) return null
+    for (let i = 1; i <= 15; i++) {
+      for (let j = 1; j <= 15; j++) {
+        const x = r.left + (r.width * i) / 16
+        const y = r.top + (r.height * j) / 16
+        const top = document.elementFromPoint(x, y)
+        if (top !== null && (top === el || el.contains(top))) return { x, y }
+      }
+    }
+    return null
+  }, handle)
+  await handle.dispose()
+  if (!point) return null
+  await page.mouse.move(point.x, point.y)
+  return point
+}
+
+const refusedStrand = page.locator('[data-card="topography"] .strand-g:has(.strand.refused)').first()
+await refusedStrand.waitFor({ timeout: 10000 })
+check((await hoverShape(refusedStrand)) !== null, 'the refused strand can be pointed at')
+await page.waitForSelector('[data-card="topography"] .line-card [data-draft-rule]', { timeout: 5000 })
+await page.click('[data-card="topography"] .line-card [data-draft-rule]')
 await page.waitForSelector('.composer', { timeout: 5000 })
 
 const panelText = await page.textContent('.composer .portpanel')
