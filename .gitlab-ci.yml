@@ -519,11 +519,23 @@ gate:scenarios:
     # nothing.
     - echo "MV_CPU_START=$(awk '/^usage_usec/{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null) MV_T_START=$(date +%s) MV_CPUS=$(nproc)" > /tmp/mv-cpu-$CI_NODE_INDEX
     - (cd frontend && npm ci)
-    - MV_SHARD="$CI_NODE_INDEX/$CI_NODE_TOTAL" make live-check 2>&1 | tee "gate-shard-$CI_NODE_INDEX.log"
-  # after_script runs whatever the script did, so a red shard still
-  # reports its number -- and it runs in a fresh shell that can only see
-  # files on disk, which is why the start values went to /tmp above
-  # rather than into a variable.
+    # Both cgroup samples must be taken by this shell. The first attempt
+    # closed the clock in `after_script`, which the executor runs as its
+    # own step with its own cgroup, so `usage_usec` there started again
+    # near zero: all four shards of pipeline 702 reported `cpu=0s`, and
+    # two of them a *negative* average -- impossible from one cgroup,
+    # because the counter only ever climbs. Hence the exit-code dance
+    # below rather than the obvious extra script line: `make live-check`
+    # is allowed to fail, and a red shard must still close its clock.
+    - |
+      set +e
+      MV_SHARD="$CI_NODE_INDEX/$CI_NODE_TOTAL" make live-check 2>&1 | tee "gate-shard-$CI_NODE_INDEX.log"
+      mv_rc=$?
+      echo "MV_CPU_END=$(awk '/^usage_usec/{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null) MV_T_END=$(date +%s)" >> /tmp/mv-cpu-$CI_NODE_INDEX
+      exit $mv_rc
+  # after_script now does arithmetic and nothing else: both readings are
+  # taken above and left on disk, which is also how they survive into
+  # this fresh shell.
   after_script:
     - |
       set +e
@@ -533,21 +545,36 @@ gate:scenarios:
         exit 0
       fi
       . "$start_file"
-      end=$(awk '/^usage_usec/{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null)
-      wall=$(( $(date +%s) - MV_T_START ))
       # cgroup v2 only, and only when the container has its own cgroup
       # namespace. Rather than print a confident wrong number if either
       # is untrue, say which piece is missing.
-      if [ -z "$MV_CPU_START" ] || [ -z "$end" ]; then
+      if [ -z "$MV_CPU_START" ]; then
         echo "cpu-measure shard $CI_NODE_INDEX: /sys/fs/cgroup/cpu.stat has no usage_usec -- not cgroup v2, or not readable in this container"
         exit 0
       fi
+      # Only a cancel or a timeout gets here: an ordinary red shard still
+      # closes its own clock. There is no honest number to print.
+      if [ -z "$MV_CPU_END" ]; then
+        echo "cpu-measure shard $CI_NODE_INDEX: no end sample -- the job was cancelled or timed out before the work finished"
+        exit 0
+      fi
+      wall=$(( MV_T_END - MV_T_START ))
       if [ "$wall" -le 0 ]; then
         echo "cpu-measure shard $CI_NODE_INDEX: wall time was ${wall}s -- nothing to average over"
         exit 0
       fi
-      cpu=$(( (end - MV_CPU_START) / 1000000 ))
-      avg=$(awk "BEGIN{printf \"%.2f\", ($end - $MV_CPU_START) / 1000000 / $wall}")
+      used=$(( MV_CPU_END - MV_CPU_START ))
+      # What pipeline 702 did, and what a confident `0` hid. A shard that
+      # ran for minutes cannot have used no CPU at all, so a flat or
+      # falling counter means the two samples did not come from one
+      # cgroup -- report that rather than a number someone would rank a
+      # lane by.
+      if [ "$used" -le 0 ]; then
+        echo "cpu-measure shard $CI_NODE_INDEX: the counter did not move over ${wall}s (start=${MV_CPU_START} end=${MV_CPU_END}) -- unusable, not a real zero"
+        exit 0
+      fi
+      cpu=$(( used / 1000000 ))
+      avg=$(awk "BEGIN{printf \"%.2f\", $used / 1000000 / $wall}")
       echo "cpu-measure shard $CI_NODE_INDEX: wall=${wall}s cpu=${cpu}s avg_cpus=${avg} of ${MV_CPUS} visible"
       # A shard cannot use more cores than the container can see. If it
       # appears to, the counter being read is the host's and not this
