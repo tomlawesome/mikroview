@@ -55,7 +55,7 @@
     type Stop,
   } from '../lib/city/project'
   import { gateToward, lerpP, roadPieces, type Entity } from '../lib/city/roads'
-  import { reachFor, reachLineSummary, type ReachStrand } from '../lib/reach'
+  import { hostSubject, reachFor, reachLineSummary, type ReachStrand, type ReachSubject, type ReachSummary } from '../lib/reach'
   import { composeCommand, reachComposeInput } from '../lib/compose'
   import { riverScene } from '../lib/city/river'
   import { P, type Paint } from '../lib/city/paint'
@@ -448,9 +448,64 @@
     onStandChange?.(standBuilding)
   })
 
-  // reachFor is #626/#485's own strand model, unchanged: the city draws
-  // exactly what it derives, never a second reading of the same events.
-  const standReach = $derived(standBuilding ? reachFor(standBuilding.ip, zonesState.wanInterface, appState.events) : null)
+  /** The two districts a road joins, or null when it joins none. A pair
+   * road is keyed `[a,b].sort().join('|')` by layout.ts over the
+   * district ids, and a district id is the zone's own boundary
+   * interface, so the ends are read from the id rather than guessed
+   * from where the road runs. A building's lane and a bridge leg are
+   * not lines between two districts. */
+  function ribEndsOf(r: { id: string; lane?: boolean }): [string, string] | null {
+    if (r.lane) return null
+    const bar = r.id.indexOf('|')
+    if (bar <= 0) return null
+    const a = r.id.slice(0, bar)
+    const b = r.id.slice(bar + 1)
+    return b && districtOf(a) && districtOf(b) ? [a, b] : null
+  }
+
+  /** What the reach is centred on (#1016, ratified 2026-09-08): whatever
+   * was stood on. A building is a host, a district is its zone, and a
+   * road between two districts is the rib they share. A lane or a bridge
+   * leg is no line between two districts and so has no subject: the
+   * camera still comes to it and the crumb still names it, and it states
+   * nothing it cannot derive. */
+  const standSubject = $derived.by((): ReachSubject | null => {
+    if (standBuilding) return hostSubject(standBuilding.ip)
+    if (standDistrict) return { kind: 'zone', iface: standDistrict.id }
+    const ends = standRoad ? ribEndsOf(standRoad) : null
+    return ends ? { kind: 'rib', a: ends[0], b: ends[1] } : null
+  })
+
+  // reachFor is #626/#485's own strand model: the city draws exactly
+  // what it derives, never a second reading of the same events. It now
+  // answers for all three subjects, so the district and the road stopped
+  // needing a workaround of their own.
+  const standReach = $derived(standSubject ? reachFor(standSubject, zonesState.wanInterface, appState.events) : null)
+
+  /** The subject's own name, for the crumb and the cards. */
+  const standName = $derived(standBuilding?.name ?? standDistrict?.name ?? standRoad?.label ?? '')
+
+  /** The crumb's second cell: a host's address, a district's pushed
+   * subnet, and nothing for a road, which has neither. */
+  const standSub = $derived(standBuilding ? standBuilding.ip : standDistrict ? (standDistrict.cidr ?? 'no address pushed') : '')
+
+  /** The reach's own side of a line, for the cards that read
+   * `subject → peer`. A rib is already a pair, so it reads from its near
+   * end rather than printing the pair twice. */
+  const standSideName = $derived.by((): string => {
+    const subj = standSubject
+    if (subj?.kind === 'rib') return districtOf(subj.a)?.name ?? subj.a
+    return standName
+  })
+
+  /** The district the subject stands in or starts from, for keeping a
+   * card off the plates its own line runs between. */
+  const standDistrictId = $derived.by((): string | null => {
+    const subj = standSubject
+    if (subj?.kind === 'rib') return subj.a
+    if (standDistrict) return standDistrict.id
+    return standBuilding?.districtId ?? null
+  })
 
   /** The crumb's third count (round 49, DESIGN.md "The reach": `name ·
    * ip · reaches N · reached by N · refused N`).
@@ -889,18 +944,44 @@
     return r.id.slice(0, bar) === d.id || r.id.slice(bar + 1) === d.id
   }
 
+  /** Which roads draw the line toward `counterpart` from `token`, and
+   * the counterpart they draw -- the join between a strand and the
+   * ground's own road ids, shared by all three subjects so none of them
+   * invents a second idea of which road a line runs along. */
+  function roadsToward(token: string, counterpart: string, ownRoadIds: Set<string>, lineOf: Map<string, string>): void {
+    const counterpartToken = counterpart === 'internet' ? (zonesState.wanInterface ?? '') : counterpart
+    if (!counterpartToken) return
+    const pairId = [token, counterpartToken].sort().join('|')
+    const road = ground.roads.find((r) => !r.lane && r.id === pairId)
+    if (road) {
+      ownRoadIds.add(road.id)
+      if (!lineOf.has(road.id)) lineOf.set(road.id, counterpart)
+    }
+    const bridge = ground.bridges.find((br) => br.iface === counterpartToken)
+    if (bridge) {
+      for (const id of ['rb-' + bridge.id, bridge.id + '-span']) {
+        ownRoadIds.add(id)
+        if (!lineOf.has(id)) lineOf.set(id, counterpart)
+      }
+    }
+  }
+
   /**
-   * A district's reach (round 49). DESIGN.md widens the click to "a
-   * building, a host dot, a district, a road" and gives one behaviour
-   * for all of them -- the camera comes to the subject and every road
-   * that is not its own fades -- but describes the crumb's counts only
-   * for a host, which is the only subject `reachFor` can answer for. So
-   * this lights the district's own roads and says nothing it cannot
-   * derive: no strand counts, no composer, no drop marks the district
-   * pair roads do not already draw for themselves.
+   * A district's reach (round 49, #1016). DESIGN.md widens the click to
+   * "a building, a host dot, a district, a road" and gives one behaviour
+   * for all of them: the camera comes to the subject and every road that
+   * is not its own fades. The district's subject is its boundary
+   * interface, so its lines come from the same `reachFor` a host's do --
+   * every road it owns stays lit, and the ones a strand actually runs
+   * along open that line's card.
+   *
+   * No drop marks and no composer: the pair roads already end at the
+   * wall where the pair was refused, and a drafted rule names one
+   * machine as its source.
    */
-  function placeOverlay(d: District): ReachOverlay {
+  function placeOverlay(d: District, summary: ReachSummary | null): ReachOverlay {
     const ownRoadIds = new Set<string>()
+    const lineOf = new Map<string, string>()
     const litBuildingIds = new Set<string>(d.buildings.map((b) => b.id))
     for (const r of ground.roads) {
       if (!roadTouches(r, d)) continue
@@ -914,21 +995,38 @@
         litBuildingIds.add(far)
       }
     }
-    return { ownRoadIds, reverseIds: new Set(), lineOf: new Map(), laneSubjects: [], litBuildingIds, dropMarks: [], composerAnchor: null }
+    for (const s of summary?.strands ?? []) roadsToward(d.id, s.counterpart, ownRoadIds, lineOf)
+    return { ownRoadIds, reverseIds: new Set(), lineOf, laneSubjects: [], litBuildingIds, dropMarks: [], composerAnchor: null }
   }
 
-  /** A road's own reach (round 49): that road alone, and the ends it
-   * joins. Everything else on the map fades, which is the same sentence
-   * every other reach reads. */
-  function roadOverlay(r: (typeof ground.roads)[number]): ReachOverlay {
+  /** A road's own reach (round 49, #1016): that road alone, everything
+   * else faded, which is the same sentence every other reach reads.
+   *
+   * A road between two districts is a rib, and its subject lights the
+   * machines that actually used it -- `peerAddrs` names the hosts at
+   * both ends, which is the one thing a rib knows that the drawing does
+   * not. A lane or a bridge leg is no rib and has no summary, so it
+   * lights the ends it joins and stops there. */
+  function roadOverlay(r: (typeof ground.roads)[number], summary: ReachSummary | null): ReachOverlay {
     const litBuildingIds = new Set<string>()
+    const lineOf = new Map<string, string>()
     if (r.from) litBuildingIds.add(r.from)
     if (r.to) litBuildingIds.add(r.to)
-    for (const d of ground.districts) if (roadTouches(r, d)) for (const b of d.buildings) litBuildingIds.add(b.id)
+    if (summary) {
+      for (const s of summary.strands) {
+        if (!lineOf.has(r.id)) lineOf.set(r.id, s.counterpart)
+        for (const addr of s.peerAddrs) {
+          const peer = allBuildings.find((x) => x.ip === addr)
+          if (peer) litBuildingIds.add(peer.id)
+        }
+      }
+    } else {
+      for (const d of ground.districts) if (roadTouches(r, d)) for (const b of d.buildings) litBuildingIds.add(b.id)
+    }
     return {
       ownRoadIds: new Set([r.id]),
       reverseIds: new Set(),
-      lineOf: new Map(),
+      lineOf,
       laneSubjects: [],
       litBuildingIds,
       dropMarks: [],
@@ -948,8 +1046,8 @@
    * occasion.
    */
   const reachOverlay = $derived.by((): ReachOverlay | null => {
-    if (standDistrict) return placeOverlay(standDistrict)
-    if (standRoad) return roadOverlay(standRoad)
+    if (standDistrict) return placeOverlay(standDistrict, standReach)
+    if (standRoad) return roadOverlay(standRoad, standReach)
     const b = standBuilding
     const summary = standReach
     if (!b || !summary) return null
@@ -2087,9 +2185,8 @@
   const lineCard = $derived.by(() => {
     const id = openRoadId
     const overlay = reachOverlay
-    const b = standBuilding
     const summary = standReach
-    if (!id || !overlay || !b || !summary) return null
+    if (!id || !overlay || !summary) return null
     const counterpart = overlay.lineOf.get(id)
     if (counterpart === undefined) return null
     // The subject is a line, and two things can draw one: the road it
@@ -2117,8 +2214,8 @@
     // the standing building's own district and the counterpart's, the
     // same two ends `roadEnds` gives the off-baseline card.
     const token = counterpart === 'internet' ? (zonesState.wanInterface ?? '') : counterpart
-    const endIds = new Set([b.districtId, districtOf(token)?.id].filter((x): x is string => typeof x === 'string'))
-    return { id, anchor, line, lead, peerName, peerAddr, refusedPort, host: b, endIds }
+    const endIds = new Set([standDistrictId, districtOf(token)?.id].filter((x): x is string => typeof x === 'string'))
+    return { id, anchor, line, lead, peerName, peerAddr, refusedPort, hostName: standSideName, endIds }
   })
 
   /** The line card's title, in the order the traffic went: the same
@@ -2129,14 +2226,13 @@
   /** The card's accessible name, and the road's while the reach is open. */
   function lineAria(id: string): string | null {
     const overlay = reachOverlay
-    const b = standBuilding
     const summary = standReach
-    if (!id || !overlay || !b || !summary) return null
+    if (!id || !overlay || !summary) return null
     const counterpart = overlay.lineOf.get(id)
     if (counterpart === undefined) return null
     const lead = summary.strands.find((s) => s.counterpart === counterpart) ?? null
     const peerName = lead?.peers[0] ?? (counterpart === 'internet' ? 'the internet' : counterpart)
-    return `${lineTitle(b.name, peerName, lead?.direction ?? null)} line, ports and what each drew`
+    return `${lineTitle(standSideName, peerName, lead?.direction ?? null)} line, ports and what each drew`
   }
 
   /** The composer, shown only when asked for (round 49): the card on a
@@ -2388,8 +2484,8 @@
     viewBox="0 0 {STAGE_W} {STAGE_H}"
     preserveAspectRatio="xMidYMid meet"
     role="application"
-    aria-label={standBuilding
-      ? `Standing on ${standBuilding.name}${standBuilding.ip ? ' at ' + standBuilding.ip : ''}: Escape surfaces to where you were`
+    aria-label={stand
+      ? `Standing on ${standName}${standSub ? ' at ' + standSub : ''}: Escape surfaces to where you were`
       : `The estate as a city at the ${effectiveStop} stop: drag or hold Shift with the arrow keys to pan; arrow keys walk the districts and their buildings`}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
@@ -2631,42 +2727,36 @@
     </g>
   </svg>
 
-  {#if standBuilding && standReach}
+  {#if standBuilding || standDistrict || standRoad}
     <!-- The crumb (#868, round 49 #1016, DESIGN.md "The reach"): name ·
          ip · reaches N · reached by N · refused N · Esc surfaces ▸ --
-         the one wording on both surfaces. `refused N` and the ▸ are
-         round 49's; the rest is the 2D map's own
-         "reaches <b>N</b> · reached by <b>N</b>" wording (Topography.svelte's
-         reach crumb), the round-40 mockup's layout and its own literal
-         "Esc surfaces" for the rest. It is itself the other way to
-         surface (#868's own "Esc or the crumb"), restoring the exact
-         camera standing started from, same as Escape. -->
-    <button type="button" class="crumb" aria-label="Standing on {standBuilding.name}. Activate to surface." onclick={standSurface}>
-      <b>{standBuilding.name}</b>
-      <span>{standBuilding.ip}</span>
+         the one wording on both surfaces, and now for all three
+         subjects. `refused N` and the ▸ are round 49's; the rest is the
+         2D map's own "reaches <b>N</b> · reached by <b>N</b>" wording
+         (Topography.svelte's reach crumb), the round-40 mockup's layout
+         and its own literal "Esc surfaces" for the rest. It is itself
+         the other way to surface (#868's own "Esc or the crumb"),
+         restoring the exact camera standing started from, same as
+         Escape.
+
+         The three counts are counts of distinct counterparts, and
+         `reachFor` now answers them for a zone and a rib as well as for
+         a host, so they say one thing on every subject. A lane or a
+         bridge leg is neither, so it has no summary: its crumb names it
+         and says how to surface, rather than stating a count derived
+         some other way. The second cell is the host's address or the
+         district's pushed subnet -- a road has neither, and is not
+         given an invented one. -->
+    <button type="button" class="crumb" aria-label="Standing on {standName}. Activate to surface." onclick={standSurface}>
+      <b>{standName}</b>
+      {#if standSub}<span>{standSub}</span>{/if}
       <i></i>
-      <span>reaches <b>{standReach.reaches}</b></span>
-      <span>reached by <b>{standReach.reachedBy}</b></span>
-      <span>refused <b>{standRefused}</b></span>
-      <i></i>
-      <span class="esc">Esc surfaces ▸</span>
-    </button>
-  {:else if standDistrict || standRoad}
-    {@const name = standDistrict ? standDistrict.name : (standRoad?.label ?? 'road')}
-    {@const sub = standDistrict ? (standDistrict.cidr ?? 'no address pushed') : null}
-    <!-- The same crumb for a district's or a road's reach (round 49's
-         "click anything"), carrying only what the app knows about that
-         subject. `reaches N · reached by N · refused N` are counts of
-         distinct counterparts a *host* spoke to, which is what
-         `reachFor` answers; neither a district nor a road has that
-         reading, and stating one derived some other way would be a
-         second, quietly different meaning for the same three words.
-         So they are left out rather than invented -- the crumb still
-         names the subject and still says how to surface. -->
-    <button type="button" class="crumb" aria-label="Standing on {name}. Activate to surface." onclick={standSurface}>
-      <b>{name}</b>
-      {#if sub}<span>{sub}</span>{/if}
-      <i></i>
+      {#if standReach}
+        <span>reaches <b>{standReach.reaches}</b></span>
+        <span>reached by <b>{standReach.reachedBy}</b></span>
+        <span>refused <b>{standRefused}</b></span>
+        <i></i>
+      {/if}
       <span class="esc">Esc surfaces ▸</span>
     </button>
   {/if}
@@ -3032,7 +3122,7 @@
     >
       <div class="bc-t">
         <span class="n"
-          >{lineTitle(lc.host.name, lc.peerName, lc.lead?.direction ?? null)}{#if lc.peerAddr}<small>{lc.peerAddr}</small>{/if}</span
+          >{lineTitle(lc.hostName, lc.peerName, lc.lead?.direction ?? null)}{#if lc.peerAddr}<small>{lc.peerAddr}</small>{/if}</span
         >
         <button
           type="button"

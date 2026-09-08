@@ -1023,6 +1023,95 @@ describe('clicking anything opens its reach (round 49, #1016)', () => {
     baselineState.off = EMPTY_OFF_BASELINE
   })
 
+  /** in:bridge-lan out:vlan-srv, one host each side. */
+  function crossing(over: Partial<ClientEvent> = {}): ClientEvent {
+    return {
+      id: 1,
+      time: '2026-09-03T12:00:00Z',
+      receivedAt: Date.now(),
+      deviceId: 'rb5009',
+      sourceIp: '10.10.0.10',
+      action: 'accept',
+      ruleLabel: 'r',
+      chain: 'forward',
+      raw: '',
+      srcIp: '10.10.0.10',
+      dstIp: '10.20.0.10',
+      inInterface: 'bridge-lan',
+      outInterface: 'vlan-srv',
+      protocol: 'tcp',
+      dstPort: 445,
+      ...over,
+    }
+  }
+
+  it("a district's crumb states its own three counts (#1016)", () => {
+    // The district's subject is its boundary interface, so the crumb
+    // says the same three things a host's does rather than leaving them
+    // out: one counterpart it reaches, one that reached it, one refused.
+    appState.events = [
+      crossing({ id: 1 }),
+      crossing({ id: 2, srcIp: '10.20.0.10', dstIp: '10.10.0.10', inInterface: 'vlan-srv', outInterface: 'bridge-lan', dstPort: 12345 }),
+      crossing({ id: 3, outInterface: 'wlan-wsh', dstIp: '10.30.0.10', action: 'drop', ruleLabel: 'default drop' }),
+      // In and out through the district's own boundary: it crossed
+      // nothing, so it is not one of its pathways.
+      crossing({ id: 4, outInterface: 'bridge-lan', dstIp: '10.10.0.11' }),
+    ]
+    const { container } = render(City, { props: { stop: 'city', ground } })
+    fireEvent.click(container.querySelector('.plate[data-cid="bridge-lan"]') as Element)
+    flushSync()
+
+    const crumb = container.querySelector('.crumb')!.textContent!.replace(/\s+/g, ' ').trim()
+    expect(crumb).toContain('reaches 1')
+    expect(crumb).toContain('reached by 1')
+    expect(crumb).toContain('refused 1')
+  })
+
+  it("a road's crumb states the rib's counts, and its card lists the line (#1016)", async () => {
+    appState.events = [
+      crossing({ id: 1 }),
+      crossing({ id: 2 }),
+      crossing({ id: 3, dstPort: 22, action: 'drop', ruleLabel: 'default drop' }),
+      // A different pair: not this rib's traffic, so not on its card.
+      crossing({ id: 4, outInterface: 'wlan-wsh', dstIp: '10.30.0.10', dstPort: 8080 }),
+    ]
+    // A road is only pointable when it has something to say. Outside a
+    // reach that is an off-baseline line, which is how the reader gets
+    // to stand on it in the first place.
+    baselineState.off = {
+      config: { days: 3, of: 14 },
+      generatedAt: 1,
+      count: 1,
+      lines: [
+        { key: 'l', srcIp: '10.10.0.10', dstIp: '10.20.0.10', port: 990, proto: 'tcp', count: 40, firstSeenToday: Date.now(), outcome: 'accept' as const },
+      ],
+    }
+    vi.spyOn(baselineState, 'refresh').mockResolvedValue(undefined)
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const hot = container.querySelector('[data-road-hot="bridge-lan|vlan-srv"]') as Element
+    expect(hot).not.toBeNull()
+    await fireEvent.click(hot)
+    flushSync()
+
+    // A road has no address of its own, so the crumb names the pair and
+    // states the counts, and nothing between them.
+    const crumb = container.querySelector('.crumb')!.textContent!.replace(/\s+/g, ' ').trim()
+    expect(crumb).toContain('reaches 1')
+    expect(crumb).toContain('refused 1')
+
+    // What a rib can say that the drawing cannot: the ports it carried.
+    await fireEvent.pointerEnter(container.querySelector('[data-road-hot="bridge-lan|vlan-srv"]') as Element)
+    flushSync()
+    const card = container.querySelector('.lcard') as HTMLElement
+    expect(card).not.toBeNull()
+    const rows = [...card.querySelectorAll('table.ports tbody tr')].map((r) => [...r.querySelectorAll('td')].map((td) => td.textContent?.trim()))
+    expect(rows).toEqual([
+      ['445', 'tcp', '2', '—'],
+      ['22', 'tcp', '—', '1'],
+    ])
+    baselineState.off = EMPTY_OFF_BASELINE
+  })
+
   it('works from any city stop, not just one', () => {
     for (const stop of ['city', 'borough', 'district', 'street'] as const) {
       const r = render(City, { props: { stop, ground } })
