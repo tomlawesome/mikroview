@@ -1462,10 +1462,18 @@
     height: 40px;
   }
 
+  /* Round 30's shelf writes a card's name in the mono face, uppercase
+     and widely tracked -- `THE FALL`, `THE DOCKET` (the-whole.html
+     `.stcard .nm`). The name itself stays sentence case in the markup so
+     the drag handle's aria-label reads as a name; only the drawing is
+     uppercased. #735 turned the shelf on its side; it did not change how
+     a card is lettered. */
   .stcard .nm {
+    font-family: var(--font-mono);
     font-size: 9.5px;
-    font-weight: 650;
-    letter-spacing: 0.1em;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
     color: var(--fg-muted);
   }
 
