@@ -666,6 +666,75 @@ describe('standing on a building (#868)', () => {
     expect(cmd).toContain('action=accept')
   })
 
+  it('the host card offers `draft the rule ▸` for the standing host’s refused strand (#1035)', async () => {
+    // #1035: the composer was unreachable. Its only door was the line
+    // card's `draft the rule ▸`, and a line card needs a road or a mark
+    // to hover -- but a strand whose district pair already ends in a
+    // drop draws neither of its own (the aggregate road is drawn, and
+    // the strand's mark is suppressed so the bollards are not doubled),
+    // and that aggregate is not a line the reach owns, so it has no
+    // card either. Standing on such a host, nothing on screen could
+    // open the composer at all.
+    //
+    // The door belongs on the host card, which is open the moment you
+    // are standing on the building anyway: guest-1 → lan-1 is refused,
+    // and the guest/LAN pair already ends in a drop of its own.
+    appState.events = [
+      event({ srcIp: '10.40.0.10', dstIp: '10.10.0.10', inInterface: 'vlan-guest', outInterface: 'bridge-lan', action: 'drop', ruleLabel: 'guest-isolation', dstPort: 445, protocol: 'tcp' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    const guest = container.querySelector('[data-cid="vlan-guest/10.40.0.10"]') as Element
+    fireEvent.click(guest)
+    flushSync()
+    // Nothing else on the drawing could have opened it: no road of this
+    // strand's own carries a card, and no mark was drawn for it.
+    expect(container.querySelector('[data-road-hot="mark:bridge-lan"]')).toBeNull()
+    // Standing puts the pointer on the building, so its card is open.
+    fireEvent.pointerEnter(container.querySelector('[data-cid="vlan-guest/10.40.0.10"]') as Element)
+    flushSync()
+    await tick()
+    const card = container.querySelector('.bcard.hcard') as HTMLElement
+    expect(card).not.toBeNull()
+    const draft = card.querySelector('[data-draft-rule]') as HTMLElement
+    expect(draft).not.toBeNull()
+    expect(draft.textContent).toContain('draft the rule ▸')
+    expect(container.querySelector('.composer')).toBeNull()
+    fireEvent.click(draft)
+    flushSync()
+    const composer = container.querySelector('.composer') as HTMLElement
+    expect(composer).not.toBeNull()
+    expect(composer.textContent).toContain('tcp/445')
+    expect(composer.textContent).toContain('caught by guest-isolation')
+    expect(composer.textContent).toContain('drafted · never run')
+  })
+
+  it('offers no `draft the rule ▸` on a host card with nothing refused, or on one you are not standing on (#1035)', async () => {
+    // The composer is about the standing host's own busiest refused
+    // strand, so the door only belongs on that host's card: on any
+    // other card it would draft a rule for a building the reader is not
+    // looking at.
+    appState.events = [
+      event({ srcIp: '10.40.0.10', dstIp: '10.10.0.10', inInterface: 'vlan-guest', outInterface: 'bridge-lan', action: 'drop', ruleLabel: 'guest-isolation', dstPort: 445, protocol: 'tcp' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    // Nobody is standing yet: hovering a host offers nothing.
+    fireEvent.pointerEnter(container.querySelector('[data-cid="vlan-guest/10.40.0.10"]') as Element)
+    flushSync()
+    await tick()
+    expect(container.querySelector('.bcard.hcard [data-draft-rule]')).toBeNull()
+
+    fireEvent.click(container.querySelector('[data-cid="vlan-guest/10.40.0.10"]') as Element)
+    flushSync()
+    // Standing on guest-1, but hovering lan-1: lan-1 refused nothing of
+    // its own, and the guest strand is not lan-1's to draft.
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    await tick()
+    const card = container.querySelector('.bcard.hcard') as HTMLElement
+    expect(card.textContent).toContain('lan-1')
+    expect(card.querySelector('[data-draft-rule]')).toBeNull()
+  })
+
   it('the crumb states name, address, reach counts and that Esc surfaces, as in 2D', () => {
     appState.events = [
       event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv' }),

@@ -209,13 +209,35 @@ async function standOn(cid) {
   return page.locator('[data-card="topography"] .city')
 }
 
+// The composer names the rule, and #1035 put its door on the standing
+// host's card -- the one card that is always there to be asked, where
+// the line card needs a road or a mark to hover and a strand across a
+// district pair that already ends in a drop draws neither. Hovering the
+// building opens its card whether or not the keyboard walk left the
+// focus on it.
+async function draftFrom(cid) {
+  await page.locator(`[data-card="topography"] .city [data-cid="${cid}"]`).first().hover()
+  await new Promise((r) => setTimeout(r, 400))
+  const draft = page.locator('[data-card="topography"] .city .bcard.hcard [data-draft-rule]')
+  if ((await draft.count()) === 0) return null
+  await draft.first().click()
+  await new Promise((r) => setTimeout(r, 400))
+  const composer = page.locator('[data-card="topography"] .city .composer')
+  if ((await composer.count()) === 0) return null
+  return (await composer.first().textContent()) ?? ''
+}
+
 const targetCid = `bridge-lan/${IOT_UNPLANNED_SRC}`
 const standCity = await standOn(targetCid)
 check(standCity !== null, `the keyboard walk reaches the unplanned pair's own host (${targetCid})`)
 
 check((await standCity.getAttribute('data-stop')) === 'street', 'standing on the host drops the camera to the street stop')
-const standText = await standCity.textContent()
-check(standText.includes('caught, no rule named'), "standing on its own host, the unplanned pair says so plainly rather than guessing one -- whichever pair the city-wide wall escalates")
+const standDraft = await draftFrom(targetCid)
+check(standDraft !== null, 'the standing host card offers `draft the rule ▸`, so the composer can be reached at all (#1035)')
+check(
+  (standDraft ?? '').includes('caught, no rule named'),
+  "standing on its own host, the unplanned pair says so plainly rather than guessing one -- whichever pair the city-wide wall escalates",
+)
 
 await page.keyboard.press('Escape')
 await new Promise((r) => setTimeout(r, 900))
@@ -228,12 +250,11 @@ await new Promise((r) => setTimeout(r, 900))
 // so standing on a refused host must show the plain mark too, not the
 // rule that refused it.
 //
-// The rule's own name lives in the card -- the line card's
-// `:445 refused by guest-isolation` and the composer's
-// "it's been asking · tcp/445 · 6× · caught by guest-isolation". Neither
-// is readable from a plain `textContent` while the card is shut, and the
-// door that opens the composer is #1035; this check is about what the
-// drawing says, which is the part #1036 settled.
+// The rule's own name lives in the card, and the composer is opened
+// through the host card's own door to read it -- the negative case
+// above, a drop with no rule label reading "caught, no rule named", is
+// the same card, so the pair proves it names the rule when the event
+// carries one and declines to invent one when it does not.
 await toDistrictStop()
 const guestCid = 'vlan-guest/10.0.30.20'
 const guestCity = await standOn(guestCid)
@@ -244,11 +265,17 @@ check(
   !guestText.includes('caught by guest-isolation'),
   `no rule name is written on the strand either (${JSON.stringify(guestText.slice(0, 160))})`,
 )
-
-// And the road itself says only the plain word: the rule's name is the
-// card's to carry, not the drawing's (#991).
+const guestDraft = await draftFrom(guestCid)
+check(guestDraft !== null, 'the refused guest host offers `draft the rule ▸` on its own card (#1035)')
+check(
+  (guestDraft ?? '').includes('caught by guest-isolation'),
+  'the composer names the rule that refused the boundary, from the event itself',
+)
 await page.keyboard.press('Escape')
 await new Promise((r) => setTimeout(r, 900))
+
+// And the road itself says only the plain word: the rule's name is the
+// card's to carry, not the drawing's (#991, #1036).
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('3') // the city stop
 await new Promise((r) => setTimeout(r, 900))
 const cityText = (await page.locator('[data-card="topography"] .city').textContent()) ?? ''
