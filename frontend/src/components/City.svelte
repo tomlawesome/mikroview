@@ -87,6 +87,7 @@
     addressName,
     endName,
     portWords,
+    roadEnds,
     rollUpRoads,
     verdictWords,
     type RoadBaselineEntry,
@@ -610,7 +611,16 @@
   })
 
   function onWindowKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && stand) {
+    if (e.key !== 'Escape') return
+    // A ladder, top rung first (#1002): a card was opened on purpose, so
+    // Escape takes that back before it takes back where you are
+    // standing. Two Escapes to do both, and never both at once.
+    if (openDropId) {
+      e.preventDefault()
+      closeDropCard()
+      return
+    }
+    if (stand) {
       e.preventDefault()
       standSurface()
     }
@@ -1382,6 +1392,12 @@
 
     // Roads, cut into pieces that carry their own depth.
     const dropLabels: { x: number; y: number; text: string; alarm: boolean }[] = []
+    /** The aggregate marks that have a breakdown to open, as boxes over
+     * the mark and its word (#1002). The mark is the control, so this is
+     * where the reader points; a mark with no rules to name gets none,
+     * and stays exactly as it was drawn rather than offering a dead
+     * click. */
+    const dropHits: { id: string; x: number; y: number; w: number; h: number }[] = []
     const ents = new Map<string, Entity>()
     for (const b of allBuildings) ents.set(b.id, { u: b.u, v: b.v, R: b.R })
 
@@ -1402,7 +1418,11 @@
     //
     // The source is prefixed, and only when the drop is not on the
     // building you are standing on -- #991's own rule, unchanged.
-    function dropMarkAt(e: Pt, alarm: boolean, source?: string) {
+    //
+    // `hotFor` is the road whose breakdown this mark opens (#1002), when
+    // it has one. Nothing about the mark changes for it: the card is one
+    // interaction deeper, and the drawing still says only "dropped".
+    function dropMarkAt(e: Pt, alarm: boolean, source?: string, hotFor?: string) {
       const text = source ? source + ' · dropped' : 'dropped'
       const col2 = alarm ? 'var(--alarm)' : 'var(--drop)'
       const px = X(c, e[0])
@@ -1424,6 +1444,15 @@
         lamps: [],
       })
       dropLabels.push({ x: mx, y: my - 14 * k, text, alarm })
+      // One target over the mark and the word above it, never two: they
+      // are one thing to point at. Wide enough for the word, and always
+      // taller than the 24px a gate pill stands at.
+      if (hotFor) {
+        const top = my - 22 * k
+        const bottom = my + 12 * k
+        const half = Math.max(30, 12 * k + text.length * 3)
+        dropHits.push({ id: hotFor, x: R2(mx - half), y: R2(top), w: R2(half * 2), h: R2(bottom - top) })
+      }
     }
 
     for (const r of g.roads) {
@@ -1517,7 +1546,13 @@
       // so this mark names no source. Nor does it name the refusing rule
       // -- `Road.refusedBy` is the events' own rule label, and #1036
       // keeps it off the drawing and in the card.
-      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x')
+      //
+      // That card is this mark's own (#1002): the pair is the one level
+      // that knows every rule which refused here, so the mark opens the
+      // breakdown `Road.dropBreakdown` carries. Not while standing --
+      // the reach fades every road but its own, and its marks answer
+      // for their own strand instead.
+      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x', undefined, !reachOverlay && (r.dropBreakdown?.length ?? 0) > 0 ? r.id : undefined)
     }
     // #991: "gone from the street stop" -- the road port chips (#868's
     // "ports on the road") are dropped entirely; the ports live on the
@@ -1710,7 +1745,7 @@
       bridgeChips.push({ x, y, w: R2(w), t, stroke })
     }
 
-    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, dropLabels, markHits, claim }
+    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, dropLabels, markHits, dropHits, claim }
   })
 
   /** Names float over buildings at the street stop, for what the
@@ -2460,6 +2495,157 @@
     return watchCardSize(card, () => roadCardTick++)
   })
 
+  /* ---------------- the drop card (#1002) ----------------
+     Where the refusing rules live. The drawing says only "dropped"
+     (#1036, DESIGN.md's metaphor table), so the names and the counts
+     are one interaction deeper: the aggregate mark is the control, and
+     what it opens is a card in the same family as every other one here
+     -- hover opens it, the pin keeps it, and it floats beside the mark
+     on a leader (lib/cardAnchor, shared with the boundary, host, road
+     and line cards, and with the 2D map).
+
+     The pair is the level that can answer this. A single strand knows
+     one catcher (`ReachStrand.refusedBy`, the latest drop's label) and
+     the composer already says it; `Road.dropBreakdown` keeps every rule
+     that refused on the pair, with a count each, from the same events
+     the drawing counts. */
+
+  let hoverDrop = $state<string | null>(null)
+  let pinnedDrop = $state<string | null>(null)
+  const dropGrace = grace()
+  let dcardEl: HTMLDivElement | undefined = $state()
+  let dropPlace = $state<Placement | null>(null)
+  let dropCardTick = $state(0)
+
+  const openDropId = $derived(pinnedDrop ?? hoverDrop)
+  const dropPinned = $derived(pinnedDrop !== null)
+
+  /** The open mark's road, what refused there, and the two names the
+   * header reads. Null when the road has gone -- a fresh rule table can
+   * stop drawing it, and a card about a mark nobody can see is a card
+   * about nothing. */
+  const dropCard = $derived.by(() => {
+    const id = openDropId
+    if (!id) return null
+    const road = ground.roads.find((r) => r.id === id && r.stop === 'drop')
+    if (!road) return null
+    const rules = road.dropBreakdown ?? []
+    if (rules.length === 0) return null
+    const ends = roadEnds(road, ground.districts)
+    if (!ends) return null
+    const anchor = road.pts[road.pts.length - 1]
+    if (!anchor) return null
+    // Largest first is the card's own promise, so the card is what keeps
+    // it rather than trusting whatever order it was handed.
+    const rows = [...rules].sort((a, b) => b.count - a.count)
+    return {
+      id,
+      anchor,
+      rows,
+      total: rows.reduce((n, r) => n + r.count, 0),
+      from: endName(ground, ends.start),
+      to: endName(ground, ends.end),
+      endIds: new Set([ends.start, ends.end]),
+      alarm: road.k === 'x',
+    }
+  })
+
+  /** The card's title, in the composer's own words: a refusal reads the
+   * same wherever it is said. */
+  const dropTitle = $derived(dropCard ? `${dropCard.from} → ${dropCard.to} · refused at this wall` : '')
+
+  /** What one row says. A drop that carried no rule label at all is said
+   * plainly, in the composer's phrase, and keeps its place in the
+   * busiest-first order rather than being folded into a named rule or
+   * pushed to the end (#865/#967: never guessed, never hidden). */
+  const dropRow = (r: { rule: string | null; count: number }): string => `${r.rule ?? 'caught, no rule named'} · ${r.count}`
+
+  /** The mark's accessible name carries the answer up front, so it never
+   * takes opening the card to learn what happened here. */
+  function dropAria(id: string): string {
+    const road = ground.roads.find((r) => r.id === id)
+    const rules = road?.dropBreakdown ?? []
+    const ends = road ? roadEnds(road, ground.districts) : null
+    const total = rules.reduce((n, r) => n + r.count, 0)
+    const where = ends ? `${endName(ground, ends.start)} → ${endName(ground, ends.end)}` : 'this boundary'
+    return `${where}, dropped ${total}× by ${rules.length} ${rules.length === 1 ? 'rule' : 'rules'}`
+  }
+
+  function openDropCard(id: string) {
+    if (drag?.moved) return
+    dropGrace.hold()
+    hoverDrop = id
+  }
+
+  /** The pointer has left the mark, or the card. The same grace the
+   * other cards take, for the same reason (#1027): it may be on its way
+   * from one to the other. */
+  function releaseDropCard() {
+    const id = hoverDrop
+    if (!id) return
+    dropGrace.release(() => {
+      if (hoverDrop === id) hoverDrop = null
+    })
+  }
+
+  function toggleDropPin(id: string) {
+    if (pinnedDrop === id) {
+      pinnedDrop = null
+      return
+    }
+    pinnedDrop = id
+    hoverDrop = id
+  }
+
+  /** Escape's first rung (#1002). A card is opened on purpose, so it is
+   * the first thing Escape takes back; surfacing from standing is the
+   * rung below, and `onWindowKeydown` reads them in that order. */
+  function closeDropCard() {
+    pinnedDrop = null
+    hoverDrop = null
+  }
+
+  $effect(() => {
+    // The same reads as every other card's placement: the subject, the
+    // camera, the stop, the card's arrival, and both size ticks.
+    const c = dropCard
+    const vc = viewCam
+    const svg = svgEl
+    const host = cityEl
+    const card = dcardEl
+    void effectiveStop
+    void stageTick
+    void dropCardTick
+
+    if (!c || !svg || !host || !card) {
+      dropPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      dropPlace = null
+      return
+    }
+    // The leader points at the mark itself, which is the thing the
+    // reader clicked and the thing the card is about.
+    const anchor = map({ x: X(vc, c.anchor[0]), y: Y(vc, c.anchor[1]) })
+    const shown = (x: { id: string }) => host.querySelector(`g.plate[data-cid="${CSS.escape(x.id)}"]`)
+    const drawnPlate = (x: { id: string; u: number; v: number; r: number }) => {
+      const el = shown(x)
+      return el !== null && drawnRect(el, host) !== null ? [mapRect(map, plateBox(x))] : []
+    }
+    const avoid = ground.districts.filter((x) => c.endIds.has(x.id)).flatMap(drawnPlate)
+    const softAvoid = ground.districts.filter((x) => !c.endIds.has(x.id)).flatMap(drawnPlate)
+    dropPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid })
+  })
+
+  $effect(() => {
+    const card = dcardEl
+    if (!card) return
+    return watchCardSize(card, () => dropCardTick++)
+  })
+
   /* ---------------- the minimap ---------------- */
 
   const MINI_W = 264
@@ -2783,6 +2969,40 @@
         {/each}
         {#each scene.dropLabels as dl, i (i)}
           <text x={dl.x} y={dl.y} text-anchor="middle" class="drop-t" class:alarm-t={dl.alarm}>{dl.text}</text>
+        {/each}
+        {#each scene.dropHits as dh (dh.id)}
+          <!-- The aggregate mark as the control (#1002): one target over
+               the mark and the word above it, in the keyboard order the
+               way a district plate and a building already are. Nothing
+               is added to the drawing -- the rules it opens are the
+               card's, and the mark still reads only "dropped". -->
+          <rect
+            class="road-hot"
+            class:on={openDropId === dh.id}
+            x={dh.x}
+            y={dh.y}
+            width={dh.w}
+            height={dh.h}
+            fill="transparent"
+            role="button"
+            tabindex="0"
+            aria-expanded={openDropId === dh.id}
+            aria-label="{dropAria(dh.id)}. Opens which rules, and how many each caught."
+            data-drop-hot={dh.id}
+            onpointerenter={() => openDropCard(dh.id)}
+            onpointerleave={releaseDropCard}
+            onfocus={() => openDropCard(dh.id)}
+            onblur={releaseDropCard}
+            onclick={() => !dragged && toggleDropPin(dh.id)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                toggleDropPin(dh.id)
+              }
+            }}
+          >
+            <title>{dropAria(dh.id)}</title>
+          </rect>
         {/each}
         {#each scene.markHits as mh (mh.id)}
           <!-- The mark where a refused line stopped, pointable so that
@@ -3300,6 +3520,57 @@
           <button type="button" class="linkact" data-draft-rule onclick={() => (composerOpen = true)}>draft the rule ▸</button>
         </div>
       {/if}
+    </div>
+  {/if}
+
+  {#if dropCard}
+    {@const dc = dropCard}
+    <!-- The drop card (#1002, DESIGN.md "Cards"). Every rule that
+         refused on this boundary and how much each caught, largest
+         first, under the composer's own header and over the total the
+         mark stands for. Same markup and same classes as the boundary
+         card: it is one family, not a second card style. -->
+    {#if dropPlace}
+      <svg class="leader" aria-hidden="true">
+        <path d="M{dropPlace.from.x} {dropPlace.from.y}L{dropPlace.to.x} {dropPlace.to.y}" stroke="var(--hair-2)" stroke-width="1" fill="none" />
+        <circle cx={dropPlace.from.x} cy={dropPlace.from.y} r="3" fill="var(--accent)" />
+      </svg>
+    {/if}
+    <div
+      class="bcard dcard"
+      class:pinned={dropPinned}
+      class:placed={dropPlace !== null}
+      style={dropPlace ? `left:${R2(dropPlace.left)}px;top:${R2(dropPlace.top)}px` : undefined}
+      bind:this={dcardEl}
+      role="dialog"
+      tabindex="-1"
+      aria-label={dropTitle}
+      onpointerenter={dropGrace.hold}
+      onpointerleave={releaseDropCard}
+    >
+      <div class="bc-t">
+        <span class="n">{dropTitle}</span>
+        <button
+          type="button"
+          class="pin"
+          class:on={dropPinned}
+          aria-pressed={dropPinned}
+          title={dropPinned ? 'pinned — click to let it go' : 'pin this card'}
+          onclick={() => toggleDropPin(dc.id)}>{dropPinned ? '✕' : '⊙'}</button
+        >
+      </div>
+
+      <!-- No swatch: the ones this card's family uses say coverage and
+           baseline, and a rule is neither. -->
+      {#each dc.rows as r (r.rule ?? '')}
+        <div class="s" data-drop-rule>{dropRow(r)}</div>
+      {/each}
+
+      <!-- The total, so the card reconciles with the mark it came from:
+           these rules are all of them, and their counts are all of it.
+           It wears the mark's own ink, so the one escalated pair reads
+           on the card as it reads on the map. -->
+      <div class="s totals" class:alarm={dc.alarm} data-drop-total>dropped <b>{dc.total}</b> in all</div>
     </div>
   {/if}
 
