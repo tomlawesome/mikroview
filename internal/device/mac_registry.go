@@ -78,6 +78,20 @@ type MACRegistry struct {
 // defect, both moved to that type (issue #400).
 var macRegistryPersistMinInterval = time.Second
 
+// macRegistryPersistClock is a test seam for the write-behind back-off's
+// own clock -- persist.WriteBehind's run loop reads it and waits on it --
+// with nil (every production caller) meaning persist's real one. Same
+// "package var a test overrides, real by default" convention
+// macRegistryPersistMinInterval above already uses, and the exact twin of
+// flags.persistClock (#941). #1039: this store's copy of the
+// sustained-failure back-off test measured real elapsed wall-clock time
+// around a real sleep and inferred how many back-off windows "must" have
+// passed, which flaked under a loaded CI runner precisely because that
+// inference is itself scheduling-dependent. A test setting this to a fake
+// persist.Clock advances the window by hand instead of guessing at it
+// from elapsed time.
+var macRegistryPersistClock persist.Clock
+
 // OpenMACRegistry loads path if it exists (a missing file is the
 // expected first-run case, not an error) and returns a MACRegistry that
 // persists to it from then on. An empty path is the expected
@@ -102,6 +116,7 @@ func OpenMACRegistryWithBackend(b persist.Backend) (*MACRegistry, error) {
 
 	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the MAC registry", persist.WriteBehindOptions{
 		MinInterval: macRegistryPersistMinInterval,
+		Clock:       macRegistryPersistClock,
 		OnSaveError: func(msg string) { persistLog.Error(msg) },
 		OnConflict:  func(msg string) { persistLog.Warn(msg) },
 	}, func(data []byte) error {
