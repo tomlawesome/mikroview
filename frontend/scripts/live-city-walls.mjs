@@ -220,28 +220,29 @@ check(standText.includes('caught, no rule named'), "standing on its own host, th
 await page.keyboard.press('Escape')
 await new Promise((r) => setTimeout(r, 900))
 
-// --- The named refusal, read off the composer card (#865, #991) -----------
+// --- The refused guest boundary, read at the street stop (#865, #1036) ----
 //
 // This used to be read at the city stop, off the road's own drop label.
-// #991 cut that label back to the plain word `dropped` and moved the
-// refusing rule's name into the composer card in the reach
-// (City.svelte ~2299, "it's been asking · tcp/445 · 14× · caught by
-// guest-isolation") -- the same fact from the same event, one surface
-// along. Round 49 kept it there: nothing is written on a road.
+// #991 cut that label back to the plain word `dropped`, and #1036 keeps
+// it there on every surface: nothing is written on a road or a strand,
+// so standing on a refused host must show the plain mark too, not the
+// rule that refused it.
 //
-// So it is read where it now lives: standing on a guest host whose
-// traffic the named rule refused. The negative case above -- a drop with
-// no rule label reading "caught, no rule named" -- is the same card, so
-// the pair proves the card names the rule when the event carries one and
-// declines to invent one when it does not.
+// The rule's own name lives in the card -- the line card's
+// `:445 refused by guest-isolation` and the composer's
+// "it's been asking · tcp/445 · 6× · caught by guest-isolation". Neither
+// is readable from a plain `textContent` while the card is shut, and the
+// door that opens the composer is #1035; this check is about what the
+// drawing says, which is the part #1036 settled.
 await toDistrictStop()
 const guestCid = 'vlan-guest/10.0.30.20'
 const guestCity = await standOn(guestCid)
 check(guestCity !== null, `the keyboard walk reaches a refused guest host (${guestCid})`)
-const guestText = await guestCity.textContent()
+const guestText = (await guestCity.textContent()) ?? ''
+check(guestText.includes('dropped'), 'standing on the refused guest host, its strand carries the plain mark')
 check(
-  guestText.includes('caught by guest-isolation'),
-  'the refused boundary names its own rule on the composer card, from the event itself',
+  !guestText.includes('caught by guest-isolation'),
+  `no rule name is written on the strand either (${JSON.stringify(guestText.slice(0, 160))})`,
 )
 
 // And the road itself says only the plain word: the rule's name is the
