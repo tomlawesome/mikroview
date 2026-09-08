@@ -8,9 +8,13 @@ is added to the map for either — the map dims to the answer.
 ## The rule
 
 - **The port pill** sits bottom-left, where round 49's pills were
-  before #981 took them. Idle it reads `⌕ port`. Clicking opens a
-  small panel: the port (one, a list, a range), tcp / udp / both,
-  the last three picks. Active it reads
+  before #981 took them. Idle it reads `⌕ port`. Clicking opens it
+  into a bar of the same shape (owner, 2026-09-08: "make it look more
+  like the bar" — "click and select"): the ports seen or named by a
+  rule in the window as chips, click to select, several at once; a
+  short field to type a list (`22,23 ↵`) instead; a divider; then
+  `tcp` / `udp`, click to select. No Show button — the map filters as
+  the selection changes. Active it collapses to
   `⌕ 445/tcp · 2 lines seen · 3 doors ✕`; the ✕ or Esc clears it.
 - **Filtered, the map dims to where the port was seen** (owner: seen
   plus policy, "B"). A rib the port crossed keeps its verdict colour
@@ -44,7 +48,7 @@ is added to the map for either — the map dims to the answer.
 `node ../docs/design/concepts/round-53/capture.mjs` from `frontend/`.
 
 - `flat` — round 49's map with the port pill idle.
-- `port-pick` — the pill open, 445 typed, tcp chosen.
+- `port-pick` — the pill open as a bar: 445 and tcp selected.
 - `port` — 445/tcp: LAN↔router↔Servers accepted, LAN→IoT refused,
   three doors (#12 accept on the Servers rib, #23 drop on WAN, #31
   drop on Guest — the last on a rib nobody used).
