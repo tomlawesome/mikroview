@@ -9,6 +9,7 @@ import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
 import { layoutGround } from '../lib/city/layout'
+import { faceOf } from '../lib/city/walls'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { policyState } from '../lib/policy.svelte'
@@ -183,6 +184,34 @@ describe('City', () => {
     expect(gates.map((e) => e.getAttribute('data-gate'))).toEqual(labels)
     // The lit lan->srv gate names its far end, not a rule number.
     expect(labels).toContain('vlan-srv')
+  })
+
+  it('lamps a logged gate whose break falls on a face the camera cannot see (#1034)', () => {
+    // Nearly every logging accept rule in a real table -- and every one
+    // in the demo estate -- crosses toward the WAN, so its gate aims at
+    // the bridge post north of the town and the break lands on one of
+    // the two edges the camera never sees. The break itself cannot be
+    // drawn there. The lamp still must: the metaphor table makes a lamp
+    // on a gate the one thing that says the rule logs, so a gate with no
+    // lamp reads exactly like a dark boundary.
+    const est = mockupEstate()
+    const wanGate = { key: 'forward|bridge-lan|ether1', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'ether1', logged: true, ruleCount: 1, comment: 'lan to wan' }
+    // wanLogged false so the road bridge's own lamp cannot stand in for
+    // the gate's -- every circle.lamp counted below is a gate's.
+    const litGround = layoutGround({ ...est, wanLogged: false, gates: [wanGate] })
+    const lan = litGround.districts.find((d) => d.id === 'bridge-lan')!
+    expect(lan.gates[0].lamp).toBe(true)
+    expect(faceOf(lan, lan.gates[0].p)).toBeNull()
+
+    const lit = render(City, { props: { stop: 'district', ground: litGround } })
+    expect(lit.container.querySelectorAll('circle.lamp').length).toBeGreaterThan(0)
+    lit.unmount()
+
+    // And the same gate with nothing logging on it draws no lamp, so
+    // this cannot pass by lighting every gate regardless.
+    const darkGround = layoutGround({ ...est, wanLogged: false, gates: [{ ...wanGate, logged: false }] })
+    const dark = render(City, { props: { stop: 'district', ground: darkGround } })
+    expect(dark.container.querySelectorAll('circle.lamp').length).toBe(0)
   })
 })
 
