@@ -38,17 +38,16 @@ clients · services · zones · ◆ city · borough · district · street
   the buildings with their labels and cards. Pan is free at every city
   stop; the stop sets the camera height. A minimap with the viewport
   rectangle is shown at every city stop.
-- Two overlay pills (`⚑ flags`, `◉ watch`) apply to both views; the
-  header, badges and callout wording are the 2D map's. There are no
-  lens tabs: traffic is the picture, coverage is always on, policy is
-  gone (round 49).
+- There are no lens tabs and no overlay pills: traffic is the picture,
+  coverage is always on, policy is gone (round 49), and the flag and
+  watch marks come and go with the data rather than being switched
+  (#981). The header, badges and callout wording are the 2D map's.
 
 **The join (#869).** One `<input type=range>` with seven stops carries
 the whole axis above; which stop was last open persists per user.
 Crossing the centre swaps
 the drawing, and carries what still makes sense rather than resetting
-everything: the selected lens always carries (it is one piece of state
-threaded to both sides); a reach -- a host held open on the 2D map, or
+everything: a reach -- a host held open on the 2D map, or
 a building stood on in the city -- carries only if the same host exists
 as a building on the other side, and otherwise surfaces rather than
 half-applying; the city's own pan carries across its own mount and
@@ -145,12 +144,21 @@ with first-seen time and count, and offers `expected ▸`: a reason,
 recorded with who said it, and the line is established from then on.
 That is the only way a line leaves the bright state early.
 
-**The two overlay pills**, both on by default, greyed when off:
-- `⚑ flags`: flagged buildings and host dots take a red halo that hugs
-  the shape and throbs in place; the escalated unplanned road stays in
-  alarm ink with its callout.
-- `◉ watch`: watched buildings and dots ringed in the 2D map's watcher
-  ink.
+**The flag and watch marks are drawn by the data, and nothing switches
+them** (owner, 2026-09-08, #981): "something that's always there is easy
+to ignore; if it's not always there you know it's there for a reason."
+A mark exists on both surfaces exactly while there is an open flag or a
+watcher behind it, and is gone the moment there is not. In the city a
+flagged building's device symbol is re-stamped in alarm ink, more solid
+the more flags it carries, with one convex-hull silhouette in the same
+ink round it; a watched one takes a second silhouette in the watcher's
+ink, sitting a touch proud of the flag rim; a flag that is an activity
+spike breathes on a two-second loop, holding steady mid-bright under
+`prefers-reduced-motion`. On the 2D map the same two facts stay the
+halo that hugs a host dot and the watcher ring round it. No disc, ring,
+number, glyph or tally on either map at any stop -- the counts are
+words on the click card, `2 flags · 1 watch`. The escalated unplanned
+road stays in alarm ink with its callout.
 
 ## The reach
 
@@ -303,3 +311,5 @@ register and `expected`, and live-gate scenarios for all of it.
   card carries them.
 - **Height / plinths** (#981, above), and the `survey` stop (the city is
   the survey).
+- The `⚑ flags` / `◉ watch` **overlay pills**: no toggle, the marks come
+  and go with the data (owner, 2026-09-08, #981).
