@@ -163,4 +163,6 @@ Numbered for reply; the counter continues from the session.
   rules.
 - LOGGED / DARK / QUIET words on plaques and lane captions.
 - Ports written along a reach strand: the line card carries them.
+- The `⚑ flags` / `◉ watch` lens pills: no toggle, the marks come and go
+  with the data (owner, 2026-09-08, #981).
 

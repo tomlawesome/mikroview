@@ -3,8 +3,15 @@
 // #869: the one altitude axis, walked end to end by keyboard against a
 // real instance -- clients, services, zones, the city (centred, the
 // default), then borough, district, street -- checking each stop draws
-// what it should, and that the overlay pills are still as they were set
-// after crossing the centre twice (out to the far end and back).
+// what it should, and that the camera and the drawing follow the slider
+// across the centre twice (out to the far end and back).
+//
+// This walk used to prove the two overlay pills survived the crossing.
+// #981 removed them: a mark is drawn by its own data on both surfaces,
+// so there is no shared overlay state left to carry and nothing to
+// switch. What the row still carries is asserted here as an absence --
+// no control on it at any stop -- because a check that quietly stopped
+// looking is how a switch would creep back unnoticed.
 //
 // A single lane is enough to prove the axis; the city's own fidelity
 // (walls, gates, the river) is live-city-stops.mjs's and live-city-
@@ -92,26 +99,13 @@ await page.waitForSelector('[data-card="topography"] .altitude input[type="range
 const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
 check((await slider.getAttribute('max')) === '6', 'seven stops on one axis (max 6, #869)')
 
-// Round 49 deleted the lens row, so the shared state this walk proves
-// carries is now the overlay pills: `⚑ flags` and `◉ watch` apply to
-// both views (DESIGN.md, "The always-on picture"). Both arrive on, so
-// switch flags OFF before walking -- the default would carry across the
-// centre by doing nothing at all, which is the same vacuous shape #1022
-// was. Off is a state something had to remember.
-await page.waitForSelector('[data-card="topography"] [aria-label="Map overlays"] .pill.f', { timeout: 10000 })
-await page.click('[data-card="topography"] [aria-label="Map overlays"] .pill.f')
-await new Promise((r) => setTimeout(r, 300))
-
 const measure = () =>
   page.evaluate(() => {
     const card = document.querySelector('[data-card="topography"]')
     const range = card.querySelector('.altitude input[type="range"]')
     const stage = card.querySelector('.stage')
     const city = card.querySelector('.city')
-    const pills = [...card.querySelectorAll('[aria-label="Map overlays"] button.pill')].map((b) => ({
-      kind: b.classList.contains('f') ? 'flags' : b.classList.contains('w') ? 'watch' : '?',
-      pressed: b.getAttribute('aria-pressed'),
-    }))
+    const overlayControls = card.querySelectorAll('[aria-label="Map overlays"] button').length
     const camera = card.querySelector('.camera')
     return {
       value: range.value,
@@ -120,7 +114,7 @@ const measure = () =>
       diamondOn: !!card.querySelector('.tick.diamond.on'),
       camClasses: camera ? [...camera.classList].filter((c) => c.startsWith('cam-')) : [],
       groundFlatCard: card.querySelector('.ground-flat .gf-card')?.textContent?.trim() ?? null,
-      pills,
+      overlayControls,
     }
   })
 
@@ -134,18 +128,7 @@ for (let i = 0; i < STOP_LABELS.length; i++) {
   const label = STOP_LABELS[i]
   const m = await measure()
   check(m.value === String(i), `stop ${i} (${label}): the slider reports it (value ${m.value})`)
-  check(
-    m.pills.length === 2 && m.pills.every((x) => x.kind !== '?'),
-    `${label}: the two overlay pills are on the row (${JSON.stringify(m.pills)})`,
-  )
-  check(
-    m.pills.find((x) => x.kind === 'flags')?.pressed === 'false',
-    `${label}: the flags pill is still switched off (${JSON.stringify(m.pills)})`,
-  )
-  check(
-    m.pills.find((x) => x.kind === 'watch')?.pressed === 'true',
-    `${label}: the watch pill is untouched and still on (${JSON.stringify(m.pills)})`,
-  )
+  check(m.overlayControls === 0, `${label}: nothing on the overlay row is a control (${m.overlayControls} buttons)`)
 
   if (i < 3) {
     check(!m.stageHidden, `${label}: the 2D stage is showing`)
@@ -171,10 +154,7 @@ for (let i = 0; i < STOP_LABELS.length; i++) {
 for (let i = STOP_LABELS.length - 1; i >= 0; i--) {
   const m = await measure()
   check(m.value === String(i), `walking back, stop ${i} (${STOP_LABELS[i]}): the slider reports it (value ${m.value})`)
-  check(
-    m.pills.find((x) => x.kind === 'flags')?.pressed === 'false',
-    `${STOP_LABELS[i]}: the switched-off flags pill survived the round trip (${JSON.stringify(m.pills)})`,
-  )
+  check(m.overlayControls === 0, `${STOP_LABELS[i]}: still no control on the overlay row after the round trip`)
   if (i > 0) {
     await page.keyboard.press('ArrowLeft')
     await new Promise((r) => setTimeout(r, 700))
