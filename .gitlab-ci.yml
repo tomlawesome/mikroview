@@ -63,6 +63,183 @@ variables:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
 
+# ---------------------------------------------------------------------------
+# DOCS-ONLY LANE (#1038). Until now nothing here decided what to run from
+# what changed, so a typo fix in a README paid for the same ~26 jobs as a
+# schema change, on runners shared with every other project.
+#
+# Two lists, and the order they are asked in is the whole mechanism:
+#
+#   *code_paths        deliberately over-broad -- every tree that is not
+#                      docs/, every source extension anywhere in the repo,
+#                      and every root file that is not prose. Matching too
+#                      much costs one full pipeline, which is the harmless
+#                      direction to be wrong in.
+#   *docs_only_paths   a closed list of prose and pictures. This is the
+#                      only thing in the file that can cause a skip.
+#
+# Every gated job asks them in that order (.dev_or_mr_code below):
+#
+#   1. a code path changed        -> run
+#   2. else a docs path changed   -> never
+#   3. else                       -> run
+#
+# Rule 3 is the point, and it is why the skip is opt-in rather than a
+# fallback. A path in neither list -- a new top-level directory, an
+# extension nobody has used here yet, an empty diff -- reaches rule 3 and
+# runs the job. So do the cases where GitLab cannot compute a diff at all
+# (a new branch's first push, a `web`/`api` run): `changes:` evaluates to
+# true there, so rule 1 matches first and the whole pipeline runs. A gate
+# that failed the other way would read green while having tested nothing,
+# which is worse than having no gate.
+#
+# Order is also what keeps a mixed diff honest. `changes:` asks "did any
+# of these change", never "did only these change", so the two lists cannot
+# be collapsed into one: README.md plus main.go matches rule 1 on main.go
+# and never reaches rule 2. Putting the docs list first would skip that
+# merge request outright.
+#
+# On a merge request GitLab diffs against the merge base with the target
+# branch, so a dev -> preview promotion is diffed against the preview tip:
+# the accumulated batch, not the last commit. Promotions therefore see
+# code and run everything, which is what a promotion has to do.
+#
+# Not every job is gated. AGENTS.md ("The docs-only lane") lists the ones
+# that always run and why -- Go tests read docs/configuration.md, and
+# test:build-checks link-checks the markdown, so prose really can fail
+# them, and a leaked secret can sit in a paragraph as easily as in code.
+# ---------------------------------------------------------------------------
+
+.docs_only_paths: &docs_only_paths
+  # Root-level prose. `*` does not cross a `/`, so this is README.md,
+  # CHANGELOG.md, AGENTS.md and friends, not every .md in the repo.
+  # THIRD-PARTY-NOTICES.md is in *code_paths below and is asked first.
+  - "*.md"
+  - "LICENSE"
+  - "docs/**/*.md"
+  # Screenshots and diagrams that documentation embeds.
+  - "docs/**/*.png"
+  - "docs/**/*.jpg"
+  - "docs/**/*.jpeg"
+  - "docs/**/*.gif"
+  - "docs/**/*.webp"
+  - "docs/**/*.svg"
+
+.code_paths: &code_paths
+  # Source extensions at any depth. These are what catch a file in a
+  # directory that does not exist yet, including the mockup rounds under
+  # docs/design/concepts (.html/.mjs/.py): those run the full set. That is
+  # deliberate -- narrowing it would mean trusting a path list to know
+  # which HTML is only a picture of an interface.
+  - "**/*.go"
+  - "**/*.js"
+  - "**/*.cjs"
+  - "**/*.mjs"
+  - "**/*.ts"
+  - "**/*.tsx"
+  - "**/*.svelte"
+  - "**/*.css"
+  - "**/*.html"
+  - "**/*.json"
+  - "**/*.yml"
+  - "**/*.yaml"
+  - "**/*.toml"
+  - "**/*.sh"
+  - "**/*.bash"
+  - "**/*.py"
+  - "**/*.sql"
+  - "**/*.service"
+  - "**/*.timer"
+  - "**/*.path"
+  - "**/*.Dockerfile"
+  - "**/Dockerfile"
+  - "**/Makefile"
+  # No root-only duplicates (`*.go` beside `**/*.go`): GitLab matches
+  # with Ruby's fnmatch, where `**/` stands for zero or more directories,
+  # so `**/*.go` already covers main.go at the root. A `changes:` list is
+  # capped at 50 entries, and pipeline 726 refused the file at 56.
+  # Every tree except docs/. A new top-level directory belongs on this
+  # list the day it is created: until it is, a change inside it only
+  # runs the full set on its own, and a diff pairing it with a README
+  # edit would be read as documentation.
+  - "brand/**/*"
+  - "cmd/**/*"
+  - "deploy/**/*"
+  - "frontend/**/*"
+  - "internal/**/*"
+  - "scripts/**/*"
+  - "site/**/*"
+  - "supply-chain/**/*"
+  - "tools/**/*"
+  - "web/**/*"
+  - ".claude/**/*"
+  - ".github/**/*"
+  - ".gitlab/**/*"
+  # Root files that are not prose. THIRD-PARTY-NOTICES.md is here on
+  # purpose: `*.md` would otherwise call it documentation, and it is
+  # compiled into the binary (notices.go's //go:embed) and regenerated and
+  # checked by test:build-checks.
+  - "go.mod"
+  - "go.sum"
+  - "VERSION"
+  - "THIRD-PARTY-NOTICES.md"
+  - ".gitlab-ci.yml"
+  - ".dockerignore"
+  - ".gitignore"
+  - ".gitleaksignore"
+  - "renovate.json"
+
+# .dev_or_mr, plus the three-rule ladder described above. Everything
+# .dev_or_mr does is unchanged and comes first: schedules and the
+# on-demand CHR/Renovate runs still select themselves out (#951).
+.dev_or_mr_code: &dev_or_mr_code
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *code_paths
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *docs_only_paths
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev"
+      changes: *code_paths
+    - if: $CI_COMMIT_BRANCH == "dev"
+      changes: *docs_only_paths
+      when: never
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+# The same ladder for the three frontend jobs, which additionally refuse to
+# run without frontend/package.json. `exists:` and `changes:` in one rule
+# are ANDed, and the guard has to be repeated on every rung rather than
+# merged in from .dev_or_mr_code, which is why this block exists at all.
+.dev_or_mr_code_frontend: &dev_or_mr_code_frontend
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+      changes: *code_paths
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+      changes: *docs_only_paths
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+      changes: *code_paths
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+      changes: *docs_only_paths
+      when: never
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+
 # Every job that shells out to git needs this. `go build` stamps VCS metadata
 # by running git, and git refuses a repository owned by another user unless it
 # is marked safe — which failed the whole lint stage with nothing but
@@ -104,6 +281,9 @@ policy:promotion-hop:
   # #952: a gate for the dev -> preview -> main hop; a cancelled-mid-run
   # result must never be read as a pass.
   interruptible: false
+  # Not gated by #1038: this is the promotion-order gate itself. A
+  # documentation-only merge request into main is still a merge request
+  # into main, and still has to come from preview.
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
   script:
@@ -132,11 +312,36 @@ policy:promotion-hop:
 # Short scanners run on the light lane (2 CPU / 2 GB, three at a time) so
 # they stop holding a big-lane slot; if one is ever killed for memory, move
 # it back to big (owner decision, ai/agent-infra#3, 2026-09-05).
+# The one hole the docs-only lane cannot close on its own (#1038): a path
+# in neither list is invisible to `changes:`, so paired with a README edit
+# it reads as documentation and the pipeline skips. This job runs on
+# every merge request and dev pipeline with no `changes:` of its own, and
+# goes red naming any changed path that is in neither *docs_only_paths
+# nor *code_paths. scripts/ci-changed-paths-guard.py reads both lists
+# from this file, so there is one copy; its .test.sh covers the cases.
+# alpine plus Alpine's own python3/py3-yaml/git rather than a new image:
+# every image tag here must be in supply-chain/pins-policy.json, and this
+# one already is. GIT_DEPTH 0 as gitleaks and semgrep: a promotion's diff
+# base is the preview tip, far past the shallow default, and an
+# unreachable base passes with a note rather than guarding nothing.
+lint:changed-paths-guard:
+  stage: lint
+  tags: [light]
+  image: alpine:3.22
+  needs: []
+  <<: *dev_or_mr
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - apk add --no-cache git python3 py3-yaml >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - python3 scripts/ci-changed-paths-guard.py --git
+
 lint:go:
   stage: lint
   tags: [light]
   image: golang:1.27
-  <<: [*dev_or_mr, *git_safe]
+  <<: [*dev_or_mr_code, *git_safe]
   script:
     - go build ./...
     - go vet ./...
@@ -163,17 +368,7 @@ lint:frontend:
   # Light lane (#949): svelte-check and a few node:test files fit in 2 GB.
   tags: [light]
   image: node:22-alpine
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-      when: never
-    # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
-    # keeps these rules inline rather than merged from the anchor.
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
-      when: never
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      exists: ["frontend/package.json"]
-    - if: $CI_COMMIT_BRANCH == "dev"
-      exists: ["frontend/package.json"]
+  <<: *dev_or_mr_code_frontend
   script:
     # The CHR watch suites (scripts/chr-watch) have node:test suites that no
     # other job runs, so they run here.
@@ -187,7 +382,7 @@ lint:supply-chain-pins:
   # Light lane (#949): reads two files and a policy, no install.
   tags: [light]
   image: node:22-alpine
-  <<: *dev_or_mr
+  <<: *dev_or_mr_code
   script:
     # #711: every action SHA and image tag CI uses must be in
     # supply-chain/pins-policy.json with its review date. Fails on a pin the
@@ -203,6 +398,11 @@ test:go:
   stage: test
   # Stays on big: peaks at ~7.2 GB, over the light lane's 6 GB cap.
   image: golang:1.27
+  # Not gated by #1038, and must not be: five tests read
+  # docs/configuration.md and assert on its contents (ca_docs_test.go,
+  # migrate_cli_test.go, internal/api/route_docs_test.go,
+  # internal/config/env_docs_test.go and problem_docs_test.go). A prose
+  # edit can fail this job for real, so it runs for prose.
   <<: *dev_or_mr
   # GitLab's docker executor runs this container as root by default; GitHub's
   # ci.yml runs the same test directly on the runner VM as an unprivileged
@@ -233,17 +433,7 @@ test:frontend:
   stage: test
   tags: [light]
   image: node:22-alpine
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-      when: never
-    # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
-    # keeps these rules inline rather than merged from the anchor.
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
-      when: never
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      exists: ["frontend/package.json"]
-    - if: $CI_COMMIT_BRANCH == "dev"
-      exists: ["frontend/package.json"]
+  <<: *dev_or_mr_code_frontend
   # The other half of #684. lint:frontend above proves the frontend compiles;
   # nothing here proved it behaves, so this lane had the same hole GitHub did
   # and 542 real assertions gated nothing on either. jsdom, so no browser and
@@ -268,6 +458,10 @@ test:build-checks:
   stage: test
   tags: [light]
   image: node:22-bookworm
+  # Not gated by #1038: the last line below is tools/docs/check-anchors.mjs,
+  # the markdown link and anchor check, and generate-notices --check reads
+  # THIRD-PARTY-NOTICES.md. This job's whole reason to exist includes prose,
+  # so it keeps .dev_or_mr's plain rules rather than the ladder.
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
@@ -304,7 +498,7 @@ test:postgres:
   stage: test
   tags: [light]
   image: golang:1.27
-  <<: *dev_or_mr
+  <<: *dev_or_mr_code
   services:
     - name: postgres:18-alpine
       alias: postgres
@@ -383,7 +577,7 @@ test:container:
   stage: test
   tags: [light]
   image: docker:28-cli
-  <<: *dev_or_mr
+  <<: *dev_or_mr_code
   variables:
     DOCKER_HOST: unix:///var/run/docker.sock
     APP: mikroview-test-$CI_JOB_ID
@@ -458,6 +652,11 @@ gate:image:
   stage: test
   tags: [light]
   image: docker:28-cli
+  # Not gated by #1038. When live-check.Dockerfile has not changed this
+  # job is a registry lookup and a retag -- seconds -- and gate:scenarios,
+  # gate:scripts and perf:promotion all name the per-branch tag it
+  # publishes. Skipping it to save nothing would risk a promotion finding
+  # no tag to pull.
   <<: *dev_or_mr
   needs: []
   allow_failure: true
@@ -496,7 +695,7 @@ gate:scenarios:
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr, *git_safe]
+  <<: [*dev_or_mr_code, *git_safe]
   parallel: 4
   allow_failure: true
   timeout: 30m
@@ -597,7 +796,7 @@ gate:scripts:
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr, *git_safe]
+  <<: [*dev_or_mr_code, *git_safe]
   allow_failure: true
   timeout: 30m
   script:
@@ -667,7 +866,17 @@ perf:promotion:
   tags: [big]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
   <<: *git_safe
+  # The #1038 ladder, target-branch guard and all: a 25-minute job that
+  # holds the whole host quiet is the one most worth not running for a
+  # prose change. In practice it will almost always run anyway, because a
+  # promotion merge request is diffed against the preview tip and so
+  # carries every commit since the last promotion.
   rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
+      changes: *code_paths
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
+      changes: *docs_only_paths
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
   resource_group: perf-promotion
   timeout: 25m
@@ -722,7 +931,7 @@ security:semgrep:
   stage: security
   tags: [light]
   image: semgrep/semgrep:1.176.0
-  <<: *dev_or_mr
+  <<: *dev_or_mr_code
   variables:
     # The whole history, as gitleaks below. On a merge request the scan
     # is diff-scoped against $CI_MERGE_REQUEST_DIFF_BASE_SHA, and on the
@@ -807,7 +1016,7 @@ security:gosec:
   image:
     name: ghcr.io/securego/gosec:2.29.0
     entrypoint: [""]
-  <<: *dev_or_mr
+  <<: *dev_or_mr_code
   script:
     - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
   artifacts:
@@ -834,7 +1043,7 @@ security:govulncheck:
   stage: security
   tags: [light]
   image: golang:1.27
-  <<: [*dev_or_mr, *git_safe]
+  <<: [*dev_or_mr_code, *git_safe]
   script:
     - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
     - govulncheck -format=json ./... > govulncheck.json
@@ -872,7 +1081,7 @@ security:fuzz:
   stage: security
   tags: [light]
   image: golang:1.27
-  <<: [*dev_or_mr, *git_safe]
+  <<: [*dev_or_mr_code, *git_safe]
   timeout: 15m
   script:
     - go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=160000x
@@ -888,17 +1097,7 @@ security:npm-audit:
   stage: security
   tags: [light]
   image: node:22-alpine
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-      when: never
-    # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
-    # keeps these rules inline rather than merged from the anchor.
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
-      when: never
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      exists: ["frontend/package.json"]
-    - if: $CI_COMMIT_BRANCH == "dev"
-      exists: ["frontend/package.json"]
+  <<: *dev_or_mr_code_frontend
   script:
     - cd frontend
     # node:22-alpine's bundled npm tries the fast bulk advisory endpoint
@@ -952,7 +1151,7 @@ security:licence-policy:
   stage: security
   tags: [light]
   image: node:22-bookworm
-  <<: [*dev_or_mr, *git_safe]
+  <<: [*dev_or_mr_code, *git_safe]
   script:
     - node --test tools/licenses/licence-policy.test.mjs
     - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
@@ -977,6 +1176,10 @@ security:gitleaks:
   image:
     name: ghcr.io/gitleaks/gitleaks:v8.30.1
     entrypoint: [""]
+  # Not gated by #1038. A secret pastes into a paragraph as easily as into
+  # code -- a token in a README example, a key in a migration guide -- and
+  # this job scans the whole tree, so a docs-only diff is exactly the case
+  # it has to keep covering.
   <<: *dev_or_mr
   variables:
     # The whole history, not GitLab's shallow default. This job reported
@@ -1019,7 +1222,7 @@ security:trivy-fs:
   image:
     name: aquasec/trivy:0.73.0
     entrypoint: [""]
-  <<: *dev_or_mr
+  <<: *dev_or_mr_code
   variables:
     TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivy-cache"
   cache:
@@ -1077,6 +1280,9 @@ sync:mirror-to-github:
   needs: []
   # #952: pushes to GitHub -- never cut mid-write.
   interruptible: false
+  # Not gated by #1038: the mirror reflects the branch, not the diff. A
+  # docs-only merge is a commit GitHub must receive like any other, and
+  # this job's rule keys off `push` rather than .dev_or_mr anyway.
   rules:
     - if: '$CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true" && ($CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "preview" || $CI_COMMIT_BRANCH == "main")'
   variables:
