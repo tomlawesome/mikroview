@@ -86,4 +86,18 @@ Numbered for the owner's reply.
 
 ## Verdict
 
-Pending.
+Owner, 2026-09-08, verbatim. On the first picker: "the port picker is
+ugly. Make it look more like the bar in 3" — "It's click and select,
+first part is the port, click multiple ports to show multiple, (or
+type the number, separated by comms and hit enter), second is the
+protocol tcp/udp, no show button, it loads automatically." Redrawn
+(670745c0). Then: "Rest looks good to me." Ratified as drawn: the
+pill-bar picker, dim-to-the-answer with doors, the one-hop trace
+with crumb and chip.
+
+On the open questions: 9/10 — "Both, I think": the city surface gets
+the same two tools, a follow-on round after the build. 11 — "It
+should offer a simple trace button, not a sentence. I like the idea
+but we need to be careful to ensure it's elegant and easy to use":
+the host card gets a small trace button, drawn in that follow-on
+round, not this build.
