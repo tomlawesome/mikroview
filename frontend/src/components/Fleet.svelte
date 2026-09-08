@@ -39,7 +39,7 @@
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
-  import { formatRelative } from '../lib/format'
+  import { formatLastHeard } from '../lib/format'
   import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
   import GhostRows from './GhostRows.svelte'
 
@@ -109,7 +109,7 @@
                 <div class="frow dim">never heard from yet</div>
               {:else}
                 <div class="frow dim">
-                  last heard {formatRelative(d.lastSeen, appState.now)} — quiet is a fact, not a fault
+                  last heard {formatLastHeard(d.lastSeen, appState.now)} — quiet is a fact, not a fault
                 </div>
               {/if}
               {#if multihomedEcho(d)}
