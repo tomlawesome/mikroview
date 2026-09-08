@@ -61,6 +61,15 @@ async function expandRow() {
   flushSync()
 }
 
+// #710: the desktop column chooser folds behind its own "columns ▸"
+// toggle now (see FilterBar.svelte's columnsOpen comment) rather than
+// sitting always-open on a forced second row -- opens it the same way a
+// reader would, by clicking the toggle.
+async function openColumns() {
+  await fireEvent.click(screen.getByRole('button', { name: 'Choose which columns the stream shows' }))
+  flushSync()
+}
+
 // Minimal event fixture, mirroring lib/state.svelte.test.ts's own evt() --
 // only the fields applyFilters' rule branch reads.
 function evt(overrides: Partial<FirewallEvent> = {}): FirewallEvent {
@@ -346,10 +355,9 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
     render(FilterBar)
     await expandRow()
 
-    // #729 (owner ruling, built on top of this ratified round-30 row):
-    // "Columns" is the one field added since -- the chooser lives here,
-    // with the rest of the strip's controls, so it is the one addition to
-    // this otherwise-frozen list.
+    // #729's "Columns" field is not one of these any more (#710): on the
+    // desktop row it is a "columns ▸" toggle beside clear/fold, not an
+    // fb-field with its own micro-label -- see the next test.
     const labels = Array.from(document.querySelectorAll('.fb-label')).map((el) => el.textContent)
     expect(labels).toEqual([
       'Device',
@@ -361,8 +369,22 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
       'Port',
       'Interface',
       'Rule',
-      'Columns',
     ])
+  })
+
+  // #710 round-30 fidelity: the column chooser used to force itself and
+  // everything after it (clear, fold) onto a second row via
+  // flex-basis: 100%. It now rides in the same one-line strip as every
+  // other control, collapsed to a toggle so thirteen checkboxes never
+  // have to fit inline.
+  it('draws the column chooser as a toggle in the one-line strip, not a field of its own', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    expect(screen.getByRole('button', { name: 'Choose which columns the stream shows' }).textContent?.trim()).toBe(
+      'columns ▸',
+    )
+    expect(screen.queryByRole('checkbox')).toBeNull()
   })
 
   it('does not draw Presets or Export to CSV -- later additions round 29 does not draw', async () => {
@@ -431,6 +453,7 @@ describe('FilterBar, the column chooser (#729)', () => {
   it('offers a checkbox for every optional column, and none for the pinned two', async () => {
     render(FilterBar)
     await expandRow()
+    await openColumns()
 
     // Time and Rule are each a unique label in this list -- a plain
     // queryByRole miss proves no checkbox exists for either. (Address and
@@ -453,6 +476,7 @@ describe('FilterBar, the column chooser (#729)', () => {
   it('defaults every checkbox to checked -- the shipped default stays all fifteen columns', async () => {
     render(FilterBar)
     await expandRow()
+    await openColumns()
 
     expect(screen.getByRole('checkbox', { name: 'Device column' })).toHaveProperty('checked', true)
   })
@@ -460,6 +484,7 @@ describe('FilterBar, the column chooser (#729)', () => {
   it('unchecking a column writes through to columnState, and is a reader preference -- not tied to any filter term', async () => {
     render(FilterBar)
     await expandRow()
+    await openColumns()
 
     const device = screen.getByRole('checkbox', { name: 'Device column' })
     await fireEvent.click(device)
@@ -467,5 +492,44 @@ describe('FilterBar, the column chooser (#729)', () => {
 
     expect(columnState.isColumnVisible('device')).toBe(false)
     expect(appState.hasActiveFilters).toBe(false)
+  })
+
+  // #710: the toggle itself -- opens on click, closes again on a second
+  // click, on Escape (returning focus to the toggle, same convention as
+  // the strip's own fold), and on a click elsewhere in the open strip.
+  it('opens and closes the panel by clicking the toggle again', async () => {
+    render(FilterBar)
+    await expandRow()
+    await openColumns()
+    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
+
+    await openColumns()
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
+
+  it('closes the panel on Escape, without also folding the whole strip', async () => {
+    render(FilterBar)
+    await expandRow()
+    await openColumns()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    flushSync()
+
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    // The strip itself stayed open -- Escape closed only the popover.
+    expect(screen.getByLabelText('Device')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Choose which columns the stream shows' }))
+  })
+
+  it('closes the panel on a click elsewhere in the strip, without folding the strip itself', async () => {
+    render(FilterBar)
+    await expandRow()
+    await openColumns()
+
+    await fireEvent.click(screen.getByLabelText('Protocol'))
+    flushSync()
+
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(screen.getByLabelText('Device')).toBeTruthy()
   })
 })
