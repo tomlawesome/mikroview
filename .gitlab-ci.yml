@@ -324,6 +324,31 @@ policy:promotion-hop:
 # Short scanners run on the light lane (2 CPU / 2 GB, three at a time) so
 # they stop holding a big-lane slot; if one is ever killed for memory, move
 # it back to big (owner decision, ai/agent-infra#3, 2026-09-05).
+# The one hole the docs-only lane cannot close on its own (#1038): a path
+# in neither list is invisible to `changes:`, so paired with a README edit
+# it reads as documentation and the pipeline skips. This job runs on
+# every merge request and dev pipeline with no `changes:` of its own, and
+# goes red naming any changed path that is in neither *docs_only_paths
+# nor *code_paths. scripts/ci-changed-paths-guard.py reads both lists
+# from this file, so there is one copy; its .test.sh covers the cases.
+# alpine plus Alpine's own python3/py3-yaml/git rather than a new image:
+# every image tag here must be in supply-chain/pins-policy.json, and this
+# one already is. GIT_DEPTH 0 as gitleaks and semgrep: a promotion's diff
+# base is the preview tip, far past the shallow default, and an
+# unreachable base passes with a note rather than guarding nothing.
+lint:changed-paths-guard:
+  stage: lint
+  tags: [light]
+  image: alpine:3.22
+  needs: []
+  <<: *dev_or_mr
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - apk add --no-cache git python3 py3-yaml >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - python3 scripts/ci-changed-paths-guard.py --git
+
 lint:go:
   stage: lint
   tags: [light]
