@@ -177,77 +177,93 @@
   })
 </script>
 
-<div class="deck" bind:this={deckEl}>
-  {#each cards as card, i (card.key)}
-    <section
-      class="card"
-      data-card={card.key}
-      bind:this={cardEls[card.key]}
-      aria-label={card.name}
-      aria-hidden={i !== activeIndex}
-    >
-      {#if mounted(i)}
-        {#if card.key === 'fall'}
-          <Fall />
-        {:else}
-          <SceneBar scene={card.views.includes(appState.view) ? appState.view : card.views[0]} />
-          <div class="card-body">
-            {#if card.key === 'topography'}
-              {#if mapModule}
-                {@const Topography = mapModule.default}
-                <Topography />
-              {:else if mapFailed}
-                <div class="map-failed">
-                  <p role="alert">The map could not be loaded.</p>
-                  <button onclick={loadMap}>Try again</button>
-                </div>
-              {:else}
-                <GhostRows label="Loading the map…" rows={4} />
+<!-- The deck and its rail are two columns of one row (#1042): the rail
+     used to be `position: fixed`, floating over every scene, which is
+     why each surface then had to reserve its own clearance to stay out
+     from under it -- and why an ingest-loss drawer, which is in flow,
+     was drawn under the rail instead of pushing it down. In flow, the
+     content column ends where the rail's begins and everything above
+     the deck pushes both. -->
+<div class="deck-shell">
+  <div class="deck" bind:this={deckEl}>
+    {#each cards as card, i (card.key)}
+      <section
+        class="card"
+        data-card={card.key}
+        bind:this={cardEls[card.key]}
+        aria-label={card.name}
+        aria-hidden={i !== activeIndex}
+      >
+        {#if mounted(i)}
+          {#if card.key === 'fall'}
+            <Fall />
+          {:else}
+            <SceneBar scene={card.views.includes(appState.view) ? appState.view : card.views[0]} />
+            <div class="card-body">
+              {#if card.key === 'topography'}
+                {#if mapModule}
+                  {@const Topography = mapModule.default}
+                  <Topography />
+                {:else if mapFailed}
+                  <div class="map-failed">
+                    <p role="alert">The map could not be loaded.</p>
+                    <button onclick={loadMap}>Try again</button>
+                  </div>
+                {:else}
+                  <GhostRows label="Loading the map…" rows={4} />
+                {/if}
+              {:else if card.key === 'metrics'}
+                <Metrics />
+              {:else if card.key === 'live'}
+                <Whisper />
+                <FilterBar />
+                <LiveTable />
+              {:else if card.key === 'docket'}
+                <Docket />
+              {:else if card.key === 'entities'}
+                <Entities />
+              {:else if card.key === 'engineroom'}
+                <EngineRoom />
+              {:else if card.key === 'fleet'}
+                <Fleet />
               {/if}
-            {:else if card.key === 'metrics'}
-              <Metrics />
-            {:else if card.key === 'live'}
-              <Whisper />
-              <FilterBar />
-              <LiveTable />
-            {:else if card.key === 'docket'}
-              <Docket />
-            {:else if card.key === 'entities'}
-              <Entities />
-            {:else if card.key === 'engineroom'}
-              <EngineRoom />
-            {:else if card.key === 'fleet'}
-              <Fleet />
-            {/if}
-          </div>
+            </div>
+          {/if}
         {/if}
-      {/if}
-    </section>
-  {/each}
+      </section>
+    {/each}
+  </div>
+
+  <!-- The roll rail: the deck's names as vertical sideways text hugging
+       the right edge, top of the letters to the LEFT -- round 30's
+       `.deckrail a { writing-mode: sideways-lr }`, ported field-for-field
+       (the build had drawn `vertical-rl` here, rotating the letters the
+       opposite way round). The in-view name grows and brightens in the
+       same beat as the roll. -->
+  <nav class="roll-rail" aria-label="The deck">
+    {#each cards as card, i (card.key)}
+      <button
+        class="rail-name"
+        class:on={i === activeIndex}
+        onclick={() => rollTo(card)}
+        aria-current={i === activeIndex ? 'page' : undefined}
+      >
+        {card.name}
+      </button>
+    {/each}
+  </nav>
 </div>
 
-<!-- The roll rail: the deck's names as vertical sideways text hugging
-     the right edge, top of the letters to the LEFT -- round 30's
-     `.deckrail a { writing-mode: sideways-lr }`, ported field-for-field
-     (the build had drawn `vertical-rl` here, rotating the letters the
-     opposite way round). The in-view name grows and brightens in the
-     same beat as the roll. -->
-<nav class="roll-rail" aria-label="The deck">
-  {#each cards as card, i (card.key)}
-    <button
-      class="rail-name"
-      class:on={i === activeIndex}
-      onclick={() => rollTo(card)}
-      aria-current={i === activeIndex ? 'page' : undefined}
-    >
-      {card.name}
-    </button>
-  {/each}
-</nav>
-
 <style>
+  .deck-shell {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
   .deck {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     overflow-y: auto;
     scroll-snap-type: y mandatory;
@@ -284,16 +300,12 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    /* #721: six reports across four scenes turned out to be one missing
-       constraint (content crowding .roll-rail below), fixed per-scene by
-       hand or not at all. Reserved here instead, once, for every card's
-       content -- see app.css's --deck-rail-gutter for where its value
-       comes from. Every scene's own component (Metrics*, LiveTable,
-       Flags/Docket) fills this box with ordinary flow width, no
-       `position: absolute` escaping to the card's own edge (see
-       LiveTable.svelte's .table-wrap comment), so this padding reaches
-       all of them without any of them needing their own copy. */
-    padding: 0 var(--deck-rail-gutter, 36px) 14px 14px;
+    /* An ordinary, even inset now the rail has a column of its own
+       (#1042). The right side used to carry --deck-rail-gutter instead
+       -- one reserved strip standing in for the space the fixed rail
+       took out of every scene (#721) -- which the column makes
+       unnecessary here and everywhere else that copied it. */
+    padding: 0 14px 14px;
     min-height: 0;
   }
 
@@ -312,16 +324,25 @@
   }
 
   .roll-rail {
-    position: fixed;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
+    /* The deck's right-hand column, centred on the deck's own height
+       rather than the window's -- so a banner or the ingest-loss drawer
+       above the deck moves the rail down with the scenes instead of
+       being covered by it.
+
+       The width is fixed at the width this box already had, rather than
+       left to its contents: the in-view name grows to 12.5px over
+       0.35s, so a content-sized column would breathe by 2px through
+       every roll and take the scene's whole layout with it. Nothing
+       about the rail's own drawing changes -- 8 + 18 + 4 is the
+       padding, the widest (in-view) name and the padding again. */
+    flex: none;
+    align-self: center;
+    width: 30px;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 18px;
     padding: 10px 4px 10px 8px;
-    z-index: 20;
   }
 
   .rail-name {
