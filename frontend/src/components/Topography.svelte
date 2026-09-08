@@ -4951,7 +4951,13 @@
         <!-- The declare form: a reason, both directions, and who. Both
              directions is checked by default (round 49 item 7) because
              one direction declared and the other still dark leaves the
-             boundary grey and this card explaining why. -->
+             boundary grey and this card explaining why.
+             The city writes this out tag for tag (#1031) -- DESIGN.md
+             "Cards" ratifies one interaction, the same on both surfaces,
+             and it is the footer's shape a reader notices when the
+             slider crosses. `type="button"` is said rather than assumed:
+             a <button> with no type is a submit button, harmless here
+             only because no <form> encloses it. -->
         <div class="form">
           <label for="{uid}-declare-why">QUIET ON PURPOSE — WHY?</label>
           <input id="{uid}-declare-why" bind:value={declareReason} placeholder="why this gap is intentional…" />
@@ -4963,8 +4969,8 @@
             <p class="d-error">{coverageState.error}</p>
           {/if}
           <div class="btns">
-            <button class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
-            <button class="no" onclick={closeBoundary}>cancel</button>
+            <button type="button" class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
+            <button type="button" class="no" onclick={closeBoundary}>cancel</button>
             <span class="who">as {authState.username}</span>
           </div>
         </div>
@@ -6150,7 +6156,12 @@
     cursor: pointer;
   }
 
-  .card .form .go:hover {
+  /* Kept in step with the city's `.bcard .form` block, property for
+     property (#1031): one interaction, the same on both surfaces, and
+     the footer is where the two had drifted. `:not(:disabled)` because
+     Declare is refused until there is a reason, and a refused button
+     lighting up under the pointer offers something it will not do. */
+  .card .form .go:hover:not(:disabled) {
     border-color: var(--accent);
   }
 
@@ -6160,8 +6171,9 @@
   }
 
   .card .form .no {
-    border: none;
+    border: 0;
     background: none;
+    padding: 0;
     color: var(--fg-dim);
     font: 10.5px var(--font-mono);
     cursor: pointer;
