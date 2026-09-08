@@ -59,35 +59,23 @@ for (let i = 0; i < 3; i++) {
 await new Promise((r) => setTimeout(r, 900))
 await toDistrictStop()
 
-// #1022, and why there is no gate count here any more.
+// The gate count, back after #1022 (owner decision on #1016).
 //
-// This scenario used to assert that a router with no pushed rule table
-// draws no gates, by counting `.city .gate-n` and expecting 0.
-// City.svelte has not drawn `gate-n` since #991, so the count was 0
-// whatever the city did: the check could not fail, and proved nothing.
+// This scenario used to count `.city .gate-n` and expect 0 before any
+// push. City.svelte had not drawn `gate-n` since #991, so the count was
+// 0 whatever the city did: the check could not fail. #1022's own fix
+// moved the hook to the policy lens's gate pill, and round 49 deleted
+// the lens, leaving the gate posts as anonymous geometry with no class,
+// id or attribute -- "how many gates" could not be asked of the DOM at
+// all, so the question was dropped rather than asked vacuously.
 //
-// It is removed rather than repaired, because the city currently offers
-// nothing honest to point it at. Gate posts are pushed into the drawing
-// as anonymous geometry with no class, id or data attribute of their
-// own, so "how many gates" cannot be asked of the DOM directly. The one
-// tell the design gives a gate is its lamp -- DESIGN.md, "Lamp on a
-// gate | the rule logs | a lit post", and round 49's table, "City gate |
-// logged: accent posts, one lamp" -- and on a live instance with a
-// logging accept rule pushed (`lan to servers`, below) the city draws
-// no `circle.lamp` at all, at any city stop, while its own walls report
-// `logged`. Measured 2026-09-07 on a clean instance at 844cb48.
-//
-// So every available reading is either absent or constant, and a check
-// written against one now would be as vacuous as the one it replaced.
-//
-// #1022's own fix (836fffab) put a `data-gate` hook on the policy
-// lens's gate pill, which was the only named gate element there was.
-// Round 49 removes the policy lens from both map surfaces, so that pill
-// and its hook are gone with it, and the DOM is back to offering
-// nothing countable. Repairing this needs a stable hook on the gate
-// posts themselves, in City.svelte, and belongs with whoever owns that
-// file. What this scenario still proves about the same honesty is
-// below: the plaque and the district both say a table was never pushed.
+// The hook is now on the posts themselves, `data-gate`, one per post
+// and two posts per gate: the only thing the city draws per gate, and
+// the thing that survives a redraw of everything around it. A gate on
+// one of the two back edges the camera cannot see draws nothing, so
+// this counts what faces the reader -- which before any push is nothing
+// at all, because a router that has pushed no rule table has no gates
+// to draw and the city must not invent one.
 const preRules = await page.request.get(`${URL_BASE}/api/routeros/${DEVICE}/rules`)
 const prePushed = preRules.ok() && (await preRules.json()).available
 if (!prePushed) {
@@ -99,6 +87,9 @@ if (!prePushed) {
 
   const plate = page.locator('[data-card="topography"] .city .plate').first()
   check((await plate.getAttribute('aria-label'))?.includes('no rule table has been pushed yet') ?? false, 'the district itself says why, not just the plaque')
+
+  const preGates = await page.locator('[data-card="topography"] .city [data-gate]').count()
+  check(preGates === 0, `before any push the walls stand with no gates (${preGates} gate posts)`)
 } else {
   check(true, 'an earlier scenario already pushed a rule table -- the pre-push honesty state is asserted on standalone runs')
 }
@@ -181,6 +172,12 @@ for (let i = 0; i < 9; i++) {
 
 await toDistrictStop()
 
+// And with a table pushed, the one accept rule on it opens a gate the
+// city actually draws -- the other half of the count above, so neither
+// reading can go quiet without the other going red.
+const gatePosts = await page.locator('[data-card="topography"] .city [data-gate]').count()
+check(gatePosts > 0, `the pushed accept rule opens a gate the city draws (${gatePosts} gate posts)`)
+
 // --- The no-rule-label pair, read off its own host (#969) ------------------
 //
 // Still at the district stop. Walk the keyboard the same way
@@ -209,45 +206,73 @@ async function standOn(cid) {
   return page.locator('[data-card="topography"] .city')
 }
 
+// The composer names the rule, and #1035 put its door on the standing
+// host's card -- the one card that is always there to be asked, where
+// the line card needs a road or a mark to hover and a strand across a
+// district pair that already ends in a drop draws neither. Hovering the
+// building opens its card whether or not the keyboard walk left the
+// focus on it.
+async function draftFrom(cid) {
+  await page.locator(`[data-card="topography"] .city [data-cid="${cid}"]`).first().hover()
+  await new Promise((r) => setTimeout(r, 400))
+  const draft = page.locator('[data-card="topography"] .city .bcard.hcard [data-draft-rule]')
+  if ((await draft.count()) === 0) return null
+  await draft.first().click()
+  await new Promise((r) => setTimeout(r, 400))
+  const composer = page.locator('[data-card="topography"] .city .composer')
+  if ((await composer.count()) === 0) return null
+  return (await composer.first().textContent()) ?? ''
+}
+
 const targetCid = `bridge-lan/${IOT_UNPLANNED_SRC}`
 const standCity = await standOn(targetCid)
 check(standCity !== null, `the keyboard walk reaches the unplanned pair's own host (${targetCid})`)
 
 check((await standCity.getAttribute('data-stop')) === 'street', 'standing on the host drops the camera to the street stop')
-const standText = await standCity.textContent()
-check(standText.includes('caught, no rule named'), "standing on its own host, the unplanned pair says so plainly rather than guessing one -- whichever pair the city-wide wall escalates")
+const standDraft = await draftFrom(targetCid)
+check(standDraft !== null, 'the standing host card offers `draft the rule ▸`, so the composer can be reached at all (#1035)')
+check(
+  (standDraft ?? '').includes('caught, no rule named'),
+  "standing on its own host, the unplanned pair says so plainly rather than guessing one -- whichever pair the city-wide wall escalates",
+)
 
 await page.keyboard.press('Escape')
 await new Promise((r) => setTimeout(r, 900))
 
-// --- The named refusal, read off the composer card (#865, #991) -----------
+// --- The refused guest boundary, read at the street stop (#865, #1036) ----
 //
 // This used to be read at the city stop, off the road's own drop label.
-// #991 cut that label back to the plain word `dropped` and moved the
-// refusing rule's name into the composer card in the reach
-// (City.svelte ~2299, "it's been asking · tcp/445 · 14× · caught by
-// guest-isolation") -- the same fact from the same event, one surface
-// along. Round 49 kept it there: nothing is written on a road.
+// #991 cut that label back to the plain word `dropped`, and #1036 keeps
+// it there on every surface: nothing is written on a road or a strand,
+// so standing on a refused host must show the plain mark too, not the
+// rule that refused it.
 //
-// So it is read where it now lives: standing on a guest host whose
-// traffic the named rule refused. The negative case above -- a drop with
-// no rule label reading "caught, no rule named" -- is the same card, so
-// the pair proves the card names the rule when the event carries one and
-// declines to invent one when it does not.
+// The rule's own name lives in the card, and the composer is opened
+// through the host card's own door to read it -- the negative case
+// above, a drop with no rule label reading "caught, no rule named", is
+// the same card, so the pair proves it names the rule when the event
+// carries one and declines to invent one when it does not.
 await toDistrictStop()
 const guestCid = 'vlan-guest/10.0.30.20'
 const guestCity = await standOn(guestCid)
 check(guestCity !== null, `the keyboard walk reaches a refused guest host (${guestCid})`)
-const guestText = await guestCity.textContent()
+const guestText = (await guestCity.textContent()) ?? ''
+check(guestText.includes('dropped'), 'standing on the refused guest host, its strand carries the plain mark')
 check(
-  guestText.includes('caught by guest-isolation'),
-  'the refused boundary names its own rule on the composer card, from the event itself',
+  !guestText.includes('caught by guest-isolation'),
+  `no rule name is written on the strand either (${JSON.stringify(guestText.slice(0, 160))})`,
 )
-
-// And the road itself says only the plain word: the rule's name is the
-// card's to carry, not the drawing's (#991).
+const guestDraft = await draftFrom(guestCid)
+check(guestDraft !== null, 'the refused guest host offers `draft the rule ▸` on its own card (#1035)')
+check(
+  (guestDraft ?? '').includes('caught by guest-isolation'),
+  'the composer names the rule that refused the boundary, from the event itself',
+)
 await page.keyboard.press('Escape')
 await new Promise((r) => setTimeout(r, 900))
+
+// And the road itself says only the plain word: the rule's name is the
+// card's to carry, not the drawing's (#991, #1036).
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('3') // the city stop
 await new Promise((r) => setTimeout(r, 900))
 const cityText = (await page.locator('[data-card="topography"] .city').textContent()) ?? ''

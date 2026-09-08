@@ -49,10 +49,10 @@ export function mockupEstate(): CityInput {
       // and nobody declared it. Round 49 (#1016) folds the two into one
       // break in the wall, wearing the worse of them: the edge is dark
       // and the gate unlit, and the card lists both directions.
-      { key: 'forward|bridge-lan|vlan-srv', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'vlan-srv', logged: true, ruleCount: 3, comment: 'nas access', edgeKey: 'bridge-lan|vlan-srv', reverseEdgeKey: 'vlan-srv|bridge-lan', coverage: 'logged', reverseCoverage: 'dark' },
-      { key: 'forward|vlan-srv|bridge-lan', chain: 'forward', inInterface: 'vlan-srv', outInterface: 'bridge-lan', logged: false, ruleCount: 1, comment: '', edgeKey: 'vlan-srv|bridge-lan', reverseEdgeKey: 'bridge-lan|vlan-srv', coverage: 'dark', reverseCoverage: 'logged' },
+      { key: 'forward|bridge-lan|vlan-srv', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'vlan-srv', logged: true, ruleCount: 3, ordinal: 4, comment: 'nas access', edgeKey: 'bridge-lan|vlan-srv', reverseEdgeKey: 'vlan-srv|bridge-lan', coverage: 'logged', reverseCoverage: 'dark' },
+      { key: 'forward|vlan-srv|bridge-lan', chain: 'forward', inInterface: 'vlan-srv', outInterface: 'bridge-lan', logged: false, ruleCount: 1, ordinal: 9, comment: '', edgeKey: 'vlan-srv|bridge-lan', reverseEdgeKey: 'bridge-lan|vlan-srv', coverage: 'dark', reverseCoverage: 'logged' },
       // The second router's workshop opens onto the primary LAN too.
-      { key: 'forward|wlan-wsh|bridge-lan', chain: 'forward', inInterface: 'wlan-wsh', outInterface: 'bridge-lan', logged: true, ruleCount: 2, comment: '', edgeKey: 'wlan-wsh|bridge-lan', reverseEdgeKey: 'bridge-lan|wlan-wsh', coverage: 'logged', reverseCoverage: 'logged' },
+      { key: 'forward|wlan-wsh|bridge-lan', chain: 'forward', inInterface: 'wlan-wsh', outInterface: 'bridge-lan', logged: true, ruleCount: 2, ordinal: 12, comment: 'workshop to lan', edgeKey: 'wlan-wsh|bridge-lan', reverseEdgeKey: 'bridge-lan|wlan-wsh', coverage: 'logged', reverseCoverage: 'logged' },
       // Nothing accepts vlan-iot -> bridge-lan or vlan-guest -> bridge-lan
       // at all: those walls stand with no gate, matching the unplanned
       // and holding verdicts above -- no rule anticipated the first, and

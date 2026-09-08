@@ -31,6 +31,16 @@ export interface CityGate {
   /** An accept rule on this exact boundary logs: the gate's lamp. */
   logged: boolean
   ruleCount: number
+  /** The RouterOS number of the first accept rule standing on this
+   * boundary, and its comment: what the gate's card calls it,
+   * `rule 4 · nas access` (owner, 2026-09-08 on #1016). Numbered as
+   * RouterOS numbers them, so "go look at rule 4" means what it says.
+   * -1 is "no rule opened this gate", which nothing here can produce --
+   * a gate exists because a rule does -- and is what a caller reading a
+   * gate it did not build from rules would see rather than a guessed 0.
+   * The comment stays '' when the rule carries none; a gate with no
+   * name is drawn with none, never one invented for it (#865). */
+  ordinal: number
   comment: string
   /** The declaration/policy-edge key for this direction, `from|to` --
    * a different namespace from `key` above (chain|in|out), and the one
@@ -86,7 +96,8 @@ export function gatesFromRules(
         outInterface: outIf,
         logged: false,
         ruleCount: 0,
-        comment: '',
+        ordinal: r.ordinal,
+        comment: r.comment,
         edgeKey: `${inIf}|${outIf}`,
         reverseEdgeKey: `${outIf}|${inIf}`,
         coverage: 'dark',
@@ -96,7 +107,17 @@ export function gatesFromRules(
     }
     g.ruleCount++
     if (r.log) g.logged = true
-    if (!g.comment && r.comment) g.comment = r.comment
+    // The lowest-numbered accept rule on the boundary is the gate's,
+    // and the comment is that rule's own -- the card prints the two
+    // together as `rule 4 · nas access`, so a name borrowed from a
+    // different rule would send the reader to the wrong line of the
+    // table. Rules normally arrive in table order; taking the minimum
+    // rather than the first seen makes that an observation, not a
+    // requirement.
+    if (r.ordinal < g.ordinal) {
+      g.ordinal = r.ordinal
+      g.comment = r.comment
+    }
   }
   // The coverage reading comes from the pushed boundary-direction where
   // there is one -- anything on it that logs, not only an accept rule --

@@ -9,6 +9,7 @@ import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
 import { layoutGround } from '../lib/city/layout'
+import { faceOf } from '../lib/city/walls'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { policyState } from '../lib/policy.svelte'
@@ -190,6 +191,68 @@ describe('City', () => {
     // fixture; nothing else in the estate does, so the lamps that exist
     // belong to boundaries that log, and there is at least one.
     expect(container.querySelectorAll('circle.lamp').length).toBeGreaterThan(0)
+  })
+
+  it('hooks every gate post with `data-gate`, so gates can be counted (#1022)', () => {
+    // #1022's own hook was on the policy lens's gate pill, which round
+    // 49 deleted with the lens; before that the gate posts were pushed
+    // into the drawing as anonymous geometry, so "how many gates" could
+    // not be asked of the DOM at all and live-city-walls.mjs had to drop
+    // the question. The hook is on the posts themselves now, which is
+    // where it survives a redraw of anything else.
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const posts = [...container.querySelectorAll('[data-gate]')]
+    // A gate on one of the two back edges the camera cannot see draws
+    // nothing, the same silence a hidden building face keeps, so the
+    // count is of the gates actually facing the reader.
+    const drawn = ground.districts.flatMap((d) => d.gates.filter((gt) => faceOf(d, gt.p) !== null).map((gt) => `${d.id}:${gt.key}`))
+    expect(drawn.length).toBeGreaterThan(0)
+    // Two posts stand either side of each break, so the count of posts
+    // is twice the count of gates and the distinct hooks are the gates.
+    expect(new Set(posts.map((p) => p.getAttribute('data-gate')))).toEqual(new Set(drawn))
+    expect(posts.length).toBe(drawn.length * 2)
+    // A district with no pushed rule table has no gates, so no hooks.
+    const unpushed = render(City, { props: { stop: 'district', ground: layoutGround({ ...mockupEstate(), rulesPushed: false, gates: [] }) } })
+    expect(unpushed.container.querySelectorAll('[data-gate]').length).toBe(0)
+    unpushed.unmount()
+  })
+
+  it('names the gate’s rule number and name on its own card, never on the drawing (#1016)', async () => {
+    // Owner, 2026-09-08 on #1016: a gate is one opening in the wall and
+    // one firewall rule, and its card says which -- `rule 4 · nas
+    // access`, numbered as RouterOS numbers it. The drawing itself
+    // stays wordless, the same rule as everywhere else on this surface.
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const post = container.querySelector('[data-gate^="bridge-lan:"][data-gate$="vlan-srv"]') as Element
+    expect(post).not.toBeNull()
+    fireEvent.pointerEnter(post)
+    flushSync()
+    await tick()
+    const card = container.querySelector('.bcard') as HTMLElement
+    expect(card).not.toBeNull()
+    // The LAN/Servers break folds two rules' directions into one gate;
+    // the card names the lower-numbered of them and that rule's own
+    // comment, never a name borrowed from the other.
+    expect(card.querySelector('[data-gate-rule]')?.textContent?.trim()).toBe('rule 4 · nas access')
+    expect(card.textContent).not.toContain('rule 9')
+    // Nothing is written on the drawing.
+    for (const t of container.querySelectorAll('.city svg text')) expect(t.textContent ?? '').not.toMatch(/^rule \d/)
+  })
+
+  it('names a gate whose rule carries no comment by its number alone, never an invented name', async () => {
+    // wlan-wsh → bridge-lan is the workshop's own gate; its lower
+    // direction (`vlan-srv → bridge-lan`, rule 9) carries no comment at
+    // all in the fixture, and neither does an estate whose operator
+    // never commented a rule. A gate with no name is shown with none.
+    const bare = mockupEstate()
+    bare.gates = bare.gates.map((g) => ({ ...g, comment: '' }))
+    const { container } = render(City, { props: { stop: 'district', ground: layoutGround(bare) } })
+    const post = container.querySelector('[data-gate]') as Element
+    fireEvent.pointerEnter(post)
+    flushSync()
+    await tick()
+    const line = container.querySelector('.bcard [data-gate-rule]')
+    expect(line?.textContent?.trim()).toMatch(/^rule \d+$/)
   })
 
   it('opens the boundary card from the wall, listing both directions, with declare behind the pin', async () => {
@@ -400,25 +463,27 @@ describe('City', () => {
     expect(ey).toBeLessThanOrEqual(top + 180)
   })
 
-  it('names the refusing rule beside a dropped road’s mark, and says "dropped" when no event named one', () => {
-    // Round 49 (DESIGN.md's metaphor table, "with the refusing rule's
-    // name beside the mark", and "The reach"): the mark carries the
-    // rule. The name is the events' own label, carried on the ground
-    // model as `Road.refusedBy`; where no refusal on a pair carried one
-    // it is still the plain word, never a guess (#865/#967).
+  it('marks a refused road with the plain word `dropped`, never the refusing rule’s name (#1036)', () => {
+    // DESIGN.md's metaphor table: "the plain mark only, reading
+    // `dropped`; the refusing rule's name is NOT written on the
+    // drawing -- it lives in the card". Nothing is written on a road or
+    // a strand, and that is one rule, not two: if it names something,
+    // it is in a card. The rule's name is still on the ground model as
+    // `Road.refusedBy`, and the line card and the composer both read it.
     //
-    // The aggregate names no *source*, which is the part #991 settled:
-    // only a standing host's own strands resolve to one building.
+    // The aggregate names no *source* either, which is the part #991
+    // settled: only a standing host's own strands resolve to one
+    // building.
     const { container } = render(City, { props: { stop: 'district', ground } })
     const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent ?? '')
     expect(labels.length).toBeGreaterThan(0)
     const dropped = ground.roads.filter((r) => r.stop === 'drop')
     expect(dropped.length).toBeGreaterThan(0)
-    for (const r of dropped) {
-      expect(labels).toContain(r.refusedBy ? `caught by ${r.refusedBy}` : 'dropped')
-    }
-    // Never a source: an aggregate has no one building to name.
-    for (const t of labels) expect(t).not.toMatch(/·/)
+    // At least one of these fixtures names a rule, so the test would go
+    // quiet rather than red if the fixture ever stopped carrying one.
+    expect(dropped.some((r) => r.refusedBy)).toBe(true)
+    for (const t of labels) expect(t).toBe('dropped')
+    for (const r of dropped) if (r.refusedBy) expect(labels.join(' ')).not.toContain(r.refusedBy)
   })
 
 })
@@ -572,12 +637,12 @@ describe('standing on a building (#868)', () => {
     expect(container.querySelector('[data-road="bridge-lan|vlan-srv"].flow.flow-rev')).not.toBeNull()
   })
 
-  it('names the refusing rule at the wall for the standing building’s own refused attempt, and says "dropped" when no event named one', () => {
-    // Round 49 restores the rule's name beside the mark (DESIGN.md "The
-    // reach": bollards, the red mark and the refusing rule's name).
+  it('marks the standing building’s own refused attempt `dropped`, with no rule name on the drawing (#1036)', () => {
     // Direction 'out': lan-1 is the source, so the drop is on the
     // building you are standing on and the mark never names it back to
     // itself -- #991's rule about the *source*, which is unchanged.
+    // The refusing rule's name is the card's to carry, never the
+    // strand's (#1036, DESIGN.md "The reach").
     appState.events = [
       event({ srcIp: '10.10.0.10', dstIp: '10.60.0.10', inInterface: 'bridge-lan', outInterface: 'wlan-cams', action: 'drop', ruleLabel: 'no-cross-router-cams' }),
     ]
@@ -585,7 +650,8 @@ describe('standing on a building (#868)', () => {
     fireEvent.click(named.container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
     flushSync()
     const namedLabels = [...named.container.querySelectorAll('.drop-t')].map((e) => e.textContent)
-    expect(namedLabels).toContain('caught by no-cross-router-cams')
+    expect(namedLabels).toContain('dropped')
+    for (const t of namedLabels) expect(t).not.toContain('no-cross-router-cams')
     // No source: it would be naming lan-1 back to itself.
     for (const t of namedLabels) expect(t).not.toMatch(/lan-1/)
     named.unmount()
@@ -603,8 +669,9 @@ describe('standing on a building (#868)', () => {
   it('names the source only when the drop is not on the building you are standing on (#991)', () => {
     // Direction 'in': cam-porch tried to reach lan-1 (the standing
     // building) and was refused at lan-1's own wall -- the drop is not
-    // "at" lan-1, so the mark names the source. Round 49 adds the
-    // refusing rule after it; the source rule itself is #991's, intact.
+    // "at" lan-1, so the mark names the source. The source is the one
+    // thing the mark says beyond the plain word: the refusing rule is
+    // the card's (#1036).
     appState.events = [
       event({ srcIp: '10.60.0.10', srcHostName: 'cam-porch', dstIp: '10.10.0.10', inInterface: 'wlan-cams', outInterface: 'bridge-lan', action: 'drop', ruleLabel: 'no-cross-router-cams' }),
     ]
@@ -612,7 +679,8 @@ describe('standing on a building (#868)', () => {
     fireEvent.click(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
     flushSync()
     const labels = [...container.querySelectorAll('.drop-t')].map((e) => e.textContent)
-    expect(labels).toContain('cam-porch · caught by no-cross-router-cams')
+    expect(labels).toContain('cam-porch · dropped')
+    for (const t of labels) expect(t).not.toContain('no-cross-router-cams')
   })
 
   it('the composer opens from the refused line’s card, drafted, never run, with what it has been asking for and the count', () => {
@@ -659,6 +727,75 @@ describe('standing on a building (#868)', () => {
     expect(cmd).toContain('src-address=10.10.0.10')
     expect(cmd).toContain('dst-address=10.60.0.10')
     expect(cmd).toContain('action=accept')
+  })
+
+  it('the host card offers `draft the rule ▸` for the standing host’s refused strand (#1035)', async () => {
+    // #1035: the composer was unreachable. Its only door was the line
+    // card's `draft the rule ▸`, and a line card needs a road or a mark
+    // to hover -- but a strand whose district pair already ends in a
+    // drop draws neither of its own (the aggregate road is drawn, and
+    // the strand's mark is suppressed so the bollards are not doubled),
+    // and that aggregate is not a line the reach owns, so it has no
+    // card either. Standing on such a host, nothing on screen could
+    // open the composer at all.
+    //
+    // The door belongs on the host card, which is open the moment you
+    // are standing on the building anyway: guest-1 → lan-1 is refused,
+    // and the guest/LAN pair already ends in a drop of its own.
+    appState.events = [
+      event({ srcIp: '10.40.0.10', dstIp: '10.10.0.10', inInterface: 'vlan-guest', outInterface: 'bridge-lan', action: 'drop', ruleLabel: 'guest-isolation', dstPort: 445, protocol: 'tcp' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    const guest = container.querySelector('[data-cid="vlan-guest/10.40.0.10"]') as Element
+    fireEvent.click(guest)
+    flushSync()
+    // Nothing else on the drawing could have opened it: no road of this
+    // strand's own carries a card, and no mark was drawn for it.
+    expect(container.querySelector('[data-road-hot="mark:bridge-lan"]')).toBeNull()
+    // Standing puts the pointer on the building, so its card is open.
+    fireEvent.pointerEnter(container.querySelector('[data-cid="vlan-guest/10.40.0.10"]') as Element)
+    flushSync()
+    await tick()
+    const card = container.querySelector('.bcard.hcard') as HTMLElement
+    expect(card).not.toBeNull()
+    const draft = card.querySelector('[data-draft-rule]') as HTMLElement
+    expect(draft).not.toBeNull()
+    expect(draft.textContent).toContain('draft the rule ▸')
+    expect(container.querySelector('.composer')).toBeNull()
+    fireEvent.click(draft)
+    flushSync()
+    const composer = container.querySelector('.composer') as HTMLElement
+    expect(composer).not.toBeNull()
+    expect(composer.textContent).toContain('tcp/445')
+    expect(composer.textContent).toContain('caught by guest-isolation')
+    expect(composer.textContent).toContain('drafted · never run')
+  })
+
+  it('offers no `draft the rule ▸` on a host card with nothing refused, or on one you are not standing on (#1035)', async () => {
+    // The composer is about the standing host's own busiest refused
+    // strand, so the door only belongs on that host's card: on any
+    // other card it would draft a rule for a building the reader is not
+    // looking at.
+    appState.events = [
+      event({ srcIp: '10.40.0.10', dstIp: '10.10.0.10', inInterface: 'vlan-guest', outInterface: 'bridge-lan', action: 'drop', ruleLabel: 'guest-isolation', dstPort: 445, protocol: 'tcp' }),
+    ]
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    // Nobody is standing yet: hovering a host offers nothing.
+    fireEvent.pointerEnter(container.querySelector('[data-cid="vlan-guest/10.40.0.10"]') as Element)
+    flushSync()
+    await tick()
+    expect(container.querySelector('.bcard.hcard [data-draft-rule]')).toBeNull()
+
+    fireEvent.click(container.querySelector('[data-cid="vlan-guest/10.40.0.10"]') as Element)
+    flushSync()
+    // Standing on guest-1, but hovering lan-1: lan-1 refused nothing of
+    // its own, and the guest strand is not lan-1's to draft.
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + LAN1 + '"]') as Element)
+    flushSync()
+    await tick()
+    const card = container.querySelector('.bcard.hcard') as HTMLElement
+    expect(card.textContent).toContain('lan-1')
+    expect(card.querySelector('[data-draft-rule]')).toBeNull()
   })
 
   it('the crumb states name, address, reach counts and that Esc surfaces, as in 2D', () => {
