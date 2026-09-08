@@ -146,6 +146,15 @@ export interface Borough {
  * wall), unplanned (the alarm), quiet (unjudged ink). */
 export type RoadKind = 'a' | 'd' | 'x' | 'q'
 
+/** One rule's share of everything a drop mark aggregates (#1002): how
+ * many refused events on this pair carried that rule's label. `rule` is
+ * null for the bucket of drops that carried no label at all -- said
+ * plainly, never folded into a named rule's count. */
+export interface CityRuleDrop {
+  rule: string | null
+  count: number
+}
+
 export interface Road {
   id: string
   /** Waypoints in ground space; the curve is Catmull-Rom through them. */
@@ -163,6 +172,15 @@ export interface Road {
    * event on this pair carried a rule label: said plainly beside the
    * mark, never guessed (#865). */
   refusedBy?: string
+  /** Every rule that refused a crossing on this pair, and how many it
+   * caught, busiest first (#1002: the owner's ruling that the aggregate
+   * drop mark aggregates every dropped item, broken down per rule with a
+   * count rather than a flat list of events). Only meaningful when stop
+   * is 'drop'; [] when nothing refused on this pair carried any events
+   * at all. This is the data the mark's own click would open -- where
+   * and how it opens is not settled here (#1002's own note), so nothing
+   * in City.svelte reads this field yet. */
+  dropBreakdown?: CityRuleDrop[]
   /** Fades along its length (the highway leaving town). */
   fade?: boolean
   /** A building's own street to its district's edge. */
