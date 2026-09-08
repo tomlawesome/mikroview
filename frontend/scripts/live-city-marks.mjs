@@ -106,6 +106,36 @@ async function toStreetStop() {
 }
 
 const BUILDING = `[data-card="topography"] .city .blk[aria-label*="${MARKED_IP}"]`
+const BUILDING_CID = `${LANE}/${MARKED_IP}`
+
+/**
+ * Walk the keyboard onto the marked building and leave the focus there.
+ *
+ * Every focus move recentres the camera (City.svelte's `focusItem`), and
+ * that is the whole point of walking rather than reaching straight for
+ * the element: the street stop's own camera centres on the *first*
+ * district (`centreFor` with nothing in focus), and on a shared instance
+ * that is whichever lane is busiest, not necessarily this one. A
+ * building one district over is then off the stage entirely -- present,
+ * visible and stable in the DOM, and outside the viewport, which is a
+ * hover Playwright can never land however long it retries. Scrolling
+ * does not help either: the stage does not scroll, the camera moves.
+ *
+ * The same walk live-city-walls.mjs uses, and for the same reason.
+ */
+async function walkTo(cid) {
+  const firstDistrict = page.locator('[data-card="topography"] .city .plate[tabindex="0"]')
+  await firstDistrict.focus()
+  for (let d = 0; d < 8; d++) {
+    for (let b = 0; b < 8; b++) {
+      await page.keyboard.press('ArrowRight')
+      const at = await page.evaluate(() => document.activeElement?.getAttribute('data-cid') ?? null)
+      if (at === cid) return true
+    }
+    await page.keyboard.press('ArrowDown')
+  }
+  return false
+}
 
 /** What the building at MARKED_IP is wearing, straight off the DOM. */
 const readMark = () =>
@@ -143,7 +173,12 @@ if (marked) {
   check(marked.aria.includes('1 flag'), `a screen reader is told what the mark means (${JSON.stringify(marked.aria)})`)
 }
 
-// The count is a word on the click card and nowhere else.
+// The count is a word on the click card and nowhere else. Walked to
+// first, so the camera is on the building rather than wherever the stop
+// happened to land -- see walkTo.
+const walked = await walkTo(BUILDING_CID)
+check(walked, `the keyboard walk reaches the marked building (${BUILDING_CID})`)
+await new Promise((r) => setTimeout(r, 900)) // the recentre is a 620ms tween
 await page.hover(BUILDING)
 await new Promise((r) => setTimeout(r, 400))
 const counts = (await page.locator('[data-card="topography"] .city .hcard [data-marks]').textContent().catch(() => null))?.replace(/\s+/g, ' ').trim()
