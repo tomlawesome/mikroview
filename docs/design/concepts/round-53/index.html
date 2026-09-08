@@ -272,27 +272,18 @@
   .pill.p.on { color: var(--accent); border-color: rgba(157, 184, 232, 0.55); background: rgba(157, 184, 232, 0.08); }
   .pill.p.on em { font-style: normal; color: var(--ink-3); margin-left: 4px; }
   .pill.p.on b { color: var(--ink); }
-  .picker {
-    position: absolute; z-index: 9; left: 24px; bottom: 40px; width: 312px; padding: 9px 12px 8px;
-    background: rgba(15, 20, 34, 0.95); border: 1px solid rgba(157, 184, 232, 0.5); border-radius: 10px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); font: 10.5px var(--mono); color: var(--ink-2);
+  .pill.p.edit { color: var(--ink-3); border-color: rgba(157, 184, 232, 0.55); background: rgba(157, 184, 232, 0.08); cursor: default; gap: 0; padding: 3px 10px 3px 9px; }
+  .pill.p.edit .ports, .pill.p.edit .seg { display: inline-flex; align-items: center; gap: 2px; }
+  .pill.p.edit .ports { margin-left: 6px; }
+  .pill.p.edit .ports b, .pill.p.edit .seg b { padding: 1px 6px; border-radius: 999px; color: var(--ink-3); cursor: pointer; font-weight: 600; }
+  .pill.p.edit .ports b:hover, .pill.p.edit .seg b:hover { color: var(--ink-2); }
+  .pill.p.edit .ports b.on, .pill.p.edit .seg b.on { background: rgba(157, 184, 232, 0.2); color: var(--ink); }
+  .pill.p.edit input {
+    width: 84px; margin-left: 4px; background: transparent; border: 0; padding: 1px 4px;
+    font: 600 10.5px var(--mono); letter-spacing: 0.04em; color: var(--ink); outline: none;
   }
-  .picker label { display: block; font: 600 9px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); margin-bottom: 5px; }
-  .picker .row { display: flex; gap: 8px; align-items: center; }
-  .picker input {
-    flex: 1; background: var(--void); border: 1px solid var(--hair-2); border-radius: 6px; padding: 5px 8px;
-    font: 600 13px var(--mono); color: var(--ink); outline: none;
-  }
-  .picker .seg { display: inline-flex; border: 1px solid var(--hair-2); border-radius: 999px; overflow: hidden; }
-  .picker .seg b { padding: 3px 9px; font: 600 10px var(--mono); color: var(--ink-3); cursor: pointer; }
-  .picker .seg b.on { background: rgba(157, 184, 232, 0.14); color: var(--ink); }
-  .picker .hint { margin-top: 5px; color: var(--ink-3); line-height: 1.45; }
-  .picker .hint code { color: var(--ink-2); }
-  .picker .recent { margin-top: 4px; color: var(--ink-3); }
-  .picker .recent a { color: var(--ink-2); text-decoration: none; margin-left: 8px; }
-  .picker .go { margin-top: 6px; display: flex; gap: 10px; align-items: center; }
-  .picker .go button { background: var(--accent); color: var(--void); border: 0; border-radius: 999px; padding: 3px 12px; font: 600 10.5px var(--mono); cursor: pointer; }
-  .picker .go span { color: var(--ink-3); }
+  .pill.p.edit input::placeholder { color: var(--ink-3); opacity: 0.7; font-weight: 400; }
+  .pill.p.edit .bar { width: 1px; height: 12px; background: var(--hair-2); margin: 0 8px; }
   .door-t { font: 600 9px var(--mono); fill: var(--ink-3); }
   .note-t { font: 11px var(--mono); fill: var(--ink-3); }
   .note-t .b { fill: var(--ink-2); font-weight: 600; }
@@ -1747,13 +1738,12 @@ function chrome(id) {
   h += '<div class="pills" role="group" aria-label="Filter">';
   if (port) h += '<button class="pill p on" aria-pressed="true" title="filtered to ' + cfg.port + ' — click to change, ✕ to clear">⌕ <b>' + port.label + '/' + port.proto + '</b>' +
     '<em>· ' + (port.lines ? port.lines + ' lines seen' : 'nothing seen') + ' · ' + port.doors.length + (port.doors.length === 1 ? ' door' : ' doors') + '</em><em>✕</em></button>';
-  else h += '<button class="pill p" aria-pressed="' + (cfg.pick ? 'true' : 'false') + '" aria-expanded="' + (cfg.pick ? 'true' : 'false') + '">⌕ port</button>';
+  else if (cfg.pick) h += '<div class="pill p edit" role="group" aria-label="Pick ports — click to select, several at once; or type a list and press enter">⌕' +
+    '<span class="ports" role="group" aria-label="Ports seen or named in the window, click to select"><b class="on" aria-pressed="true">445</b><b aria-pressed="false">22</b><b aria-pressed="false">53</b><b aria-pressed="false">443</b><b aria-pressed="false">3389</b><b aria-pressed="false">51820</b></span>' +
+    '<input placeholder="22,23 ↵" aria-label="Or type ports, comma separated, and press enter">' +
+    '<span class="bar"></span><span class="seg" role="group" aria-label="Protocol"><b class="on" aria-pressed="true">tcp</b><b aria-pressed="false">udp</b></span></div>';
+  else h += '<button class="pill p" aria-pressed="false" aria-expanded="false">⌕ port</button>';
   h += '</div>';
-  if (cfg.pick) h += '<div class="picker" role="dialog" aria-label="Pick a port"><label>SHOW WHERE A PORT IS USED</label>' +
-    '<div class="row"><input value="445" aria-label="Port, list or range"><span class="seg" role="radiogroup" aria-label="Protocol"><b class="on">tcp</b><b>udp</b><b>both</b></span></div>' +
-    '<p class="hint">one port, a list <code>22,23</code> or a range <code>1000-2000</code></p>' +
-    '<p class="recent">recent<a href="#">445 tcp</a><a href="#">22 tcp</a><a href="#">53 udp</a></p>' +
-    '<div class="go"><button>Show</button><span>dims the map to where it is seen · doors where a rule names it</span></div></div>';
   h += '<div class="alt" style="flex-direction:column;gap:6px">' +
     '<div class="stops">' + ALTS.map((t, i) => '<span class="lab' + (cfg.alt === i ? ' on' : '') +
       (i === 3 ? ' mid' : '') + '">' + (i === 3 ? '◆ ' : '') + t + '</span>').join('') + '</div>' +
