@@ -208,6 +208,36 @@ export function formatRelative(iso: string, nowMs: number): string {
   return `${d}d ago`
 }
 
+// formatSpacedAge renders how long ago `iso` was in round 30's own
+// duration idiom -- a bare "<number> <unit>", no "ago" suffix -- which
+// is what the record writes wherever a table column answers "how long
+// ago" rather than "when". Entities is the worked example: round 38's
+// `#ent` writes `412 d`, `2 m`, `19 m` down first seen/last seen, `2 s`
+// and `12 s` down the rules view's last fired, and `now` for anything
+// that has just happened (`the-whole.html` #et-hosts/#et-rules/
+// #et-ports). Same spaced-letter shape as the scene bar's own span
+// picker (`15 m`/`1 h`/`24 h`/`14 d`) and the docket's age column.
+//
+// Distinct from formatRelative above, which keeps the "Xm ago" phrasing
+// for prose that reads as a sentence (Fleet's "last heard ... — quiet is
+// a fact, not a fault"), and from Flags.svelte's own age formatter,
+// which never says "now": round 30's flags table has no sub-minute row
+// and its comment records that seconds there read "N s" instead (#688).
+export function formatSpacedAge(iso: string, nowMs: number): string {
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return iso
+  const deltaMs = Math.max(0, nowMs - t)
+  const s = Math.floor(deltaMs / 1000)
+  if (s < 5) return 'now'
+  if (s < 60) return `${s} s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} h`
+  const d = Math.floor(h / 24)
+  return `${d} d`
+}
+
 // rawTooltip is the verbatim router log line as shown on hover, plus a
 // note when the server cut it.
 //
