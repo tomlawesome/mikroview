@@ -162,9 +162,17 @@ check(
 // both directions of the same pair together (layout.ts), so a rule
 // label on one direction would otherwise paper over the other's
 // silence.
+// All six guest refusals come from the one host this scenario stands on,
+// rather than one each from six. The composer drafts from the busiest
+// blocked strand the standing host has, and live-city-stops.mjs -- which
+// runs just before this one on the shared instance -- leaves two
+// `city-drop` refusals from the internet on 10.0.30.20 as well. One
+// guest-isolation event against those two lost, and the composer named
+// the sibling's rule instead of this scenario's. Six against two is this
+// scenario's own traffic winning on its own terms.
 for (let i = 0; i < 6; i++) {
   feedRaw(`firewall,info A|walls| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), 10.0.10.2${i}:5${100 + i}->10.0.40.10:443, len 60`)
-  feedRaw(`firewall,info D|guest-isolation| forward: in:vlan-guest out:bridge-lan, connection-state:new, proto TCP (SYN), 10.0.30.2${i}:5${200 + i}->10.0.10.10:445, len 60`)
+  feedRaw(`firewall,info D|guest-isolation| forward: in:vlan-guest out:bridge-lan, connection-state:new, proto TCP (SYN), 10.0.30.20:5${200 + i}->10.0.10.10:445, len 60`)
 }
 for (let i = 0; i < 9; i++) {
   feedRaw(`firewall,info D|| forward: in:bridge-lan out:vlan-iot, connection-state:new, proto TCP (SYN), ${IOT_UNPLANNED_SRC}:5${300 + i}->10.0.20.20:22, len 60`)
@@ -266,7 +274,7 @@ const guestDraft = await draftFrom(guestCid)
 check(guestDraft !== null, 'the refused guest host offers `draft the rule ▸` on its own card (#1035)')
 check(
   (guestDraft ?? '').includes('caught by guest-isolation'),
-  'the composer names the rule that refused the boundary, from the event itself',
+  `the composer names the rule that refused the boundary, from the event itself (${JSON.stringify((guestDraft ?? '').slice(0, 240))})`,
 )
 await page.keyboard.press('Escape')
 await new Promise((r) => setTimeout(r, 900))
