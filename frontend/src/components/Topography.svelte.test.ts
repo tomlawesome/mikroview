@@ -4250,6 +4250,22 @@ describe('the reach, drawn to round 49 (#1016)', () => {
       expect(card!.textContent).toContain('Servers')
     })
 
+    // A hover test in jsdom proves the handler, not that a pointer can
+    // reach the element -- jsdom hit-tests nothing. `.membrane-layer` is
+    // `pointer-events: none` so that clicking off it surfaces, and every
+    // shape in it that can be pointed at opts back in. The strand used to
+    // opt in through the `.strand-door` pill that sat on it; round 49
+    // moved the interaction onto the whole strand and deleted the pill,
+    // and the opt-in went with it, so in a real browser no strand could be
+    // hovered or clicked at all -- 0 hits over every pixel of a refused
+    // strand's box, measured on a live instance. The stylesheet is the
+    // only place that fact lives, so the stylesheet is what is asserted,
+    // the same way the lens pills' inks are.
+    it('lets a pointer reach a strand at all, which pointer-events: none on its layer does not (#1016)', () => {
+      const rule = componentSource.slice(componentSource.indexOf('\n  .strand-g {'))
+      expect(rule.slice(0, rule.indexOf('}'))).toContain('pointer-events: auto')
+    })
+
     it('reads the port, proto, accepted and dropped table out of reachLineSummary', () => {
       // One port accepted and another dropped on the same pair. reachFor
       // splits those into two strands; the card is about the line, so
