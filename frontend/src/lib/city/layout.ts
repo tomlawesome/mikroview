@@ -63,6 +63,39 @@ export const RIVER_W = 24
 /** Plate radius from how many hosts stand on it. */
 export const plateRadius = (hostCount: number): number => Math.max(13, Math.min(21, 11 + 2.5 * hostCount))
 
+// Card text metrics for plateHalfWidth, below (#1013): Topography's flat
+// card draws `.n-name` (15px, proportional, weight 600) then `.gf-card
+// .n-cidr` (9px, monospace) left-padded 12px from the plate's own edge.
+// Character advances are estimates, not measured per-glyph -- generous on
+// purpose, so a plate only ever errs wider than its text needs, never
+// narrower. Font sizes are the card's own SVG units: flatCards draws the
+// card group with a translate only, no scale, so unlike the host-count
+// radius these are independent of the flat map's own zoom (S).
+const CARD_NAME_PX = 15
+const CARD_NAME_CHAR_EM = 0.55 // proportional font, ~0.55em advance/char
+const CARD_CIDR_PX = 9
+const CARD_CIDR_CHAR_EM = 0.6 // monospace font, ~0.6em fixed advance/char
+/** The card's left text inset (Topography's `-fc.gr + 12`), mirrored on
+ * the right so text never rides the plate's own edge. */
+const CARD_TEXT_PAD = 12
+/** What `.n-cidr` renders when a zone has no CIDR (Topography's
+ * `fc.d.cidr ?? 'from boundaries'`). */
+const CARD_CIDR_FALLBACK = 'from boundaries'
+
+/** A plate's half-width: the larger of what its host count wants
+ * (`plateRadius(hostCount) * S * 0.9`, floored at 38 -- Topography's own
+ * `flatCards`) and what its own name/subnet text needs to not run off the
+ * plate (#1013: a district named "uplink -- inside rb5009's LAN" with 2
+ * hosts overflowed the host-count size alone). Pure text-metric estimate;
+ * see the constants above for the fonts it is estimating. */
+export function plateHalfWidth(d: Pick<District, 'r' | 'name' | 'cidr'>, S: number): number {
+  const hostGr = d.r * S * 0.9
+  const nameW = d.name.length * CARD_NAME_CHAR_EM * CARD_NAME_PX
+  const cidrW = (d.cidr ?? CARD_CIDR_FALLBACK).length * CARD_CIDR_CHAR_EM * CARD_CIDR_PX
+  const textGr = Math.max(nameW, cidrW) / 2 + CARD_TEXT_PAD
+  return Math.max(38, hostGr, textGr)
+}
+
 /** sampleBank flattens a bank's curve so anything can ask "where is the
  * water at this u?" */
 function sampleBank(pts: Pt[]): Pt[] {

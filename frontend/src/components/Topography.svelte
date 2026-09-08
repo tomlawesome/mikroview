@@ -62,7 +62,7 @@
   import type { Flag, WatchlistEntry } from '../lib/types'
   import City from './City.svelte'
   import { STOPS, R2, flatFit, FX, FY } from '../lib/city/project'
-  import { layoutGround } from '../lib/city/layout'
+  import { layoutGround, plateHalfWidth } from '../lib/city/layout'
   import { cityInputFrom } from '../lib/city/input'
   import {
     EXPECTED_LABEL,
@@ -2603,7 +2603,11 @@
   const flatCards = $derived.by(() =>
     pushCardsApart(
       ground.districts.map((d) => {
-        const gr = Math.max(38, d.r * flatCam.S * 0.9)
+        // #1013: half-width from the larger of the host-count size and
+        // what the plate's own name/subnet text needs -- see
+        // plateHalfWidth's own doc comment for the text-metric estimate
+        // and why it also folds in the old `Math.max(38, ...)` floor.
+        const gr = plateHalfWidth(d, flatCam.S)
         // 56, not 44: the card's third line (host count, at -gh/2+48
         // below) needs the plate's own bottom edge past 48 with some
         // padding, or that line prints below the opaque plate rather
