@@ -1,5 +1,12 @@
 # RouterOS push ingest: what a real router does
 
+> Redacted 2026-09-08 (#1043). This is a transcript of a session against real
+> hardware, and it was committed as recorded: it carried a working credential and
+> the owner's own addresses into a public repository. Credentials now read
+> `<REDACTED>`, and every address has been moved to the RFC 5737 documentation
+> range, keeping its last octet so the transcript still reads consistently. The
+> findings are unchanged.
+
 Date: 2026-08-07. Answers the Step 0 spike on #186 before any of the
 implementation steps were started, because the payload schema and the
 whole router-side script depend on capabilities that were being guessed
