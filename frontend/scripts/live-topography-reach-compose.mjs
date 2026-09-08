@@ -96,9 +96,16 @@ check(cmd.includes('action=drop') && cmd.includes('named block'), 'the named blo
 const noteText = await page.textContent('.composer .cmdnote')
 check(noteText.includes('mikroview never touches the router'), 'the invariant is said where the command is')
 
-// Esc walks out one level at a time: composer, then the reach.
+// Esc walks out one level at a time. Round 49 put a card in that stack:
+// the line card is where `draft the rule ▸` lives, and Topography's own
+// onKeydown walks out the open card, then the composer, then the reach.
+// So the first Esc takes the card the composer was opened from and the
+// second takes the composer, with the reach still standing under both.
 await page.keyboard.press('Escape')
-check(!(await page.isVisible('.composer')), 'Escape closes the composer first')
+check(!(await page.isVisible('[data-card="topography"] .line-card')), 'Escape closes the open card first')
+check(await page.isVisible('.composer'), 'the composer that card opened is still there')
+await page.keyboard.press('Escape')
+check(!(await page.isVisible('.composer')), 'the next Escape closes the composer')
 check(await page.isVisible('[data-card="topography"] .membrane-layer svg'), 'the reach stays beneath it')
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
