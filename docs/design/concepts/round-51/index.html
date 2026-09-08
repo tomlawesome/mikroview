@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 51 · Tunnels in the map — the 2D services stop opens fitted to whatever it holds</title>
+<style>
+  /* ============================================================
+     ROUND 51 — TUNNELS IN THE MAP (#890). Round 50's column is dead
+     (owner, 2026-09-08: "just place them in the map, we have pan and
+     zoom"). Each tunnel is a stop of its own in a row off the
+     router's right shoulder, at the zone row's own gap, busiest
+     nearest the router; nothing folds. The map no longer fits a
+     frame — the frame fits the map: it opens at the zoom that takes
+     in everything it holds, never closer than 1:1, and the operator
+     zooms and pans from there, as in the city. Internet, router,
+     zone row and wg0 are round 49's to the pixel; chrome, tokens,
+     ribs, cards and hosts are round 49's (round 40's, round 30's #s3).
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --glass: rgba(15, 20, 34, 0.66);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e; --drop: #f5a623; --nat: #2dd4bf;
+    --watch: #a78bfa;
+    /* the three treatments, named once so both surfaces read the same
+       token: quiet is the page ink, dark is the third ink */
+    --quiet: #e9eefb; --dark: #55628a;
+    --wsh: #34837c; --cam2: #4576bc;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+    padding: 30px 0 60px;
+  }
+  .intro { width: 1400px; margin: 0 auto 10px; font: 12px var(--sans); color: var(--ink-2); }
+  .intro h1 { font: 700 16px var(--sans); color: var(--ink); letter-spacing: 0.02em; margin-bottom: 4px; }
+  .intro p { max-width: 900px; }
+  .intro .key { display: flex; gap: 22px; margin-top: 8px; font: 10.5px var(--mono); color: var(--ink-3); align-items: center; flex-wrap: wrap; }
+  .intro .key i { display: inline-block; width: 26px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .cap {
+    width: 1400px; margin: 34px auto 6px; padding: 0 4px;
+    font: 11px var(--mono); color: var(--ink-3); letter-spacing: 0.03em;
+  }
+  .cap b { color: var(--ink-2); font-weight: 600; letter-spacing: 0.1em; margin-right: 10px; }
+  .scene {
+    width: 1400px; height: 860px; margin: 0 auto; position: relative;
+    overflow: hidden; border: 1px solid var(--hair-2); border-radius: 3px;
+    background: radial-gradient(900px 520px at 50% 30%, rgba(60, 92, 170, 0.055), transparent 70%), var(--void);
+  }
+
+  /* ---- chrome, verbatim from round 39/40 ---- */
+  .scenebar { position: absolute; top: 0; left: 0; right: 0; z-index: 10; pointer-events: none; }
+  .scenebar > * { pointer-events: auto; }
+  .wordmark { position: absolute; top: 18px; left: 24px; font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); }
+  .wordmark em { font-style: normal; color: var(--accent); }
+  .scstatus { position: absolute; top: 20px; right: 24px; display: flex; gap: 16px; align-items: center; font-size: 11px; color: var(--ink-2); }
+  .scstatus .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: 1px; }
+  .scstatus .fmk { color: var(--alarm); font: 600 11px var(--mono); text-decoration: none; }
+  .scstatus .wmk { color: var(--watch); font: 600 11px var(--mono); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+  .scstatus .nmk { color: var(--accept); font: 600 11px var(--mono); text-decoration: none; }
+  .scstatus .nmk b { font-weight: 400; color: var(--ink-3); }
+  .scstatus .wmk b { color: var(--alarm); font-size: 9px; font-weight: 600; }
+  .scstatus .who { background: transparent; border: 1px solid transparent; border-radius: 999px; padding: 2px 10px; font: inherit; color: var(--ink-3); cursor: pointer; }
+
+  /* ONE slider, seven stops (round 40) */
+  .alt { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; gap: 12px; align-items: center; font: 500 9px var(--mono); letter-spacing: 0.11em; color: var(--ink-3); }
+  .alt .lab { opacity: 0.8; }
+  .alt .lab.on { color: var(--ink); opacity: 1; }
+  .alt .lab.mid { color: var(--accent); opacity: 1; }
+  .altwrap { position: relative; display: inline-flex; align-items: center; }
+  .alt input { width: 232px; height: 2px; -webkit-appearance: none; appearance: none; background: var(--hair-2); border-radius: 1px; accent-color: var(--accent); }
+  .alt input::-webkit-slider-thumb { -webkit-appearance: none; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+  .altwrap .tick { position: absolute; top: 50%; width: 2px; height: 2px; margin-top: -1px; margin-left: -1px; background: var(--hair-2); border-radius: 1px; pointer-events: none; }
+  .altwrap .tick.on { background: var(--accent); opacity: 0.85; width: 4px; height: 4px; margin-top: -2px; margin-left: -2px; }
+  .altwrap .tick.city { width: 5px; height: 5px; margin-top: -2.5px; margin-left: -2.5px; border-radius: 1px; background: var(--accent); opacity: 0.9; transform: rotate(45deg); }
+  .alt .stops { display: flex; gap: 9px; align-items: center; }
+
+  /* ---- THE LENS ROW, reduced to two pills (owner, item 107). Grey
+     outline when off; flag red / watcher purple when on. Nothing else
+     lives here any more: coverage is the picture, policy is gone,
+     traffic is the picture. ---- */
+  .pills { position: absolute; bottom: 12px; left: 24px; z-index: 6; display: flex; gap: 8px; }
+  /* round 51: the fit chip, bottom right above the legend's row */
+  .fitchip { position: absolute; right: 24px; bottom: 44px; z-index: 6; display: inline-flex; align-items: center; gap: 7px;
+    font: 500 9.5px var(--mono); letter-spacing: 0.08em; color: var(--ink-2); background: var(--glass);
+    border: 1px solid var(--hair-2); border-radius: 999px; padding: 4px 9px; cursor: pointer; }
+  .fitchip .z { color: var(--ink); }
+  .fitchip .sep { width: 1px; height: 9px; background: var(--hair-2); }
+  .fitchip .dimt { color: var(--ink-3); }
+  .fitchip.hand { border-color: var(--accent); color: var(--ink); }
+  .pill {
+    display: inline-flex; gap: 6px; align-items: center; padding: 3px 11px 3px 9px;
+    border: 1px solid var(--hair-2); border-radius: 999px; background: transparent;
+    font: 600 10.5px var(--mono); letter-spacing: 0.04em; color: var(--ink-3); cursor: pointer;
+  }
+  .pill b { font-weight: 600; }
+  .pill.on.f { color: var(--alarm); border-color: rgba(255, 84, 112, 0.55); background: rgba(255, 84, 112, 0.1); }
+  .pill.on.w { color: var(--watch); border-color: rgba(167, 139, 250, 0.55); background: rgba(167, 139, 250, 0.1); }
+  .pill:hover { border-color: var(--ink-3); }
+
+  .legend {
+    position: absolute; bottom: 13px; right: 24px; z-index: 6;
+    display: flex; gap: 15px; align-items: center;
+    font: 9.5px var(--mono); color: var(--ink-3); letter-spacing: 0.02em;
+  }
+  .legend span { display: inline-flex; gap: 5px; align-items: center; }
+  .legend i.sw { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .legend i.sw.dk { background: repeating-linear-gradient(90deg, var(--dark) 0 3px, transparent 3px 6px); opacity: 0.8; }
+  .legend i.sw.es { background: var(--accept); opacity: 0.28; height: 2px; }
+  .legend i.sw.nb { background: var(--accept); box-shadow: 0 0 0 2px rgba(62,207,126,0.35); }
+  .legend i.sw.qt { background: var(--quiet); opacity: 0.4; }
+
+  /* ---- the stage ---- */
+  .stage { position: absolute; left: 0; right: 0; top: 60px; height: 700px; }
+  .stage > div { height: 100%; }  /* round 51: the svg fills the stage, so `meet` centres a fitted map */
+  .stage svg { width: 100%; height: 100%; display: block; }
+
+  /* ---- the 2D vocabulary, round 30 #s3 ---- */
+  .isl { fill: rgba(15, 20, 34, 0.72); stroke: var(--hair-2); }
+  .n-name { font: 650 15px var(--sans); fill: var(--ink); }
+  .n-cidr { font: 11px var(--mono); fill: var(--ink-3); }
+  .n-sub { font: 11px var(--sans); fill: var(--ink-3); }
+  .rib { fill: none; }
+  .rib-x { fill: none; stroke: var(--alarm); stroke-width: 2; filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.45)); }
+  .alarm-t { font: 700 10.5px var(--mono); fill: var(--alarm); }
+  .chip-t { font: 10.5px var(--mono); fill: var(--ink-2); }
+  .station-label { font: 10.5px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .c-label { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .c-dot { stroke: none; }
+  .hbar .hb { cursor: pointer; }
+  .hb-w { fill: rgba(167, 139, 250, 0.10); stroke: rgba(167, 139, 250, 0.40); stroke-width: 0.9; }
+  .hb-f { fill: rgba(255, 84, 112, 0.10); stroke: rgba(255, 84, 112, 0.45); stroke-width: 0.9; }
+  .hb-div { stroke: rgba(160, 185, 230, 0.45); stroke-width: 1; }
+  .hbt { pointer-events: none; }
+  .wp { font: 600 9.5px var(--mono); fill: var(--watch); }
+  .fchip { font: 600 9.5px var(--mono); fill: var(--alarm); }
+  /* a flagged host throbs in place: the ring hugs the dot and breathes, it does not ripple out */
+  .halo { animation: halo 1.6s ease-in-out infinite; }
+  @keyframes halo { 0%, 100% { opacity: 0.45; stroke-width: 1.2; } 50% { opacity: 1; stroke-width: 2; } }
+  .hot { cursor: pointer; }
+  .hot:hover { filter: brightness(1.3); }
+
+  /* ---- the city vocabulary, round 40 ---- */
+  .p-name { font: 600 12.5px var(--sans); fill: var(--ink); }
+  .p-cidr { font: 10px var(--mono); fill: var(--ink-3); }
+  .p-note { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .roof-t { font: 600 10.5px var(--sans); fill: var(--ink); }
+  .roof-s { font: 9px var(--mono); fill: var(--ink-2); }
+  .st-name { font: 600 13px var(--sans); fill: var(--ink); }
+  .st-ip { font: 10.5px var(--mono); fill: var(--ink-2); }
+  .st-dim { font: 600 13px var(--sans); fill: var(--ink-3); }
+  .boro-t { font: 600 10px var(--mono); fill: var(--ink-3); letter-spacing: 0.16em; }
+  .bank-t { font: 600 9.5px var(--mono); fill: var(--ink-3); letter-spacing: 0.14em; }
+  .flat text { paint-order: stroke; stroke: #06080e; stroke-width: 3.4px; stroke-linejoin: round; }
+  .road-alarm { filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.5)); }
+  .flow { stroke-dasharray: 7 11; animation: flow 1.5s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -18; } }
+  .current { stroke-dasharray: 30 46; animation: current 7s linear infinite; }
+  @keyframes current { to { stroke-dashoffset: -76; } }
+  .lamp { animation: lamp 3.4s ease-in-out infinite; }
+  @keyframes lamp { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+  /* ---- THE CARD. One card for everything you can point at: a
+     boundary, a host, a district, a line in the reach. Hover opens it;
+     the pin keeps it; every fact in it that lives elsewhere is a link.
+     Round 40's hovercard, grown a title row and a foot. ---- */
+  .card {
+    position: absolute; z-index: 9; width: 264px; padding: 9px 12px 9px;
+    background: rgba(15, 20, 34, 0.95); border: 1px solid var(--hair-2); border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); font: 10.5px var(--mono); color: var(--ink-2);
+  }
+  .card.pinned { border-color: rgba(157, 184, 232, 0.5); }
+  .card .t { display: flex; align-items: baseline; gap: 8px; }
+  .card .t .n { font: 650 13.5px var(--sans); color: var(--ink); flex: 1; }
+  .card .t .n small { font: 10.5px var(--mono); color: var(--ink-3); margin-left: 6px; }
+  .card .pin {
+    width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--hair-2); background: transparent;
+    color: var(--ink-3); font: 11px var(--sans); cursor: pointer; line-height: 1; align-self: flex-start;
+  }
+  .card .pin.on, .card .pin:hover { color: var(--accent); border-color: var(--accent); }
+  .card .s { margin-top: 3px; color: var(--ink-3); }
+  .card .s b { color: var(--ink-2); font-weight: 600; }
+  .card .s.dk { color: var(--dark); }
+  .card .s.qt { color: var(--ink); opacity: 0.7; }
+  .card .s.al { color: var(--alarm); }
+  .card .s.wt { color: var(--watch); }
+  .card .s.ok { color: var(--accept); }
+  .card .sw { display: inline-block; width: 22px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .card .sw.dk { background: repeating-linear-gradient(90deg, var(--dark) 0 3px, transparent 3px 6px); }
+  .card .sw.qt { background: var(--quiet); opacity: 0.4; }
+  .card .sw.ok { background: var(--accept); opacity: 0.8; }
+  .card .sw.nb { background: var(--accept); box-shadow: 0 0 0 2px rgba(62,207,126,0.3); }
+  .card .sw.es { background: var(--accept); opacity: 0.3; height: 2px; }
+  .card .sw.al { background: var(--alarm); opacity: 0.9; }
+  .card .sw.dot { width: 8px; height: 8px; border-radius: 50%; }
+  .card .quote { margin-top: 5px; padding: 5px 8px; border-left: 2px solid var(--hair-2); color: var(--ink); font: italic 11px var(--sans); }
+  .card .acts { display: flex; gap: 12px; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--hair); flex-wrap: wrap; }
+  .card .acts a { color: var(--accent); text-decoration: none; font: 10.5px var(--mono); }
+  .card .acts a:hover { text-decoration: underline; }
+  .card .acts a.dim { color: var(--ink-3); }
+  .card .acts a.hot { color: var(--alarm); }
+  .card table { width: 100%; border-collapse: collapse; margin-top: 6px; font: 10.5px var(--mono); }
+  .card th { text-align: left; font: 600 9px var(--mono); letter-spacing: 0.1em; color: var(--ink-3); padding: 0 0 3px; border-bottom: 1px solid var(--hair); }
+  .card td { padding: 2px 0; color: var(--ink-2); }
+  .card td.n, .card th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .card td.ok { color: var(--accept); }
+  .card td.al { color: var(--alarm); }
+  .card td.dim { color: var(--ink-3); }
+  .card .form { margin-top: 7px; }
+  .card .form label { display: block; font: 600 9px var(--mono); letter-spacing: 0.1em; color: var(--ink-3); margin-bottom: 3px; }
+  .card .form input {
+    width: 100%; padding: 5px 8px; background: #080c16; border: 1px solid var(--hair-2); border-radius: 6px;
+    color: var(--ink); font: 11px var(--sans); outline: none;
+  }
+  .card .form input:focus { border-color: var(--accent); }
+  .card .form .btns { display: flex; gap: 8px; margin-top: 7px; align-items: center; }
+  .card .form .go {
+    padding: 4px 12px; border-radius: 999px; border: 1px solid var(--hair-2); background: var(--raised);
+    color: var(--ink); font: 600 10.5px var(--mono); cursor: pointer;
+  }
+  .card .form .go:hover { border-color: var(--accent); }
+  .card .form .no { color: var(--ink-3); font: 10.5px var(--mono); cursor: pointer; }
+  .card .form .who { margin-left: auto; color: var(--ink-3); }
+  .leader { position: absolute; z-index: 8; pointer-events: none; }
+
+  /* ---- reach: the crumb at the top (round 40's wording, both surfaces) ---- */
+  .crumb {
+    position: absolute; z-index: 9; top: 58px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 11px; align-items: center; padding: 6px 14px;
+    background: var(--glass); border: 1px solid var(--hair-2); border-radius: 999px;
+    backdrop-filter: blur(7px); font: 10.5px var(--mono); color: var(--ink-3);
+  }
+  .crumb > b { font: 650 12.5px var(--sans); color: var(--ink); }
+  .crumb b { color: var(--ink-2); font-weight: 600; }
+  .crumb i { width: 1px; height: 12px; background: var(--hair-2); }
+  .crumb .esc { color: var(--accent); }
+
+  /* ---- the minimap (round 40) ---- */
+  .mini {
+    position: absolute; z-index: 8; right: 20px; top: 58px; width: 232px;
+    padding: 8px 9px 7px; background: var(--glass); border: 1px solid var(--hair-2);
+    border-radius: 9px; backdrop-filter: blur(7px);
+  }
+  .mini h4 { font: 600 9px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); margin-bottom: 5px; }
+  .mini svg { display: block; }
+  .mini .mk { font: 9px var(--mono); color: var(--ink-3); margin-top: 5px; display: flex; justify-content: space-between; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .flow, .halo, .lamp, .current { animation: none; }
+    .flow, .current { stroke-dasharray: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="intro">
+  <h1>Round 50 — the tunnel column</h1>
+  <p>Round 49's services stop with more than one tunnel, drawn the way the owner asked after round 50: no column, no fold. Each tunnel is placed in the map as its own stop, in a row off the router's right shoulder at the zone row's own gap, busiest nearest the router, each with its own strand — the way the zones fan from the router's bottom edge. The map opens at whatever zoom takes all of it in, never closer than 1:1, and the operator zooms and pans from there exactly as in the city. Everything round 49 drew is unmoved.</p>
+  <div class="key">
+    <span><i style="background:var(--accept);opacity:.8"></i>logged · anything accepted</span>
+    <span><i style="background:var(--alarm)"></i>logged · only ever dropped</span>
+    <span><i style="background:repeating-linear-gradient(90deg,var(--dark) 0 3px,transparent 3px 6px)"></i>dark — nothing logs this boundary</span>
+    <span><i style="background:var(--quiet);opacity:.4"></i>quiet on purpose — declared, with a reason</span>
+    <span><i style="background:var(--ink-3);width:8px;height:8px;border-radius:50%"></i>host gone quiet</span>
+    <span><i style="background:var(--quiet);opacity:.55;width:8px;height:8px;border-radius:50%"></i>host quiet on purpose</span>
+</div>
+
+<p class="cap"><b>TWO TUNNELS</b>wg1 takes its place beside wg0: the same card, one zone-gap to the right, with its own strand off the router's right shoulder — thin and dim because it is established. It spills past round 49's frame, so the map opens a shade further out and everything, wg1 included, is in view. wg0 keeps its white strand and its watch bar; busiest nearest the router.</p>
+<section class="scene" id="two-tunnels" aria-label="The 2D services stop with two tunnel cards side by side off the router's right shoulder, the map opened slightly zoomed out so both fit"></section>
+
+<p class="cap"><b>THREE TUNNELS</b>l2tp-out takes the next place in the row. It carries a line off the baseline today, so its strand is bright with the ring at the end it arrived at, exactly as a rib is elsewhere on this map, and the header counts it. The map opens a step further out to hold it.</p>
+<section class="scene" id="three-tunnels" aria-label="Three tunnel cards in a row off the router's right shoulder, the third with a bright off-baseline strand and a ring where it arrived; the map fitted to hold all three"></section>
+
+<p class="cap"><b>FIVE TUNNELS</b>wg2 and gre-site-b take the fourth and fifth places. Nothing folds: every tunnel is on the map, and the map opens far enough out that it is. The order is the traffic each carries, busiest nearest the router; gre-site-b has not been heard for three days, so it is drawn grey with a dashed footprint like any host not heard.</p>
+<section class="scene" id="five-tunnels" aria-label="Five tunnel cards in a row off the router's right shoulder, the map opened zoomed out so the whole of it is in view"></section>
+
+<p class="cap"><b>ZOOMED IN</b>The same five tunnels after one scroll of the wheel: 1:1, panned to the router's right shoulder, gre-site-b off the right edge because that is what pan and zoom are for. l2tp-out's strand is hovered and its line card is open — the one off-baseline line it carried, in round 49's card idiom. The fit chip in the corner says how far out you are and takes you back.</p>
+<section class="scene" id="zoomed" aria-label="The same map at one-to-one, panned to the router's right shoulder with three of the five tunnels in view, l2tp-out's line card open"></section>
+
+<script>
+const R2 = (n) => Math.round(n * 10) / 10;
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const lerpP = (p, q, t) => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+function bezRange(s, a, b) {
+  let x01 = lerpP(s[0], s[1], b), x12 = lerpP(s[1], s[2], b), x23 = lerpP(s[2], s[3], b);
+  let y0 = lerpP(x01, x12, b), y1 = lerpP(x12, x23, b);
+  const left = [s[0], x01, y0, lerpP(y0, y1, b)];
+  const t2 = b > 0 ? a / b : 0;
+  x01 = lerpP(left[0], left[1], t2); x12 = lerpP(left[1], left[2], t2); x23 = lerpP(left[2], left[3], t2);
+  y0 = lerpP(x01, x12, t2); y1 = lerpP(x12, x23, t2);
+  return [lerpP(y0, y1, t2), y1, x23, left[3]];
+}
+
+/* ================================================================
+   THE CARD — round 49's, verbatim. One card for everything you can
+   point at; here only one of them is used, the list the folded card
+   opens into.
+   ================================================================ */
+function card(o) {
+  let h = '<div class="card' + (o.pinned ? ' pinned' : '') + '" style="left:' + o.px[0] + 'px;top:' + o.px[1] + 'px' +
+    (o.w ? ';width:' + o.w + 'px' : '') + '" role="dialog" aria-label="' + esc(o.aria || o.n) + '">';
+  h += '<div class="t"><span class="n">' + o.n + (o.sub ? '<small>' + o.sub + '</small>' : '') + '</span>' +
+    '<button class="pin' + (o.pinned ? ' on' : '') + '" title="' + (o.pinned ? 'pinned — click to let it go' : 'pin this card') + '" aria-pressed="' +
+    (o.pinned ? 'true' : 'false') + '">' + (o.pinned ? '✕' : '⊙') + '</button></div>';
+  h += o.body || '';
+  if (o.acts) h += '<div class="acts">' + o.acts.map((a) => '<a href="#" class="' + (a[2] || '') + '">' + a[0] + (a[1] ? ' ▸' : '') + '</a>').join('') + '</div>';
+  return h + '</div>';
+}
+function leader(from, to) {
+  return '<svg class="leader" style="left:0;top:60px" width="1400" height="700" aria-hidden="true">' +
+    '<path d="M' + from[0] + ' ' + from[1] + 'L' + to[0] + ' ' + to[1] + '" stroke="var(--hair-2)" stroke-width="1"/>' +
+    '<circle cx="' + from[0] + '" cy="' + from[1] + '" r="3" fill="var(--accent)"/></svg>';
+}
+const CARDS = {
+  l2tpLine: (px) => ({ px: px, w: 292, n: 'l2tp-out', sub: '10.97.0.0/24 · tunnel · up 41 d',
+    aria: 'l2tp-out: one line off the baseline today',
+    body: '<div class="s"><i class="sw es"></i>rb5009 → l2tp-out · 1701/udp · established</div>' +
+      '<div class="s"><i class="sw nb"></i>laptop-anna → 10.97.0.12 · 445/tcp · <b>off-baseline</b> · first seen 22:04 · 3×</div>',
+    acts: [['expected', 1], ['rules', 1, 'dim'], ['stream', 1, 'dim']] })
+};
+
+/* ================================================================
+   THE 2D SURFACE — round 30's #s3, redrawn to the same rule.
+   Each rib is two halves: the half nearest a card is that card's
+   own direction across the boundary, and wears its state; the verdict
+   is the colour. Hosts are a dot row inside their lane card.
+   ================================================================ */
+const N2 = {
+  internet: { x: 700, y: 68, w: 200, h: 60, name: 'Internet', cidr: 'ether1 · 203.0.113.7', hb: ['◉ 1', '✱ 2'] },
+  rb: { x: 700, y: 268, w: 256, h: 68, name: 'rb5009', sub: 'RouterOS 7.20.1 · the waist · 41 rules', router: 1 },
+  wg: { x: 1128, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg0 · 10.99.0.0/24', hb: ['◉ 1', null], small: 1 },
+  lan: { x: 285, y: 490, lane: 'var(--lan)', name: 'LAN', cidr: '10.0.10.0/24', hb: ['◉ 2', '✱ 1'],
+    hosts: [['tom-desktop', 'live', 'w'], ['phone-tom', 'live'], ['laptop-anna', 'live', 'f'], ['tv-lounge', 'quiet'], ['printer-old', 'intended'],
+      ['nuc', 'live'], ['tablet', 'live'], ['ap-hall', 'live'], ['ap-loft', 'live'], ['switch-desk', 'live']], more: 2,
+    tally: '12 hosts · 1 quiet · 1 quiet on purpose' },
+  srv: { x: 577, y: 490, lane: 'var(--srv)', name: 'Servers', cidr: '10.0.20.0/24', hb: ['◉ 2', null],
+    hosts: [['nas', 'live', 'w'], ['pihole', 'live'], ['unifi', 'live']], tally: '3 hosts' },
+  iot: { x: 848, y: 490, lane: 'var(--iot)', name: 'IoT', cidr: '10.0.30.0/24', hb: ['◉ 1 ○', '✱ 3'],
+    hosts: [['cam-porch', 'live', 'f'], ['hue-bridge', 'live'], ['thermostat', 'live'], ['doorbell', 'live', 'f'], ['esp-weather', 'live'], ['plug-kettle', 'live'], ['tv-kitchen', 'live']],
+    tally: '7 hosts' },
+  guest: { x: 1116, y: 490, lane: 'var(--guest)', name: 'Guest', cidr: '10.0.40.0/24',
+    hosts: [['guest-e8b2', 'live'], ['guest-1a07', 'quiet'], ['guest-c3d9', 'quiet']], tally: '3 hosts · 2 quiet' },
+  /* ---- ROUND 51: the row. Same card as wg0, one zone-gap (52 px)
+     to the right each time -- a 240 px pitch for the 188 px card --
+     busiest nearest the router. The row runs past round 49's 1400 px
+     frame from the second tunnel on, and the frame follows it. ---- */
+  wg1: { x: 1368, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg1 · 10.98.0.0/24', small: 1 },
+  l2tp: { x: 1608, y: 132, w: 188, h: 56, name: 'L2TP', cidr: 'l2tp-out · 10.97.0.0/24', small: 1 },
+  wg2: { x: 1848, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg2 · 10.96.0.0/24', small: 1 },
+  gre: { x: 2088, y: 132, w: 188, h: 56, name: 'GRE', cidr: 'gre-site-b · 10.95.0.0/24', small: 1, quiet: '3 d' }
+};
+/* a rib: [from, to, bezier, width, {cov,k,nb} for from→to, {cov,k,nb} for to→from]
+   nb: that direction carries a line off the baseline today; the ring
+   sits at the end it arrived at */
+const RIBS2 = [
+  ['internet', 'rb', [[700, 144], [700, 173], [700, 203], [700, 232]], 3.5, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a', nb: 1 }],
+  ['rb', 'lan', [[645, 302], [565, 380], [355, 410], [285, 480]], 3.5, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a', nb: 1 }],
+  ['rb', 'srv', [[683, 302], [653, 380], [595, 420], [577, 480]], 2.4, { cov: 'l', k: 'a', nb: 1 }, { cov: 'l', k: 'a' }],
+  ['rb', 'iot', [[718, 302], [748, 380], [818, 420], [848, 480]], 1.7, { cov: 'l', k: 'a' }, { cov: 'd' }],
+  ['rb', 'guest', [[756, 302], [846, 375], [1050, 405], [1116, 480]], 1.7, { cov: 'd' }, { cov: 'd' }],
+  ['wg', 'rb', [[1080, 186], [990, 215], [880, 240], [830, 252]], 1.7, { cov: 'q' }, { cov: 'q' }],
+  { one: 1, x: 1, d: [[828, 486], [725, 385], [405, 385], [302, 486]], w: 2 }
+];
+/* ---- ROUND 51: one strand per tunnel, all leaving the router's
+   right shoulder the way the zones leave its bottom edge -- 252 (wg0),
+   268, 284, 300, 316 down the same edge -- and arriving under each
+   card from the lower left. wg1 and wg2 are established both ways, so
+   thin and dim. l2tp-out carries one line off the baseline today,
+   drawn exactly as the Internet rib is: bright, the ring at the end it
+   arrived at. gre-site-b has not been heard for three days: its strand
+   is grey and dashed, as a dark boundary's is. ---- */
+const ROW_RIBS = {
+  wg1: ['wg1', 'rb', [[1320, 162], [1320, 214], [1000, 268], [830, 268]], 1.7, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a' }],
+  l2tp: ['l2tp', 'rb', [[1560, 162], [1560, 226], [1060, 284], [830, 284]], 1.7, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a', nb: 1 }],
+  wg2: ['wg2', 'rb', [[1800, 162], [1800, 238], [1120, 300], [830, 300]], 1.7, { cov: 'l', k: 'a' }, { cov: 'l', k: 'a' }],
+  gre: ['gre', 'rb', [[2040, 162], [2040, 250], [1180, 316], [830, 316]], 1.7, { cov: 'd' }, { cov: 'd' }]
+};
+const HOST_INK = { live: null, quiet: 'var(--dark)', intended: 'var(--quiet)' };
+
+function halfRib(pts, w, st, key) {
+  const P = (p) => R2(p[0]) + ' ' + R2(p[1]);
+  const d = 'M' + P(pts[0]) + 'C' + P(pts[1]) + ' ' + P(pts[2]) + ' ' + P(pts[3]);
+  let stroke, op = 0.5, dash = '';
+  if (st.cov === 'd') { stroke = 'var(--dark)'; op = 0.5; dash = ' stroke-dasharray="3 6"'; }
+  else if (st.cov === 'q') { stroke = 'var(--quiet)'; op = 0.3; }
+  else if (st.k === 'a') { stroke = 'var(--accept)'; op = st.nb ? 0.85 : 0.26; if (!st.nb) w = Math.max(1, w * 0.6); }
+  else { stroke = 'var(--alarm)'; op = 0.7; }
+  return '<path class="rib hot" data-rib="' + key + '" d="' + d + '" stroke="' + stroke + '" stroke-width="' + R2(w) + '" opacity="' + op + '"' + dash + '/>' +
+    '<path d="' + d + '" fill="none" stroke="transparent" stroke-width="14" class="hot" data-rib="' + key + '"/>';
+}
+function ribs2(opt) {
+  let s = '';
+  RIBS2.concat((opt.row || []).map((k) => ROW_RIBS[k])).forEach((r) => {
+    if (r.one) {
+      const P = (p) => R2(p[0]) + ' ' + R2(p[1]);
+      s += '<path class="rib-x hot" d="M' + P(r.d[0]) + 'C' + P(r.d[1]) + ' ' + P(r.d[2]) + ' ' + P(r.d[3]) + '"/>';
+      return;
+    }
+    const a = bezRange(r[2], 0, 0.5), b = bezRange(r[2], 0.5, 1);
+    const st4 = (opt.declared && r[0] === 'rb' && r[1] === 'guest') ? { cov: 'q' } : r[5];
+    s += halfRib(a, r[3], r[4], r[0] + '>' + r[1]);
+    s += halfRib(b, r[3], st4, r[1] + '>' + r[0]);
+    /* the ring where an off-baseline line arrived */
+    const ring = (p) => '<circle class="halo" cx="' + p[0] + '" cy="' + p[1] + '" r="6" fill="none" stroke="var(--accept)"/>';
+    if (r[4].nb && r[1] !== 'rb') s += ring(r[2][3]);
+    if (st4.nb && r[0] !== 'rb') s += ring(r[2][0]);
+  });
+  return s;
+}
+function hbar2(n, w, x0, y0) {
+  const hb = n.hb; if (!hb) return '';
+  let s = '<g class="hbar" transform="translate(' + x0 + ' ' + y0 + ')">';
+  if (hb[0] && hb[1]) {
+    s += '<path class="hb hb-w" d="M7 0 H' + (w / 2) + ' V16 H7 Q0 16 0 9 V7 Q0 0 7 0 Z"><title>watchers — open the watchlist</title></path>' +
+      '<path class="hb hb-f" d="M' + (w / 2) + ' 0 H' + (w - 7) + ' Q' + w + ' 0 ' + w + ' 7 V9 Q' + w + ' 16 ' + (w - 7) + ' 16 H' + (w / 2) + ' Z"><title>open flags</title></path>' +
+      '<line x1="' + (w / 2) + '" y1="0" x2="' + (w / 2) + '" y2="16" class="hb-div"/>' +
+      '<text class="wp hbt" x="' + (w / 4) + '" y="11.5" text-anchor="middle">' + hb[0] + '</text>' +
+      '<text class="fchip hbt" x="' + (w * 3 / 4) + '" y="11.5" text-anchor="middle">' + hb[1] + '</text>';
+  } else if (hb[0]) {
+    s += '<rect class="hb hb-w" x="0" y="0" width="' + w + '" height="16" rx="7"><title>open the watchlist</title></rect>' +
+      '<text class="wp hbt" x="' + (w / 2) + '" y="11.5" text-anchor="middle">' + hb[0] + '</text>';
+  }
+  return s + '</g>';
+}
+function node2(id, opt) {
+  const n = N2[id];
+  /* a card that stands for a list rather than for a thing is drawn a
+     shade dimmer — same card, same ink, less of it (round 50) */
+  let s = '<g class="node" transform="translate(' + n.x + ' ' + n.y + ')"' + (n.dim ? ' opacity="' + n.dim + '"' : '') + '>';
+  if (n.lane) {
+    s += '<rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>';
+    s += '<circle cx="-90" cy="22" r="3.5" fill="' + n.lane + '"/>';
+    s += '<text x="-79" y="26" class="n-name">' + n.name + '</text><text x="22" y="26" class="n-cidr">' + n.cidr + '</text>';
+    /* the hosts, alive on the top-level map: one dot each, in the
+       lane's ink; grey gone quiet, white quiet on purpose */
+    n.hosts.forEach((h, i) => {
+      const x = -90 + i * 17, y = 56, pres = h[1], ink = HOST_INK[pres] || n.lane;
+      const st = (pres === 'quiet' && opt.pres === 'intended' && h[0] === 'tv-lounge') ? 'intended' : pres;
+      const ink2 = HOST_INK[st] || n.lane;
+      s += '<g class="hot" data-host="' + h[0] + '"><title>' + h[0] + (st === 'quiet' ? ' · quiet' : st === 'intended' ? ' · quiet on purpose' : '') + '</title>';
+      s += '<circle class="c-dot" cx="' + x + '" cy="' + y + '" r="4.5" fill="' + ink2 + '"' + (st === 'intended' ? ' fill-opacity="0.55"' : st === 'quiet' ? ' fill-opacity="0.75"' : '') + '/>';
+      if (h[2] === 'f' && opt.flags) s += '<circle cx="' + x + '" cy="' + y + '" r="6" fill="none" stroke="var(--alarm)" class="halo"/>';
+      if (h[2] === 'w' && opt.watch) s += '<circle cx="' + x + '" cy="' + y + '" r="7" fill="none" stroke="var(--watch)" stroke-width="1.1" stroke-opacity="0.9"/>';
+      if (opt.hostFocus === h[0]) s += '<circle cx="' + x + '" cy="' + y + '" r="8.5" fill="none" stroke="var(--accent)" stroke-width="1" stroke-dasharray="2 3"/>';
+      s += '</g>';
+    });
+    if (n.more) s += '<text x="' + (-90 + n.hosts.length * 17 - 4) + '" y="60" class="c-label">+' + n.more + '</text>';
+    s += '<text x="-90" y="82" class="n-sub" style="font-size:10px">' + n.tally + '</text>';
+    if (n.hb && (opt.flags || opt.watch)) {
+      const hb = [opt.watch ? n.hb[0] : null, opt.flags ? n.hb[1] : null];
+      s += hbar2({ hb: hb }, 216, -108, 110);
+    }
+  } else if (n.router) {
+    s += '<rect class="isl" x="-128" y="-34" width="256" height="68" rx="12" stroke="rgba(157,184,232,0.4)"/>';
+    s += '<text x="-110" y="-6" class="n-name">' + n.name + '</text><text x="-110" y="12" class="n-sub">' + n.sub + '</text>';
+  } else {
+    const hw = n.w / 2, hh = n.h / 2;
+    /* a tunnel not heard for the quiet window: grey, dashed footprint,
+       the span written at its right edge -- the host rule (round 49) */
+    s += '<rect class="isl" x="-' + (n.small ? 84 : hw) + '" y="-' + hh + '" width="' + n.w + '" height="' + n.h + '" rx="12"' +
+      (n.quiet ? ' stroke="var(--dark)" stroke-dasharray="3 6"' : '') + '/>';
+    if (n.quiet) s += '<text x="' + (n.small ? 52 : hw - 18) + '" y="-3" class="n-cidr" fill="var(--dark)" style="font-size:9px">quiet · ' + n.quiet + '</text>';
+    const lx = n.small ? -66 : -82;
+    s += '<text x="' + lx + '" y="-3" class="n-name"' + (n.small ? ' style="font-size:13px"' : '') + '>' + n.name + '</text>';
+    s += '<text x="' + lx + '" y="14" class="n-cidr">' + n.cidr + '</text>';
+    if (n.hb && (opt.flags || opt.watch)) {
+      const hb = [opt.watch ? n.hb[0] : null, opt.flags ? n.hb[1] : null];
+      s += hbar2({ hb: hb }, n.w, n.small ? -84 : -hw, hh + 4);
+    }
+  }
+  return s + '</g>';
+}
+/* ---- ROUND 51: the frame fits the map. The stop's own frame is
+   round 49's 1400x720; anything placed beyond it widens the view
+   until it is in, with the city's 40 px of air (cityFitS), and the
+   view never comes in closer than 1:1 -- a map that fits the frame
+   is drawn at the frame, unmoved. A scene may instead say where the
+   operator has zoomed and panned to (`view`), which is the same
+   viewBox by another route. ---- */
+function fitBox(opt) {
+  if (opt.view) return opt.view;
+  let x1 = 1400, y1 = 720;
+  ['internet', 'rb', 'wg', 'lan', 'srv', 'iot', 'guest'].concat(opt.row || []).forEach((id) => {
+    const n = N2[id];
+    const r = n.lane ? 108 : n.router ? 128 : n.small ? 104 : n.w / 2;
+    const b = n.lane ? 130 : n.router ? 34 : n.h / 2 + (n.hb ? 30 : 0);
+    x1 = Math.max(x1, n.x + r + 40); y1 = Math.max(y1, n.y + b + 40);
+  });
+  return { x: 0, y: 0, w: x1, h: y1 };
+}
+function zoomOf(box) { return Math.min(1400 / box.w, 700 / box.h); }
+function flat2(opt) {
+  const box = fitBox(opt);
+  let s = '<svg viewBox="' + box.x + ' ' + box.y + ' ' + box.w + ' ' + box.h + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="' +
+    'The network as one graph: internet above, router at the waist, lanes below with their hosts as dots; every rib carries the state of its own boundary">';
+  s += ribs2(opt);
+  s += '<g class="detail"><g class="hot" transform="translate(514 396)">' +
+    '<rect x="-12" y="-15" width="234" height="40" rx="9" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.8"/>' +
+    '<circle cx="2" cy="-2" r="3" fill="var(--alarm)"/>' +
+    '<text x="14" y="1" class="alarm-t">UNPLANNED · iot → lan · tcp/445</text>' +
+    '<text x="14" y="15" class="chip-t">caught by #17 default drop · 14× · open ▸</text></g>' +
+    '<g transform="translate(742 158)"><text class="alarm-t" x="0" y="0" style="font-size:9px">▲3.1× drops · wan-in</text></g></g>';
+  ['internet', 'rb', 'wg', 'lan', 'srv', 'iot', 'guest'].concat(opt.row || []).forEach((id) => { s += node2(id, opt); });
+  return s + '</svg>';
+}
+/* map units -> stage pixels, for the HTML cards and their leaders:
+   the svg is 1400x700 with `meet`, so one scale and a centring offset */
+function toPx(opt, p) {
+  const box = fitBox(opt), k = zoomOf(box);
+  const ox = (1400 - box.w * k) / 2, oy = (700 - box.h * k) / 2;
+  return [R2(ox + (p[0] - box.x) * k), R2(oy + (p[1] - box.y) * k)];
+}
+
+/* ================================================================
+   THE SCENES. Four: round 49's #flat with the row one longer each
+   time, then the fifth zoomed to 1:1 and panned to the shoulder with
+   l2tp-out's line card open. `row` is the row to the right of wg0.
+   ================================================================ */
+const SCENES = {
+  'two-tunnels': { flat: 1, alt: 1, flags: 1, watch: 1, row: ['wg1'] },
+  'three-tunnels': { flat: 1, alt: 1, flags: 1, watch: 1, row: ['wg1', 'l2tp'] },
+  'five-tunnels': { flat: 1, alt: 1, flags: 1, watch: 1, row: ['wg1', 'l2tp', 'wg2', 'gre'] },
+  'zoomed': { flat: 1, alt: 1, flags: 1, watch: 1, row: ['wg1', 'l2tp', 'wg2', 'gre'], view: { x: 560, y: 0, w: 1400, h: 720 },
+    /* the card sits below the strands, centred under the ring, so no strand runs through it */
+    cards: [{ from: [1560, 162], at: [-146, 210], make: (px) => CARDS.l2tpLine(px) }] }
+};
+
+function render(id) {
+  document.getElementById('st-' + id).innerHTML = flat2(SCENES[id]);
+}
+
+/* ================================================================
+   CHROME — round 40's, with the lens row cut to two pills.
+   ================================================================ */
+const ALTS = ['CLIENTS', 'SERVICES', 'ZONES', 'CITY', 'BOROUGH', 'DISTRICT', 'STREET'];
+function chrome(id) {
+  const cfg = SCENES[id];
+  let h = '<div class="scenebar"><span class="wordmark">MIKRO<em>VIEW</em></span>' +
+    '<span class="scstatus"><span><span class="dot"></span>LIVE · 34/s</span>' +
+    '<a class="nmk" href="#" title="4 lines off the baseline today — new routes or ports, accepted or not">⟡ off-baseline <b>today</b> 4</a>' +
+    '<a class="fmk" href="#" title="6 open flags">⚑ 6</a>' +
+    '<a class="wmk" href="#" title="7 watchers — 6 healthy, 1 broken">' +
+    '<svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/>' +
+    '<circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b>○1</b></a>' +
+    '<button class="who">tom (admin)</button></span></div>';
+  h += '<div class="stage"><div id="st-' + id + '"></div></div>';
+  if (cfg.cards) {
+    cfg.cards.forEach((k) => {
+      const from = toPx(cfg, k.from);
+      const at = k.at || [-40, 36];   /* card top-left, px from the point */
+      const o = k.make([from[0] + at[0], from[1] + at[1]]);
+      o.px = [o.px[0], o.px[1] + 60];
+      const W = o.w || 264, L = o.px[0], T = o.px[1] - 60;
+      const to = k.lead ? k.lead : from[0] < L ? [L, T + 40] : from[0] > L + W ? [L + W, T + 40] : [L + W / 2, T + 10];
+      h += leader(from, to);
+      h += card(o);
+    });
+  }
+  /* the fit chip: how far out the frame is, and the way back to it.
+     At the frame it reads 100% and is quiet; zoomed by hand it offers
+     `fit` -- the city's ⤢ */
+  const z = Math.round(zoomOf(fitBox(cfg)) / zoomOf({ w: 1400, h: 720 }) * 100);
+  h += '<button class="fitchip' + (cfg.view ? ' hand' : '') + '" title="' + (cfg.view ? 'zoomed by hand — click to fit the whole map' : 'the whole map, fitted') + '">' +
+    '<span class="z">' + z + '%</span><span class="sep"></span><span' + (cfg.view ? '' : ' class="dimt"') + '>⤢ fit</span></button>';
+  h += '<div class="pills" role="group" aria-label="Overlays">' +
+    '<button class="pill f' + (cfg.flags ? ' on' : '') + '" aria-pressed="' + (cfg.flags ? 'true' : 'false') + '">⚑ flags <b>6</b></button>' +
+    '<button class="pill w' + (cfg.watch ? ' on' : '') + '" aria-pressed="' + (cfg.watch ? 'true' : 'false') + '">◉ watch <b>7</b></button></div>';
+  h += '<div class="alt" style="flex-direction:column;gap:6px">' +
+    '<div class="stops">' + ALTS.map((t, i) => '<span class="lab' + (cfg.alt === i ? ' on' : '') +
+      (i === 3 ? ' mid' : '') + '">' + (i === 3 ? '◆ ' : '') + t + '</span>').join('') + '</div>' +
+    '<span class="altwrap"><input type="range" min="0" max="6" value="' + cfg.alt +
+    '" aria-label="Altitude: clients, services, zones, city, borough, district, street">' +
+    ALTS.map((t, i) => '<i class="tick' + (i === 3 ? ' city' : (cfg.alt === i ? ' on' : '')) +
+      '" style="left:' + R2(3 + i * 15.667) + '%"></i>').join('') + '</span></div>';
+  h += '<div class="legend" aria-label="Legend: colour is the verdict, brightness is the baseline; grey dashed is dark, white is quiet on purpose">' +
+    '<span><i class="sw es"></i>established</span>' +
+    '<span><i class="sw nb"></i>off-baseline</span>' +
+    '<span><i class="sw" style="background:var(--alarm)"></i>refused</span>' +
+    '<span><i class="sw dk"></i>dark</span>' +
+    '<span><i class="sw qt"></i>quiet on purpose</span>' +
+    '</div>';
+  document.getElementById(id).innerHTML = h;
+}
+
+/* ---------------- go ---------------- */
+Object.keys(SCENES).forEach((id) => { chrome(id); render(id); });
+</script>
+</body>
+</html>
