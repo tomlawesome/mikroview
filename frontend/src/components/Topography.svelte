@@ -6341,21 +6341,6 @@
   }
 
   /* --- the composer (round 2 scene 4) ------------------------------------ */
-  .strand-door {
-    pointer-events: auto;
-    cursor: pointer;
-  }
-
-  .strand-door:hover,
-  .strand-door:focus-visible {
-    text-decoration: underline;
-  }
-
-  .strand-door:focus,
-  .strand-door:focus-visible {
-    outline: none;
-  }
-
   .composer {
     position: absolute;
     right: 24px;
