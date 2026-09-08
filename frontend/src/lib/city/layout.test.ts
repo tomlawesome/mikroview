@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mockupEstate } from './fixture'
-import { bankV, layoutGround, plateRadius } from './layout'
+import { bankV, layoutGround, plateHalfWidth, plateRadius } from './layout'
 import { bezAt, bezTangent, dm, segsOf } from './roads'
 import type { CityInput } from './input'
 import type { Pt } from './project'
@@ -24,6 +24,21 @@ describe('city layout: the ground plan', () => {
     expect(plateRadius(0)).toBe(13)
     expect(plateRadius(2)).toBe(16)
     expect(plateRadius(40)).toBe(21)
+  })
+
+  it("sizes a plate's half-width by its own text, not just its hosts (#1013)", () => {
+    const S = 4 // representative flat-map scale
+    const hostOnly = { r: plateRadius(2), name: 'lan', cidr: '10.0.0.0/24' }
+    // A short name never needs more than the host-count size gives it.
+    expect(plateHalfWidth(hostOnly, S)).toBeCloseTo(Math.max(38, hostOnly.r * S * 0.9), 5)
+
+    // A long name on a tiny (2-host) zone: the host-count floor alone
+    // (Topography's old `Math.max(38, d.r * flatCam.S * 0.9)`) is far
+    // narrower than the name needs, and used to run the name off the
+    // plate (#1013).
+    const longName = { r: plateRadius(2), name: "uplink -- inside rb5009's LAN", cidr: '10.0.0.0/24' }
+    const hostFloor = Math.max(38, longName.r * S * 0.9)
+    expect(plateHalfWidth(longName, S)).toBeGreaterThan(hostFloor)
   })
 
   it('lays out every zone as a plate, none overlapping', () => {
