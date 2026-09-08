@@ -56,13 +56,36 @@ describe('gatesFromRules', () => {
     expect(gates.find((g) => g.inInterface === 'srv')?.logged).toBe(false)
   })
 
-  it('several accept rules on one boundary count and keep the first comment', () => {
+  it('several accept rules on one boundary count, and the lowest-numbered one names the gate', () => {
+    // The card prints the two together -- `rule 4 · nas access` (owner,
+    // 2026-09-08 on #1016) -- so the number and the name must come from
+    // the same line of the table, never a name borrowed from another
+    // rule. Numbered as RouterOS numbers them.
     const [g] = gatesFromRules([
-      rule({ inInterface: 'lan', outInterface: 'srv', comment: 'nas access' }),
-      rule({ inInterface: 'lan', outInterface: 'srv', comment: 'second' }),
+      rule({ ordinal: 4, inInterface: 'lan', outInterface: 'srv', comment: 'nas access' }),
+      rule({ ordinal: 7, inInterface: 'lan', outInterface: 'srv', comment: 'second' }),
     ])
     expect(g.ruleCount).toBe(2)
+    expect(g.ordinal).toBe(4)
     expect(g.comment).toBe('nas access')
+  })
+
+  it('takes the lowest rule number whatever order the rules arrive in', () => {
+    const [g] = gatesFromRules([
+      rule({ ordinal: 7, inInterface: 'lan', outInterface: 'srv', comment: 'second' }),
+      rule({ ordinal: 4, inInterface: 'lan', outInterface: 'srv', comment: 'nas access' }),
+    ])
+    expect(g.ordinal).toBe(4)
+    expect(g.comment).toBe('nas access')
+  })
+
+  it('leaves a gate whose rule carries no comment unnamed rather than inventing one', () => {
+    const [g] = gatesFromRules([
+      rule({ ordinal: 4, inInterface: 'lan', outInterface: 'srv', comment: '' }),
+      rule({ ordinal: 7, inInterface: 'lan', outInterface: 'srv', comment: 'second' }),
+    ])
+    expect(g.ordinal).toBe(4)
+    expect(g.comment).toBe('')
   })
 
   it('no rules at all opens no gates', () => {

@@ -74,6 +74,18 @@ export interface DistrictGate {
   /** An accept rule on this exact boundary logs: the gate's lamp. */
   lamp: boolean
   ruleCount: number
+  /** The RouterOS number of the lowest-numbered accept rule that opened
+   * this gate, and that rule's own comment. The card reads them as
+   * `rule 4 · nas access` (owner, 2026-09-08 on #1016) -- numbered as
+   * RouterOS numbers them, so "go look at rule 4" means what it says.
+   * `ruleName` is '' when the rule carries no comment: a gate with no
+   * name is shown with none, never one invented for it. `ruleOrdinal`
+   * is -1 when no rule is known, which is the state a ground model
+   * built without a rule table is in -- the card then says nothing
+   * rather than printing `rule 0`. Never drawn on the gate itself:
+   * nothing is written on the drawing. */
+  ruleOrdinal: number
+  ruleName: string
   /** The worse of this gate's two directions (dark worse than quiet
    * worse than logged): accent posts and one lamp when logged, grey
    * posts and no lamp otherwise, and the wall edge it stands in takes

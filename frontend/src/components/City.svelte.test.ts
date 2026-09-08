@@ -9,6 +9,7 @@ import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
 import { layoutGround } from '../lib/city/layout'
+import { faceOf } from '../lib/city/walls'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { policyState } from '../lib/policy.svelte'
@@ -190,6 +191,68 @@ describe('City', () => {
     // fixture; nothing else in the estate does, so the lamps that exist
     // belong to boundaries that log, and there is at least one.
     expect(container.querySelectorAll('circle.lamp').length).toBeGreaterThan(0)
+  })
+
+  it('hooks every gate post with `data-gate`, so gates can be counted (#1022)', () => {
+    // #1022's own hook was on the policy lens's gate pill, which round
+    // 49 deleted with the lens; before that the gate posts were pushed
+    // into the drawing as anonymous geometry, so "how many gates" could
+    // not be asked of the DOM at all and live-city-walls.mjs had to drop
+    // the question. The hook is on the posts themselves now, which is
+    // where it survives a redraw of anything else.
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const posts = [...container.querySelectorAll('[data-gate]')]
+    // A gate on one of the two back edges the camera cannot see draws
+    // nothing, the same silence a hidden building face keeps, so the
+    // count is of the gates actually facing the reader.
+    const drawn = ground.districts.flatMap((d) => d.gates.filter((gt) => faceOf(d, gt.p) !== null).map((gt) => `${d.id}:${gt.key}`))
+    expect(drawn.length).toBeGreaterThan(0)
+    // Two posts stand either side of each break, so the count of posts
+    // is twice the count of gates and the distinct hooks are the gates.
+    expect(new Set(posts.map((p) => p.getAttribute('data-gate')))).toEqual(new Set(drawn))
+    expect(posts.length).toBe(drawn.length * 2)
+    // A district with no pushed rule table has no gates, so no hooks.
+    const unpushed = render(City, { props: { stop: 'district', ground: layoutGround({ ...mockupEstate(), rulesPushed: false, gates: [] }) } })
+    expect(unpushed.container.querySelectorAll('[data-gate]').length).toBe(0)
+    unpushed.unmount()
+  })
+
+  it('names the gate’s rule number and name on its own card, never on the drawing (#1016)', async () => {
+    // Owner, 2026-09-08 on #1016: a gate is one opening in the wall and
+    // one firewall rule, and its card says which -- `rule 4 · nas
+    // access`, numbered as RouterOS numbers it. The drawing itself
+    // stays wordless, the same rule as everywhere else on this surface.
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const post = container.querySelector('[data-gate^="bridge-lan:"][data-gate$="vlan-srv"]') as Element
+    expect(post).not.toBeNull()
+    fireEvent.pointerEnter(post)
+    flushSync()
+    await tick()
+    const card = container.querySelector('.bcard') as HTMLElement
+    expect(card).not.toBeNull()
+    // The LAN/Servers break folds two rules' directions into one gate;
+    // the card names the lower-numbered of them and that rule's own
+    // comment, never a name borrowed from the other.
+    expect(card.querySelector('[data-gate-rule]')?.textContent?.trim()).toBe('rule 4 · nas access')
+    expect(card.textContent).not.toContain('rule 9')
+    // Nothing is written on the drawing.
+    for (const t of container.querySelectorAll('.city svg text')) expect(t.textContent ?? '').not.toMatch(/^rule \d/)
+  })
+
+  it('names a gate whose rule carries no comment by its number alone, never an invented name', async () => {
+    // wlan-wsh → bridge-lan is the workshop's own gate; its lower
+    // direction (`vlan-srv → bridge-lan`, rule 9) carries no comment at
+    // all in the fixture, and neither does an estate whose operator
+    // never commented a rule. A gate with no name is shown with none.
+    const bare = mockupEstate()
+    bare.gates = bare.gates.map((g) => ({ ...g, comment: '' }))
+    const { container } = render(City, { props: { stop: 'district', ground: layoutGround(bare) } })
+    const post = container.querySelector('[data-gate]') as Element
+    fireEvent.pointerEnter(post)
+    flushSync()
+    await tick()
+    const line = container.querySelector('.bcard [data-gate-rule]')
+    expect(line?.textContent?.trim()).toMatch(/^rule \d+$/)
   })
 
   it('opens the boundary card from the wall, listing both directions, with declare behind the pin', async () => {

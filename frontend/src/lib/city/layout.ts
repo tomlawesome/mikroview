@@ -365,6 +365,11 @@ export function layoutGround(input: CityInput): Ground {
       }
       const directions = [...seen.values()].sort((a, b) => (a.edgeKey.startsWith(d.id + '|') ? -1 : b.edgeKey.startsWith(d.id + '|') ? 1 : 0))
       const coverage = directions.reduce<Coverage>((w, x) => worseCoverage(w, x.coverage), 'logged')
+      // One break in the wall can fold two directions together, so the
+      // rule the card names is the lowest-numbered of all of them --
+      // the first line of the table that opens this gate at all -- with
+      // that rule's own comment, never another's.
+      const named = gates.reduce((a, x) => (x.ordinal < a.ordinal ? x : a))
       d.gates.push({
         key: gates[0].key,
         p: g.p,
@@ -372,6 +377,8 @@ export function layoutGround(input: CityInput): Ground {
         toward: other || d.name + '’s own gateway',
         lamp: coverage === 'logged',
         ruleCount: gates.reduce((n, x) => n + x.ruleCount, 0),
+        ruleOrdinal: named.ordinal,
+        ruleName: named.comment,
         coverage,
         directions,
       })

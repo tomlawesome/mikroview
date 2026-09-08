@@ -63,7 +63,7 @@ returning to the city lands back where it was left.
 | District | a VLAN / zone | an isometric plate with a low wall around its edge, its name and subnet on a plaque; the wall's material says the coverage, so no badge |
 | Borough | a router's territory | that router's districts, grouped; a second router is a second borough down a road |
 | Road | traffic between two buildings or a building and a gate | a curved ground ribbon: width = volume, colour = verdict (`--accept`, `--drop`, `--alarm` for an escalated unplanned road) |
-| Gate | an accept rule crossing a district boundary | a break in the wall; a road crosses a wall only through a gate |
+| Gate | an accept rule crossing a district boundary | a break in the wall; a road crosses a wall only through a gate. Its posts are hoverable and its card names the rule |
 | Lamp on a gate | the rule logs | a lit post; a wall with no lamp toward a neighbour is that boundary's dark made visible |
 | Bollards and a red mark on a wall | a drop — the road ends at the wall | the plain mark only, reading `dropped`; **the refusing rule's name is not written on the drawing** — it lives in the card (#991, kept by round 49) |
 | River | the Internet | along one edge of the map; there is no Internet box. It must read as water — banks, an uneven edge, a ripple texture, no lane marks — the owner read the mockup's river as a road (2026-09-03) |
@@ -196,7 +196,10 @@ in the feed it comes back by itself. Neither state claims more than
 
 Cards are the one interaction, the same on both surfaces: hover to
 open, and every card has a **pin** so it stays when the pointer leaves.
-Boundary card (dark): what the rule does, both directions, and
+Boundary card (dark): the gate's own `rule N · name` (owner,
+2026-09-08 on #1016 — numbered as RouterOS numbers it, and on the card
+only, never on the drawing; a rule with no comment is shown by its
+number alone), what the rule does, both directions, and
 `declare quiet on purpose ▸ · rules ▸ · stream ▸`; pinned it opens the
 declare form — reason (required), `both directions ☑`, `Declare`, and
 who. Quiet card: the reason quoted, who and when, `undeclare ▸`. Host
