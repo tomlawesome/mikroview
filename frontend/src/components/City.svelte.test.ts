@@ -495,10 +495,32 @@ describe('City', () => {
     // on a gate the one thing that says the rule logs, so a gate with no
     // lamp reads exactly like a dark boundary.
     const est = mockupEstate()
-    const wanGate = { key: 'forward|bridge-lan|ether1', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'ether1', logged: true, ruleCount: 1, comment: 'lan to wan' }
-    // wanLogged false so the road bridge's own lamp cannot stand in for
-    // the gate's -- every circle.lamp counted below is a gate's.
-    const litGround = layoutGround({ ...est, wanLogged: false, gates: [wanGate] })
+    // Round 49 (#1016) folds a boundary's two directions into one break
+    // in the wall, so a gate now carries both readings and the fixture
+    // has to state both: the reading this test is about is the folded
+    // one, and a gate given only its outbound half reads dark whatever
+    // its own direction logs.
+    const wanGate = {
+      key: 'forward|bridge-lan|ether1',
+      chain: 'forward',
+      inInterface: 'bridge-lan',
+      outInterface: 'ether1',
+      logged: true,
+      ruleCount: 1,
+      ordinal: 1,
+      comment: 'lan to wan',
+      edgeKey: 'bridge-lan|ether1',
+      reverseEdgeKey: 'ether1|bridge-lan',
+      coverage: 'logged' as const,
+      reverseCoverage: 'logged' as const,
+    }
+    // Nothing else on the map may lamp, so every circle.lamp counted
+    // below is this gate's: the WAN deck reads dark (round 49 took that
+    // from `wanCoverage`, not from `wanLogged`, which now only sets the
+    // deck's up/unknown state) and there are no tunnel footbridges to
+    // lamp either.
+    const quiet = { ...est, wanLogged: false, wanCoverage: 'dark' as const, tunnels: [] }
+    const litGround = layoutGround({ ...quiet, gates: [wanGate] })
     const lan = litGround.districts.find((d) => d.id === 'bridge-lan')!
     expect(lan.gates[0].lamp).toBe(true)
     expect(faceOf(lan, lan.gates[0].p)).toBeNull()
@@ -509,7 +531,7 @@ describe('City', () => {
 
     // And the same gate with nothing logging on it draws no lamp, so
     // this cannot pass by lighting every gate regardless.
-    const darkGround = layoutGround({ ...est, wanLogged: false, gates: [{ ...wanGate, logged: false }] })
+    const darkGround = layoutGround({ ...quiet, gates: [{ ...wanGate, logged: false, coverage: 'dark' as const, reverseCoverage: 'dark' as const }] })
     const dark = render(City, { props: { stop: 'district', ground: darkGround } })
     expect(dark.container.querySelectorAll('circle.lamp').length).toBe(0)
   })
