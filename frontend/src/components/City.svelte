@@ -736,6 +736,11 @@
         /** Present on a wall piece: which district's edge it is, so
          * pointing at it opens that boundary's card. */
         wall?: { districtId: string; side: WallSide; coverage: Coverage }
+        /** Present on a gate post: which gate it belongs to, so pointing
+         * at it opens that gate's own card rather than the worst gate
+         * standing in the same edge, and so a live check can count the
+         * gates the city drew (#1022). */
+        gate?: { districtId: string; side: WallSide; gateKey: string; toward: string; coverage: Coverage }
       }
     | {
         kind: 'building'
@@ -1243,7 +1248,13 @@
             lit && sgn === 1
               ? [{ x: R2(X(c, m[0])), y: R2(Y(c, m[1], GATE_POST_H)), h: Math.max(2, c.S * 0.3), r: R2(Math.max(1.9, c.S * 0.3)), rr: R2(Math.max(4.5, c.S * 0.8)) }]
               : []
-          solids.push({ kind: 'other', v: m[1] + 0.8, paints, lamps })
+          solids.push({
+            kind: 'other',
+            v: m[1] + 0.8,
+            paints,
+            lamps,
+            gate: { districtId: d.id, side: f.side, gateKey: gate.key, toward: gate.toward, coverage: gate.coverage },
+          })
         }
       }
     }
@@ -1259,21 +1270,19 @@
     // wall, not just where the district-pair aggregate already draws
     // one. `e` is the ground point the mark centres on (depth reads its
     // v, same as every other solid).
-    // What the label says, in order of what is actually known:
+    // What the label says is the plain word "dropped", and nothing else
+    // (#1036, DESIGN.md's metaphor table: "the plain mark only, reading
+    // `dropped`; the refusing rule's name is not written on the drawing
+    // -- it lives in the card"). Nothing is written on a road or a
+    // strand: if it names something, it is in a card. The refusing rule
+    // is still carried -- `Road.refusedBy` on the ground model and
+    // `ReachStrand.refusedBy` in the reach -- and the line card and the
+    // composer are where it is read.
     //
-    // - the refusing rule's name where the events carried one. Round 49
-    //   restores it (DESIGN.md's metaphor table, "with the refusing
-    //   rule's name beside the mark", and "The reach": bollards, the red
-    //   mark and the refusing rule's name). #991 had moved it to the
-    //   composer, which is the older text.
-    // - otherwise the plain word "dropped": a refusal nothing named is
-    //   said plainly, never guessed at (#865/#967).
-    //
-    // The source is prefixed either way, and only when the drop is not
-    // on the building you are standing on -- #991's own rule, unchanged.
-    function dropMarkAt(e: Pt, alarm: boolean, source?: string, rule?: string) {
-      const what = rule ? 'caught by ' + rule : 'dropped'
-      const text = source ? source + ' · ' + what : what
+    // The source is prefixed, and only when the drop is not on the
+    // building you are standing on -- #991's own rule, unchanged.
+    function dropMarkAt(e: Pt, alarm: boolean, source?: string) {
+      const text = source ? source + ' · dropped' : 'dropped'
       const col2 = alarm ? 'var(--alarm)' : 'var(--drop)'
       const px = X(c, e[0])
       const py = Y(c, e[1])
@@ -1384,11 +1393,10 @@
       }
       // #991: the district-pair aggregate has no per-building source to
       // name (only the reach's own strands, below, resolve to one host),
-      // so this mark names no source. It does name the refusing rule
-      // where the ground model carried one -- `Road.refusedBy` is the
-      // events' own rule label, which #865 put there for exactly this
-      // mark.
-      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x', undefined, r.refusedBy)
+      // so this mark names no source. Nor does it name the refusing rule
+      // -- `Road.refusedBy` is the events' own rule label, and #1036
+      // keeps it off the drawing and in the card.
+      if (r.stop === 'drop') dropMarkAt(r.pts[r.pts.length - 1], r.k === 'x')
     }
     // #991: "gone from the street stop" -- the road port chips (#868's
     // "ports on the road") are dropped entirely; the ports live on the
@@ -1402,7 +1410,7 @@
     const markHits: { id: string; x: number; y: number }[] = []
     if (reachOverlay)
       for (const dm2 of reachOverlay.dropMarks) {
-        dropMarkAt(dm2.p, false, dm2.source, dm2.rule)
+        dropMarkAt(dm2.p, false, dm2.source)
         markHits.push({ id: dm2.id, x: R2(X(c, dm2.p[0])), y: R2(Y(c, dm2.p[1]) - 1.8 * c.S * ZK) })
       }
 
@@ -1623,7 +1631,16 @@
    * `onpointerenter` passed it `openWall!.side` against an `openWall`
    * that was already null by then (#1027). There is no longer anywhere
    * to write that. */
-  type WallRef = { districtId: string; side: WallSide }
+  type WallRef = {
+    districtId: string
+    side: WallSide
+    /** Which gate in that edge the reader pointed at. A wall piece names
+     * none -- an edge takes the worse of the gates standing in it, and
+     * that is the one its card describes -- but a gate post names its
+     * own, so a card opened from a post is about the gate under the
+     * pointer (#1016). */
+    gateKey?: string
+  }
 
   let hoverWall = $state<WallRef | null>(null)
   let pinnedWall = $state<WallRef | null>(null)
@@ -1665,8 +1682,11 @@
     if (!d) return null
     const here = d.gates.filter((gt) => faceOf(d, gt.p)?.side === w.side)
     if (here.length === 0) return null
-    let gate = here[0]
-    for (const g of here) if (worseCoverage(gate.coverage, g.coverage) === g.coverage && g.coverage !== gate.coverage) gate = g
+    // Pointed at from a gate post, the card is that gate's. Pointed at
+    // from the wall it stands in, it is the worst-covered gate in the
+    // edge -- the one that gave the edge its material.
+    let gate = (w.gateKey ? here.find((g) => g.key === w.gateKey) : null) ?? here[0]
+    if (!w.gateKey) for (const g of here) if (worseCoverage(gate.coverage, g.coverage) === g.coverage && g.coverage !== gate.coverage) gate = g
     const declaration = gate.directions.map((x) => coverageState.byKey.get(x.edgeKey)).find((x) => x !== undefined) ?? null
     return { d, gate, declaration }
   })
@@ -1699,7 +1719,7 @@
       pinnedWall = null
       return
     }
-    pinnedWall = { districtId: w.districtId, side: w.side }
+    pinnedWall = { districtId: w.districtId, side: w.side, gateKey: w.gateKey }
     // Pinned, the card opens the declare form with whatever reason is
     // already on record, so an existing declaration is edited rather
     // than silently replaced by an empty one.
@@ -2139,8 +2159,10 @@
     return `${lineTitle(b.name, peerName, lead?.direction ?? null)} line, ports and what each drew`
   }
 
-  /** The composer, shown only when asked for (round 49): the card on a
-   * refused line offers `draft the rule ▸`, and this is what that opens.
+  /** The composer, shown only when asked for (round 49): two cards
+   * offer `draft the rule ▸` and this is what either opens -- the
+   * refused line's own card, and the standing host's card, which is the
+   * one that is always there to be asked (#1035).
    * Reset on surfacing, so standing on the next building starts from the
    * drawing rather than from the last building's draft. */
   let composerOpen = $state(false)
@@ -2501,6 +2523,28 @@
               >
                 {@render otherPaints(s.paints, s.lamps)}
               </g>
+            {:else if s.gate}
+              <!-- A gate post is pointable too, and opens the same card
+                   the wall it stands in opens -- about this gate rather
+                   than the worst one in the edge. `data-gate` is what a
+                   live check counts gates by (#1022): the posts are the
+                   only thing the city draws per gate, and before this
+                   they were anonymous geometry with nothing to ask. -->
+              {@const gt = s.gate}
+              <g
+                class="wall-hot"
+                class:on={sameWall(openWall, { districtId: gt.districtId, side: gt.side })}
+                role="button"
+                tabindex="-1"
+                aria-label="{districtOf(gt.districtId)?.name ?? gt.districtId} gate toward {gt.toward}, {COVERAGE_WORD[gt.coverage]}"
+                data-gate="{gt.districtId}:{gt.gateKey}"
+                onpointerenter={() => openWallCard(gt)}
+                onpointerleave={releaseWallCard}
+                onclick={() => openWallCard(gt)}
+                onkeydown={(e) => e.key === 'Enter' && openWallCard(gt)}
+              >
+                {@render otherPaints(s.paints, s.lamps)}
+              </g>
             {:else}
               {@render otherPaints(s.paints, s.lamps)}
             {/if}
@@ -2739,6 +2783,16 @@
         >
       </div>
 
+      {#if c.gate.ruleOrdinal >= 0}
+        <!-- Which rule this opening in the wall is (owner, 2026-09-08 on
+             #1016), numbered as RouterOS numbers it so "go look at rule
+             4" means what it says. The name is that rule's own comment;
+             a rule with none is shown by its number alone rather than
+             given an invented name. It is said here and nowhere else --
+             nothing is written on the drawing. -->
+        <div class="s" data-gate-rule>rule {c.gate.ruleOrdinal}{c.gate.ruleName ? ` · ${c.gate.ruleName}` : ''}</div>
+      {/if}
+
       {#each c.gate.directions as dir (dir.edgeKey)}
         <div class="s {dir.coverage}">
           <i class="sw {dir.coverage}"></i>{dir.label} · {COVERAGE_WORD[dir.coverage]} — {directionDetail(dir)}
@@ -2864,6 +2918,20 @@
       {#if hostsState.error}<div class="s alarm">{hostsState.error}</div>{/if}
 
       <div class="acts">
+        {#if standBuilding?.id === c.b.id && standReach?.topBlocked}
+          <!-- The composer's door (#1035). It used to hang on the line
+               card alone, which needs a road or a mark to hover; a
+               strand across a district pair that already ends in a drop
+               draws neither of its own, so on those hosts -- the ones
+               with most to draft -- nothing on screen opened the
+               composer at all. The host card is open the moment you are
+               standing on the building, so the door is here, on the
+               subject the composer is about. Only that host's card: the
+               composer drafts `standReach.topBlocked`, and offering it
+               on another building's card would draft a rule for a
+               building the reader is not looking at. -->
+          <button type="button" data-draft-rule onclick={() => (composerOpen = true)}>draft the rule ▸</button>
+        {/if}
         {#if authState.canEdit && c.h.key}
           {#if c.h.reason}
             <button type="button" class="hot" disabled={markBusy} onclick={unmarkHost}>unmark ▸</button>
