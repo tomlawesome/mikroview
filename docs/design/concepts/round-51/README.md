@@ -55,6 +55,14 @@ an implementation issue, not this round's.
 
 ## Verdict
 
-_(pending)_
+Owner, 2026-09-08, verbatim: "No, this is just a row instead of a
+column!! Just let them fill the space more organically, where they can
+fit."
+
+So: the fit-to-content opening view, the fit chip and the one-strand-
+per-tunnel reading survive; any fixed line of tunnels — column or row —
+is dead. Round 52 puts each tunnel in the nearest free pocket around
+the router, wherever it fits, and the frame grows only when the pockets
+are full. #890.
 
 Drawn by Claude Fable 5, 2026-09-08.
