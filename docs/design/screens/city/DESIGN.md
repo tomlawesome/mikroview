@@ -155,9 +155,19 @@ That is the only way a line leaves the bright state early.
 ## The reach
 
 **Clicking anything on the map, at any stop, opens its reach** — a
-building, a host dot, a district, a road (round 49). Standing on a
-building drops the camera to the street stop on it and fades every road
-that is not its own. Its roads light with direction shown by the flow
+building, a host dot, a district, a road (round 49). A reach answers
+"where does this thing connect to", and the subject is whatever was
+clicked: a **host**, a **zone** (the district, or the 2D lane plate), or
+a **rib** — the line between two zones, drawn as a road between
+districts in the city (ratified 2026-09-08, #1016). A zone's own side is
+its boundary interface, so traffic that came and went through it counts
+and traffic that never left it does not; a rib is the pair of
+interfaces, both directions of it are one line, and its card lists the
+ports that line carried, which is what a rib can say that the drawing
+cannot. All three read the same crumb and the same three counts.
+Standing on a building drops the camera to the street stop on it and
+fades every road that is not its own. Its roads light with direction
+shown by the flow
 (dashes moving away = it spoke, toward = it was spoken to); accepted
 roads pass the district's gates and light the peer buildings; a refused
 road ends at the wall with bollards and the red mark, reading `dropped`.

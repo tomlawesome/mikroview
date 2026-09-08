@@ -28,9 +28,11 @@ export interface ReachStrand {
   /** The far side: a boundary interface, or 'internet'. */
   counterpart: string
   outcome: 'accepted' | 'blocked'
-  /** Relative to the centred host: 'out' = it spoke, 'in' = it was spoken to. */
+  /** Relative to the reach's subject: 'out' = it spoke, 'in' = it was
+   * spoken to. On a rib, 'out' is a -> b. */
   direction: 'out' | 'in'
-  /** Top far-side hosts (names where the events carry them). */
+  /** Top far-side hosts (names where the events carry them). A rib has
+   * no far side of its own, so it lists the hosts at both of its ends. */
   peers: string[]
   /** Top far-side raw addresses, same ranking -- what a printed rule
    * targets (a name is display, never a match condition). */
@@ -90,7 +92,99 @@ export interface ReachSummary {
 export const ACCEPTED_ACTIONS = new Set(['accept', 'nat', 'log'])
 export const isAccepted = (action: string): boolean => ACCEPTED_ACTIONS.has(action)
 
-export function reachFor(ip: string, wanInterface: string | null, events: ClientEvent[], now: number = Date.now()): ReachSummary {
+/**
+ * What a reach is centred on (#1016). A reach answers "where does this
+ * thing connect to", and the thing is whatever was clicked: a host, a
+ * zone, or a rib -- the line between two zones on the 2D map, the road
+ * between two districts in the city. Ratified by the owner 2026-09-08.
+ *
+ * A zone and a rib are named by the boundary interfaces the events
+ * themselves carry, never by a display name: the interface is the only
+ * end of a zone the event stream can be matched against.
+ */
+export type ReachSubject = { kind: 'host'; ip: string } | { kind: 'zone'; iface: string } | { kind: 'rib'; a: string; b: string }
+
+/** The host subject, so a call site that already has an address stays
+ * one line. `reachFor` takes a bare address too, for the same reason. */
+export const hostSubject = (ip: string): ReachSubject => ({ kind: 'host', ip })
+
+/** One event's part in a subject's reach, or null when it has none:
+ * which way it ran relative to the subject, the far end it ran to, and
+ * the far-side host(s) to credit for it. */
+interface Match {
+  direction: ReachStrand['direction']
+  /** The far boundary, unresolved -- `reachFor` spells the WAN
+   * 'internet' before it becomes a strand key. */
+  farIface: string
+  /** Far-side hosts, name-or-address first and raw address second, in
+   * matching order. A rib names the hosts at both of its ends, because
+   * either end is the subject and the surface lights both. */
+  peers: (string | undefined)[]
+  peerAddrs: (string | undefined)[]
+}
+
+function matchHost(e: ClientEvent, ip: string): Match | null {
+  const out = e.srcIp === ip
+  const inn = e.dstIp === ip
+  if (!out && !inn) return null
+  // The far boundary is the interface on the other side of the host:
+  // where the traffic left toward (out) or arrived from (in).
+  const farIface = out ? e.outInterface : e.inInterface
+  if (!farIface) return null
+  return out
+    ? { direction: 'out', farIface, peers: [e.dstHostName ?? e.dstIp], peerAddrs: [e.dstIp] }
+    : { direction: 'in', farIface, peers: [e.srcHostName ?? e.srcIp], peerAddrs: [e.srcIp] }
+}
+
+function matchZone(e: ClientEvent, iface: string): Match | null {
+  const left = e.inInterface === iface
+  const arrived = e.outInterface === iface
+  // Traffic that both entered and left through this zone never crossed
+  // its boundary, so it is not part of the zone's reach at all.
+  if (left && arrived) return null
+  if (left) {
+    if (!e.outInterface) return null
+    return { direction: 'out', farIface: e.outInterface, peers: [e.dstHostName ?? e.dstIp], peerAddrs: [e.dstIp] }
+  }
+  if (arrived) {
+    if (!e.inInterface) return null
+    return { direction: 'in', farIface: e.inInterface, peers: [e.srcHostName ?? e.srcIp], peerAddrs: [e.srcIp] }
+  }
+  return null
+}
+
+function matchRib(e: ClientEvent, a: string, b: string): Match | null {
+  // Only traffic crossing between the rib's own two ends counts, in
+  // either direction; direction is read from `a`, so a->b is 'out'.
+  const forward = e.inInterface === a && e.outInterface === b
+  const back = e.inInterface === b && e.outInterface === a
+  if (!forward && !back) return null
+  // The counterpart is the far end of the rib, which is `b` whichever
+  // way the packet ran: the rib is one line, and the drawn arrow is
+  // what says which way it went.
+  return {
+    direction: forward ? 'out' : 'in',
+    farIface: b,
+    peers: [e.srcHostName ?? e.srcIp, e.dstHostName ?? e.dstIp],
+    peerAddrs: [e.srcIp, e.dstIp],
+  }
+}
+
+function matchFor(e: ClientEvent, subject: ReachSubject): Match | null {
+  if (subject.kind === 'host') return matchHost(e, subject.ip)
+  if (subject.kind === 'zone') return matchZone(e, subject.iface)
+  return matchRib(e, subject.a, subject.b)
+}
+
+export function reachFor(subject: ReachSubject, wanInterface: string | null, events: ClientEvent[], now?: number): ReachSummary
+export function reachFor(ip: string, wanInterface: string | null, events: ClientEvent[], now?: number): ReachSummary
+export function reachFor(
+  subject: ReachSubject | string,
+  wanInterface: string | null,
+  events: ClientEvent[],
+  now: number = Date.now(),
+): ReachSummary {
+  const subj: ReachSubject = typeof subject === 'string' ? hostSubject(subject) : subject
   const groups = new Map<
     string,
     ReachStrand & {
@@ -103,16 +197,11 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
   >()
 
   for (const e of events) {
-    const out = e.srcIp === ip
-    const inn = e.dstIp === ip
-    if (!out && !inn) continue
-    // The far boundary is the interface on the other side of the host:
-    // where the traffic left toward (out) or arrived from (in).
-    const farIface = out ? e.outInterface : e.inInterface
-    if (!farIface) continue
-    const counterpart = farIface === wanInterface ? 'internet' : farIface
+    const m = matchFor(e, subj)
+    if (m === null) continue
+    const counterpart = m.farIface === wanInterface ? 'internet' : m.farIface
     const outcome: ReachStrand['outcome'] = isAccepted(e.action) ? 'accepted' : 'blocked'
-    const direction: ReachStrand['direction'] = out ? 'out' : 'in'
+    const direction: ReachStrand['direction'] = m.direction
     const key = `${counterpart}|${direction}|${outcome}`
     let g = groups.get(key)
     if (!g) {
@@ -140,10 +229,8 @@ export function reachFor(ip: string, wanInterface: string | null, events: Client
     // replayed) is clamped to full weight rather than allowed to
     // outrank everything by an unbounded amount.
     g.weight += 2 ** (-Math.max(0, now - e.receivedAt) / RECENCY_HALF_LIFE_MS)
-    const peer = out ? (e.dstHostName ?? e.dstIp) : (e.srcHostName ?? e.srcIp)
-    if (peer) g.peerCounts.set(peer, (g.peerCounts.get(peer) ?? 0) + 1)
-    const peerAddr = out ? e.dstIp : e.srcIp
-    if (peerAddr) g.peerAddrCounts.set(peerAddr, (g.peerAddrCounts.get(peerAddr) ?? 0) + 1)
+    for (const peer of m.peers) if (peer) g.peerCounts.set(peer, (g.peerCounts.get(peer) ?? 0) + 1)
+    for (const peerAddr of m.peerAddrs) if (peerAddr) g.peerAddrCounts.set(peerAddr, (g.peerAddrCounts.get(peerAddr) ?? 0) + 1)
     if (e.dstPort) {
       g.portCounts.set(e.dstPort, (g.portCounts.get(e.dstPort) ?? 0) + 1)
       if (e.protocol && !g.portProto.has(e.dstPort)) g.portProto.set(e.dstPort, e.protocol.toLowerCase())

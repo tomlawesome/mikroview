@@ -118,7 +118,7 @@ async function zonesCard(name) {
   await slider().fill('2') // the zones stop, the 2D stage
   await new Promise((r) => setTimeout(r, 900))
   return page.evaluate((n) => {
-    const card = [...document.querySelectorAll('[data-card="topography"] .gf-card')].find((c) => (c.getAttribute('aria-label') || '').endsWith(n))
+    const card = [...document.querySelectorAll('[data-card="topography"] .gf-card')].find((c) => (c.getAttribute('aria-label') || '').startsWith(n + ' '))
     if (!card) return null
     return { count: card.querySelector('.gf-count')?.textContent ?? '', dim: card.classList.contains('dark') }
   }, name)

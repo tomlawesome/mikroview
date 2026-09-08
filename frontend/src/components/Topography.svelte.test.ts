@@ -4429,6 +4429,48 @@ describe('the reach, drawn to round 49 (#1016)', () => {
       expect(container.querySelector<HTMLInputElement>('.alt-range')!.value).toBe('1')
     })
 
+    it("opens a zone's own reach from its lane plate (#1016)", () => {
+      // Round 49 widened the click to anything, and #1016 gave a zone a
+      // subject of its own: the plate is no longer a shortcut to the
+      // stream, it stands on the zone the way a host dot stands on a
+      // host.
+      const container = standOnDesktop()
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      flushSync()
+
+      const plate = [...container.querySelectorAll<SVGGElement>('g.zone')].find((g) => g.getAttribute('data-zone') === 'bridge1')!
+      plate.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+
+      expect(container.querySelector('.membrane-layer')).not.toBeNull()
+      expect(appState.view).toBe('topography') // the reach, never the stream
+      const crumb = container.querySelector('.crumb .path')!.textContent!.replace(/\s+/g, ' ').trim()
+      expect(crumb).toContain('LAN')
+      // The zone's own side is bridge1, so the one accepted crossing to
+      // Servers is a pathway it reaches, counted the same way a host's is.
+      expect(crumb).toContain('reaches 1')
+      expect(crumb).toContain('reached by 0')
+    })
+
+    it("opens a rib's own reach from the line between two zones (#1016)", () => {
+      const container = standOnDesktop()
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      flushSync()
+
+      const rib = container.querySelector<SVGGElement>('.edge-g')!
+      expect(rib).not.toBeNull()
+      rib.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+
+      expect(container.querySelector('.membrane-layer')).not.toBeNull()
+      expect(appState.view).toBe('topography')
+      // A rib names the pair, and has no address of its own to print.
+      const crumb = container.querySelector('.crumb .path')!.textContent!.replace(/\s+/g, ' ').trim()
+      expect(crumb).toContain('LAN → Servers')
+      expect(crumb).toContain('Esc surfaces')
+      expect(container.querySelector('.crumb .ip')).toBeNull()
+    })
+
     it('walks out of the card first, then the reach', () => {
       const container = standOnDesktop()
       hoverStrand(container)
