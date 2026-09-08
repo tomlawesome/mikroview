@@ -880,6 +880,17 @@ perf:promotion:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
   resource_group: perf-promotion
   timeout: 25m
+  # This is the only `big` job that runs as a non-root user (the image's
+  # `node`, uid 1000), and it shares its per-slot checkout with test:go,
+  # whose after_script hands the whole tree to root:root (#908). Whenever
+  # two pipelines' big jobs overlap, test:go lands in the slot this job
+  # reuses and live-env.sh can no longer clear web/dist (#1048: jobs 8292
+  # and 8477, red twice in one afternoon). This flag makes the runner
+  # chown the build directory to the image's uid at job start instead of
+  # relying on umask 0000 -- set here alone: gate:scenarios on `light`
+  # depends on the world-writable checkout (comment above it).
+  variables:
+    FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR: "true"
   script:
     - set -o pipefail
     - t0=$(date +%s)
@@ -888,7 +899,14 @@ perf:promotion:
     - scripts/quiet-host.sh hold
     - scripts/wait-quiet-host.sh
     - 't2=$(date +%s); echo "hold+drain wall seconds: $((t2 - t1))"'
-    - eval "$(scripts/live-env.sh up)"
+    # Two lines, not `eval "$(... up)"`: `up` fails with a message on
+    # stderr and nothing on stdout, and eval of an empty string is 0, so
+    # the one-liner threw the exit status away and the job died a second
+    # later on the seed's "Connection refused" instead (#1048). The
+    # assignment keeps the substitution's status, so the real error is
+    # the one GitLab shows.
+    - mv_env="$(scripts/live-env.sh up)"
+    - eval "$mv_env"
     - trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT
     # Seed before measuring. Without this the probe rendered an empty
     # instance: `up` creates no events, and the 300-event baseline other

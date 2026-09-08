@@ -116,7 +116,7 @@ live-check-remote:
 # CI's gate:scenarios job runs one per parallel job. Unset, it is the whole
 # gate, exactly as before.
 live-check:
-	@eval "$$(scripts/live-env.sh up)"; \
+	@mv_env="$$(scripts/live-env.sh up)" || exit 1; eval "$$mv_env"; \
 	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT; \
 	  runner_pid=""; \
 	  trap '[ -n "$$runner_pid" ] && kill "$$runner_pid" 2>/dev/null; scripts/live-env.sh down >/dev/null 2>&1 || true; exit 130' INT TERM; \
