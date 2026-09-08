@@ -1362,6 +1362,22 @@
           })
         }
       }
+      // A gate whose break falls on a face the camera cannot see still
+      // stands its lamp at the gate point (#1034): nearly every logging
+      // accept rule crosses toward the WAN, so its gate aims at the
+      // bridge post and lands on a back face, and skipping those left
+      // the one mark that tells a logged gate from a dark one off the
+      // whole city. The gate point's own v is the depth: it is exactly
+      // the face point wallSegments would have carved.
+      for (const gate of d.gates) {
+        if (gate.coverage !== 'logged' || visible.some((v) => v.g === gate)) continue
+        solids.push({
+          kind: 'other',
+          v: gate.p[1],
+          paints: [],
+          lamps: [{ x: R2(X(c, gate.p[0])), y: R2(Y(c, gate.p[1], GATE_POST_H)), h: Math.max(2, c.S * 0.3), r: R2(Math.max(1.9, c.S * 0.3)), rr: R2(Math.max(4.5, c.S * 0.8)) }],
+        })
+      }
     }
 
     // Roads, cut into pieces that carry their own depth.

@@ -203,6 +203,15 @@ for (let i = 0; i < STOPS.length; i++) {
   // that nothing else exists (#897).
   check(m.plates >= 4, `${at}: a district per pushed lane (${m.plates} plates, 4 lanes pushed here)`)
   check(m.blks >= 8, `${at}: buildings stand on the plates (${m.blks})`)
+  if (stop === 'city') {
+    // #1034: every logged gate stands a lamp post. The lamp circle itself
+    // is the only mark of a logged gate -- no data-cid or district group
+    // ties it back to a lane -- so this can only prove some gate is lit,
+    // not that vlan-guest's own gate stays dark.
+    const lampRadii = await page.$$eval('circle.lamp', (els) => els.map((el) => Number(el.getAttribute('r'))))
+    const lit = lampRadii.filter((r) => r > 0)
+    check(lit.length > 0, `${at}: at least one gate lamp is lit (${lit.length} of ${lampRadii.length} lamp circles have r>0)`)
+  }
   check(m.unnamed === 0, `${at}: every district and building carries an accessible name (${m.unnamed} bare)`)
   check(!!m.viewport, `${at}: the minimap shows the viewport`)
   if (m.viewport && lastViewport) check(m.viewport.w < lastViewport.w, `${at}: the viewport rect is smaller than at the last stop (${m.viewport.w.toFixed(1)} < ${lastViewport.w.toFixed(1)})`)
