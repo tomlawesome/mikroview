@@ -25,7 +25,7 @@
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { buildFilterChips, type FilterChip } from '../lib/filterChips'
   import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
-  import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
+  import { columnState } from '../lib/columns.svelte'
   import FilterPresetsMenu from './FilterPresetsMenu.svelte'
 
   // Saved filters have a drawn home now (round 37: "saved filters are
@@ -44,6 +44,43 @@
   }
 
   const actions = ACTION_FILTER_OPTIONS
+
+  // #710: the chooser's own naming, distinct from COLUMNS' table-header
+  // labels (lib/columns.svelte). A flat list read "Device column",
+  // "Address column", "Address column" -- the same visible text twice,
+  // once for source's address and once for destination's, with nothing
+  // beside it to tell them apart. These three lists say the bare column
+  // name in the strip's own mono voice, and the source/destination
+  // facts (address, port, MAC) sit under a small heading naming which
+  // side they belong to instead of repeating "source"/"destination" on
+  // every row. Order here is the chooser's own -- COLUMNS interleaves
+  // source's and destination's facts around chain/proto for a table-
+  // layout reason (see its own comment) that has nothing to do with how
+  // this menu groups them.
+  interface ColumnChoice {
+    key: string
+    text: string
+    ariaLabel: string
+  }
+  const PLAIN_COLUMNS: ColumnChoice[] = [
+    { key: 'device', text: 'device', ariaLabel: 'Device column' },
+    { key: 'action', text: 'action', ariaLabel: 'Action column' },
+    { key: 'chain', text: 'chain', ariaLabel: 'Chain column' },
+    { key: 'source', text: 'source', ariaLabel: 'Source column' },
+    { key: 'destination', text: 'destination', ariaLabel: 'Destination column' },
+    { key: 'proto', text: 'proto', ariaLabel: 'Proto column' },
+    { key: 'iface', text: 'interface', ariaLabel: 'Interfaces column' },
+    { key: 'nat', text: 'NAT', ariaLabel: 'NAT column' },
+  ]
+  const SOURCE_COLUMNS: ColumnChoice[] = [
+    { key: 'srcAddr', text: 'address', ariaLabel: 'Source address column' },
+    { key: 'srcPort', text: 'src port', ariaLabel: 'Source port column' },
+    { key: 'mac', text: 'MAC', ariaLabel: 'Source MAC column' },
+  ]
+  const DEST_COLUMNS: ColumnChoice[] = [
+    { key: 'dstAddr', text: 'address', ariaLabel: 'Destination address column' },
+    { key: 'port', text: 'port', ariaLabel: 'Destination port column' },
+  ]
 
   // Below the breakpoint, the ~9 fields below move into a slide-up
   // drawer behind a trigger (issue #85) rather than staying always-
@@ -558,25 +595,34 @@
          is every column on, and this only ever narrows from there. Time
          and Rule are pinned -- no checkbox for either, since neither is
          ever offered as a toggle. -->
+    {#snippet columnCheckbox(col: ColumnChoice)}
+      <!-- aria-label carries the disambiguated name ("Source address
+           column", not "Address column") on the input directly, which
+           wins over the wrapping <label>'s own text for the accessible
+           name -- so the visible word stays bare while a screen reader
+           still hears which side it belongs to. -->
+      <label class="col-toggle">
+        <input
+          type="checkbox"
+          checked={columnState.isColumnVisible(col.key)}
+          onchange={() => columnState.toggleColumn(col.key)}
+          aria-label={col.ariaLabel}
+        />
+        {col.text}
+      </label>
+    {/snippet}
+
     {#snippet columnCheckboxes()}
-      {#each COLUMNS as col (col.key)}
-        {#if !PINNED_COLUMNS.has(col.key)}
-          <!-- The visible text reads "{label} column", not the bare
-               column name -- several of these (Device, Chain, Proto,
-               Port, Interface) are also the exact visible name of an
-               existing field elsewhere in this same strip, and giving a
-               checkbox and an unrelated select the identical accessible
-               name would leave a screen-reader or voice-control user
-               unable to tell them apart. -->
-          <label class="col-toggle">
-            <input
-              type="checkbox"
-              checked={columnState.isColumnVisible(col.key)}
-              onchange={() => columnState.toggleColumn(col.key)}
-            />
-            {col.label} column
-          </label>
-        {/if}
+      {#each PLAIN_COLUMNS as col (col.key)}
+        {@render columnCheckbox(col)}
+      {/each}
+      <span class="col-group-heading">source</span>
+      {#each SOURCE_COLUMNS as col (col.key)}
+        {@render columnCheckbox(col)}
+      {/each}
+      <span class="col-group-heading">destination</span>
+      {#each DEST_COLUMNS as col (col.key)}
+        {@render columnCheckbox(col)}
       {/each}
     {/snippet}
 
@@ -920,6 +966,19 @@
     align-items: flex-end;
     animation: unfurl 0.35s ease-out;
     transform-origin: right center;
+    /* #710: neither .card nor .card-body (the shared ancestor of this
+       bar and LiveTable's .table-wrap) is itself a stacking context, so
+       .col-panel's z-index and .table-wrap's sticky header cells' own
+       (.header-cell, z-index 2-4) climb straight past both and are
+       compared as if they were siblings at the document root -- caught
+       live as the header painting straight through the open column
+       panel despite .col-panel's z-index of 40 nominally outranking it.
+       .bar was an unpositioned sibling of .table-wrap and so took no
+       part in that comparison at all; position + a z-index clear of
+       LiveTable's own (2-4) puts it in the race and gives it the
+       header's own weapon back. */
+    position: relative;
+    z-index: 10;
   }
 
   @keyframes unfurl {
@@ -1368,6 +1427,21 @@
     outline-offset: 2px;
   }
 
+  /* #710: the small heading naming which side "address"/"src port"/
+     "MAC" belongs to. flex-basis: 100% starts a new line the same way
+     the old, now-retired .columns-field did for the whole chooser --
+     here it is scoped to one heading inside the panel/drawer list
+     instead of the whole strip. */
+  .col-group-heading {
+    flex-basis: 100%;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    font: 500 9px var(--font-mono);
+    letter-spacing: 0.1em;
+    color: var(--fg-dim);
+  }
+
   /* The drawer's own 44px touch-target convention (issue #85) -- applies
      to the whole label, not just the checkbox glyph, so the tap target is
      the full "checkbox + column name" row rather than the ~16px box. */
@@ -1375,6 +1449,11 @@
     min-height: 44px;
     font: 14px var(--font-sans);
     color: var(--fg);
+  }
+
+  .drawer .col-group-heading {
+    font-size: 11px;
+    padding-top: 10px;
   }
 
   .duration {
