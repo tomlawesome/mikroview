@@ -217,7 +217,14 @@ card: presence, last and first seen, events, `mark quiet on purpose ▸ ·
 dismiss ▸`. Line card in the reach: the port / proto / accepted /
 dropped table, the totals, `:22 refused by #17 default drop`, and on a
 refused strand the composer's `draft the rule ▸`. Off-baseline card:
-the lines, first seen, count, and `expected ▸`. Every card links on
+the lines, first seen, count, and `expected ▸`. Drop card (#1002): the
+mark itself is the control — a button, in the keyboard order, opening
+`<from> → <to> · refused at this wall`, then one row per refusing rule
+as `rule name · count`, largest first, with `caught, no rule named` for
+the drops that named none, and the total under them so the card
+reconciles with the mark. It is the only place those rule names are
+said: the drawing still reads `dropped` and nothing more. Escape takes
+a card down before it surfaces from standing. Every card links on
 into the flags, the watchers and the stream.
 
 ## Labels
