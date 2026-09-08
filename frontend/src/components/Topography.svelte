@@ -76,7 +76,7 @@
   } from '../lib/city/expected'
   import type { District, Ground } from '../lib/city/types'
   import { ALTITUDE_LABELS, CENTRE_ALTITUDE, isCityAltitude, type Altitude } from '../lib/altitude'
-  import { cardSize, drawnRect, drawnRects, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
+  import { cardSize, drawnPathRects, drawnRect, drawnRects, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
   import { altitudeStopState } from '../lib/altitudeStop.svelte'
   // Living hosts (#1016). The register is the source of presence, not
   // the event buffer: zonesState derives its host list from the lines
@@ -1354,6 +1354,24 @@
     return drawnRects(els, host)
   }
 
+  /**
+   * The open boundary's own line, as boxes the card keeps off (#1030).
+   *
+   * The plates named in the card's title were in the avoid-set and the
+   * line between them was not, so the card came down on the tail of the
+   * very boundary it was describing. Taken off the drawing rather than
+   * recomputed from `halfPath`, for the reason `zonePlates` gives:
+   * whatever is on screen is what the card has to clear.
+   *
+   * `drawnPathRects` walks the rib, so a diagonal is a chain of boxes
+   * along it rather than one box round the whole sweep -- the card
+   * stays beside its own line instead of being pushed off it.
+   */
+  function openEdgeRects(host: Element): Rect[] {
+    const el = host.querySelector('g.cov-g.on path.cedge')
+    return el === null ? [] : drawnPathRects(el, host)
+  }
+
   /** Whether the lane row is the drawing on screen, as opposed to the
    * ground plan that replaces it at the zones stop. */
   function laneRowDrawn(host: Element): boolean {
@@ -1406,7 +1424,11 @@
     // nobody can see, and the card cleared those while coming down on
     // the ground-plan plate its title names. `zonePlates` returns
     // whichever layer is really on screen.
-    const avoid = zonePlates(host, [open.from, open.to])
+    //
+    // And the boundary's own line with them (#1030): a card sitting on
+    // the line hides the tail of the one thing it is about, which the
+    // two plates alone never stopped.
+    const avoid = zonePlates(host, [open.from, open.to]).concat(openEdgeRects(host))
     // Every other plate is worth keeping clear too, but only as a
     // tie-break: the plates fill the map, and insisting would leave
     // nowhere to put the card at all.

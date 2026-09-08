@@ -64,7 +64,7 @@
   import { deviceScale, deviceStampAttrs, type DeviceStampAttrs } from '../lib/city/devices'
   import { faceCoverage, faceOf, facePoint, wallPiece, wallSegments, GATE_HALF_WIDTH, WALL_H, type WallBreak, type WallSide } from '../lib/city/walls'
   import { worseCoverage } from '../lib/city/gates'
-  import { cardSize, drawnRect, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
+  import { cardSize, drawnPathRects, drawnRect, grace, mapRect, placeCard, stageRect, unitMapper, watchCardSize, type Placement, type Rect } from '../lib/cardAnchor'
   import type { Coverage } from '../lib/coverageRule'
   import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
@@ -1764,6 +1764,22 @@
    * (#1028). */
   let cardTick = $state(0)
 
+  /**
+   * The open boundary's own wall, as boxes the card keeps off (#1030).
+   *
+   * The 2D map's card kept clear of the plates its title named and then
+   * sat on the boundary line between them, hiding the tail of the one
+   * thing it was describing. The rule is the shared module's, so the
+   * city keeps off its own wall by the same call: `drawnPathRects`
+   * walks a stroked line into a chain of boxes and takes a solid shape
+   * -- which a wall panel is -- as its own box.
+   */
+  function openWallRects(host: Element): Rect[] {
+    const out: Rect[] = []
+    for (const el of host.querySelectorAll('g.wall-hot.on path')) out.push(...drawnPathRects(el, host))
+    return out
+  }
+
   /** A district's plate as a box on the stage, its wall included. */
   function plateBox(d: { u: number; v: number; r: number }): Rect {
     const x = X(viewCam, d.u - d.r)
@@ -1819,7 +1835,9 @@
       const el = shown(x)
       return el !== null && drawnRect(el, host) !== null ? [mapRect(map, plateBox(x))] : []
     }
-    const avoid = ends.flatMap(drawnPlate)
+    // The wall itself goes in with them (#1030): the plates alone never
+    // stopped the card coming down on the boundary line it is about.
+    const avoid = ends.flatMap(drawnPlate).concat(openWallRects(host))
     // Every other plate is worth keeping clear too, but only as a
     // tie-break: at the city stop the whole estate is on screen and
     // insisting would leave nowhere to put the card at all.

@@ -11,6 +11,7 @@ import {
   LEAD_INSET,
   boundsOf,
   cardSize,
+  drawnPathRects,
   drawnRect,
   drawnRects,
   fitViewBox,
@@ -20,6 +21,7 @@ import {
   mapRect,
   parseAspect,
   parseViewBox,
+  pathBoxes,
   placeCard,
   stageRect,
   unitMapper,
@@ -259,6 +261,81 @@ describe('placeCard', () => {
 describe('boundsOf', () => {
   it('boxes a set of points', () => {
     expect(boundsOf([{ x: 10, y: 4 }, { x: -2, y: 30 }, { x: 6, y: 6 }])).toEqual({ x: -2, y: 4, w: 12, h: 26 })
+  })
+})
+
+describe('pathBoxes — the boundary line the card is describing (#1030)', () => {
+  // The card kept off the two zone plates its title names, and then sat
+  // on the boundary line running between them: the plates were in the
+  // avoid-set and the line itself never was, so the line ran in under
+  // the card's left edge and its tail was gone.
+  //
+  // A line is not a rectangle. One box round a diagonal claims the whole
+  // triangle either side of it, and the card is then shoved right out of
+  // the area it is describing; a box per sampled segment claims only the
+  // ground the line is actually on.
+
+  /** The diagonal the 2D map draws between two lanes, sampled the way
+   * the measuring half samples a real path. */
+  const DIAGONAL = [
+    { x: 900, y: 120 },
+    { x: 1000, y: 230 },
+    { x: 1100, y: 340 },
+    { x: 1200, y: 450 },
+    { x: 1300, y: 560 },
+  ]
+
+  it('boxes a straight line as the one rectangle it occupies', () => {
+    // Nothing is gained by chopping up a line that is already thin in
+    // one axis, and every extra rectangle costs the placement search.
+    const boxes = pathBoxes([{ x: 200, y: 400 }, { x: 600, y: 400 }, { x: 1000, y: 400 }])
+    expect(boxes).toHaveLength(1)
+    expect(boxes[0].x).toBe(200)
+    expect(boxes[0].w).toBe(800)
+    // Given a girth, so a hairline is something the card can be kept off
+    // rather than a zero-height rectangle nothing can overlap.
+    expect(boxes[0].h).toBeGreaterThan(0)
+    expect(boxes[0].y + boxes[0].h / 2).toBeCloseTo(400)
+  })
+
+  it('gives a diagonal a box per segment rather than one box round the lot', () => {
+    const boxes = pathBoxes(DIAGONAL)
+    expect(boxes).toHaveLength(DIAGONAL.length - 1)
+    const whole = boundsOf(DIAGONAL)
+    // Together they cover the line and nothing like the whole box.
+    expect(boxes.reduce((sum, b) => sum + b.w * b.h, 0)).toBeLessThan(whole.w * whole.h)
+    for (const b of boxes) expect(overlap(b, whole)).toBeGreaterThan(0)
+  })
+
+  it('says nothing about a line it was given no points for', () => {
+    expect(pathBoxes([])).toEqual([])
+  })
+
+  it('keeps the card off the boundary line, which is what it did not do', () => {
+    const anchor = { x: 1100, y: 340 } // the middle of the line, where the leader starts
+    const line = pathBoxes(DIAGONAL)
+
+    // The bug: with only the plates named in the title to keep off, the
+    // card comes down on its own line.
+    const before = placeCard({ anchor, card: CARD, stage: STAGE })
+    const beforeBox = { x: before.left, y: before.top, w: CARD.w, h: CARD.h }
+    expect(line.some((b) => overlap(beforeBox, b) > 0)).toBe(true)
+
+    // The fix: the line is in the avoid-set too, and the card clears it.
+    const after = placeCard({ anchor, card: CARD, stage: STAGE, avoid: line })
+    const afterBox = { x: after.left, y: after.top, w: CARD.w, h: CARD.h }
+    for (const b of line) expect(overlap(afterBox, b)).toBe(0)
+  })
+
+  it('still lets the card sit beside its own line, not banished from the whole diagonal', () => {
+    // What the segment boxes buy. One box round the diagonal would put
+    // the card outside 900..1300 x 120..560 entirely; the segments leave
+    // the clear ground beside the line usable, so the card stays near
+    // the thing it is describing.
+    const anchor = { x: 1100, y: 340 }
+    const p = placeCard({ anchor, card: CARD, stage: STAGE, avoid: pathBoxes(DIAGONAL) })
+    const box = { x: p.left, y: p.top, w: CARD.w, h: CARD.h }
+    expect(overlap(box, boundsOf(DIAGONAL))).toBeGreaterThan(0)
   })
 })
 
@@ -604,6 +681,81 @@ describe('isDrawn / drawnRect — only what a reader can see', () => {
     layer.append(second)
     second.style.opacity = '0'
     expect(drawnRects([plate, second], host)).toEqual([{ x: 100, y: 100, w: 60, h: 40 }])
+  })
+})
+
+describe('drawnPathRects — a drawn line, as boxes the card keeps off (#1030)', () => {
+  // jsdom lays nothing out and has no getScreenCTM, so this is the
+  // measuring half against a stub, exactly as unitMapper is above.
+  const withBox = (el: Element, box: { x: number; y: number; w: number; h: number }) => {
+    el.getBoundingClientRect = () =>
+      ({ left: box.x, top: box.y, width: box.w, height: box.h, right: box.x + box.w, bottom: box.y + box.h, x: box.x, y: box.y }) as DOMRect
+    return el
+  }
+
+  /** A host with one shape in it, measured where the stub says. */
+  const scene = (shape: Element, box: { x: number; y: number; w: number; h: number }) => {
+    const host = withBox(document.createElement('div'), { x: 10, y: 20, w: 800, h: 600 })
+    withBox(shape, box)
+    host.append(shape)
+    document.body.append(host)
+    return host
+  }
+
+  /** A stroked SVG path that can be walked, on the identity matrix --
+   * `fill="none"` because that is what a rib is, and what tells this
+   * apart from a solid shape. */
+  const walkable = (at: (len: number) => { x: number; y: number }, total = 400) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    el.setAttribute('fill', 'none')
+    const p = el as unknown as {
+      getTotalLength: () => number
+      getPointAtLength: (n: number) => { x: number; y: number }
+      getScreenCTM: () => DOMMatrix
+    }
+    p.getTotalLength = () => total
+    p.getPointAtLength = at
+    p.getScreenCTM = () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }) as DOMMatrix
+    return el
+  }
+
+  afterEach(() => {
+    document.body.replaceChildren()
+  })
+
+  it('walks a diagonal path and returns the boxes along it', () => {
+    // A path from 100,100 to 500,400 in page pixels; the host's origin
+    // is 10,20, so the boxes come back in the container's own space.
+    const el = walkable((n) => ({ x: 100 + (400 * n) / 400, y: 100 + (300 * n) / 400 }))
+    const host = scene(el, { x: 100, y: 100, w: 400, h: 300 })
+    const boxes = drawnPathRects(el, host)
+    expect(boxes.length).toBeGreaterThan(1)
+    expect(boxes[0].x).toBeCloseTo(90)
+    expect(boxes[0].y).toBeCloseTo(80)
+    const last = boxes[boxes.length - 1]
+    expect(last.x + last.w).toBeCloseTo(490)
+    expect(last.y + last.h).toBeCloseTo(380)
+  })
+
+  it('takes a filled shape as its own box: a wall covers its inside too', () => {
+    // The city's wall is a filled quad, not a hairline. Walking its
+    // outline would leave the middle of it fair game for the card.
+    const el = walkable((n) => ({ x: 100 + n, y: 100 + n }))
+    el.setAttribute('fill', '#0f1422')
+    const host = scene(el, { x: 100, y: 100, w: 400, h: 300 })
+    expect(drawnPathRects(el, host)).toEqual([{ x: 90, y: 80, w: 400, h: 300 }])
+  })
+
+  it('falls back to the whole box for a shape it cannot walk', () => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    const host = scene(el, { x: 100, y: 100, w: 40, h: 30 })
+    expect(drawnPathRects(el, host)).toEqual([{ x: 90, y: 80, w: 40, h: 30 }])
+  })
+
+  it('says nothing at all about a shape nobody can see', () => {
+    const el = walkable((n) => ({ x: 100 + n, y: 100 }))
+    const host = scene(el, { x: 100, y: 100, w: 400, h: 0 })
+    expect(drawnPathRects(el, host)).toEqual([])
   })
 })
 
