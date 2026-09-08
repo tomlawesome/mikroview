@@ -65,7 +65,7 @@
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
-  import type { Building, CityLens, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
+  import type { Building, CityLens, CityPeer, District, Ground, RoadKind } from '../lib/city/types'
 
   let {
     stop,
@@ -798,9 +798,9 @@
     // Walls and gates (#865): every plate's own low prism, in its VLAN
     // tint, broken open only where a pushed accept rule actually crosses
     // that boundary. A gate that resolves to a point on one of the two
-    // back edges the camera cannot see draws nothing -- the same
-    // silence a hidden building face keeps -- but still keeps its lamp
-    // and rule count for the plaque and the policy lens.
+    // back edges the camera cannot see breaks no wall open -- the same
+    // silence a hidden building face keeps -- but still stands its own
+    // lamp post, and still counts on the plaque and the policy lens.
     // #991: "these pills are too busy, they should [be] bigger and just
     // simply be a label" -- one word (the far end), bigger type; the
     // rule number, its text and its ports move to the gate's click card.
@@ -810,12 +810,12 @@
     for (const d of g.districts) {
       const dim = d.dark
       const wallInk = dim ? 'var(--fg-dim)' : inkOf(d)
-      const visible: { g: DistrictGate; f: WallBreak }[] = []
+      const breaks: WallBreak[] = []
       for (const gate of d.gates) {
         const f = faceOf(d, gate.p)
-        if (f) visible.push({ g: gate, f })
+        if (f) breaks.push(f)
       }
-      const segs = wallSegments(d, visible.map((v) => v.f))
+      const segs = wallSegments(d, breaks)
       for (const seg of segs) {
         const mid = (seg.t0 + seg.t1) / 2
         const midV = seg.side === 'l' ? d.v + d.r * mid : d.v + d.r * (1 - mid)
@@ -830,13 +830,20 @@
           lamps: [],
         })
       }
-      for (const { g: gate, f } of visible) {
+      // Every gate, not just the ones whose break got drawn (#1034):
+      // nearly every logging accept rule crosses toward the WAN, so its
+      // gate aims at the bridge post and lands on a face the camera
+      // cannot see. Skipping those here left the lamp -- the one mark
+      // that tells a logged gate from a dark one -- off the whole city.
+      // The gate point's own v is the depth either way: it is exactly
+      // the face point wallSegments would have carved.
+      for (const gate of d.gates) {
         const gx = X(c, gate.p[0])
         const gy = Y(c, gate.p[1])
         const lampH = Math.max(6, c.S * 1.1)
         solids.push({
           kind: 'other',
-          v: f.side === 'l' ? d.v + d.r * f.t : d.v + d.r * (1 - f.t),
+          v: gate.p[1],
           paints: [],
           lamps: gate.lamp ? [{ x: R2(gx), y: R2(gy), h: lampH, r: R2(Math.max(1.6, c.S * 0.3)), rr: R2(Math.max(4, c.S * 0.7)) }] : [],
         })
