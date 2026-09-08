@@ -314,8 +314,9 @@ engines-check:
 # thing neither the suite nor live-check can see -- a surface that works
 # but is not the one that was ratified.
 #
-# Needs a running instance and the design host. Both are overridable:
-#   FIDELITY_APP=... FIDELITY_MOCKUPS=... make fidelity
+# Needs a running instance and the design host. Both are required, because
+# the defaults used to be one developer's own machine (#1044):
+#   FIDELITY_APP=https://<host>:19892/ FIDELITY_MOCKUPS=http://<host>:8311/ make fidelity
 # Baselines move only deliberately: UPDATE_BASELINE=1 make fidelity
 fidelity:
 	@cd frontend && node tests/fidelity/screens.mjs

@@ -121,8 +121,8 @@ type backgroundHost struct {
 }
 
 var backgroundHosts = []backgroundHost{
-	{"192.0.2.10", "aa:bb:cc:01:01:01"}, // core-switch, border-rb5009/core
-	{"192.0.2.21", "aa:bb:cc:01:01:02"}, // home-nas, border-rb5009/core
+	{"192.0.2.10", "aa:bb:cc:01:01:01"},    // core-switch, border-rb5009/core
+	{"192.0.2.21", "aa:bb:cc:01:01:02"},    // home-nas, border-rb5009/core
 	{"192.168.10.15", "aa:bb:cc:01:02:01"}, // tom-laptop, border-rb5009/staff
 	{"192.168.40.12", "aa:bb:cc:02:01:01"}, // office-hex/office, unnamed
 	{"172.16.5.5", "aa:bb:cc:03:01:01"},    // lab-crs/mgmt, unnamed
