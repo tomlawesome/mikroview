@@ -54,6 +54,9 @@ ratified, not this round's.
 
 ## Verdict
 
-_(pending)_
+Owner, 2026-09-08, verbatim: "Good". Ratified: one group where wg0
+is, filling the free space around what is there, busiest nearest the
+router, one strand each; the frame fits the map and grows only as the
+group does. #890.
 
 Drawn by Claude Fable 5, 2026-09-08.
