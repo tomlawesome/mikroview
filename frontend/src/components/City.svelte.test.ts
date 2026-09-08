@@ -1827,3 +1827,91 @@ describe('City: brightness by baseline', () => {
     })
   })
 })
+
+describe('the drop card (#1002)', () => {
+  beforeEach(() => {
+    matchMedia(true)
+    appState.events = []
+  })
+
+  // The fixture already draws two aggregate drop marks -- the holding
+  // guest boundary and the one escalated unplanned pair. Only the guest
+  // one is given a breakdown, so the same ground answers both halves of
+  // the question: a mark with rules to name opens a card, and a mark
+  // with none stays exactly as it was drawn.
+  //
+  // The counts go in deliberately out of order: "largest first" is the
+  // card's own promise, so the card is what has to keep it.
+  const GUEST_ROAD = 'bridge-lan|vlan-guest'
+  function dropGround() {
+    const input = mockupEstate()
+    const guest = input.edges.find((e) => e.key === 'vlan-guest|bridge-lan')!
+    guest.dropsByRule = [
+      { rule: 'guest-isolation', count: 2 },
+      { rule: null, count: 3 },
+      { rule: 'lan-guard', count: 7 },
+    ]
+    return layoutGround(input)
+  }
+
+  const dropCard = (c: Element) => c.querySelector('.bcard.dcard') as HTMLElement | null
+
+  it('opens from the aggregate drop mark, a row per refusing rule, busiest first, and a total that reconciles', async () => {
+    const { container } = render(City, { props: { stop: 'district', ground: dropGround() } })
+    const mark = container.querySelector(`[data-drop-hot="${GUEST_ROAD}"]`) as Element
+    expect(mark).not.toBeNull()
+    // The mark is the control, the way a district plate and a building
+    // already are: a button in the keyboard order, not a new affordance.
+    expect(mark.getAttribute('role')).toBe('button')
+    expect(mark.getAttribute('tabindex')).toBe('0')
+    // A mark with nothing to break down is left exactly as drawn --
+    // there is no dead click on it.
+    expect(container.querySelector('[data-drop-hot="bridge-lan|vlan-iot"]')).toBeNull()
+    expect(dropCard(container)).toBeNull()
+
+    // Hover opens it, as it does every other card on this surface.
+    await fireEvent.pointerEnter(mark)
+    flushSync()
+    const card = dropCard(container) as HTMLElement
+    expect(card).not.toBeNull()
+    // The composer's own phrasing, so a refusal reads the same wherever
+    // it is said.
+    expect(card.textContent).toContain('Guest → LAN · refused at this wall')
+    // One row per rule, largest first, and the composer's own words for
+    // the drops that carried no rule at all.
+    expect([...card.querySelectorAll('[data-drop-rule]')].map((r) => r.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      'lan-guard · 7',
+      'caught, no rule named · 3',
+      'guest-isolation · 2',
+    ])
+    // The footer reconciles with the mark: every drop the mark stands for.
+    expect(card.querySelector('[data-drop-total]')?.textContent).toContain('12')
+
+    // Every card pins (DESIGN.md "Cards").
+    await fireEvent.click(card.querySelector('.pin') as HTMLElement)
+    flushSync()
+    expect(dropCard(container)?.classList.contains('pinned')).toBe(true)
+  })
+
+  it('takes the card down before it surfaces from standing', async () => {
+    const { container } = render(City, { props: { stop: 'district', ground: dropGround() } })
+    // Activating the mark pins its card, so the card is still open when
+    // the next click stands somewhere.
+    await fireEvent.click(container.querySelector(`[data-drop-hot="${GUEST_ROAD}"]`) as Element)
+    flushSync()
+    expect(dropCard(container)).not.toBeNull()
+
+    await fireEvent.click(container.querySelector('.plate[data-cid="bridge-lan"]') as Element)
+    flushSync()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    // First Escape is the card's; standing is untouched.
+    key(document.body, 'Escape')
+    expect(dropCard(container)).toBeNull()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    // Second Escape surfaces, exactly as it did before there was a card.
+    key(document.body, 'Escape')
+    expect(container.querySelector('.crumb')).toBeNull()
+  })
+})

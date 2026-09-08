@@ -13,7 +13,7 @@ import type { Device, FirewallEvent } from '../types'
 import type { ZoneInfo } from '../zones.svelte'
 import { betterCoverage, gatesFromRules, type CityGate } from './gates'
 import { mergeZoneHosts, type CityHost } from './presence'
-import type { CityPeer } from './types'
+import type { CityPeer, CityRuleDrop } from './types'
 
 export type { CityHost } from './presence'
 
@@ -68,6 +68,12 @@ export interface CityEdge {
   /** The rule that refused traffic on this pair, from the events' own
    * label -- never invented when absent. */
   refusedBy?: string
+  /** Every rule that refused a crossing on this pair, and how many events
+   * each one caught, busiest first -- #1002's aggregate breakdown. Unlike
+   * `refusedBy` (reality.ts's "latest drop wins", built for naming one
+   * catcher on a card), this keeps every distinct rule label a drop
+   * carried, computed independently from the same events. */
+  dropsByRule?: CityRuleDrop[]
 }
 
 /**
@@ -136,6 +142,33 @@ export interface CityInput {
 export const TUNNEL_RE = /^(wg|wireguard|l2tp|pptp|sstp|ovpn|ipsec|gre|eoip|zerotier|vxlan)/i
 
 export const isTunnel = (iface: string): boolean => TUNNEL_RE.test(iface)
+
+/**
+ * Every rule that refused a crossing on each interface pair, and how many
+ * events each one caught -- #1002. Grouped the same way realityEdges groups
+ * (`${inInterface}|${outInterface}`, not sorted, folded into one plate-pair
+ * road later by layout.ts), but keeping every distinct rule label a drop
+ * carried rather than collapsing to the latest one: reality.ts's own
+ * `refusedBy` exists to name one catcher on a card and is right to keep
+ * only the latest; the aggregate drop mark needs every rule that ever
+ * caught traffic on the pair, so this reads the same events independently
+ * rather than reaching into reality.ts's shared aggregation.
+ */
+export function dropsByRuleFrom(events: FirewallEvent[]): Map<string, CityRuleDrop[]> {
+  const byPair = new Map<string, Map<string | null, number>>()
+  for (const e of events) {
+    if (!e.inInterface || !e.outInterface) continue
+    if (e.action !== 'drop' && e.action !== 'reject') continue
+    const key = `${e.inInterface}|${e.outInterface}`
+    let m = byPair.get(key)
+    if (!m) byPair.set(key, (m = new Map()))
+    const rule = e.ruleLabel || null
+    m.set(rule, (m.get(rule) ?? 0) + 1)
+  }
+  const out = new Map<string, CityRuleDrop[]>()
+  for (const [key, m] of byPair) out.set(key, [...m.entries()].map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count))
+  return out
+}
 
 /**
  * cityInputFrom reduces the stores' shapes to the city's. A zone's
@@ -308,10 +341,20 @@ export function cityInputFrom(
     }
   })
 
+  const dropsByRule = dropsByRuleFrom(events)
   return {
     routers,
     zones: cityZones,
-    edges: edges.map((e) => ({ key: e.key, from: e.from, to: e.to, events: e.events, verdict: e.verdict, drops: e.drops, refusedBy: e.refusedBy })),
+    edges: edges.map((e) => ({
+      key: e.key,
+      from: e.from,
+      to: e.to,
+      events: e.events,
+      verdict: e.verdict,
+      drops: e.drops,
+      refusedBy: e.refusedBy,
+      dropsByRule: dropsByRule.get(e.key) ?? [],
+    })),
     wan,
     wanLogged,
     wanCoverage: wan === null ? 'logged' : materialOf(wan),

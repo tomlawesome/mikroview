@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { cityInputFrom, isTunnel, zoneHolding } from './input'
-import type { Device, FirewallEvent } from '../types'
+import { cityInputFrom, dropsByRuleFrom, isTunnel, zoneHolding } from './input'
+import type { Device, FirewallEvent, Action } from '../types'
+import type { RealityEdge } from '../reality'
 import type { ZoneInfo } from '../zones.svelte'
 import type { PolicyEdge } from '../policy.svelte'
 
 const device = (id: string, sourceIp: string): Device =>
   ({ id, name: id, sourceIp, configured: true, firstSeen: '', lastSeen: '', eventCount: 0, status: 'live' }) as Device
 
-const event = (deviceId: string, inInterface?: string, outInterface?: string): FirewallEvent =>
-  ({ id: 1, time: '', deviceId, sourceIp: '', action: 'accept', ruleLabel: '', chain: 'forward', inInterface, outInterface }) as FirewallEvent
+const event = (deviceId: string, inInterface?: string, outInterface?: string, action: Action = 'accept', ruleLabel = ''): FirewallEvent =>
+  ({ id: 1, time: '', deviceId, sourceIp: '', action, ruleLabel, chain: 'forward', inInterface, outInterface }) as FirewallEvent
+
+const realityEdge = (key: string, from: string, to: string, refusedBy?: string): RealityEdge =>
+  ({ key, from, to, events: 0, accepts: 0, drops: 0, topPorts: [], topAsked: [], refusedBy, verdict: 'unplanned' }) as RealityEdge
 
 const zone = (id: string, cidr: string | null): ZoneInfo => ({ id, name: id, cidr, hosts: [], hostCount: 0, eventCount: 0 })
 
@@ -147,5 +151,70 @@ describe('city input', () => {
     const zones = cityInputFrom([device('rb', '1.1.1.1')], [zone('a', '10.0.0.0/24'), zone('b', '10.5.0.0/16')], [], [], [], false, 'rb', null).zones
     expect(zoneHolding(zones, '10.5.9.9')?.id).toBe('b')
     expect(zoneHolding(zones, '192.168.1.1')).toBeNull()
+  })
+})
+
+// #1002: the aggregate drop mark's own breakdown -- every rule that
+// refused a crossing on a pair, and how many events each one caught.
+describe('dropsByRuleFrom', () => {
+  it('counts each distinct rule label separately, busiest first', () => {
+    const events = [
+      event('rb', 'vlan-iot', 'bridge-lan', 'drop', 'iot-egress-drop'),
+      event('rb', 'vlan-iot', 'bridge-lan', 'drop', 'iot-egress-drop'),
+      event('rb', 'vlan-iot', 'bridge-lan', 'reject', 'iot-egress-drop'),
+      event('rb', 'vlan-iot', 'bridge-lan', 'drop', 'default-drop'),
+    ]
+    const byRule = dropsByRuleFrom(events)
+    expect(byRule.get('vlan-iot|bridge-lan')).toEqual([
+      { rule: 'iot-egress-drop', count: 3 },
+      { rule: 'default-drop', count: 1 },
+    ])
+  })
+
+  it('buckets a drop with no rule label under null, never guessing a name', () => {
+    const events = [event('rb', 'vlan-guest', 'bridge-lan', 'drop', ''), event('rb', 'vlan-guest', 'bridge-lan', 'drop', 'guest-isolation')]
+    const byRule = dropsByRuleFrom(events)
+    expect(byRule.get('vlan-guest|bridge-lan')).toEqual([
+      { rule: null, count: 1 },
+      { rule: 'guest-isolation', count: 1 },
+    ])
+  })
+
+  it('ignores accepted and logged-only traffic, and events missing an interface', () => {
+    const events = [
+      event('rb', 'vlan-srv', 'bridge-lan', 'accept', 'nas-access'),
+      event('rb', 'vlan-srv', 'bridge-lan', 'log', 'watch'),
+      event('rb', undefined, 'bridge-lan', 'drop', 'x'),
+    ]
+    expect(dropsByRuleFrom(events).size).toBe(0)
+  })
+
+  it('keeps a pair with no drops at all out of the map entirely', () => {
+    const events = [event('rb', 'vlan-srv', 'bridge-lan', 'accept')]
+    expect(dropsByRuleFrom(events).has('vlan-srv|bridge-lan')).toBe(false)
+  })
+
+  it('threads the per-rule breakdown through cityInputFrom onto the matching edge', () => {
+    const devices = [device('rb', '10.0.0.1')]
+    const zones = [zone('vlan-iot', null), zone('bridge-lan', null)]
+    const events = [
+      event('rb', 'vlan-iot', 'bridge-lan', 'drop', 'iot-egress-drop'),
+      event('rb', 'vlan-iot', 'bridge-lan', 'drop', 'iot-egress-drop'),
+      event('rb', 'vlan-iot', 'bridge-lan', 'drop', 'default-drop'),
+    ]
+    const edges = [realityEdge('vlan-iot|bridge-lan', 'vlan-iot', 'bridge-lan', 'default-drop')]
+    const input = cityInputFrom(devices, zones, events, edges, [], true, 'rb', null)
+    expect(input.edges[0].dropsByRule).toEqual([
+      { rule: 'iot-egress-drop', count: 2 },
+      { rule: 'default-drop', count: 1 },
+    ])
+  })
+
+  it('gives an edge with no drops an empty breakdown, not undefined', () => {
+    const devices = [device('rb', '10.0.0.1')]
+    const zones = [zone('vlan-srv', null), zone('bridge-lan', null)]
+    const edges = [realityEdge('vlan-srv|bridge-lan', 'vlan-srv', 'bridge-lan')]
+    const input = cityInputFrom(devices, zones, [], edges, [], true, 'rb', null)
+    expect(input.edges[0].dropsByRule).toEqual([])
   })
 })
