@@ -185,6 +185,11 @@ where it is defined:
 `policy:promotion-hop` and `sync:mirror-to-github` are outside it too:
 neither keys off the diff at all.
 
+`lint:changed-paths-guard` closes the one gap the ladder cannot: it runs
+unconditionally and goes red naming any changed path in neither list, with
+the instruction to add its tree to `*code_paths`. Its script reads the lists
+from `.gitlab-ci.yml`; `scripts/ci-changed-paths-guard.test.sh` is its test.
+
 Adding a job: it gets `<<: *dev_or_mr_code` (or `*dev_or_mr_code_frontend`)
 only if a documentation change genuinely cannot fail it. If in doubt use
 plain `*dev_or_mr` — running a job that did not need to run costs minutes;
