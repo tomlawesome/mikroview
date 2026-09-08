@@ -231,6 +231,109 @@ var (
 	tcpRejectedConfigured atomic.Uint64
 )
 
+// lossClockOverride is a test seam for "now" as read by loss-counter
+// freshness tracking below (lastAt, episode, active) -- nil means
+// time.Now. A package-level var rather than a struct field, because the
+// counters it clocks are themselves package-level state (this whole
+// var block), with no per-listener instance to hang a clock on. Same
+// "nil means the real clock" convention as logging.Limiter's own now
+// seam.
+var lossClockOverride atomic.Pointer[func() time.Time]
+
+// lossNow reads the current time for freshness tracking, through
+// lossClockOverride when a test has installed one.
+func lossNow() time.Time {
+	if p := lossClockOverride.Load(); p != nil {
+		return (*p)()
+	}
+	return time.Now()
+}
+
+// setLossClock installs fn as lossNow's source, or restores time.Now
+// when fn is nil. Test-only: production code never calls this.
+func setLossClock(fn func() time.Time) {
+	if fn == nil {
+		lossClockOverride.Store(nil)
+		return
+	}
+	lossClockOverride.Store(&fn)
+}
+
+// Per-counter freshness windows (issue #1015): how long a counter's
+// condition is still considered "happening" after it last moved, before
+// it should stop being surfaced as active. Dropped and rejectedConfigured
+// get the longer 5-minute window -- records were actually lost, or a
+// declared router is locked out, both worth a longer dwell than a
+// stray sender being turned away. Rejected (undeclared source) and
+// oversized get 60 seconds -- ordinary defensive behaviour working as
+// intended, not itself an emergency once it stops recurring.
+const (
+	lossWindowDropped            = 5 * time.Minute
+	lossWindowRejectedConfigured = 5 * time.Minute
+	lossWindowRejected           = 60 * time.Second
+	lossWindowOversized          = 60 * time.Second
+)
+
+// lossFreshness tracks, beside a counter's own monotonic total, when its
+// condition last happened and how many times in the current episode --
+// what lets the frontend ask "is this still happening?" instead of "has
+// this ever happened?" (issue #1015). An episode is a run of hits with
+// no gap wider than its window between consecutive hits; a gap that wide
+// means whatever was happening stopped, so the next hit starts a new
+// episode at 1 rather than adding to a count that would otherwise grow
+// forever, exactly like the monotonic total it sits beside.
+//
+// Guarded by its own mutex, like tcpOversizedHostMu and
+// rejectedConfiguredHostsMu elsewhere in this file: hit's
+// read-then-maybe-reset-then-write is not a single atomic step.
+type lossFreshness struct {
+	mu      sync.Mutex
+	episode uint64
+	lastAt  time.Time // zero means never
+}
+
+// hit records one occurrence against window -- see lossFreshness.
+func (f *lossFreshness) hit(window time.Duration) {
+	now := lossNow()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lastAt.IsZero() || now.Sub(f.lastAt) > window {
+		f.episode = 0
+	}
+	f.episode++
+	f.lastAt = now
+}
+
+// snapshot reports the current episode count, lastAt (the zero value
+// when the counter has never moved) and whether the condition is still
+// active -- lastAt within window of now. now is a parameter rather than
+// read internally so a caller building several fields off one request
+// (lossStats) judges every one of them against the same instant.
+func (f *lossFreshness) snapshot(window time.Duration, now time.Time) (episode uint64, lastAt time.Time, active bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.episode, f.lastAt, !f.lastAt.IsZero() && now.Sub(f.lastAt) <= window
+}
+
+// clear zeroes the episode and lastAt. The monotonic total this sits
+// beside is a separate atomic.Uint64 the caller clears itself -- see
+// ClearLoss.
+func (f *lossFreshness) clear() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.episode = 0
+	f.lastAt = time.Time{}
+}
+
+// Freshness trackers for the four loss counters, one each -- see
+// lossFreshness and ClearLoss.
+var (
+	tcpDroppedFreshness            lossFreshness
+	tcpRejectedFreshness           lossFreshness
+	tcpRejectedConfiguredFreshness lossFreshness
+	tcpOversizedFreshness          lossFreshness
+)
+
 // maxRejectedConfiguredHosts bounds how many distinct locked-out
 // declared hosts rejectedConfiguredHosts remembers. Matches
 // maxTCPConnectionsPerSource (8): both exist to keep a value that is
@@ -246,6 +349,16 @@ var (
 // locked-out router, so evicting the oldest is the right eviction rule.
 const maxRejectedConfiguredHosts = 8
 
+// rejectedConfiguredHostEntry is one entry in rejectedConfiguredHosts:
+// the host plus when it was last rejected, so issue #1015's
+// loss.rejectedConfigured.hosts can list only the ones still within
+// window while the plain rejectedConfiguredHostsSnapshot below keeps
+// serving the full bounded list unchanged.
+type rejectedConfiguredHostEntry struct {
+	host   string
+	lastAt time.Time
+}
+
 // rejectedConfiguredHosts holds the most recently rejected declared
 // hosts, most-recent-first, deduplicated (a host already present moves
 // to the front rather than appearing twice). Guarded by its own mutex
@@ -253,7 +366,7 @@ const maxRejectedConfiguredHosts = 8
 // word.
 var (
 	rejectedConfiguredHostsMu sync.Mutex
-	rejectedConfiguredHosts   []string
+	rejectedConfiguredHosts   []rejectedConfiguredHostEntry
 )
 
 // noteRejectedConfiguredHost records host as the most recently
@@ -263,26 +376,48 @@ func noteRejectedConfiguredHost(host string) {
 	rejectedConfiguredHostsMu.Lock()
 	defer rejectedConfiguredHostsMu.Unlock()
 
-	for i, h := range rejectedConfiguredHosts {
-		if h == host {
+	for i, e := range rejectedConfiguredHosts {
+		if e.host == host {
 			rejectedConfiguredHosts = append(rejectedConfiguredHosts[:i], rejectedConfiguredHosts[i+1:]...)
 			break
 		}
 	}
-	rejectedConfiguredHosts = append([]string{host}, rejectedConfiguredHosts...)
+	rejectedConfiguredHosts = append([]rejectedConfiguredHostEntry{{host: host, lastAt: lossNow()}}, rejectedConfiguredHosts...)
 	if len(rejectedConfiguredHosts) > maxRejectedConfiguredHosts {
 		rejectedConfiguredHosts = rejectedConfiguredHosts[:maxRejectedConfiguredHosts]
 	}
 }
 
 // rejectedConfiguredHostsSnapshot returns a copy of the current
-// most-recent-first list, safe for a caller to hold onto.
+// most-recent-first list of host names, safe for a caller to hold onto.
+// Unchanged shape (a plain string list, bounded at
+// maxRejectedConfiguredHosts) -- see rejectedConfiguredHostEntry's doc
+// comment.
 func rejectedConfiguredHostsSnapshot() []string {
 	rejectedConfiguredHostsMu.Lock()
 	defer rejectedConfiguredHostsMu.Unlock()
 
 	out := make([]string, len(rejectedConfiguredHosts))
-	copy(out, rejectedConfiguredHosts)
+	for i, e := range rejectedConfiguredHosts {
+		out[i] = e.host
+	}
+	return out
+}
+
+// activeRejectedConfiguredHostsSnapshot returns the most-recent-first
+// host names whose own lastAt is within window of now -- issue #1015's
+// loss.rejectedConfigured.hosts, a filtered view of the same bounded
+// list rejectedConfiguredHostsSnapshot serves in full.
+func activeRejectedConfiguredHostsSnapshot(window time.Duration, now time.Time) []string {
+	rejectedConfiguredHostsMu.Lock()
+	defer rejectedConfiguredHostsMu.Unlock()
+
+	var out []string
+	for _, e := range rejectedConfiguredHosts {
+		if now.Sub(e.lastAt) <= window {
+			out = append(out, e.host)
+		}
+	}
 	return out
 }
 
@@ -316,6 +451,123 @@ type ListenerStats struct {
 	// address to look at rather than leaving that half of its own copy
 	// unfillable. Empty until the first oversized message.
 	OversizedHost string `json:"oversizedHost"`
+	// Loss is issue #1015's freshness signal for the four counters
+	// above: per-counter "is this still happening", not just "has this
+	// ever happened". Nothing existing above changes shape -- this is
+	// the one field added, so #1001's Settings readout and
+	// TestHandleStats keep passing unmodified. See LossStats.
+	Loss LossStats `json:"loss"`
+}
+
+// LossCounterStats is one counter's entry in LossStats -- see LossStats
+// and lossCounterStats.
+type LossCounterStats struct {
+	// Recent is the current episode's count -- how many times this
+	// counter has moved since it last went quiet for longer than its
+	// window, not the all-time total (that stays in ListenerStats'
+	// existing fields, for Settings). Nothing here is a rate.
+	Recent uint64 `json:"recent"`
+	// LastAt is when the counter last moved, RFC3339 UTC, or nil if it
+	// never has.
+	LastAt *string `json:"lastAt"`
+	// Active is computed fresh on every request: now - LastAt <= this
+	// counter's window. It is the one thing the frontend needs to decide
+	// whether to show a row at all.
+	Active bool `json:"active"`
+	// Hosts lists the declared hosts rejected within window,
+	// most-recent-first. Only ever set on the rejectedConfigured entry.
+	Hosts []string `json:"hosts,omitempty"`
+	// Host names the source of the most recent oversized message, but
+	// only while that message's own lastAt is still within window. Only
+	// ever set on the oversized entry.
+	Host string `json:"host,omitempty"`
+}
+
+// LossStats is ListenerStats.Loss's shape -- issue #1015.
+type LossStats struct {
+	Dropped            LossCounterStats `json:"dropped"`
+	RejectedConfigured LossCounterStats `json:"rejectedConfigured"`
+	Rejected           LossCounterStats `json:"rejected"`
+	Oversized          LossCounterStats `json:"oversized"`
+}
+
+// lossCounterStats builds one LossCounterStats entry from a freshness
+// tracker, judged against now.
+func lossCounterStats(f *lossFreshness, window time.Duration, now time.Time) LossCounterStats {
+	episode, lastAt, active := f.snapshot(window, now)
+	stats := LossCounterStats{Recent: episode, Active: active}
+	if !lastAt.IsZero() {
+		s := lastAt.UTC().Format(time.RFC3339)
+		stats.LastAt = &s
+	}
+	return stats
+}
+
+// lossStats builds Stats()'s Loss field -- one instant (lossNow, or a
+// test's injected clock) shared across all four counters, so they never
+// disagree about "now" against each other within the same response.
+func lossStats() LossStats {
+	now := lossNow()
+
+	rejectedConfigured := lossCounterStats(&tcpRejectedConfiguredFreshness, lossWindowRejectedConfigured, now)
+	rejectedConfigured.Hosts = activeRejectedConfiguredHostsSnapshot(lossWindowRejectedConfigured, now)
+
+	oversized := lossCounterStats(&tcpOversizedFreshness, lossWindowOversized, now)
+	if host, active := oversizedHostIfActive(lossWindowOversized, now); active {
+		oversized.Host = host
+	}
+
+	return LossStats{
+		Dropped:            lossCounterStats(&tcpDroppedFreshness, lossWindowDropped, now),
+		RejectedConfigured: rejectedConfigured,
+		Rejected:           lossCounterStats(&tcpRejectedFreshness, lossWindowRejected, now),
+		Oversized:          oversized,
+	}
+}
+
+// ClearLossResult is what ClearLoss hands its caller for an audit entry
+// -- the four totals as they stood immediately before the reset.
+type ClearLossResult struct {
+	Dropped            uint64
+	RejectedConfigured uint64
+	Rejected           uint64
+	Oversized          uint64
+}
+
+// ClearLoss zeroes every ingest-loss counter this package tracks: the
+// four monotonic totals, their episodes and lastAt, and both host
+// records (rejectedConfiguredHosts and tcpOversizedHost) -- issue
+// #1015's "Clear all". It does not affect InUse/Capacity/
+// ReservedForConfigured, which are current listener state, not loss
+// history.
+func ClearLoss() ClearLossResult {
+	result := ClearLossResult{
+		Dropped:            tcpDropped.Load(),
+		RejectedConfigured: tcpRejectedConfigured.Load(),
+		Rejected:           tcpRejected.Load(),
+		Oversized:          tcpOversized.Load(),
+	}
+
+	tcpDropped.Store(0)
+	tcpRejectedConfigured.Store(0)
+	tcpRejected.Store(0)
+	tcpOversized.Store(0)
+
+	tcpDroppedFreshness.clear()
+	tcpRejectedConfiguredFreshness.clear()
+	tcpRejectedFreshness.clear()
+	tcpOversizedFreshness.clear()
+
+	rejectedConfiguredHostsMu.Lock()
+	rejectedConfiguredHosts = nil
+	rejectedConfiguredHostsMu.Unlock()
+
+	tcpOversizedHostMu.Lock()
+	tcpOversizedHost = ""
+	tcpOversizedHostLastAt = time.Time{}
+	tcpOversizedHostMu.Unlock()
+
+	return result
 }
 
 // Stats reports current listener saturation. Safe to call at any time.
@@ -330,13 +582,16 @@ func Stats() ListenerStats {
 		Oversized:               tcpOversized.Load(),
 		RejectedConfiguredHosts: rejectedConfiguredHostsSnapshot(),
 		OversizedHost:           oversizedHostSnapshot(),
+		Loss:                    lossStats(),
 	}
 }
 
 func noteRejected(host string) {
 	tcpRejected.Add(1)
+	tcpRejectedFreshness.hit(lossWindowRejected)
 	if isConfiguredSource(host) {
 		tcpRejectedConfigured.Add(1)
+		tcpRejectedConfiguredFreshness.hit(lossWindowRejectedConfigured)
 		noteRejectedConfiguredHost(host)
 	}
 }
@@ -450,7 +705,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		if atCap {
 			noteRejected(host)
 			if total, ok := perSourceRejectGate.Allow(); ok {
-				tcpLog.Warn(fmt.Sprintf("per-source connection limit (%d) reached -- rejecting %s (%d such rejections since start)", perSourceLimit(), host, total))
+				tcpLog.Warn(fmt.Sprintf("per-source connection limit (%d) reached -- rejecting %s (%d such rejections since start or last clear)", perSourceLimit(), host, total))
 			}
 			conn.Close()
 			continue
@@ -459,7 +714,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			noteRejected(host)
 			if total, ok := unreservedRejectGate.Allow(); ok {
 				tcpLog.Warn(fmt.Sprintf(
-					"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml) -- rejecting %s (%d such rejections since start)",
+					"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml) -- rejecting %s (%d such rejections since start or last clear)",
 					unreservedCap, reservedSlots(), maxTCPConns(), host, total))
 			}
 			conn.Close()
@@ -493,7 +748,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			// At capacity: reject immediately rather than queuing, so the
 			// accept loop itself never blocks waiting for a slot to free up.
 			if total, ok := globalRejectGate.Allow(); ok {
-				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start)", maxTCPConns(), conn.RemoteAddr(), total))
+				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start or last clear)", maxTCPConns(), conn.RemoteAddr(), total))
 			}
 			conn.Close()
 		}
@@ -1191,15 +1446,24 @@ var (
 // rejectedConfiguredHosts: overwriting in place is already O(1) memory
 // regardless of how often or from how many hosts it fires, so there is
 // nothing here for an attacker to grow.
+//
+// tcpOversizedHostLastAt is when that host was last seen sending an
+// oversized message (issue #1015) -- it is what lets loss.oversized.host
+// stop being served once the sender has been quiet longer than
+// lossWindowOversized, the same freshness rule every other counter here
+// gets.
 var (
-	tcpOversizedHostMu sync.Mutex
-	tcpOversizedHost   string
+	tcpOversizedHostMu     sync.Mutex
+	tcpOversizedHost       string
+	tcpOversizedHostLastAt time.Time
 )
 
 func noteOversizedHost(host string) {
 	tcpOversizedHostMu.Lock()
 	tcpOversizedHost = host
+	tcpOversizedHostLastAt = lossNow()
 	tcpOversizedHostMu.Unlock()
+	tcpOversizedFreshness.hit(lossWindowOversized)
 }
 
 func oversizedHostSnapshot() string {
@@ -1208,8 +1472,23 @@ func oversizedHostSnapshot() string {
 	return tcpOversizedHost
 }
 
+// oversizedHostIfActive reports tcpOversizedHost and whether its own
+// lastAt is within window of now -- issue #1015's loss.oversized.host,
+// which must stay silent once the sender has gone quiet even though
+// oversizedHostSnapshot above keeps answering the last-known host
+// forever (unchanged, for the existing banner/Settings readout).
+func oversizedHostIfActive(window time.Duration, now time.Time) (host string, active bool) {
+	tcpOversizedHostMu.Lock()
+	defer tcpOversizedHostMu.Unlock()
+	if tcpOversizedHost == "" || tcpOversizedHostLastAt.IsZero() {
+		return "", false
+	}
+	return tcpOversizedHost, now.Sub(tcpOversizedHostLastAt) <= window
+}
+
 func noteIngestDrop() {
 	total := tcpDropped.Add(1)
+	tcpDroppedFreshness.hit(lossWindowDropped)
 	if _, ok := dropLogGate.Allow(); ok {
 		tcpLog.Warn(fmt.Sprintf(
 			"ingest queue full -- %d syslog messages discarded since start; events are arriving faster than they can be processed, or something downstream is stalled",

@@ -13,6 +13,7 @@
   import BottomBar from './components/BottomBar.svelte'
   import { viewportState } from './lib/viewport.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
+  import IngestLossDrawer from './components/IngestLossDrawer.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import Fleet from './components/Fleet.svelte'
   import TuneLogging from './components/TuneLogging.svelte'
@@ -224,11 +225,17 @@
     <BottomBar />
   {/if}
   <div class="shell" class:with-bottom-bar={viewportState.isMobile}>
-    <!-- The banner tops the content column and pushes content rather than
-         overlaying it, per the ratified record; that is why the banners
-         live inside this column and not above the deck. -->
+    <!-- ConnectionBanner's connecting/disconnected line tops the content
+         column and pushes content rather than overlaying it, per the
+         ratified record. IngestLossDrawer sits directly under it and
+         does the same (#1015): it is where the ingest-loss banners
+         always were, and what it adds is folding away to a 3px line
+         rather than holding that space open for good. It overlaid the
+         column in a first cut, which covered each scene's own bar --
+         see the drawer's own header comment. -->
     <div class="content">
       <ConnectionBanner />
+      <IngestLossDrawer />
       <ConfigProblemBanner />
       <main id="main-content" class:bare={inDeck && journeyState.phase !== 'attach'}>
         {#if journeyState.phase === 'attach'}

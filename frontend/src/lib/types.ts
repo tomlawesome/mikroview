@@ -287,6 +287,55 @@ export interface SyslogListenerStats {
   // "non-RouterOS sender" banner's "received from <ip>" names. Empty
   // string until the first oversized message.
   oversizedHost: string
+  // #1015: the freshness signal the totals above cannot give -- a total
+  // that stopped growing is indistinguishable from one that never grew.
+  // Optional so an older server (or a test fixture) that predates this
+  // field leaves every drawer row inactive rather than throwing.
+  loss?: SyslogIngestLoss
+}
+
+// One counter's freshness, as the server computes it against its own
+// per-counter window (5 min for dropped/rejectedConfigured, 60s for
+// rejected/oversized -- internal/syslog/tcp_listener.go). `active` is
+// computed when the request is served (now - lastAt <= window), so the
+// frontend never computes a rate of its own. `lastAt` is null when the
+// counter has never moved.
+export interface IngestLossCounter {
+  recent: number
+  lastAt: string | null
+  active: boolean
+}
+
+// rejectedConfigured's hosts gain a lastAt each server-side, but the
+// top-level list keeps its existing shape and bound of 8 -- only the
+// most-recent-first ordering is sent here, unchanged.
+export interface IngestLossHostsCounter extends IngestLossCounter {
+  hosts: string[]
+}
+
+// oversized's host is present only while its own lastAt is within the
+// window -- absent rather than the empty string SyslogListenerStats.
+// oversizedHost above uses, so a stale host name is never shown as if
+// it were current.
+export interface IngestLossHostCounter extends IngestLossCounter {
+  host?: string
+}
+
+// Mirrors GET /api/stats' new `syslog.loss` block (internal/syslog.
+// ListenerStats.Loss). Nothing here is a rate -- see each field's own
+// comment above.
+export interface SyslogIngestLoss {
+  dropped: IngestLossCounter
+  rejectedConfigured: IngestLossHostsCounter
+  // Freshness of the *total* rejected-connection counter (tcpRejected),
+  // which counts every refusal, declared or not -- the server keeps no
+  // separate "undeclared-only" counter. This is still the right signal
+  // for the drawer's "Undeclared sources" row: rejectedConfigured
+  // already carries its own freshness for the declared-router subset,
+  // so a lockout alone does not hold this row open once the undeclared
+  // traffic that also matters here has stopped.
+  rejected: IngestLossCounter
+  oversized: IngestLossHostCounter
 }
 
 // Mirrors internal/api/auth.go's sessionResponse.

@@ -214,6 +214,10 @@ var authzMatrix = []routeExpectation{
 	// role.
 	{http.MethodPost, "/api/flags/clear-all", accessUser,
 		"reversible: a cleared flag raises again on the next matching event, and a bulk clear records no expectation. Tightened from viewer to user tier by #653: reversible or not, this changes what mikroview is showing, which a viewer may not do"},
+	{http.MethodPost, "/api/syslog/loss/clear", accessUser,
+		"#1015: zeroes the four ingest-loss counters GET /api/stats' syslog.loss reads. Same reasoning as " +
+			"/api/flags/clear-all directly above -- reversible (a cleared counter starts a fresh episode on the " +
+			"next occurrence), and a viewer may not change what mikroview is currently showing"},
 	{http.MethodPost, "/api/flags/{id}/verdict", accessUser,
 		"#640: the four verdicts, and the only way one flag leaves the inbox now that the plain clear and " +
 			"the admin-only clear-permanent are gone. User tier for all four, per the ratified design: the " +
