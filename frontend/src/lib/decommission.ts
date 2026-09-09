@@ -297,3 +297,14 @@ export function forceRemoveContract(watch: DecommissionWatch, nowMs: number): st
   const left = hoursOfWindow(watch, nowMs)
   return `The ghost leaves the map now. The watch goes on in the watchlist — ${left} of quiet still to go, or longer if a straggler resets its clock — and can only be forgotten from there.`
 }
+
+// forgetContract is the watchlist's own warning before it ends a watch
+// outright (#1069) -- the "can only be forgotten from there" that
+// forceRemoveContract promises points at this action. Unlike force-
+// remove, a watch forgotten here may still be a live ghost on the map
+// (force-remove is not the only way to reach this row): ending the
+// watch takes the ghost with it, since nothing is left to paint it
+// with, and there is no undo the way a silent retirement gets one.
+export function forgetContract(watch: DecommissionWatch): string {
+  return `This ends the watch on ${watch.cidr} outright. If it is still on the map, it leaves too, and nothing further about this range will be recorded. This cannot be undone.`
+}
