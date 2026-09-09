@@ -259,6 +259,8 @@ var authzMatrix = []routeExpectation{
 		"answers a departure offer with no. User tier rather than viewer even though it creates nothing: declining drops the offer, so a viewer could otherwise silently spend the operator's one chance to watch a range that has just been retired"},
 	{http.MethodPost, "/api/decommission/watches/{id}/force", accessUser,
 		"forces a retiring segment off the map while its traffic persists -- a recorded override in the #385 pattern. User tier, not admin: it changes what the map shows and nothing about the instance, and the watch itself survives, so nothing is lost that an admin would need to authorise"},
+	{http.MethodPost, "/api/decommission/watches/{id}/undo", accessUser,
+		"takes a silent retirement back within the hour after it happened. Same tier as creating the watch, because that is what it does -- it puts the range back under surveillance the operator had stopped"},
 	{http.MethodDelete, "/api/decommission/watches/{id}", accessUser,
 		"abandons a decommission watch. Same tier as deleting a definition below -- it stops server-side surveillance the operator asked for"},
 	{http.MethodPost, "/api/definitions", accessUser,
