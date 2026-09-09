@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
+	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/flags"
 )
 
@@ -938,5 +939,120 @@ func TestHandleExpectationsViewerReadsButCannotForget(t *testing.T) {
 	defer userResp.Body.Close()
 	if userResp.StatusCode != http.StatusNoContent {
 		t.Errorf("expected a user forget to succeed with 204, got %d", userResp.StatusCode)
+	}
+}
+
+// -- #768: GET /api/flags's baselinesWarming ------------------------
+//
+// The learning shelf's warming signal, moved off the definitions
+// surface onto the flags response by the owner's decision on #768
+// (2026-09-02). Viewer-readable, like the rest of this route (#653),
+// so a viewer's shelf can say why mikroview is silent instead of
+// degrading to absence.
+
+// flagsListRaw fetches GET /api/flags as a generic map, so a test can
+// assert on a field's *presence* as well as its value -- learning_test.
+// go's decodeToMap pattern, for the same reason it exists there: a
+// missing bool decodes to false in a struct, which is exactly the
+// distinction "cannot say" turns on.
+func flagsListRaw(t *testing.T, ts *httptest.Server) map[string]any {
+	t.Helper()
+	resp, err := http.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/flags: status = %d, want 200", resp.StatusCode)
+	}
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		t.Fatal(err)
+	}
+	return decodeToMap(t, buf.Bytes())
+}
+
+// TestHandleFlagsListBaselineWarmingTrue: one enabled detection holding
+// an observed key below its floor (keys > ready) is the whole warming
+// condition, and a *viewer* must be able to read it -- the point of
+// putting it here rather than leaving it on a surface the shelf has to
+// infer it from.
+func TestHandleFlagsListBaselineWarmingTrue(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Learning = fakeLearningSource{states: map[string]engine.LearningState{
+		"rule_spike": {
+			Floor: engine.BaselineFloor{MinDuration: 14 * 24 * time.Hour, MinSamples: 14},
+			Keys:  3,
+			Ready: 1,
+		},
+	}}
+
+	ts := httptest.NewServer(asViewer(s.mux()))
+	defer ts.Close()
+
+	m := flagsListRaw(t, ts)
+	if m["baselinesWarming"] != true {
+		t.Fatalf("baselinesWarming = %v, want true (a viewer must be able to read it)", m["baselinesWarming"])
+	}
+}
+
+// TestHandleFlagsListBaselineWarmingFalse: every observed key ready is
+// not warming, and neither is "no traffic seen yet" (keys 0) -- #642's
+// ruling, amendment 2, which this field carries over unchanged. False
+// is a real answer here, so the key is present.
+func TestHandleFlagsListBaselineWarmingFalse(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Learning = fakeLearningSource{states: map[string]engine.LearningState{
+		"rule_spike":     {Keys: 4, Ready: 4},
+		"activity_spike": {Keys: 0, Ready: 0},
+	}}
+
+	ts := httptest.NewServer(asViewer(s.mux()))
+	defer ts.Close()
+
+	m := flagsListRaw(t, ts)
+	if m["baselinesWarming"] != false {
+		t.Fatalf("baselinesWarming = %v, want false", m["baselinesWarming"])
+	}
+}
+
+// TestHandleFlagsListBaselineWarmingIgnoresDisabled: a disabled
+// detection cannot raise a provisional flag, so however warm its
+// baseline it is not what the shelf is talking about.
+func TestHandleFlagsListBaselineWarmingIgnoresDisabled(t *testing.T) {
+	s, _ := newTestServer(t)
+	sd, ok := s.Definitions.Get("rule_spike")
+	if !ok {
+		t.Fatal("rule_spike missing from the seeded catalogue")
+	}
+	if err := s.Definitions.SetEnabledAndScope("rule_spike", false, sd.Definition.Scope); err != nil {
+		t.Fatal(err)
+	}
+	s.Learning = fakeLearningSource{states: map[string]engine.LearningState{
+		"rule_spike": {Keys: 3, Ready: 1},
+	}}
+
+	ts := httptest.NewServer(asViewer(s.mux()))
+	defer ts.Close()
+
+	m := flagsListRaw(t, ts)
+	if m["baselinesWarming"] != false {
+		t.Fatalf("baselinesWarming = %v, want false for a disabled detection", m["baselinesWarming"])
+	}
+}
+
+// TestHandleFlagsListBaselineWarmingOmittedWithNoLiveEngine pins the
+// silence case: newTestServer wires no engine (Server.Learning nil), so
+// there is no warm-up state to report and the key is absent entirely
+// rather than false -- the shelf then makes no claim, which is the
+// "absent, not disabled" grammar (#653), not a wrong answer.
+func TestHandleFlagsListBaselineWarmingOmittedWithNoLiveEngine(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asViewer(s.mux()))
+	defer ts.Close()
+
+	m := flagsListRaw(t, ts)
+	if _, present := m["baselinesWarming"]; present {
+		t.Fatalf("expected no \"baselinesWarming\" key with no live engine wired, got %v", m["baselinesWarming"])
 	}
 }
