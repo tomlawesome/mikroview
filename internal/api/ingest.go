@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/ingest"
 )
 
@@ -165,6 +166,18 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Tell every open screen the pushed tables moved, so an answer
+	// derived from them refetches now instead of on its own poll. The
+	// visible one is watchlist coverage: before this, an operator who
+	// switched logging on for a rule and let the router push watched the
+	// ring sit there claiming nothing could feed the watch, for up to a
+	// minute, with no way to tell a slow poll from a change that had not
+	// registered. Nil-guarded like every other optional store here -- a
+	// Server built without a hub simply has nobody to tell.
+	if s.Hub != nil {
+		s.Hub.Notify(hub.ChangeRouterState)
 	}
 
 	// #186 step 5: never persist a raw payload wholesale. RouterState

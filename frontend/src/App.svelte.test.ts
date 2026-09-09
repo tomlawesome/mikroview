@@ -61,8 +61,11 @@ vi.mock('./lib/api', async (importOriginal) => {
 // App.svelte connects a real WebSocket on mount -- jsdom has no server
 // to answer it, so the module is replaced wholesale rather than let it
 // spin up doomed connection attempts during the test.
+// onChange returns its own unregister function, same as the real one --
+// App.svelte calls it on teardown, and a stand-in returning undefined
+// turns a clean unmount into a TypeError.
 vi.mock('./lib/ws', () => ({
-  liveSocket: { connect: vi.fn(), disconnect: vi.fn() },
+  liveSocket: { connect: vi.fn(), disconnect: vi.fn(), onChange: vi.fn(() => vi.fn()) },
 }))
 
 // jsdom has neither matchMedia nor ResizeObserver nor
