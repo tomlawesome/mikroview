@@ -75,4 +75,13 @@ Data story: the garage range `10.0.70.0/24` and its stragglers,
 
 ## Verdicts
 
-(none yet)
+Owner, 2026-09-09: *"it's really not very elegant I'm afraid, and it's
+super generic. The engine room is the wrong place to look at for
+inspiration on the style. Consider the rest of the app instead."* Then:
+*"The layout is cluttered and confusing"* and *"It needs to be simple,
+intuitive, clean."*
+
+→ Round 6 starts from the docket's drawer and the app's popovers, and
+makes the sentence itself the editor. The token bar, the group
+headings and the boxed fields do not carry forward.
+
