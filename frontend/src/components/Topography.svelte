@@ -2803,16 +2803,13 @@
 
   function crossAltitudeCentre(intoCity: boolean) {
     if (intoCity) {
-      // The trace is still the flat map's alone -- the city gets it in a
-      // round of its own (#1050) -- so it clears on the way over rather
-      // than staying on behind a drawing that cannot show it.
-      //
-      // The port filter no longer does (#1055): the city answers the
-      // same question from the same store and the pill is drawn on both
-      // sides, so the selection survives the crossing in both
-      // directions. Clearing it would have thrown away the operator's
-      // own question for moving the slider.
-      mapTraceState.clear()
+      // The trace no longer clears on the way over (round 56, #1050,
+      // same rule the port filter follows for #1055): the city draws its
+      // own copy of the traced road, the ✕ and the ghost, and mounts the
+      // same crumb, so the selection survives the crossing in both
+      // directions the same way the port filter's does. Clearing it here
+      // would throw away the operator's own question for moving the
+      // slider, onto a view that can now answer it.
       if (reach && reachIsHost) {
         // Handed to City's own pending-descend effect (#868's own
         // consumer, shared with the flags "where" link) rather than
@@ -4278,8 +4275,14 @@
   {/if}
   <!-- The traced line's own crumb, plus its list (#1018 round 53, #1050
        round 56 A1) -- lifted into its own component so the same markup
-       mounts on the city too. -->
-  <TraceCrumb />
+       mounts on the city too, which draws its own copy of this same
+       component rather than sharing this one: hidden here exactly when
+       `.stage` is, so the two never both show at once (an earlier build
+       of this left it unconditional, which put two crumbs on screen at
+       the city stop, both wired to the same store). -->
+  {#if cityStop === null}
+    <TraceCrumb />
+  {/if}
   <!-- Both tools swap the legend for their own entries (round 53's
        `chrome`). The map carries no legend of its own -- round 49
        decided the material is the statement -- so this appears with a
