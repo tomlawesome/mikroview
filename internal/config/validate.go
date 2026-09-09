@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/baseline"
+	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 )
 
@@ -42,6 +43,7 @@ func (c *Config) Validate() Result {
 	c.validateStore(fatal, warn)
 	c.validateWatchlist(warn)
 	c.validateBaseline(warn)
+	c.validateEngine(warn)
 	c.validateSnapshot(warn)
 	c.validateHistory(warn)
 	c.validateAuth(fatal)
@@ -116,6 +118,9 @@ var examplesByCode = map[string]string{
 
 	"CFG-0092": `baseline:
   hostQuietAfter: 24h`,
+
+	"CFG-0093": `engine:
+  decommissionCleanWindow: 6h`,
 
 	"CFG-0020": `auth:
   sessionTTL: 24h`,
@@ -553,7 +558,32 @@ var (
 	defaultBaselineDays      = defaults().Baseline.Days
 	defaultBaselineOf        = defaults().Baseline.Of
 	defaultHostQuietAfter    = defaults().Baseline.HostQuietAfter
+
+	defaultDecommissionCleanWindow = defaults().Engine.DecommissionCleanWindow
 )
+
+// validateEngine clamps the decommission clean window (#460) to the
+// hours-scale band the owner ruled for on 2026-08-17.
+//
+// Clamped rather than fatal, like every other threshold in this file: a
+// bad number here should not stop the server serving. Both ends matter
+// and for different reasons. Too short and a segment retires before the
+// evidence that would have contradicted it could plausibly have arrived
+// -- a router pushes its tables every 15-30 minutes, and a device that
+// only speaks on an hourly timer would never get the chance to reveal
+// itself, so the map would report a clean decommission it never
+// observed. Too long and the ruling's own words stop being true: hours,
+// not days.
+func (c *Config) validateEngine(warn warnFunc) {
+	if c.Engine.DecommissionCleanWindow < decommission.MinCleanWindow || c.Engine.DecommissionCleanWindow > decommission.MaxCleanWindow {
+		was := c.Engine.DecommissionCleanWindow
+		c.Engine.DecommissionCleanWindow = defaultDecommissionCleanWindow
+		warn("CFG-0093", "engine.decommissionCleanWindow",
+			fmt.Sprintf("%s is not a usable clean window for a retiring segment -- it must be between %s and %s, so a range cannot be declared quiet before a straggler could have spoken, and a decommission still finishes in hours rather than days", was, decommission.MinCleanWindow, decommission.MaxCleanWindow),
+			c.Engine.DecommissionCleanWindow.String(),
+			"set how long a retired range must stay silent before it leaves the map, e.g. 6h")
+	}
+}
 
 // validateBaseline clamps the establishment threshold to something the
 // register can actually answer (issue #1016).

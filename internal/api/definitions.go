@@ -1229,13 +1229,11 @@ func (s *Server) handleDefinitionsReplay(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// The one construction site issue #403 reserved: whether a replay
-	// reads memory alone or disk-then-memory is decided here and
-	// nowhere else, and every Replay call below is unchanged either way.
-	var corpus engine.Corpus = engine.NewMemoryCorpus(s.Store)
-	if s.History != nil {
-		corpus = engine.NewRetainedCorpus(s.Store, s.History)
-	}
+	// Memory alone or disk-then-memory, with the retained half named as
+	// it would be named now (#996) -- see Server.replayCorpus, which is
+	// the one construction site issue #403 reserved. Every Replay call
+	// below is unchanged either way.
+	corpus := s.replayCorpus()
 	result, err := engine.ReplayDefinition(sd.Definition, corpus, req.Params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

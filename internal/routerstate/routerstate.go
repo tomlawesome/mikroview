@@ -106,6 +106,11 @@ type deviceState struct {
 	// rebuild every other's.
 	hostsExact map[string]hostName
 	hostsCIDR  []cidrName
+	// departures is this device's address-table baseline and its pending
+	// decommission offers (#460) -- nil until a first *complete*
+	// ip-address cycle has arrived. See departures.go, which is entirely
+	// about why that word "complete" carries the design.
+	departures *departureState
 }
 
 // hostName is one resolved router-supplied name plus which pushed table
@@ -227,6 +232,12 @@ func (s *Store) Apply(device string, p ingest.Payload, now time.Time) error {
 	switch p.Kind {
 	case ingest.KindDNSStatic, ingest.KindDHCPLease, ingest.KindWireguardPeer:
 		ds.rebuildIdentityLocked()
+	case ingest.KindIPAddress:
+		// A segment "goes" when a later complete push stops carrying it
+		// (#460). Only a complete cycle is ever compared -- see
+		// departures.go -- so this is a no-op for every page but the one
+		// that finishes a table.
+		ds.noteAddressCycleLocked(device, p, now)
 	}
 	return nil
 }
