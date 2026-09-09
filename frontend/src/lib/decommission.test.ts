@@ -78,20 +78,34 @@ const receipt = (over: Partial<DecommissionReceipt> = {}): DecommissionReceipt =
 })
 
 describe('the ghost s state', () => {
-  it('paints an unanswered offer grey, a held watch purple, a straggler red', () => {
-    expect(ghostStateOf(null)).toBe('none')
-    expect(ghostStateOf(watch({ state: 'holding' }))).toBe('holding')
-    expect(ghostStateOf(watch({ state: 'draining' }))).toBe('broken')
+  const now = Date.parse('2026-09-01T03:52:00Z')
+
+  it('paints an unanswered offer grey and a held watch purple', () => {
+    expect(ghostStateOf(null, now)).toBe('none')
+    expect(ghostStateOf(watch({ state: 'holding' }), now)).toBe('holding')
+  })
+
+  it('paints a straggler red as it arrives', () => {
+    const s = watch({ state: 'draining', trafficCount: 3, lastTrafficAt: '2026-09-01T03:41:00Z' })
+    expect(ghostStateOf(s, now)).toBe('broken')
+  })
+
+  it('goes back to holding once the ghost can claim an hour of quiet', () => {
+    // Round 55 draws exactly this: 22:41 red, and the same watch with
+    // three stragglers behind it purple again at 03:52. The alarm is the
+    // arrival, not the history.
+    const s = watch({ state: 'draining', trafficCount: 3, lastTrafficAt: '2026-08-31T23:48:00Z' })
+    expect(ghostStateOf(s, now)).toBe('holding')
   })
 
   it('paints a watch nothing can feed with the same alarm as a straggler', () => {
     // Two different failures, one ink: to the operator both mean this
     // retired range is not safely quiet. The tally says which it is.
-    expect(ghostStateOf(watch({ state: 'broken', covered: false }))).toBe('broken')
+    expect(ghostStateOf(watch({ state: 'broken', covered: false }), now)).toBe('broken')
   })
 
   it('paints nothing once the watch has retired -- the ghost has left the map', () => {
-    expect(ghostStateOf(watch({ state: 'retired' }))).toBe('none')
+    expect(ghostStateOf(watch({ state: 'retired' }), now)).toBe('none')
   })
 })
 
@@ -216,7 +230,7 @@ describe('the straggler', () => {
   })
 
   it('says broken with its line count on the watchlist row', () => {
-    expect(watchlistRowText(broken, Date.now())).toBe('broken · 3 lines')
+    expect(watchlistRowText(broken, Date.parse('2026-08-31T22:45:00Z'))).toBe('broken · 3 lines')
     expect(watchlistRowText(watch({ lastTrafficAt: '2026-08-31T23:48:00Z' }), Date.parse('2026-09-01T03:52:00Z'))).toBe(
       'holding · 4 h of 6 h',
     )
