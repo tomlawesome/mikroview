@@ -1450,6 +1450,19 @@ func main() {
 		Persistence:       persistenceInfo,
 	}
 
+	// The live-check harness's test clock (#1063): a watch window can be
+	// stepped past its close instead of waited out in real minutes.
+	//
+	// Read straight from the environment rather than through
+	// internal/config, and so absent from docs/configuration.md, because
+	// this is not an operator setting: a documented option is one somebody
+	// eventually turns on. With it unset the route is never registered at
+	// all -- see internal/api/testhooks.go for the rest of the reasoning.
+	if os.Getenv("MV_TEST_HOOKS") == "1" {
+		srv.TestHooks = true
+		logging.New("test-hooks").Warn("MV_TEST_HOOKS=1: the test-only route POST /api/test/clock is registered. An admin can move this instance's watch clock forward, so a watch window closes when asked rather than when the hour arrives. This exists for the live-check harness -- never set it on a real deployment.")
+	}
+
 	// The range the memory control may move within, read from this
 	// host's cgroup or RAM once, here, and never again while the process
 	// runs -- see config.MaxMemoryCeiling for the headroom rule. The

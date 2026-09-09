@@ -369,7 +369,14 @@ $(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
 history: {enabled: true, keyFile: "$MV_DIR/history.key", dir: "$MV_DIR/data/history"}
 $DEVICES_BLOCK
 EOF
-  MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
+  # MV_TEST_HOOKS=1 registers POST /api/test/clock (#1063) -- the clock a
+  # watch-window scenario moves forward instead of waiting real minutes
+  # for a window to close. Deliberately an environment variable rather
+  # than a config key: it is not an operator setting and does not appear
+  # in docs/configuration.md. It is set here and only here, so the route
+  # exists on a harness instance and nowhere else. The server logs a
+  # warning naming it when it sees the variable.
+  MV_TEST_HOOKS=1 MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"
 
   for _ in $(seq 1 40); do

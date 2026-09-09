@@ -333,6 +333,17 @@ var authzMatrix = []routeExpectation{
 		"renders logging switched on for the selected rules from an uploaded export, mechanically checked to differ only in logging (#435) -- same tier as analyse beside it. The output is a file the operator downloads and applies themselves; mikroview never connects to the router, so this is not a write to anything mikroview itself is exposed on -- but it is the same class of change-what-is-watched decision analyse already gates at user tier"},
 	{http.MethodGet, "/api/audit", accessAdmin,
 		"the admin action trail; also the record an attacker would want to read to see whether they were noticed"},
+
+	// -- Test hooks (MV_TEST_HOOKS=1 only) -----------------------------
+	// Registered only when the process was started with that variable
+	// set, which no shipped image does -- so on a real deployment this is
+	// not refused, it does not exist. The row pins the tier it enforces on
+	// the harness instances where it *does*;
+	// TestTestHookRoutesAreAbsentWithoutTheFlag pins the absence.
+	{http.MethodPost, "/api/test/clock", accessAdmin,
+		"moves this process's watch clock forward (#1063), so a scenario that needs a watch window to have closed " +
+			"does not have to wait real minutes for it. Admin because the flag is the real gate and there is no " +
+			"reason for the second lock to be weaker than the one on PUT /api/settings/store, which changes far less"},
 }
 
 // TestEveryRouteIsInTheAuthorizationMatrix is the guard that makes the
@@ -376,6 +387,11 @@ func TestEveryRouteIsInTheAuthorizationMatrix(t *testing.T) {
 // asserts each of the four caller kinds gets what the matrix says.
 func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 	s := newAuthTestServer(t)
+	// The matrix covers the MV_TEST_HOOKS route, so the server it is
+	// driven against has to be one that registers it. Turning the flag on
+	// here rather than in newTestServer keeps every other test running
+	// against the route table a shipped image serves.
+	s.TestHooks = true
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -497,6 +513,11 @@ func loggedInClient(t *testing.T, base, username, password string) *http.Client 
 func registeredRoutePatterns(t *testing.T) []string {
 	t.Helper()
 	s, _ := newTestServer(t)
+	// With the test hooks on, so the guard walks every route this binary
+	// can serve rather than only the ones a shipped image does -- a
+	// test-only route still has to state its access level, and a stale
+	// row for one still has to be noticed.
+	s.TestHooks = true
 	out := make([]string, 0, len(s.routes()))
 	for _, r := range s.routes() {
 		out = append(out, r.method+" "+r.path)
