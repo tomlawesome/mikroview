@@ -94,6 +94,48 @@ check(
   'the four lane ranges are pushed',
 )
 
+// This scenario shares one live instance with whatever sorted ahead of
+// it in the slice (scripts/run-scenarios.sh: filename order, leftovers
+// persist). Its escalated callout has to be the ether4->bridge-lan
+// refused pair pushed below -- reality.ts's worstUnplannedOf picks
+// whichever 'unplanned' pair is busiest, and a sibling's own traffic
+// (live-topography-edges.mjs's syslog-fed probe, say) is still sitting
+// on the server with a pair no table here names, which is exactly what
+// 'unplanned' means. Left alone, that leftover -- not this scenario's
+// own pair -- would be the one the callout and the trace escalate to.
+//
+// So every pair already on record, other than the one this scenario
+// means to escalate, gets an explicit forward rule of its own: named
+// (accepted) rather than left to fall to 'unplanned' by default. It
+// draws no door (no dst-port), and log:true keeps coverageRule.ts
+// reading it 'logged' rather than 'dark' -- an unlogged accept still
+// makes coverage.ts treat the pair as a boundary-direction nothing logs,
+// and Topography.svelte draws that as its own `.cedge` material, which
+// is exactly the stray-material bug an earlier version of this fix
+// produced when it left log unset. Since none of these interfaces are
+// in the /ip address table pushed above, that leaves nothing on the
+// map at all -- it only removes a pair from the callout's own contest.
+const before = await (await page.request.get(`${URL_BASE}/api/events`)).json()
+const TARGET_PAIR = 'ether4|bridge-lan'
+const leftoverPairs = new Set()
+for (const e of before.events ?? []) {
+  if (!e.inInterface || !e.outInterface) continue
+  const key = `${e.inInterface}|${e.outInterface}`
+  if (key !== TARGET_PAIR) leftoverPairs.add(key)
+}
+const neutralizers = [...leftoverPairs].map((pair, i) => {
+  const [inInterface, outInterface] = pair.split('|')
+  return {
+    ordinal: 900 + i,
+    chain: 'forward',
+    action: 'accept',
+    inInterface,
+    outInterface,
+    log: true,
+    comment: 'a sibling scenario\'s leftover pair, named here so it cannot outrank this scenario\'s own callout',
+  }
+})
+
 // The rule table the doors come from. Three rules name a port; the
 // fourth deliberately names none, and must draw no door at all -- a
 // rule with no dst-port covers every port and so says nothing about
@@ -123,6 +165,7 @@ check(
       // visible on a rib the port never crossed.
       { ordinal: 31, chain: 'forward', action: 'drop', dstPort: '137-445', inInterface: 'ether4', outInterface: 'ether3', log: true },
       { ordinal: 40, chain: 'forward', action: 'drop', log: true },
+      ...neutralizers,
     ],
   })) === 200,
   'the filter table is pushed, three rules naming a port and one naming none',
