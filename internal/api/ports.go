@@ -455,7 +455,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 
 	res := s.Store.Trace(q)
 	if res.Event == nil {
-		writeJSON(w, http.StatusOK, traceResponse{Found: false})
+		writeJSON(w, http.StatusOK, traceResponse{Found: false, SameLine: []store.Event{}, SameMinute: []store.Event{}})
 		return
 	}
 	out := traceResponse{
