@@ -428,7 +428,7 @@ func definitionOrder(views []definitionView) {
 // definitions route open below user tier, not the first of several.
 func (s *Server) handleDefinitionsList(w http.ResponseWriter, r *http.Request) {
 	rulesByDevice, evidence := s.definitionsCoverage()
-	now := time.Now()
+	now := s.now()
 	stored := s.Definitions.List()
 	// Catch the nightly history up before rendering it (#680). This is the
 	// half of the lazy fill the evaluation path cannot do: an entry
@@ -471,7 +471,7 @@ func (s *Server) handleDefinitionsGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rulesByDevice, evidence := s.definitionsCoverage()
-	writeJSON(w, http.StatusOK, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, time.Now()))
+	writeJSON(w, http.StatusOK, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, s.now()))
 }
 
 // handleDefinitionsSchema serves every param schema the definitions this
@@ -1392,7 +1392,7 @@ func (s *Server) writeDefinition(w http.ResponseWriter, status int, id string) {
 		return
 	}
 	rulesByDevice, evidence := s.definitionsCoverage()
-	writeJSON(w, status, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, time.Now()))
+	writeJSON(w, status, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, s.now()))
 }
 
 // writeDefinitionError maps the definitions store's sentinel errors onto
