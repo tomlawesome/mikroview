@@ -105,6 +105,13 @@ export interface Device {
   // any) is the same router on another of its interfaces, and neither
   // can this client. The wizard's step 2 and the fleet cards read it.
   multihomedCandidates?: string[]
+  // nameSource (#600) is where `name` above came from, in
+  // internal/naming's own vocabulary: 'config-device' for a name
+  // config.yaml decides (which no rename can out-rank), 'entity' for a
+  // stored rename, 'none' when the raw id is what shows. Served with
+  // the name so a reader gets the fact and the reason together, the way
+  // GET /api/naming/provenance reports a host name's origin.
+  nameSource?: NameSource
 }
 
 // Mirrors internal/device.MACEntry's JSON shape (GET /api/devices/macs,
@@ -760,7 +767,7 @@ export interface CoverageEvidence {
 // entities.Store never validates Type); 'host'/'rule'/'port' below are
 // just the values this UI knows how to label/discover today, not a
 // validation allowlist -- an arbitrary string still round-trips fine.
-export type EntityType = 'host' | 'rule' | 'port' | (string & {})
+export type EntityType = 'host' | 'rule' | 'port' | 'device' | (string & {})
 
 export interface Entity {
   type: EntityType
@@ -786,6 +793,12 @@ export type NameSource =
   | 'none'
   | 'entity'
   | 'config'
+  // config-device is a device display name declared in config.yaml's
+  // devices block (#600). Its own value rather than 'config' because
+  // the editability answer is the opposite one: a config.yaml alias for
+  // a host or rule is a fallback a label out-ranks, a declared device
+  // name wins and the editor refuses the edit.
+  | 'config-device'
   | 'router-dns-static'
   | 'router-dhcp-lease'
   | 'router-wireguard-peer'

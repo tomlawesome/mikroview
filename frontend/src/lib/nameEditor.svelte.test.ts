@@ -237,3 +237,104 @@ describe('holding the stream while open', () => {
     expect(appState.streamHeld).toBe(false)
   })
 })
+
+// #600: Device is the fourth token, and it brings a second refusal.
+// config.yaml decides the name of a declared router, so an edit there
+// would be stored and never displayed -- the same failure the router
+// gate above prevents, one layer along, and the editor says so in the
+// same grammar.
+describe('the device token (#600)', () => {
+  it('offers no field when config.yaml decides the name, and says where it lives', async () => {
+    vi.mocked(fetchNameProvenance).mockResolvedValue(
+      provenance({
+        type: 'device',
+        key: 'live-router',
+        device: '',
+        name: 'Live Router',
+        source: 'config-device',
+        label: 'front door',
+        editable: false,
+      }),
+    )
+
+    nameEditorState.open('device', 'live-router', '', RECT)
+    await settle()
+
+    expect(nameEditorState.editable).toBe(false)
+    expect(nameEditorState.title).toBe('Rename this device')
+    expect(nameEditorState.identityLine).toContain('from config.yaml')
+    expect(nameEditorState.refusal).toContain('config.yaml supplies this name')
+    expect(nameEditorState.refusal).toContain('would be stored and never displayed')
+    // The losing label is still reported, rather than an empty field
+    // presented over the top of one that exists.
+    expect(nameEditorState.refusal).toContain('front door')
+    // And no router is named: this name is not on a router.
+    expect(nameEditorState.refusal).not.toContain('RouterOS')
+
+    await nameEditorState.save()
+    expect(upsertEntity).not.toHaveBeenCalled()
+    expect(deleteEntity).not.toHaveBeenCalled()
+  })
+
+  it('renames a device config.yaml does not name, and every session reads it', async () => {
+    vi.mocked(fetchNameProvenance).mockResolvedValue(
+      provenance({ type: 'device', key: '10.0.0.9', device: '', name: '', source: 'none', editable: true }),
+    )
+    appState.devices = [
+      {
+        id: '10.0.0.9',
+        name: '10.0.0.9',
+        sourceIp: '10.0.0.9',
+        configured: false,
+        firstSeen: '2026-01-01T00:00:00Z',
+        lastSeen: '2026-01-01T00:00:00Z',
+        eventCount: 3,
+        status: 'live',
+        nameSource: 'none',
+      },
+    ]
+
+    nameEditorState.open('device', '10.0.0.9', '', RECT)
+    await settle()
+
+    expect(nameEditorState.editable).toBe(true)
+    expect(nameEditorState.scopeLine).toContain('the device id “10.0.0.9” stays the identity')
+
+    nameEditorState.draft = 'lab crs'
+    await nameEditorState.save()
+
+    expect(upsertEntity).toHaveBeenCalledWith({ type: 'device', key: '10.0.0.9', label: 'lab crs' })
+    // The list every surface reads its device name from -- the live
+    // view's device column, the fleet cards, the router rows -- shows it
+    // without waiting for the next poll.
+    expect(appState.devices[0].name).toBe('lab crs')
+    expect(toastState.message).toContain('lab crs')
+  })
+
+  it('restores the raw id when the label is removed', async () => {
+    vi.mocked(fetchNameProvenance).mockResolvedValue(
+      provenance({ type: 'device', key: '10.0.0.9', device: '', name: 'lab crs', source: 'entity', label: 'lab crs' }),
+    )
+    appState.devices = [
+      {
+        id: '10.0.0.9',
+        name: 'lab crs',
+        sourceIp: '10.0.0.9',
+        configured: false,
+        firstSeen: '2026-01-01T00:00:00Z',
+        lastSeen: '2026-01-01T00:00:00Z',
+        eventCount: 3,
+        status: 'live',
+        nameSource: 'entity',
+      },
+    ]
+
+    nameEditorState.open('device', '10.0.0.9', '', RECT)
+    await settle()
+    nameEditorState.draft = ''
+    await nameEditorState.save()
+
+    expect(deleteEntity).toHaveBeenCalledWith('device', '10.0.0.9')
+    expect(appState.devices[0].name).toBe('10.0.0.9')
+  })
+})

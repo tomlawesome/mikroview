@@ -228,9 +228,11 @@
        worse for every reader, not just the ones who use the chooser. -->
   {#snippet deviceCell()}
     <!-- #717: restored, in its pre-#644 spot right after Time -- see
-         columns.svelte.ts's own comment. Only a copy button beside it,
-         no pencil: there is no device-name entity type for
-         EditNameButton to open (see nameEditor.svelte.ts). -->
+         columns.svelte.ts's own comment. The pencil beside the copy
+         glyph is #600: Device is the fourth token #413 listed and left
+         unbuilt until a device name had somewhere everyone could read
+         it. The editor refuses the edit on a device config.yaml names,
+         which is most of them -- it asks before it offers a field. -->
     <span class="cell device">
       <span
         class="cell-btn device-btn"
@@ -240,6 +242,9 @@
         use:activate={() => appState.setFilter('device', event.deviceId)}
       >{deviceName || event.deviceId}</span>
       <CopyButton value={event.deviceId} label="device id" />
+      {#if nameEditorState.available}
+        <EditNameButton type="device" value={event.deviceId} label={deviceName || event.deviceId} />
+      {/if}
     </span>
   {/snippet}
 
@@ -490,6 +495,9 @@
         use:activate={() => appState.setFilter('device', event.deviceId)}
       >{deviceName || event.deviceId}</span>
       <CopyButton value={event.deviceId} label="device id" />
+      {#if nameEditorState.available}
+        <EditNameButton type="device" value={event.deviceId} label={deviceName || event.deviceId} />
+      {/if}
     </span>
 
     <span
