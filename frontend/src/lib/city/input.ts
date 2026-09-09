@@ -362,7 +362,11 @@ export function cityInputFrom(
   const dropsByRule = dropsByRuleFrom(events)
   return {
     routers,
-    zones: cityZones.concat(ghostZones),
+    // A ghost stands where its district stood, so a live zone for the
+    // same boundary steps aside rather than being laid out beside it
+    // (#460): two districts with one id is the same segment drawn
+    // twice, once working and once gone.
+    zones: cityZones.filter((z) => !ghostZones.some((g) => g.id === z.id)).concat(ghostZones),
     edges: edges.map((e) => ({
       key: e.key,
       from: e.from,
@@ -391,6 +395,17 @@ export function zoneHolding(zones: CityZone[], ip: string): CityZone | null {
     if (c && addressInCidr(ip, c)) return z
   }
   return null
+}
+
+function dedupeByAddress<T extends { address: string }>(xs: readonly T[]): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const x of xs) {
+    if (seen.has(x.address)) continue
+    seen.add(x.address)
+    out.push(x)
+  }
+  return out
 }
 
 /**
@@ -422,7 +437,10 @@ export function ghostCityZones(
     id,
     name: name || id,
     cidr,
-    hosts: known.map(
+    // One building per address: the frozen snapshot is newest-named
+    // first and can carry the same address twice, once from the lease
+    // table and once from ARP.
+    hosts: dedupeByAddress(known).map(
       (k): CityHost => ({
         key: '',
         ip: k.address,
@@ -439,7 +457,7 @@ export function ghostCityZones(
         spike: false,
       }),
     ),
-    hostCount: known.length,
+    hostCount: dedupeByAddress(known).length,
     eventCount: 0,
     routerId: device || primaryRouterId,
     // A retired range makes no coverage claim: nothing is expected to

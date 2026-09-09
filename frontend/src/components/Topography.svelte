@@ -170,7 +170,16 @@
   // something behind it and vanishes when there is not, on both
   // surfaces, and nothing switches it.
 
-  const zones = $derived(zonesState.zones)
+  // A retired boundary's lane is its ghost (#460, round 55): the ghost
+  // stands exactly where the segment was, so the live lane for that
+  // boundary steps aside rather than being drawn beside it.
+  //
+  // The two can genuinely coexist for a while -- zones are derived from
+  // the event buffer, and a straggler is by definition traffic still
+  // arriving on a range that has been retired -- and drawing both would
+  // put the same segment on the map twice, once as a working lane and
+  // once as the thing that says it is gone.
+  const zones = $derived(zonesState.zones.filter((z) => !ghostLanes.some((g) => g.iface === z.id)))
   const eps = $derived(appState.stats?.eventsPerSecond ?? 0)
 
   /* ---------------- the ghost lanes (#460, round 55) ---------------- */
@@ -200,6 +209,21 @@
     hosts: { label: string; ip: string }[]
   }
 
+  // One dot per address, not one per table that named it: routerstate's
+  // frozen snapshot is newest-named first and a single address can be in
+  // it twice, once from the lease table and once from ARP. The first
+  // entry wins, which is the newest name.
+  const ghostHosts = (known: readonly { address: string; name?: string }[]) => {
+    const seen = new Set<string>()
+    const out: { label: string; ip: string }[] = []
+    for (const k of known) {
+      if (seen.has(k.address)) continue
+      seen.add(k.address)
+      out.push({ label: k.name || k.address, ip: k.address })
+    }
+    return out
+  }
+
   const ghostLanes = $derived.by((): GhostLane[] => {
     const out: GhostLane[] = []
     for (const o of decommissionsState.offers) {
@@ -212,7 +236,7 @@
         state: 'none',
         watch: null,
         offer: o,
-        hosts: (o.lastKnown ?? []).map((k) => ({ label: k.name || k.address, ip: k.address })),
+        hosts: ghostHosts(o.lastKnown ?? []),
       })
     }
     for (const w of decommissionsState.ghosts) {
@@ -225,7 +249,7 @@
         state: ghostStateOf(w, nowMs),
         watch: w,
         offer: null,
-        hosts: (w.lastKnown ?? []).map((k) => ({ label: k.name || k.address, ip: k.address })),
+        hosts: ghostHosts(w.lastKnown ?? []),
       })
     }
     return out
