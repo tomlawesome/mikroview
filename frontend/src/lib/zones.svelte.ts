@@ -140,10 +140,19 @@ class ZonesState {
     return [...tunnels].sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || (a < b ? -1 : a > b ? 1 : 0))
   })
 
-  /** The lanes: every observed non-wan boundary, busiest first, capped
-   * at five (the map is spare by design; a sixth lane is a design
-   * question, not a rendering one). Every drawn tunnel is excluded too --
-   * they stand beside the internet as their own group (#877, #890). */
+  /** The lanes: every observed non-wan boundary, capped at five (the map
+   * is spare by design; a sixth lane is a design question, not a
+   * rendering one). Every drawn tunnel is excluded too -- they stand
+   * beside the internet as their own group (#877, #890).
+   *
+   * Ranked declared lanes first, then busiest, then name (#1054): a
+   * lane in the pushed address table is a fact about the network, so it
+   * always takes a slot before a buffer-only lane -- one seen only in
+   * the event ring, a scan on an interface the router has not declared
+   * -- regardless of which is busier. A buffer-only lane can still win a
+   * slot among the buffer-only ones, and can still be pushed off the
+   * map entirely once five declared lanes fill it, but it never
+   * displaces a declared one. */
   zones = $derived.by((): ZoneInfo[] => {
     const wans = this.wanInterfaces
     const tunnels = this.tunnelInterfaces
@@ -193,7 +202,12 @@ class ZonesState {
           eventCount: ev?.count ?? 0,
         }
       })
-      .sort((a, b) => b.eventCount - a.eventCount)
+      .sort((a, b) => {
+        const aDeclared = byPush.has(a.id)
+        const bDeclared = byPush.has(b.id)
+        if (aDeclared !== bDeclared) return aDeclared ? -1 : 1
+        return b.eventCount - a.eventCount || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      })
       .slice(0, 5)
   })
 
