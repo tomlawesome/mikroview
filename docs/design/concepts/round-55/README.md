@@ -105,4 +105,7 @@ watch has held for 4 h of 6 h; at 04:11 the ghost retires by itself.
 
 ## Verdict
 
-(awaiting the owner)
+Accepted (owner, 2026-09-09): *"Yep, great now."* — after two fixes on
+the first batch: cards beside the ghost with a heavier leader, and the
+ghost lane's tally shortened to fit. The open questions above stand for
+the build issue.
