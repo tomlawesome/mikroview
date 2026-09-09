@@ -120,6 +120,7 @@
 
 <div
   bind:this={element}
+  data-decomm={kind}
   class="card"
   class:pinned={kind !== 'straggler'}
   class:placed={place !== null}

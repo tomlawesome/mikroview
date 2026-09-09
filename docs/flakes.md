@@ -39,3 +39,7 @@ each, recorded together because the cause is shared (#831's contention):
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 2/4 · `live-history-control`, `live-memory-slider`
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 3/4 · `live-metrics-views` (and `live-rule-regex`, counted above)
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 4/4 · `live-topography-furniture`
+
+## live-decommission: goTo("Stream") times out (10 s) on the workstation
+
+- 2026-09-09 · 4f17d079 (work/460-ui, local, standalone) · `goTo("Stream") timed out waiting for card "live"`, `offsetFromDeckTop: -105` (card mounted, the roll overshot it — #1011's shape) at `live-browser.mjs:444` from the scenario's own `session()` call, before a single check ran; the same command on the same tree passed immediately after, and three further standalone runs passed. Same family as the `live-rule-regex` and `live-settings-doors` entries above: `goTo` never settles, on a host with other work on it.
