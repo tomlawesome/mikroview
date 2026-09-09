@@ -1022,7 +1022,15 @@ func main() {
 		}
 	}
 	syncDefinitions()
-	definitions.SetOnChange(syncDefinitions)
+	// SetOnChange rather than a call in each API write handler: this is
+	// the one funnel every definition change already goes through,
+	// whichever door it came in by, so a future door cannot forget to
+	// tell the screens. The notice itself only says "definitions", never
+	// what they now are -- the client refetches (see hub.Change).
+	definitions.SetOnChange(func() {
+		syncDefinitions()
+		h.Notify(hub.ChangeDefinitions)
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
