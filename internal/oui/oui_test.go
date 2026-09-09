@@ -157,7 +157,7 @@ func TestParseMAC(t *testing.T) {
 // and no network client, for the lookup tests.
 func loadedRegistry(t *testing.T) *Registry {
 	t.Helper()
-	r := New(SourceURL, "", testLog())
+	r := New("", testLog())
 	entries, err := parseCSV([]byte(registryFixture))
 	if err != nil {
 		t.Fatalf("fixture: %v", err)
@@ -228,7 +228,7 @@ func TestLookup(t *testing.T) {
 // empty registry answers with why it is empty, never with a wrong or
 // blank vendor.
 func TestLookupBeforeAnyFetch(t *testing.T) {
-	r := New(SourceURL, "", testLog())
+	r := New("", testLog())
 	_, v := r.LookupMAC("DC:A6:32:11:22:33")
 	if v.Known {
 		t.Fatalf("got %+v, want no vendor before the first fetch", v)
@@ -260,8 +260,15 @@ func TestStatusStatesStalenessRatherThanHidingIt(t *testing.T) {
 // below, and this way the fetch path is exercised without it.
 func testRegistry(t *testing.T, srv *httptest.Server, cachePath string) *Registry {
 	t.Helper()
-	r := New(srv.URL, cachePath, testLog())
+	r := New(cachePath, testLog())
+	// The source URL is a constant in production; a test points the
+	// same machinery at its own server through the unexported field,
+	// which is also why the SSRF guard has to be swapped out below --
+	// it would refuse the server's 127.0.0.1 address, and it has its
+	// own test.
+	r.url = srv.URL
 	r.client = &fetchClient{http: srv.Client()}
+	r.loadCache()
 	return r
 }
 
@@ -358,7 +365,9 @@ func TestCacheSurvivesARestart(t *testing.T) {
 
 	// A fresh process: vendors must be answerable before any network
 	// access happens at all.
-	second := New(srv.URL, path, testLog())
+	second := New(path, testLog())
+	second.url = srv.URL
+	second.loadCache()
 	if got := second.entryCount(); got != 6 {
 		t.Fatalf("restart read %d entries from the cache, want 6", got)
 	}
@@ -383,7 +392,9 @@ func TestCacheForAnotherSourceIsIgnored(t *testing.T) {
 	first := testRegistry(t, srv, path)
 	first.Refresh(context.Background())
 
-	other := New("https://example.invalid/oui.csv", path, testLog())
+	other := New(path, testLog())
+	other.url = "https://example.invalid/oui.csv"
+	other.loadCache()
 	if got := other.entryCount(); got != 0 {
 		t.Fatalf("a cache written for another source served %d entries, want none", got)
 	}

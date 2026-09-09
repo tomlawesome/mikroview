@@ -203,7 +203,7 @@ func TestHandleHostDossierReportsTheLocallyAdministeredBit(t *testing.T) {
 	})
 	// A registry that has never fetched: the vendor answer must be
 	// "no vendor data yet", never a guess.
-	s.OUI = oui.New(oui.SourceURL, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.OUI = oui.New("", slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	ts := httptest.NewServer(asViewer(s.mux()))
 	defer ts.Close()
