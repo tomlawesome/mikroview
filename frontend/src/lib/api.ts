@@ -10,6 +10,7 @@ import type {
   DecommissionResponse,
   DecommissionWatch,
   Definition,
+  DefinitionCondition,
   DefinitionParamSchema,
   DetectorScope,
   Device,
@@ -739,6 +740,20 @@ export interface DefinitionUpdate {
   // string clears the filing. Absent leaves it alone, like every other
   // field here.
   family?: string
+  // A custom detector's structure -- its conditions and the aggregation
+  // around them -- as the conditions editor saves it (#829). Threshold
+  // and window are deliberately not in here: they are ordinary params
+  // and go up under `params` above, so there is one door onto each value
+  // rather than two.
+  detection?: DefinitionStructureUpdate
+}
+
+export interface DefinitionStructureUpdate {
+  conditions: DefinitionCondition[]
+  key: string
+  counting: string
+  distinctField?: string
+  detailTemplate: string
 }
 
 export async function updateDefinition(id: string, req: DefinitionUpdate): Promise<Definition | string> {

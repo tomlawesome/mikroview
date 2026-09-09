@@ -502,6 +502,36 @@ func (s *DefinitionsStore) SetFamily(id string, family Family) error {
 	})
 }
 
+// SetDetection rewrites a custom detection's structure -- its conditions
+// and the aggregation around them (#829's conditions editor).
+//
+// Until the editor existed there was nowhere in the UI to author a
+// condition, so the structure was write-once at create time and this
+// door was deliberately absent (see DetectionSpec's own doc comment on
+// the structure/tunable split). The split has not moved: threshold and
+// window are still ordinary Params behind SetParams, and this changes
+// only what the detector *is*.
+//
+// Rebuilding is the intended consequence, not an accident of it. Registry
+// .Sync byte-compares stored JSON, so a changed spec drops the detector's
+// accumulated window state -- which is the honest outcome, because the
+// counts held in that state were counted against conditions that no
+// longer describe the detector.
+func (s *DefinitionsStore) SetDetection(id string, spec DetectionSpec) error {
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+	return s.mutate(id, func(d *Definition) error {
+		if d.Provenance.Origin != ProvenanceCustom || d.Intent != IntentDetection {
+			return fmt.Errorf("%w: %q is not an operator-authored detector, and its structure is this binary's rather than this deployment's", ErrDefinitionImmutable, id)
+		}
+		copied := spec
+		copied.Conditions = append([]Condition(nil), spec.Conditions...)
+		d.Detection = &copied
+		return nil
+	})
+}
+
 // ResetParams puts a shipped definition's params back to exactly the
 // values it shipped with (Provenance.ShippedParams), which is what makes
 // "reset to default" and "clear every override" the same state rather

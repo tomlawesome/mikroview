@@ -799,6 +799,41 @@ type updateDefinitionRequest struct {
 	// empty string clears the filing. Refused for a shipped definition,
 	// the same way Name is.
 	Family *engine.Family `json:"family"`
+	// Detection rewrites an operator-authored detector's structure --
+	// its conditions and the aggregation around them. The conditions
+	// editor (#829) is the first thing in the UI that can author one, so
+	// this is the door it saves through; before it, the structure was
+	// write-once at create time.
+	//
+	// Threshold and window are deliberately not here even though
+	// detectionRequest carries them at create time: they are ordinary
+	// Params once the definition exists, tuned through Params above like
+	// every other detector's, and a second door onto them would be two
+	// ways to write one value. See engine.DetectionSpec on where that
+	// line is drawn.
+	Detection *detectionStructureRequest `json:"detection"`
+}
+
+// detectionStructureRequest is the structure half of detectionRequest --
+// what a detector *is*, without the two numbers that say how sensitive it
+// is. Its own type rather than a reused detectionRequest, so a caller
+// cannot send a threshold to an endpoint that would silently drop it.
+type detectionStructureRequest struct {
+	Conditions     []engine.Condition  `json:"conditions"`
+	Key            engine.KeyMode      `json:"key"`
+	Counting       engine.CountingMode `json:"counting"`
+	DistinctField  engine.Field        `json:"distinctField"`
+	DetailTemplate string              `json:"detailTemplate"`
+}
+
+func (req detectionStructureRequest) spec() engine.DetectionSpec {
+	return engine.DetectionSpec{
+		Conditions:     req.Conditions,
+		Key:            req.Key,
+		Counting:       req.Counting,
+		DistinctField:  req.DistinctField,
+		DetailTemplate: req.DetailTemplate,
+	}
 }
 
 // handleDefinitionsUpdate applies whichever of enabled, scope, params
@@ -916,6 +951,12 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 	}
 	if req.Family != nil {
 		if err := s.Definitions.SetFamily(id, *req.Family); err != nil {
+			writeDefinitionError(w, err)
+			return
+		}
+	}
+	if req.Detection != nil {
+		if err := s.Definitions.SetDetection(id, req.Detection.spec()); err != nil {
 			writeDefinitionError(w, err)
 			return
 		}
@@ -1045,19 +1086,19 @@ type cloneRequest struct {
 // its own identity -- a fresh id, never the original's (see
 // engine.Definition.ID's own doc comment on why a clone needs one).
 //
-// Supported for the two definitions that are data all the way down: an
-// expectation, and a custom declarative detection, whose conditions and
-// aggregation are a stored DetectionSpec (#502) rather than Go. Cloning
-// either produces a second definition the operator can then edit.
+// Three sources, one outcome -- a definition the operator can then edit:
 //
-// Refused, with its reason, for a shipped definition -- its logic is Go
-// keyed by its own id, so a "clone" of it could only be an envelope with
-// no logic behind it: a definition that lists, looks configurable, and
-// evaluates nothing. Overriding the original's params (PUT) is the
-// operation that actually exists for those, and the refusal says so
-// rather than leaving an operator to discover the clone never fires.
-// Starting a custom detector *from* a shipped one is a different
-// operation, and needs a conditions editor nothing has yet (#829).
+//   - an expectation, which is data all the way down;
+//   - a custom declarative detection, whose conditions and aggregation
+//     are a stored DetectionSpec (#502) rather than Go;
+//   - a shipped *declarative* detector, whose structure this binary can
+//     now read back off its own builder and hand to the copy as a
+//     stored spec (#829, cloneShippedDetector).
+//
+// Only a shipped *programmatic* detector is still refused, and the
+// reason narrowed with it: not "a shipped definition cannot be cloned"
+// any more, but that this particular one's conditions are Go with
+// nothing in them to copy. See errShippedCodeDetectorHasNoConditions.
 //
 // User-tier (#653), same as the rest of the definitions surface -- see
 // handleDefinitionsList's doc comment.
@@ -1100,7 +1141,7 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 			s.cloneCustomDetection(w, r, sd.Definition, req.Name)
 			return
 		}
-		http.Error(w, "a shipped definition cannot be cloned: its logic is compiled into this binary and keyed by its own id, so a copy would evaluate nothing. Override its params instead (PUT /api/definitions/{id}).", http.StatusBadRequest)
+		s.cloneShippedDetector(w, r, sd.Definition, req.Name)
 		return
 	}
 
@@ -1156,6 +1197,131 @@ func (s *Server) cloneCustomDetection(w http.ResponseWriter, r *http.Request, sr
 	}
 	s.Audit.Record(auditActor(r), "definition.clone", clone.ID, "from "+src.ID)
 	s.writeDefinition(w, http.StatusCreated, clone.ID)
+}
+
+// errShippedCodeDetectorHasNoConditions is what cloning a shipped
+// *programmatic* detector answers with. Stated once so the handler, the
+// frontend's copied-from line and the test that pins it all quote the
+// same reason.
+const errShippedCodeDetectorHasNoConditions = "this detector's conditions are built into this binary as Go rather than stored as data, so there are none to copy. Start a detector from it in the conditions editor instead -- the copy takes its scope and its numbers, and you write what it matches."
+
+// cloneShippedDetector starts an operator-authored detector from a
+// shipped one (#829).
+//
+// This used to be refused outright, and the refusal was right at the
+// time: a "clone" of a shipped detector could only be an envelope with
+// no logic behind it, because nothing could express the logic. What
+// changed is that a custom detection can now carry the same structure
+// the shipped builder assembles (engine.DetectionSpec, #502) and there
+// is now an editor for it, so the copy can be handed the original's real
+// conditions rather than an empty bar.
+//
+// The copy is a genuinely separate detector: its own id, its own name,
+// provenance=custom, and it evaluates its own stored structure. It is
+// not an override of the original, which keeps running exactly as it
+// was.
+//
+// It starts paused, for the same reason a custom detector's copy does
+// (#787 decision C, #810): an operator clones a detector to change it,
+// and one that started firing on creation would duplicate the original's
+// flags for as long as the editing took.
+//
+// Two things are deliberately not carried across:
+//
+//   - The shipped params that are not threshold and window. A custom
+//     detection declares exactly those two (engine.
+//     CustomDetectionParamSchema), so anything else the original tuned
+//     has no schema to be validated against here and would be stored as
+//     a value nothing reads.
+//   - A detail template naming evidence the copy cannot accumulate. A
+//     shipped detector may write "{Count} ports including {Ports}"; a
+//     DetectionSpec declares no evidence categories, so that template
+//     would be refused by its own validation. Rather than fail the
+//     clone over a sentence, the copy falls back to a plain one and the
+//     operator can rewrite it -- the says line is right there in the
+//     editor.
+func (s *Server) cloneShippedDetector(w http.ResponseWriter, r *http.Request, src engine.Definition, name string) {
+	if src.Intent != engine.IntentDetection {
+		http.Error(w, "only a detection definition can be started from: an expectation is copied through its own clone path.", http.StatusBadRequest)
+		return
+	}
+	built, err := engine.BuildShippedDeclarativeDefinition(src)
+	if err != nil {
+		http.Error(w, errShippedCodeDetectorHasNoConditions, http.StatusBadRequest)
+		return
+	}
+	spec := built.Structure()
+	if engine.ValidateDetectionDetailTemplate(spec.Key, spec.DetailTemplate) != nil {
+		spec.DetailTemplate = defaultDetailTemplate(spec.Key)
+	}
+	if err := spec.Validate(); err != nil {
+		http.Error(w, "this detector's structure cannot be expressed as an operator-authored one: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	clone := engine.NewDefinition(cloneNameFor(src.Name, name), engine.IntentDetection, engine.KindDeclarative)
+	clone.Enabled = false
+	clone.Scope = src.Scope
+	clone.Provenance = engine.Provenance{Origin: engine.ProvenanceCustom}
+	clone.ParamSchema = engine.CustomDetectionParamSchema()
+	clone.Params = customParamsFrom(src.Params, clone.ParamSchema)
+	clone.Detection = &spec
+
+	if err := s.Definitions.Upsert(clone); err != nil {
+		writeDefinitionError(w, err)
+		return
+	}
+	s.Audit.Record(auditActor(r), "definition.clone", clone.ID, "from "+src.ID)
+	s.writeDefinition(w, http.StatusCreated, clone.ID)
+}
+
+// cloneNameFor is the copy's name: whatever the operator asked for, or
+// the original's with " (copy)" after it -- the same suffix both other
+// clone paths in this file already append, so the three read alike on
+// the bench.
+func cloneNameFor(original, requested string) string {
+	if strings.TrimSpace(requested) != "" {
+		return strings.TrimSpace(requested)
+	}
+	if original == "" {
+		return "Detector (copy)"
+	}
+	return original + " (copy)"
+}
+
+// customParamsFrom keeps only the params a custom detection declares --
+// see cloneShippedDetector's own doc comment on why the rest are dropped
+// rather than carried. A param the original never set is left unset, so
+// engine.ValidateParams supplies whatever default its schema declares
+// instead of this function inventing one.
+func customParamsFrom(src engine.Params, schema []engine.ParamSchema) engine.Params {
+	out := engine.Params{}
+	for _, p := range schema {
+		if v, ok := src[p.Name]; ok {
+			out[p.Name] = v
+		}
+	}
+	return out
+}
+
+// defaultDetailTemplate is the sentence a copied detector says when the
+// original's own sentence names evidence a custom detection cannot
+// accumulate. Deliberately plain and true of every key mode: {Count} is
+// the one placeholder every detector resolves by construction (see
+// engine.ValidateDetectionDetailTemplate), and the key's own token is
+// added where the key supplies one, so the sentence names who it is
+// about rather than floating free.
+func defaultDetailTemplate(key engine.KeyMode) string {
+	switch key {
+	case engine.KeyPerSource, engine.KeyPerSourcePort:
+		return "{Count} matching events from {SourceAddress}"
+	case engine.KeyPerTarget:
+		return "{Count} matching events to {DestinationAddress}"
+	case engine.KeyPerDestinationPort:
+		return "{Count} matching events on port {DestinationPort}"
+	default:
+		return "{Count} matching events"
+	}
 }
 
 // handleDefinitionsReset puts a shipped definition's params back to
