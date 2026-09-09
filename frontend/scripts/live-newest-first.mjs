@@ -20,7 +20,7 @@
 // checks scrollHeight against window.innerHeight first, specifically to
 // rule that out here.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
 
 // Comfortably past MAX_RENDERED_ROWS (800), same reasoning as
 // live-autoscroll.mjs: below that threshold nothing ever gets evicted
@@ -48,10 +48,13 @@ check(
 
 // --- Newest at the top, autoscroll follows it there -----------------------
 feedSyslog(20, 'order-newest')
-await page.waitForFunction(() => document.querySelector('.row[title*="order-newest"]') !== null, {
-  timeout: 5000,
-})
-await page.waitForTimeout(300)
+// Wait for the *first* row specifically, not just any row with this title
+// anywhere in the table -- that is what "newest at the top" means, and it
+// is the exact condition the check below reads.
+await page.waitForFunction(
+  () => document.querySelector('.grid .row')?.getAttribute('title')?.includes('order-newest'),
+  { timeout: 5000 },
+)
 
 const firstRowTitle = await page.getAttribute('.grid .row', 'title')
 check(
@@ -69,10 +72,16 @@ check(
 // Rounds 36-38: the control is the `following` pill on the whisper's own
 // line now, not a scene-bar button. Same freeze, same assertions.
 await page.click(FOLLOW)
-await page.waitForTimeout(200)
+// The pill's own label is the observable half of toggleFollow() flipping
+// appState.autoscroll off (Whisper.svelte) -- wait for it rather than a
+// fixed pause, since that flip is also what LiveTable's frozenPool effect
+// keys on.
+await page.waitForFunction((sel) => document.querySelector(sel)?.textContent.trim() === 'follow', FOLLOW)
 
 // Scroll down and away from the top -- the reader is now looking at
-// older rows, exactly the scenario the frozen pool exists for.
+// older rows, exactly the scenario the frozen pool exists for. Setting
+// scrollTop is synchronous and LiveTable.svelte has no scroll listener,
+// so the read below needs nothing further.
 const scrollTarget = 400
 await page.$eval(
   bodySel,
@@ -81,7 +90,6 @@ await page.$eval(
   },
   scrollTarget,
 )
-await page.waitForTimeout(200)
 
 const scrollBefore = await page.$eval(bodySel, (el) => el.scrollTop)
 check(scrollBefore > 0, `the reader is genuinely scrolled away from the top (scrollTop=${scrollBefore})`)
@@ -93,9 +101,13 @@ check(scrollBefore > 0, `the reader is genuinely scrolled away from the top (scr
 const snapshotBefore = await page.$$eval('.grid .row', (els) => els.slice(0, 10).map((e) => e.getAttribute('title')))
 
 // New events arrive while frozen -- none of them may appear, and nothing
-// already on screen may shift.
+// already on screen may shift. Wait for the server to have actually
+// counted all 60 before asserting nothing moved, so a miss here proves the
+// freeze held against events that truly arrived, not that this merely
+// outran ingest.
+const beforeFreezeTotal = await eventsTotal(page)
 feedSyslog(60, 'order-after-freeze')
-await page.waitForTimeout(1500)
+await waitForEventsTotal(page, beforeFreezeTotal + 60)
 
 const scrollAfter = await page.$eval(bodySel, (el) => el.scrollTop)
 check(
@@ -116,7 +128,14 @@ check(
 
 // --- Releasing the freeze resumes newest-at-top --------------------------
 await page.click(FOLLOW)
-await page.waitForTimeout(300)
+// Wait for the actual thing being asserted next: releasing the freeze
+// re-renders liveRendered and re-triggers the scroll-to-0 effect
+// (LiveTable.svelte) from the same commit, so the first row becoming the
+// newest event implies the scroll reset already happened too.
+await page.waitForFunction(
+  () => document.querySelector('.grid .row')?.getAttribute('title')?.includes('order-after-freeze'),
+  { timeout: 5000 },
+)
 
 const scrollReleased = await page.$eval(bodySel, (el) => el.scrollTop)
 check(scrollReleased === 0, `following again returns to the top (scrollTop=${scrollReleased})`)

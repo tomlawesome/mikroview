@@ -59,6 +59,9 @@ check(!(await page.locator('main .setup').count()), 'no wizard page route remain
 const veil = page.locator('.veil')
 const box = await modal.boundingBox()
 await page.mouse.click(Math.max(4, Math.floor(box.x / 2)), Math.max(4, Math.floor(box.y / 2)))
+// Genuine negative assertion: proving the click did nothing has no
+// end-state to wait for, only an interval long enough for a dismissal
+// to have shown up if the veil were not inert.
 await page.waitForTimeout(300)
 check(await modal.isVisible(), 'clicking outside does not dismiss the modal')
 check((await veil.count()) === 1, 'the veil is present but inert')

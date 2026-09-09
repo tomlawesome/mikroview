@@ -39,6 +39,27 @@ const CARD = CARD_SEL
 const hand = (cls) => `${CARD} .whisper .hand-btn${cls}`
 const pill = (label) => `${CARD} .whisper .wpill:text-is("${label}")`
 
+const rowCount = () => page.locator(`${CARD} .grid .row`).count()
+
+/**
+ * Waits for the row count to stop moving. TERM drives the same
+ * appState.filters.rule the main table filters on, so setting or
+ * clearing it re-renders the whole table -- its own cost scales with how
+ * much is loaded, so a fixed frame count can undershoot on a busy shared
+ * instance (#1061 follow-up) where two rAFs alone was still mid-render.
+ */
+async function waitForRowCountStable({ intervalMs = 50, timeoutMs = 5000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let last = -1
+  while (Date.now() < deadline) {
+    const n = await rowCount()
+    if (n === last) return n
+    last = n
+    await page.waitForTimeout(intervalMs)
+  }
+  return last
+}
+
 // ============================================================
 // The column boundary: nothing at rest, a hairline under the hand
 // ============================================================
@@ -60,7 +81,18 @@ const boundaryStyle = (el) => {
 // Playwright leaves the mouse wherever the last action put it, and a
 // stale hover here would report the hover state as the resting one.
 await page.mouse.move(0, 0)
-await page.waitForTimeout(200)
+// The hairline is a genuine CSS transition (0.15s, LiveTable.svelte's
+// .header-cell::after border-color) -- wait for the pseudo-element's own
+// computed color to settle rather than guessing how long that takes.
+const targetHandle = await target.elementHandle()
+await page.waitForFunction(
+  (el) => {
+    const c = getComputedStyle(el, '::after').borderRightColor
+    return c === 'rgba(0, 0, 0, 0)' || c === 'transparent'
+  },
+  targetHandle,
+  { timeout: 2000 },
+)
 
 const atRest = await target.evaluate(boundaryStyle)
 check(
@@ -69,7 +101,14 @@ check(
 )
 
 await target.hover()
-await page.waitForTimeout(300)
+await page.waitForFunction(
+  (el) => {
+    const c = getComputedStyle(el, '::after').borderRightColor
+    return c !== 'rgba(0, 0, 0, 0)' && c !== 'transparent'
+  },
+  targetHandle,
+  { timeout: 2000 },
+)
 
 const hovered = await target.evaluate(boundaryStyle)
 check(
@@ -129,14 +168,17 @@ check(true, 'Escape closes it')
 // prompt, so answer it rather than letting Playwright dismiss it.
 page.on('dialog', (d) => d.accept('hand-rule, everything'))
 await page.fill(TERM, 'hand-rule')
-await page.waitForTimeout(500)
+await waitForRowCountStable()
 
 await saved.click()
 await menu.waitFor({ state: 'visible', timeout: 5000 })
 const saveEntry = menu.locator('.fpsave')
 check((await saveEntry.count()) === 1, 'with a filter set, "save this filter as…" sits at the foot')
 await saveEntry.click()
-await page.waitForTimeout(300)
+// saveCurrent (FilterPresetsMenu.svelte) closes the menu synchronously
+// (open = false) -- wait for that close rather than the reopen click's
+// own actionability wait to happen to land after it.
+await menu.waitFor({ state: 'detached', timeout: 5000 })
 
 await saved.click()
 await menu.waitFor({ state: 'visible', timeout: 5000 })
@@ -149,19 +191,18 @@ check(
 check((await rows.first().locator('.fpx').count()) === 1, 'with an × to forget it')
 
 await rows.first().locator('.fpx').click()
-await page.waitForTimeout(300)
+await rows.first().waitFor({ state: 'detached', timeout: 5000 })
 check((await menu.locator('.fprow').count()) === 0, 'and the × forgets it')
 check(await menu.isVisible(), 'without closing the list out from under the hand')
 
 await page.keyboard.press('Escape')
 await page.fill(TERM, '')
-await page.waitForTimeout(500)
+await waitForRowCountStable()
 
 // ============================================================
 // group folds repeats; wipe empties this screen and says so
 // ============================================================
 
-const rowCount = () => page.locator(`${CARD} .grid .row`).count()
 const before = await rowCount()
 check(before > 0, `the table has lines to act on (${before})`)
 
@@ -171,7 +212,7 @@ check(before > 0, `the table has lines to act on (${before})`)
 // happens to contain repeats is not this check's business, and asserting
 // it would make this fail on a feed that simply had none.
 await page.click(hand(':text-is("group")'))
-await page.waitForTimeout(500)
+await page.waitForSelector(`${hand(':text-is("group")')}[aria-pressed="true"]`, { timeout: 5000 })
 const grouped = await rowCount()
 check(
   (await page.getAttribute(hand(':text-is("group")'), 'aria-pressed')) === 'true',
@@ -179,11 +220,11 @@ check(
 )
 check(grouped <= before, `and folds repeats of the same line into one (${before} -> ${grouped})`)
 await page.click(hand(':text-is("group")'))
-await page.waitForTimeout(500)
+await page.waitForSelector(`${hand(':text-is("group")')}[aria-pressed="false"]`, { timeout: 5000 })
 check((await rowCount()) === before, 'clicking it again unfolds them')
 
 await page.click(pill('wipe'))
-await page.waitForTimeout(500)
+await page.waitForSelector(`${CARD} .body .empty`, { timeout: 5000 })
 
 check((await rowCount()) === 0, 'wipe empties the lines held on this screen')
 // `.body .empty`, not `.empty`: the filter box carries an `empty` class

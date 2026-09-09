@@ -64,7 +64,7 @@ async function heldOnServer(p, timeoutMs = 30000) {
     const s = await history(p)
     if (s.held) return s
     if (Date.now() > deadline) return s
-    await new Promise((r) => setTimeout(r, 1000))
+    await new Promise((r) => setTimeout(r, 250))
   }
 }
 
@@ -82,7 +82,7 @@ async function dayFilesGone(timeoutMs = 20000) {
     const names = dayFiles()
     if (names.length === 0) return true
     if (Date.now() > deadline) return false
-    await new Promise((r) => setTimeout(r, 500))
+    await new Promise((r) => setTimeout(r, 250))
   }
 }
 
