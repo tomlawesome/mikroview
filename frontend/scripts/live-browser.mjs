@@ -258,7 +258,11 @@ function isUntrustedCertServiceWorkerError(text) {
  * that is still one paint away.
  */
 export async function dismissSetupWizard(page) {
-  const devices = await page.request.get(`${URL_BASE}/api/devices`).then((r) => r.json())
+  // The answer is `{ devices: [...] }`, not a bare array: reading it as
+  // one made the guard never fire, so every scenario paid the full
+  // ten-second wait for a modal that could not open (#1060).
+  const body = await page.request.get(`${URL_BASE}/api/devices`).then((r) => r.json())
+  const devices = Array.isArray(body) ? body : body?.devices
   if (Array.isArray(devices) && devices.length > 0) return
   const modal = page.locator('.setup-wizard')
   await modal.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {})
