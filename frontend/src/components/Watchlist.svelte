@@ -1619,7 +1619,7 @@
         <tbody id="sugg">
           <tr class="sdiv">
             <td colspan="6">
-              <span class="sdl">{suggestHeading} · <b>{openSuggestions.length}</b></span>
+              <span class="sdl">{suggestHeading}{#if openSuggestions.length > 0} · <b>{openSuggestions.length}</b>{/if}</span>
               <span class="sdr">
                 {#if asideSuggestions.length > 0}
                   <button
@@ -1655,6 +1655,22 @@
 
           {#if suggestError}
             <tr><td colspan="6"><p class="error" role="alert">{suggestError}</p></td></tr>
+          {/if}
+
+          {#if openSuggestions.length === 0}
+            <!-- #710 round-30 fidelity: the heading drops its " · 0" above
+                 rather than counting nothing, and this line says why the
+                 body is empty instead of just going quiet. "A day of
+                 baseline" doesn't hold for this feature -- suggestions
+                 come from router data already pushed (DHCP leases,
+                 firewall rules), not a statistical window, per
+                 docs/configuration.md's own "Suggested watchlist
+                 entries" section -- so the copy says that instead. -->
+            <tr class="wt-sugg-empty">
+              <td class="empty-row" colspan="6"
+                >nothing yet — suggestions come from what your router has already pushed</td
+              >
+            </tr>
           {/if}
 
           {#each suggestionRows as c (c.id)}

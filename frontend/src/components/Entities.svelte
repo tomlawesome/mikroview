@@ -97,7 +97,7 @@
   } from '../lib/api'
   import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
-  import { formatRelative, formatSpacedAge, formatHM } from '../lib/format'
+  import { formatLastHeard, formatSpacedAge, formatHM } from '../lib/format'
   import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
   import { instanceAddress, portOf } from '../lib/setupsteps'
   import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
@@ -608,7 +608,7 @@
               {:else if d.status === 'never_seen'}
                 <div class="frow dim">never heard from yet</div>
               {:else}
-                <div class="frow dim">last heard {formatRelative(d.lastSeen, appState.now)} — quiet is a fact, not a fault</div>
+                <div class="frow dim">last heard {formatLastHeard(d.lastSeen, appState.now)} — quiet is a fact, not a fault</div>
               {/if}
               {#if multihomedEcho(d)}
                 <!-- The source-address split's echo (#442), the same
