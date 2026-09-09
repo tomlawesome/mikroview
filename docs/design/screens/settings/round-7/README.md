@@ -116,4 +116,12 @@ check.
 
 ## Verdicts
 
-(none yet)
+Owner, 2026-09-09: *"this is much closer but the bar looks cluttered and
+complicated when we're trying to give 'clean and simple' vibes. Right
+idea, slightly wrong execution. But MUCH better than previous rounds.
+We're getting somewhere now."*
+
+→ Round 8 keeps everything round 7 got right — the docket-flag drawer,
+the family ink running through the surface, a GitLab-behaviour bar in
+the stream's clothes, the dropdown that is not a card — and redraws only
+the bar so it reads clean and simple. Nothing else moves.
