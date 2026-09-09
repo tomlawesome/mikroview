@@ -215,6 +215,11 @@ export function layoutGround(input: CityInput): Ground {
         more: Math.max(0, z.hostCount - Math.min(z.hosts.length, MAX_BUILDINGS)),
         gates: [],
         rulesPushed: input.rulesPushed,
+        // A retired segment keeps its plate and its place (#460): the
+        // ghost's whole point is that the operator recognises where it
+        // was, so it is laid out as a district and only drawn
+        // differently.
+        ghost: z.ghost,
       }
       d.buildings = placeBuildings(z, d, routerId)
       districts.push(d)

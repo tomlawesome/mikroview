@@ -22,11 +22,19 @@
   import { coverageState } from '../lib/coverage.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
+  import { addressInCidr, parseCidr } from '../lib/addressMatch'
   import { realityEdges } from '../lib/reality'
+  // The decommission ghost (#460, round 55), on the city's own
+  // geometry: a plate with no fill, a dashed wall all round, its
+  // last-known hosts faded inside, and the same card the flat map draws.
+  import DecommissionCard from './DecommissionCard.svelte'
+  import { decommissionsState } from '../lib/decommission.svelte'
+  import { GHOST_INK, boroughLabel, ghostNote, ghostStateOf, stragglerCallout } from '../lib/decommission'
+  import type { DecommissionSighting, DecommissionWatch, GhostState } from '../lib/types'
   import { symbolFor } from '../lib/city/blocks'
   import { markFor, type BuildingMark } from '../lib/city/marks'
   import { buildingDepth, paintOrder, pieceDepth } from '../lib/city/depth'
-  import { cityInputFrom } from '../lib/city/input'
+  import { cityInputFrom, ghostCityZones } from '../lib/city/input'
   import { layoutGround } from '../lib/city/layout'
   import {
     IK,
@@ -151,6 +159,16 @@
     quiet: { back: 0.7, fo: 0.16, so: 0.4, sw: 0.5 },
     dark: { back: 0.7, fo: 0.12, so: 0.45, sw: 0.6, dash: '3 3' },
   }
+  /** The ghost's own wall treatment (#460, round 55), one per state:
+   * lighter than any live wall and dashed all round, because the wall
+   * of a segment nothing routes is a boundary the operator remembers
+   * rather than one anything is holding. Broken sits heaviest of the
+   * three -- it is the one asking for something. */
+  const GHOST_WALL: Record<GhostState, { back: number; fo: number; so: number; sw: number; dash?: string }> = {
+    none: { back: 0.14, fo: 0.11, so: 0.45, sw: 0.6, dash: '3 4' },
+    holding: { back: 0.16, fo: 0.12, so: 0.5, sw: 0.6, dash: '3 4' },
+    broken: { back: 0.2, fo: 0.15, so: 0.6, sw: 0.7, dash: '3 4' },
+  }
   /** A gate post: half its ground extent, and how tall it stands -- half
    * again the wall's own height (walls.ts's WALL_H), the mockup's ratio. */
   const GATE_POST_HALF = 0.6
@@ -236,6 +254,23 @@
    * app Topography hands the ground down with the marks already on it. */
   const hostMarks = $derived(hostMarksFrom(flagsState.list, watchlistState.entries))
 
+  /* ---------------- the ghost district (#460, round 55) ---------------- */
+
+  // The map's own clock, on the same one-minute beat the flat map keeps:
+  // a ghost's tally counts hours of quiet, and an hour that has passed
+  // has to show without waiting for traffic to arrive.
+  let nowMs = $state(Date.now())
+  $effect(() => {
+    const t = setInterval(() => (nowMs = Date.now()), 60_000)
+    return () => clearInterval(t)
+  })
+
+  // The watch or the offer behind a ghost district, by the boundary the
+  // district is keyed on -- the same identity the topography keys a zone
+  // on, so an accepted offer's ghost lands where its district stood.
+  const ghostWatchFor = (id: string) => decommissionsState.ghosts.find((w) => w.interface === id) ?? null
+  const ghostOfferFor = (id: string) => decommissionsState.offers.find((o) => o.interface === id) ?? null
+
   const ground: Ground = $derived(
     groundProp ??
       layoutGround(
@@ -253,13 +288,132 @@
           new Set(coverageState.byKey.keys()),
           registeredHosts,
           hostMarks,
+          ghostCityZones(decommissionsState.offers, decommissionsState.ghosts, nowMs, primaryDevice?.id ?? ''),
         ),
       ),
   )
 
+
   const inkOf = (d: District) => LANE_INKS[d.ink % LANE_INKS.length]
   const districtOf = (id: string | null) => (id ? (ground.districts.find((d) => d.id === id) ?? null) : null)
   const allBuildings = $derived<Building[]>([...ground.nodes, ...ground.districts.flatMap((d) => d.buildings)])
+
+
+  // The ghost the operator has opened a card on, and the ghost whose
+  // watch a straggler has just broken. One card and one alarm road at a
+  // time, the same rule the flat map keeps: two cards on one ghost would
+  // be the map saying two things about the same place.
+  let openGhostId = $state<string | null>(null)
+  let ghostBusy = $state(false)
+  let ghostError = $state<string | null>(null)
+
+  const ghostDistricts = $derived(ground.districts.filter((d) => d.ghost))
+  const brokenGhostDistrict = $derived(
+    ghostDistricts.find((d) => {
+      const w = ghostWatchFor(d.id)
+      return w !== null && ghostStateOf(w, nowMs) === 'broken' && w.lastStraggler
+    }) ?? null,
+  )
+
+  // The straggler's road: from the ghost's gate to the gate of whatever
+  // district its peer stands in. Drawn only where a pushed address table
+  // claims the peer -- a road to a district that might not be the right
+  // one would be a guess, and the callout still names the line.
+  const stragglerRoad = $derived.by((): {
+    g: District
+    w: DecommissionWatch
+    st: DecommissionSighting
+    from: Pt | null
+    to: Pt | null
+  } | null => {
+    const g = brokenGhostDistrict
+    const w = g ? ghostWatchFor(g.id) : null
+    const st = w?.lastStraggler
+    if (!g || !w || !st?.peer) return null
+    const peer = st.peer
+    const target = ground.districts.find((d) => {
+      if (d.ghost || !d.cidr) return false
+      const parsed = parseCidr(d.cidr)
+      return parsed !== null && addressInCidr(peer, parsed)
+    })
+    if (!target) return { g, w, st, from: null, to: null }
+    return { g, w, st, from: gateToward(g, [target.u, target.v]).p, to: gateToward(target, [g.u, g.v]).p }
+  })
+
+  // What card, if any, this surface is showing. Same precedence as the
+  // flat map's: the straggler the operator opened, then the ghost's own
+  // card, then an offer nobody has answered.
+  const cityDecommCard = $derived.by((): { kind: 'offer' | 'ghost' | 'straggler'; district: District } | null => {
+    const openD = ghostDistricts.find((d) => d.id === openGhostId) ?? null
+    if (openD) {
+      const w = ghostWatchFor(openD.id)
+      if (w?.lastStraggler && ghostStateOf(w, nowMs) === 'broken') return { kind: 'straggler', district: openD }
+      if (w) return { kind: 'ghost', district: openD }
+    }
+    const offered = ghostDistricts.find((d) => ghostOfferFor(d.id) !== null)
+    if (offered) return { kind: 'offer', district: offered }
+    return null
+  })
+
+  let gcardEl: HTMLElement | null = $state(null)
+  let ghostPlace = $state<Placement | null>(null)
+  let ghostCardTick = $state(0)
+
+  // Placed beside the ghost, with the heavier leader the card itself
+  // draws (round 55's second fix): a ghost is faint by design, so a
+  // hairline to one reads as nothing at all.
+  $effect(() => {
+    const open = cityDecommCard
+    const c = viewCam
+    const svg = svgEl
+    const host = cityEl
+    const card = gcardEl
+    void effectiveStop
+    void stageTick
+    void ghostCardTick
+    if (!open || !c || !svg || !host || !card) {
+      ghostPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      ghostPlace = null
+      return
+    }
+    const d = open.district
+    const anchor = map({ x: X(c, d.u), y: Y(c, d.v) })
+    const avoid = [mapRect(map, plateBox(d))]
+    const softAvoid = ground.districts.filter((x) => x.id !== d.id).map((x) => mapRect(map, plateBox(x)))
+    ghostPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid, prefer: ['left', 'right', 'top'] })
+  })
+
+  $effect(() => {
+    const card = gcardEl
+    if (!card) return
+    return watchCardSize(card, () => ghostCardTick++)
+  })
+
+  async function answerGhostOffer(d: District, yes: boolean) {
+    const o = ghostOfferFor(d.id)
+    if (!o) return
+    ghostBusy = true
+    const err = yes ? await decommissionsState.accept(o) : await decommissionsState.dismiss(o)
+    ghostBusy = false
+    ghostError = err
+  }
+
+  async function forceRemoveGhostDistrict(d: District, why: string) {
+    const w = ghostWatchFor(d.id)
+    if (!w) return
+    ghostBusy = true
+    const err = await decommissionsState.force(w.id, why)
+    ghostBusy = false
+    ghostError = err
+    if (!err) openGhostId = null
+  }
+
+
 
   /* ---------------- brightness by baseline (#1016) ---------------- */
 
@@ -747,6 +901,15 @@
    * that Enter uses is unchanged. */
   function onDistrictClick(id: string) {
     if (dragged) return
+    // A ghost opens its own card rather than being stood on: there is
+    // nothing to stand in -- the district is a place that was -- and the
+    // card is the only thing here with anything to say or ask.
+    const g = ground.districts.find((d) => d.id === id)
+    if (g?.ghost) {
+      ghostError = null
+      openGhostId = openGhostId === id ? null : id
+      return
+    }
     standOnDistrict(id)
   }
 
@@ -1778,8 +1941,13 @@
       )
       for (const seg of segs) {
         const cov = faces[seg.side]
-        const t = WALL_TREATMENT[cov]
-        const ink = cov === 'logged' ? inkOf(d) : COVERAGE_INK[cov]
+        // Every edge of a ghost's wall wears the watch state (#460,
+        // round 55): the wall is dashed all round in the state's ink,
+        // whatever each boundary used to read, because a boundary that
+        // is gone has no coverage left to report.
+        const gs = d.ghost ? ghostStateOf(ghostWatchFor(d.id), nowMs) : null
+        const t = gs ? GHOST_WALL[gs] : WALL_TREATMENT[cov]
+        const ink = gs ? GHOST_INK[gs] : cov === 'logged' ? inkOf(d) : COVERAGE_INK[cov]
         const mid = (seg.t0 + seg.t1) / 2
         const midV = seg.side === 'l' ? d.v + d.r * mid : d.v + d.r * (1 - mid)
         const path = wallPiece(c, d, seg)
@@ -2172,7 +2340,10 @@
       // 2026-09-08), so what a screen reader is told and what is drawn
       // are the same fact by construction.
       const mark = b.host ? markFor(b.kind, b.host) : null
-      const note = b.host ? presenceNote(b.host, nowTick) : null
+      // A ghost's host says what it is rather than how long it has been
+      // quiet: "not heard for 26 h" is true of every address in a
+      // retired range and tells the operator nothing.
+      const note = d?.ghost ? 'last known here; the range is retired' : b.host ? presenceNote(b.host, nowTick) : null
       const aria =
         b.name +
         (b.ip ? ' at ' + b.ip : '') +
@@ -2243,7 +2414,15 @@
         const d = hull.map((p, i) => (i ? 'L' : 'M') + R2(p[0]) + ' ' + R2(p[1])).join('') + 'Z'
         rings.push({
           d,
-          label: bo.name.toUpperCase() + ' BOROUGH · ' + bo.districtIds.length + (bo.districtIds.length === 1 ? ' DISTRICT' : ' DISTRICTS'),
+          // A ghost is inside the ring -- it is still a place on the
+          // map -- but it is not a district any more, so the label
+          // counts the two apart (#460, round 55: "4 districts · 1
+          // ghost").
+          label: boroughLabel(
+            bo.name.toUpperCase() + ' BOROUGH',
+            bo.districtIds.filter((id) => !g.districts.find((d) => d.id === id)?.ghost).length,
+            bo.districtIds.filter((id) => g.districts.find((d) => d.id === id)?.ghost).length,
+          ),
           x: R2(Math.max(...hull.map((p) => p[0])) - 60),
           y: R2(Math.min(...hull.map((p) => p[1])) + 10),
         })
@@ -3316,6 +3495,7 @@
           <path d={r.d} fill="none" stroke="var(--accent)" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="2 6" stroke-linejoin="round" />
         {/each}
         {#each scene.plates as p (p.d.id)}
+          {@const gs = p.d.ghost ? ghostStateOf(ghostWatchFor(p.d.id), nowMs) : null}
           <g
             class="plate"
             class:focused={focus?.id === p.d.id}
@@ -3329,16 +3509,34 @@
             <title>{p.aria}</title>
             <!-- The plate keeps its own ink unless every one of the
                  district's boundaries is dark (round 49, #1016); then,
-                 and only then, it goes grey and dashed. -->
-            <path d={p.outer} fill={p.d.plateDark ? 'var(--fg-dim)' : p.ink} fill-opacity={p.d.plateDark ? 0.06 : 0.1} />
-            <path
-              d={p.inner}
-              fill="none"
-              stroke={p.d.plateDark ? 'var(--fg-dim)' : p.ink}
-              stroke-opacity={p.d.plateDark ? 0.2 : 0.17}
-              stroke-width="0.7"
-              stroke-dasharray={p.d.plateDark ? '3 4' : undefined}
-            />
+                 and only then, it goes grey and dashed.
+                 A ghost is a third case (#460, round 55): no fill of its
+                 own, an outline in the watch's ink, dashed all round,
+                 and an alarm rim when a straggler has broken it. -->
+            {#if gs}
+              <path d={p.outer} fill={GHOST_INK[gs]} fill-opacity={gs === 'broken' ? 0.07 : 0.04} />
+              <path
+                d={p.inner}
+                fill="none"
+                stroke={GHOST_INK[gs]}
+                stroke-opacity={gs === 'none' ? 0.55 : 0.85}
+                stroke-width="1.3"
+                stroke-dasharray="3 4"
+              />
+              {#if gs === 'broken'}
+                <path d={p.outer} fill="none" stroke="var(--alarm)" stroke-opacity="0.35" stroke-width="1.2" />
+              {/if}
+            {:else}
+              <path d={p.outer} fill={p.d.plateDark ? 'var(--fg-dim)' : p.ink} fill-opacity={p.d.plateDark ? 0.06 : 0.1} />
+              <path
+                d={p.inner}
+                fill="none"
+                stroke={p.d.plateDark ? 'var(--fg-dim)' : p.ink}
+                stroke-opacity={p.d.plateDark ? 0.2 : 0.17}
+                stroke-width="0.7"
+                stroke-dasharray={p.d.plateDark ? '3 4' : undefined}
+              />
+            {/if}
             <path class="ring" d={p.outer} fill="none" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="4 5" />
           </g>
         {/each}
@@ -3476,7 +3674,14 @@
                 <path d={p.d} fill={p.fill} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} stroke-dasharray={p.dash} class={p.cls} />
               {/each}
               <g transform="translate({s.stamp.x} {s.stamp.y})">
-                <g transform="scale({s.stamp.k})" style:color={s.ink} opacity={s.pres === 'quiet' ? 0.62 : s.pres === 'intended' ? 0.55 : s.dim ? 0.62 : undefined}>
+                <!-- A ghost's hosts are drawn in the quiet material and
+                     then faded (#460, round 55): they are names the range
+                     last had, not machines anyone can see now. -->
+                <g
+                  transform="scale({s.stamp.k})"
+                  style:color={s.ink}
+                  opacity={s.district?.ghost ? 0.45 : s.pres === 'quiet' ? 0.62 : s.pres === 'intended' ? 0.55 : s.dim ? 0.62 : undefined}
+                >
                   {#each symbolFor(s.b.kind).paths as p, j (j)}
                     <path d={p.d} fill={p.fill === 'void' ? VOID : 'currentColor'} fill-opacity={p.fillOpacity} stroke={p.fill === 'body' ? 'currentColor' : undefined} stroke-opacity={p.strokeOpacity} stroke-width={p.strokeWidth} />
                   {/each}
@@ -3524,6 +3729,7 @@
       </g>
       <g class="flat" aria-hidden="true">
         {#each scene.plaques as p (p.d.id)}
+          {@const gs = p.d.ghost ? ghostStateOf(ghostWatchFor(p.d.id), nowMs) : null}
           <g transform="translate({p.x} {p.y})">
             <!-- The plaque says name · subnet, and nothing else (round
                  49, #1016): LOGGED, DARK and NO RULES PUSHED are gone
@@ -3532,16 +3738,34 @@
                  thing anyway (#1014). `no rule table pushed` stays, dim,
                  because it is a different fact from dark: there, a table
                  exists and nothing on it logs. -->
+            <!-- A ghost's plaque says what it is: compact, the name
+                 carries `· ghost`; full, the note line under it is the
+                 same sentence the flat map's lane tally says, in the
+                 ghost's own ink. Its dot is a ring rather than a disc,
+                 the same hollowing the lane dot takes. -->
             {#if compact}
               <rect x={R2(-p.w / 2)} y="0" width={p.w} height="20" rx="10" fill="#0a0f1c" fill-opacity="0.9" stroke="var(--border)" />
-              <circle cx={R2(-p.w / 2 + 11)} cy="10" r="3.2" fill={p.ink} />
-              <text x={R2(-p.w / 2 + 19)} y="14" class="p-name small">{p.d.name}</text>
+              {#if gs}
+                <circle cx={R2(-p.w / 2 + 11)} cy="10" r="3.2" fill="none" stroke={GHOST_INK[gs]} stroke-width="1.2" />
+                <text x={R2(-p.w / 2 + 19)} y="14" class="p-name small gname">{p.d.name} · ghost</text>
+              {:else}
+                <circle cx={R2(-p.w / 2 + 11)} cy="10" r="3.2" fill={p.ink} />
+                <text x={R2(-p.w / 2 + 19)} y="14" class="p-name small">{p.d.name}</text>
+              {/if}
             {:else}
-              <rect x={R2(-p.w / 2)} y="0" width={p.w} height={p.d.rulesPushed ? 28 : 40} rx="8" fill="#0a0f1c" fill-opacity="0.93" stroke="var(--border)" />
-              <circle cx={R2(-p.w / 2 + 13)} cy="14" r="3.4" fill={p.ink} />
-              <text x={R2(-p.w / 2 + 22)} y="18" class="p-name">{p.d.name}</text>
+              <rect x={R2(-p.w / 2)} y="0" width={p.w} height={gs || !p.d.rulesPushed ? 40 : 28} rx="8" fill="#0a0f1c" fill-opacity="0.93" stroke="var(--border)" />
+              {#if gs}
+                <circle cx={R2(-p.w / 2 + 13)} cy="14" r="3.4" fill="none" stroke={GHOST_INK[gs]} stroke-width="1.2" />
+              {:else}
+                <circle cx={R2(-p.w / 2 + 13)} cy="14" r="3.4" fill={p.ink} />
+              {/if}
+              <text x={R2(-p.w / 2 + 22)} y="18" class="p-name" class:gname={gs}>{p.d.name}</text>
               <text x={R2(p.w / 2 - 11)} y="17.5" text-anchor="end" class="p-cidr">{p.d.cidr ?? 'no address pushed'}</text>
-              {#if !p.d.rulesPushed}
+              {#if gs}
+                <text x={R2(-p.w / 2 + 13)} y="32" class="p-note" style:fill={GHOST_INK[gs]}
+                  >{ghostNote(gs, ghostWatchFor(p.d.id), ghostOfferFor(p.d.id), nowMs)}</text
+                >
+              {:else if !p.d.rulesPushed}
                 <text x={R2(-p.w / 2 + 13)} y="32" class="p-note">no rule table pushed</text>
               {/if}
             {/if}
@@ -3559,6 +3783,43 @@
             <text x="0" y="0" text-anchor="middle" class="st-ip">{t.sub}</text>
           </g>
         {/each}
+        <!-- The straggler (#460, round 55): a road from the ghost's gate
+             to the gate of the district its peer stands in, in the
+             reserved alarm ink, with the callout naming the host the
+             address last belonged to. Drawn only where a pushed address
+             table claims the peer; where it does not, the callout still
+             says what happened and no road claims a destination the map
+             cannot prove. -->
+        {#if stragglerRoad}
+          {@const sr = stragglerRoad}
+          {#if sr.from && sr.to}
+            <path
+              class="straggler-road"
+              d="M{R2(X(geomCam, sr.from[0]))} {R2(Y(geomCam, sr.from[1]))}L{R2(X(geomCam, sr.to[0]))} {R2(Y(geomCam, sr.to[1]))}"
+            />
+          {/if}
+          {@const call = stragglerCallout(sr.w, sr.st, sr.st.peer ?? '')}
+          {@const cx = R2(X(geomCam, sr.from ? (sr.from[0] + (sr.to ? sr.to[0] : sr.from[0])) / 2 : sr.g.u))}
+          {@const cy = R2(Y(geomCam, sr.from ? (sr.from[1] + (sr.to ? sr.to[1] : sr.from[1])) / 2 : sr.g.v) + 34)}
+          <g
+            class="straggler-call"
+            role="button"
+            tabindex="0"
+            aria-label="{call.head} — open this straggler"
+            onclick={() => (openGhostId = openGhostId === sr.g.id ? null : sr.g.id)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openGhostId = openGhostId === sr.g.id ? null : sr.g.id
+              }
+            }}
+          >
+            <rect x={cx - 167} y={cy} width="334" height="46" rx="10" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.85" />
+            <circle cx={cx - 152} cy={cy + 17} r="3.4" fill="var(--alarm)" />
+            <text x={cx - 141} y={cy + 20} class="alarm-t">{call.head}</text>
+            <text x={cx - 141} y={cy + 35} class="chip-t">{call.detail} · open ▸</text>
+          </g>
+        {/if}
         {#each scene.rings as r (r.label)}
           <text x={r.x} y={r.y} text-anchor="middle" class="boro-t">{r.label}</text>
         {/each}
@@ -3784,6 +4045,51 @@
          opens the declare form. Quiet: the reason quoted, who and when,
          and undeclare. The wording is the 2D map's, so a boundary reads
          the same on either side of the slider. -->
+    <!-- The decommission card (#460, round 55): the same component the
+         flat map draws, beside the ghost, with its own heavier leader. -->
+    {#if cityDecommCard}
+      {@const gd = cityDecommCard.district}
+      <DecommissionCard
+        bind:element={gcardEl}
+        kind={cityDecommCard.kind}
+        offer={ghostOfferFor(gd.id)}
+        watch={ghostWatchFor(gd.id)}
+        peerName={ghostWatchFor(gd.id)?.lastStraggler?.peer ?? ''}
+        {nowMs}
+        place={ghostPlace}
+        busy={ghostBusy}
+        error={ghostError}
+        onaccept={() => answerGhostOffer(gd, true)}
+        ondismiss={() => answerGhostOffer(gd, false)}
+        onforce={(why) => forceRemoveGhostDistrict(gd, why)}
+        onclose={() => (openGhostId = null)}
+        ontrace={() => {
+          const st = ghostWatchFor(gd.id)?.lastStraggler
+          if (st) topologyNavState.pendingTrace = { in: st.interface || undefined, port: st.port, proto: st.protocol }
+          appState.view = 'topography'
+        }}
+        onwatchhost={() => {
+          const st = ghostWatchFor(gd.id)?.lastStraggler
+          if (!st) return
+          topologyNavState.requestWatchDraft({
+            who: st.address,
+            toward: st.peer ? `${st.peer}${st.port ? `:${st.port}` : ''}` : undefined,
+            mode: 'expect',
+            provenance: `from a straggler on the retired range ${gd.cidr ?? gd.id}`,
+          })
+          appState.view = 'watchlist'
+        }}
+        onstream={() => {
+          appState.resetFilters()
+          if (gd.cidr) appState.setFilter('srcQuery', gd.cidr)
+          appState.view = 'live'
+        }}
+        onwatchlist={() => {
+          appState.view = 'watchlist'
+        }}
+      />
+    {/if}
+
     {#if cardPlace}
       <!-- The leader (round-49/index.html:1112): a hairline from the
            card to the boundary it is about, with an accent dot at the
@@ -4964,6 +5270,26 @@
   /* A quiet building's own name recedes with it, so the street reads at
      a glance as which machines are still talking. */
   .st-name.st-dim {
+    fill: var(--fg-muted);
+  }
+
+  /* The straggler's road (#460, round 55): the same reserved saturated
+     colour an unplanned road spends, because it is the same statement --
+     traffic the map had no reason to expect. */
+  .straggler-road {
+    fill: none;
+    stroke: var(--alarm);
+    stroke-width: 1.4;
+    stroke-linecap: round;
+  }
+
+  .straggler-call {
+    cursor: pointer;
+  }
+
+  /* A ghost's plaque name reads a step back, like the flat map's: it is
+     the name the range had, not one anything answers to now. */
+  .gname {
     fill: var(--fg-muted);
   }
 

@@ -78,7 +78,7 @@
     type Placed,
   } from '../lib/topography/cluster'
   import { layoutGround, plateHalfWidth } from '../lib/city/layout'
-  import { cityInputFrom } from '../lib/city/input'
+  import { cityInputFrom, ghostCityZones } from '../lib/city/input'
   import { hostMarksFrom } from '../lib/city/presence'
   import {
     EXPECTED_LABEL,
@@ -2836,6 +2836,9 @@
         quietKeys,
         [],
         cityHostMarks,
+        // The retired segments, laid out as districts so the city draws
+        // a ghost where the flat map draws a ghost lane (#460).
+        ghostCityZones(decommissionsState.offers, decommissionsState.ghosts, nowMs, primaryDevice?.id ?? ''),
       ),
     ),
   )
