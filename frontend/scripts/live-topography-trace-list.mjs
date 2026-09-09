@@ -121,6 +121,8 @@ check(
     pages: 1,
     routerosVersion: '7.23.3 (stable)',
     records: [
+      { ordinal: 10, chain: 'forward', action: 'accept', inInterface: 'bridge-tl', outInterface: 'ether1', log: true, comment: 'lan internet' },
+      { ordinal: 11, chain: 'forward', action: 'accept', inInterface: 'ether4', outInterface: 'ether1', log: true, comment: 'iot internet' },
       { ordinal: 12, chain: 'forward', action: 'accept', protocol: 'tcp', dstPort: 443, inInterface: 'bridge-tl', outInterface: 'ether3', log: true, comment: 'web out' },
       { ordinal: 40, chain: 'forward', action: 'drop', log: true },
       ...neutralizers,
@@ -154,11 +156,23 @@ for (let i = 0; i < 3; i++) {
     `firewall,info A|print| forward: in:ether4 out:ether3, connection-state:new, proto TCP (SYN), ${SRC}:5${300 + i}->10.0.20.79:${9100 + i}, len 60`,
   )
 }
-// A little ordinary traffic elsewhere, so the map has more than one
-// lane's worth of activity to dim.
-for (let i = 0; i < 4; i++) {
+// Ordinary traffic on both ends of the traced pair -- planned by the
+// two Internet accepts above, so none of it can outrank the callout --
+// and plenty of it: the flat map draws only the five busiest zones
+// (zones.svelte.ts's slice), and in a gate shard the siblings before
+// this file leave whole zones with tens of events behind them. At
+// eleven events `bridge-tl` missed the cut, its pair was never drawn,
+// and the callout fell back to this scenario's own SAME MINUTE pair
+// (pipeline 820, gate shard 3/4). The sources cycle over a few hosts so
+// each district stays under the city's eight-building cap.
+for (let i = 0; i < 120; i++) {
   feedRaw(
-    `firewall,info A|web| forward: in:bridge-tl out:ether1, connection-state:new, proto TCP (SYN), 10.0.15.${90 + i}:5${400 + i}->203.0.113.9:443, len 60`,
+    `firewall,info A|lan internet| forward: in:bridge-tl out:ether1, connection-state:new, proto TCP (SYN), 10.0.15.${90 + (i % 4)}:5${400 + i}->203.0.113.9:443, len 60`,
+  )
+}
+for (let i = 0; i < 80; i++) {
+  feedRaw(
+    `firewall,info A|iot internet| forward: in:ether4 out:ether1, connection-state:new, proto TCP (SYN), 10.0.30.${50 + (i % 2)}:5${600 + i}->203.0.113.9:443, len 60`,
   )
 }
 // The traced destination also has to be the *source* of some crossing to
