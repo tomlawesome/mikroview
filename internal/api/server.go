@@ -388,6 +388,12 @@ func (s *Server) routes() []route {
 		// handleStatsTops' own doc comment for why this is a separate
 		// route rather than a field on /api/stats above.
 		{http.MethodGet, "/api/stats/tops", s.handleStatsTops},
+		// #1018's two tools on the living topology: where a port is used
+		// (seen traffic, and the pushed rules that name it), and the one
+		// hop one logged line took through the router. Reads over the
+		// event buffer and RouterState; nothing here touches the network.
+		{http.MethodGet, "/api/ports", s.handlePorts},
+		{http.MethodGet, "/api/trace", s.handleTrace},
 		// Ingest-loss "Clear all" (#1015): zeroes the four monotonic
 		// syslog-listener loss counters /api/stats' "syslog.loss" field
 		// reads, so a transient loss stops permanently marking the

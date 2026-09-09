@@ -105,7 +105,9 @@ const measure = () =>
     const range = card.querySelector('.altitude input[type="range"]')
     const stage = card.querySelector('.stage')
     const city = card.querySelector('.city')
-    const overlayControls = card.querySelectorAll('[aria-label="Map overlays"] button').length
+    const overlayControls = [...card.querySelectorAll('[aria-label="Map overlays"] button')].map((b) =>
+      b.textContent.trim(),
+    )
     const camera = card.querySelector('.camera')
     return {
       value: range.value,
@@ -128,7 +130,14 @@ for (let i = 0; i < STOP_LABELS.length; i++) {
   const label = STOP_LABELS[i]
   const m = await measure()
   check(m.value === String(i), `stop ${i} (${label}): the slider reports it (value ${m.value})`)
-  check(m.overlayControls === 0, `${label}: nothing on the overlay row is a control (${m.overlayControls} buttons)`)
+  // #981 left no lens toggle here and none has come back. #1018 put one
+  // control in the row -- the port filter -- and it belongs to the flat
+  // map alone: the city gets the same two tools in a round of its own
+  // (#1050), so the row is bare right of centre.
+  check(
+    m.overlayControls.join(' ') === (i < 3 ? '⌕ port' : ''),
+    `${label}: the overlay row carries the port pill on the flat side and nothing at all on the city's (${JSON.stringify(m.overlayControls)})`,
+  )
 
   if (i < 3) {
     check(!m.stageHidden, `${label}: the 2D stage is showing`)
@@ -154,7 +163,10 @@ for (let i = 0; i < STOP_LABELS.length; i++) {
 for (let i = STOP_LABELS.length - 1; i >= 0; i--) {
   const m = await measure()
   check(m.value === String(i), `walking back, stop ${i} (${STOP_LABELS[i]}): the slider reports it (value ${m.value})`)
-  check(m.overlayControls === 0, `${STOP_LABELS[i]}: still no control on the overlay row after the round trip`)
+  check(
+    m.overlayControls.join(' ') === (i < 3 ? '⌕ port' : ''),
+    `${STOP_LABELS[i]}: the overlay row still reads the same after the round trip (${JSON.stringify(m.overlayControls)})`,
+  )
   if (i > 0) {
     await page.keyboard.press('ArrowLeft')
     await new Promise((r) => setTimeout(r, 700))
