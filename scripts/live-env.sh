@@ -83,8 +83,10 @@ if [ "$MV_BIND" = "127.0.0.1" ]; then
   # -- which is what the token dialog's device pick-list (#326) and
   # every devices[0]-reading scenario get to rely on. NOT set in
   # $MV_BIND mode: the CHR's traffic arrives from a different address
-  # there, and a second device would make devices[0] nondeterministic
-  # (internal/device.Registry.List is map-ordered).
+  # there, so a second device would appear that no scenario declared.
+  # devices[0] itself is no longer at risk from that: Registry.List
+  # sorts configured devices first, then by id (#600), where it used to
+  # return whatever order the map iterated in.
   DEVICES_BLOCK='devices: [{id: live-router, name: Live Router, sourceIp: 127.0.0.1}]'
 else
   MV_SCHEME=https
@@ -135,15 +137,24 @@ fi
 # The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
 SYSLOG_TLS_HOST="${SYSLOG_TLS_ADDR%:*}"
 
-# send_tls -- read complete syslog lines on stdin and deliver them over
-# the TLS listener, mikroview's only syslog ingest since #189. Lines are
-# newline-delimited: the listener splits a read on newlines when they are
-# present and takes it whole when they are not, so this shape and
+# send_tls [source-ip] -- read complete syslog lines on stdin and deliver
+# them over the TLS listener, mikroview's only syslog ingest since #189.
+# Lines are newline-delimited: the listener splits a read on newlines when
+# they are present and takes it whole when they are not, so this shape and
 # RouterOS's unterminated one both land as one event per message.
+#
+# source-ip binds the client end of the connection, so the events arrive
+# stamped with that address and internal/device.Registry files them under
+# a different device (#600 needs a router config.yaml has *not* declared,
+# and the harness declares the only loopback source it feeds from).
+# Anything in 127.0.0.0/8 is local, so no interface has to be configured
+# for it. Empty (the default) lets the kernel choose, which is 127.0.0.1
+# and the declared router.
 send_tls() {
   python3 -c '
 import socket, ssl, sys, time
 host, port = sys.argv[1], int(sys.argv[2])
+src = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
 lines = [l for l in sys.stdin.buffer.read().split(b"\n") if l]
 # The certificate is self-signed and was generated seconds ago by the
 # server under test. There is no chain to verify against, and verifying
@@ -152,7 +163,7 @@ lines = [l for l in sys.stdin.buffer.read().split(b"\n") if l]
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
-with socket.create_connection((host, port), timeout=10) as sock:
+with socket.create_connection((host, port), timeout=10, source_address=(src, 0) if src else None) as sock:
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     with ctx.wrap_socket(sock, server_hostname=host) as tls:
         # One message per write, paced. The listener hands each parsed
@@ -189,7 +200,7 @@ with socket.create_connection((host, port), timeout=10) as sock:
             tls.unwrap()
         except OSError:
             pass
-' "$SYSLOG_TLS_HOST" "$SYSLOG_TLS_PORT"
+' "$SYSLOG_TLS_HOST" "$SYSLOG_TLS_PORT" "${1:-}"
 }
 
 build() {
@@ -413,12 +424,21 @@ PY
   echo "sent ${1:-100} events labelled ${2:-live-test-rule}" >&2
 }
 
-# raw LINE... -- deliver exact syslog lines over one connection, for scenarios needing a
-# specific shape (a control-port hit, say) rather than the bulk
-# generators. Scenarios must use this rather than opening their own
-# socket: there is no plaintext listener left for them to talk to.
+# raw LINE... -- deliver exact syslog lines over one connection, for
+# scenarios needing a specific shape (a control-port hit, say) rather
+# than the bulk generators. Scenarios must use this rather than opening
+# their own socket: there is no plaintext listener left for them to
+# talk to.
 raw() {
   printf '%s\n' "$@" | send_tls
+}
+
+# rawfrom SOURCE-IP LINE... -- the same, appearing to come from
+# source-ip, and so landing under that device -- see send_tls. Use raw
+# for the declared router.
+rawfrom() {
+  local src="$1"; shift
+  printf '%s\n' "$@" | send_tls "$src"
 }
 
 # portscan N [source-ip] -- N distinct destination ports from one source
@@ -476,5 +496,5 @@ case "${1:-}" in
   portscan) shift; portscan "$@" ;;
   recon) shift; recon "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|build PATH|syslog N [label]|raw LINE...|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|build PATH|syslog N [label]|raw LINE...|rawfrom SRC-IP LINE...|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
 esac

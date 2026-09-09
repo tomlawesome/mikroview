@@ -88,6 +88,10 @@ type RegistrationDeps struct {
 	// own params -- which are themselves part of what Sync re-reads.
 	Flags      *flags.Store
 	Reputation ReputationLookup
+	// Decommission holds the retiring segments (#460). nil is valid and
+	// registers a set that evaluates nothing, the same nil-tolerant
+	// contract the two groups above state.
+	Decommission DecommissionStore
 }
 
 // NewRegistry constructs a Registry over eng and store. Nothing is
@@ -212,6 +216,17 @@ func (r *Registry) Sync() []error {
 		staleAfter: deviceStaleAfterFrom(nextBuilt),
 		enabled:    deviceSilenceEnabledFrom(nextBuilt),
 	})
+
+	// The decommission watches are rebuilt wholesale on every Sync, like
+	// the ticker above and unlike a stored definition: they hold no
+	// evaluation state of their own (the clock lives on the watch record
+	// in the decommission store), and the store's own change hook drives
+	// Sync, so an accepted or force-removed watch is live on the very next
+	// event rather than the next restart -- #407's contract, extended to
+	// an object that is not in the definitions document at all.
+	decomm := NewDecommissionWatches(r.deps.Decommission)
+	decomm.OnRoutedEmission = r.deps.Expectations.Sink
+	r.eng.Register(decomm)
 
 	inverted, err := NewInvertedExpectations(entries, r.deps.Expectations.Observations)
 	if err != nil {

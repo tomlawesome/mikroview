@@ -24,6 +24,15 @@ type Info struct {
 	EventCount uint64    `json:"eventCount"`
 }
 
+// NameLookup is the one method of internal/naming.Resolver this package
+// needs: the display name to show for a device id, "" when nothing
+// names it. An interface rather than the concrete type so device does
+// not import naming (naming's resolver is built later in main, once the
+// entity store exists) and so tests can supply a name without one.
+type NameLookup interface {
+	Device(id string) string
+}
+
 // Registry resolves syslog source IPs to device identity, and tracks
 // liveness/volume per device for the /api/devices endpoint.
 //
@@ -45,6 +54,18 @@ type Registry struct {
 	// would start pruning before the registry actually held
 	// maxDiscoveredDevices *discovered* entries. See #370.
 	configuredEntries int
+
+	// names, when set, resolves the display name for a device id --
+	// config.yaml's declared name, else an operator's stored label
+	// (issue #600). Held here rather than applied by each caller so
+	// every consumer of List (GET /api/devices, the setup wizard's
+	// command blocks, the device-silence flag's own wording) shows the
+	// one name, which is the whole point of the issue: a rename typed
+	// by one person is what everybody reads.
+	//
+	// Read under the same lock as byIP, but never on the ingest path:
+	// Resolve returns the id, and only List asks for a name.
+	names NameLookup
 }
 
 // maxDiscoveredDevices bounds how many *auto-discovered* sources the
@@ -73,6 +94,21 @@ type Registry struct {
 // same class of per-source state for the same reason. A var so tests
 // can shrink it.
 var maxDiscoveredDevices = 4096
+
+// ConfigNames is the device-name map internal/naming.Resolver.Devices
+// takes: the display name config.yaml declares for each device, keyed
+// by the id everything downstream uses. Lives here, beside the registry
+// built from the same slice, rather than in main -- the two readings of
+// cfg.Devices belong together.
+func ConfigNames(configured []config.Device) map[string]string {
+	out := make(map[string]string, len(configured))
+	for _, d := range configured {
+		if d.Name != "" {
+			out[d.ID] = d.Name
+		}
+	}
+	return out
+}
 
 func NewRegistry(configured []config.Device) *Registry {
 	r := &Registry{byIP: make(map[string]*Info)}
@@ -173,16 +209,58 @@ func (r *Registry) pruneLocked() {
 	}
 }
 
+// SetNames wires the display-name resolver in. Separate from
+// NewRegistry because the resolver needs the entity store, which main
+// opens long after the registry the ingest path needs; a Registry
+// without one keeps answering the names config.yaml gave it.
+func (r *Registry) SetNames(names NameLookup) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.names = names
+}
+
 // List returns a snapshot of all known devices, configured and
-// auto-discovered alike.
+// auto-discovered alike, with each Name resolved through NameLookup
+// (issue #600) so a stored rename is what every reader sees.
+//
+// Ordering is configured devices first, then by id -- stable, and not
+// the map order this used to return. Callers picking devices[0] as
+// "the router this instance watches" were relying on a single-device
+// deployment for that to hold: with two, the same request answered in a
+// different order each time (live-setup-wizard-source-split.mjs records
+// what that cost, and live-env.sh declares one device to avoid it).
+// Configured first matches what the fleet already sorts by
+// (frontend/src/lib/fleet.ts): a declared router is what an operator
+// set out to watch; a discovered one is secondary information.
 func (r *Registry) List() []Info {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	out := make([]Info, 0, len(r.byIP))
 	for _, info := range r.byIP {
-		out = append(out, *info)
+		v := *info
+		if r.names != nil {
+			if name := r.names.Device(v.ID); name != "" {
+				v.Name = name
+			}
+		}
+		// A device always displays as something. A discovered one is
+		// already named after its own source address (Resolve), and a
+		// declaration with no name would otherwise show as an empty
+		// cell in every fleet card and every row -- the raw id is the
+		// honest fallback, and the one the editor promises when a label
+		// is removed ("leave empty to show the raw value again").
+		if v.Name == "" {
+			v.Name = v.ID
+		}
+		out = append(out, v)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Configured != out[j].Configured {
+			return out[i].Configured
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 

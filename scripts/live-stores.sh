@@ -53,5 +53,6 @@ deviceMac: {storePath: $dir/mac-registry.json}
 engine:
   storePath: $dir/engine-state.json
   definitionsStorePath: $dir/definitions.json
+  decommissionStorePath: $dir/decommission.json
 YAML
 }
