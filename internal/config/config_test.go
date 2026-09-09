@@ -5,6 +5,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -961,5 +962,62 @@ func TestSnapshotIntervalAtTheMinimumIsAccepted(t *testing.T) {
 		if p.Code == "CFG-0070" {
 			t.Errorf("the minimum itself was reported as too short: %+v", p)
 		}
+	}
+}
+
+// The registry's URL is deliberately not a config field: there is one
+// publisher, named by internal/oui.SourceURL, following the vetted-menu
+// pattern Blocklist and NetClass already set. This asserts the absence,
+// so re-adding a URL setting has to be a decision rather than a drift.
+func TestOUIHasNoURLSetting(t *testing.T) {
+	if _, ok := reflect.TypeOf(OUI{}).FieldByName("URL"); ok {
+		t.Error("config.OUI grew a URL field -- the source is internal/oui.SourceURL, not operator input")
+	}
+	t.Setenv("MIKROVIEW_OUI_URL", "https://mirror.example.invalid/oui.csv")
+	if _, err := Load("", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOUIDefaultsToEnabledAgainstTheIEEERegistry(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OUI.Enabled {
+		t.Error("OUI.Enabled = false, want the vendor feed on by default")
+	}
+	if cfg.OUI.CachePath != "/var/lib/mikroview/oui-registry.json" {
+		t.Errorf("OUI.CachePath = %q, want it under the data directory", cfg.OUI.CachePath)
+	}
+}
+
+func TestOUIEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_OUI_ENABLED", "false")
+	t.Setenv("MIKROVIEW_OUI_CACHE_PATH", "/data/oui.json")
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OUI.Enabled {
+		t.Error("MIKROVIEW_OUI_ENABLED=false did not switch the feed off")
+	}
+	if cfg.OUI.CachePath != "/data/oui.json" {
+		t.Errorf("OUI.CachePath = %q, want the override", cfg.OUI.CachePath)
+	}
+}
+
+func TestOUIYAMLCanDisableTheFeed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("oui:\n  enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OUI.Enabled {
+		t.Error("oui.enabled: false in YAML did not switch the feed off")
 	}
 }

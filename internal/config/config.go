@@ -847,6 +847,32 @@ type NetClass struct {
 	Sources []string `yaml:"sources"`
 }
 
+// OUI configures internal/oui's MAC-vendor lookups: the IEEE MA-L
+// registry that turns a hardware address' first three octets into the
+// organisation that registered them (issue #410's device dossier).
+//
+// On by default, and with no source setting at all: there is exactly
+// one publisher of this registry, and it is named by
+// internal/oui.SourceURL. That follows Blocklist and NetClass above,
+// which take vetted source *names* and deliberately not arbitrary URLs
+// -- an operator enabling a feed is trusting mikroview's vetting of it.
+// Mirroring the file internally, or reaching it through a proxy, is a
+// separate feature and would arrive on that same vetted-name pattern.
+//
+// Refresh cadence is not configurable either, same reasoning as
+// Blocklist and NetClass -- see internal/oui.RefreshInterval.
+type OUI struct {
+	// Enabled at false switches the feed off entirely: no fetch, no
+	// goroutine, and a dossier that reports vendor data as unavailable
+	// rather than pretending an address has no vendor.
+	Enabled bool `yaml:"enabled"`
+	// CachePath is where the parsed registry is kept between restarts,
+	// so vendor names are available immediately on start rather than
+	// after the first fetch. Empty disables the cache (the feed then
+	// re-downloads on every start).
+	CachePath string `yaml:"cachePath"`
+}
+
 // Postgres optionally moves mikroview's persisted state off this host
 // and onto a database server (issue #131).
 //
@@ -1070,6 +1096,7 @@ type Config struct {
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 	Blocklist  Blocklist  `yaml:"blocklist"`
 	NetClass   NetClass   `yaml:"netClass"`
+	OUI        OUI        `yaml:"oui"`
 	Engine     Engine     `yaml:"engine"`
 	Snapshot   Snapshot   `yaml:"snapshot"`
 	History    History    `yaml:"history"`
@@ -1261,6 +1288,10 @@ func defaults() Config {
 			// the same ranges, so leaving Apple's own list out is what
 			// makes ordinary iPhone/iPad/Mac traffic read as a VPN exit.
 			Sources: []string{"tor", "apple_private_relay", "x4b_vpn"},
+		},
+		OUI: OUI{
+			Enabled:   true,
+			CachePath: DefaultDataDir + "/oui-registry.json",
 		},
 		Snapshot: Snapshot{
 			Interval: defaultSnapshotInterval,
@@ -1757,6 +1788,14 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
 		cfg.Blocklist.Sources = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_OUI_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.OUI.Enabled = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_OUI_CACHE_PATH"); v != "" {
+		cfg.OUI.CachePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_STORE_PATH"); v != "" {
 		cfg.Engine.StorePath = v

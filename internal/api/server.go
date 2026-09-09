@@ -25,6 +25,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/oidc"
+	"github.com/tomlawesome/mikroview/internal/oui"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -55,6 +56,13 @@ type Server struct {
 	// nil-means-disabled convention as Reputation. Deliberately display-
 	// only: it is read in handleIPLookup and nowhere near flag scoring.
 	NetClass *netclass.Classifier
+	// OUI turns a hardware address into the organisation IEEE assigned
+	// its prefix to, for the device dossier (issue #410). Nil means the
+	// feed is switched off, and every use is nil-guarded -- the same
+	// nil-means-disabled convention as NetClass above. The package's own
+	// methods are nil-safe too, so a disabled feed answers "no vendor
+	// data" rather than needing a check at each call site.
+	OUI *oui.Registry
 	// History is the on-disk event history a replay reads before it
 	// reaches the ring (#856). Nil means memory-only, which is the
 	// default and a first-class mode, not a missing dependency -- same
@@ -475,6 +483,7 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/hosts", s.handleHostsList},
 		{http.MethodPut, "/api/hosts/{key}/mark", s.handleHostMarkPut},
 		{http.MethodDelete, "/api/hosts/{key}/mark", s.handleHostMarkDelete},
+		{http.MethodGet, "/api/hosts/{ip}/dossier", s.handleHostDossier},
 
 		// The baseline line register (issue #1016, round 49). Only
 		// today's off-baseline lines are reachable -- there is
