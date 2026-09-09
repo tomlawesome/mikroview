@@ -27,6 +27,9 @@ import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(40, 'live-engine-room')
 const { page, consoleErrors } = await session({ waitForEvents: 40 })
 
 const PEOPLE = '#people'

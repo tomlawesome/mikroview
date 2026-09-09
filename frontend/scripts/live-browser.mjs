@@ -170,18 +170,21 @@ setGlobalDispatcher(new Agent({ connect: { rejectUnauthorized: false } }))
 const preSessionFeeds = []
 let sessionOpened = false
 
-function feed(run) {
+/** feed runs a delivery of `count` lines, remembering it for the replay. */
+function feed(run, count) {
   run()
-  if (!sessionOpened) preSessionFeeds.push(run)
+  if (!sessionOpened) preSessionFeeds.push({ run, count })
 }
 
 /** feedSyslog pushes synthetic events into the running instance. */
 export function feedSyslog(n, label = 'live-test-rule') {
-  feed(() =>
-    execFileSync(ENV_SCRIPT, ['syslog', String(n), label], {
-      stdio: 'ignore',
-      cwd: REPO,
-    }),
+  feed(
+    () =>
+      execFileSync(ENV_SCRIPT, ['syslog', String(n), label], {
+        stdio: 'ignore',
+        cwd: REPO,
+      }),
+    n,
   )
 }
 
@@ -199,11 +202,13 @@ export function feedRaw(...lines) {
   // opens a TLS session per call, so a scenario feeding two hundred
   // lines one call at a time paid two hundred handshakes and process
   // starts for them (#1061).
-  feed(() =>
-    execFileSync(ENV_SCRIPT, ['raw', ...lines], {
-      stdio: 'ignore',
-      cwd: REPO,
-    }),
+  feed(
+    () =>
+      execFileSync(ENV_SCRIPT, ['raw', ...lines], {
+        stdio: 'ignore',
+        cwd: REPO,
+      }),
+    lines.length,
   )
 }
 
@@ -232,6 +237,27 @@ export async function waitForEventsTotal(page, n, { timeoutMs = 15000 } = {}) {
 }
 
 /**
+ * waitForEventsSettled returns once the lifetime count has stopped
+ * rising, for a caller that does not know how many lines are in flight.
+ */
+async function waitForEventsSettled(page, { quietMs = 500, timeoutMs = 15000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let last = await eventsTotal(page)
+  let quietSince = Date.now()
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100))
+    const now = await eventsTotal(page)
+    if (now !== last) {
+      last = now
+      quietSince = Date.now()
+    } else if (Date.now() - quietSince >= quietMs) {
+      return last
+    }
+  }
+  return last
+}
+
+/**
  * feedAndSettle feeds the lines and returns once the instance has counted
  * every one of them. Use it where a scenario fed and then slept.
  */
@@ -254,7 +280,7 @@ export async function feedAndSettle(page, ...lines) {
 export function feedPortScan(n, sourceIp) {
   const args = ['portscan', String(n)]
   if (sourceIp) args.push(sourceIp)
-  feed(() => execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO }))
+  feed(() => execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO }), n)
 }
 
 /**
@@ -270,7 +296,7 @@ export function feedInternalRecon(n, sourceIp, port) {
   const args = ['recon', String(n)]
   if (sourceIp) args.push(sourceIp)
   if (port) args.push(String(port))
-  feed(() => execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO }))
+  feed(() => execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO }), n)
 }
 
 /**
@@ -562,19 +588,43 @@ export async function goTo(page, label, { unfold = true } = {}) {
  * image does not, so the container flavour of this harness runs the same
  * scenarios against an instance that simply cannot be reset. That is a
  * weaker guarantee, not a broken run.
+ *
+ * Returns whether a reset happened, so the caller knows to reload.
  */
 async function resetInstance(page) {
+  // Let what the scenario already fed land before the reset, or it lands
+  // after and the scenario sees it twice: fed once by itself, once by the
+  // replay. live-smoke feeds 200 lines and rendered 400 rows.
+  if (preSessionFeeds.length > 0) await waitForEventsSettled(page)
   const res = await page.request.fetch(`${URL_BASE}/api/test/reset`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
   })
-  if (res.status() === 404) return
+  if (res.status() === 404) return false
   if (res.status() !== 200) {
     throw new Error(`POST /api/test/reset answered ${res.status()} -- the instance was not reset, so this run would be judging residue`)
   }
   // Whatever the scenario fed before signing in went with the reset; put
-  // it back before the page is navigated anywhere that reads it.
-  for (const run of preSessionFeeds) run()
+  // it back before the page is navigated anywhere that reads it -- and
+  // wait for the instance to have counted it. Ingest is asynchronous:
+  // without the wait the Stream's first fetch raced the replay and a
+  // scenario waiting for rows could see the page settle at fewer than
+  // it fed. A short count is not fatal here: a line the parser refused
+  // was refused before the reset too, so the scenario's own checks are
+  // the ones that should say so.
+  if (preSessionFeeds.length === 0) return true
+  const before = await eventsTotal(page)
+  let expected = before
+  for (const { run, count } of preSessionFeeds) {
+    run()
+    expected += count
+  }
+  try {
+    await waitForEventsTotal(page, expected)
+  } catch (e) {
+    console.warn(`replaying pre-session feeds: ${e.message}`)
+  }
+  return true
 }
 
 export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream', unfoldFilter = true, keep = false } = {}) {
@@ -611,12 +661,20 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
   // wait, it does not assume which view is the landing page.
   await page.waitForSelector('#main-content', { timeout: 15000 })
 
-  // Signed in, nothing navigated yet: the one moment a reset can happen
-  // without a page reading half-cleared state. Once per process -- a
-  // scenario that opens a second session is opening a second tab on its
-  // own instance, not starting again. keep: true opts out for a scenario
-  // that deliberately wants what a sibling left behind.
-  if (!keep && !sessionOpened) await resetInstance(page)
+  // Signed in: the first moment an admin request can reset. Once per
+  // process -- a scenario that opens a second session is opening a
+  // second tab on its own instance, not starting again. keep: true opts
+  // out for a scenario that deliberately wants what a sibling left
+  // behind.
+  //
+  // The shell has already fetched the stream by now, so the page is
+  // reloaded after a reset or it goes on showing what was cleared, with
+  // the replayed feeds arriving on top over the socket: live-smoke fed
+  // 200 lines and rendered 400 rows.
+  if (!keep && !sessionOpened && (await resetInstance(page))) {
+    await page.reload({ waitUntil: 'networkidle' })
+    await page.waitForSelector('#main-content', { timeout: 15000 })
+  }
   sessionOpened = true
 
   // Before anything else touches the page: a first-run instance layers

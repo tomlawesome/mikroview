@@ -32,6 +32,9 @@
 
 import { session, feedRaw, feedSyslog, check, done, unfoldStreamFilter, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
 
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(50, 'live-group-compression')
 const { page, consoleErrors } = await session({ waitForEvents: 50 })
 
 const rowCount = () => page.$$eval('.grid .row', (els) => els.length)
