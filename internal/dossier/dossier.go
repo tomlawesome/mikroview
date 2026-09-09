@@ -195,14 +195,17 @@ type Dossier struct {
 // Seen is when this address was first and last heard from, and how much
 // of that is inside the retained event window.
 type Seen struct {
-	Known           bool      `json:"known"`
-	FirstSeen       time.Time `json:"firstSeen,omitempty"`
-	FirstSeenSource string    `json:"firstSeenSource,omitempty"`
-	LastSeen        time.Time `json:"lastSeen,omitempty"`
+	Known bool `json:"known"`
+	// FirstSeen, LastSeen and WindowStart are pointers so "never" is
+	// absent from the JSON rather than the year 1, which reads as a
+	// date and is exactly the kind of filled-in gap this card refuses.
+	FirstSeen       *time.Time `json:"firstSeen,omitempty"`
+	FirstSeenSource string     `json:"firstSeenSource,omitempty"`
+	LastSeen        *time.Time `json:"lastSeen,omitempty"`
 	// Events is how many retained events involve this address.
 	Events int `json:"events"`
 	// WindowStart is the oldest moment those events could come from.
-	WindowStart time.Time `json:"windowStart,omitempty"`
+	WindowStart *time.Time `json:"windowStart,omitempty"`
 	// Interfaces are the boundary interfaces the host has been seen on.
 	Interfaces []string `json:"interfaces,omitempty"`
 	Note       string   `json:"note,omitempty"`
@@ -239,9 +242,12 @@ type MACBlock struct {
 	Vendor    oui.Vendor `json:"vendor"`
 	// Registry is the vendor feed's own status: source, fetch time,
 	// staleness. A vendor name is never shown without it.
-	Registry  oui.Status `json:"registry"`
-	FirstSeen time.Time  `json:"firstSeen,omitempty"`
-	LastSeen  time.Time  `json:"lastSeen,omitempty"`
+	Registry oui.Status `json:"registry"`
+	// FirstSeen and LastSeen come from the persisted MAC registry, and
+	// are absent rather than zero when it holds nothing for this
+	// address.
+	FirstSeen *time.Time `json:"firstSeen,omitempty"`
+	LastSeen  *time.Time `json:"lastSeen,omitempty"`
 	Note      string     `json:"note,omitempty"`
 }
 
@@ -386,7 +392,7 @@ func Assemble(in Input) Dossier {
 }
 
 func buildSeen(in Input, absent []string) (Seen, []string) {
-	s := Seen{Events: len(in.Events), WindowStart: in.WindowStart}
+	s := Seen{Events: len(in.Events), WindowStart: timeOrNil(in.WindowStart)}
 
 	var first, last time.Time
 	for _, p := range in.Presence {
@@ -424,7 +430,7 @@ func buildSeen(in Input, absent []string) (Seen, []string) {
 		}
 	}
 
-	s.FirstSeen, s.LastSeen = first, last
+	s.FirstSeen, s.LastSeen = timeOrNil(first), timeOrNil(last)
 	s.Known = !first.IsZero() || !last.IsZero()
 	if !s.Known {
 		s.Note = "this address has not been seen at all: no retained event mentions it and the presence register has no row for it"
@@ -506,7 +512,7 @@ func buildMAC(in Input, absent []string) (MACBlock, macFacts, []string) {
 		b.GroupNote = "the group bit is set, which a station address should never have -- treat this address as forged or malformed"
 	}
 	if in.MACHistory != nil {
-		b.FirstSeen, b.LastSeen = in.MACHistory.FirstSeen, in.MACHistory.LastSeen
+		b.FirstSeen, b.LastSeen = timeOrNil(in.MACHistory.FirstSeen), timeOrNil(in.MACHistory.LastSeen)
 	}
 
 	if in.Vendors == nil {
@@ -626,6 +632,15 @@ func buildFirewall(in Input, absent []string) (Firewall, []string) {
 	}
 	f.Rules = rules
 	return f, absent
+}
+
+// timeOrNil drops a zero time rather than reporting it: absent is the
+// honest rendering of "never", and the year 1 is not.
+func timeOrNil(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 // eventTime prefers the router's own clock and falls back to receipt
