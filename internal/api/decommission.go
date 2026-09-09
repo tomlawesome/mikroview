@@ -496,6 +496,17 @@ func (s *Server) handleDecommissionUndo(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, s.watchViewFor(stored, rulesByDevice, time.Now()))
 }
 
+// deleteDecommissionRequest carries the watchlist page's own reason for
+// forgetting a watch outright -- the same #385 recorded-override pattern
+// force-remove's Reason carries, since the ghost's card explicitly
+// promises this is the only place a still-active watch can be ended
+// (DecommissionCard's forceRemoveContract). Optional on the wire, unlike
+// force's: this route pre-dates the reason and a body-less DELETE (no
+// Content-Type, no body) still has to work.
+type deleteDecommissionRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
 // handleDecommissionDelete abandons a watch outright -- "I no longer want
 // to be asked about this range". Distinct from retirement, which is the
 // watch finishing its job, and from force-remove, which only takes it off
@@ -509,12 +520,19 @@ func (s *Server) handleDecommissionDelete(w http.ResponseWriter, r *http.Request
 		http.Error(w, "decommission watches are not available on this deployment", http.StatusServiceUnavailable)
 		return
 	}
+	var req deleteDecommissionRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSONBody(w, r, &req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
 	id := r.PathValue("id")
 	if err := s.Decommissions.Delete(id); err != nil {
 		writeDecommissionError(w, err)
 		return
 	}
-	s.Audit.Record(auditActor(r), "decommission.delete", id, "")
+	s.Audit.Record(auditActor(r), "decommission.delete", id, strings.TrimSpace(req.Reason))
 	w.WriteHeader(http.StatusNoContent)
 }
 

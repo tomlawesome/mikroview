@@ -1729,9 +1729,13 @@ export async function undoDecommissionRetirement(id: string): Promise<Decommissi
 
 // Abandoning a watch outright -- distinct from retirement, which is the
 // watch finishing its job, and from force-remove, which only takes it
-// off the map.
-export async function deleteDecommissionWatch(id: string): Promise<string | null> {
-  const res = await deleteJSON(`/api/decommission/watches/${encodeURIComponent(id)}`)
+// off the map. This is the "can only be forgotten from there" the card's
+// force-remove warning promises (#1069), so it carries the same #385
+// recorded-override reason force-remove does -- optional on the wire
+// (an older caller with nothing to say still works), but the watchlist
+// page always supplies one.
+export async function deleteDecommissionWatch(id: string, reason?: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/decommission/watches/${encodeURIComponent(id)}`, reason ? { reason } : undefined)
   if (res.ok) return null
   return (await res.text()) || `deleteDecommissionWatch: ${res.status}`
 }
