@@ -60,20 +60,17 @@ const entry = await api('POST', '/api/definitions', {
 check(entry.status === 201, `an entry is created (${entry.status})`)
 const id = entry.body?.id
 
-// The tables the earlier scenarios pushed carry no `log` field at all,
-// so every rule in them is non-logging -- which is itself the answer
-// this starts from, and a fair reproduction of a real deployment whose
-// rules do not log.
+// Nothing has been pushed to this instance yet -- session() resets it
+// (#1064), so the starting answer is the one every deployment that
+// never set up the router push gets: unknown.
 check(
-  (await coverageFor(id)) === 'no-logging',
-  'starting state: tables pushed by earlier scenarios have no logging rules, and mikroview says so',
+  (await coverageFor(id)) === 'unknown',
+  `starting state: no table has been pushed, and mikroview says it cannot know (${await coverageFor(id)})`,
 )
 
 feedSyslog(3, 'coverage-probe')
 const device = (await api('GET', '/api/devices')).body?.devices?.[0]?.id
 check(!!device, `the instance reports a device (${device})`)
-
-// --- Rules that all log, and cover the entry ----------------------------
 
 const token = await api('POST', '/api/tokens', { name: 'coverage', kind: 'ingest', device })
 check(token.status === 201, `an ingest token is issued (${token.status})`)
@@ -86,6 +83,18 @@ async function push(records) {
   })
   return res.status
 }
+
+// A table whose rules carry no `log` field at all, so every rule in it
+// is non-logging -- a fair reproduction of a real deployment whose rules
+// do not log. This scenario pushes it itself rather than reading what a
+// sibling left behind.
+check((await push([{ ordinal: 0, chain: 'forward', action: 'drop' }])) === 200, 'a table with no logging rules is accepted')
+check(
+  (await coverageFor(id)) === 'no-logging',
+  'no rule in the pushed table logs, and mikroview says so',
+)
+
+// --- Rules that all log, and cover the entry ----------------------------
 
 check(
   (await push([{ ordinal: 0, chain: 'forward', action: 'drop', log: true, logPrefix: 'D|any|' }])) === 200,
