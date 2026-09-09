@@ -17,7 +17,7 @@
 //
 // This scenario shares one live instance with whatever sorted ahead of
 // it in the slice (scripts/run-scenarios.sh: filename order, leftovers
-// persist). Its escalated callout has to be the ether4->bridge-lan
+// persist). Its escalated callout has to be the ether4->bridge-tl
 // refused pair pushed below -- reality.ts's worstUnplannedOf picks
 // whichever 'unplanned' pair is busiest, and a sibling's own traffic
 // still sitting on the server on a pair no table here names is exactly
@@ -69,7 +69,14 @@ check(
     pages: 1,
     routerosVersion: '7.23.3 (stable)',
     records: [
-      { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge-lan', comment: 'LAN' },
+      // The destination district is this scenario's own -- its own bridge
+      // name and its own range -- so no sibling's leftover hosts can share
+      // it. The city draws eight buildings per district (layout.ts's
+      // MAX_BUILDINGS) and folds the rest into `more`; on a shared
+      // `bridge-lan` with 33 siblings' hosts on record, DST's one reply
+      // lost that ranking and the ghost had no building to reach
+      // (pipeline 819, gate shard 3/4).
+      { address: '10.0.15.1/24', network: '10.0.15.0', interface: 'bridge-tl', comment: 'LAN' },
       { address: '10.0.20.1/24', network: '10.0.20.0', interface: 'ether3', comment: 'Servers' },
       { address: '10.0.30.1/24', network: '10.0.30.0', interface: 'ether4', comment: 'IoT' },
       { address: '10.0.40.1/24', network: '10.0.40.0', interface: 'ether5', comment: 'Guest' },
@@ -81,7 +88,7 @@ check(
 // Neutralize every leftover pair other than this scenario's own, the
 // same device live-topography-port-trace.mjs uses for the same reason.
 const before = await (await page.request.get(`${URL_BASE}/api/events`)).json()
-const TARGET_PAIR = 'ether4|bridge-lan'
+const TARGET_PAIR = 'ether4|bridge-tl'
 const leftoverPairs = new Set()
 for (const e of before.events ?? []) {
   if (!e.inInterface || !e.outInterface) continue
@@ -114,7 +121,7 @@ check(
     pages: 1,
     routerosVersion: '7.23.3 (stable)',
     records: [
-      { ordinal: 12, chain: 'forward', action: 'accept', protocol: 'tcp', dstPort: 443, inInterface: 'bridge-lan', outInterface: 'ether3', log: true, comment: 'web out' },
+      { ordinal: 12, chain: 'forward', action: 'accept', protocol: 'tcp', dstPort: 443, inInterface: 'bridge-tl', outInterface: 'ether3', log: true, comment: 'web out' },
       { ordinal: 40, chain: 'forward', action: 'drop', log: true },
       ...neutralizers,
     ],
@@ -133,10 +140,10 @@ check(
 // leftover traffic outrank live-city-reach.mjs's own refused pair for
 // its composer, once both scenarios had run against one instance.
 const SRC = '10.0.30.77'
-const DST = '10.0.10.77'
+const DST = '10.0.15.77'
 for (let i = 0; i < 6; i++) {
   feedRaw(
-    `firewall,info D|default drop| forward: in:ether4 out:bridge-lan, connection-state:new, proto TCP (SYN), ${SRC}:5${200 + i}->${DST}:445, len 60`,
+    `firewall,info D|default drop| forward: in:ether4 out:bridge-tl, connection-state:new, proto TCP (SYN), ${SRC}:5${200 + i}->${DST}:445, len 60`,
   )
 }
 // Three more from the same source, same clock minute, a different
@@ -151,7 +158,7 @@ for (let i = 0; i < 3; i++) {
 // lane's worth of activity to dim.
 for (let i = 0; i < 4; i++) {
   feedRaw(
-    `firewall,info A|web| forward: in:bridge-lan out:ether1, connection-state:new, proto TCP (SYN), 10.0.10.${90 + i}:5${400 + i}->203.0.113.9:443, len 60`,
+    `firewall,info A|web| forward: in:bridge-tl out:ether1, connection-state:new, proto TCP (SYN), 10.0.15.${90 + i}:5${400 + i}->203.0.113.9:443, len 60`,
   )
 }
 // The traced destination also has to be the *source* of some crossing to
@@ -159,7 +166,7 @@ for (let i = 0; i < 4; i++) {
 // host-attribution counts only the private side of a boundary-crossing
 // event) -- without this, the far side of the ghost has nowhere to
 // point, the same trap live-city-reach.mjs's own comment names for srv1.
-feedRaw(`firewall,info A|reply| forward: in:bridge-lan out:ether3, connection-state:new, proto TCP (SYN), ${DST}:5500->10.0.20.80:443, len 60`)
+feedRaw(`firewall,info A|reply| forward: in:bridge-tl out:ether3, connection-state:new, proto TCP (SYN), ${DST}:5500->10.0.20.80:443, len 60`)
 
 await new Promise((r) => setTimeout(r, 1500))
 await page.setViewportSize({ width: 1600, height: 900 })
@@ -297,7 +304,7 @@ const city = await page.evaluate((sel) => {
   const roads = [...city.querySelectorAll('path[data-road]')]
   const traced = roads.filter((r) => {
     const id = r.getAttribute('data-road') ?? ''
-    return id.includes('ether4') && id.includes('bridge-lan')
+    return id.includes('ether4') && id.includes('bridge-tl')
   })
   const others = roads.filter((r) => !traced.includes(r))
   return {
