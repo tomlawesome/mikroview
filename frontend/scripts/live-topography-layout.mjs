@@ -11,10 +11,35 @@
 // units. Long host names, deliberately too: the reproduction on #699 saw
 // hosts render as bare IPs, which understated how far the row overran.
 
-import { session, check, done, feedRaw, feedPortScan } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedPortScan, waitForFlag } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
+
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
 
 let DEVICE
 for (let i = 0; i < 40 && !DEVICE; i++) {
@@ -170,7 +195,13 @@ const watchWan = await api('POST', '/api/definitions', {
 })
 const watchIds = [watchLan.body?.id, watchWan.body?.id]
 
-await new Promise((r) => setTimeout(r, 1500))
+// The aggregate bars read live async detection, not just the feed calls
+// returning -- wait for each raised flag to actually reach the server
+// (#354's pattern) before the loop below starts reading the map.
+for (const ip of ['10.0.20.20', '10.0.10.21', '203.0.113.77']) {
+  const flagWait = await waitForFlag(page, ip)
+  check(flagWait.ok, flagWait.message)
+}
 
 const OUT = process.env.TOPO_SHOTS || '/tmp/topo699'
 const WIDTHS = [1280, 1600, 1920]
@@ -204,14 +235,21 @@ const measure = () =>
 
 for (const width of WIDTHS) {
   await page.setViewportSize({ width, height: 900 })
-  await page.reload()
-  await page.click('.rail-name >> text=Topography')
+  // Only the first width needs the reload: that one is picking up the
+  // estate, leases, rules and flags just pushed above (zonesState etc.
+  // only fetch on load), and the map's own geometry is read fresh with
+  // getBoundingClientRect() on every measurement, so a later width can
+  // just resize the already-loaded page rather than reload it.
+  if (width === WIDTHS[0]) {
+    await page.reload()
+    await page.click('.rail-name >> text=Topography')
+  }
   // #869: off the city default and onto zones before waiting on anything
   // the 2D map draws -- see the coverage scenario for the full note.
   await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
   await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
   await page.waitForSelector('[data-card="topography"] .zone .isl', { timeout: 15000 })
-  await new Promise((r) => setTimeout(r, 900))
+  await waitForSettle('[data-card="topography"] .zone .isl')
   const m = await measure()
   const at = `at ${width} wide`
 
@@ -307,7 +345,7 @@ for (const width of WIDTHS) {
 
   // 6. clients: layers added, nothing clipped off the stage.
   await slider.fill('0')
-  await new Promise((r) => setTimeout(r, 900))
+  await waitForSettle('[data-card="topography"] .camera')
   const clients = await page.evaluate(() => {
     const card = document.querySelector('[data-card="topography"]')
     const svg = card.querySelector('.stage svg')
@@ -330,7 +368,7 @@ for (const width of WIDTHS) {
   await page.screenshot({ path: `${OUT}/clients-${width}.png` })
 
   await slider.fill('2')
-  await new Promise((r) => setTimeout(r, 600))
+  await waitForSettle('[data-card="topography"] .camera')
 
   // Round 49 (#1016) deleted the lens row, and `.wlens2` with it. This
   // block used to switch to the coverage lens and repeat the same

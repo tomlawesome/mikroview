@@ -85,17 +85,38 @@ const beforeSort = await activeTargets()
 check(beforeSort.indexOf(HIGH_IP) < beforeSort.indexOf(LOW_IP), 'defaults to newest-first, the fixed order this replaces')
 
 await page.click('.sorth:has-text("count")')
-await page.waitForTimeout(150)
+await page.waitForFunction(
+  ({ sel, low, high }) => {
+    const targets = [...document.querySelectorAll(sel)].map((el) => el.textContent?.trim())
+    return targets.indexOf(low) !== -1 && targets.indexOf(high) !== -1 && targets.indexOf(low) < targets.indexOf(high)
+  },
+  { sel: `${ACTIVE} tbody tr.frow td.k`, low: LOW_IP, high: HIGH_IP },
+  { timeout: 5000 },
+)
 const ascCount = await activeTargets()
 check(ascCount.indexOf(LOW_IP) < ascCount.indexOf(HIGH_IP), 'clicking the count head sorts ascending by it')
 
 await page.click('.sorth:has-text("count")')
-await page.waitForTimeout(150)
+await page.waitForFunction(
+  ({ sel, low, high }) => {
+    const targets = [...document.querySelectorAll(sel)].map((el) => el.textContent?.trim())
+    return targets.indexOf(low) !== -1 && targets.indexOf(high) !== -1 && targets.indexOf(high) < targets.indexOf(low)
+  },
+  { sel: `${ACTIVE} tbody tr.frow td.k`, low: LOW_IP, high: HIGH_IP },
+  { timeout: 5000 },
+)
 const descCount = await activeTargets()
 check(descCount.indexOf(HIGH_IP) < descCount.indexOf(LOW_IP), 'clicking it again reverses the order')
 
 await page.fill('input[aria-label="Filter by where"]', LOW_IP)
-await page.waitForTimeout(150)
+await page.waitForFunction(
+  ({ sel, low }) => {
+    const targets = [...document.querySelectorAll(sel)].map((el) => el.textContent?.trim())
+    return targets.length === 1 && targets[0] === low
+  },
+  { sel: `${ACTIVE} tbody tr.frow td.k`, low: LOW_IP },
+  { timeout: 5000 },
+)
 const filtered = await activeTargets()
 check(
   filtered.length === 1 && filtered[0] === LOW_IP,
@@ -156,7 +177,14 @@ check(
 )
 
 await page.click(`${WATCHES} .th-sort:has-text("watch")`)
-await page.waitForTimeout(150)
+await page.waitForFunction(
+  ({ sel, a, b }) => {
+    const names = [...document.querySelectorAll(sel)].map((el) => el.textContent?.trim())
+    return names.indexOf(a) !== -1 && names.indexOf(b) !== -1 && names.indexOf(b) < names.indexOf(a)
+  },
+  { sel: `${WATCHES} tbody:not(#sugg) tr.wt-row:not(.wt-draft) td.k`, a: 'live sort watch A', b: 'live sort watch B' },
+  { timeout: 5000 },
+)
 const namesDesc = await entryNames()
 check(
   namesDesc.indexOf('live sort watch B') < namesDesc.indexOf('live sort watch A'),
@@ -164,7 +192,14 @@ check(
 )
 
 await page.fill('input[aria-label="Filter watches by watch name"]', 'watch A')
-await page.waitForTimeout(150)
+await page.waitForFunction(
+  (sel) => {
+    const names = [...document.querySelectorAll(sel)].map((el) => el.textContent?.trim())
+    return names.length === 1 && names[0] === 'live sort watch A'
+  },
+  `${WATCHES} tbody:not(#sugg) tr.wt-row:not(.wt-draft) td.k`,
+  { timeout: 5000 },
+)
 const filteredNames = await entryNames()
 check(
   filteredNames.length === 1 && filteredNames[0] === 'live sort watch A',
@@ -196,7 +231,13 @@ function auditDetails() {
 }
 
 await page.fill('input[aria-label="Filter by what"]', 'live sort watch')
-await page.waitForTimeout(150)
+await page.waitForFunction(
+  () => {
+    const rows = [...document.querySelectorAll('tbody tr td.what')].map((el) => el.textContent?.trim())
+    return rows.length >= 2 && rows.every((t) => t?.includes('live sort watch'))
+  },
+  { timeout: 5000 },
+)
 const auditFiltered = await auditDetails()
 check(
   auditFiltered.length >= 2 && auditFiltered.every((t) => t?.includes('live sort watch')),
@@ -204,7 +245,14 @@ check(
 )
 
 await page.click('th:has-text("What")')
-await page.waitForTimeout(150)
+await page.waitForFunction(
+  () => {
+    const got = [...document.querySelectorAll('tbody tr td.what')].map((el) => el.textContent?.trim())
+    const sorted = [...got].sort((a, b) => (a || '').localeCompare(b || ''))
+    return JSON.stringify(got) === JSON.stringify(sorted)
+  },
+  { timeout: 5000 },
+)
 const detailsAsc = await auditDetails()
 const sortedAsc = [...detailsAsc].sort((a, b) => (a || '').localeCompare(b || ''))
 check(
@@ -213,7 +261,15 @@ check(
 )
 
 await page.click('th:has-text("What")')
-await page.waitForTimeout(150)
+await page.waitForFunction(
+  () => {
+    const got = [...document.querySelectorAll('tbody tr td.what')].map((el) => el.textContent?.trim())
+    const sortedAsc = [...got].sort((a, b) => (a || '').localeCompare(b || ''))
+    const sortedDesc = [...sortedAsc].reverse()
+    return JSON.stringify(got) === JSON.stringify(sortedDesc)
+  },
+  { timeout: 5000 },
+)
 const detailsDesc = await auditDetails()
 const sortedDesc = [...sortedAsc].reverse()
 check(JSON.stringify(detailsDesc) === JSON.stringify(sortedDesc), 'clicking it again reverses the order')

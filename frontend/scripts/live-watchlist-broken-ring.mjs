@@ -50,11 +50,14 @@
 // anywhere logs" answer applies to every expectation definition
 // regardless of its own scope, so a leftover entry would turn broken
 // too, and the marker this scenario asserts on would end up counting
-// somebody else's watches alongside the one it made. This scenario's
-// own subject is that exact count, so rather than depend on which
-// upstream scenarios ran and whether their own cleanup fired, it clears
-// out any stray expectation definitions itself before making its own --
-// see the cleanup below.
+// somebody else's watches alongside the one it made -- and this
+// scenario's own subject is that exact count. It used to sweep the
+// strays itself and then reload to shake the stale count out of
+// App.svelte's module-level watchlist store. #1064 made that
+// unnecessary: session() resets the instance before it navigates
+// anywhere, so the page mounts against a definitions store holding
+// nothing but this binary's shipped catalogue and the count below starts
+// from zero by construction rather than by cleanup.
 
 import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
@@ -78,26 +81,13 @@ async function coverageFor(id) {
   return d?.coverage
 }
 
-// #971: a clean baseline for the count this scenario is about to make an
-// exact claim against -- see the header comment. Every expectation
-// definition still around from an earlier scenario would otherwise be
-// swept into "broken" by the non-logging push below, whatever its own
-// scope was authored with.
-const stray = (await api('GET', '/api/definitions')).body?.definitions ?? []
-for (const d of stray.filter((d) => d.intent === 'expectation')) {
-  await api('DELETE', `/api/definitions/${d.id}`)
-}
-// The page already mounted (session() above navigates to Stream before
-// this runs) and App.svelte's own watchlist poll may already have landed
-// once against the pre-cleanup state -- watchlistState is a module
-// singleton that otherwise sits on that stale count until its next 60s
-// tick (WATCHLIST_COVERAGE_REFRESH_MS). A reload re-mounts against what
-// the server holds now, the same pattern live-watchlist-coverage.mjs
-// uses for the same reason. goTo back to Stream explicitly rather than
-// trusting whatever the reload happens to land on by default -- this
-// scenario's own later checks are all read from there.
-await page.reload({ waitUntil: 'networkidle' })
-await goTo(page, 'Stream')
+// #971, now #1064's job: the count below is an exact claim, so the
+// instance has to hold no expectation definition but this scenario's own.
+// session() reset it before the page mounted -- see the header comment --
+// so this is a check that the reset actually happened rather than a
+// cleanup that makes it true.
+const strays = ((await api('GET', '/api/definitions')).body?.definitions ?? []).filter((d) => d.intent === 'expectation')
+check(strays.length === 0, `the instance starts with no watches from earlier scenarios -- found ${strays.length}`)
 
 const device = (await api('GET', '/api/devices')).body?.devices?.[0]?.id
 check(!!device, `the instance reports a device (${device})`)

@@ -380,7 +380,16 @@ $(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
 history: {enabled: true, keyFile: "$MV_DIR/history.key", dir: "$MV_DIR/data/history"}
 $DEVICES_BLOCK
 EOF
-  MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
+  # MV_TEST_HOOKS=1 registers POST /api/test/clock and POST /api/test/reset
+  # (#1063, #1064) -- the clock a watch-window scenario moves forward
+  # instead of waiting real minutes for a window to close, and the reset
+  # session() calls so each scenario starts on an instance that has seen
+  # nothing. Deliberately an environment variable rather than a config
+  # key: it is not an operator setting and does not appear in
+  # docs/configuration.md. It is set here and only here, so the routes
+  # exist on a harness instance and nowhere else. The server logs a
+  # warning naming both routes when it sees it.
+  MV_TEST_HOOKS=1 MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"
 
   for _ in $(seq 1 40); do
@@ -415,15 +424,21 @@ PY
   echo "sent ${1:-100} events labelled ${2:-live-test-rule}" >&2
 }
 
-# raw LINE [source-ip] -- deliver one exact syslog line, for scenarios
-# needing a specific shape (a control-port hit, say) rather than the bulk
-# generators. Scenarios must use this rather than opening their own
-# socket: there is no plaintext listener left for them to talk to.
-#
-# source-ip is which address the line appears to come from, and so which
-# device it lands under -- see send_tls. Omit it for the declared router.
+# raw LINE... -- deliver exact syslog lines over one connection, for
+# scenarios needing a specific shape (a control-port hit, say) rather
+# than the bulk generators. Scenarios must use this rather than opening
+# their own socket: there is no plaintext listener left for them to
+# talk to.
 raw() {
-  printf '%s\n' "$1" | send_tls "${2:-}"
+  printf '%s\n' "$@" | send_tls
+}
+
+# rawfrom SOURCE-IP LINE... -- the same, appearing to come from
+# source-ip, and so landing under that device -- see send_tls. Use raw
+# for the declared router.
+rawfrom() {
+  local src="$1"; shift
+  printf '%s\n' "$@" | send_tls "$src"
 }
 
 # portscan N [source-ip] -- N distinct destination ports from one source
@@ -478,8 +493,9 @@ case "${1:-}" in
   build) shift; [ -n "${1:-}" ] || { echo "usage: $0 build PATH" >&2; exit 2; }; mkdir -p "$(dirname "$1")"; build "$1" ;;
   syslog) shift; syslog "$@" ;;
   raw) shift; raw "$@" ;;
+  rawfrom) shift; rawfrom "$@" ;;
   portscan) shift; portscan "$@" ;;
   recon) shift; recon "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|build PATH|syslog N [label]|raw LINE [src-ip]|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|build PATH|syslog N [label]|raw LINE...|rawfrom SRC-IP LINE...|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
 esac

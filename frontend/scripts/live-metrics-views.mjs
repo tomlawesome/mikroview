@@ -395,6 +395,10 @@ check(
 const stored = await page.evaluate(() => localStorage.getItem('mikroview-metrics-view'))
 check(stored === 'register', `the chosen view is persisted -- got ${JSON.stringify(stored)}`)
 
+// Load-only, kept deliberately: the claim under test is that the stored
+// view is read synchronously at module load, before first paint -- a
+// claim about a reload, not about a live update, so there is no push path
+// that could stand in for navigating away and back.
 await page.reload({ waitUntil: 'networkidle' })
 await goTo(page, 'Metrics')
 // No click on a view button between the reload and this wait: if the

@@ -204,11 +204,14 @@ let populated = await populatedMinutes(page)
 if (populated.length < 2) {
   const beforeMinute = Math.floor(Date.now() / 60000)
   while (Math.floor(Date.now() / 60000) === beforeMinute) {
-    await page.waitForTimeout(1000)
+    await page.waitForTimeout(250)
   }
   feedSyslog(20, 'stream-interiors-fence')
-  await page.waitForTimeout(1500)
-  populated = await populatedMinutes(page)
+  const deadline = Date.now() + 15000
+  do {
+    await page.waitForTimeout(250)
+    populated = await populatedMinutes(page)
+  } while (populated.length < 2 && Date.now() < deadline)
 }
 check(populated.length >= 2, `at least two minutes carry real traffic before fencing -- got ${populated.length}`)
 
@@ -301,7 +304,7 @@ await page.waitForFunction((sel) => document.querySelectorAll(`${sel} .row`).len
 
 const ruleInput = page.locator(`${CARD} .bar.thin .rule-group input.rule`)
 await ruleInput.fill(uniqueLabel)
-await page.waitForTimeout(600)
+await page.locator(`${CARD} .bar.thin .tf-clear`).waitFor({ state: 'visible', timeout: 5000 })
 
 // appState.hasActiveFilters is the filter state the UI itself exposes --
 // the thin bar's own "clear" control is gated on exactly that flag.
@@ -320,7 +323,7 @@ check(
 
 // --- Clear and fold back before done(): scenarios share the instance ------
 await page.locator(`${CARD} .bar.thin .tf-clear`).click()
-await page.waitForTimeout(300)
+await page.locator(`${CARD} .bar.thin .tf-clear`).waitFor({ state: 'detached', timeout: 5000 })
 check(
   (await page.locator(`${CARD} .bar.thin .tf-clear`).count()) === 0,
   "clearing removes the thin bar's own \"clear\" control again",

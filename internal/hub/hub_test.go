@@ -12,13 +12,13 @@ import (
 
 func TestBroadcastDeliversToRegisteredClient(t *testing.T) {
 	h := New()
-	events, _, unregister, _ := h.Register()
-	defer unregister()
+	sub, _ := h.Register()
+	defer sub.Unregister()
 
 	h.Broadcast(store.Event{ID: 1})
 
 	select {
-	case e := <-events:
+	case e := <-sub.Events:
 		if e.ID != 1 {
 			t.Errorf("ID = %d, want 1", e.ID)
 		}
@@ -29,14 +29,14 @@ func TestBroadcastDeliversToRegisteredClient(t *testing.T) {
 
 func TestBroadcastFanOutToMultipleClients(t *testing.T) {
 	h := New()
-	e1, _, u1, _ := h.Register()
-	e2, _, u2, _ := h.Register()
-	defer u1()
-	defer u2()
+	s1, _ := h.Register()
+	s2, _ := h.Register()
+	defer s1.Unregister()
+	defer s2.Unregister()
 
 	h.Broadcast(store.Event{ID: 42})
 
-	for _, ch := range []<-chan store.Event{e1, e2} {
+	for _, ch := range []<-chan store.Event{s1.Events, s2.Events} {
 		select {
 		case e := <-ch:
 			if e.ID != 42 {
@@ -50,8 +50,8 @@ func TestBroadcastFanOutToMultipleClients(t *testing.T) {
 
 func TestBroadcastNeverBlocksOnFullSlowClient(t *testing.T) {
 	h := New()
-	_, _, unregister, _ := h.Register() // never drained
-	defer unregister()
+	sub, _ := h.Register() // never drained
+	defer sub.Unregister()
 
 	done := make(chan struct{})
 	go func() {
@@ -70,27 +70,27 @@ func TestBroadcastNeverBlocksOnFullSlowClient(t *testing.T) {
 
 func TestBroadcastReportsDroppedCount(t *testing.T) {
 	h := New()
-	_, dropped, unregister, _ := h.Register() // never drained
-	defer unregister()
+	sub, _ := h.Register() // never drained
+	defer sub.Unregister()
 
 	for i := 0; i < clientQueueSize+50; i++ {
 		h.Broadcast(store.Event{ID: uint64(i)})
 	}
 
-	if got := dropped(); got != 50 {
+	if got := sub.Dropped(); got != 50 {
 		t.Errorf("dropped() = %d, want 50 (queue holds %d, so the next 50 each evict one)", got, clientQueueSize)
 	}
 }
 
 func TestUnregisterStopsDelivery(t *testing.T) {
 	h := New()
-	events, _, unregister, _ := h.Register()
-	unregister()
+	sub, _ := h.Register()
+	sub.Unregister()
 
 	h.Broadcast(store.Event{ID: 1})
 
 	select {
-	case e, ok := <-events:
+	case e, ok := <-sub.Events:
 		if ok {
 			t.Errorf("expected no further delivery after unregister, got %+v", e)
 		}
@@ -100,6 +100,86 @@ func TestUnregisterStopsDelivery(t *testing.T) {
 
 	if h.ClientCount() != 0 {
 		t.Errorf("ClientCount() = %d, want 0", h.ClientCount())
+	}
+}
+
+// TestNotifyReachesEveryClient pins the fan-out half of Notify: a change
+// notice is what lets a screen refetch when a table is pushed, instead of
+// waiting out its own poll, so every open tab has to get it -- not just
+// whichever one happens to be reading events at the time.
+func TestNotifyReachesEveryClient(t *testing.T) {
+	h := New()
+	s1, _ := h.Register()
+	s2, _ := h.Register()
+	defer s1.Unregister()
+	defer s2.Unregister()
+
+	h.Notify(ChangeRouterState)
+
+	for i, ch := range []<-chan Change{s1.Notices, s2.Notices} {
+		select {
+		case got := <-ch:
+			if got != ChangeRouterState {
+				t.Errorf("client %d got change %q, want %q", i, got, ChangeRouterState)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("client %d never received the change notice", i)
+		}
+	}
+}
+
+// TestNotifyNeverBlocksOnAFullNoticeQueue is the property that makes it
+// safe to call from a request handler: the caller is the ingest endpoint,
+// which must not be held up by a browser tab that has stopped reading.
+// Notices are hints with a poll behind them, so dropping one costs
+// latency and nothing else -- see Notify.
+func TestNotifyNeverBlocksOnAFullNoticeQueue(t *testing.T) {
+	h := New()
+	sub, _ := h.Register() // never drained
+	defer sub.Unregister()
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < noticeQueueSize+50; i++ {
+			h.Notify(ChangeRouterState)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Notify blocked on a full, undrained notice queue")
+	}
+
+	// And the ones that did fit are still there: dropping the overflow
+	// must not cost the notices already queued.
+	if got := len(sub.Notices); got != noticeQueueSize {
+		t.Errorf("the notice queue holds %d, want %d", got, noticeQueueSize)
+	}
+}
+
+// TestNoticesAndEventsDoNotShareAQueue is the reason notices have a
+// channel of their own. A slow client has events evicted from its queue
+// by design; a notice evicted the same way would be a screen left showing
+// a stale answer with nothing to tell it so.
+func TestNoticesAndEventsDoNotShareAQueue(t *testing.T) {
+	h := New()
+	sub, _ := h.Register() // never drained
+	defer sub.Unregister()
+
+	h.Notify(ChangeDefinitions)
+	for i := 0; i < clientQueueSize+50; i++ {
+		h.Broadcast(store.Event{ID: uint64(i)})
+	}
+
+	select {
+	case got := <-sub.Notices:
+		if got != ChangeDefinitions {
+			t.Errorf("change = %q, want %q", got, ChangeDefinitions)
+		}
+	default:
+		t.Error("the notice was lost to an event flood -- it must not share the event queue")
 	}
 }
 
@@ -123,14 +203,14 @@ func TestRegisterRefusesBeyondMaxClients(t *testing.T) {
 	h := New()
 	var unregisters []func()
 	for i := 0; i < maxClients; i++ {
-		_, _, unreg, err := h.Register()
+		sub, err := h.Register()
 		if err != nil {
 			t.Fatalf("client %d was refused below the cap: %v", i, err)
 		}
-		unregisters = append(unregisters, unreg)
+		unregisters = append(unregisters, sub.Unregister)
 	}
 
-	if _, _, _, err := h.Register(); !errors.Is(err, ErrTooManyClients) {
+	if _, err := h.Register(); !errors.Is(err, ErrTooManyClients) {
 		t.Fatalf("Register past the cap returned %v, want ErrTooManyClients", err)
 	}
 	if got := h.ClientCount(); got != maxClients {
@@ -140,7 +220,7 @@ func TestRegisterRefusesBeyondMaxClients(t *testing.T) {
 	// A slot must come back when a client leaves, or the cap becomes a
 	// permanent lockout after enough reconnects.
 	unregisters[0]()
-	if _, _, _, err := h.Register(); err != nil {
+	if _, err := h.Register(); err != nil {
 		t.Errorf("Register after a disconnect was refused: %v", err)
 	}
 }

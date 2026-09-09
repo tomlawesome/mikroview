@@ -55,7 +55,7 @@ const deadline = Date.now() + 20000
 while (Date.now() < deadline) {
   both = await flagsFor(SRC)
   if (new Set(both.map((f) => f.type)).size >= 2) break
-  await page.waitForTimeout(400)
+  await page.waitForTimeout(250)
 }
 const types = [...new Set(both.map((f) => f.type))].sort()
 check(
@@ -84,7 +84,7 @@ if (types.length >= 2) {
     n = (await flagsFor(SRC)).length
     flagCell = (await camp.locator('td.fmark').textContent())?.replace(/\s+/g, ' ').trim() ?? ''
     if (n >= 2 && new RegExp(`^⁂ campaign\\s*${n} flags$`, 'i').test(flagCell)) break
-    await page.waitForTimeout(500)
+    await page.waitForTimeout(250)
   }
   const word = ['zero', 'one', 'two', 'three', 'four', 'five'][n] ?? String(n)
   check(

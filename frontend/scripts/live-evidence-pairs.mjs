@@ -123,7 +123,7 @@ async function waitForTypedFlag(type, target, timeoutMs = 20000) {
   while (Date.now() < deadline) {
     last = await findFlag(type, target)
     if (last && !last.cleared) return { ok: true, flag: last }
-    await page.waitForTimeout(400)
+    await page.waitForTimeout(250)
   }
   return { ok: false, flag: last }
 }

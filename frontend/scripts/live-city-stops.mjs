@@ -10,7 +10,7 @@
 // being built in parallel and was not available to import. Once it
 // lands this scenario should lean on it instead of carrying its own.
 
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedAndSettle } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -120,21 +120,25 @@ check(
 // Traffic: every lane out to the web and back, one lane-to-lane pair
 // that the rules never planned (IoT into LAN), and a tunnel out of LAN
 // so the river gets a footbridge.
+const cityLines = []
 for (const l of LANES) {
   const net = l.cidr.replace(/\.1\/24$/, '')
   for (let i = 0; i < 4; i++) {
-    feedRaw(`firewall,info A|city| forward: in:${l.iface} out:ether1, connection-state:new, proto TCP (SYN), ${net}.${20 + (i % 3)}:5${100 + i}->203.0.113.9:443, len 60`)
-    feedRaw(`firewall,info D|city-drop| forward: in:ether1 out:${l.iface}, connection-state:new, proto TCP (SYN), 198.51.100.${30 + i}:44${i}->${net}.${20 + (i % 3)}:445, len 60`)
+    cityLines.push(`firewall,info A|city| forward: in:${l.iface} out:ether1, connection-state:new, proto TCP (SYN), ${net}.${20 + (i % 3)}:5${100 + i}->203.0.113.9:443, len 60`)
+    cityLines.push(`firewall,info D|city-drop| forward: in:ether1 out:${l.iface}, connection-state:new, proto TCP (SYN), 198.51.100.${30 + i}:44${i}->${net}.${20 + (i % 3)}:445, len 60`)
   }
 }
 for (let i = 0; i < 3; i++) {
-  feedRaw(`firewall,info A|city| forward: in:vlan-iot out:bridge-lan, connection-state:new, proto TCP (SYN), 10.0.20.20:5${200 + i}->10.0.10.21:445, len 60`)
-  feedRaw(`firewall,info A|city| forward: in:bridge-lan out:wg0, connection-state:new, proto UDP, 10.0.10.20:5${300 + i}->10.8.0.2:51820, len 60`)
+  cityLines.push(`firewall,info A|city| forward: in:vlan-iot out:bridge-lan, connection-state:new, proto TCP (SYN), 10.0.20.20:5${200 + i}->10.0.10.21:445, len 60`)
+  cityLines.push(`firewall,info A|city| forward: in:bridge-lan out:wg0, connection-state:new, proto UDP, 10.0.10.20:5${300 + i}->10.8.0.2:51820, len 60`)
 }
 
-await new Promise((r) => setTimeout(r, 1500))
+await feedAndSettle(page, ...cityLines)
 await page.setViewportSize({ width: 1600, height: 900 })
-await page.reload()
+// No reload: this is the session's first navigation to Topography
+// (session() lands on Stream), so the mount effect that refetches
+// zones/policy/coverage already runs on this one mount -- there is
+// nothing pushed earlier for a reload to pick up.
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
 
@@ -197,7 +201,7 @@ let lastViewport = null
 for (let i = 0; i < STOPS.length; i++) {
   const stop = STOPS[i]
   await slider.fill(String(3 + i))
-  await new Promise((r) => setTimeout(r, 900))
+  await new Promise((r) => setTimeout(r, 900)) // the stop change is a 620ms camera tween; measure() below reads its settled geometry
   const m = await measure()
   const at = `${stop}`
   check(!!m && m.stop === stop, `${at}: the city renders at its stop (${m?.stop})`)
@@ -272,7 +276,7 @@ if (hasWalkable) {
   // district, so it is pressed until the walk reaches the district that
   // actually has buildings for Right to walk into.
   await page.locator('[data-card="topography"] .city .plate[tabindex="0"]').focus()
-  await new Promise((r) => setTimeout(r, 300))
+  await new Promise((r) => setTimeout(r, 300)) // focusing recentres the camera, a 620ms tween
   let landed = (await activeCid()) === first
   for (let i = 0; i < 8 && !landed; i++) {
     await page.keyboard.press('ArrowDown')
@@ -281,17 +285,17 @@ if (hasWalkable) {
   }
   check(landed, `Down walks the districts as far as the one with buildings (${first})`)
   await page.keyboard.press('ArrowRight')
-  await new Promise((r) => setTimeout(r, 200))
+  await new Promise((r) => setTimeout(r, 200)) // the walk step recentres the camera, a 620ms tween
   const walked = await page.evaluate(() => ({ cid: document.activeElement?.dataset.cid, cls: document.activeElement?.getAttribute('class') }))
   check(walked.cls?.includes('blk') && walked.cid?.startsWith(first + '/'), `Right walks from the district ${first} into its first building (${walked.cid})`)
 }
 await page.keyboard.press('ArrowDown')
-await new Promise((r) => setTimeout(r, 200))
+await new Promise((r) => setTimeout(r, 200)) // the walk step recentres the camera, a 620ms tween
 const next = await page.evaluate(() => ({ cid: document.activeElement?.dataset.cid, cls: document.activeElement?.getAttribute('class') }))
 check(next.cls?.includes('plate') && next.cid !== first, `Down walks to the next district (${next.cid})`)
 const before = await page.evaluate(() => document.querySelector('.city .mini rect.viewport').getAttribute('x'))
 await page.keyboard.press('Shift+ArrowLeft')
-await new Promise((r) => setTimeout(r, 900))
+await new Promise((r) => setTimeout(r, 900)) // the pan is a 620ms tween, read as raw minimap geometry with no discrete completion event
 const after = await page.evaluate(() => document.querySelector('.city .mini rect.viewport').getAttribute('x'))
 check(before !== after, `Shift+arrow pans the camera (minimap viewport ${before} -> ${after})`)
 await page.screenshot({ path: `${OUT}/street-keyboard.png` })
@@ -303,7 +307,7 @@ await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
 await page.mouse.down()
 await page.mouse.move(stage.x + stage.width / 2 - 200, stage.y + stage.height / 2 - 80, { steps: 8 })
 await page.mouse.up()
-await new Promise((r) => setTimeout(r, 300))
+await new Promise((r) => setTimeout(r, 300)) // the pan is a 620ms tween, read as raw minimap geometry with no discrete completion event
 const dragAfter = await page.evaluate(() => document.querySelector('.city .mini rect.viewport').getAttribute('x'))
 check(dragBefore !== dragAfter, `dragging the stage pans the camera (minimap viewport ${dragBefore} -> ${dragAfter})`)
 
@@ -333,7 +337,12 @@ await page.emulateMedia({ reducedMotion: 'no-preference' })
 
 // Back to a 2D stop, and the city goes away.
 await slider.fill('2')
-await new Promise((r) => setTimeout(r, 300))
+await page.waitForFunction(
+  () =>
+    !document.querySelector('.city') &&
+    getComputedStyle(document.querySelector('[data-card="topography"] .stage')).display !== 'none',
+  { timeout: 10000 },
+)
 const gone = await page.evaluate(() => ({
   city: !!document.querySelector('.city'),
   stage: getComputedStyle(document.querySelector('[data-card="topography"] .stage')).display !== 'none',

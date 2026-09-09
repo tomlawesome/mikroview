@@ -5,19 +5,57 @@
 // what was observed, pasted by the operator, never run by mikroview.
 // Runs after the other topography scenarios and feeds its own denial.
 
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedRaw, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
 
 const { page, consoleErrors } = await session()
 
-// A host with an accepted presence (so it stands on the zone card) and
-// a blocked ask toward the internet on a known port.
-for (let i = 0; i < 4; i++) {
-  feedRaw(`firewall,info A|compose-web| forward: in:bridge1 out:ether1, connection-state:new, proto TCP (SYN), 192.168.1.77:51${40 + i}->203.0.113.9:443, len 60`)
-  feedRaw(`firewall,info D|compose-deny| forward: in:bridge1 out:ether1, connection-state:new, proto TCP (SYN), 192.168.1.77:52${40 + i}->203.0.113.77:445, len 60`)
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
 }
-await new Promise((r) => setTimeout(r, 1200))
-await page.reload()
 
+// A host with an accepted presence (so it stands on the zone card) and
+// a blocked ask toward the internet on a known port. Collected and fed
+// as one call rather than one per line (#1061).
+//
+// The first lines are inbound from public addresses: the map names an
+// interface "the internet" only once it has seen public traffic arrive
+// on it (zonesState.wanInterface), and they go to another host so the
+// composer is not opened on them. A sibling used to supply that; since
+// #1064's reset there is nobody else's traffic to lean on.
+const lines = []
+for (let i = 0; i < 4; i++) {
+  lines.push(`firewall,info D|compose-wan| forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 198.51.100.${20 + i}:4${40 + i}->192.168.1.10:22, len 60`)
+  lines.push(`firewall,info A|compose-web| forward: in:bridge1 out:ether1, connection-state:new, proto TCP (SYN), 192.168.1.77:51${40 + i}->203.0.113.9:443, len 60`)
+  lines.push(`firewall,info D|compose-deny| forward: in:bridge1 out:ether1, connection-state:new, proto TCP (SYN), 192.168.1.77:52${40 + i}->203.0.113.77:445, len 60`)
+}
+const beforeFeed = await eventsTotal(page)
+feedRaw(...lines)
+await waitForEventsTotal(page, beforeFeed + lines.length)
+
+// This session has not yet visited Topography, so its own $effect
+// (zonesState/coverageState/etc, gated on appState.devices) fires fresh
+// on this first navigation -- no reload needed to see the feed above.
 await page.click('.rail-name >> text=Topography')
 // #869: off the city default and onto zones before waiting on anything
 // the 2D map draws -- see the coverage scenario for the full note.
@@ -34,7 +72,7 @@ await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 // dot. `.host-link` kept its stylesheet rule but has no markup left, so
 // the old click simply never resolved.
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
-await new Promise((r) => setTimeout(r, 700))
+await waitForSettle('[data-card="topography"] .camera')
 await page.waitForSelector('[data-card="topography"] .hostrow .hot', { timeout: 10000 })
 await page.click('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.77"]')
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })

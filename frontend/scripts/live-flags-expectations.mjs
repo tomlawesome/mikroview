@@ -71,7 +71,7 @@ async function waitForApiFlag(target, predicate, { timeoutMs = 8000 } = {}) {
   while (Date.now() < deadline) {
     last = await flagByTarget(target)
     if (last && predicate(last)) return { ok: true, flag: last }
-    await page.waitForTimeout(300)
+    await page.waitForTimeout(250)
   }
   return { ok: false, flag: last }
 }
@@ -95,7 +95,7 @@ async function waitForRowText(locator, expected, { timeoutMs = 8000 } = {}) {
   while (Date.now() < deadline) {
     last = (await locator.textContent())?.trim() ?? ''
     if (last === expected) return { ok: true, text: last }
-    await page.waitForTimeout(300)
+    await page.waitForTimeout(250)
   }
   return { ok: false, text: last }
 }

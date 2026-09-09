@@ -96,6 +96,10 @@ check(
   })) === 200,
   'the rule table is pushed whole',
 )
+// zonesState (lib/zones.svelte.ts) fetches router addresses once and is
+// otherwise only refreshed by Entities.svelte's own explicit call -- it
+// does not follow a push made straight over the ingest API the way the
+// live event stream does, so the map needs a reload to see this estate.
 await page.reload()
 
 /* ---------------- measuring, in the browser's own numbers ----------- */
@@ -370,9 +374,10 @@ async function flatAt(altitude, what) {
     await page.waitForSelector(`${FLAT_CARD} .form`, { timeout: 5000 })
     check(await page.locator(FLAT_CARD).isVisible(), `${what}: the card survived the journey from the boundary to the pin (#1027)`)
     // The placement is recomputed from a ResizeObserver report, so let
-    // the browser lay out and re-place before measuring.
+    // the browser lay out and re-place before measuring -- two real
+    // paints rather than a guessed margin over the reflow.
     await page.waitForFunction((sel) => document.querySelector(sel)?.classList.contains('placed') === true, FLAT_CARD, { timeout: 5000 })
-    await new Promise((r) => setTimeout(r, 400))
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
 
     const m = await page.evaluate(READ_SURFACE, { cardSel: FLAT_CARD, titleSel: '.t .n', surface: 'flat' })
     m.heightBefore = heightBefore
@@ -394,7 +399,6 @@ const stillPinned = page.locator(`${FLAT_CARD} .pin`)
 if ((await stillPinned.count()) > 0) await stillPinned.first().click().catch(() => {})
 await page.mouse.move(4, 4)
 await page.waitForSelector(FLAT_CARD, { state: 'detached', timeout: 5000 }).catch(() => {})
-await new Promise((r) => setTimeout(r, 300))
 
 /* ---------------- the city ---------------- */
 
@@ -415,6 +419,10 @@ for (const stop of [3, 4, 5, 6]) {
   if (cityOpened) break
   await page.locator('[data-card="topography"] .altitude input[type="range"]').fill(String(stop))
   await page.waitForSelector('[data-card="topography"] .city g.plate', { timeout: 15000 }).catch(() => {})
+  // Same reasoning as flatAt above: the camera's own 0.35s transform
+  // transition plus its child layers' 0.55s opacity fades (Topography.svelte's
+  // .camera rules) have to finish before a wall's real resting position
+  // can be measured or reliably hovered.
   await new Promise((r) => setTimeout(r, 900))
 
   const walls = page.locator('[data-card="topography"] g.wall-hot')
@@ -453,7 +461,7 @@ if (cityOpened) {
     return el && form ? el.getBoundingClientRect().height - form.getBoundingClientRect().height : 0
   }, CITY_CARD)
   await page.waitForFunction((sel) => document.querySelector(sel)?.classList.contains('placed') === true, CITY_CARD, { timeout: 5000 })
-  await new Promise((r) => setTimeout(r, 400))
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
 
   const city = await page.evaluate(READ_SURFACE, { cardSel: CITY_CARD, titleSel: '.bc-t .n', surface: 'city' })
   city.heightBefore = cityHeightBefore

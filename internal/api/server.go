@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
@@ -226,6 +227,31 @@ type Server struct {
 	// device with at least one event is always reported "live".
 	DeviceStaleAfter time.Duration
 	StartTime        time.Time
+	// Now is where the definitions read path takes the current time from
+	// -- the nightly watch fill and the ring/coverage view it renders
+	// (see s.now and handleDefinitionsList). Nil means time.Now, which is
+	// every deployment: this is a seam for tests, not a setting.
+	//
+	// Deliberately narrow. It is not a process-wide fake clock: ingest
+	// stamps, session expiry, retention and everything else keep reading
+	// time.Now directly, because a whole-process clock that can be moved
+	// from an HTTP request is a much larger thing to get wrong than the
+	// one read path #1063 needed to stop waiting on.
+	Now func() time.Time
+	// TestHooks turns on the test-only routes (POST /api/test/clock and
+	// POST /api/test/reset) and nothing else. Off unless main saw
+	// MV_TEST_HOOKS=1; when off the routes are not registered at all, so
+	// they 404 rather than 403 -- see testhooks.go.
+	TestHooks bool
+	// Reseed re-applies this binary's shipped catalogue after
+	// POST /api/test/reset empties the definitions store. Set by main
+	// alongside TestHooks; nil means the reset leaves the store empty,
+	// which is only ever a test fixture's situation.
+	Reseed func() error
+	// testClockOffset is how far POST /api/test/clock has moved this
+	// process's definitions clock forward, in nanoseconds. Zero unless
+	// that route exists and something called it.
+	testClockOffset atomic.Int64
 	// Version is main.version (the build-time-stamped short commit SHA,
 	// "dev" for a plain local build) -- passed in rather than read
 	// directly since internal/api can't import main. Surfaced on
@@ -382,10 +408,38 @@ type route struct {
 	handler http.HandlerFunc
 }
 
+// now is the current time as the definitions read path sees it: the
+// process clock (or Server.Now, where a test supplied one) plus whatever
+// POST /api/test/clock has been asked to add.
+//
+// The offset is separate from the Now field on purpose. Now is the base
+// clock a unit test substitutes wholesale; the offset is the movable part
+// the test-hooks route drives, and keeping them apart means a test can
+// pin the base to a fixed instant and still exercise the endpoint.
+func (s *Server) now() time.Time {
+	base := time.Now
+	if s.Now != nil {
+		base = s.Now
+	}
+	return base().Add(time.Duration(s.testClockOffset.Load()))
+}
+
 // routes returns every /api/* endpoint. Order is irrelevant to
 // ServeMux's matching (it is longest-pattern-wins, not first-match), so
 // these stay grouped by area for readability.
 func (s *Server) routes() []route {
+	rs := s.apiRoutes()
+	// Appended rather than declared inline so the ordinary table stays
+	// exactly the set a shipped image serves: with MV_TEST_HOOKS unset
+	// these two patterns are never registered, so they 404 like any
+	// unknown path instead of existing and refusing (see testhooks.go).
+	if s.TestHooks {
+		rs = append(rs, s.testHookRoutes()...)
+	}
+	return rs
+}
+
+func (s *Server) apiRoutes() []route {
 	return []route{
 		{http.MethodGet, "/api/healthz", s.handleHealthz},
 		{http.MethodGet, "/api/events", s.handleEvents},

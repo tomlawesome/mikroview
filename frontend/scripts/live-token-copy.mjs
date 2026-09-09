@@ -71,6 +71,18 @@ async function waitForInputValue(selector, expected, timeoutMs = 3000) {
   return last
 }
 
+/** Polls a locator's computed opacity -- the real end of EventRow.svelte's 0.12s CSS transition, not a guessed margin over it. */
+async function waitForOpacity(locator, target, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs
+  let last = null
+  while (Date.now() < deadline) {
+    last = await locator.evaluate((el) => getComputedStyle(el).opacity)
+    if (last === target) return last
+    await page.waitForTimeout(20)
+  }
+  return last
+}
+
 // A friendly label on the source IP -- the row must show HOST_LABEL, but
 // still copy HOST_IP. Without this, "copies the raw value" and "copies
 // whatever text happens to be on screen" are indistinguishable.
@@ -190,18 +202,15 @@ if (box) {
 // reveals the glyph -- deliberately, for keyboard users tabbing to it
 // directly). Undo both before "starts hidden" below, or it would be
 // checking a test artifact rather than the real resting state.
+const copyBtn = addrCell.locator('.copy-btn').first()
 await page.mouse.move(2, 2)
 await page.evaluate(() => (document.activeElement instanceof HTMLElement) && document.activeElement.blur())
-await page.waitForTimeout(200) // let the opacity transition settle back to 0
-
-// --- Hover-revealed copy glyph -------------------------------------------
-const copyBtn = addrCell.locator('.copy-btn').first()
-const opacityBeforeHover = await copyBtn.evaluate((el) => getComputedStyle(el).opacity)
+const opacityBeforeHover = await waitForOpacity(copyBtn, '0')
 check(opacityBeforeHover === '0', `the copy glyph starts hidden (opacity ${opacityBeforeHover})`)
 
+// --- Hover-revealed copy glyph -------------------------------------------
 await row.hover()
-await page.waitForTimeout(200) // the opacity transition
-const opacityOnHover = await copyBtn.evaluate((el) => getComputedStyle(el).opacity)
+const opacityOnHover = await waitForOpacity(copyBtn, '1')
 check(opacityOnHover === '1', `hovering the row reveals the copy glyph (opacity ${opacityOnHover})`)
 
 // Clipboard permissions, granted explicitly, so the read-back below can

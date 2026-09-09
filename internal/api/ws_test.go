@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -269,4 +270,39 @@ func TestHandleWSStaysOpenForAValidSession(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	assertWSAlive(t, s, conn, 42)
+}
+
+// TestHandleWSSendsAChangedFrame pins the wire shape the browser reads a
+// change notice off (#1064's follow-up): its own frame, naming what
+// changed and nothing else, delivered on a socket carrying no events at
+// all -- which is exactly the instance a freshly pushed table arrives on.
+func TestHandleWSSendsAChangedFrame(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Same reason as the broadcast tests above: Register happens inside
+	// the handler goroutine, after the upgrade.
+	time.Sleep(50 * time.Millisecond)
+
+	s.Hub.Notify(hub.ChangeRouterState)
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var env wsEnvelope
+	if err := conn.ReadJSON(&env); err != nil {
+		t.Fatalf("ReadJSON failed: %v", err)
+	}
+	if env.Type != "changed" || env.Change != hub.ChangeRouterState {
+		t.Errorf("envelope = %+v, want type \"changed\" naming %q", env, hub.ChangeRouterState)
+	}
+	if len(env.Events) != 0 {
+		t.Errorf("a changed frame carried %d events; it must carry none", len(env.Events))
+	}
 }

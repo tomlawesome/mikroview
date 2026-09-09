@@ -43,7 +43,7 @@
 // non-WAN lanes' event counts and sends enough SMB connections to clear
 // the cap's cutoff, rather than a fixed handful that only happened to
 // be enough before -declared and -marks existed.
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedAndSettle } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -185,20 +185,20 @@ const smbHosts = beatCount + 5
 // scenario filters to. 3389 is named by a rule above and never crossed.
 // Enough connections to outrank the city's five-lane cap regardless of
 // what a sibling left behind (see the header).
+const smbLines = []
 for (let i = 0; i < smbHosts; i++) {
-  feedRaw(
+  smbLines.push(
     `firewall,info A|city-smb| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), 10.0.10.${61 + (i % 190)}:5${100 + (i % 900)}->10.0.40.61:445, len 60`,
   )
 }
+await feedAndSettle(page, ...smbLines)
 
-await new Promise((r) => setTimeout(r, 1500))
 await page.setViewportSize({ width: 1600, height: 900 })
-await page.reload()
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector(`${CARD} .altitude input[type="range"]`, { timeout: 15000 })
 await page.locator(`${CARD} .altitude input[type="range"]`).fill('3') // the city stop (#869)
 await page.waitForSelector(`${CARD} .city`, { state: 'attached', timeout: 15000 })
-await page.waitForTimeout(800)
+await page.waitForSelector(`${CARD} .pills .pill.p`, { timeout: 10000 })
 
 // --- the port pill, at city altitude ------------------------------------
 //
@@ -219,7 +219,7 @@ await page.locator(`${CARD} .pill.p.edit .ports .chip`, { hasText: /^445$/ }).fi
 // to land on the city itself rather than on the surface port-trace uses.
 await page.locator(`${CARD} .city`).click({ position: { x: 20, y: 20 } })
 await page.waitForSelector(`${CARD} .pill.p.on`, { timeout: 10000 })
-await page.waitForTimeout(500)
+await page.waitForSelector(`${CARD} .pill.p.on b`, { timeout: 10000 })
 
 const on = page.locator(`${CARD} .pill.p.on`)
 const label = (await on.locator('b').textContent())?.trim()
@@ -248,7 +248,7 @@ await page.locator(`${CARD} .pill.p.edit .ports .chip`, { hasText: /^445$/ }).fi
 await page.locator(`${CARD} .pill.p.edit .ports .chip`, { hasText: /^3389$/ }).first().click()
 await page.locator(`${CARD} .city`).click({ position: { x: 20, y: 20 } })
 await page.waitForSelector(`${CARD} .city .note-t`, { state: 'attached', timeout: 10000 })
-await page.waitForTimeout(300)
+await page.waitForFunction((sel) => (document.querySelector(sel)?.textContent || '').trim().length > 0, `${CARD} .city .note-t`, { timeout: 10000 })
 
 const note = (await page.locator(`${CARD} .city .note-t`).textContent())?.trim()
 check(
@@ -259,7 +259,7 @@ check(
 await page.screenshot({ path: `${OUT}/city-port-empty.png` })
 
 await page.locator(`${CARD} .pill-x`).click()
-await page.waitForTimeout(300)
+await page.waitForSelector(`${CARD} .city .note-t`, { state: 'detached', timeout: 10000 })
 check((await page.locator(`${CARD} .city .note-t`).count()) === 0, 'the ✕ puts the city back too')
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)

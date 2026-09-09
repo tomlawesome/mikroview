@@ -85,6 +85,9 @@ const (
 	                    LIMIT $3`
 
 	sqlPurgeOlderThan = `DELETE FROM match_log WHERE last_seen < $1`
+
+	// Reset's statement -- the test hook's whole-table wipe, see Reset.
+	sqlDeleteAll = `DELETE FROM match_log`
 )
 
 // hashTupleKey turns Tuple.key's Go-internal collapsing key into
@@ -279,6 +282,18 @@ func (s *PostgresStore) Stats() Stats {
 		return Stats{}
 	}
 	return Stats{Count: count}
+}
+
+// Reset implements Store: deletes every match this deployment holds.
+// Written for the test-only POST /api/test/reset (#1064); nothing an
+// operator can reach calls it.
+func (s *PostgresStore) Reset() error {
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	if _, err := s.pool.Exec(ctx, sqlDeleteAll); err != nil {
+		return fmt.Errorf("matchlog: deleting every match: %w", err)
+	}
+	return nil
 }
 
 // Close is a no-op: the pool is shared and owned by whatever opened it
