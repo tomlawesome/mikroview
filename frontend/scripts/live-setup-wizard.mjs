@@ -12,7 +12,7 @@
 // So every assertion here goes through a real browser against a real
 // server.
 
-import { session, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -20,6 +20,9 @@ const URL_BASE = process.env.MV_URL
 // On a shared instance earlier scenarios have already fed events, so
 // auto-launch will not have fired -- the door under test here is the
 // relaunch one, which is the same door.
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(20, 'live-setup-wizard')
 const { page, consoleErrors } = await session({ waitForEvents: 20, dismissSetup: false })
 
 // commandsSeen records every /api/setup/commands answer, from before the

@@ -23,7 +23,7 @@
 //
 // Shares one instance with every other scenario in this directory.
 
-import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -31,9 +31,14 @@ const { page, consoleErrors } = await session()
 
 // A little more traffic of our own, spread over enough source IPs that
 // activity_spike/global_spike/rule_spike/off_hours_activity/low_slow_scan
-// all have something to have observed by the time this runs, on top of
-// whatever every earlier scenario in filename order already fed.
+// all have something to have observed by the time this runs. Since
+// #1064's reset it is the only traffic there is, so wait for it to land
+// before the bench mounts: the bench reads its numbers once, on mount,
+// and a feed still arriving then left global_spike rendered as learning
+// while the API read a moment later said ready.
+const beforeFeed = await eventsTotal(page)
 feedSyslog(80, 'live-learning-window')
+await waitForEventsTotal(page, beforeFeed + 80)
 
 async function fetchDefinitions() {
   return page.request

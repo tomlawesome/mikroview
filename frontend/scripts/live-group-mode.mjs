@@ -10,8 +10,11 @@
 // children; a wrapper element would silently destroy the column
 // alignment while every test still passed.
 
-import { session, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done } from './live-browser.mjs'
 
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(200, 'live-group-mode')
 const { page, consoleErrors } = await session({ waitForEvents: 200 })
 
 const rowCount = () => page.$$eval('.grid .row', (els) => els.length)

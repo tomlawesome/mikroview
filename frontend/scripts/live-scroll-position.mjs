@@ -28,6 +28,9 @@
 
 import { session, check, done, goTo, feedSyslog } from './live-browser.mjs'
 
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(60, 'live-scroll-position')
 const { page, consoleErrors } = await session({ waitForEvents: 60 })
 
 // The viewport both defects were reported at. Fixed rather than
