@@ -44,11 +44,11 @@ const EXPECT_IP = '192.168.1.60'
 const RESOLVE_IP = '192.168.1.61'
 const UNDO_IP = '192.168.1.62'
 
+const { page, consoleErrors } = await session()
+
 feedInternalRecon(12, EXPECT_IP, 445)
 feedInternalRecon(12, RESOLVE_IP, 3389)
 feedInternalRecon(12, UNDO_IP, 22)
-
-const { page, consoleErrors } = await session()
 
 async function openFlags() {
   await goTo(page, 'Flags')

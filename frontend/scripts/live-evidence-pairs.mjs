@@ -79,6 +79,8 @@ const CP_CONNECTIONS = [
   [CP_HOST_B, CP_PORT_SMB],
   [CP_HOST_C, CP_PORT_RDP],
 ]
+const { page } = await session()
+
 CP_CONNECTIONS.forEach(([host, port], i) => {
   feedRaw(line({ src: CP_SRC, sport: 40000 + i, dst: host, dport: port }))
 })
@@ -98,8 +100,6 @@ for (let i = 0; i < 20; i++) {
 for (let i = 1; i <= 12; i++) {
   feedRaw(line({ src: IR_SRC, sport: 52000 + i, dst: `${IR_DEST_PREFIX}${i}`, dport: 80 }))
 }
-
-const { page } = await session()
 
 async function flagsList() {
   const res = await page.request.get(`${URL_BASE}/api/flags`)

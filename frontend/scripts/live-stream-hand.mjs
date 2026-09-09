@@ -17,18 +17,19 @@
 // live-scene-bar-controls.mjs owns the hand's own toggling (following
 // two-way, pause, csv). This owns what it does to the table.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, waitForStreamRows } from './live-browser.mjs'
 
 // The active card -- the deck mounts the neighbouring cards too, and the
 // whisper and its hand belong to the Stream card.
 const CARD_SEL = '.card[aria-hidden="false"]'
 
-feedSyslog(120, 'hand-rule')
 // unfoldFilter: false -- one of the checks below is that opening the
 // saved list does NOT also unfold the filter strip, and session() opens
 // that strip for every other scenario (#667), which would leave the
 // check asserting against a strip that was already open.
-const { page, consoleErrors } = await session({ waitForEvents: 60, unfoldFilter: false })
+const { page, consoleErrors } = await session({ unfoldFilter: false })
+feedSyslog(120, 'hand-rule')
+await waitForStreamRows(page, 60)
 
 // The always-present type-ahead inside the box, which is the same
 // appState.filters.rule the strip's own Rule field writes -- reachable

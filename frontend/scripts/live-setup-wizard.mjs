@@ -12,18 +12,20 @@
 // So every assertion here goes through a real browser against a real
 // server.
 
-import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, waitForStreamRows } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
 // dismissSetup: false, because this scenario drives the modal itself.
-// On a shared instance earlier scenarios have already fed events, so
-// auto-launch will not have fired -- the door under test here is the
-// relaunch one, which is the same door.
+// Auto-launch will not have fired: it is gated on the instance having no
+// devices, and the harness declares a router the reset keeps -- so the
+// door under test here is the relaunch one, which is the same door.
+const { page, consoleErrors } = await session({ dismissSetup: false })
+
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.
 feedSyslog(20, 'live-setup-wizard')
-const { page, consoleErrors } = await session({ waitForEvents: 20, dismissSetup: false })
+await waitForStreamRows(page, 20)
 
 // commandsSeen records every /api/setup/commands answer, from before the
 // modal is even opened, so the version pick below always has a pre-pick

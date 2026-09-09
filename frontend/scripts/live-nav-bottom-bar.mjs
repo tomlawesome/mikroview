@@ -26,10 +26,11 @@
 // -- jsdom's back()/forward() are documented no-ops, which is why
 // BottomBar.svelte.test.ts stubs them out rather than asserting on them.
 
-import { session, feedSyslog, feedPortScan, check, waitForFlag, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, feedPortScan, check, waitForFlag, responsive, done, waitForStreamRows } from './live-browser.mjs'
 
+const { page, consoleErrors } = await session()
 feedSyslog(60, 'nav-bottom-bar')
-const { page, consoleErrors } = await session({ waitForEvents: 30 })
+await waitForStreamRows(page, 30)
 
 // --- Resize down to a small viewport --------------------------------------
 // viewportState's matchMedia listener is live, so no reload is needed --

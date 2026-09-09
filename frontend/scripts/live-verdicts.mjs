@@ -25,12 +25,12 @@ const INVESTIGATE_IP = '198.51.100.105'
 const RESOLVED_IP = '198.51.100.106'
 const RELOAD_IP = '198.51.100.107'
 
+const { page, consoleErrors } = await session()
+
 feedPortScan(20, CHECKED_IP)
 feedPortScan(20, INVESTIGATE_IP)
 feedPortScan(20, RESOLVED_IP)
 feedPortScan(20, RELOAD_IP)
-
-const { page, consoleErrors } = await session()
 
 async function openFlags() {
   await goTo(page, 'Flags')

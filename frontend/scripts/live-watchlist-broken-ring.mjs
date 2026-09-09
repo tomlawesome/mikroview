@@ -63,8 +63,9 @@ import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
-feedSyslog(3, 'broken-ring-probe')
 const { page, consoleErrors } = await session()
+
+feedSyslog(3, 'broken-ring-probe')
 
 async function api(method, path_, body) {
   const res = await page.request.fetch(`${URL_BASE}${path_}`, {

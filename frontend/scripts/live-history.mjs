@@ -24,7 +24,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { session, feedSyslog, feedRaw, check, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, feedRaw, check, responsive, done, waitForStreamRows } from './live-browser.mjs'
 
 // Addresses and a rule label this scenario alone feeds, so finding one
 // in a retained file is unambiguous: nothing else in the suite sends
@@ -35,6 +35,8 @@ const SECRET_RULE = 'mv856-history'
 
 // Bulk first, so the day file exists and has something to compress, then
 // the marked lines whose addresses the assertions below look for.
+const { page, consoleErrors } = await session()
+
 feedSyslog(40, 'history')
 // One connection per call to send_tls used to mean five TLS handshakes
 // for five lines (#1061) -- feedRaw takes them all in one.
@@ -46,8 +48,8 @@ feedRaw(
       `proto TCP (SYN), ${SECRET_SRC}:5${i}100->${SECRET_DST}:443, len 60`,
   ),
 )
+await waitForStreamRows(page, 20)
 
-const { page, consoleErrors } = await session({ waitForEvents: 20 })
 
 const dir = process.env.MV_DIR
 check(Boolean(dir), `the harness exported MV_DIR -- got ${dir ?? 'nothing'}`)

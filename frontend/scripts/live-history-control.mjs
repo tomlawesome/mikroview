@@ -34,17 +34,19 @@
 
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { session, check, done, goTo, feedSyslog, responsive } from './live-browser.mjs'
+import { session, check, done, goTo, feedSyslog, responsive, waitForStreamRows } from './live-browser.mjs'
 
 const DISKG = '#diskg'
 const SLIDER = `${DISKG} svg[role="slider"]`
 const NOTE = `${DISKG} .memnote`
 
+const { page, consoleErrors } = await session()
+
 // Something on disk before anything is asserted about it: the group at
 // rest is a bar of held days, and an instance that has written nothing
 // yet has no bar.
 feedSyslog(60, 'live-history-control')
-const { page, consoleErrors } = await session({ waitForEvents: 30 })
+await waitForStreamRows(page, 30)
 
 const dir = process.env.MV_DIR
 check(Boolean(dir), `the harness exported MV_DIR -- got ${dir ?? 'nothing'}`)

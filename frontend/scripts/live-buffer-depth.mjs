@@ -34,10 +34,11 @@
 // spans.test.ts's unit coverage, which can assert it precisely without
 // a 200,000-event feed or a fortnight of wall-clock time.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, waitForStreamRows } from './live-browser.mjs'
 
+const { page } = await session()
 feedSyslog(100)
-const { page } = await session({ waitForEvents: 50 })
+await waitForStreamRows(page, 50)
 
 const reach = page.locator('.filterline .spans .reach')
 check(await reach.isVisible(), 'the buffer reach indicator is visible on the filter line')

@@ -25,7 +25,7 @@
 // account. The moment a viewer is ever given Settings, that account sees
 // exactly what this scenario checks a user seeing.
 
-import { session, check, done, goTo, feedSyslog, launchBrowser, responsive } from './live-browser.mjs'
+import { session, check, done, goTo, feedSyslog, launchBrowser, responsive, waitForStreamRows } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const MIB = 1024 * 1024
@@ -34,11 +34,13 @@ const BYTES_PER_EVENT = 624
 const MEMG = '#memg'
 const SLIDER = `${MEMG} svg[role="slider"]`
 
+const { page, consoleErrors } = await session()
+
 // Something in the ring before anything is asserted about it: every
 // claim below is about what the buffer holds, and an empty one has no
 // reach, no rate and nothing to evict.
 feedSyslog(200, 'live-memory-slider')
-const { page, consoleErrors } = await session({ waitForEvents: 100 })
+await waitForStreamRows(page, 100)
 
 /** stats reads the server's own answer, which is what the row claims to restate. */
 async function stats(p) {

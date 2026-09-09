@@ -35,14 +35,15 @@
 // means. Do not "fix" a hidden line by widening the timeout: it will
 // never become visible.
 
-import { session, feedSyslog, feedPortScan, waitForFlag, check, responsive, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, feedPortScan, waitForFlag, check, responsive, done, goTo, waitForStreamRows } from './live-browser.mjs'
 
 // Enough traffic for several minutes of the hour to carry a rate, and a
 // scan so at least one flag type has an episode to draw a tick for.
+const { page, consoleErrors } = await session()
+
 feedSyslog(240, 'metrics-views')
 feedPortScan(20, '203.0.113.44')
-
-const { page, consoleErrors } = await session({ waitForEvents: 100 })
+await waitForStreamRows(page, 100)
 await waitForFlag(page, '203.0.113.44')
 
 // #700 moved the view switcher off Metrics.svelte's own `.views` and onto the scene bar (SceneBar.svelte:62-72):
