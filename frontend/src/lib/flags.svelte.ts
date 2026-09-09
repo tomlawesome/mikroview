@@ -144,6 +144,13 @@ class FlagsState {
   // nothing is flagged.
   loaded = $state(false)
 
+  // The learning shelf's warming signal (#768), from the same GET
+  // /api/flags response as list above -- one source for one surface, so
+  // the shelf cannot disagree with the flags beside it the way a second
+  // poll of GET /api/definitions could. undefined until the server says
+  // (see api.ts's FlagsResponse): a claim it did not make.
+  baselinesWarming = $state<boolean | undefined>(undefined)
+
   // Ids Flags.svelte's current visit judged, kept in the settled/shelf
   // tables in place -- dimmed, carrying their stamp -- rather than
   // dropped the instant the server marks them cleared (#780 item 2: "the
@@ -191,6 +198,7 @@ class FlagsState {
     const res = await fetchFlags()
     this.list = res.flags
     this.timeSeries = res.timeSeries
+    this.baselinesWarming = res.baselinesWarming
     this.loaded = true
   }
 
