@@ -15,7 +15,7 @@
 // Every line below is synthetic and uses documentation address space
 // (RFC 5737 / RFC 1918). Nothing here comes from a real deployment.
 
-import { session, feedRaw, check, done } from './live-browser.mjs'
+import { session, feedRaw, check, done, waitForStreamRows } from './live-browser.mjs'
 
 // One distinctive slug per class, so the rule filter can isolate this
 // scenario's own events on an instance other scenarios have already
@@ -23,6 +23,8 @@ import { session, feedRaw, check, done } from './live-browser.mjs'
 const MARK = 'mv437-mark'
 const NAT = 'mv437-nat'
 const LOGONLY = 'mv437-logonly'
+
+const { page, consoleErrors } = await session()
 
 // Tagged: the operator declares the rule kind in the log-prefix.
 feedRaw(
@@ -49,8 +51,8 @@ feedRaw(
   `firewall,info postrouting: in:(unknown 0) out:ether1, proto TCP (ACK), ` +
     `192.168.88.20:51512->203.0.113.44:443, len 52`,
 )
+await waitForStreamRows(page, 1)
 
-const { page, consoleErrors } = await session({ waitForEvents: 1 })
 
 /** Sets the rule filter and returns the action badges left on screen. */
 async function badgesForRule(rule) {

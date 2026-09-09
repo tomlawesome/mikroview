@@ -30,12 +30,14 @@
 // combined, so the write-up can report the real range rather than one
 // number that hides which end of it any given deployment lands on.
 
-import { session, feedRaw, feedSyslog, check, done, unfoldStreamFilter, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
+import { session, feedRaw, feedSyslog, check, done, unfoldStreamFilter, eventsTotal, waitForEventsTotal, waitForStreamRows } from './live-browser.mjs'
+
+const { page, consoleErrors } = await session()
 
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.
 feedSyslog(50, 'live-group-compression')
-const { page, consoleErrors } = await session({ waitForEvents: 50 })
+await waitForStreamRows(page, 50)
 
 const rowCount = () => page.$$eval('.grid .row', (els) => els.length)
 

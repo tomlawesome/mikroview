@@ -16,10 +16,11 @@
 // into a real row's time cell actually opens the sheet -- the same gap
 // live-group-mode.mjs's own comment describes for its own layout check.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, waitForStreamRows } from './live-browser.mjs'
 
+const { page, consoleErrors } = await session()
 feedSyslog(20, 'live-stream-table')
-const { page, consoleErrors } = await session({ waitForEvents: 20 })
+await waitForStreamRows(page, 20)
 
 // --- The header set is exactly the fifteen, in order --------------------
 const headerLabels = await page.$$eval('.grid .header-cell .label-text', (els) =>

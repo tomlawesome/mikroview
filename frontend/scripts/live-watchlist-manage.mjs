@@ -38,12 +38,12 @@ async function api(page, method, path, body) {
 const MAC = 'aa:bb:cc:dd:ee:61'
 const SCAN_IP = '198.51.100.161'
 
+const { page, consoleErrors } = await session()
+
 // The default port_scan threshold is 15 distinct ports in a minute
 // (GET /api/definitions/port_scan) -- 20 is what every other passing
 // scenario in this directory feeds, comfortably over it.
 feedPortScan(20, SCAN_IP)
-
-const { page, consoleErrors } = await session()
 
 // #871: the two alphabetically earlier watchlist scenarios
 // (live-watchlist-broken-ring.mjs, live-watchlist-coverage.mjs) each

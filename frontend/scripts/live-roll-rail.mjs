@@ -31,11 +31,12 @@ import { session, feedSyslog, check, responsive, done, launchBrowser } from './l
 
 const URL_BASE = process.env.MV_URL
 
-feedSyslog(120, 'roll-rail')
 // landing: 'fall' -- stay on the real landing page so the landing
 // assertion below actually observes it, rather than session()'s own
 // default navigation to Stream hiding what the app opens on.
 const { page, consoleErrors } = await session({ landing: 'fall' })
+
+feedSyslog(120, 'roll-rail')
 
 // --- The deck's names, in the ratified order ------------------------------
 const names = await page.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))

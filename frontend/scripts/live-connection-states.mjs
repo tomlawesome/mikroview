@@ -21,10 +21,11 @@
 // sever an already-established loopback WebSocket in Chromium. See this
 // file's history for the long version.
 
-import { session, feedSyslog, check, responsive, goTo, done } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, goTo, done, waitForStreamRows } from './live-browser.mjs'
 
+const { page, consoleErrors } = await session()
 feedSyslog(40, 'connection-states')
-const { page, consoleErrors } = await session({ waitForEvents: 20 })
+await waitForStreamRows(page, 20)
 
 // --- Wire the WS interception, transparent by default ----------------------
 // `blocked` gates whether a *new* connection attempt is allowed through;

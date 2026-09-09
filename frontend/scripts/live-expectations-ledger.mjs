@@ -25,9 +25,9 @@ const URL_BASE = process.env.MV_URL
 // every 198.51.100.* literal already in use here before picking it).
 const SCAN_IP = '198.51.100.108'
 
-feedPortScan(20, SCAN_IP)
-
 const { page, consoleErrors } = await session()
+
+feedPortScan(20, SCAN_IP)
 
 async function api(method, path_, body) {
   const res = await page.request.fetch(`${URL_BASE}${path_}`, {

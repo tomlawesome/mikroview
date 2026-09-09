@@ -21,10 +21,11 @@
 // Everything here asserts badge-agrees-with-server rather than a literal
 // number: the feed raises whatever the detectors decide it raises.
 
-import { session, feedSyslog, feedPortScan, check, waitForFlag, done } from './live-browser.mjs'
+import { session, feedSyslog, feedPortScan, check, waitForFlag, done, waitForStreamRows } from './live-browser.mjs'
 
+const { page, consoleErrors } = await session()
 feedSyslog(40, 'scene-badge')
-const { page, consoleErrors } = await session({ waitForEvents: 20 })
+await waitForStreamRows(page, 20)
 
 // The active card's own scene bar -- the deck also mounts the
 // neighbouring cards, each with a bar of its own. Renamed from

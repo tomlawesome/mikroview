@@ -23,14 +23,16 @@
 //     list. GET /api/auth/users is admin-only (#657), so a viewer
 //     issuing it would be a page that loads and immediately 403s.
 
-import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, waitForStreamRows } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
+
+const { page, consoleErrors } = await session()
 
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.
 feedSyslog(40, 'live-engine-room')
-const { page, consoleErrors } = await session({ waitForEvents: 40 })
+await waitForStreamRows(page, 40)
 
 const PEOPLE = '#people'
 const MACHINES = '#keys'
