@@ -6735,6 +6735,11 @@
         appState.view = 'live'
       }}
       onwatchlist={() => {
+        // #1069: land on the row this ghost's watch draws in the
+        // watchlist, not just the tab -- the card's own copy already
+        // promises that's where the watch lives on.
+        const id = decommCard.lane.watch?.id
+        if (id) topologyNavState.requestDecommissionWatch(id)
         appState.view = 'watchlist'
       }}
     />

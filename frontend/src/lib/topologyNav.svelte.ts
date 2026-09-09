@@ -32,6 +32,14 @@ class TopologyNavState {
   pendingFlagId = $state<string | null>(null)
   pendingWatchId = $state<string | null>(null)
 
+  // #1069's own version of the same handoff: the decommission ghost's
+  // card carries a `watchlist ▸` door (DecommissionCard.svelte) promising
+  // the watch that outlives it, and the watchlist tab is the only place
+  // that watch is ever drawn. Same one-shot slot, same reason -- the card
+  // knows the watch's id and cannot reach into Watchlist.svelte's own
+  // decommission-drawer state directly.
+  pendingDecommissionWatchId = $state<string | null>(null)
+
   // #761's own handoffs, same shape as the two above: the docket's
   // `+ watch` button lives in Docket.svelte, outside Watchlist.svelte's
   // component boundary, and a flag's `watch this pathway`/`watch this
@@ -85,6 +93,10 @@ class TopologyNavState {
 
   requestWatch(id: string) {
     this.pendingWatchId = id
+  }
+
+  requestDecommissionWatch(id: string) {
+    this.pendingDecommissionWatchId = id
   }
 
   requestNewWatch() {
