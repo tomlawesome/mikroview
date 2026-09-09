@@ -19,7 +19,7 @@ import { baselineState } from '../lib/baseline.svelte'
 import { portFilterState } from '../lib/portFilter.svelte'
 import { mapTraceState } from '../lib/mapTrace.svelte'
 import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
-import type { Host } from '../lib/api'
+import type { Host, TraceResponse } from '../lib/api'
 import type { RouterFilterRule, RouterIPAddress } from '../lib/api'
 import { emptyFilters, type ClientEvent, type Device, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
 import Topography from './Topography.svelte'
@@ -5229,27 +5229,33 @@ describe('the event trace (#1018, round 53)', () => {
     ]
   }
 
-  function traceRefused() {
+  function traceRefused(overrides: Partial<ClientEvent> = {}, resultOverrides: Partial<TraceResponse> = {}) {
+    const e = event({
+      id: 7,
+      action: 'drop',
+      ruleLabel: '#17 default drop',
+      inInterface: 'ether4',
+      outInterface: undefined,
+      srcIp: '10.0.30.14',
+      srcHostName: 'cam-porch',
+      dstIp: '10.0.10.21',
+      dstHostName: 'tom-desktop',
+      dstPort: 445,
+      protocol: 'tcp',
+      ...overrides,
+    })
     mapTraceState.request = { event: 7 }
     mapTraceState.result = {
       found: true,
       verdict: 'refused',
-      event: event({
-        id: 7,
-        action: 'drop',
-        ruleLabel: '#17 default drop',
-        inInterface: 'ether4',
-        outInterface: undefined,
-        srcIp: '10.0.30.14',
-        srcHostName: 'cam-porch',
-        dstIp: '10.0.10.21',
-        dstHostName: 'tom-desktop',
-        dstPort: 445,
-        protocol: 'tcp',
-      }),
+      event: e,
       like: 13,
       srcSeen: 14,
       dstReached: 0,
+      sameLine: [e],
+      sameMinute: [],
+      sameMinuteTotal: 0,
+      ...resultOverrides,
     }
   }
 
@@ -5330,6 +5336,9 @@ describe('the event trace (#1018, round 53)', () => {
       like: 0,
       srcSeen: 1,
       dstReached: 1,
+      sameLine: [],
+      sameMinute: [],
+      sameMinuteTotal: 0,
     }
     const { container } = render(Topography)
     flushSync()
@@ -5355,7 +5364,7 @@ describe('the event trace (#1018, round 53)', () => {
   it('says an honest miss in words rather than drawing a path that went nowhere', () => {
     seedMap()
     mapTraceState.request = { in: 'ether4', port: 3389 }
-    mapTraceState.result = { found: false, like: 0, srcSeen: 0, dstReached: 0 }
+    mapTraceState.result = { found: false, like: 0, srcSeen: 0, dstReached: 0, sameLine: [], sameMinute: [], sameMinuteTotal: 0 }
     const { container } = render(Topography)
     flushSync()
     showTheMap(container)

@@ -41,7 +41,21 @@ class MapTraceState {
   srcSeen = $derived(this.result?.srcSeen ?? 0)
   dstReached = $derived(this.result?.dstReached ?? 0)
 
-  async open(req: TraceRequest) {
+  /** The list's two columns (round 56, A1): the line's own events
+   * (newest first, this one included) and the source's other events in
+   * its own clock minute. */
+  sameLine = $derived<FirewallEvent[]>(this.result?.sameLine ?? [])
+  sameMinute = $derived<FirewallEvent[]>(this.result?.sameMinute ?? [])
+  sameMinuteTotal = $derived(this.result?.sameMinuteTotal ?? 0)
+
+  /** Whether the list (round 56, A1) is open under the crumb. Shared
+   * here rather than local to whichever crumb component is mounted, so
+   * B1's callout can ask for it to open the instant the trace's answer
+   * lands, and so re-opening the trace on a picked row (open() again,
+   * with no `openList` asked) leaves it exactly as it was. */
+  listOpen = $state(false)
+
+  async open(req: TraceRequest, opts?: { openList?: boolean }) {
     this.request = req
     this.result = null
     this.loading = true
@@ -53,12 +67,13 @@ class MapTraceState {
       // never about different lines.
       if (asked !== JSON.stringify(this.request)) return
       this.result = res
+      if (opts?.openList) this.listOpen = true
     } catch {
       if (asked !== JSON.stringify(this.request)) return
       // A failed read is a miss, drawn as a miss. The alternative --
       // leaving the previous trace up -- would put one line's crumb over
       // another line's drawing.
-      this.result = { found: false, like: 0, srcSeen: 0, dstReached: 0 }
+      this.result = { found: false, like: 0, srcSeen: 0, dstReached: 0, sameLine: [], sameMinute: [], sameMinuteTotal: 0 }
     } finally {
       if (asked === JSON.stringify(this.request)) this.loading = false
     }
@@ -68,6 +83,7 @@ class MapTraceState {
     this.request = null
     this.result = null
     this.loading = false
+    this.listOpen = false
   }
 }
 
