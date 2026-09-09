@@ -98,10 +98,11 @@ type Width = number | null
 // column would go straight back to the reported bug this measure was
 // built to fix, and because Rule is the one field the owner and #685
 // have already agreed has no real ceiling -- these six do:
-//   device    a configured friendly name, or (unconfigured) the
-//             device's own source IP -- <=15 chars either way, one
-//             copy button (no edit affordance: there is no
-//             device-name entity type, see nameEditor.svelte.ts)
+//   device    a configured friendly name, or (undeclared) the
+//             device's own source IP -- <=15 chars either way, a copy
+//             button and (since #600 gave a device name somewhere
+//             everyone reads) the same pencil the address columns
+//             carry, which is why this sits close to their 160px
 //   chain     a RouterOS chain word, <=11 chars ("postrouting"),
 //             plain click-to-filter text, no buttons
 //   src port  mirrors Port exactly (up to 4 digits, bare number, no

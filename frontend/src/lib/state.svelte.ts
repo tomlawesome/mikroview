@@ -560,10 +560,26 @@ class AppState {
   // `label` is '' for a removed label, which restores the raw value --
   // matching what the server will resolve for the next event, since the
   // entity is gone.
-  relabel(type: 'host' | 'port' | 'rule', key: string, label: string) {
+  relabel(type: 'host' | 'port' | 'rule' | 'device', key: string, label: string) {
+    // A device name is not stamped on events at all: rows read it from
+    // this list, which the server refreshes every STATS_REFRESH_MS and
+    // serves identically to every session (#600). So the rename needs
+    // no buffer rewrite -- only this list, brought forward by the few
+    // seconds until the next poll confirms it, and falling back to the
+    // raw id when a label is removed, exactly as the server will.
+    if (type === 'device') {
+      this.devices = this.devices.map((d) =>
+        d.id === key ? { ...d, name: label || d.id, nameSource: label ? 'entity' : 'none' } : d,
+      )
+      return
+    }
+
     const name = label || undefined
+    // Narrowed once, here: `type` is a parameter, so the early return
+    // above does not narrow it inside the closure below.
+    const kind: 'host' | 'port' | 'rule' = type
     const rewrite = <E extends FirewallEvent>(e: E): E => {
-      switch (type) {
+      switch (kind) {
         case 'host': {
           const src = e.srcIp === key
           const dst = e.dstIp === key
@@ -580,6 +596,7 @@ class AppState {
           return e.ruleLabel === key ? { ...e, ruleName: name } : e
       }
     }
+
 
     // Every buffer that can still reach the screen, not just `events`:
     // a rename made while paused, or in the moment between a websocket

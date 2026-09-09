@@ -123,6 +123,7 @@
       <span class="v-group">
         <button class="v link" onclick={() => filterAndClose('device', event.deviceId)}>{deviceName}</button>
         <CopyButton value={event.deviceId} label="device id" />
+        <EditNameButton type="device" value={event.deviceId} label={deviceName} />
       </span>
     </div>
     {#if event.chain}
