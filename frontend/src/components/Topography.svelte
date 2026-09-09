@@ -50,6 +50,7 @@
   import { hostSubject, portsLine, reachFor, reachLineSummary } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
   import { isPublicIp, formatHM, formatRelative } from '../lib/format'
+  import { dossierState } from '../lib/dossier.svelte'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
@@ -6248,6 +6249,9 @@
           {/if}
           <button class="hot" disabled={hostBusy} onclick={dismissHost}>dismiss ▸</button>
         {/if}
+        <!-- #410: the host click reaches the dossier. One hook, no state
+             of its own -- lib/dossier.svelte.ts owns the card. -->
+        <button class="dim" onclick={(e) => dossierState.open(d.ip, e.currentTarget)}>dossier ▸</button>
         <button class="dim" onclick={openStreamFromHost}>stream ▸</button>
         <button
           class="dim"

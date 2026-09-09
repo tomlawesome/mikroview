@@ -82,6 +82,7 @@
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
+  import { dossierState } from '../lib/dossier.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { zonesState } from '../lib/zones.svelte'
@@ -764,7 +765,20 @@
               <td>
                 {#if row.lane}<i class="lz" style="background:{row.lane.ink}"></i>{row.lane.name}{:else}<span class="dim">—</span>{/if}
               </td>
-              <td>{row.key}</td>
+              <!-- #410: the dossier, from the row that names the host.
+                   The design puts this on the row's Edit; #675 replaced
+                   that Edit with the inline rename in the name cell,
+                   which cannot also open a card without taking the
+                   rename away, so the door sits on the address instead
+                   -- the one token on the row that *is* the host. -->
+              <td
+                ><button
+                  type="button"
+                  class="dossier-btn"
+                  title="Dossier for {row.key}"
+                  onclick={(e) => dossierState.open(row.key, e.currentTarget)}>{row.key}</button
+                ></td
+              >
               <td class="dim">{row.mac ? elideMac(row.mac.mac) : 'private'}</td>
               <td class="dim">{firstSeenOf(row)}</td>
               <td>{lastSeenOf(row)}</td>
@@ -1213,6 +1227,21 @@
   .rename-btn:hover {
     border-color: var(--border);
     color: var(--accent);
+  }
+
+  .dossier-btn {
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dotted var(--border);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .dossier-btn:hover {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
   }
 
   .rename-input {

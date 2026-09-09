@@ -15,6 +15,7 @@
   // the plinth (#867): devices sit flat on their district plate.
   import { tick, untrack } from 'svelte'
   import { appState } from '../lib/state.svelte'
+  import { dossierState } from '../lib/dossier.svelte'
   import { zonesState } from '../lib/zones.svelte'
   import { tunnelsState } from '../lib/tunnels.svelte'
   import { policyState } from '../lib/policy.svelte'
@@ -3995,6 +3996,9 @@
           {/if}
           <button type="button" class="hot" disabled={markBusy} onclick={dismissHost}>dismiss ▸</button>
         {/if}
+        <!-- #410: the host click reaches the dossier. One hook, no state
+             of its own -- lib/dossier.svelte.ts owns the card. -->
+        <button type="button" class="dim" onclick={(e) => dossierState.open(c.b.ip, e.currentTarget)}>dossier ▸</button>
         <button type="button" class="dim" onclick={() => (appState.view = 'live')}>stream ▸</button>
       </div>
     </div>
