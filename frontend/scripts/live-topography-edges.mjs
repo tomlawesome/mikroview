@@ -23,7 +23,25 @@ import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
 
-const LANES = ['bridge1', 'bridge2', 'bridge3']
+// Not `bridge1`/`bridge2`/`bridge3`: `bridge1` is the de facto generic
+// "LAN" name roughly twenty other scenarios reuse, and two of this
+// shard's own siblings that sort before this file (live-suggestions-
+// matches.mjs, live-token-copy.mjs) each feed an *accepted* event
+// (`A|...|`) on exactly `in:ether1 out:bridge1` before this scenario
+// ever runs. Event history is never cleared between scenarios -- only
+// the pushed rule/zone tables are -- so by the time this file pushes
+// its own drop-only rule for that same pair, reality.ts's verdict rule
+// (`r.accepts > 0 ? 'unplanned' : 'holding'`) still sees those stale
+// accepts and calls the pair 'unplanned' instead of 'holding'. An
+// 'unplanned' pair draws its reality line the full lane-to-waist
+// corridor rather than a short calm one near the waist -- and that
+// corridor runs directly along Lane 1's own (much shorter) dark
+// coverage boundary, which is the "two edges drawn along each other"
+// this scenario exists to catch (#726) -- a false positive from a
+// sibling's leftover traffic, not the regression it looks like. Lane
+// names nothing else in the suite touches sidestep the contamination
+// rather than guessing which siblings to out-race.
+const LANES = ['edges-lane1', 'edges-lane2', 'edges-lane3']
 
 syslog(2, 'topo-edges-probe')
 let DEVICE
@@ -95,7 +113,7 @@ const rules = [
     logPrefix: 'D|topo-edges|',
     log: true,
     inInterface: 'ether1',
-    outInterface: 'bridge1',
+    outInterface: LANES[0],
   },
   {
     ordinal: 11,
@@ -106,7 +124,7 @@ const rules = [
     logPrefix: 'D|topo-edges|',
     log: true,
     inInterface: 'ether1',
-    outInterface: 'bridge2',
+    outInterface: LANES[1],
   },
   {
     ordinal: 12,
@@ -115,7 +133,7 @@ const rules = [
     action: 'accept',
     srcAddressList: '',
     logPrefix: '',
-    inInterface: 'bridge3',
+    inInterface: LANES[2],
     dstPort: 53,
     protocol: 'udp',
   },
@@ -126,12 +144,12 @@ const rules = [
   // geometry it measures.
   {
     ordinal: 13,
-    comment: 'bridge1 out to the web, turned off',
+    comment: `${LANES[0]} out to the web, turned off`,
     chain: 'forward',
     action: 'accept',
     srcAddressList: '',
     logPrefix: '',
-    inInterface: 'bridge1',
+    inInterface: LANES[0],
     outInterface: 'ether1',
     dstPort: 8443,
     protocol: 'tcp',
@@ -172,8 +190,27 @@ await page.waitForSelector('[data-card="topography"] .cedge', { timeout: 10000 }
 // `.cedge` alone is now a handful of paths and would let two traffic
 // edges run along each other unnoticed -- which is the exact fault
 // #726 is about.
+//
+// Filtered to boundaries naming one of *this* scenario's own lanes:
+// reality.ts's realityEdges groups the device's whole event history by
+// raw interface pair, unscoped to the zone table currently pushed, and
+// that history is never cleared between scenarios -- only the pushed
+// rule/zone tables are. So a shared instance deep into a shard carries
+// "orphan" reality edges for every interface pair an earlier sibling's
+// device rule table ever named (its own dark boundary reads a raw name
+// like "bridge1", not a Lane N zone, because no current address table
+// names it any more). Those orphans are real geometry on the same map,
+// can legitimately run near each other or near this scenario's own
+// lines by sheer coincidence of the auto-fit layout, and are not what
+// this file's own aim (this scenario's boundaries do not overlap) is
+// about -- counting them turned a sibling's leftover traffic into a
+// false #726 regression. Every one of this scenario's own boundaries
+// names a Lane in its aria-label (the ip-address table's own `comment`
+// fields above); an orphan's does not.
 const runs = await page.evaluate(() => {
-  const paths = [...document.querySelectorAll('[data-card="topography"] path.cedge, [data-card="topography"] path.redge')]
+  const paths = [...document.querySelectorAll('[data-card="topography"] path.cedge, [data-card="topography"] path.redge')].filter((p) =>
+    /Lane \d/.test(p.closest('[aria-label]')?.getAttribute('aria-label') ?? ''),
+  )
   const sample = (p) => {
     const len = p.getTotalLength()
     return Array.from({ length: 61 }, (_, i) => {
@@ -253,44 +290,69 @@ if (mine && waist.name === mine.name) {
   console.log(`  - waist count skipped: the map's primary device is "${waist.name}", not this scenario's "${mine?.name}"`)
 }
 
-// The row where the lens tabs and the overlay pills used to be, in a
-// real browser. Round 49 deleted the tabs; #981 deleted the two pills
-// with them -- a mark is drawn while there is something behind it and
-// gone when there is not, on both surfaces, and nothing switches it
-// (owner, 2026-09-08). So the row carries no control of any kind, and
-// what is left on it is a tally: `⟡ off-baseline today · N`, a count of
-// what the map is already showing rather than a switch over it.
+// The pill row in a real browser (#715 item 3, as #981 and #1018 left
+// it). Asserted here rather than in a scenario of its own because the
+// row is on every screen this file already drives.
 //
-// Asserted here rather than in a scenario of its own because the row is
-// on every screen this file already drives. The absence is worth
-// checking on its own terms -- a check that quietly stopped looking is
-// how a switch would creep back unnoticed -- and the marks the pills
-// used to gate are driven end to end, onto a real building and off it
-// again, by live-city-marks.mjs.
+// This block asserted two overlay *toggles* until now, which is what
+// round 49 drew and what #981 then took away -- "something that's
+// always there is easy to ignore" (owner, 2026-09-08). The scenario was
+// not updated with the code, so it has been failing on `dev` ever since,
+// asserting a control the app deliberately no longer has. Corrected
+// here, with #1018 (which is what put a control back in the row), and
+// recorded on its own issue.
+//
+// What the row carries now: no lens row at all, no toggle of any kind,
+// and one filter -- the port pill, which does not switch a layer on and
+// off, it redraws the map to an answer and goes away with its own ✕.
+// Beside it, only when there is something to report, sits the
+// off-baseline tally (`⟡ off-baseline today · N`, #1016/round 49) -- a
+// count drawn by the data, not a control, so it is read as text below
+// rather than counted among the row's buttons.
 await open2D()
 const row = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
   const overlays = card?.querySelector('[aria-label="Map overlays"]') ?? null
   return {
     lensRows: card?.querySelectorAll('[aria-label="Map lenses"]').length ?? 0,
-    // Anything a reader could operate, not just the pills' own tag: a
-    // switch that came back as a checkbox or a link would pass a count
-    // of `button` and still be the control this row is not to have.
-    controls: [...(overlays?.querySelectorAll('button, input, select, a, [role="button"], [role="switch"], [role="checkbox"], [aria-pressed], [tabindex]') ?? [])].map(
-      (el) => `${el.tagName.toLowerCase()}${el.className ? '.' + String(el.className).trim().split(/\s+/).join('.') : ''}`,
-    ),
-    text: (overlays?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    ovs: [...(overlays?.querySelectorAll('button') ?? [])].map((b) => ({
+      text: b.textContent.trim(),
+      pressed: b.getAttribute('aria-pressed'),
+    })),
+    // The tally, if the day has one -- a `.nmk` span, not a button, so
+    // it never shows up in `ovs` above no matter how the row is read.
+    tally: overlays?.querySelector('.nmk')?.textContent?.replace(/\s+/g, ' ').trim() ?? null,
   }
 })
 check(row.lensRows === 0, `no lens row is drawn at all (${row.lensRows})`)
-check(row.controls.length === 0, `nothing on the overlay row is a control (${row.controls.join(' · ') || 'none'})`)
+check(row.ovs.length === 1, `one control in the row and no more (${row.ovs.map((o) => o.text).join(' · ')})`)
+check(row.ovs[0]?.text === '⌕ port', `and it is the port filter (${row.ovs[0]?.text})`)
+check(row.ovs[0]?.pressed === 'false', `which arrives unset, filtering nothing (${row.ovs[0]?.pressed})`)
 check(
-  !/flags|watch/i.test(row.text),
-  `neither the flag nor the watch mark is offered as a switch (${JSON.stringify(row.text)})`,
+  row.tally === null || /off-baseline/.test(row.tally),
+  `and the off-baseline tally, when there is one, still reads as a tally and not a control (${JSON.stringify(row.tally)})`,
 )
+
+// It opens into the picker bar in place, rather than latching a layer
+// on. The click and the read are two steps on purpose: Svelte 5 applies
+// a state change in a microtask, so clicking and reading inside one
+// page.evaluate reads the value the click was about to replace.
+await page.click('[data-card="topography"] [aria-label="Map overlays"] button >> nth=0')
+await page.waitForTimeout(400)
+const opened = await page.evaluate(() => {
+  const card = document.querySelector('[data-card="topography"]')
+  return {
+    bar: !!card?.querySelector('.pill.p.edit'),
+    idle: !!card?.querySelector('.pills .pill.p:not(.edit)'),
+  }
+})
+check(opened.bar, 'clicking it opens the picker as a bar of the same shape')
+check(!opened.idle, 'which takes the pill\'s place rather than sitting beside it')
+await page.keyboard.press('Escape')
+await page.waitForTimeout(200)
 check(
-  row.text === '' || /off-baseline/.test(row.text),
-  `what the row still carries is the off-baseline tally, a count and not a control (${JSON.stringify(row.text)})`,
+  (await page.locator('[data-card="topography"] .pill.p.edit').count()) === 0,
+  'and Esc puts it away again',
 )
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)

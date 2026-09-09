@@ -61,6 +61,20 @@ class TopologyNavState {
   // later, unrelated visit.
   pendingFlagsReturn = $state(false)
 
+  // #1018's trace, the same one-shot slot as pendingDescend above and
+  // for the identical reason: a stream row knows which event it is and
+  // the map owns the drawing, and there is no route param to carry one
+  // across the view switch. The row fills this in and flips
+  // appState.view; Topography.svelte reads it and clears it on arrival,
+  // whether that is its own mount or the instant the slot changes under
+  // an already-mounted tab (Deck.svelte keeps visited cards alive).
+  //
+  // A fresh object per request, never a bare id already at its target
+  // value, so tracing the same event twice in a row is seen as two
+  // requests rather than the second being a no-op against an unchanged
+  // value.
+  pendingTrace = $state<PendingTrace | null>(null)
+
   requestHost(zoneId: string, host: string, ip: string) {
     this.pendingDescend = { zoneId, host, ip }
   }
@@ -83,6 +97,10 @@ class TopologyNavState {
 
   signalFlagsReturn() {
     this.pendingFlagsReturn = true
+  }
+
+  requestTrace(trace: PendingTrace) {
+    this.pendingTrace = trace
   }
 }
 
@@ -108,6 +126,23 @@ export interface PendingWatchDraft {
   // the inbox. Absent means stay where you are, which is right for
   // every caller already on the watchlist.
   returnTo?: 'flags'
+}
+
+// PendingTrace is how a caller outside the map names the line to trace
+// (#1018). `event` is the id where the caller holds one -- a stream row
+// -- and the pair/port form is for a caller that holds a rolled-up pair
+// instead. Mirrors api.ts's TraceRequest, deliberately by hand rather
+// than by import: this module is the handoff contract between two
+// components and must not gain a dependency on the fetch layer.
+export interface PendingTrace {
+  event?: number
+  in?: string
+  out?: string
+  port?: number
+  proto?: string
+  src?: string
+  dst?: string
+  noOut?: boolean
 }
 
 export const topologyNavState = new TopologyNavState()
