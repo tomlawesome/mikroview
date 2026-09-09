@@ -47,6 +47,44 @@ async function fetchDefinitions() {
     .then((b) => b.definitions ?? [])
 }
 
+// global_spike is the one definition whose learning state does not follow
+// the traffic directly. Its baseline takes a reading on its own
+// ten-second cadence (globalSpikeCheckInterval, internal/engine/
+// shipped_global_spike.go), and #1064's reset -- which session() runs at
+// the top of every scenario -- empties it, so for up to ten seconds after
+// the feed above the instance still reports keys 0 for it while every
+// keyed definition already counts the sources it just saw.
+//
+// That matters because the bench reads its numbers once, on mount, and
+// the per-row check below compares what it rendered against an
+// /api/definitions read taken afterwards. A mount before that reading and
+// a read after it disagree with nothing wrong in the app -- the bench
+// says "Learning -- no traffic seen yet", the API says "Baselines
+// established (1 source)". That is the failure pipeline 850 hit, and it
+// is a coin toss on where the cadence happens to fall, not a regression.
+//
+// So wait for the reading to land before opening the bench: after it,
+// nothing else is feeding this instance, so both reads see one settled
+// state.
+async function globalSpikeLearning() {
+  const defs = await fetchDefinitions()
+  return defs.find((d) => d.id === 'global_spike')?.learning
+}
+
+// Polled a second apart, not tighter: each /api/definitions read costs
+// the server a rebuild of its dispatch index and seven log lines, and
+// what is being waited for is a ten-second cadence.
+const settleDeadline = Date.now() + 30000
+let gs = await globalSpikeLearning()
+while ((gs?.keys ?? 0) === 0 && Date.now() < settleDeadline) {
+  await new Promise((r) => setTimeout(r, 1000))
+  gs = await globalSpikeLearning()
+}
+check(
+  (gs?.keys ?? 0) > 0,
+  `global_spike took its first reading of this scenario's own traffic before the bench opens -- got ${JSON.stringify(gs)}`,
+)
+
 const BASELINE_BACKED = ['activity_spike', 'global_spike', 'rule_spike', 'off_hours_activity', 'low_slow_scan']
 
 // --- the presentation: recompute the expected sentence, compare to the DOM

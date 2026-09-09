@@ -153,6 +153,10 @@ func clone(w *Watch) Watch {
 	if len(w.LastKnown) > 0 {
 		out.LastKnown = append([]Straggler(nil), w.LastKnown...)
 	}
+	if w.LastStraggler != nil {
+		sighting := *w.LastStraggler
+		out.LastStraggler = &sighting
+	}
 	return out
 }
 
@@ -275,13 +279,20 @@ func (s *Store) Ghosts() []Watch {
 // the write lock, which is why the engine side asks a lock-free prefix
 // index first (see engine.DecommissionWatches) rather than calling this
 // for every event that arrives.
-func (s *Store) RecordTraffic(srcIP, dstIP string, at time.Time) []Watch {
+//
+// obs carries the rest of the event -- port, protocol, interface, rule,
+// verdict -- so each watch that takes the observation also records what
+// it was (Watch.RecordSighting). The sighting is written first, because
+// both share the staleness guard and RecordTraffic is what advances the
+// clock the guard reads.
+func (s *Store) RecordTraffic(srcIP, dstIP string, at time.Time, obs Observation) []Watch {
 	s.mu.Lock()
 	var hit []Watch
 	for _, w := range s.watches {
 		if !w.RetiredAt.IsZero() || !w.Matches(srcIP, dstIP) {
 			continue
 		}
+		w.RecordSighting(srcIP, dstIP, at, obs)
 		w.RecordTraffic(at)
 		hit = append(hit, clone(w))
 	}
@@ -380,6 +391,56 @@ func (s *Store) Sweep(now time.Time) []Watch {
 		s.notify()
 	}
 	return retired
+}
+
+// UndoWindow is how long after a watch retires the operator can take the
+// retirement back.
+//
+// #485's ratified sentence is that retirement is silent: the ghost
+// leaves by itself and the map goes back to what it was, with one note
+// line and an undo for the hour after. The hour is what makes the
+// silence affordable -- an operator who looks up, sees a zone gone and
+// realises the segment was not finished after all needs a way back that
+// does not depend on having been watching at the moment it happened.
+//
+// It is bounded rather than permanent because an undo offered forever is
+// not an undo: the note line stays either way, and a retirement a day
+// old is history, which is re-watched by watching the range again rather
+// than by reopening a decision that has since been acted on.
+const UndoWindow = time.Hour
+
+// Restore un-retires a watch, within UndoWindow of its retirement.
+//
+// The clock restarts from now, so the range must go quiet for a fresh
+// full clean window. That is deliberate and not a rounding of the old
+// clock forward: the range *was* quiet, and the watch retired honestly
+// on that evidence -- the operator taking the retirement back is saying
+// they do not believe the segment is finished, so the watch has to earn
+// its retirement again rather than inherit the one just taken from it.
+// A restored watch that retired again a minute later would be an undo
+// button that undid nothing.
+func (s *Store) Restore(id string, now time.Time) (Watch, error) {
+	s.mu.Lock()
+	w, ok := s.watches[id]
+	if !ok {
+		s.mu.Unlock()
+		return Watch{}, ErrNoSuchWatch
+	}
+	if w.RetiredAt.IsZero() {
+		s.mu.Unlock()
+		return Watch{}, ErrNotRetired
+	}
+	if now.Sub(w.RetiredAt) > UndoWindow {
+		s.mu.Unlock()
+		return Watch{}, ErrUndoExpired
+	}
+	w.RetiredAt = time.Time{}
+	w.LastTrafficAt = now
+	out := clone(w)
+	s.persistLocked()
+	s.mu.Unlock()
+	s.notify()
+	return out, nil
 }
 
 // Delete removes a watch outright -- the operator abandoning a

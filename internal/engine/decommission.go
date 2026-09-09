@@ -66,8 +66,11 @@ type DecommissionStore interface {
 	// turns on.
 	Active() []decommission.Watch
 	// RecordTraffic takes one observation against every active watch the
-	// event touched and returns those watches as they now stand.
-	RecordTraffic(srcIP, dstIP string, at time.Time) []decommission.Watch
+	// event touched and returns those watches as they now stand. The
+	// observation carries the rest of the line -- port, protocol,
+	// interface, rule, verdict -- so each watch can record what the
+	// straggler actually was, not merely that there was one.
+	RecordTraffic(srcIP, dstIP string, at time.Time, obs decommission.Observation) []decommission.Watch
 	// Sweep records retirement for every watch whose clean window has
 	// elapsed.
 	Sweep(now time.Time) []decommission.Watch
@@ -194,7 +197,14 @@ func (x *DecommissionWatches) Evaluate(e store.Event) {
 	// it, and internal/store documents device clocks as not monotonic
 	// with arrival order. A skewed router must not be able to shorten or
 	// extend a decommission.
-	for _, w := range x.store.RecordTraffic(e.SrcIP, e.DstIP, e.ReceivedAt) {
+	obs := decommission.Observation{
+		Protocol:  e.Protocol,
+		Port:      e.DstPort,
+		Interface: e.InInterface,
+		Rule:      e.RuleLabel,
+		Action:    string(e.Action),
+	}
+	for _, w := range x.store.RecordTraffic(e.SrcIP, e.DstIP, e.ReceivedAt, obs) {
 		x.emit(w, e)
 	}
 }

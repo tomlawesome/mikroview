@@ -17,16 +17,17 @@
 // from the issue: route-intercept /api/events to fail, then narrow a
 // filter so refetchWithFilters() is what has to run to find a genuine
 // server-side match.
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, waitForStreamRows } from './live-browser.mjs'
 
 const MATCHED_RULE = 'refetch-failure-373'
+
+const { page, consoleErrors } = await session()
 
 // Buffered locally so the client-side filter layer alone could, in
 // principle, find these -- the point of the scenario is that the
 // *refetch* fails, not that the buffer is empty to start with.
 feedSyslog(30, MATCHED_RULE)
-
-const { page, consoleErrors } = await session({ waitForEvents: 30 })
+await waitForStreamRows(page, 30)
 
 // The WebSocket stream must stay healthy throughout -- this is
 // specifically the dual-channel failure the issue describes (the query

@@ -5,6 +5,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -58,6 +59,79 @@ type decommissionReceiptView struct {
 	Duration      string    `json:"duration"`
 	EventCount    int       `json:"eventCount"`
 	Truncated     bool      `json:"truncated"`
+	// Addresses are the distinct addresses inside the retired range that
+	// the replay actually caught, most-seen first and capped at
+	// receiptAddressBound. Named because "would have caught 3" is an
+	// abstraction until the operator sees which device it means: #485's
+	// receipt sentence is "3 lines -- all from 10.0.70.14, last named
+	// garage-cam", and the half after the dash is the persuasive half.
+	//
+	// Derived from the receipt's own bounded sample, which is everything
+	// the replay retains about which addresses it matched, so the counts
+	// are over that sample rather than over EmissionCount. Truncated
+	// says when the two can differ.
+	Addresses []decommissionReplayAddressView `json:"addresses,omitempty"`
+}
+
+// receiptAddressBound caps how many addresses a receipt names. The
+// sentence is an argument, not an inventory: four is enough to show
+// whether one stubborn device or half a subnet is still talking, and a
+// list long enough to scroll would say neither.
+const receiptAddressBound = 4
+
+// decommissionReplayAddressView is one address the replay caught, with
+// the router's last-known name for it where there is one.
+//
+// Name obeys the same absence rule the rest of this feature does: it
+// comes from the departure's frozen last-known snapshot, and is absent
+// -- never guessed -- for an address no push ever named.
+type decommissionReplayAddressView struct {
+	Address string `json:"address"`
+	Name    string `json:"name,omitempty"`
+	Count   int    `json:"count"`
+}
+
+// replayAddresses reduces a receipt's sample to the addresses it caught,
+// most-seen first, naming each from the departure's snapshot.
+//
+// Ties break on the address itself, so the same corpus always produces
+// the same sentence rather than one that reshuffles between paints.
+func replayAddresses(rec *engine.Receipt, known []routerstate.KnownHost) []decommissionReplayAddressView {
+	counts := map[string]int{}
+	for _, sample := range rec.Sample() {
+		if sample.Target == "" {
+			continue
+		}
+		counts[sample.Target]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	out := make([]decommissionReplayAddressView, 0, len(counts))
+	for addr, n := range counts {
+		out = append(out, decommissionReplayAddressView{Address: addr, Name: nameFor(known, addr), Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].Address < out[j].Address
+		}
+		return out[i].Count > out[j].Count
+	})
+	if len(out) > receiptAddressBound {
+		out = out[:receiptAddressBound]
+	}
+	return out
+}
+
+// nameFor is the departure snapshot's answer for one address, empty
+// where no push covered it.
+func nameFor(known []routerstate.KnownHost, addr string) string {
+	for _, k := range known {
+		if k.Address == addr {
+			return k.Name
+		}
+	}
+	return ""
 }
 
 // decommissionDeclineView is what is shown instead when there is nothing
@@ -89,6 +163,13 @@ type decommissionWatchView struct {
 	// reported: the flag is what retirement is decided on, and this is
 	// the evidence for it.
 	Coverage engine.CoverageState `json:"coverage"`
+	// UndoableUntil is when the undo offered after a silent retirement
+	// stops being offered -- RetiredAt plus decommission.UndoWindow, and
+	// absent entirely for a watch that has not retired. Computed here
+	// from the store's own constant rather than restated on the surface,
+	// so the window cannot be one hour in the API and something else in
+	// the map's note line.
+	UndoableUntil time.Time `json:"undoableUntil,omitzero"`
 }
 
 // decommissionResponse is one call for the whole surface: what is being
@@ -143,12 +224,7 @@ func (s *Server) handleDecommission(w http.ResponseWriter, r *http.Request) {
 					wt.Covered = covered
 				}
 			}
-			resp.Watches = append(resp.Watches, decommissionWatchView{
-				Watch:     wt,
-				State:     wt.StateAt(now),
-				RetiresIn: wt.Remaining(now).Round(time.Minute).String(),
-				Coverage:  engine.DecommissionCoverage(wt.CIDR, rulesByDevice),
-			})
+			resp.Watches = append(resp.Watches, s.watchViewFor(wt, rulesByDevice, now))
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -190,6 +266,7 @@ func (s *Server) offerViewFor(d routerstate.Departure, rulesByDevice map[string]
 			Duration:      win.Duration().String(),
 			EventCount:    win.EventCount(),
 			Truncated:     rec.CorpusTruncated(),
+			Addresses:     replayAddresses(rec, d.LastKnown),
 		}
 	}
 	return v
@@ -382,6 +459,43 @@ func (s *Server) handleDecommissionForce(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, s.watchViewFor(stored, rulesByDevice, time.Now()))
 }
 
+// handleDecommissionUndo takes a retirement back, within the hour after
+// it happened.
+//
+// #485 ratified retirement as silent: the ghost leaves by itself, the
+// map goes back to what it was, and all that is left is a note line and
+// this. So the undo is the whole safety net for a transition nobody was
+// asked to confirm -- an operator who looks up, sees the zone gone and
+// knows the segment was not finished needs a way back that does not
+// depend on having been watching when it left.
+//
+// User tier, the same guard force and delete carry: it puts server-side
+// traffic surveillance back, which is the same kind of change to what
+// the instance watches as creating it was.
+//
+// The refusals are the store's (decommission.Restore): a watch that
+// never retired, and a retirement older than the window, are both
+// conflicts rather than bad requests -- the request was well formed and
+// the watch's own state is what refused it.
+func (s *Server) handleDecommissionUndo(w http.ResponseWriter, r *http.Request) {
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
+		return
+	}
+	if s.Decommissions == nil {
+		http.Error(w, "decommission watches are not available on this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	stored, err := s.Decommissions.Restore(r.PathValue("id"), time.Now())
+	if err != nil {
+		writeDecommissionError(w, err)
+		return
+	}
+	s.Audit.Record(auditActor(r), "decommission.undo", stored.ID, stored.CIDR)
+	rulesByDevice, _ := s.definitionsCoverage()
+	writeJSON(w, http.StatusOK, s.watchViewFor(stored, rulesByDevice, time.Now()))
+}
+
 // handleDecommissionDelete abandons a watch outright -- "I no longer want
 // to be asked about this range". Distinct from retirement, which is the
 // watch finishing its job, and from force-remove, which only takes it off
@@ -444,13 +558,21 @@ func stragglersFrom(known []routerstate.KnownHost) []decommission.Straggler {
 	return out
 }
 
+// watchViewFor paints one watch. Every surface that returns a watch goes
+// through here -- the list, the create, the force and the undo -- so a
+// watch cannot be described one way by one endpoint and another way by
+// the next.
 func (s *Server) watchViewFor(wt decommission.Watch, rulesByDevice map[string][]ingest.FilterRule, now time.Time) decommissionWatchView {
-	return decommissionWatchView{
+	v := decommissionWatchView{
 		Watch:     wt,
 		State:     wt.StateAt(now),
 		RetiresIn: wt.Remaining(now).Round(time.Minute).String(),
 		Coverage:  engine.DecommissionCoverage(wt.CIDR, rulesByDevice),
 	}
+	if !wt.RetiredAt.IsZero() {
+		v.UndoableUntil = wt.RetiredAt.Add(decommission.UndoWindow)
+	}
+	return v
 }
 
 // refreshDecommissionCoverage re-answers "could a straggler be seen at
@@ -484,7 +606,9 @@ func writeDecommissionError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, decommission.ErrNoSuchWatch):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, decommission.ErrAlreadyEnded):
+	case errors.Is(err, decommission.ErrAlreadyEnded),
+		errors.Is(err, decommission.ErrNotRetired),
+		errors.Is(err, decommission.ErrUndoExpired):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)

@@ -23,9 +23,10 @@ import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-br
 // anywhere on the path means no flag, and the scenario then fails for a
 // reason that has nothing to do with Clear all (#354).
 const TARGETS = ['198.51.100.79', '198.51.100.80', '198.51.100.81']
-for (const ip of TARGETS) feedPortScan(20, ip)
 
 const { page } = await session()
+
+for (const ip of TARGETS) feedPortScan(20, ip)
 
 async function openFlags() {
   await goTo(page, 'Flags')

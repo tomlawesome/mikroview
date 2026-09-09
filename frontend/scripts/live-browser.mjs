@@ -142,50 +142,14 @@ const ENV_SCRIPT = path.join(REPO, process.env.MV_ENV_SCRIPT || 'scripts/live-en
 // live-env.sh (plain HTTP on loopback) it changes nothing.
 setGlobalDispatcher(new Agent({ connect: { rejectUnauthorized: false } }))
 
-/**
- * preSessionFeeds remembers every feed made before session() opened its
- * page, so resetInstance can put them back.
- *
- * THIS IS TEMPORARY, AND IT GOES WHEN THE SCENARIOS MOVE.
- *
- * Thirty-three scenarios call a feed helper and *then* call session() --
- * live-smoke.mjs feeds 200 lines and waits for 100 rows on the first
- * screen. #1064's reset empties the event ring at the start of session(),
- * which takes exactly those events with it, and each of those scenarios
- * then waits for rows that will never arrive. Replaying is what makes the
- * reset invisible to a scenario that did nothing wrong: it fed, the
- * instance was wiped underneath it, and it is fed again.
- *
- * The real fix is for those scenarios to feed *after* session(), at which
- * point nothing here is doing anything and the whole mechanism -- this
- * list, feed(), and the replay loop in resetInstance -- comes out. It
- * lives here rather than in each scenario deliberately: the alternative
- * was editing thirty-three files that other work is already touching, to
- * carry a workaround that is meant to be deleted.
- *
- * Only feeds made before the first session() are replayed. Afterwards
- * there is nothing to protect them from -- the reset has already
- * happened, and a scenario feeding mid-run wants exactly one delivery.
- */
-const preSessionFeeds = []
 let sessionOpened = false
-
-/** feed runs a delivery of `count` lines, remembering it for the replay. */
-function feed(run, count) {
-  run()
-  if (!sessionOpened) preSessionFeeds.push({ run, count })
-}
 
 /** feedSyslog pushes synthetic events into the running instance. */
 export function feedSyslog(n, label = 'live-test-rule') {
-  feed(
-    () =>
-      execFileSync(ENV_SCRIPT, ['syslog', String(n), label], {
-        stdio: 'ignore',
-        cwd: REPO,
-      }),
-    n,
-  )
+  execFileSync(ENV_SCRIPT, ['syslog', String(n), label], {
+    stdio: 'ignore',
+    cwd: REPO,
+  })
 }
 
 /**
@@ -210,14 +174,10 @@ export function feedRaw(...lines) {
   // opens a TLS session per call, so a scenario feeding two hundred
   // lines one call at a time paid two hundred handshakes and process
   // starts for them (#1061).
-  feed(
-    () =>
-      execFileSync(ENV_SCRIPT, ['raw', ...lines], {
-        stdio: 'ignore',
-        cwd: REPO,
-      }),
-    lines.length,
-  )
+  execFileSync(ENV_SCRIPT, ['raw', ...lines], {
+    stdio: 'ignore',
+    cwd: REPO,
+  })
 }
 
 /** eventsTotal reads the instance's lifetime event count (/api/stats). */
@@ -245,27 +205,6 @@ export async function waitForEventsTotal(page, n, { timeoutMs = 15000 } = {}) {
 }
 
 /**
- * waitForEventsSettled returns once the lifetime count has stopped
- * rising, for a caller that does not know how many lines are in flight.
- */
-async function waitForEventsSettled(page, { quietMs = 500, timeoutMs = 15000 } = {}) {
-  const deadline = Date.now() + timeoutMs
-  let last = await eventsTotal(page)
-  let quietSince = Date.now()
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 100))
-    const now = await eventsTotal(page)
-    if (now !== last) {
-      last = now
-      quietSince = Date.now()
-    } else if (Date.now() - quietSince >= quietMs) {
-      return last
-    }
-  }
-  return last
-}
-
-/**
  * feedAndSettle feeds the lines and returns once the instance has counted
  * every one of them. Use it where a scenario fed and then slept.
  */
@@ -276,14 +215,10 @@ export async function feedAndSettle(page, ...lines) {
 }
 
 export function feedRawFrom(sourceIp, ...lines) {
-  feed(
-    () =>
-      execFileSync(ENV_SCRIPT, ['rawfrom', sourceIp, ...lines], {
-        stdio: 'ignore',
-        cwd: REPO,
-      }),
-    lines.length,
-  )
+  execFileSync(ENV_SCRIPT, ['rawfrom', sourceIp, ...lines], {
+    stdio: 'ignore',
+    cwd: REPO,
+  })
 }
 
 /**
@@ -299,7 +234,7 @@ export function feedRawFrom(sourceIp, ...lines) {
 export function feedPortScan(n, sourceIp) {
   const args = ['portscan', String(n)]
   if (sourceIp) args.push(sourceIp)
-  feed(() => execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO }), n)
+  execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO })
 }
 
 /**
@@ -315,7 +250,7 @@ export function feedInternalRecon(n, sourceIp, port) {
   const args = ['recon', String(n)]
   if (sourceIp) args.push(sourceIp)
   if (port) args.push(String(port))
-  feed(() => execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO }), n)
+  execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO })
 }
 
 /**
@@ -611,10 +546,6 @@ export async function goTo(page, label, { unfold = true } = {}) {
  * Returns whether a reset happened, so the caller knows to reload.
  */
 async function resetInstance(page) {
-  // Let what the scenario already fed land before the reset, or it lands
-  // after and the scenario sees it twice: fed once by itself, once by the
-  // replay. live-smoke feeds 200 lines and rendered 400 rows.
-  if (preSessionFeeds.length > 0) await waitForEventsSettled(page)
   const res = await page.request.fetch(`${URL_BASE}/api/test/reset`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
@@ -623,30 +554,10 @@ async function resetInstance(page) {
   if (res.status() !== 200) {
     throw new Error(`POST /api/test/reset answered ${res.status()} -- the instance was not reset, so this run would be judging residue`)
   }
-  // Whatever the scenario fed before signing in went with the reset; put
-  // it back before the page is navigated anywhere that reads it -- and
-  // wait for the instance to have counted it. Ingest is asynchronous:
-  // without the wait the Stream's first fetch raced the replay and a
-  // scenario waiting for rows could see the page settle at fewer than
-  // it fed. A short count is not fatal here: a line the parser refused
-  // was refused before the reset too, so the scenario's own checks are
-  // the ones that should say so.
-  if (preSessionFeeds.length === 0) return true
-  const before = await eventsTotal(page)
-  let expected = before
-  for (const { run, count } of preSessionFeeds) {
-    run()
-    expected += count
-  }
-  try {
-    await waitForEventsTotal(page, expected)
-  } catch (e) {
-    console.warn(`replaying pre-session feeds: ${e.message}`)
-  }
   return true
 }
 
-export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream', unfoldFilter = true, keep = false } = {}) {
+export async function session({ dismissSetup = true, landing = 'stream', unfoldFilter = true, keep = false } = {}) {
   browser = await launchBrowser()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
@@ -687,9 +598,7 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
   // behind.
   //
   // The shell has already fetched the stream by now, so the page is
-  // reloaded after a reset or it goes on showing what was cleared, with
-  // the replayed feeds arriving on top over the socket: live-smoke fed
-  // 200 lines and rendered 400 rows.
+  // reloaded after a reset or it goes on showing what was cleared.
   if (!keep && !sessionOpened && (await resetInstance(page))) {
     await page.reload({ waitUntil: 'networkidle' })
     await page.waitForSelector('#main-content', { timeout: 15000 })
@@ -714,17 +623,25 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
     await page.waitForSelector(unfoldFilter ? 'input.rule' : '.filterline input.fbtype', { timeout: 15000 })
   }
 
-  if (waitForEvents > 0) {
-    // Scoped to the Stream card: the deck keeps neighbouring cards
-    // mounted, and their scenes render .row elements of their own, so a
-    // bare .row count can be satisfied before any event has rendered.
-    await page.waitForFunction(
-      (n) => document.querySelectorAll('.card[data-card="live"] .row').length >= n,
-      waitForEvents,
-      { timeout: 20000 },
-    )
-  }
   return { page, consoleErrors }
+}
+
+/**
+ * waitForStreamRows waits for the Stream card to have rendered at least
+ * `n` event rows. Feed first, then call this: session() used to do it
+ * from a `waitForEvents` option, back when scenarios fed before signing
+ * in (#1065).
+ *
+ * Scoped to the Stream card: the deck (#616) keeps neighbouring cards
+ * mounted, and their scenes render .row elements of their own, so a bare
+ * .row count can be satisfied before any event has rendered.
+ */
+export async function waitForStreamRows(page, n, { timeoutMs = 20000 } = {}) {
+  await page.waitForFunction(
+    (want) => document.querySelectorAll('.card[data-card="live"] .row').length >= want,
+    n,
+    { timeout: timeoutMs },
+  )
 }
 
 /**

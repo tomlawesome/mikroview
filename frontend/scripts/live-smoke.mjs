@@ -4,10 +4,11 @@
 // it, and come away with no console errors. A change-specific scenario
 // goes in its own file alongside this one.
 
-import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, waitForStreamRows } from './live-browser.mjs'
 
+const { page, consoleErrors } = await session()
 feedSyslog(200, 'smoke-rule')
-const { page, consoleErrors } = await session({ waitForEvents: 100 })
+await waitForStreamRows(page, 100)
 
 // Scoped to the Stream card: the deck (#616) keeps the neighbouring
 // cards mounted, and their scenes render .row elements of their own.

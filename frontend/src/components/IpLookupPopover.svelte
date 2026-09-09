@@ -7,6 +7,7 @@
   // by that container's overflow, which an absolutely-positioned popover
   // anchored inside the table would be.
   import { ipLookupState } from '../lib/ipLookup.svelte'
+  import { dossierState } from '../lib/dossier.svelte'
   import ReputationDetails from './ReputationDetails.svelte'
 
   const POPOVER_WIDTH = 260
@@ -59,6 +60,24 @@
       <button class="close" onclick={() => ipLookupState.close()} aria-label="Close">✕</button>
     </div>
 
+    <!-- Dossier first (#410): "what is this device" is the question
+         that comes before "what is this address known for", and the
+         investigate control is the per-IP menu the card's design names
+         as its route. Opening it closes this popover and hands the
+         card the same trigger, so Esc returns focus to the button the
+         operator actually pressed. -->
+    <button
+      type="button"
+      class="item"
+      data-testid="ip-lookup-dossier"
+      onclick={() => {
+        const ip = ipLookupState.anchor?.ip
+        const trigger = ipLookupState.trigger
+        ipLookupState.close()
+        if (ip) dossierState.open(ip, trigger)
+      }}>Dossier</button
+    >
+
     {#if ipLookupState.loading}
       <div class="status">Looking up…</div>
     {:else if ipLookupState.error}
@@ -110,6 +129,25 @@
   .close:hover {
     color: var(--fg);
     border-color: var(--fg-muted);
+  }
+
+  .item {
+    display: block;
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 5px 8px;
+    text-align: left;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--fg);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .item:hover {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .status {

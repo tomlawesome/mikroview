@@ -9,7 +9,8 @@ import { boundaryCoverage, edgeCoverage, type Coverage } from '../coverageRule'
 import type { PolicyEdge } from '../policy.svelte'
 import type { RealityEdge } from '../reality'
 import type { TunnelInterface } from '../tunnels.svelte'
-import type { Device, FirewallEvent } from '../types'
+import { ghostStateOf } from '../decommission'
+import type { DecommissionOffer, DecommissionWatch, Device, FirewallEvent, GhostState } from '../types'
 import type { ZoneInfo } from '../zones.svelte'
 import { betterCoverage, gatesFromRules, type CityGate } from './gates'
 import { mergeZoneHosts, type CityHost, type HostMarks } from './presence'
@@ -53,6 +54,11 @@ export interface CityZone {
    * buildings dim. Derived from `coverage` -- #1014, where reading the
    * policy edges alone left a declared boundary dark. */
   dark: boolean
+  /** Set only on a segment the router has stopped carrying (#460, round
+   * 55): the district is drawn as a ghost in this state's ink, and the
+   * borough counts it apart from its live districts. Absent on every
+   * ordinary zone, which is what makes `ghost` a safe truth test. */
+  ghost?: GhostState
 }
 
 export interface CityEdge {
@@ -216,6 +222,12 @@ export function cityInputFrom(
    * marked": every building draws plain, which is what a caller that
    * predates this should still get. */
   hostMarks: ReadonlyMap<string, HostMarks> = new Map(),
+  /** Segments the router has stopped carrying (#460, round 55), each
+   * already shaped as a zone by the caller that can read the watches.
+   * They are appended after the live zones rather than merged into
+   * them: a ghost is a place, not a boundary anything is still routing,
+   * and the borough's own label counts the two apart. */
+  ghostZones: readonly CityZone[] = [],
 ): CityInput {
   let primary = primaryId ?? devices[0]?.id ?? ''
   const routers: CityRouter[] = devices.map((d) => ({ id: d.id, name: d.name, primary: d.id === primary, sourceIp: d.sourceIp }))
@@ -350,7 +362,11 @@ export function cityInputFrom(
   const dropsByRule = dropsByRuleFrom(events)
   return {
     routers,
-    zones: cityZones,
+    // A ghost stands where its district stood, so a live zone for the
+    // same boundary steps aside rather than being laid out beside it
+    // (#460): two districts with one id is the same segment drawn
+    // twice, once working and once gone.
+    zones: cityZones.filter((z) => !ghostZones.some((g) => g.id === z.id)).concat(ghostZones),
     edges: edges.map((e) => ({
       key: e.key,
       from: e.from,
@@ -379,4 +395,83 @@ export function zoneHolding(zones: CityZone[], ip: string): CityZone | null {
     if (c && addressInCidr(ip, c)) return z
   }
   return null
+}
+
+function dedupeByAddress<T extends { address: string }>(xs: readonly T[]): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const x of xs) {
+    if (seen.has(x.address)) continue
+    seen.add(x.address)
+    out.push(x)
+  }
+  return out
+}
+
+/**
+ * The retired segments, shaped as zones so the city lays them out like
+ * any other district (#460, round 55).
+ *
+ * A ghost is a place, not a boundary anything is still routing: it has
+ * no events, no coverage claim of its own and no gates, and its hosts
+ * are the names the range last had rather than machines anyone can see.
+ * They are drawn from the frozen last-known snapshot and marked `quiet`,
+ * which is the material round 55 draws them in before the plate fades
+ * them -- a ghost host is a quiet host that is also gone.
+ */
+export function ghostCityZones(
+  offers: readonly DecommissionOffer[],
+  watches: readonly DecommissionWatch[],
+  nowMs: number,
+  primaryRouterId: string,
+): CityZone[] {
+  const out: CityZone[] = []
+  const zoneFor = (
+    id: string,
+    name: string,
+    cidr: string,
+    device: string,
+    ghost: GhostState,
+    known: readonly { address: string; name?: string }[],
+  ): CityZone => ({
+    id,
+    name: name || id,
+    cidr,
+    // One building per address: the frozen snapshot is newest-named
+    // first and can carry the same address twice, once from the lease
+    // table and once from ARP.
+    hosts: dedupeByAddress(known).map(
+      (k): CityHost => ({
+        key: '',
+        ip: k.address,
+        label: k.name || k.address,
+        presence: 'quiet',
+        lastSeen: null,
+        firstSeen: null,
+        events: 0,
+        reason: null,
+        markedBy: null,
+        markedAt: null,
+        flags: 0,
+        watch: 0,
+        spike: false,
+      }),
+    ),
+    hostCount: dedupeByAddress(known).length,
+    eventCount: 0,
+    routerId: device || primaryRouterId,
+    // A retired range makes no coverage claim: nothing is expected to
+    // log a boundary that is gone, and calling it dark would put a hole
+    // on the map where there is no longer a wall.
+    coverage: 'quiet',
+    dark: false,
+    ghost,
+  })
+  for (const o of offers) {
+    out.push(zoneFor(o.interface, o.name, o.cidr, o.device, 'none', o.lastKnown ?? []))
+  }
+  for (const w of watches) {
+    out.push(zoneFor(w.interface, w.name, w.cidr, w.device, ghostStateOf(w, nowMs), w.lastKnown ?? []))
+  }
+  return out
 }

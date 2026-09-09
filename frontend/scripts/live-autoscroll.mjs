@@ -15,7 +15,7 @@
 // below are unchanged in substance -- what the freeze must do is what it
 // always had to do -- only the selector and the two tooltip readings
 // follow the control to where it now lives.
-import { session, feedSyslog, check, done, goTo, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, eventsTotal, waitForEventsTotal, waitForStreamRows } from './live-browser.mjs'
 
 // Scoped to the centred card: the deck mounts the neighbouring cards
 // too, and the whisper belongs to the Stream card.
@@ -27,15 +27,16 @@ const FOLLOW = `${CARD} .whisper .hand-btn.follow`
 // lives -- below that threshold every event renders regardless of
 // autoscroll, and the bug is invisible.
 //
-// The split around session() is load-bearing, not stylistic: the client's
-// initial GET /api/events asks for limit:500 (state.svelte.ts), so no
-// amount of pre-seeding gets the page past 500 rows. Only events arriving
-// over the WebSocket, after the page is up, can drive the window past the
-// 800-row cap. Feeding both batches up front leaves it stuck at 500 and
-// the wait below never satisfies.
-feedSyslog(450, 'batch-a')
+// The split is load-bearing, not stylistic: it is what gets the window
+// past its 800-row cap. The client's initial GET /api/events asks for
+// limit:500 (state.svelte.ts), so seeding before the page is up can
+// never do it -- only events arriving over the WebSocket afterwards can,
+// and both batches do, which is why they are fed in two goes with the
+// page waiting on the first before the second lands.
+const { page } = await session()
 
-const { page } = await session({ waitForEvents: 400 })
+feedSyslog(450, 'batch-a')
+await waitForStreamRows(page, 400)
 
 feedSyslog(450, 'batch-b')
 await page.waitForFunction(() => document.querySelectorAll('.row').length >= 800, null, { timeout: 30000 })
