@@ -101,6 +101,9 @@ check(
   })) === 200,
   'the rule table is pushed whole',
 )
+// zonesState only fetches router addresses on load and otherwise
+// refreshes from Entities.svelte's own explicit call, so a push made
+// straight over the ingest API needs a reload to reach the map.
 await page.reload()
 
 /**
@@ -110,6 +113,30 @@ await page.reload()
  * and ask the browser which node is on top. Same helper as
  * live-topography-card-placement.mjs, which drives the same shapes.
  */
+/**
+ * Poll the topography camera's own transform until it stops changing --
+ * the real end of Topography.svelte's `.camera { transition: transform
+ * 0.35s ease }`, not a guessed margin over it. A plate or edge read (or
+ * hovered) while the camera is still mid-flight is not where it comes to
+ * rest.
+ */
+async function waitForCameraSettle(timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate(() => {
+      const el = document.querySelector('[data-card="topography"] g.camera')
+      return el ? getComputedStyle(el).transform : null
+    })
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
+
 async function hoverShape(locator) {
   const handle = await locator.elementHandle()
   if (!handle) return null
@@ -144,7 +171,7 @@ await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
 await page.waitForSelector('[data-card="topography"] .cedge', { timeout: 10000 })
-await new Promise((r) => setTimeout(r, 900))
+await waitForCameraSettle()
 
 // Round 49's material rule, read straight off the drawing.
 //
@@ -215,7 +242,10 @@ check(
 // way out -- which is where the words the plaque no longer carries now
 // live (DESIGN.md "Cards", the quiet card).
 await page.mouse.move(4, 4)
-await new Promise((r) => setTimeout(r, 300))
+// The previous card's own grace period (CARD_GRACE_MS, lib/cardAnchor.ts)
+// before it closes -- wait for that card to actually detach rather than
+// guessing a margin over it, or the next hover risks reading its content.
+await page.waitForSelector(CARD, { state: 'detached', timeout: 2000 }).catch(() => {})
 const quietEdge = page.locator('[data-card="topography"] .cov-g:has(.cedge.quiet)').first()
 check((await hoverShape(quietEdge)) !== null, 'the declared boundary can be pointed at')
 await page.waitForSelector(CARD, { timeout: 5000 })

@@ -138,11 +138,13 @@ feedSyslog(30, 'fall-cadence')
 // count past MAX_CARRIERS (8) and exercise the cap + "+n quieter"
 // affordance the review asked for, without the shared-instance port
 // pollution that made this count unassertable on ether1/bridge1.
-for (let p = 6000; p < 6012; p++) {
-  feedRaw(
-    `firewall,info D|cap-test| forward: in:ether6 out:bridge6, connection-state:new, proto TCP (SYN), 203.0.113.50:5000->192.168.1.10:${p}, len 60`,
-  )
-}
+feedRaw(
+  ...Array.from(
+    { length: 12 },
+    (_, i) =>
+      `firewall,info D|cap-test| forward: in:ether6 out:bridge6, connection-state:new, proto TCP (SYN), 203.0.113.50:5000->192.168.1.10:${6000 + i}, len 60`,
+  ),
+)
 
 // fallState polls (Fall.svelte), so the freshly-pushed table takes up to
 // one poll interval to reach the page -- the generous timeout here is

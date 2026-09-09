@@ -25,7 +25,7 @@
 // server, since "a trial writes nothing" is the property most worth
 // pinning here.
 
-import { session, check, done, goTo, feedSyslog, feedPortScan } from './live-browser.mjs'
+import { session, check, done, goTo, feedSyslog, feedPortScan, waitForFlag } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const SCAN_SOURCE = '198.51.100.86'
@@ -57,9 +57,16 @@ const tidy = (s) => (s ?? '').replace(/\s+/g, ' ').trim()
 // arrives down one connection within the same instant.
 
 feedSyslog(40, 'live-watchers-try')
+// This gap has to be real elapsed time, not a wait on any event: the
+// corpus has to *span* more than the candidate window tried below, which
+// a wait-for-ingestion cannot stand in for -- see the header comment.
 await page.waitForTimeout(2500)
 feedPortScan(25, SCAN_SOURCE)
-await page.waitForTimeout(1500)
+// Real ingestion this time, not just spacing: wait for the scan to raise
+// its own flag (#354's pattern), which cannot happen before the replay
+// endpoint's own corpus has these events in it either.
+const scanArrived = await waitForFlag(page, SCAN_SOURCE)
+check(scanArrived.ok, scanArrived.message)
 
 // --- what the server says the corpus covers -----------------------------
 //

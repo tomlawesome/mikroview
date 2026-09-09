@@ -162,20 +162,46 @@ check(
   'the filter-rule table is accepted through the real ingest endpoint',
 )
 
+/**
+ * Poll the topography camera's own transform until it stops changing --
+ * the real end of Topography.svelte's `.camera { transition: transform
+ * 0.35s ease }`, not a guessed margin over it.
+ */
+async function waitForCameraSettle(timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate(() => {
+      const el = document.querySelector('[data-card="topography"] g.camera')
+      return el ? getComputedStyle(el).transform : null
+    })
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
+
 // Round 49 deleted the lens row: traffic is the picture and coverage is
 // always on, so there is no tab to pick before the map can be read. What
 // is left of `openLens` is getting to a 2D stop.
-async function open2D() {
-  await page.reload()
+//
+// Only the first call reloads: that one is picking up the estate just
+// pushed over the ingest API (zonesState only fetches addresses on load),
+// every later call is just re-settling the same already-loaded map.
+async function open2D({ reload = false } = {}) {
+  if (reload) await page.reload()
   await page.click('.rail-name >> text=Topography')
   // #869: off the city default and onto zones before waiting on anything
   // the 2D map draws -- see the coverage scenario for the full note.
   await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
   await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
-  await page.waitForTimeout(600)
+  await waitForCameraSettle()
 }
 
-await open2D()
+await open2D({ reload: true })
 await page.waitForSelector('[data-card="topography"] .cedge', { timeout: 10000 })
 
 // Walk each rendered path in the browser: 61 points apiece, in the
@@ -338,7 +364,7 @@ check(
 // a state change in a microtask, so clicking and reading inside one
 // page.evaluate reads the value the click was about to replace.
 await page.click('[data-card="topography"] [aria-label="Map overlays"] button >> nth=0')
-await page.waitForTimeout(400)
+await page.waitForSelector('[data-card="topography"] .pill.p.edit', { timeout: 2000 })
 const opened = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
   return {
@@ -349,7 +375,7 @@ const opened = await page.evaluate(() => {
 check(opened.bar, 'clicking it opens the picker as a bar of the same shape')
 check(!opened.idle, 'which takes the pill\'s place rather than sitting beside it')
 await page.keyboard.press('Escape')
-await page.waitForTimeout(200)
+await page.waitForSelector('[data-card="topography"] .pill.p.edit', { state: 'detached', timeout: 2000 }).catch(() => {})
 check(
   (await page.locator('[data-card="topography"] .pill.p.edit').count()) === 0,
   'and Esc puts it away again',
