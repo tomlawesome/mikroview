@@ -103,6 +103,7 @@
   import type { OffBaselineLine } from '../lib/baseline'
   import { hostMarksFrom, presenceNote, quietFor, type CityHost, type HostPresence } from '../lib/city/presence'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
+  import TraceCrumb from './TraceCrumb.svelte'
   import type { Building, CityPeer, District, DistrictGate, Ground, Road, RoadKind } from '../lib/city/types'
 
   let {
@@ -3264,7 +3265,10 @@
 {/snippet}
 
 <div class="city" data-stop={effectiveStop} bind:this={cityEl}>
-  <!-- TraceCrumb mounts here (#1050) -->
+  <!-- The traced line's own crumb, plus its list (#1018 round 53, #1050
+       round 56 A1) -- the same component Topography mounts, so the same
+       markup and behaviour appear on the city too. -->
+  <TraceCrumb />
   <svg
     bind:this={svgEl}
     viewBox="0 0 {STAGE_W} {STAGE_H}"
