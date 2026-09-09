@@ -55,9 +55,25 @@ vi.mock('../lib/api', () => ({
         // render a field named "stale" and this suite would say so.
         paramSchema: [{ name: 'stale', type: 'int', description: 'the row copy' }],
         provenance: { origin: 'shipped' },
+        // A shipped declarative detector's own conditions, read off its
+        // builder (#829). Their presence is what tells the bench that
+        // cloning this row is a copy the server can make, rather than a
+        // draft that has to be written.
+        structure: {
+          conditions: [
+            { field: 'destinationPort', operator: 'inRange', values: ['1', '1024'] },
+            { field: 'action', operator: 'equals', values: ['drop'] },
+          ],
+          key: 'perSource',
+          counting: 'distinct',
+          distinctField: 'destinationPort',
+          detailTemplate: '{Count} distinct destination ports from {SourceAddress}',
+        },
         available: true,
         replay: { known: true, capable: true },
       },
+      // A shipped detector whose matching is Go: no structure, so no
+      // conditions for a copy to carry.
       {
         id: 'rule_spike',
         name: 'Rule hit-rate spike',
@@ -125,6 +141,8 @@ vi.mock('../lib/api', () => ({
   })),
   resetDefinition: vi.fn(async () => ({ id: 'port_scan' })),
   cloneDefinition: vi.fn(async () => ({ id: 'copy-1' })),
+  createCustomDetection: vi.fn(async () => ({ id: 'made-1' })),
+  deleteDefinition: vi.fn(async () => null),
   fetchEntities: vi.fn(async () => [
     { type: 'host', key: '192.168.1.50', label: 'nas' },
     { type: 'port', key: '22', label: 'ssh' },
@@ -382,9 +400,10 @@ describe('reset', () => {
   })
 })
 
-// #810. Clone is offered on the rows where it can succeed and nowhere
-// else: a custom detector is stored structure the server copies, a
-// shipped one is Go keyed by its own id and always refuses.
+// #810, widened by #829. Clone was custom-only while a shipped
+// detector's logic was Go the server could not copy; now a shipped
+// declarative one's conditions come across with the copy, so the button
+// is on every row and the drawer it opens is the round-8 one.
 describe('clone', () => {
   // The copy as the server hands it back on the refresh that follows:
   // a second custom detector, paused, under the "(copy)" name.
@@ -417,25 +436,33 @@ describe('clone', () => {
     } as never)
   }
 
+  // A custom detector opens the round-8 drawer, whose clone is the .olink
+  // beside try and save; a shipped one keeps the #787 panel, whose clone
+  // is the button in its foot. Same operation, two surfaces, so the tests
+  // say which one they are pressing.
+  function cloneButton(where: 'drawer' | 'panel') {
+    return screen.getByRole('button', { name: where === 'drawer' ? 'clone' : 'Clone' })
+  }
+
   it('is offered on a custom detector', async () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open('SSH hammering')
-    expect(screen.getByRole('button', { name: 'Clone' })).toBeTruthy()
+    expect(cloneButton('drawer')).toBeTruthy()
   })
 
-  it('is not offered on a shipped one, whose logic no copy could carry', async () => {
+  it('is offered on a shipped one too, now that a copy can carry conditions', async () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
-    expect(screen.queryByRole('button', { name: 'Clone' })).toBeNull()
-    // The rest of the foot is untouched: this hides one button, not the
-    // panel it sits in.
+    expect(cloneButton('panel')).toBeTruthy()
+    // The rest of the foot is untouched: this adds one button, it does
+    // not rearrange the panel it sits in.
     expect(screen.getByRole('button', { name: 'Reset to stock' })).toBeTruthy()
   })
 
   it('creates the copy with no prompt in between, under the "(copy)" name', async () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open('SSH hammering')
-    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await fireEvent.click(cloneButton('drawer'))
     await settle()
     expect(api.cloneDefinition).toHaveBeenCalledWith('ssh_hammering', 'SSH hammering (copy)')
   })
@@ -446,7 +473,7 @@ describe('clone', () => {
     // of a detector the operator is halfway through editing.
     render(EngineRoomWatchers, { canEdit: true })
     await open('SSH hammering')
-    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await fireEvent.click(cloneButton('drawer'))
     await settle()
     expect(api.updateDefinition).not.toHaveBeenCalled()
   })
@@ -455,23 +482,35 @@ describe('clone', () => {
     await withCopyOnRefresh()
     render(EngineRoomWatchers, { canEdit: true })
     await open('SSH hammering')
-    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await fireEvent.click(cloneButton('drawer'))
     await settle()
 
     const copyRow = screen.getByRole('button', { expanded: true, name: /SSH hammering \(copy\)/ })
     expect(copyRow).toBeTruthy()
-    const name = screen.getByLabelText('Name') as HTMLInputElement
+    const name = screen.getByLabelText('name') as HTMLInputElement
     expect(name.value).toBe('SSH hammering (copy)')
     expect(document.activeElement).toBe(name)
   })
 
+  it('says where the copy came from, in the drawer that opens on it', async () => {
+    // The copied-from line is the whole of what clone says: there is no
+    // prompt and no confirmation, so a copy that arrived with nothing
+    // saying so would be indistinguishable from a press that did nothing.
+    await withCopyOnRefresh()
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(cloneButton('drawer'))
+    await settle()
+    expect(screen.getByText(/copied from/)).toBeTruthy()
+  })
+
   it('shows the server’s refusal in its own words when a definition cannot be cloned', async () => {
     const refusal =
-      'a shipped definition cannot be cloned: its logic is compiled into this binary and keyed by its own id, so a copy would evaluate nothing. Override its params instead (PUT /api/definitions/{id}).'
+      "this detector's conditions are built into this binary as Go rather than stored as data, so there are none to copy."
     vi.mocked(api.cloneDefinition).mockResolvedValueOnce(refusal)
     render(EngineRoomWatchers, { canEdit: true })
     await open('SSH hammering')
-    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await fireEvent.click(cloneButton('drawer'))
     await settle()
     expect(screen.getByText(refusal)).toBeTruthy()
   })
@@ -741,5 +780,134 @@ describe('a viewer', () => {
     await settle()
     expect(api.fetchDefinitionSchema).not.toHaveBeenCalled()
     expect(api.fetchEntities).not.toHaveBeenCalled()
+  })
+})
+
+// #829. Cloning a shipped row is two different operations depending on
+// whether the original's matching is data or Go, and the bench has to
+// pick the right one without asking: a copy that quietly arrived with an
+// empty bar, or a refusal for a detector that could have been copied,
+// are both failures the operator would have to work out for themselves.
+describe('cloning a shipped detector', () => {
+  it('asks the server for the copy where the conditions can come across', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('Port scan')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+    expect(api.cloneDefinition).toHaveBeenCalledWith('port_scan', 'Port scan (copy)')
+  })
+
+  it('writes the copy here where they cannot, without asking the server first', async () => {
+    // rule_spike's matching is Go: there are no conditions to copy, and
+    // the server refuses to store a detection with none. So the copy is
+    // written in the drawer and created on the first Save.
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('Rule hit-rate spike')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+    expect(api.cloneDefinition).not.toHaveBeenCalled()
+    // Round 7's own words for what came across and what has not.
+    expect(
+      screen.getByText(/scope and numbers · its conditions are built in — write them here/),
+    ).toBeTruthy()
+  })
+
+  it('waits for the conditions rather than offering a save that would be refused', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('Rule hit-rate spike')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+    // Amber and waiting, never red and never a disabled button with no
+    // reason beside it.
+    expect(screen.getByText('add a condition')).toBeTruthy()
+    expect(api.createCustomDetection).not.toHaveBeenCalled()
+  })
+
+  it('creates the draft with what was written once the bar is finished', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('Rule hit-rate spike')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+
+    const bar = screen.getByLabelText('add a condition')
+    await fireEvent.focus(bar)
+    await fireEvent.input(bar, { target: { value: 'action' } })
+    await settle()
+    await fireEvent.keyDown(bar, { key: 'Enter' })
+    await settle()
+    await fireEvent.input(bar, { target: { value: 'drop' } })
+    await settle()
+    await fireEvent.keyDown(bar, { key: 'Enter' })
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: /save/ }))
+    await settle()
+
+    expect(api.createCustomDetection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Rule hit-rate spike (copy)',
+        detection: expect.objectContaining({
+          conditions: [{ field: 'action', operator: 'equals', values: ['drop'] }],
+          key: 'perSource',
+          counting: 'total',
+        }),
+      }),
+    )
+  })
+})
+
+// The drawer a custom detector opens into, drawn as round 8: the family
+// picker whose ink runs through everything below it, the conditions bar,
+// the counting line and the says line.
+describe('the custom detector drawer', () => {
+  it('shows the stored conditions as pills rather than as an empty bar', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    expect(screen.getByText('port')).toBeTruthy()
+    expect(screen.getByText('22')).toBeTruthy()
+  })
+
+  it('offers the seven families, and files the detector on a press', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    const picker = screen.getByRole('group', {
+      name: 'file this detector under a flag family',
+    })
+    expect(within(picker).getAllByRole('button')).toHaveLength(7)
+    await fireEvent.click(within(picker).getByRole('button', { name: 'scan' }))
+    await settle()
+    expect(screen.getByText('scan')).toBeTruthy()
+  })
+
+  it('sends the structure and the family in the same save as the numbers', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    const picker = screen.getByRole('group', {
+      name: 'file this detector under a flag family',
+    })
+    await fireEvent.click(within(picker).getByRole('button', { name: 'scan' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: /save/ }))
+    await settle()
+    expect(api.updateDefinition).toHaveBeenCalledWith(
+      'ssh_hammering',
+      expect.objectContaining({
+        family: 'scan',
+        detection: expect.objectContaining({
+          conditions: [{ field: 'destinationPort', operator: 'equals', values: ['22'] }],
+        }),
+      }),
+    )
+  })
+
+  it('offers only the placeholders this key mode can resolve', async () => {
+    // The set is the engine's own, closed and validated server-side, so
+    // one offered here that it refuses is a sentence rejected on save
+    // after it has been written.
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    expect(screen.getByLabelText('add {Count} to what a flag says')).toBeTruthy()
+    expect(screen.getByLabelText('add {SourceAddress} to what a flag says')).toBeTruthy()
+    expect(screen.queryByLabelText('add {DestinationAddress} to what a flag says')).toBeNull()
   })
 })

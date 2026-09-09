@@ -2,6 +2,8 @@
 
 import {
   cloneDefinition,
+  createCustomDetection,
+  deleteDefinition,
   fetchDefinitionSchema,
   fetchDefinitions,
   replayDefinition,
@@ -64,6 +66,7 @@ class DetectorSettingsState {
         origin: d.provenance?.origin ?? 'shipped',
         overridden: Object.keys(d.distance ?? {}).length > 0,
         detection: d.detection,
+        structure: d.structure,
         family: d.family,
       }))
     // The palette asks familyOf(flag.type) from a dozen places that have
@@ -159,6 +162,30 @@ class DetectorSettingsState {
   // distinction engine.Result is shaped to preserve.
   async replay(name: string, params: Record<string, unknown>): Promise<ReplayResult | string> {
     return await replayDefinition(name, params)
+  }
+
+  // create writes a new operator-authored detector and returns its id, so
+  // the bench can swap the local draft for the real row it just made.
+  async create(req: Parameters<typeof createCustomDetection>[0]): Promise<{ id: string } | string> {
+    const result = await createCustomDetection(req)
+    if (typeof result === 'string') return result
+    await this.refresh()
+    // The schema map is keyed by definition id and the new detector has
+    // one nothing has ever asked about -- the same reason clone below
+    // re-reads it (#810).
+    await this.refreshSchema()
+    return { id: result.id }
+  }
+
+  // remove deletes an operator-authored detector. Offered only on a
+  // custom row: a shipped definition is never deleted, only paused, and
+  // the server refuses one -- a button whose only outcome is that refusal
+  // would be worse than no button.
+  async remove(name: string): Promise<string | null> {
+    const err = await deleteDefinition(name)
+    if (err) return err
+    await this.refresh()
+    return null
   }
 
   async clone(name: string, cloneAs: string): Promise<{ id: string } | string> {
