@@ -28,6 +28,9 @@
 
 import { session, check, done, goTo, feedSyslog } from './live-browser.mjs'
 
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(60, 'live-scroll-position')
 const { page, consoleErrors } = await session({ waitForEvents: 60 })
 
 // The viewport both defects were reported at. Fixed rather than
@@ -203,7 +206,10 @@ check(
 
 // Partway down, not at the top -- at the top the defect is invisible.
 await page.$eval('.page', (el) => el.scrollTo(0, Math.floor(el.scrollHeight * 0.6)))
-await page.waitForTimeout(300)
+// .page has no scroll-behavior: smooth and no scroll listener of its own,
+// so scrollTop is already set synchronously -- this only waits for the
+// browser to have painted it, deterministically, rather than guessing.
+await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
 const before = await page.$eval('.page', (el) => el.scrollTop)
 check(before > entities.clientHeight * 2, `the view is scrolled well down before the add (scrollTop ${before})`)
 

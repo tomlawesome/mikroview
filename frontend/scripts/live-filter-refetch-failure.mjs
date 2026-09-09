@@ -39,9 +39,16 @@ await page.route('**/api/events*', (route) => route.fulfill({ status: 503, body:
 // the only way to get a real answer is the server-side refetch -- which
 // is exactly what is now failing.
 await page.fill('input.rule', 'no-such-rule-in-the-local-buffer')
-// FILTER_DEBOUNCE_MS (300ms, App.svelte) plus headroom for the rejected
-// request to actually resolve.
-await page.waitForTimeout(1500)
+// FILTER_DEBOUNCE_MS (300ms, App.svelte) plus the rejected request's own
+// round trip -- wait for the empty-state text to actually carry the
+// failure instead of guessing how long that takes. Non-throwing: a
+// failure to see it is itself the interesting case, caught by the checks
+// below rather than an uncaught timeout with no RESULT line.
+await page
+  .waitForFunction(() => /could not load|failed|error/i.test(document.querySelector('.body .empty')?.textContent ?? ''), null, {
+    timeout: 5000,
+  })
+  .catch(() => {})
 
 const emptyText = await page.textContent('.body .empty')
 check(!!emptyText, 'the empty-state message is shown once the filter narrows to nothing')
@@ -66,7 +73,18 @@ check(!banner, 'the WebSocket connection itself is unaffected by the API-only ou
 // successful refetch, rather than latching forever.
 await page.unroute('**/api/events*')
 await page.fill('input.rule', MATCHED_RULE)
-await page.waitForTimeout(1500)
+// Same FILTER_DEBOUNCE_MS + round-trip headroom as above, but waiting
+// this time for the honest failure message to actually clear.
+await page
+  .waitForFunction(
+    () => {
+      const el = document.querySelector('.body .empty')
+      return !el || !/could not load/i.test(el.textContent ?? '')
+    },
+    null,
+    { timeout: 5000 },
+  )
+  .catch(() => {})
 
 const recoveredText = await page.textContent('.body .empty').catch(() => null)
 check(

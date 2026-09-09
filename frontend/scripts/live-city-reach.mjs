@@ -8,7 +8,7 @@
 // printed line, and Escape landing back on the exact camera standing
 // started from.
 
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedAndSettle } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -81,21 +81,22 @@ check(
 )
 
 // LAN1 speaks to srv1, accepted, through the lit gate.
+const reachLines = []
 for (let i = 0; i < 5; i++) {
-  feedRaw(`firewall,info A|reach| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), ${LAN1}:5${100 + i}->${SRV1}:443, len 60`)
+  reachLines.push(`firewall,info A|reach| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), ${LAN1}:5${100 + i}->${SRV1}:443, len 60`)
 }
 // srv1 also has to be the *source* of some crossing to stand on the
 // map at all -- zones.svelte.ts's own host-attribution counts only the
 // private side (the source) of a boundary-crossing event.
-feedRaw(`firewall,info A|reach| forward: in:vlan-srv out:bridge-lan, connection-state:new, proto TCP (SYN), ${SRV1}:5000->${LAN1}:12345, len 60`)
+reachLines.push(`firewall,info A|reach| forward: in:vlan-srv out:bridge-lan, connection-state:new, proto TCP (SYN), ${SRV1}:5000->${LAN1}:12345, len 60`)
 // LAN1 asks the iot boundary for tcp/445 and is refused every time,
 // named by its own rule.
 for (let i = 0; i < 4; i++) {
-  feedRaw(`firewall,info D|iot-egress-drop| forward: in:bridge-lan out:vlan-iot, connection-state:new, proto TCP (SYN), ${LAN1}:5${200 + i}->${IOT_PEER}:445, len 60`)
+  reachLines.push(`firewall,info D|iot-egress-drop| forward: in:bridge-lan out:vlan-iot, connection-state:new, proto TCP (SYN), ${LAN1}:5${200 + i}->${IOT_PEER}:445, len 60`)
 }
 // A pair LAN1 has nothing to do with: iot-host to workshop-host.
 for (let i = 0; i < 6; i++) {
-  feedRaw(`firewall,info A|other| forward: in:vlan-iot out:wlan-wsh, connection-state:new, proto TCP (SYN), ${IOT_HOST}:5${300 + i}->${WSH_HOST}:22, len 60`)
+  reachLines.push(`firewall,info A|other| forward: in:vlan-iot out:wlan-wsh, connection-state:new, proto TCP (SYN), ${IOT_HOST}:5${300 + i}->${WSH_HOST}:22, len 60`)
 }
 // A second LAN host, quieter than LAN1 so it never takes its place in
 // the keyboard walk. It is here so bridge-lan draws lanes at all:
@@ -105,17 +106,16 @@ for (let i = 0; i < 6; i++) {
 // usually put a second host on this lane already; this makes the floor
 // its own rather than borrowed.
 for (let i = 0; i < 2; i++) {
-  feedRaw(`firewall,info A|reach| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), ${LAN2}:5${400 + i}->${SRV1}:443, len 60`)
+  reachLines.push(`firewall,info A|reach| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), ${LAN2}:5${400 + i}->${SRV1}:443, len 60`)
 }
-await new Promise((r) => setTimeout(r, 1200))
+await feedAndSettle(page, ...reachLines)
 
 await page.setViewportSize({ width: 1600, height: 900 })
-await page.reload()
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
 const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
 await slider.fill('5') // the district stop; the seven-stop axis is clients 0 .. street 6 (#869)
-await new Promise((r) => setTimeout(r, 900))
+await page.waitForSelector('[data-card="topography"] .city .plate[tabindex="0"]', { timeout: 10000 })
 
 // Stand on LAN1 from the keyboard: the district stop's own camera can
 // land anywhere (zones.svelte.ts sorts busiest-first, and this run's
@@ -155,7 +155,7 @@ check(stoodOnLan1, 'the keyboard walk reaches LAN1 among the four districts')
 await new Promise((r) => setTimeout(r, 900))
 const viewportBefore = await page.locator('[data-card="topography"] .mini rect.viewport').getAttribute('x')
 await page.keyboard.press('Enter')
-await new Promise((r) => setTimeout(r, 900))
+await page.waitForFunction(() => document.querySelector('[data-card="topography"] .city')?.getAttribute('data-stop') === 'street', { timeout: 10000 })
 
 const cityRoot = page.locator('[data-card="topography"] .city')
 check((await cityRoot.getAttribute('data-stop')) === 'street', 'standing on the building drops the camera to the street stop')
@@ -216,11 +216,11 @@ check(arrivalMark?.loose === 0, `nothing but a building wears the arrival mark (
 // not the keyboard walk left the focus on it, which is what
 // live-city-walls.mjs's `draftFrom` does for the same door.
 await page.locator(`[data-card="topography"] .city [data-cid="${lan1Cid}"]`).first().hover()
-await new Promise((r) => setTimeout(r, 400))
 const draftDoor = page.locator('[data-card="topography"] .city .bcard.hcard [data-draft-rule]')
+await page.waitForSelector('[data-card="topography"] .city .bcard.hcard [data-draft-rule]', { timeout: 10000 })
 check((await draftDoor.count()) > 0, 'the standing host card offers `draft the rule ▸` (#1035)')
 await draftDoor.first().click()
-await new Promise((r) => setTimeout(r, 400))
+await page.waitForSelector('[data-card="topography"] .composer', { timeout: 10000 })
 
 const composerText = await page.locator('[data-card="topography"] .composer').textContent()
 check((composerText ?? '').includes("it's been asking"), 'the composer states what it has been asking for')
@@ -236,6 +236,9 @@ check((cmd ?? '').includes('action=accept') && (cmd ?? '').includes('log=yes'), 
 // --- Escape surfaces to the exact camera standing started from --------
 
 await page.keyboard.press('Escape')
+// Escape's surface is the same 620ms camera tween as the walk above, and
+// viewportAfter below reads the mini's raw geometry, so this has to
+// settle rather than being polled for.
 await new Promise((r) => setTimeout(r, 900))
 check((await cityRoot.getAttribute('data-stop')) === 'district', 'Escape surfaces back to the district stop')
 const viewportAfter = await page.locator('[data-card="topography"] .mini rect.viewport').getAttribute('x')

@@ -287,8 +287,10 @@ const older = cameraDrawer.locator('button.slink.older')
 if ((await older.count()) > 0) {
   await older.click()
   // It either loads more or reports itself exhausted; what must not
-  // happen is an error surfacing in the drawer.
-  await page.waitForTimeout(1500)
+  // happen is an error surfacing in the drawer. Either way the button
+  // stops being disabled -- it either goes back to `older ▸`, or
+  // unmounts entirely once canLoadOlder(row.entry) turns false.
+  await cameraDrawer.locator('button.slink.older[disabled]').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {})
   check(
     (await cameraDrawer.locator('p.error').count()) === 0,
     '`older ▸` pages back without surfacing an error',
@@ -345,6 +347,10 @@ check(
 const reset0 = await api('POST', '/api/suggestions/reset', { confirm: true })
 check(reset0.status === 200, `the initial reset regenerates candidates (${reset0.status})`)
 
+// suggestState only refreshes itself after a mutation made through its
+// own accept/hide/unhide/reset methods -- this reset went straight over
+// the API, so the mounted page's candidate list is stale until a reload
+// re-fetches it. Load-only: nothing here pushes over the websocket.
 await page.reload({ waitUntil: 'networkidle' })
 await openWatchlist()
 
@@ -375,13 +381,20 @@ await page.fill('input[aria-label="Filter watches by name"]', 'zzz-no-such-watch
   // one rather than failing the whole scenario on a label rename.
   await page.locator('#panel-watchlist thead input').first().fill('zzz-no-such-watch-zzz')
 })
-await page.waitForTimeout(400)
+// filteredWatchRows is a plain $derived over wtFilters -- no debounce --
+// so the real thing to wait for is the filter actually landing: the
+// camera entry's own watch row (a real watch, unlike the suggestion)
+// drops out.
+await cameraRow.waitFor({ state: 'hidden' })
 check(
   await visible(sugg.locator('tr.wt-sugg', { hasText: SUGGEST_HOST }).first(), 5000),
   "the watch table's filter leaves the suggestions body alone -- a suggestion is not a watch",
 )
 await page.locator('#panel-watchlist thead input').first().fill('')
-await page.waitForTimeout(400)
+// Best-effort: nothing below depends on the row having reappeared, and
+// the original sleep-based version never checked this either -- bounded
+// rather than the default 30s so a mismatch here cannot stall the run.
+await cameraRow.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
 
 // --- not this / show them / bring it back ---------------------------------
 
@@ -400,7 +413,7 @@ check(
 )
 
 await deviceDrawer.locator('.dwr-acts button', { hasText: 'not this' }).click()
-await page.waitForTimeout(800)
+await deviceRow.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {})
 check(
   (await sugg.locator('tr.wt-sugg', { hasText: SUGGEST_HOST }).count()) === 0,
   '`not this` sets the suggestion aside -- it leaves the open list',
@@ -409,7 +422,6 @@ check(
 const showThem = sugg.locator('.sdr button.slink', { hasText: 'set aside' })
 check(await visible(showThem), 'the heading offers `n set aside · show them`')
 await showThem.click()
-await page.waitForTimeout(400)
 const asideRow = sugg.locator('tr.wt-aside', { hasText: SUGGEST_HOST }).first()
 check(await visible(asideRow), '`show them` reveals the set-aside rows')
 
@@ -418,7 +430,6 @@ const asideDrawer = sugg.locator('tr.wt-drawer.wt-aside').first()
 const backBtn = asideDrawer.locator('.dwr-acts button', { hasText: 'bring it back' })
 check(await visible(backBtn), 'a set-aside suggestion offers one verb, `bring it back`')
 await backBtn.click()
-await page.waitForTimeout(800)
 check(
   await visible(sugg.locator('tr.wt-sugg', { hasText: SUGGEST_HOST }).first()),
   '`bring it back` returns it to the open suggestions -- nothing is thrown away from here',
@@ -430,12 +441,17 @@ const acceptRow = sugg.locator('tr.wt-sugg', { hasText: SUGGEST_HOST }).first()
 await acceptRow.click()
 const acceptDrawer = sugg.locator('tr.wt-drawer.wt-sugg').first()
 await acceptDrawer.locator('.dwr-acts button', { hasText: 'watch it' }).click()
-await page.waitForTimeout(1500)
 
-const created = await api('GET', '/api/definitions')
-const madeEntry = (created.body?.definitions ?? created.body ?? []).find?.(
-  (e) => (e.name ?? '').includes(SUGGEST_HOST),
-)
+// Poll rather than sleep-then-read: "watch it" round-trips to the
+// server before the new entry exists to find.
+let created = { body: null }
+let madeEntry
+for (let i = 0; i < 40; i++) {
+  created = await api('GET', '/api/definitions')
+  madeEntry = (created.body?.definitions ?? created.body ?? []).find?.((e) => (e.name ?? '').includes(SUGGEST_HOST))
+  if (madeEntry) break
+  await page.waitForTimeout(250)
+}
 check(!!madeEntry, 'accepting a device suggestion created a real watchlist entry')
 check(
   madeEntry?.expectation?.observing !== false,
@@ -488,7 +504,10 @@ check(
 )
 
 await resetBtn.click()
-await page.waitForTimeout(300)
+await page.waitForFunction(
+  () => document.querySelector('.sdr button.slink.quiet')?.textContent?.trim().startsWith('confirm —'),
+  { timeout: 5000 },
+)
 const armedText = ((await resetBtn.textContent()) ?? '').trim()
 check(
   armedText.startsWith('confirm —'),
@@ -498,7 +517,10 @@ check(
 // Any other click disarms, per round 28's gesture. Proving it disarms
 // is proving the second click is a deliberate one.
 await page.locator('#panel-watchlist').click({ position: { x: 5, y: 5 } })
-await page.waitForTimeout(300)
+await page.waitForFunction(
+  () => document.querySelector('.sdr button.slink.quiet')?.textContent?.trim().startsWith('start over'),
+  { timeout: 5000 },
+)
 check(
   ((await resetBtn.textContent()) ?? '').trim().startsWith('start over'),
   'any other click disarms it again',
@@ -515,11 +537,20 @@ const countBefore = await watchCount()
 check(countBefore > 0, `there are watches to wipe before the reset (${countBefore})`)
 
 await resetBtn.click()
-await page.waitForTimeout(300)
+await page.waitForFunction(
+  () => document.querySelector('.sdr button.slink.quiet')?.textContent?.trim().startsWith('confirm —'),
+  { timeout: 5000 },
+)
 await resetBtn.click()
-await page.waitForTimeout(2500)
 
-const countAfter = await watchCount()
+// Poll the server for the wipe landing rather than sleeping a guessed
+// worst case: the confirm click's DELETEs are real requests.
+let countAfter = await watchCount()
+for (let i = 0; i < 40 && countAfter !== 0; i++) {
+  await page.waitForTimeout(250)
+  countAfter = await watchCount()
+}
+
 check(countAfter === 0, `the confirmed reset deleted every watchlist entry (${countBefore} → ${countAfter})`)
 
 check(

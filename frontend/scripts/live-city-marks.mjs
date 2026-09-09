@@ -85,24 +85,28 @@ check(
 // A real port scan, so a real detector raises the flag -- nothing here
 // synthesises one. Same shape as live-env.sh's own portscan feeder, from
 // a lane address so the host has a building to be marked on.
-for (let i = 0; i < PORTS; i++) {
-  feedRaw(
-    `firewall,info D|mark-scan| forward: in:${LANE} out:ether1, connection-state:new, proto TCP (SYN), ${MARKED_IP}:${40000 + i}->203.0.113.9:${1000 + i}, len 60`,
-  )
-}
+feedRaw(
+  ...Array.from(
+    { length: PORTS },
+    (_, i) => `firewall,info D|mark-scan| forward: in:${LANE} out:ether1, connection-state:new, proto TCP (SYN), ${MARKED_IP}:${40000 + i}->203.0.113.9:${1000 + i}, len 60`,
+  ),
+)
 
 // Server-side first (#354): a locator timeout cannot say whether the
 // scan raised nothing or merely had not rendered yet.
 const raised = await waitForFlag(page, MARKED_IP)
 check(raised.ok, raised.message)
 
+// No reload: the marks this scenario reads come from flagsState, which
+// refreshes on its own global interval regardless of Topography's mount
+// (App.svelte), so the second call below sees a cleared flag without
+// one -- unlike the city scenarios that read the mount-gated pushed
+// tables (zones, policy, coverage).
 async function toStreetStop() {
   await page.setViewportSize({ width: 1600, height: 900 })
-  await page.reload()
   await page.click('.rail-name >> text=Topography')
   await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
   await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('6') // street
-  await new Promise((r) => setTimeout(r, 1200))
 }
 
 const BUILDING = `[data-card="topography"] .city .blk[aria-label*="${MARKED_IP}"]`
@@ -166,6 +170,12 @@ check(pills === 1, `the only button on the overlay row is the port pill (${pills
 check((await overlays.first().textContent())?.trim() === '⌕ port', 'and it is the port pill, idle -- no flag or watch switch remains')
 
 await page.waitForSelector(BUILDING, { timeout: 15000 })
+// Same reasoning as the second toStreetStop() below: the building itself
+// renders as soon as the host has events, but the mark it wears comes
+// from flagsState, which is only guaranteed fresh once its own refresh
+// (App.svelte, 5s interval) has run at least once since the flag was
+// raised -- wait for that rather than reading the mark straight away.
+await page.waitForFunction((sel) => !!document.querySelector(sel)?.querySelector('path.mk-rim'), BUILDING, { timeout: 8000 })
 const marked = await readMark()
 check(marked !== null, `the flagged host has a building in the city (${MARKED_IP})`)
 if (marked) {
@@ -184,7 +194,7 @@ const walked = await walkTo(BUILDING_CID)
 check(walked, `the keyboard walk reaches the marked building (${BUILDING_CID})`)
 await new Promise((r) => setTimeout(r, 900)) // the recentre is a 620ms tween
 await page.hover(BUILDING)
-await new Promise((r) => setTimeout(r, 400))
+await page.waitForSelector('[data-card="topography"] .city .hcard [data-marks]', { timeout: 5000 })
 const counts = (await page.locator('[data-card="topography"] .city .hcard [data-marks]').textContent().catch(() => null))?.replace(/\s+/g, ' ').trim()
 check(counts === '1 flag', `the click card says how many, as plain words (${JSON.stringify(counts)})`)
 await page.mouse.move(10, 10)
@@ -204,6 +214,10 @@ if (open) {
 
   await toStreetStop()
   await page.waitForSelector(BUILDING, { timeout: 15000 })
+  // flagsState's own refresh interval (App.svelte, 5s) is what notices
+  // the clear, not anything toStreetStop() does -- wait for it rather
+  // than reading straight away.
+  await page.waitForFunction((sel) => !document.querySelector(sel)?.querySelector('path.mk-rim'), BUILDING, { timeout: 8000 })
   const after = await readMark()
   check(after !== null, 'the building is still there once the flag is cleared -- only the mark goes')
   check(after?.rims === 0 && after?.fill === null, `nothing is behind it any more, so it wears nothing (${JSON.stringify(after)})`)

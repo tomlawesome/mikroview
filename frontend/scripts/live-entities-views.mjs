@@ -20,8 +20,11 @@
 //   bare spans; this build uses buttons for that reason, and a real
 //   browser is the only place tabbing to one proves anything.
 
-import { session, check, responsive, goTo, done } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, goTo, done } from './live-browser.mjs'
 
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(60, 'live-entities-views')
 const { page, consoleErrors } = await session({ waitForEvents: 60 })
 
 await goTo(page, 'Entities')

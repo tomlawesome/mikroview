@@ -26,7 +26,7 @@
 // order, and a lane an earlier scenario also pushed rules for would
 // make this scenario's reading depend on run order.
 
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedAndSettle } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -95,12 +95,18 @@ check(
   'the filter-rule table is pushed: one unlogged lane, one logged',
 )
 
+const declaredLines = []
 for (let i = 0; i < 4; i++) {
-  feedRaw(`firewall,info A|declared| forward: in:${QUIET.iface} out:${WAN}, connection-state:new, proto TCP (SYN), 10.0.70.2${i}:5${100 + i}->203.0.113.9:443, len 60`)
-  feedRaw(`firewall,info A|declared| forward: in:${LIT.iface} out:${WAN}, connection-state:new, proto TCP (SYN), 10.0.71.2${i}:5${200 + i}->203.0.113.9:443, len 60`)
+  declaredLines.push(`firewall,info A|declared| forward: in:${QUIET.iface} out:${WAN}, connection-state:new, proto TCP (SYN), 10.0.70.2${i}:5${100 + i}->203.0.113.9:443, len 60`)
+  declaredLines.push(`firewall,info A|declared| forward: in:${LIT.iface} out:${WAN}, connection-state:new, proto TCP (SYN), 10.0.71.2${i}:5${200 + i}->203.0.113.9:443, len 60`)
 }
-await new Promise((r) => setTimeout(r, 1500))
+await feedAndSettle(page, ...declaredLines)
 
+// Reload is load-only here: policyState, coverageState and zonesState only
+// refetch from Topography's own mount effect, keyed on the device list
+// rather than on the filter-rule push or the declarations PUT below
+// (Topography.svelte), so the second call (after declaring) needs a fresh
+// mount to see either.
 async function toTopography() {
   await page.setViewportSize({ width: 1600, height: 900 })
   await page.reload()
@@ -116,7 +122,7 @@ const slider = () => page.locator('[data-card="topography"] .altitude input[type
 // the card's own `dark` class, which is the material.
 async function zonesCard(name) {
   await slider().fill('2') // the zones stop, the 2D stage
-  await new Promise((r) => setTimeout(r, 900))
+  await page.waitForSelector('[data-card="topography"] .gf-card', { timeout: 10000 })
   return page.evaluate((n) => {
     const card = [...document.querySelectorAll('[data-card="topography"] .gf-card')].find((c) => (c.getAttribute('aria-label') || '').startsWith(n + ' '))
     if (!card) return null
@@ -140,7 +146,7 @@ async function zonesCard(name) {
 // rather than the city stop where the whole estate is compressed.
 async function cityDistrict(name) {
   await slider().fill('4') // the borough stop
-  await new Promise((r) => setTimeout(r, 900))
+  await page.waitForSelector('[data-card="topography"] .city .plate', { timeout: 10000 })
   return page.evaluate((n) => {
     const plate = [...document.querySelectorAll('[data-card="topography"] .city .plate')].find((p) => (p.getAttribute('aria-label') || '').startsWith(n + ' district'))
     return { aria: plate ? (plate.getAttribute('aria-label') ?? '') : null }

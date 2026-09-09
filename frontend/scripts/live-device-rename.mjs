@@ -33,6 +33,7 @@
 import {
   session,
   feedRaw,
+  feedRawFrom,
   check,
   done,
   launchBrowser,
@@ -77,7 +78,7 @@ async function devices(client) {
 // --- Both routers, as the server sees them -------------------------------
 
 feedRaw(line(RULE_DECLARED, '192.168.1.10'))
-feedRaw(line(RULE_UNDECLARED, '192.168.1.11'), UNDECLARED_IP)
+feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
 
 let undeclared = null
 let declared = null
@@ -88,7 +89,7 @@ while (Date.now() < deadline && !undeclared) {
   declared = list.find((d) => d.configured)
   if (undeclared) break
   await new Promise((r) => setTimeout(r, 2000))
-  feedRaw(line(RULE_UNDECLARED, '192.168.1.11'), UNDECLARED_IP)
+  feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
 }
 
 check(!!declared, `the harness's declared router is reported (${declared?.id})`)

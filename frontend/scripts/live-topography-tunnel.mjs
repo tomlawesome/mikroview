@@ -31,6 +31,31 @@ import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
 
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
+
 syslog(2, 'topo-tunnel-probe')
 let DEVICE
 for (let i = 0; i < 40 && !DEVICE; i++) {
@@ -112,13 +137,16 @@ check(
   'the wireguard-peer table is accepted, with a handshake seconds old',
 )
 
-await page.reload()
+// This session has not yet visited Topography, so its own $effect
+// (zonesState/tunnelsState/etc, gated on appState.devices) fires fresh
+// on this first navigation -- no reload needed to see the tables pushed
+// above.
 await page.click('.rail-name >> text=Topography')
 // Round 49 deleted the lens row; the overlay pills are what is left of
 // it, and they mount with the map's own furniture, so waiting on them
 // is the same "the map is up" signal the lens row used to give.
 await page.waitForSelector('[data-card="topography"] [aria-label="Map overlays"]', { timeout: 10000 })
-await page.waitForTimeout(1200)
+await waitForSettle('[data-card="topography"] .camera')
 
 const node = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
@@ -196,10 +224,13 @@ check(
   'the same peer is pushed again with a handshake days old',
 )
 
+// This push landed after Topography's own effect had already fired once
+// (the visit above), so unlike the first visit this one genuinely needs
+// a reload to see the router's changed answer.
 await page.reload()
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] [aria-label="Map overlays"]', { timeout: 10000 })
-await page.waitForTimeout(1200)
+await waitForSettle('[data-card="topography"] .camera')
 
 const down = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')

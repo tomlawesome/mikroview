@@ -12,7 +12,32 @@
 // "exactly" (the same reasoning live-topography-reality.mjs gives for
 // its own alarm-count check).
 
-import { session, check, done, feedRaw, feedPortScan } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
+
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(page, selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
 
 // #869: the city is the axis's centre and its default, so a scenario about
 // the 2D map's furniture must say which side it means. `zones` is the
@@ -37,7 +62,7 @@ async function toZonesStop(page) {
     el.dispatchEvent(new Event('input', { bubbles: true }))
     el.dispatchEvent(new Event('change', { bubbles: true }))
   })
-  await new Promise((r) => setTimeout(r, 400))
+  await waitForSettle(page, '[data-card="topography"] .camera')
 }
 
 
@@ -112,9 +137,22 @@ const entry = await api('POST', '/api/definitions', {
 check(entry.status === 201, `the watch entry is created (${entry.status})`)
 const entryId = entry.body?.id
 
-await new Promise((r) => setTimeout(r, 1200))
+// The port-scan flag is raised by an async detector, not by the feed
+// call returning -- wait for it to actually reach the server (#354's
+// pattern) rather than guessing how long detection takes.
+const flagArrived = await waitForFlag(page, '192.168.1.60')
+check(flagArrived.ok, flagArrived.message)
+// zonesState (router addresses/lanes) and watchlistState both only
+// refresh on load or their own explicit calls, not from this scenario's
+// direct API pushes, so the dials and node card below need a reload to
+// see the entry, the flag and the estate together.
 await page.reload()
-await page.click('.rail-name >> text=Topography')
+// goTo, not a bare rail click: it waits for the deck to actually finish
+// rolling the card to centre, which a docket detour and back needs and a
+// fixed sleep here used to paper over (the camera's own transform often
+// does not change on a repeat visit to the same stop, so a wait keyed to
+// it alone resolves before the roll itself is done).
+await goTo(page, 'Topography')
 // #869: the slider now defaults to the city, its centre -- check that
 // default here, before moving to a 2D stop so the rest of this scenario
 // (which predates the join and draws entirely from the 2D map) can wait
@@ -146,14 +184,19 @@ await page.click('[data-card="topography"] .dial-panel .dp-row >> nth=0')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=flags', { timeout: 5000 })
 check(true, 'clicking the flags dial, then its own panel row, opens the docket on the flags tab')
 
-await page.click('.rail-name >> text=Topography')
+// goTo, not a bare rail click: it waits for the deck to actually finish
+// rolling the card to centre, which a docket detour and back needs and a
+// fixed sleep here used to paper over (the camera's own transform often
+// does not change on a repeat visit to the same stop, so a wait keyed to
+// it alone resolves before the roll itself is done).
+await goTo(page, 'Topography')
 // #869 put the city at the centre of the axis and made it the default, so
 // the 2D map's own furniture is only drawn left of centre. Everything below
 // is about that furniture, so move to the zones stop first rather than
 // asserting against whichever side happened to open.
 await toZonesStop(page)
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
-await new Promise((r) => setTimeout(r, 300)) // let the camera's own opacity transition settle before clicking inside it
+await waitForSettle(page, '[data-card="topography"] .zone .hbar-g')
 
 // --- the aggregate bar ------------------------------------------------------
 
@@ -165,14 +208,24 @@ await activate(page, '[data-card="topography"] .zone .hbar-g[aria-label*="watche
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=watchlist', { timeout: 5000 })
 check(true, 'the purple half opens the watchlist')
 
-await page.click('.rail-name >> text=Topography')
+// goTo, not a bare rail click: it waits for the deck to actually finish
+// rolling the card to centre, which a docket detour and back needs and a
+// fixed sleep here used to paper over (the camera's own transform often
+// does not change on a repeat visit to the same stop, so a wait keyed to
+// it alone resolves before the roll itself is done).
+await goTo(page, 'Topography')
 await toZonesStop(page)
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 await activate(page, '[data-card="topography"] .zone .hbar-g[aria-label*="open flag"]')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=flags', { timeout: 5000 })
 check(true, 'the red half opens the flags tab, pre-filtered to the zone')
 
-await page.click('.rail-name >> text=Topography')
+// goTo, not a bare rail click: it waits for the deck to actually finish
+// rolling the card to centre, which a docket detour and back needs and a
+// fixed sleep here used to paper over (the camera's own transform often
+// does not change on a repeat visit to the same stop, so a wait keyed to
+// it alone resolves before the roll itself is done).
+await goTo(page, 'Topography')
 await toZonesStop(page)
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 
@@ -203,7 +256,7 @@ check(true, 'moving the slider to zones applies the flat ground-plan camera')
 // ground plan's own river and roads and the old lane lines painted at
 // once. This scenario already has real accepted traffic on one lane, so
 // the trunk and its edge both exist to check.
-await new Promise((r) => setTimeout(r, 700)) // let the camera's own opacity transition settle
+await waitForSettle(page, '[data-card="topography"] .ground-flat')
 const zonesVisibility = await page.evaluate(() => {
   const vis = (el) => (el ? getComputedStyle(el).opacity !== '0' : null)
   return {
@@ -227,7 +280,7 @@ check(zonesVisibility.edge === false, `the traffic edges are hidden at zones, so
 // match it, which is why waiting on it timed out rather than failing.
 await range.fill('1')
 await page.waitForSelector('[data-card="topography"] .hostrow .hot', { timeout: 10000 })
-await new Promise((r) => setTimeout(r, 700))
+await waitForSettle(page, '[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.60"]')
 await page.click('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.60"]')
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
 

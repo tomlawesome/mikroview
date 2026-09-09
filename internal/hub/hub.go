@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Package hub fans newly inserted events out to connected WebSocket
-// clients for the live-tail view.
+// clients for the live-tail view, and carries the much rarer "something
+// you are displaying has changed" notices alongside them (see Change).
 package hub
 
 import (
@@ -60,11 +61,62 @@ var ErrTooManyClients = errors.New("hub: too many live connections")
 type client struct {
 	id   uint64
 	send chan store.Event
+	// notices carries Change values -- see Notify. Its own channel
+	// rather than a sentinel event on send: an event queue that a slow
+	// client is having entries evicted from is exactly the wrong place
+	// to put a message whose whole job is to arrive.
+	notices chan Change
 	// dropped counts events evicted from this client's queue because it
-	// fell behind (see Broadcast). Exposed via Register's dropped
-	// accessor so the WS handler can tell the browser it's missing
+	// fell behind (see Broadcast). Exposed via Subscription.Dropped
+	// so the WS handler can tell the browser it's missing
 	// events, rather than that silently never showing up anywhere.
 	dropped atomic.Uint64
+}
+
+// noticeQueueSize bounds pending change notices per client. Small on
+// purpose: a notice says "refetch", not "here is what changed", so a
+// client that has several queued would make the same call several times
+// and get the same answer. Deep enough that a couple of pushes landing
+// while the write loop is busy with an event batch still both arrive;
+// past that, dropping is harmless, because any later notice produces the
+// refetch the dropped one wanted.
+const noticeQueueSize = 8
+
+// Change names something on the server that a connected client may be
+// displaying a now-stale answer about. It is deliberately only a name:
+// the client refetches through the ordinary API, so nothing here has to
+// carry (or keep in step with) the shape of what changed.
+type Change string
+
+const (
+	// ChangeRouterState: a device pushed a filter/NAT/address table.
+	// What it invalidates is every answer derived from pushed router
+	// state -- watchlist coverage above all, which is why a table
+	// arriving used to take up to a minute to show up as a watch that
+	// can or cannot be fed.
+	ChangeRouterState Change = "router-state"
+	// ChangeDefinitions: a definition was created, edited, deleted or
+	// re-seeded. Same reasoning: coverage is computed per definition, so
+	// the set changing changes the answer.
+	ChangeDefinitions Change = "definitions"
+)
+
+// Subscription is one registered client's half of the hub: the two
+// channels it reads and the two functions it needs.
+//
+// A struct rather than four return values, because Register grew a
+// second channel and a five-value signature reads as a list to be
+// counted rather than a thing to be used.
+type Subscription struct {
+	// Events is the live-tail feed, unfiltered.
+	Events <-chan store.Event
+	// Notices is the change feed -- see Change and Notify.
+	Notices <-chan Change
+	// Dropped reports how many events have been evicted from this
+	// client's queue so far, cumulative (see Broadcast).
+	Dropped func() uint64
+	// Unregister must be called exactly once when the connection ends.
+	Unregister func()
 }
 
 // Hub fans out newly inserted events to connected WebSocket clients. Every
@@ -81,25 +133,28 @@ func New() *Hub {
 	return &Hub{clients: make(map[uint64]*client)}
 }
 
-// Register adds a new client and returns its event channel, a function
-// reporting how many events have been dropped for it so far (see
-// Broadcast), and an unregister function the caller must invoke exactly
-// once when the connection ends.
+// Register adds a new client and returns its Subscription -- the event
+// and notice channels, the dropped-event counter, and the unregister
+// function the caller must invoke exactly once when the connection ends.
 //
 // It returns ErrTooManyClients once maxClients are already connected --
 // each client costs clientQueueSize * sizeof(store.Event) immediately,
 // so "one more is free" is not true here.
-func (h *Hub) Register() (events <-chan store.Event, dropped func() uint64, unregister func(), err error) {
+func (h *Hub) Register() (*Subscription, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if len(h.clients) >= maxClients {
-		return nil, nil, nil, ErrTooManyClients
+		return nil, ErrTooManyClients
 	}
 
 	h.nextID++
 	id := h.nextID
-	c := &client{id: id, send: make(chan store.Event, clientQueueSize)}
+	c := &client{
+		id:      id,
+		send:    make(chan store.Event, clientQueueSize),
+		notices: make(chan Change, noticeQueueSize),
+	}
 	h.clients[id] = c
 
 	var once sync.Once
@@ -111,7 +166,33 @@ func (h *Hub) Register() (events <-chan store.Event, dropped func() uint64, unre
 		})
 	}
 
-	return c.send, c.dropped.Load, unreg, nil
+	return &Subscription{
+		Events:     c.send,
+		Notices:    c.notices,
+		Dropped:    c.dropped.Load,
+		Unregister: unreg,
+	}, nil
+}
+
+// Notify tells every connected client that change has happened, so the
+// screen it is showing can refetch instead of waiting out its own poll.
+//
+// Never blocks and never evicts: a full notice queue is dropped on the
+// floor, because a queued notice and a dropped one produce the same
+// refetch, and the caller is a request handler that must not be held up
+// by a stalled browser tab. This is a hint, not a delivery guarantee --
+// every screen that acts on one keeps its own poll as the backstop, so a
+// dropped notice costs latency and nothing else.
+func (h *Hub) Notify(change Change) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for _, c := range h.clients {
+		select {
+		case c.notices <- change:
+		default:
+		}
+	}
 }
 
 // Broadcast delivers e to every connected client's queue. If a client's

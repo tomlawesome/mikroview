@@ -220,6 +220,39 @@ func (s *Store) shedRuleLabelsLocked() {
 	}
 }
 
+// Reset empties the ring and every figure derived from it: the held
+// events, the lifetime and per-action/per-rule totals, and both rolling
+// bucket series Stats reads its rate and time series from. Written for
+// the test-only POST /api/test/reset (#1064), which gives each live-check
+// scenario an instance that has seen nothing rather than one carrying its
+// siblings' traffic.
+//
+// nextID is deliberately not rewound. It is an identity, not a count:
+// reusing IDs would hand a WebSocket client already holding event 900 a
+// fresh event 1, and the frontend's own newest-wins bookkeeping would
+// have no way to tell that apart from a stale delivery. liveSince is
+// re-stamped instead, because "from when is this process's account of the
+// traffic complete" is genuinely now again; restoredTo is dropped for the
+// same reason -- the counters this Store holds no longer came from a
+// snapshot.
+func (s *Store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.buf = make([]Event, s.capacity)
+	s.head = 0
+	s.count = 0
+	s.total = 0
+	s.totalByAction = make(map[Action]uint64)
+	s.totalByRule = make(map[string]uint64)
+	s.secBuckets = [60]uint64{}
+	s.secBucketTime = [60]int64{}
+	s.minuteBuckets = [timeSeriesMinutes][len(actionSlots)]uint64{}
+	s.minuteBucketTime = [timeSeriesMinutes]int64{}
+	s.liveSince = time.Now()
+	s.restoredTo = time.Time{}
+}
+
 // RuleCount is one entry in Stats.TopRules.
 type RuleCount struct {
 	Rule  string `json:"rule"`
