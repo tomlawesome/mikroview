@@ -273,29 +273,67 @@
     alarmCount: number
   }
 
-  function marksFor(address: string, mac: string | undefined): Marks {
-    const macLower = mac?.toLowerCase()
-    let newTalker = false
-    let alarmCount = 0
+  // The marks index -- built once per change of the flag and watchlist
+  // state, not once per row. marksFor below used to walk all of
+  // flagsState.list and all of watchlistState.entries for every row it
+  // was asked about, so naming N things cost N x (flags + entries).
+  // #690's 2026-09-09 profile caught it at 11.9% of self-time on a roll
+  // to the *docket*, where nobody has asked to see this page at all --
+  // Deck.svelte's neighbour-mount policy premounts Entities beside it,
+  // and a flag arriving re-ran the whole scan. The keys are exactly the
+  // ones marksFor already matched on, so the marks are unchanged; only
+  // the scanning moved out of the loop.
+  const markIndex = $derived.by(() => {
+    // new_device names a MAC, every other family names an address --
+    // which a flag target may carry a port suffix on, stripped here once
+    // rather than per row.
+    const newTalkerMacs = new Set<string>()
+    const alarmsByAddress = new Map<string, number>()
     for (const f of flagsState.list) {
       if (f.cleared) continue
       if (f.type === 'new_device') {
-        if (macLower && f.target.toLowerCase() === macLower) newTalker = true
+        newTalkerMacs.add(f.target.toLowerCase())
         continue
       }
+      if (familyOf(f.type).mark !== '✱') continue
       const addr = f.target.replace(/ -> port \d+$/, '')
-      if (addr === address && familyOf(f.type).mark === '✱') alarmCount++
+      alarmsByAddress.set(addr, (alarmsByAddress.get(addr) ?? 0) + 1)
     }
-    let watched = false
-    let ringBroken = false
+    // One watch can be reached by three keys -- its destination IP, its
+    // source IP, its source MAC -- and any one of them counts as a hit,
+    // so each key carries that watch's own broken-ring answer and two
+    // watches landing on the same key keep the broken one's.
+    const ringByWatchKey = new Map<string, boolean>()
+    const watch = (key: string | undefined, ringBroken: boolean) => {
+      if (!key) return
+      ringByWatchKey.set(key, (ringByWatchKey.get(key) ?? false) || ringBroken)
+    }
     for (const e of watchlistState.entries) {
       if (!e.enabled) continue
-      const hit = e.destIp === address || e.source?.ip === address || (macLower && e.source?.mac?.toLowerCase() === macLower)
-      if (!hit) continue
-      watched = true
-      if (watchlistState.coverage[e.id] === 'no-logging') ringBroken = true
+      const ringBroken = watchlistState.coverage[e.id] === 'no-logging'
+      watch(e.destIp, ringBroken)
+      watch(e.source?.ip, ringBroken)
+      watch(e.source?.mac?.toLowerCase(), ringBroken)
     }
-    return { newTalker, watched, ringBroken, alarmCount }
+    return { newTalkerMacs, alarmsByAddress, ringByWatchKey }
+  })
+
+  function marksFor(address: string, mac: string | undefined): Marks {
+    const macLower = mac?.toLowerCase()
+    let watched = false
+    let ringBroken = false
+    for (const key of macLower ? [address, macLower] : [address]) {
+      const broken = markIndex.ringByWatchKey.get(key)
+      if (broken === undefined) continue
+      watched = true
+      ringBroken ||= broken
+    }
+    return {
+      newTalker: macLower !== undefined && markIndex.newTalkerMacs.has(macLower),
+      watched,
+      ringBroken,
+      alarmCount: markIndex.alarmsByAddress.get(address) ?? 0,
+    }
   }
 
   const NEW_TALKER_INK = familyOf('new_device').ink
