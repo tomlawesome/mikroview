@@ -178,7 +178,11 @@ class NameEditorState {
     return lookupPort(Number(this.key))?.[0]?.name ?? ''
   }
 
-  open(type: EditableTokenType, key: string, device: string, rect: DOMRect) {
+  // `suggestion` is the dossier card's own suggested label (#410),
+  // passed only from there. It ranks below every name that already
+  // exists -- a suggestion is not a name -- so it prefills the field
+  // only for a host nothing has named yet.
+  open(type: EditableTokenType, key: string, device: string, rect: DOMRect, suggestion = '') {
     this.type = type
     this.key = key
     this.device = device
@@ -203,7 +207,7 @@ class NameEditorState {
         // operator's own label, else the name in use, else the
         // well-known service name for a port. The common case is
         // confirming a suggestion, not typing.
-        this.draft = p.label || p.name || this.wellKnown
+        this.draft = p.label || p.name || suggestion || this.wellKnown
         this.loading = false
       },
       () => {

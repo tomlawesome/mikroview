@@ -21,6 +21,9 @@
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
   import NameEditorPopover from './components/NameEditorPopover.svelte'
+  // The device dossier card (#410), one instance for the whole app --
+  // every surface that opens one calls lib/dossier.svelte.ts.
+  import HostDossier from './components/HostDossier.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
@@ -282,6 +285,7 @@
   <PortLookupPopover />
   <RouterLookupPopover />
   <NameEditorPopover />
+  <HostDossier />
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <SetupWizard />
