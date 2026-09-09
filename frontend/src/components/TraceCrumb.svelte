@@ -291,7 +291,32 @@
     position: absolute;
     top: 14px;
     left: 24px;
+    /* #1050 round 56 defect 2: the picker below is anchored off this
+       element's own width (`left: calc(50% - 196px)`, the mockup's own
+       formula), so this has to span the map rather than shrink to the
+       crumb bar's content -- otherwise "50%" is 50% of the crumb text,
+       not of the map, and the picker lands wherever the crumb happens
+       to be wide enough to put it. The crumb itself is unaffected: it
+       is a flex row that never asked for a background of its own. */
+    right: 0;
     z-index: 2;
+    /* Spanning the map (above) would otherwise let this wrapper's own
+       empty space eat clicks meant for whatever is drawn under it --
+       its two children opt back in below. */
+    pointer-events: none;
+  }
+
+  .trace-wrap > * {
+    pointer-events: auto;
+  }
+
+  .crumb {
+    /* trace-wrap (above) now spans the map so the picker's own
+       percentage anchor has something real to measure against; without
+       this a plain block child would stretch to match it, and the
+       empty space beside the actual crumb text would start capturing
+       clicks meant for the map under it. */
+    width: fit-content;
   }
 
   .crumb .path {
@@ -360,7 +385,12 @@
   .picker {
     position: absolute;
     top: 52px;
-    left: 0;
+    /* #1050 round 56 defect 2: `left: 0` put this under the city's own
+       ESTATE MAP mini-map (City.svelte, top-left) -- round-56's own
+       mockup (index.html's `.picker`) anchors it off the crumb's centre
+       instead, right-aligned under "and N more like it", clear of any
+       top-left furniture on either surface. */
+    left: calc(50% - 196px);
     z-index: 9;
     width: 574px;
     display: flex;
@@ -380,7 +410,11 @@
     content: '';
     position: absolute;
     top: -6px;
-    left: 40px;
+    /* Ported with the panel's own anchor above: the mockup points this
+       from the panel's right side (`right: 118px`), which is where "and
+       N more like it" sits once the panel is centred under the crumb
+       rather than pinned to its left edge. */
+    right: 118px;
     width: 10px;
     height: 10px;
     background: rgba(15, 20, 34, 0.96);
