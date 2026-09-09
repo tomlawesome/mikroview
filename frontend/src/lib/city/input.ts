@@ -12,10 +12,10 @@ import type { TunnelInterface } from '../tunnels.svelte'
 import type { Device, FirewallEvent } from '../types'
 import type { ZoneInfo } from '../zones.svelte'
 import { betterCoverage, gatesFromRules, type CityGate } from './gates'
-import { mergeZoneHosts, type CityHost } from './presence'
+import { mergeZoneHosts, type CityHost, type HostMarks } from './presence'
 import type { CityPeer, CityRuleDrop } from './types'
 
-export type { CityHost } from './presence'
+export type { CityHost, HostMarks } from './presence'
 
 export type { CityGate } from './gates'
 
@@ -210,6 +210,12 @@ export function cityInputFrom(
    * gone when it stops talking. That is the pre-#1016 behaviour, which
    * is what every caller and test that predates this should still get. */
   registeredHosts: CityHost[] = [],
+  /** What each address is flagged and watched with (#981, round 46 --
+   * `hostMarksFrom` in presence.ts, called by the component that can
+   * read the two ledgers). Defaults to none, which reads as "nothing is
+   * marked": every building draws plain, which is what a caller that
+   * predates this should still get. */
+  hostMarks: ReadonlyMap<string, HostMarks> = new Map(),
 ): CityInput {
   let primary = primaryId ?? devices[0]?.id ?? ''
   const routers: CityRouter[] = devices.map((d) => ({ id: d.id, name: d.name, primary: d.id === primary, sourceIp: d.sourceIp }))
@@ -324,7 +330,7 @@ export function cityInputFrom(
 
   const cityZones: CityZone[] = drawable.map((z) => {
     const coverage = coverageOfZone(z.id)
-    const hosts = mergeZoneHosts(z.hosts, registeredByZone.get(z.id) ?? [])
+    const hosts = mergeZoneHosts(z.hosts, registeredByZone.get(z.id) ?? [], hostMarks)
     return {
       id: z.id,
       name: z.name,

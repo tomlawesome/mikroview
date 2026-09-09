@@ -105,7 +105,50 @@
   // While a programmatic roll is in flight the observer sees every card
   // it passes; this flag keeps those transits from writing appState.view.
   let rolling = false
+  // When the last roll finished. An observer entry carries `time` --
+  // the moment its geometry was *sampled* -- and that is not the moment
+  // its callback runs. Under load (four gate shards sharing one host) a
+  // sample taken 30ms into a roll was delivered nearly a second later,
+  // by which point the fixed 700ms timer this used to rely on had
+  // already dropped `rolling`: a card the roll was merely passing
+  // became the view, the effect below dutifully rolled back to it, and
+  // the deck parked there -- a click on Stream leaving the operator on
+  // Entities, and staying there. So a sample is judged on when it was
+  // taken, never on when it arrived (#1049).
+  let rollEndedAt = 0
   let rollTimer: ReturnType<typeof setTimeout> | undefined
+
+  // The roll's own length is the browser's business: a stalled main
+  // thread stretches it in wall-clock time, so a timer set to a guess
+  // at the animation's length expires with the deck still moving. The
+  // deck's scrollend is the event that actually says the roll is over,
+  // and the operator's own wheel or finger says they have taken it over
+  // -- either ends the roll. The timer is left only as a backstop for
+  // an engine that fires no scrollend: latched forever, the deck would
+  // stop following a wheel at all.
+  const ROLL_BACKSTOP_MS = 3000
+
+  function endRoll() {
+    clearTimeout(rollTimer)
+    if (!rolling) return
+    rolling = false
+    rollEndedAt = performance.now()
+  }
+
+  // What ends a roll, attached here rather than as onscrollend/onwheel
+  // on the element itself: Svelte's a11y rule reads a touchstart
+  // handler on a plain <div> as an unlabelled control, and the deck is
+  // a scroller rather than a widget. Passive, since none of them does
+  // anything but note that the roll is over.
+  $effect(() => {
+    const el = deckEl
+    if (!el) return
+    for (const type of ['scrollend', 'wheel', 'touchstart'])
+      el.addEventListener(type, endRoll, { passive: true })
+    return () => {
+      for (const type of ['scrollend', 'wheel', 'touchstart']) el.removeEventListener(type, endRoll)
+    }
+  })
 
   function rollTo(card: DeckCard) {
     if (!card.views.includes(appState.view)) appState.view = card.views[0]
@@ -128,7 +171,7 @@
     clearTimeout(rollTimer)
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
     deckEl.scrollTo({ top, behavior: reduced ? 'auto' : 'smooth' })
-    rollTimer = setTimeout(() => (rolling = false), 700)
+    rollTimer = setTimeout(endRoll, ROLL_BACKSTOP_MS)
   })
 
   // Wheel/touch scrolling marks the centred card as the view, so the
@@ -137,8 +180,14 @@
     void cards
     const observer = new IntersectionObserver(
       (entries) => {
-        if (rolling) return
         for (const entry of entries) {
+          // `rolling` drops what is sampled while a roll is in flight;
+          // `rollEndedAt` drops what was sampled during one and only
+          // delivered afterwards. Both are the same rule -- a card the
+          // deck was rolling past is not a card anybody arrived at --
+          // and it has to be applied per entry, since one batch can
+          // carry samples from either side of the roll's end.
+          if (rolling || entry.time < rollEndedAt) continue
           if (!entry.isIntersecting) continue
           const key = (entry.target as HTMLElement).dataset.card
           const card = cards.find((c) => c.key === key)
