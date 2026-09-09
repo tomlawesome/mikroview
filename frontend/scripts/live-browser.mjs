@@ -159,11 +159,49 @@ export function feedSyslog(n, label = 'live-test-rule') {
  * hand-rolled UDP send delivers nothing at all -- silently, since there
  * is no longer anything bound to refuse it.
  */
-export function feedRaw(line) {
-  execFileSync(ENV_SCRIPT, ['raw', line], {
+export function feedRaw(...lines) {
+  // Any number of lines go over one connection: live-env.sh's `raw`
+  // opens a TLS session per call, so a scenario feeding two hundred
+  // lines one call at a time paid two hundred handshakes and process
+  // starts for them (#1061).
+  execFileSync(ENV_SCRIPT, ['raw', ...lines], {
     stdio: 'ignore',
     cwd: REPO,
   })
+}
+
+/** eventsTotal reads the instance's lifetime event count (/api/stats). */
+export async function eventsTotal(page) {
+  const stats = await page.request.get(`${URL_BASE}/api/stats`).then((r) => r.json())
+  return Number(stats.total ?? 0)
+}
+
+/**
+ * waitForEventsTotal polls until the instance has counted at least `n`
+ * events in its lifetime -- the wait a fixed sleep after a feed was
+ * standing in for (#1061). Throws naming the count reached, so a line
+ * the parser refused shows up as a short count rather than as whatever
+ * the next check happened to say.
+ */
+export async function waitForEventsTotal(page, n, { timeoutMs = 15000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let seen = -1
+  while (Date.now() < deadline) {
+    seen = await eventsTotal(page)
+    if (seen >= n) return seen
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error(`waited ${timeoutMs}ms for ${n} events; the instance has counted ${seen}`)
+}
+
+/**
+ * feedAndSettle feeds the lines and returns once the instance has counted
+ * every one of them. Use it where a scenario fed and then slept.
+ */
+export async function feedAndSettle(page, ...lines) {
+  const before = await eventsTotal(page)
+  feedRaw(...lines)
+  return waitForEventsTotal(page, before + lines.length)
 }
 
 /**
