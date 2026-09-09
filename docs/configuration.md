@@ -1214,8 +1214,7 @@ Every event from a LAN host carries that host's hardware address, and the
 first three octets of one are an *OUI* -- a block IEEE assigned to a
 named organisation. Looking it up turns `dc:a6:32:...` into "Raspberry Pi
 Trading Ltd", which is usually the single most useful thing you can learn
-about a host you don't recognise. It backs the device dossier (see
-[API reference](#api-reference)'s `GET /api/hosts/{ip}/dossier`).
+about a host you don't recognise. It backs the [device dossier](#device-dossier-issue-410).
 
 ```yaml
 oui:
@@ -1471,6 +1470,62 @@ with a pipe, e.g. `bridge-lan|10.0.10.5` -- the same key style as a
 coverage declaration. `GET` is open to any signed-in user; the two writes
 are user tier and audit-logged, since saying a silence is deliberate
 carries the same weight as any other authored explanation.
+
+## Device dossier (issue #410)
+
+`GET /api/hosts/{ip}/dossier` answers "what is this thing?" for one
+address, by assembling what mikroview already holds rather than by going
+and looking. It needs no configuration and is on whenever mikroview is,
+though several of its blocks are only as good as what your routers push
+(see [RouterOS setup](routeros-setup.md)).
+
+What it puts in front of you:
+
+- **Traffic fingerprint** -- which hosts it reached, which reached it,
+  the ports involved with their known names, and the cadence: regular,
+  bursty or occasional.
+- **MAC, vendor, and the locally-administered bit.** The vendor comes
+  from [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default).
+  The bit is called out on its own because it is the most useful single
+  line on the card when it is set: no vendor exists, so you are looking
+  at a VM, a container, or a device randomising its address, and the
+  question changes from "what gadget is this" to "which host made it".
+- **Names and where each came from** -- a static DNS entry, a lease
+  hostname, a WireGuard peer comment, your own saved label or a config
+  alias, said in words rather than as a code.
+- **Lease or fixed**, first and last seen, and **which firewall rules
+  its traffic matched**, with the rule's own comment when the router has
+  pushed its rule table.
+- **A suggested identity** with the evidence behind it and a confidence
+  in words: weak, fair or strong.
+
+The suggestion comes from a small explicit table -- MQTT plus a clock
+check plus a couple of fixed endpoints outside the LAN reads IoT-ish;
+SMB with RDP reads Windows-ish; raw printing reads printer, and so on.
+It is a table you can read (`internal/dossier/heuristics.go`), every row
+says what would rule it out, and no row may claim more than its ceiling.
+Evidence drawn from a handful of events over a few minutes lowers the
+confidence a step and the card says why.
+
+**Absence is reported, never filled in.** Each block says what it does
+not know and why, and the card ends with a list of everything it could
+not answer. The sharpest case is lease-versus-fixed: an address is only
+called fixed when a router has actually pushed a DHCP table that does
+not list it. A router that has never pushed one leaves the answer
+unknown, because silence is not evidence. An address nobody has ever
+seen answers 200 with an honest empty card, not a 404 -- "never seen" is
+an answer, and often the one you needed.
+
+**mikroview never touches the host.** The card may print an `nmap`
+command or a browser URL for you to run yourself, built from the ports
+something has actually been seen reaching on that host. mikroview does
+not run it and connects to nothing on your network: an observer that
+starts probing changes character, and starts appearing in other tools'
+logs as a scanner.
+
+The endpoint is open to any signed-in user, and is deliberately not
+reachable with a read-only API token -- it puts one host's traffic,
+peers, ports and hardware address in a single response.
 
 ## Baseline line register (issue #1016, optional)
 
@@ -3815,6 +3870,7 @@ exits, rather than starting the server. See
 | `GET /api/hosts` | open to any signed-in user (see [Host presence register](#host-presence-register-issue-1016-optional)): every host the feed has shown, each with its interface, address, last-seen hostname, first/last seen times, event count and any mark on it. Not reachable with a read-only API token: it is a partial inventory of your private address space |
 | `PUT /api/hosts/{key}/mark` | user tier: say what a quiet host is, taking `{"kind": "intended"\|"dismissed", "reason": "..."}` in the JSON body. `reason` is required for `intended` and optional for `dismissed`; `by`/`at` are set server-side. 400 on an unknown kind or an empty/oversized/control-character key or reason, 404 if no event has ever registered that key. Audit-logged as `hosts.mark` |
 | `DELETE /api/hosts/{key}/mark` | user tier: take the mark off the host at `key`, putting it back to whatever its own last-seen time says it is. 404 if there is no mark there. Audit-logged as `hosts.unmark` |
+| `GET /api/hosts/{ip}/dossier` | open to any signed-in user (see [Device dossier](#device-dossier-issue-410)): everything already known about one address, assembled -- traffic fingerprint, MAC with its vendor and the locally-administered bit, names with their provenance, lease-versus-fixed, first/last seen, matched firewall rules, and a suggested identity with its evidence and a confidence in words. Accepts a bare address or a host-register key (`bridge-lan|10.0.10.5`). 200 with an honest empty card for an address nothing is known about, 400 for something that is not an address. May include a `suggestedProbe` -- a command for *you* to run; mikroview never connects to a host on your network. Not reachable with a read-only API token: it is one host's traffic, peers and hardware address in a single response |
 | `GET /api/baseline/off` | open to any signed-in user (see [Baseline line register](#baseline-line-register-issue-1016-optional)): today's off-baseline lines, the establishment threshold that judged them, and the configured host-quiet window. Not reachable with a read-only API token: it is a partial inventory of your private address space, with destinations and ports attached |
 | `PUT /api/baseline/{key}/expected` | user tier: say the line at `key` is meant to be there, taking `{"reason": "..."}` in the JSON body. `reason` is required; empty is refused. 400 on an invalid key, 404 if no event has ever registered it. Audit-logged as `baseline.expected` |
 | `DELETE /api/baseline/{key}/expected` | user tier: take the mark off the line at `key`, putting it back to whatever its own recurrence says it is. 404 if there is no mark there. Audit-logged as `baseline.unexpected` |
