@@ -8,11 +8,17 @@ import { toastState } from './toast.svelte'
 import type { NameProvenance } from './types'
 
 // The kinds of token this editor can rename. Narrower than EntityType on
-// purpose: these are the three that a live row actually shows a label
+// purpose: these are the four that a live row actually shows a label
 // for, and each one has its own title, scope sentence and identity line
 // below. An arbitrary entity type has none of those, so it has no
 // business opening this.
-export type EditableTokenType = 'host' | 'port' | 'rule'
+//
+// 'device' is the fourth #413's ratified design listed and left
+// deliberately unbuilt: until #600 a device name had nowhere to be
+// stored that everybody read, so a rename would have shown to the one
+// admin who typed it. It is stored on the server now, so the token
+// joins the other three.
+export type EditableTokenType = 'host' | 'port' | 'rule' | 'device'
 
 interface Anchor {
   x: number
@@ -34,6 +40,10 @@ const COPY: Record<EditableTokenType, { title: string; scope: (key: string) => s
   rule: {
     title: 'Name this rule',
     scope: (key) => `Applies to every event logged with prefix “${key}”.`,
+  },
+  device: {
+    title: 'Rename this device',
+    scope: (key) => `Display name only — the device id “${key}” stays the identity.`,
   },
 }
 
@@ -114,6 +124,10 @@ class NameEditorState {
       case 'entity':
         return `${this.key} — currently “${p.name}”, from your label`
       case 'config':
+      // A device named in config.yaml says the same sentence: the
+      // operator does not care which map it came out of, only that the
+      // file holds it. What differs is the refusal below.
+      case 'config-device':
         return `${this.key} — currently “${p.name}”, from config.yaml`
       case 'router-dhcp-lease':
         return `${this.key} — currently “${p.name}”, from a DHCP lease`
@@ -136,8 +150,19 @@ class NameEditorState {
   get refusal(): string | null {
     const p = this.provenance
     if (!p || p.editable) return null
-    const where = p.router ? `“${p.router}”` : 'the router'
     const shadowed = p.label ? ` Your label “${p.label}” is saved, but it is not what is shown.` : ''
+    // Two refusals, one grammar (#600): what supplies the name, that it
+    // wins, what would happen to an edit, and where to go instead. Only
+    // the last clause differs, because only one of them has a router to
+    // send anybody to -- a device is named in config.yaml, on the
+    // machine mikroview runs on.
+    if (p.source === 'config-device') {
+      return (
+        'config.yaml supplies this name, and config.yaml wins — a name set here would be stored and never displayed.' +
+        ` Change it in config.yaml, in this device’s entry.${shadowed}`
+      )
+    }
+    const where = p.router ? `“${p.router}”` : 'the router'
     return (
       'RouterOS supplies this name, and RouterOS wins — a name set here would be stored and never displayed.' +
       ` Change it on ${where}, in the table above.${shadowed}`

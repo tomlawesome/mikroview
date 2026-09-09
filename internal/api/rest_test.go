@@ -26,6 +26,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -941,4 +942,52 @@ func getStats(t *testing.T, base string) map[string]any {
 		t.Fatal(err)
 	}
 	return body
+}
+
+// TestHandleDevicesServesTheStoredNameWithProvenance is issue #600 at
+// the endpoint everyone reads: a device renamed by one operator comes
+// back named for everybody, and every device says where its name came
+// from. "config-device" is the refusal case -- a name config.yaml
+// decides, which no label can out-rank -- and the editor reads exactly
+// that distinction before offering a field.
+func TestHandleDevicesServesTheStoredNameWithProvenance(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Devices.Resolve("203.0.113.9", time.Now())
+	if _, err := s.Entities.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "203.0.113.9", Label: "lab crs"}); err != nil {
+		t.Fatal(err)
+	}
+	// The wiring main does: one resolver, held by the registry and by
+	// the server, so the name and its provenance cannot disagree.
+	s.Naming = naming.Resolver{Devices: map[string]string{"core": "Core"}, Entities: s.Entities}
+	s.Devices.SetNames(s.Naming)
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Devices []struct {
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			NameSource string `json:"nameSource"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][2]string{}
+	for _, d := range body.Devices {
+		got[d.ID] = [2]string{d.Name, d.NameSource}
+	}
+	if got["203.0.113.9"] != [2]string{"lab crs", naming.SourceEntity} {
+		t.Errorf("discovered device = %v, want the stored rename reported as an entity name", got["203.0.113.9"])
+	}
+	if got["core"] != [2]string{"Core", naming.SourceConfigDevice} {
+		t.Errorf("declared device = %v, want config.yaml's name reported as config-owned", got["core"])
+	}
 }

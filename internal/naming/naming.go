@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Package naming resolves friendly display names for firewall rule
-// labels, host IPs, and (issue #109) ports from two layers: internal/
+// labels, host IPs, (issue #109) ports and (issue #600) the routers
+// events arrive from, from two layers: internal/
 // config's static RuleNames/HostNames maps (config-driven only, no
 // auto-discovery or liveness tracking the way internal/device's
 // Registry has, since a rule label or a host IP doesn't have a
@@ -28,6 +29,15 @@ import (
 type Resolver struct {
 	Rules map[string]string
 	Hosts map[string]string
+	// Devices are the display names config.yaml declares for routers
+	// (internal/config.Device.Name, keyed by the device's id -- see
+	// device.ConfigNames). Unlike Rules/Hosts this map is consulted
+	// *before* Entities, not after: issue #600's ratified plan makes a
+	// declared name the one config.yaml decides, so a label saved under
+	// it would be stored and never shown. Device/DeviceProvenance carry
+	// that precedence, and the editor refuses the edit rather than
+	// taking it.
+	Devices map[string]string
 	// Entities, if set, is consulted before Rules/Hosts -- see this
 	// package's doc comment. nil (the zero value) means "no entity store
 	// wired up," falling straight back to Rules/Hosts, exactly today's
@@ -90,6 +100,16 @@ const (
 	// label here does take effect.
 	SourceConfig = "config"
 
+	// SourceConfigDevice: a device display name declared in
+	// config.yaml's devices block. Deliberately distinct from
+	// SourceConfig, because for a device the answer to "would a label
+	// here be shown?" is the opposite one: a config.yaml alias for a
+	// host or a rule is a fallback an entity out-ranks, while a
+	// declared device name wins (#600). One value, one editability
+	// answer -- a caller that reads Source can decide without also
+	// knowing which kind of key it asked about.
+	SourceConfigDevice = "config-device"
+
 	SourceRouterDNSStatic     = "router-dns-static"
 	SourceRouterDHCPLease     = "router-dhcp-lease"
 	SourceRouterWireguardPeer = "router-wireguard-peer"
@@ -125,6 +145,19 @@ func (p Provenance) RouterWins() bool {
 		return true
 	}
 	return false
+}
+
+// Fixed reports whether the name shown comes from a layer no
+// mikroview-side label can out-rank, and therefore whether saving one
+// here would be stored and never displayed. This is the gate #413's
+// editor is built on, widened by #600 from "the router won" to "the
+// winning layer is not one this editor writes": RouterOS for host names
+// (#186 step 4c), config.yaml for device names.
+//
+// RouterWins stays separate because the two are not the same fact: only
+// a router-won name has a device to send the operator to.
+func (p Provenance) Fixed() bool {
+	return p.RouterWins() || p.Source == SourceConfigDevice
 }
 
 // routerSource maps routerstate's own source constant onto the
@@ -259,6 +292,57 @@ func (r Resolver) PortProvenance(port int) Provenance {
 	var p Provenance
 	if port > 0 && r.Entities != nil {
 		p.Label = r.Entities.Label(entities.TypePort, strconv.Itoa(port))
+	}
+	if p.Label != "" {
+		p.Name, p.Source = p.Label, SourceEntity
+		return p
+	}
+	p.Source = SourceNone
+	return p
+}
+
+// Device returns the display name for a router's device id: the name
+// declared for it in config.yaml first, then an internal/entities
+// record of type "device", then "" -- and "" means the caller shows the
+// raw id, which is what internal/device.Registry.List does.
+//
+// Config first is the whole of issue #600's shape. A device id is the
+// identity everything downstream is keyed by (tokens, pushed router
+// state, every event's deviceId), and config.yaml is where an operator
+// declares the router that identity stands for -- so a declared name is
+// the answer, the same way a router-pushed host name is for Host. The
+// entity layer names the routers config.yaml does not: the
+// auto-discovered ones, which arrive named after their own source
+// address.
+func (r Resolver) Device(id string) string {
+	if id == "" {
+		return ""
+	}
+	if v := r.Devices[id]; v != "" {
+		return v
+	}
+	if r.Entities != nil {
+		return r.Entities.Label(entities.TypeDevice, id)
+	}
+	return ""
+}
+
+// DeviceProvenance is Device with the reason attached, for the editor
+// that has to decide whether to offer a field at all (#600). Same
+// precedence, same answer, plus which layer produced it and what the
+// operator's own label for this device is.
+func (r Resolver) DeviceProvenance(id string) Provenance {
+	var p Provenance
+	if id == "" {
+		p.Source = SourceNone
+		return p
+	}
+	if r.Entities != nil {
+		p.Label = r.Entities.Label(entities.TypeDevice, id)
+	}
+	if v := r.Devices[id]; v != "" {
+		p.Name, p.Source = v, SourceConfigDevice
+		return p
 	}
 	if p.Label != "" {
 		p.Name, p.Source = p.Label, SourceEntity
