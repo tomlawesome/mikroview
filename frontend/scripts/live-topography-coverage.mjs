@@ -55,8 +55,26 @@ async function push(payload) {
 }
 
 // The zones the captions read, then the rules the paint judges -- both
-// whole tables, matching what the reality scenario pushes later so the
-// lane names stay stable across the suite.
+// whole tables. The comments (the display names an operator actually
+// sees) still read "The LAN" / "The quiet lane", matching what the
+// reality scenario pushes later so the lane names stay stable across
+// the suite -- but the raw interface ids are this scenario's own
+// (`cov-lan`/`cov-quiet`), not the ubiquitous `bridge1`/`ether5` around
+// twenty other scenarios reuse. Event history is never cleared between
+// scenarios, only the pushed rule/zone tables are, so a shared instance
+// deep into a shard still carries every accept- and drop-actioned event
+// any earlier sibling ever fed on `bridge1`/`ether1` under its own,
+// different rules. reality.ts's verdict rule (`r.accepts > 0 ?
+// 'unplanned' : 'holding'`) judges a pair from that whole history, not
+// from this scenario's own traffic alone, so a stale accept anywhere in
+// it turns this scenario's own drop-only pair 'unplanned' -- drawn as
+// the full lane-to-waist alarm corridor rather than a short calm line
+// near the waist -- and that corridor ran directly along this
+// scenario's own short dark coverage curve for `bridge1`, which is why
+// hovering the material timed out only after other scenarios had run
+// (`live-suggestions-matches.mjs` and `live-token-copy.mjs` both feed an
+// `A|...|` event on exactly `in:ether1 out:bridge1`). An id nothing else
+// in the suite has ever touched has no such history to inherit.
 check(
   (await push({
     kind: 'ip-address',
@@ -64,8 +82,8 @@ check(
     pages: 1,
     routerosVersion: '7.23.3 (stable)',
     records: [
-      { address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' },
-      { address: '10.9.0.1/24', network: '10.9.0.0', interface: 'ether5', comment: 'The quiet lane' },
+      { address: '192.168.1.1/24', network: '192.168.1.0', interface: 'cov-lan', comment: 'The LAN' },
+      { address: '10.9.0.1/24', network: '10.9.0.0', interface: 'cov-quiet', comment: 'The quiet lane' },
     ],
   })) === 200,
   'the zone table is pushed whole',
@@ -77,8 +95,8 @@ check(
     pages: 1,
     routerosVersion: '7.23.3 (stable)',
     records: [
-      { ordinal: 0, comment: 'LAN out to the web', chain: 'forward', action: 'accept', srcAddressList: '', logPrefix: '', inInterface: 'bridge1', outInterface: 'ether1', dstPort: 443, protocol: 'tcp' },
-      { ordinal: 1, comment: 'Nothing unsolicited comes in', chain: 'forward', action: 'drop', srcAddressList: '', logPrefix: 'D|forward-drop|', log: true, inInterface: 'ether1', outInterface: 'bridge1' },
+      { ordinal: 0, comment: 'LAN out to the web', chain: 'forward', action: 'accept', srcAddressList: '', logPrefix: '', inInterface: 'cov-lan', outInterface: 'ether1', dstPort: 443, protocol: 'tcp' },
+      { ordinal: 1, comment: 'Nothing unsolicited comes in', chain: 'forward', action: 'drop', srcAddressList: '', logPrefix: 'D|forward-drop|', log: true, inInterface: 'ether1', outInterface: 'cov-lan' },
     ],
   })) === 200,
   'the rule table is pushed whole',

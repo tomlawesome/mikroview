@@ -238,6 +238,45 @@ export function formatSpacedAge(iso: string, nowMs: number): string {
   return `${d} d`
 }
 
+// formatLastHeard renders Fleet's and Entities' "last heard" line in
+// round 38's cutover (`the-whole.html`'s device card: "last heard
+// Tuesday 21:14"), which round 30's plain formatRelative left as a bare
+// "3d ago" -- fine for "how long", useless for "which day", the same gap
+// AuditLog's formatWhen and Watchlist's matchWhen each closed locally for
+// their own tables. This is that rule, shared, for prose rather than a
+// table cell:
+//
+//   - under an hour: formatSpacedAge's short form ("12 m") -- freshness,
+//     not a clock, is the fact worth a glance here.
+//   - later than an hour but still today: the clock time alone ("21:14").
+//   - within the last 7 calendar days: weekday name + time
+//     ("Tuesday 21:14").
+//   - older: day + short month + time ("2 Sep 21:14"), formatDayMonth's
+//     own rendering with the clock time appended.
+//
+// Calendar days throughout, not 24h windows, so a device last heard from
+// at 23:59 read at 00:01 the next day is "yesterday's weekday", not
+// "today". Locale-driven like every other helper here: toLocaleDateString
+// with `undefined` lets the browser pick how this reader writes a
+// weekday and a month, rather than a hand-built name table.
+export function formatLastHeard(iso: string, nowMs: number): string {
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return iso
+  const deltaMs = Math.max(0, nowMs - t)
+  if (deltaMs < 3_600_000) return formatSpacedAge(iso, nowMs)
+
+  const d = new Date(t)
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+  const startOfDay = (ms: number): number => {
+    const x = new Date(ms)
+    return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  }
+  const dayDiff = Math.round((startOfDay(nowMs) - startOfDay(t)) / 86_400_000)
+  if (dayDiff <= 0) return time
+  if (dayDiff <= 6) return `${d.toLocaleDateString(undefined, { weekday: 'long' })} ${time}`
+  return `${formatDayMonth(iso)} ${time}`
+}
+
 // rawTooltip is the verbatim router log line as shown on hover, plus a
 // note when the server cut it.
 //

@@ -157,9 +157,13 @@ const readMark = () =>
 
 await toStreetStop()
 
-// Nothing switches a mark on or off any more.
-const pills = await page.locator('[data-card="topography"] [aria-label="Map overlays"] button').count()
-check(pills === 0, `no overlay pill is drawn anywhere on the row (${pills} buttons)`)
+// Nothing switches a mark on or off any more. The one button left on
+// the row is the port pill (#1055), which is a filter, not a switch:
+// it is the only control there, and it stands idle.
+const overlays = page.locator('[data-card="topography"] [aria-label="Map overlays"] button')
+const pills = await overlays.count()
+check(pills === 1, `the only button on the overlay row is the port pill (${pills} buttons)`)
+check((await overlays.first().textContent())?.trim() === '⌕ port', 'and it is the port pill, idle -- no flag or watch switch remains')
 
 await page.waitForSelector(BUILDING, { timeout: 15000 })
 const marked = await readMark()
