@@ -18,6 +18,7 @@ import {
   undoable,
   watchlistRowText,
 } from './decommission'
+import { formatDayMonth } from './format'
 import type { DecommissionOffer, DecommissionReceipt, DecommissionWatch } from './types'
 
 const HOUR = 3_600_000
@@ -212,7 +213,7 @@ describe('the straggler', () => {
   })
 
   it('names what the address was, where it arrived, and what judged it', () => {
-    expect(stragglerProvenance(broken, s)).toBe('was garage-cam until 1 Aug (dhcp lease, rb5009) · arrived on iot · accepted by #26')
+    expect(stragglerProvenance(broken, s)).toBe(`was garage-cam until ${formatDayMonth('2026-08-01T09:00:00Z')} (dhcp lease, rb5009) · arrived on iot · accepted by #26`)
   })
 
   it('shortens rather than guessing where no push supplied a clause', () => {
@@ -226,7 +227,7 @@ describe('the straggler', () => {
   it('draws the callout as the pair, then the enrichment', () => {
     const { head, detail } = stragglerCallout(broken, s, 'nas')
     expect(head).toBe('STRAGGLER · 10.0.70.14 → nas · tcp/554')
-    expect(detail).toBe('was ‘garage-cam’ until 1 Aug · in: iot · 3×')
+    expect(detail).toBe(`was ‘garage-cam’ until ${formatDayMonth('2026-08-01T09:00:00Z')} · in: iot · 3×`)
   })
 
   it('says broken with its line count on the watchlist row', () => {
