@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/oui"
 )
 
 func TestLoadPrecedence(t *testing.T) {
@@ -961,5 +963,58 @@ func TestSnapshotIntervalAtTheMinimumIsAccepted(t *testing.T) {
 		if p.Code == "CFG-0070" {
 			t.Errorf("the minimum itself was reported as too short: %+v", p)
 		}
+	}
+}
+
+func TestOUIDefaultsToEnabledAgainstTheIEEERegistry(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OUI.Enabled {
+		t.Error("OUI.Enabled = false, want the vendor feed on by default")
+	}
+	if cfg.OUI.URL != oui.SourceURL {
+		t.Errorf("OUI.URL = %q, want internal/oui.SourceURL (%q) -- the two must not drift", cfg.OUI.URL, oui.SourceURL)
+	}
+	if cfg.OUI.CachePath != "/var/lib/mikroview/oui-registry.json" {
+		t.Errorf("OUI.CachePath = %q, want it under the data directory", cfg.OUI.CachePath)
+	}
+}
+
+func TestOUIEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_OUI_ENABLED", "false")
+	t.Setenv("MIKROVIEW_OUI_URL", "https://mirror.example.com/oui.csv")
+	t.Setenv("MIKROVIEW_OUI_CACHE_PATH", "/data/oui.json")
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OUI.Enabled {
+		t.Error("MIKROVIEW_OUI_ENABLED=false did not switch the feed off")
+	}
+	if cfg.OUI.URL != "https://mirror.example.com/oui.csv" {
+		t.Errorf("OUI.URL = %q, want the mirror", cfg.OUI.URL)
+	}
+	if cfg.OUI.CachePath != "/data/oui.json" {
+		t.Errorf("OUI.CachePath = %q, want the override", cfg.OUI.CachePath)
+	}
+}
+
+func TestOUIYAMLCanDisableTheFeed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("oui:\n  enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OUI.Enabled {
+		t.Error("oui.enabled: false in YAML did not switch the feed off")
+	}
+	if cfg.OUI.URL != oui.SourceURL {
+		t.Errorf("OUI.URL = %q, want the default to survive an unrelated override", cfg.OUI.URL)
 	}
 }

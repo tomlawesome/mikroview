@@ -308,6 +308,29 @@ store:
 #     # - aws             # opt-in: official AWS ranges, with region detail
 #     # - gcp             # opt-in: official Google Cloud ranges
 
+# Optional (on by default): MAC vendor lookups, from IEEE's own MA-L
+# registry. It turns the first three octets of a hardware address into
+# the organisation that registered them, for the device dossier
+# (issue #410) -- and, just as usefully, says when there is no vendor to
+# find at all, because the address is locally administered (a VM,
+# container, or a phone randomising its Wi-Fi MAC).
+#
+# The registry is fetched at runtime from IEEE and cached under the data
+# directory: no vendor data ships in the image. IEEE publishes the file
+# for direct download at no charge with no licence or usage conditions
+# attached; there is no permission to redistribute it, which is why your
+# instance fetches its own copy rather than receiving one from us. Until
+# the first fetch completes, the dossier says vendor data is not
+# available yet rather than guessing. Refresh is a fixed daily
+# conditional request, not configurable.
+#
+# url only needs setting if you mirror the file internally or must go
+# through a proxy; it must still resolve to a public address.
+# oui:
+#   enabled: true
+#   url: https://standards-oui.ieee.org/oui/oui.csv
+#   cachePath: /var/lib/mikroview/oui-registry.json
+
 # Optional: friendly display names shown in place of a raw RouterOS rule
 # label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
 # and CSV export. Filtering/grouping still uses the raw value -- these

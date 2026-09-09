@@ -60,6 +60,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
+	"github.com/tomlawesome/mikroview/internal/oui"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
@@ -942,6 +943,19 @@ func main() {
 	netclassLog := logging.New("netclass")
 	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
 
+	// oui (issue #410): the IEEE MA-L registry behind MAC vendor
+	// lookups in the device dossier. Same runtime-fetch contract as the
+	// two feeds above -- no registry data ships in the binary -- with an
+	// on-disk cache, so an operator opening a dossier straight after a
+	// restart sees vendor names rather than waiting on a 4MB download.
+	// Nil-safe throughout: a disabled feed answers every lookup with
+	// "no vendor data", never with a wrong name.
+	ouiLog := logging.New("oui")
+	var ouiRegistry *oui.Registry
+	if cfg.OUI.Enabled {
+		ouiRegistry = oui.New(cfg.OUI.URL, cfg.OUI.CachePath, ouiLog)
+	}
+
 	// routerState (issue #186 step 4): each device's most recent pushed
 	// state, in-memory only by that package's design. Constructed here,
 	// before the definitions are registered, because an expectation
@@ -1268,6 +1282,40 @@ func main() {
 		}()
 	}
 
+	// OUI registry refresh (issue #410): same shape as the two sweeps
+	// above, jittered for the same thundering-herd reason netclass
+	// gives -- IEEE serves this file to everyone who asks, and it
+	// should not be asked by every instance at once. The first fetch
+	// runs after the jitter rather than at start, because a cached
+	// registry is already serving lookups by then; a cold start with no
+	// cache reports "no vendor data yet" until it lands, which is the
+	// honest state and not an error.
+	if ouiRegistry.Enabled() {
+		go func() {
+			defer logging.Recover(ouiLog)
+			jitter := time.Duration(rand.Int64N(int64(time.Hour)))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitter):
+			}
+			ouiRegistry.Refresh(ctx)
+			ticker := time.NewTicker(oui.RefreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					func() {
+						defer logging.Recover(ouiLog)
+						ouiRegistry.Refresh(ctx)
+					}()
+				}
+			}
+		}()
+	}
+
 	// SSO (issue #43): additive on top of local auth, never a
 	// replacement -- see internal/oidc and auth.Store.
 	// FindOrCreateOIDCUser. A misconfigured or unreachable provider must
@@ -1409,6 +1457,7 @@ func main() {
 		Hub:               h,
 		Reputation:        rep,
 		NetClass:          nc,
+		OUI:               ouiRegistry,
 		Flags:             fs,
 		Definitions:       definitions,
 		Entities:          entityStore,
