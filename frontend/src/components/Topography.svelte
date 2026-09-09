@@ -2151,12 +2151,12 @@
       else if (lineCard) closeLineCard()
       else if (compose) compose = null
       // The list (#1050, A1) is its own rung: Esc closes it first, a
-      // second Esc clears the trace underneath it.
-      else if (mapTraceState.active && mapTraceState.listOpen) mapTraceState.listOpen = false
-      else if (mapTraceState.active) mapTraceState.clear()
-      // The city has the same rung in its own ladder (#1055) and owns it
-      // while it is the surface being read: two handlers on one window
-      // would otherwise take two rungs at once on a single press.
+      // second Esc clears the trace underneath it. The city has the same
+      // rung in its own ladder (#1055) and owns it while it is the
+      // surface being read: two handlers on one window would otherwise
+      // take two rungs at once on a single press.
+      else if (cityStop === null && mapTraceState.active && mapTraceState.listOpen) mapTraceState.listOpen = false
+      else if (cityStop === null && mapTraceState.active) mapTraceState.clear()
       else if (cityStop === null && (portFilterState.active || portFilterState.open)) portFilterState.clear()
       else if (reach) surface()
     }
