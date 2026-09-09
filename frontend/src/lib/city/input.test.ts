@@ -134,6 +134,7 @@ describe('city input', () => {
         routerId: 'rb',
         kind: 'wg',
         apiState: 'down',
+        lastHeard: null,
         peers: [{ id: 'wg0/wg/1', name: 'phone', address: '10.9.0.2', kind: 'wg' }],
       },
     ])
