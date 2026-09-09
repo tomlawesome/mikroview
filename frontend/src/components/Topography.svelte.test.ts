@@ -4951,6 +4951,29 @@ describe('the port filter (#1018, round 53)', () => {
   // "Knowing where a door is open (even if unused) is useful
   // information" (owner, 2026-09-08). A door on a rib nobody used still
   // draws, and its rib recedes less than the rest.
+  // Every rib on this map converges on the router, so two doors picked
+  // at the same fraction land in the same crowded place. The chooser
+  // measures clearance instead; here that has to separate them.
+  it('keeps two doors on converging ribs off each other', () => {
+    seedMap()
+    filterTo([445], {
+      doors: [door(), door({ label: '#31', ordinal: 31, action: 'drop', in: 'ether4', out: 'ether3' })],
+    })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const doors = [...container.querySelectorAll('.door')]
+    expect(doors.length).toBe(2)
+    const at = (g: Element) => {
+      const d = g.querySelector('.door-post')!.getAttribute('d') ?? ''
+      const [, x, y] = /^M ([-\d.]+) ([-\d.]+)/.exec(d) ?? []
+      return { x: Number(x), y: Number(y) }
+    }
+    const [a, b] = doors.map(at)
+    expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(20)
+  })
+
   it('draws a door wherever a rule names the port, on a used rib and an unused one alike', () => {
     seedMap()
     filterTo([445], {
@@ -4972,6 +4995,28 @@ describe('the port filter (#1018, round 53)', () => {
     // The unused rib the drop guards recedes less than the rest.
     const halves = [...container.querySelectorAll('.redge.port-off, .cedge.port-off')]
     expect(halves.some((h) => (h.getAttribute('style') ?? '').includes('opacity: 0.6'))).toBe(true)
+  })
+
+  // The fit chip keeps its own corner; the legend goes to the left of it.
+  // jsdom lays nothing out, so the real overlap is caught in
+  // live-topography-port-trace.mjs against measured rects -- this pins
+  // the wiring: the legend's `right` is driven by the chip's own width
+  // rather than by a guess that is right at 100 % and wrong at 1000 %.
+  it('places its legend clear of the fit chip rather than under it', () => {
+    seedMap()
+    filterTo([445], { doors: [door()] })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const legend = container.querySelector<HTMLElement>('.map-legend')!
+    const chip = container.querySelector<HTMLElement>('.fitchip')!
+    expect(chip).not.toBeNull()
+    const right = Number(/right:\s*([\d.]+)px/.exec(legend.getAttribute('style') ?? '')?.[1])
+    // The chip sits 16px in and measures 0 wide under jsdom, so the
+    // legend's own inset has to clear that inset by the stated gap.
+    expect(right).toBeGreaterThanOrEqual(32)
+    expect(componentSource).toMatch(/fitChipW = el \? el\.getBoundingClientRect\(\)\.width : 0/)
   })
 
   it('says nothing was seen in one line under the map, and still draws the door', () => {

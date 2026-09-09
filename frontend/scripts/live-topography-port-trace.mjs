@@ -25,7 +25,32 @@ const OUT = process.env.PORT_TRACE_SHOTS || '/tmp/1018-shots'
 mkdirSync(OUT, { recursive: true })
 
 const CARD = '[data-card="topography"]'
+
 const { page, consoleErrors } = await session()
+
+// Measured in the page, not asserted from the CSS: the fit chip's label
+// is `NN%` and grows with the zoom, so "does the legend clear it" is a
+// question about two rendered boxes rather than about two `right`
+// values. Read on its own rather than folded into the two big reads
+// below, so the same measurement serves both without either of them
+// needing a helper shipped into the page.
+async function legendClearsFitChip() {
+  return page.evaluate((sel) => {
+    const card = document.querySelector(sel)
+    const legend = card?.querySelector('.map-legend')
+    const chip = card?.querySelector('.fitchip')
+    if (!legend || !chip) return { clear: false, why: 'legend or fit chip missing' }
+    const l = legend.getBoundingClientRect()
+    const c = chip.getBoundingClientRect()
+    const overlaps = l.left < c.right && c.left < l.right && l.top < c.bottom && c.top < l.bottom
+    return {
+      clear: !overlaps && l.right <= c.left,
+      gap: Math.round(c.left - l.right),
+      legendRight: Math.round(l.right),
+      chipLeft: Math.round(c.left),
+    }
+  }, CARD)
+}
 
 let DEVICE
 for (let i = 0; i < 40 && !DEVICE; i++) {
@@ -232,6 +257,11 @@ check(
 )
 check(filtered.doorGuides > 0, `a door on a rib the map draws none of its own brings its own faint one (${filtered.doorGuides})`)
 check(/door open/.test(filtered.legend ?? '') && /off the port/.test(filtered.legend ?? ''), `the legend swaps for the filter's own entries (${filtered.legend})`)
+const portLegendBox = await legendClearsFitChip()
+check(
+  portLegendBox.clear,
+  `the legend sits clear of the fit chip rather than under it (${JSON.stringify(portLegendBox)})`,
+)
 check(filtered.badges === 0, 'the map goes quiet about everything the filter is not about')
 
 await page.screenshot({ path: `${OUT}/port.png` })
@@ -322,6 +352,11 @@ check(
   'and the end it came from carries its own count',
 )
 check(/would have gone/.test(traced.legend ?? ''), `the legend swaps for the trace's own entries (${traced.legend})`)
+const traceLegendBox = await legendClearsFitChip()
+check(
+  traceLegendBox.clear,
+  `and it too sits clear of the fit chip (${JSON.stringify(traceLegendBox)})`,
+)
 check(traced.off > 0, 'everything else is grey')
 
 await page.screenshot({ path: `${OUT}/trace.png` })

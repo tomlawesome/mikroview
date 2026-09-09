@@ -107,7 +107,17 @@
   // server answered, and everything below only draws it.
   import { portFilterState } from '../lib/portFilter.svelte'
   import { mapTraceState } from '../lib/mapTrace.svelte'
-  import { doorAccepts, doorHalf, emptyNote, litRibs, parsePortList, ribKey, zoneTally } from '../lib/portFilter'
+  import {
+    chooseDoorSpot,
+    doorAccepts,
+    doorHalf,
+    doorTs,
+    emptyNote,
+    litRibs,
+    parsePortList,
+    ribKey,
+    zoneTally,
+  } from '../lib/portFilter'
   import type { OffBaselineLine } from '../lib/baseline'
   import type { Host } from '../lib/api'
 
@@ -3641,6 +3651,30 @@
   // there is nothing to draw, and dimming on `active` alone would put
   // "0 of 12 hosts on 22/tcp" and a wholly grey map on screen for the
   // length of every request -- an answer to a question still in flight.
+  /** The fit chip's own width, measured rather than assumed: the label
+   * is `NN%` and grows with the zoom, so a hardcoded gap beside it
+   * would be right at 100 % and wrong at 1000 %. The legend sits left
+   * of it by this plus FIT_CHIP_CLEAR.
+   *
+   * Read from the element rather than through `bind:clientWidth`, which
+   * makes Svelte install a ResizeObserver on it -- one this scene does
+   * not otherwise need, and which jsdom does not have. The two things
+   * that change the chip's width are the zoom label and the chip coming
+   * and going, and both are already state this effect reads. */
+  let fitChipEl: HTMLButtonElement | undefined = $state()
+  let fitChipW = $state(0)
+  $effect(() => {
+    mapZoom
+    filterOn
+    const el = fitChipEl
+    fitChipW = el ? el.getBoundingClientRect().width : 0
+  })
+  const FIT_CHIP_RIGHT = 16
+  const FIT_CHIP_CLEAR = 16
+  /** Where the filter legend's right edge sits: clear of the fit chip,
+   * which keeps its own place. */
+  const legendRight = $derived(reach ? 24 : FIT_CHIP_RIGHT + fitChipW + FIT_CHIP_CLEAR)
+
   const portOn = $derived(portFilterState.active && portFilterState.settled)
   const traceOn = $derived(mapTraceState.active)
   const filterOn = $derived(portOn || traceOn)
@@ -3745,8 +3779,43 @@
     guide: string | null
   }
 
-  const DOOR_T = 0.46
   const DOOR_W = 8
+
+  /** How finely a rib is sampled when the door chooser measures
+   * clearance against it. Twelve points is enough to catch a crossing
+   * anywhere along a half without turning the chooser into a curve
+   * intersection problem -- the answer only has to rank candidates. */
+  const RIB_SAMPLES = 12
+
+  /** The curve a line is actually drawn as, sampled. A direction that
+   * dies at the waist draws the quad `edgePath` draws, not a half of a
+   * cubic, so the samples follow whichever is on screen -- measuring
+   * clearance against a curve nobody can see would move a door away
+   * from nothing. */
+  function drawnPoints(l: Line): Pt[] {
+    const out: Pt[] = []
+    const c = halfCubic(l)
+    if (c) {
+      for (let i = 0; i <= RIB_SAMPLES; i++) out.push(bezAt(c, i / RIB_SAMPLES))
+      return out
+    }
+    const [a, b, cc] = quadOf(l)
+    for (let i = 0; i <= RIB_SAMPLES; i++) {
+      const t = i / RIB_SAMPLES
+      const u = 1 - t
+      out.push({ x: u * u * a.x + 2 * u * t * b.x + t * t * cc.x, y: u * u * a.y + 2 * u * t * b.y + t * t * cc.y })
+    }
+    return out
+  }
+
+  /** Every drawn half, sampled and keyed, for the door chooser. */
+  const ribSamples = $derived.by((): { key: string; pts: Pt[] }[] => {
+    if (!portOn) return []
+    const out: { key: string; pts: Pt[] }[] = []
+    for (const d of drawnCoverage.drawn) out.push({ key: d.edge.key, pts: drawnPoints(d.line) })
+    for (const d of drawnReality.drawn) out.push({ key: d.r.key, pts: drawnPoints(d.line) })
+    return out
+  })
 
   /** Every direction the unfiltered map already draws a line for. A
    * door whose own direction is not in here has no rib under it -- the
@@ -3770,6 +3839,9 @@
   const drawnDoors = $derived.by((): DrawnDoor[] => {
     if (!portOn) return []
     const out: DrawnDoor[] = []
+    // Filled as each door lands, so the next one is measured against it
+    // too and two doors on converging ribs do not stack.
+    const placedDoorPts: Pt[] = []
     for (const door of portFilterState.placedDoors) {
       const half = doorHalf(door)
       if (!half) continue
@@ -3777,8 +3849,23 @@
       if (!line) continue
       const c = halfCubic(line)
       if (!c) continue
-      const p = bezAt(c, DOOR_T)
-      const q = bezAt(c, Math.min(1, DOOR_T + 0.02))
+      const key = ribKey(half.from, half.to)
+      // Where on its own rib: the sampled point with the most room
+      // around it, measured against every *other* drawn rib and every
+      // door already placed. A fixed fraction put every door in the same
+      // place, and on this map every rib converges on the router, so
+      // that place is the pile-up.
+      const ts = doorTs()
+      const others = ribSamples.filter((r) => r.key !== key).map((r) => r.pts)
+      if (placedDoorPts.length > 0) others.push(placedDoorPts)
+      const spot = chooseDoorSpot(
+        ts.map((t) => bezAt(c, t)),
+        others,
+      )
+      const t = ts[spot.index]
+      const p = bezAt(c, t)
+      placedDoorPts.push(p)
+      const q = bezAt(c, Math.min(1, t + 0.02))
       const len = Math.hypot(q.x - p.x, q.y - p.y) || 1
       const tx = (q.x - p.x) / len
       const ty = (q.y - p.y) / len
@@ -3787,9 +3874,18 @@
       const a = { x: p.x + nx * DOOR_W, y: p.y + ny * DOOR_W }
       const b = { x: p.x - nx * DOOR_W, y: p.y - ny * DOOR_W }
       const accepts = doorAccepts(door)
-      // The label sits off the posts on whichever side has more room --
-      // away from the router, which is where the cards are not.
-      const side = p.x < WAIST.x ? -1 : 1
+      // The label goes on the side away from whatever is nearest -- the
+      // one part of a door that has a side to choose, and choosing the
+      // crowded one throws away the clearance the point was picked for.
+      // With nothing near it, away from the router, which is where the
+      // cards are not.
+      const side = spot.toward
+        ? (spot.toward.x - p.x) * nx + (spot.toward.y - p.y) * ny > 0
+          ? -1
+          : 1
+        : p.x < WAIST.x
+          ? -1
+          : 1
       out.push({
         key: `${door.device}#${door.ordinal}`,
         label: door.label,
@@ -3805,8 +3901,8 @@
         lx: R2(p.x + nx * (DOOR_W + 8) * side),
         ly: R2(p.y + ny * (DOOR_W + 8) * side + 3),
         anchor: nx * side < 0 ? 'end' : 'start',
-        half: ribKey(half.from, half.to),
-        guide: drawnHalfKeys.has(ribKey(half.from, half.to)) ? null : halfPath(line),
+        half: key,
+        guide: drawnHalfKeys.has(key) ? null : halfPath(line),
       })
     }
     return out
@@ -4148,7 +4244,11 @@
        filter and goes with it, which is also the rule #981 set for the
        flag and watch marks: something always there is easy to ignore. -->
   {#if filterOn}
-    <div class="map-legend" aria-label="What this filter's colours mean">
+    <div
+      class="map-legend"
+      style:right="{legendRight}px"
+      aria-label="What this filter's colours mean"
+    >
       <span><i class="sw ok"></i>accepted</span>
       <span><i class="sw al"></i>refused</span>
       {#if portOn}
@@ -5544,6 +5644,7 @@
       <button
         type="button"
         class="fitchip"
+        bind:this={fitChipEl}
         class:hand={mapView !== null}
         aria-label={mapView !== null ? 'Zoomed by hand — fit the whole map' : 'The whole map, fitted'}
         title={mapView !== null ? 'zoomed by hand — click to fit the whole map' : 'the whole map, fitted'}
@@ -8787,10 +8888,13 @@
 
   /* Both tools swap the legend for their own entries, and the map has
      none otherwise: round 49 ruled the material is the statement. */
+  /* Left of the fit chip, never under it: `right` is set inline from
+     the chip's measured width (see legendRight), and this is only the
+     fallback for the moment before that measurement lands. */
   .map-legend {
     position: absolute;
     bottom: 13px;
-    right: 24px;
+    right: 120px;
     z-index: 2;
     display: flex;
     gap: 15px;
