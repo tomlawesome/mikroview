@@ -480,6 +480,28 @@ func (s *DefinitionsStore) SetName(id, name string) error {
 	})
 }
 
+// SetFamily files a custom detector under a flag family, or clears the
+// filing when family is empty (#829). Refused for a shipped definition,
+// the same way SetName is and for the same reason: a shipped detector's
+// family belongs to the design record that classifies the built-ins, not
+// to this deployment.
+//
+// Display only. Nothing the engine evaluates reads this -- see Family's
+// own doc comment -- so a re-file changes what the docket, the fall and
+// the map draw and changes nothing about what fires.
+func (s *DefinitionsStore) SetFamily(id string, family Family) error {
+	if err := ValidateFamily(family); err != nil {
+		return err
+	}
+	return s.mutate(id, func(d *Definition) error {
+		if d.Provenance.Origin != ProvenanceCustom {
+			return fmt.Errorf("%w: %q is shipped, and its flag family is the design record's rather than this deployment's", ErrDefinitionImmutable, id)
+		}
+		d.Family = family
+		return nil
+	})
+}
+
 // ResetParams puts a shipped definition's params back to exactly the
 // values it shipped with (Provenance.ShippedParams), which is what makes
 // "reset to default" and "clear every override" the same state rather

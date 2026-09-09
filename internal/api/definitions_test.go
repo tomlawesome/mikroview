@@ -1129,6 +1129,20 @@ func TestHandleDefinitionsCloneRefusesShipped(t *testing.T) {
 	}
 }
 
+// mustGetDefinition reads one definition as the API serves it.
+func mustGetDefinition(t *testing.T, ts *httptest.Server, id string) definitionView {
+	t.Helper()
+	resp, err := http.Get(ts.URL + "/api/definitions/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		t.Fatalf("GET /api/definitions/%s = %d", id, resp.StatusCode)
+	}
+	return mustDecodeDefinition(t, resp)
+}
+
 // mustCreateCustomDetection creates an operator-authored detector and
 // returns it as the API serves it.
 func mustCreateCustomDetection(t *testing.T, ts *httptest.Server, name string) definitionView {
@@ -1575,4 +1589,91 @@ func TestHandleDefinitionsReplayOmitsCurrentWithoutACandidate(t *testing.T) {
 	if _, ok := keys["current"]; ok {
 		t.Errorf("an empty candidate must not carry a current: %v", keys)
 	}
+}
+
+// TestCustomDetectionFamilyRoundTrip is #829's family field end to end:
+// filed on create, re-filed by PUT, cleared by PUT, and served back on
+// every read. Round-tripped rather than asserted at one end, because the
+// failure this guards against is a field the server accepts, stores and
+// never serves -- which looks exactly like success from the editor until
+// the drawer is reopened and the picker has forgotten.
+func TestCustomDetectionFamilyRoundTrip(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:   "Garage probes",
+		Intent: engine.IntentDetection,
+		Family: engine.FamilyScan,
+		Detection: &detectionRequest{
+			Conditions:     []engine.Condition{{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}}},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	})
+	made := mustDecodeDefinition(t, resp)
+	if made.Family != engine.FamilyScan {
+		t.Fatalf("family on create = %q, want scan", made.Family)
+	}
+	if got := mustGetDefinition(t, ts, made.ID); got.Family != engine.FamilyScan {
+		t.Errorf("family on read back = %q, want scan", got.Family)
+	}
+
+	refiled := engine.FamilyPresence
+	if got := mustPutDefinition(t, ts, made.ID, updateDefinitionRequest{Family: &refiled}); got.Family != engine.FamilyPresence {
+		t.Errorf("family after re-filing = %q, want presence", got.Family)
+	}
+
+	// Choosing nothing has to be reachable again: a picker that can only
+	// ever be set would make the first click irreversible.
+	unfiled := engine.Family("")
+	if got := mustPutDefinition(t, ts, made.ID, updateDefinitionRequest{Family: &unfiled}); got.Family != "" {
+		t.Errorf("family after clearing = %q, want empty", got.Family)
+	}
+
+	// A family nothing can draw is refused rather than stored.
+	bogus := engine.Family("chartreuse")
+	body, _ := json.Marshal(updateDefinitionRequest{Family: &bogus})
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/definitions/"+made.ID, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	bad, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bad.Body.Close()
+	if bad.StatusCode == http.StatusOK {
+		t.Error("PUT stored a family nothing can draw")
+	}
+}
+
+// mustPutDefinition applies one update and returns the definition as the
+// API serves it back, failing the test on anything but 200.
+func mustPutDefinition(t *testing.T, ts *httptest.Server, id string, update updateDefinitionRequest) definitionView {
+	t.Helper()
+	body, err := json.Marshal(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/definitions/"+id, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		got, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("PUT /api/definitions/%s = %d: %s", id, resp.StatusCode, got)
+	}
+	return mustDecodeDefinition(t, resp)
 }

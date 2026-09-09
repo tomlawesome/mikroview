@@ -9,6 +9,7 @@ import {
   updateDefinition,
   type DefinitionUpdate,
 } from './api'
+import { rememberCustomFamilies } from './flagPalette'
 import type {
   DefinitionParamSchema,
   DetectorScope,
@@ -62,7 +63,18 @@ class DetectorSettingsState {
         paramSchema: d.paramSchema,
         origin: d.provenance?.origin ?? 'shipped',
         overridden: Object.keys(d.distance ?? {}).length > 0,
+        detection: d.detection,
+        family: d.family,
       }))
+    // The palette asks familyOf(flag.type) from a dozen places that have
+    // a flag and nothing else, so the answer for an operator-authored
+    // detector has to be put somewhere they can all reach (#829). Done
+    // here, on the one fetch that already reads every definition, rather
+    // than in the bench: the docket and the map need the ink whether or
+    // not anyone has opened the engine room.
+    rememberCustomFamilies(
+      Object.fromEntries(definitions.map((d) => [d.id, d.family])),
+    )
   }
 
   // refreshSchema is separate from refresh, and failure is survivable: the

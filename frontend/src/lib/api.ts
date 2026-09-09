@@ -735,6 +735,10 @@ export interface DefinitionUpdate {
   scope?: DetectorScope
   params?: Record<string, unknown>
   expectation?: WatchlistEntryRequest
+  // The flag family a custom detector is filed under (#829); the empty
+  // string clears the filing. Absent leaves it alone, like every other
+  // field here.
+  family?: string
 }
 
 export async function updateDefinition(id: string, req: DefinitionUpdate): Promise<Definition | string> {
