@@ -956,6 +956,22 @@ baseline:
   hostQuietAfter: 24h
 ```
 
+#### CFG-0093
+
+`engine.decommissionCleanWindow` is below 1h or above 48h. Too short and
+a retired range could be declared quiet before a straggler could
+plausibly have spoken -- a router pushes its address table only every
+15-30 minutes, so the map would report a clean decommission it never
+actually observed. Too long and it stops being a matter of hours, as the
+name promises. See [Network segment
+decommissioning](#network-segment-decommissioning-issue-460-optional).
+Clamped to the default of 6h.
+
+```yaml
+engine:
+  decommissionCleanWindow: 6h
+```
+
 ## Logging
 
 Mikroview's own server output (not event data -- see `store.retention`
@@ -1592,6 +1608,37 @@ opaque-string style as a host or coverage key. `GET` is open to any
 signed-in user, same as `GET /api/hosts`; the two writes are user tier
 and audit-logged, since saying a line is expected carries the same
 weight as any other authored explanation.
+
+## Network segment decommissioning (issue #460, optional)
+
+Deleting a subnet from the router does not remove it from mikroview's map
+the moment the config changes -- it is decommissioned when the traffic
+stops, not when the config is deleted. A retiring range enters a
+**draining** watch, and the watch only clears after a **clean window** --
+measured in hours, not days -- during which nothing at all was seen to or
+from the range. Any traffic to or from the range during that window
+restarts the clock.
+
+```yaml
+engine:
+  # Where the decommission watches are persisted: each retiring range,
+  # its clean-window clock, and the names the router last knew inside it.
+  # Same optional-persistence contract as engine.definitionsStorePath
+  # above: left unset, watches still work, they just do not survive a
+  # restart. If you set this in the container, mount a volume for its
+  # parent directory -- see deploy/docker-compose.yml.
+  decommissionStorePath: "/var/lib/mikroview/decommission.json"
+  # How long a retired range must stay completely silent before it
+  # leaves the map. This is the default offered when a watch is
+  # created -- a watch already under way keeps the window it started
+  # with, so changing this does not retune a decommission in progress.
+  # Must be between 1h and 48h (CFG-0093 warns and clamps outside that
+  # range): shorter and a range could be declared quiet before a
+  # straggler had a chance to speak, since a router only pushes its
+  # address table every 15-30 minutes; longer and it stops being a
+  # matter of hours.
+  decommissionCleanWindow: 6h
+```
 
 ## Audit log: admin action accountability (optional)
 
@@ -3593,6 +3640,8 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
 | `MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH` | `engine.definitionsStorePath` -- where the definitions store (issue #404) lives: shipped detectors, migrated watchlist expectations, and eventually builder-authored custom definitions, all in one document |
+| `MIKROVIEW_ENGINE_DECOMMISSION_STORE_PATH` | `engine.decommissionStorePath` (see [Network segment decommissioning](#network-segment-decommissioning-issue-460-optional)) |
+| `MIKROVIEW_ENGINE_DECOMMISSION_CLEAN_WINDOW` | `engine.decommissionCleanWindow` (see [Network segment decommissioning](#network-segment-decommissioning-issue-460-optional)) |
 | `MIKROVIEW_SNAPSHOT_INTERVAL` | `snapshot.interval` -- how often a warm-restart snapshot is written (see [Warm restart](#warm-restart-what-survives-a-restart)); anything under 30s falls back to the default |
 | `MIKROVIEW_SNAPSHOT_KEEP` | `snapshot.keep` -- how many snapshot generations to keep; anything under 1 falls back to the default |
 | `MIKROVIEW_SNAPSHOT_DIR` | `snapshot.dir` -- where the snapshot files live. A file path even on a Postgres deployment: a snapshot is derived counters, not custody data |
