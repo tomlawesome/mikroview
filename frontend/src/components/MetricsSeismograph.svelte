@@ -66,8 +66,50 @@
   // content column gives it after the rail's own state; its height no
   // longer does (see ASPECT above) -- boxHeight now only clamps the ideal
   // height down for a container shorter than the band would otherwise be.
+  //
+  // Measured by our own ResizeObserver rather than by
+  // `bind:clientWidth`/`bind:clientHeight` on the drum, which is what
+  // this used to be. Svelte's size binding (bind_element_size) reads
+  // `element.clientWidth` inside an effect as well as inside the
+  // observer, and this element is the one the whole hour of strokes is
+  // drawn into -- so every render pass forced a synchronous layout of
+  // the entire chart to answer it. #690's 2026-09-09 profile put that
+  // binding's runtime at 23% of self-time on a roll to metrics, the
+  // deck with by far the highest LayoutDuration (403ms median against
+  // under 90ms everywhere else). An observer entry's contentRect is
+  // reported by the observation itself, so reading it forces no layout;
+  // the drum carries no border or padding, so that box is the same box
+  // clientWidth/clientHeight reported, rounded the same way. Same
+  // numbers, same drum -- measured once per actual resize instead of
+  // once per render.
+  let drumEl = $state<HTMLDivElement | null>(null)
   let boxWidth = $state(0)
   let boxHeight = $state(0)
+
+  // One measurement at mount, then the observer's own boxes. The mount
+  // read is the one place clientWidth/clientHeight are still asked for:
+  // the drum has to be drawn at its real width on the first frame, not
+  // at MIN_WIDTH until the first observation lands. That is one forced
+  // layout per mount, against one per render before.
+  //
+  // jsdom has no ResizeObserver (lib/cardAnchor.ts guards the same way):
+  // nothing is watched, the box stays 0, and the drum draws at its own
+  // minimum -- which is exactly what the binding did there too.
+  $effect(() => {
+    const el = drumEl
+    if (!el) return
+    boxWidth = el.clientWidth
+    boxHeight = el.clientHeight
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.contentRect
+      if (!box) return
+      boxWidth = Math.round(box.width)
+      boxHeight = Math.round(box.height)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  })
 
   const width = $derived(Math.max(MIN_WIDTH, boxWidth || MIN_WIDTH))
   const idealHeight = $derived(width / ASPECT)
@@ -142,7 +184,7 @@
   )
 </script>
 
-<div class="drum" bind:clientWidth={boxWidth} bind:clientHeight={boxHeight}>
+<div class="drum" bind:this={drumEl}>
   {#if n === 0}
     <p class="empty">No minutes recorded yet — the drum starts as soon as events arrive.</p>
   {:else}
