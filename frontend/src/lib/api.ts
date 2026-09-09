@@ -1622,6 +1622,16 @@ export interface TraceResponse {
   like: number
   srcSeen: number
   dstReached: number
+  // sameLine is the list's SAME LINE column (round 56, A1): the line's
+  // own events, newest first, the traced one included so it can be
+  // marked, capped at eight.
+  sameLine: FirewallEvent[]
+  // sameMinute is the SAME MINUTE column: the source's other events in
+  // the traced event's own clock minute, excluding anything already in
+  // sameLine, newest first, capped at eight. sameMinuteTotal is the
+  // exact count that is capped from.
+  sameMinute: FirewallEvent[]
+  sameMinuteTotal: number
 }
 
 export async function fetchTrace(req: TraceRequest): Promise<TraceResponse> {

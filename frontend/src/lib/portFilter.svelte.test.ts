@@ -189,6 +189,9 @@ function trace(overrides: Partial<TraceResponse> = {}): TraceResponse {
     like: 13,
     srcSeen: 14,
     dstReached: 0,
+    sameLine: [],
+    sameMinute: [],
+    sameMinuteTotal: 0,
     ...overrides,
   }
 }
@@ -210,7 +213,7 @@ describe('the event trace (#1018)', () => {
   })
 
   it('is active on an honest miss too, so the map can say so in words', async () => {
-    vi.mocked(fetchTrace).mockResolvedValue({ found: false, like: 0, srcSeen: 0, dstReached: 0 })
+    vi.mocked(fetchTrace).mockResolvedValue({ found: false, like: 0, srcSeen: 0, dstReached: 0, sameLine: [], sameMinute: [], sameMinuteTotal: 0 })
 
     await mapTraceState.open({ in: 'ether4', port: 445 })
     expect(mapTraceState.active).toBe(true)

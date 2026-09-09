@@ -3,6 +3,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
+// Only fetchTrace is stubbed (B1's own test needs to control when its
+// promise resolves); every other export of the module -- fetchPorts and
+// the rest -- stays real, the same way the file's own top-of-file note
+// says the component's other network calls never fire because
+// appState.devices stays empty throughout this file.
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
+  fetchTrace: vi.fn(),
+}))
+import { fetchTrace, type TraceResponse } from '../lib/api'
 import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { zonesState } from '../lib/zones.svelte'
@@ -202,6 +212,7 @@ beforeEach(() => {
   portFilterState.clear()
   portFilterState.proto = 'tcp'
   mapTraceState.clear()
+  vi.mocked(fetchTrace).mockReset()
   wizardState.open = false
   // Every test starts on a fresh slider: altitudeStopState is a
   // module-level singleton that persists across reloads, so a test that
@@ -5229,27 +5240,33 @@ describe('the event trace (#1018, round 53)', () => {
     ]
   }
 
-  function traceRefused() {
+  function traceRefused(overrides: Partial<ClientEvent> = {}, resultOverrides: Partial<TraceResponse> = {}) {
+    const e = event({
+      id: 7,
+      action: 'drop',
+      ruleLabel: '#17 default drop',
+      inInterface: 'ether4',
+      outInterface: undefined,
+      srcIp: '10.0.30.14',
+      srcHostName: 'cam-porch',
+      dstIp: '10.0.10.21',
+      dstHostName: 'tom-desktop',
+      dstPort: 445,
+      protocol: 'tcp',
+      ...overrides,
+    })
     mapTraceState.request = { event: 7 }
     mapTraceState.result = {
       found: true,
       verdict: 'refused',
-      event: event({
-        id: 7,
-        action: 'drop',
-        ruleLabel: '#17 default drop',
-        inInterface: 'ether4',
-        outInterface: undefined,
-        srcIp: '10.0.30.14',
-        srcHostName: 'cam-porch',
-        dstIp: '10.0.10.21',
-        dstHostName: 'tom-desktop',
-        dstPort: 445,
-        protocol: 'tcp',
-      }),
+      event: e,
       like: 13,
       srcSeen: 14,
       dstReached: 0,
+      sameLine: [e],
+      sameMinute: [],
+      sameMinuteTotal: 0,
+      ...resultOverrides,
     }
   }
 
@@ -5279,6 +5296,37 @@ describe('the event trace (#1018, round 53)', () => {
     // A refusal ends at the router.
     expect(container.querySelector('.trace-stop')).not.toBeNull()
     expect(container.querySelector('.trace-ring')).toBeNull()
+  })
+
+  it('C1 (round 56): a forward-chain refusal lights both halves and puts the ✕ at the far gate, with no ghost', () => {
+    seedMap()
+    // The log now names an out-interface: the router forwarded the line
+    // before the LAN boundary refused it, unlike the input-chain shape
+    // traceRefused() otherwise fixtures.
+    traceRefused({ outInterface: 'bridge1' })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const lit = [...container.querySelectorAll('.lit-half')]
+    expect(lit.length).toBe(2)
+    expect(lit.every((h) => h.classList.contains('refused'))).toBe(true)
+
+    // The ✕ still stands (at the gate now, not the router), but there is
+    // nowhere left to draw a dashed rib toward.
+    expect(container.querySelector('.trace-stop')).not.toBeNull()
+    expect(container.querySelector('.trace-ring')).toBeNull()
+    expect(container.querySelector('.trace-ghost')).toBeNull()
+
+    // The two grey words take the ghost's place instead.
+    const note = container.querySelector('.trace-note')?.textContent?.replace(/\s+/g, ' ')
+    expect(note).toContain('would have reached tom-desktop')
+    expect(note).toContain('stopped at the LAN boundary')
+
+    // The chip sits by the ✕: its leader now runs to the gate, not to
+    // the router's own fixed spot.
+    const leader = container.querySelector('.trace-chip .trace-leader')?.getAttribute('d')
+    expect(leader).not.toBe('M556 254 L 572 258')
   })
 
   it('dashes the rib the refused line would have taken, and says so beside it', () => {
@@ -5330,6 +5378,9 @@ describe('the event trace (#1018, round 53)', () => {
       like: 0,
       srcSeen: 1,
       dstReached: 1,
+      sameLine: [],
+      sameMinute: [],
+      sameMinuteTotal: 0,
     }
     const { container } = render(Topography)
     flushSync()
@@ -5355,7 +5406,7 @@ describe('the event trace (#1018, round 53)', () => {
   it('says an honest miss in words rather than drawing a path that went nowhere', () => {
     seedMap()
     mapTraceState.request = { in: 'ether4', port: 3389 }
-    mapTraceState.result = { found: false, like: 0, srcSeen: 0, dstReached: 0 }
+    mapTraceState.result = { found: false, like: 0, srcSeen: 0, dstReached: 0, sameLine: [], sameMinute: [], sameMinuteTotal: 0 }
     const { container } = render(Topography)
     flushSync()
     showTheMap(container)
@@ -5390,5 +5441,190 @@ describe('the event trace (#1018, round 53)', () => {
     flushSync()
     expect(mapTraceState.active).toBe(false)
     expect(container.querySelector('.trace-crumb')).toBeNull()
+  })
+
+  it('Esc closes the list first (#1050, A1), a second Esc clears the trace underneath it', () => {
+    seedMap()
+    traceRefused()
+    mapTraceState.listOpen = true
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    expect(container.querySelector('.picker')).not.toBeNull()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    flushSync()
+    expect(mapTraceState.active).toBe(true)
+    expect(mapTraceState.listOpen).toBe(false)
+    expect(container.querySelector('.picker')).toBeNull()
+    expect(container.querySelector('.trace-crumb')).not.toBeNull()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    flushSync()
+    expect(mapTraceState.active).toBe(false)
+    expect(container.querySelector('.trace-crumb')).toBeNull()
+  })
+})
+
+describe("the trace's own list (#1050, round 56, A1/B1)", () => {
+  const lanes: RouterIPAddress[] = [
+    { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
+    { address: '10.0.30.1/24', network: '10.0.30.0', interface: 'ether4', comment: 'IoT' },
+  ]
+
+  function seedMap() {
+    zonesState.pushed = lanes
+  }
+
+  function traceRefusedWithList() {
+    const traced = event({
+      id: 7,
+      action: 'drop',
+      ruleLabel: '#17 default drop',
+      inInterface: 'ether4',
+      outInterface: 'bridge1',
+      srcIp: '10.0.30.14',
+      srcHostName: 'cam-porch',
+      dstIp: '10.0.10.21',
+      dstHostName: 'tom-desktop',
+      dstPort: 445,
+      protocol: 'tcp',
+      time: '2026-09-09T22:04:31Z',
+    })
+    const older = event({
+      id: 6,
+      action: 'drop',
+      ruleLabel: '#17 default drop',
+      inInterface: 'ether4',
+      outInterface: 'bridge1',
+      srcIp: '10.0.30.14',
+      srcHostName: 'cam-porch',
+      dstIp: '10.0.10.21',
+      dstHostName: 'tom-desktop',
+      dstPort: 445,
+      protocol: 'tcp',
+      time: '2026-09-09T22:04:12Z',
+    })
+    const minuteMate = event({
+      id: 9,
+      action: 'accept',
+      ruleLabel: '#26 accept',
+      inInterface: 'ether4',
+      outInterface: 'bridge1',
+      srcIp: '10.0.30.14',
+      srcHostName: 'cam-porch',
+      dstIp: '10.0.20.5',
+      dstHostName: 'nas',
+      dstPort: 554,
+      protocol: 'tcp',
+      time: '2026-09-09T22:04:47Z',
+    })
+    mapTraceState.request = { event: 7 }
+    mapTraceState.result = {
+      found: true,
+      verdict: 'refused',
+      event: traced,
+      like: 13,
+      srcSeen: 14,
+      dstReached: 0,
+      sameLine: [traced, older],
+      sameMinute: [minuteMate],
+      sameMinuteTotal: 4,
+    }
+  }
+
+  it('opens the list on the toggle, with SAME LINE and SAME MINUTE columns, the traced row marked', () => {
+    seedMap()
+    traceRefusedWithList()
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelector('.picker')).toBeNull()
+    const toggle = [...container.querySelectorAll('.crumb-link')].find((b) => b.textContent?.includes('more like it'))!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    const picker = container.querySelector('.picker')!
+    expect(picker).not.toBeNull()
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+
+    const cols = [...picker.querySelectorAll('.col')]
+    expect(cols.length).toBe(2)
+    expect(cols[0].querySelector('h5')?.textContent).toContain('SAME LINE')
+    expect(cols[1].querySelector('h5')?.textContent).toContain('SAME MINUTE')
+
+    const lineRows = [...cols[0].querySelectorAll('.row')]
+    expect(lineRows.length).toBe(2)
+    expect(lineRows.some((r) => r.classList.contains('on') && r.textContent?.includes('TRACED'))).toBe(true)
+
+    const minuteRows = [...cols[1].querySelectorAll('.row')]
+    expect(minuteRows.length).toBe(1)
+    expect(minuteRows[0].textContent).toContain('nas')
+  })
+
+  it('picking a row re-opens the trace on that event, and keeps the list open', async () => {
+    seedMap()
+    traceRefusedWithList()
+    mapTraceState.listOpen = true
+    vi.mocked(fetchTrace).mockResolvedValue({
+      found: true,
+      verdict: 'refused',
+      event: event({ id: 6, action: 'drop', srcIp: '10.0.30.14', dstIp: '10.0.10.21', dstPort: 445, protocol: 'tcp' }),
+      like: 13,
+      srcSeen: 14,
+      dstReached: 0,
+      sameLine: [],
+      sameMinute: [],
+      sameMinuteTotal: 0,
+    })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const picker = container.querySelector('.picker')!
+    const lineRows = [...picker.querySelectorAll('.col')[0].querySelectorAll('.row')]
+    const olderRow = lineRows.find((r) => !r.classList.contains('on'))!
+    olderRow.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(mapTraceState.request).toEqual({ event: 6 })
+    expect(mapTraceState.listOpen).toBe(true)
+  })
+
+  it('B1: the unplanned callout opens the list as soon as the trace answer lands', async () => {
+    zonesState.pushed = lanes
+    policyState.anyPushed = true
+    policyState.edges = []
+    appState.events = Array.from({ length: 14 }, () =>
+      event({ action: 'drop', ruleLabel: 'default drop', inInterface: 'ether4', outInterface: 'bridge1', srcIp: '10.0.30.14', dstIp: '10.0.10.21', dstPort: 445, protocol: 'tcp' }),
+    )
+    vi.mocked(fetchTrace).mockResolvedValue({
+      found: true,
+      verdict: 'refused',
+      event: event({ id: 99, action: 'drop', srcIp: '10.0.30.14', dstIp: '10.0.10.21', dstPort: 445, protocol: 'tcp' }),
+      like: 13,
+      srcSeen: 14,
+      dstReached: 0,
+      sameLine: [],
+      sameMinute: [],
+      sameMinuteTotal: 0,
+    })
+    const { container } = render(Topography)
+    flushSync()
+
+    const traceBtn = container.querySelector('.uc-trace')!
+    expect(traceBtn).not.toBeNull()
+    traceBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    expect(mapTraceState.listOpen).toBe(true)
+    expect(container.querySelector('.picker')).not.toBeNull()
   })
 })

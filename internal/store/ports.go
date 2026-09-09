@@ -347,6 +347,13 @@ type TraceQuery struct {
 	NoOut bool
 }
 
+// maxTraceRelated caps how many rows each column of the trace's own list
+// (round 56, A1) carries. Eight is the drawing's own number: a shortlist
+// to scan, not the full tally -- Like and SameMinuteTotal already carry
+// the exact counts, and each column's own "more in the stream ▸" footer
+// is where the rest live.
+const maxTraceRelated = 8
+
 // TraceResult is one hop through the router, as the router knows it.
 //
 // Event is nil when nothing in the window matches -- an honest miss,
@@ -361,6 +368,18 @@ type TraceResult struct {
 	// the two tallies the lit host cards carry ("cam-porch · 14x today",
 	// "tom-desktop · never reached").
 	DstReached uint64
+	// SameLine is the line's own events -- the same match Like counts --
+	// newest first, this one included so the list can mark it, capped at
+	// maxTraceRelated. The list's SAME LINE column.
+	SameLine []Event
+	// SameMinute is the traced event's source's other events that fall in
+	// its own clock minute, excluding anything already counted in
+	// SameLine, newest first, capped at maxTraceRelated. The list's SAME
+	// MINUTE column.
+	SameMinute []Event
+	// SameMinuteTotal is the exact count SameMinute is capped from, for
+	// the column's own header.
+	SameMinuteTotal uint64
 }
 
 // Trace answers "where did this one line go".
@@ -441,7 +460,8 @@ func (s *Store) Trace(q TraceQuery) TraceResult {
 		return TraceResult{}
 	}
 
-	out := TraceResult{Event: subject}
+	out := TraceResult{Event: subject, SameLine: []Event{}, SameMinute: []Event{}}
+	minute := subject.Time.Truncate(time.Minute)
 	idx = start
 	for i := 0; i < s.count; i++ {
 		e := &s.buf[idx]
@@ -464,15 +484,26 @@ func (s *Store) Trace(q TraceQuery) TraceResult {
 		if q.Device != "" && e.DeviceID != q.Device {
 			continue
 		}
-		if e.SrcIP != subject.SrcIP || e.DstIP != subject.DstIP || e.DstPort != subject.DstPort {
+		sameLine := e.SrcIP == subject.SrcIP && e.DstIP == subject.DstIP && e.DstPort == subject.DstPort &&
+			strings.EqualFold(e.Protocol, subject.Protocol)
+		if sameLine {
+			out.Like++
+			if e.Action == ActionAccept {
+				out.DstReached++
+			}
+			if len(out.SameLine) < maxTraceRelated {
+				out.SameLine = append(out.SameLine, *e)
+			}
 			continue
 		}
-		if !strings.EqualFold(e.Protocol, subject.Protocol) {
-			continue
-		}
-		out.Like++
-		if e.Action == ActionAccept {
-			out.DstReached++
+		// SAME MINUTE is the sender's other lines, whatever they went to --
+		// same line is excluded above so the two columns never repeat a
+		// row between them.
+		if e.SrcIP == subject.SrcIP && e.Time.Truncate(time.Minute).Equal(minute) {
+			out.SameMinuteTotal++
+			if len(out.SameMinute) < maxTraceRelated {
+				out.SameMinute = append(out.SameMinute, *e)
+			}
 		}
 	}
 	return out

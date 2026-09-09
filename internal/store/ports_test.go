@@ -278,6 +278,87 @@ func TestTraceNoOutTakesOnlyALineThatNeverLeftTheRouter(t *testing.T) {
 	}
 }
 
+// The fixture's refused pair has fourteen same-line drops and no
+// same-minute traffic at all (everything else in the fixture is a
+// different source). This exercises the cap and the newest-first order.
+func TestTraceSameLineIsCappedNewestFirstAndIncludesTheSubject(t *testing.T) {
+	s := New(1000, time.Hour)
+	var subjectID uint64
+	for i := 0; i < 14; i++ {
+		inserted := s.Insert(Event{Action: ActionDrop, RuleLabel: "default drop", InInterface: "ether4", Protocol: "tcp",
+			SrcIP: "10.0.30.14", DstIP: "10.0.10.21", DstPort: 445, Time: time.Now()})
+		subjectID = inserted.ID
+	}
+
+	got := s.Trace(TraceQuery{ID: subjectID})
+	if got.Event == nil {
+		t.Fatal("the newest of the fourteen should be traceable by id")
+	}
+	if len(got.SameLine) != maxTraceRelated {
+		t.Fatalf("want the list capped at %d, got %d", maxTraceRelated, len(got.SameLine))
+	}
+	var sawSubject bool
+	for _, e := range got.SameLine {
+		if e.ID == subjectID {
+			sawSubject = true
+		}
+	}
+	if !sawSubject {
+		t.Fatal("the traced event itself must be in SameLine so the list can mark it")
+	}
+	// Newest first: the buffer holds ids ascending on insert, so the
+	// first row must be the highest id and each row after strictly lower.
+	for i := 1; i < len(got.SameLine); i++ {
+		if got.SameLine[i].ID >= got.SameLine[i-1].ID {
+			t.Fatalf("SameLine must be newest first, got ids %v", idsOf(got.SameLine))
+		}
+	}
+}
+
+func idsOf(es []Event) []uint64 {
+	out := make([]uint64, len(es))
+	for i, e := range es {
+		out[i] = e.ID
+	}
+	return out
+}
+
+// SAME MINUTE is the sender's other lines in its own clock minute,
+// excluding whatever SAME LINE already counted.
+func TestTraceSameMinuteExcludesSameLineAndOtherSenders(t *testing.T) {
+	s := New(1000, time.Hour)
+	now := time.Date(2026, 9, 9, 22, 4, 31, 0, time.UTC)
+	s.Insert(Event{Action: ActionDrop, InInterface: "ether4", Protocol: "tcp",
+		SrcIP: "10.0.30.14", DstIP: "10.0.10.21", DstPort: 445, Time: now})
+	// Same sender, same minute, a different line: belongs in SAME MINUTE.
+	s.Insert(Event{Action: ActionAccept, Protocol: "udp",
+		SrcIP: "10.0.30.14", DstIP: "10.0.20.5", DstPort: 53, Time: now.Add(-5 * time.Second)})
+	// Same sender, same minute, but the very same line: must not double
+	// up into SAME MINUTE as well as SAME LINE.
+	s.Insert(Event{Action: ActionDrop, InInterface: "ether4", Protocol: "tcp",
+		SrcIP: "10.0.30.14", DstIP: "10.0.10.21", DstPort: 445, Time: now.Add(-10 * time.Second)})
+	// Same sender, one second into the next minute: excluded.
+	s.Insert(Event{Action: ActionAccept, Protocol: "udp",
+		SrcIP: "10.0.30.14", DstIP: "10.0.20.5", DstPort: 53, Time: now.Truncate(time.Minute).Add(time.Minute)})
+	// A different sender in the same minute: not this trace's business.
+	s.Insert(Event{Action: ActionAccept, Protocol: "udp",
+		SrcIP: "10.0.30.9", DstIP: "10.0.20.5", DstPort: 53, Time: now})
+
+	got := s.Trace(TraceQuery{In: "ether4", Port: 445, Proto: "tcp"})
+	if got.Event == nil {
+		t.Fatal("the refused pair should be traceable")
+	}
+	if got.Like != 2 {
+		t.Fatalf("two same-line drops, got %d", got.Like)
+	}
+	if got.SameMinuteTotal != 1 || len(got.SameMinute) != 1 {
+		t.Fatalf("want exactly one same-minute row (the DNS lookup), got total=%d rows=%+v", got.SameMinuteTotal, got.SameMinute)
+	}
+	if got.SameMinute[0].DstPort != 53 {
+		t.Fatalf("want the DNS lookup, got %+v", got.SameMinute[0])
+	}
+}
+
 func TestTraceTalliesOnlyTheDeviceItWasAskedAbout(t *testing.T) {
 	s := New(1000, time.Hour)
 	for i := 0; i < 3; i++ {
