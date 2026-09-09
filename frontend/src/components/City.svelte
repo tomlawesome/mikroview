@@ -70,6 +70,7 @@
   import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { portFilterState } from '../lib/portFilter.svelte'
+  import { mapTraceState } from '../lib/mapTrace.svelte'
   import { doorAccepts, doorHalf, emptyNote, litRibs, plaqueTally } from '../lib/portFilter'
   import type { PortDoor } from '../lib/api'
   import { flagsState } from '../lib/flags.svelte'
@@ -102,7 +103,8 @@
   import type { OffBaselineLine } from '../lib/baseline'
   import { hostMarksFrom, presenceNote, quietFor, type CityHost, type HostPresence } from '../lib/city/presence'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
-  import type { Building, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
+  import TraceCrumb from './TraceCrumb.svelte'
+  import type { Building, CityPeer, District, DistrictGate, Ground, Road, RoadKind } from '../lib/city/types'
 
   let {
     stop,
@@ -334,6 +336,17 @@
   const viewCam = $derived(cam(centre[0], centre[1], S))
   const viewTransform = $derived('translate(' + R2(viewCam.ox) + ' ' + R2(viewCam.oy) + ') scale(' + R2(S / Sgeom) + ')')
   const viewport = $derived(viewportRect(viewCam))
+
+  /** The inverse of `viewTransform`'s own scale -- nested inside it
+   * (the same `translate(point) scale(traceK)` shape a building's own
+   * stamp already uses, below), it cancels that scale back to exactly
+   * this component's local pixel units, so whatever it wraps renders at
+   * a fixed size regardless of how far the camera is zoomed, while the
+   * translate it sits inside still moves with the pan and the zoom
+   * (#1050 round 56 defect 3: the trace's ✕, chip and ghost note used
+   * to be drawn at the isometric drawing's own scale, legible only by
+   * accident at whichever zoom this component happened to open on). */
+  const traceK = $derived(Sgeom / S)
 
   type Focus = { districtId: string | null; id: string } | null
   let focus = $state<Focus>(null)
@@ -632,10 +645,13 @@
     // comes off before where they are standing -- the flat map reads the
     // ladder in the same order. It is this handler's rung while the city
     // is the surface being read: Topography stands its own down for a
-    // city stop so one press can never take two.
-    if (portFilterState.active || portFilterState.open) {
+    // city stop so one press can never take two. The trace (#1050) is
+    // the same rung as the port filter -- the two are mutually exclusive
+    // already, so at most one of them is ever open to clear.
+    if (portFilterState.active || portFilterState.open || mapTraceState.active) {
       e.preventDefault()
       portFilterState.clear()
+      mapTraceState.clear()
       return
     }
     if (stand) {
@@ -988,6 +1004,39 @@
     return r.id.slice(0, bar) === d.id || r.id.slice(bar + 1) === d.id
   }
 
+  /**
+   * The buildings standing at one end of a road -- what the off-baseline
+   * arrival mark outlines (#1057).
+   *
+   * Three cases, all answered from the ground's own ids rather than from
+   * geometry:
+   *
+   * - a lane names its host in `from` (layout.ts), so its start is that
+   *   one building -- the reach's own case, where the traffic resolves
+   *   to a single host;
+   * - a pair road that ends at a router or a bridge post names it in
+   *   `from`/`to`, so that node's own building is the end. The WAN road
+   *   is this: a line to an address outside every district rings the
+   *   wan end, and the wan end is drawn at the router the road runs to;
+   * - otherwise the end is a district's wall, and the district's
+   *   buildings are what stands there.
+   *
+   * The issue offers "the district's buildings, or the district plaque's
+   * building" for that last case. Only the first exists here: a plaque
+   * is a text label under the plate (`plaques`, in the scene below) with
+   * no building of its own, so there is no plaque building to outline.
+   */
+  function endBuildings(r: Road, which: 'start' | 'end', pair: RoadBaselineEntry | null): Building[] {
+    const nodeId = which === 'start' ? r.from : r.to
+    if (nodeId) {
+      const b = allBuildings.find((x) => x.id === nodeId)
+      return b ? [b] : []
+    }
+    const id = pair?.ends[which] ?? null
+    const d = id ? ground.districts.find((x) => x.id === id) : null
+    return d ? d.buildings : []
+  }
+
   /** Which roads draw the line toward `counterpart` from `token`, and
    * the counterpart they draw -- the join between a strand and the
    * ground's own road ids, shared by all three subjects so none of them
@@ -1331,6 +1380,231 @@
     }
   })
 
+  /* ---------------- the event trace (#1050, rounds 54 & 56) ---------------- */
+
+  // Round 53's other tool (#1018) on this surface, drawn as rounds 54
+  // and 56 draw it. Mutually exclusive with the port filter by
+  // construction -- Topography's openTrace/openPortPicker each clear
+  // the other -- so at most one of portOverlay/traceOverlay is ever
+  // non-null.
+  const traceOn = $derived(mapTraceState.active)
+
+  interface TraceOverlay {
+    /** Every road the traced pair travelled -- kept at full colour and
+     * flow; everything else dims exactly as the port filter dims it. */
+    litRoadIds: Set<string>
+    litBuildingIds: Set<string>
+    /** The one line under each end's own district plaque, the same
+     * shape the port filter's tally takes: `cam-porch · 14× in the
+     * window`, `tom-desktop · never reached`. */
+    tallies: Map<string, string>
+  }
+
+  const traceOverlay = $derived.by((): TraceOverlay | null => {
+    if (!traceOn) return null
+    const litRoadIds = new Set<string>()
+    const litBuildingIds = new Set<string>()
+    const tallies = new Map<string, string>()
+    const e = mapTraceState.event
+    // A log, mark or NAT line says which kind of rule logged the packet,
+    // not whether it passed (mapTrace.svelte.ts's own doc comment) --
+    // there is no path to light for one, so the city dims to nothing
+    // rather than guessing a route.
+    if (!e || !mapTraceState.verdict) return { litRoadIds, litBuildingIds, tallies }
+    const inIface = e.inInterface ?? ''
+    const outIface = e.outInterface ?? ''
+    if (inIface !== '' && outIface !== '') {
+      // Both ways round: the pair id is order-free, but which end is a
+      // bridge leg is not -- the same reasoning portOverlay's own loop
+      // above uses.
+      roadsToward(inIface, outIface, litRoadIds, new Map())
+      roadsToward(outIface, inIface, litRoadIds, new Map())
+    } else if (inIface !== '') {
+      // No out-interface: the line never left the router. The city
+      // draws no road from a plain district straight to its own router
+      // (portOverlay's own note, above) -- only a boundary the WAN
+      // bridge carries has a road object independent of any one pair's
+      // traffic, so that is the only case with an "in road" to light.
+      const bridge = ground.bridges.find((br) => br.iface === inIface)
+      if (bridge) {
+        litRoadIds.add('rb-' + bridge.id)
+        litRoadIds.add(bridge.id + '-span')
+      }
+    }
+    const srcBuilding = e.srcIp ? allBuildings.find((b) => b.ip === e.srcIp) : undefined
+    const dstBuilding = e.dstIp ? allBuildings.find((b) => b.ip === e.dstIp) : undefined
+    if (srcBuilding) {
+      litBuildingIds.add(srcBuilding.id)
+      if (srcBuilding.districtId) tallies.set(srcBuilding.districtId, `${srcBuilding.name} · ${mapTraceState.srcSeen}× in the window`)
+    }
+    if (dstBuilding) {
+      litBuildingIds.add(dstBuilding.id)
+      if (dstBuilding.districtId) {
+        tallies.set(
+          dstBuilding.districtId,
+          mapTraceState.dstReached > 0 ? `${dstBuilding.name} · reached ${mapTraceState.dstReached}×` : `${dstBuilding.name} · never reached`,
+        )
+      }
+    }
+    return { litRoadIds, litBuildingIds, tallies }
+  })
+
+  interface TraceMark {
+    x: number
+    y: number
+  }
+  interface TraceChip {
+    x: number
+    y: number
+    w: number
+    l1: string
+    l2: string
+    refused: boolean
+  }
+  interface TraceGhost {
+    d: string
+    tx: number
+    ty: number
+    text: string
+  }
+  interface TraceRing {
+    x: number
+    y: number
+    r: number
+    alarm: boolean
+  }
+  interface TraceDrawing {
+    mark: TraceMark | null
+    chip: TraceChip | null
+    leader: string | null
+    ghost: TraceGhost | null
+    halo: TraceRing | null
+    ring: TraceRing | null
+  }
+
+  const EMPTY_TRACE_DRAWING: TraceDrawing = { mark: null, chip: null, leader: null, ghost: null, halo: null, ring: null }
+
+  /**
+   * Where the trace's own mark, chip, ghost and haloes stand (#1050,
+   * rounds 54 & 56, C1). Not part of `scene` above: nothing here takes
+   * part in the isometric paint order (`solids`/`paintOrder`) -- like
+   * the flat map's own `traceChip`/`traceGhost`, these are a floating
+   * annotation over the drawing, not a physical object in it, so they
+   * are always on top and never occluded by a building.
+   *
+   * C1 (owner, 2026-09-09): the ✕ stands where the rule stopped it --
+   * the destination district's own gate when the log names an
+   * out-interface (round 54's own city drawing already put it there,
+   * gate-to-gate roads dying at the far wall), the router's own door
+   * when it names none (round 56's addition). A dashed ghost from the
+   * gate to the named destination only makes sense in the first case --
+   * there is nowhere left to draw one in the second.
+   */
+  const traceDrawing = $derived.by((): TraceDrawing => {
+    if (!traceOn) return EMPTY_TRACE_DRAWING
+    const e = mapTraceState.event
+    const verdict = mapTraceState.verdict
+    if (!e || !verdict) return EMPTY_TRACE_DRAWING
+    // Positioned on the geometry camera, same as the rest of the
+    // isometric drawing (`scene`, buildings, plates) -- their own tests
+    // read a `.trace-stop`/`.trace-chip` translate straight against a
+    // plate's own drawn path, which only lines up when both are in the
+    // same pre-pan/zoom units. #1050 round 56 defect 3 is a rendered
+    // *size* bug, not a position one, and the render block below fixes
+    // that with a counter-scale on each piece's own content instead of
+    // moving the anchor to a different camera.
+    const c = geomCam
+    const g = ground
+    const refused = verdict === 'refused'
+    const inIface = e.inInterface ?? ''
+    const outIface = e.outInterface ?? ''
+    const rule = e.ruleName || e.ruleLabel || 'no rule named'
+    const proto = (e.protocol ?? '').toLowerCase()
+    const port = e.dstPort ? `${e.dstPort}/${proto || '?'}` : proto
+    const l1 = `${refused ? '✕ REFUSED' : '✓ ACCEPTED'} · ${rule}`
+    const l2 = `in: ${inIface || '—'} → out: ${outIface || '—'} · ${port} · ${formatHM(e.time)}`
+    const w = Math.max(190, Math.max(l1.length, l2.length) * 6.2 + 24)
+    const srcBuilding = e.srcIp ? allBuildings.find((b) => b.ip === e.srcIp) : undefined
+    const dstBuilding = e.dstIp ? allBuildings.find((b) => b.ip === e.dstIp) : undefined
+    const primaryRouter = g.nodes.find((n) => n.kind === 'router') ?? null
+
+    let mark: TraceMark | null = null
+    let chip: TraceChip | null = null
+    let leader: string | null = null
+    let ghost: TraceGhost | null = null
+
+    if (refused) {
+      const dstDistrict = outIface ? districtOf(outIface) : null
+      if (dstDistrict) {
+        const gate = wallCrossing(dstDistrict, inIface)
+        const mx = X(c, gate.p[0])
+        const my = Y(c, gate.p[1])
+        mark = { x: mx, y: my }
+        const cx = mx + 26
+        const cy = my - 78
+        chip = { x: cx, y: cy, w, l1, l2, refused: true }
+        leader = `M${R2(mx)} ${R2(my - 6)}L${R2(cx)} ${R2(cy + 34)}`
+        if (dstBuilding) {
+          const bx = X(c, dstBuilding.u)
+          const by = Y(c, dstBuilding.v)
+          const midx = (mx + bx) / 2
+          const midy = (my + by) / 2 - 10
+          ghost = {
+            d: `M${R2(mx)} ${R2(my)}Q${R2(midx)} ${R2(midy)} ${R2(bx)} ${R2(by)}`,
+            tx: R2(midx),
+            ty: R2(midy - 6),
+            text: `would have reached ${e.dstHostName || e.dstIp || 'the host'} · stopped at the ${dstDistrict.name} wall`,
+          }
+        }
+      } else {
+        // No out-interface (round 56's input-drop case): the ✕ stands
+        // on the router's own door, where the in-interface's road meets
+        // it -- the bridge's town-bank head off the WAN, since a plain
+        // district has no drawable spoke of its own (traceOverlay's own
+        // note, above).
+        const inDistrict = districtOf(inIface)
+        const bridge = !inDistrict ? g.bridges.find((br) => br.iface === inIface) : null
+        const routerNode = (inDistrict ? g.nodes.find((n) => n.id === inDistrict.routerId) : null) ?? primaryRouter
+        const doorPt: Pt | null = bridge ? bridge.t : routerNode ? [routerNode.u, routerNode.v] : null
+        if (doorPt) {
+          const dx = X(c, doorPt[0])
+          const dy = Y(c, doorPt[1])
+          mark = { x: dx, y: dy }
+          const cx = dx - w - 26
+          const cy = dy - 78
+          chip = { x: cx, y: cy, w, l1, l2, refused: true }
+          leader = `M${R2(dx)} ${R2(dy - 6)}L${R2(cx + w)} ${R2(cy + 34)}`
+        }
+      }
+    } else {
+      // Accepted: both roads already keep their colour and flow above;
+      // the chip stands beside the router that decided, no ✕ and no
+      // ghost.
+      const inDistrict = districtOf(inIface)
+      const routerNode = (inDistrict ? g.nodes.find((n) => n.id === inDistrict.routerId) : null) ?? primaryRouter
+      if (routerNode) {
+        const rx = X(c, routerNode.u)
+        const ry = Y(c, routerNode.v)
+        const cx = rx + 30
+        const cy = ry - 86
+        chip = { x: cx, y: cy, w, l1, l2, refused: false }
+        leader = `M${R2(rx)} ${R2(ry - 6)}L${R2(cx)} ${R2(cy + 34)}`
+      }
+    }
+
+    const halo: TraceRing | null = srcBuilding
+      ? { x: X(c, srcBuilding.u), y: Y(c, srcBuilding.v) - 6, r: Math.max(7, c.S * 1.1), alarm: refused }
+      : null
+    // The ring at the far end, only where the line actually arrived: a
+    // refusal's "never reached" is already said by the plaque tally and,
+    // when it has one, the ghost's own note -- a second mark on the
+    // building itself would say the same thing twice.
+    const ring: TraceRing | null =
+      !refused && dstBuilding ? { x: X(c, dstBuilding.u), y: Y(c, dstBuilding.v) - 6, r: Math.max(7, c.S * 1.1), alarm: false } : null
+
+    return { mark, chip, leader, ghost, halo, ring }
+  })
+
   /**
    * Where one rule's door stands. `doorHalf` names the side the rule
    * acts on -- the way in for a refusal, the way out for an accept --
@@ -1620,6 +1894,18 @@
     const ents = new Map<string, Entity>()
     for (const b of allBuildings) ents.set(b.id, { u: b.u, v: b.v, R: b.R })
 
+    /**
+     * Building id -> the ink of the road whose off-baseline traffic
+     * arrived there (#1057). Filled by the road loop below and read by
+     * `building()`, which draws the outline on the footprint path it is
+     * already drawing, so the mark cannot drift off the building.
+     *
+     * One entry per building however many roads arrive at it: two roads
+     * carrying different verdicts into the same building is one mark in
+     * the later road's ink, not two outlines fighting over one edge.
+     */
+    const arrivedInk = new Map<string, string>()
+
     // The bollards, cross and red mark a dropped road ends at (#865) --
     // pulled out so standing on a building (#868) can pin the same mark
     // exactly where a blocked strand's own road would have crossed the
@@ -1677,11 +1963,21 @@
     for (const r of g.roads) {
       if (r.lane && !showLanes) continue
       const own = !reachOverlay || reachOverlay.ownRoadIds.has(r.id)
-      // The port filter (#1055) asks the same question of a road that
-      // standing does, and answers it the same way: the roads the port
-      // travelled keep their verdict colour, the rest recede. Nothing is
-      // taken off the map -- the answer is read against the whole city.
+      // The port filter (#1055) and the trace (#1050) ask the same
+      // question of a road that standing does, and answer it the same
+      // way: the roads the answer travelled keep their verdict colour,
+      // the rest recede. Nothing is taken off the map -- the answer is
+      // read against the whole city. The two are mutually exclusive
+      // (opening one clears the other), so at most one is ever active.
       const onPort = !portOverlay || portOverlay.litRoadIds.has(r.id)
+      const onTrace = traceOverlay !== null && traceOverlay.litRoadIds.has(r.id)
+      const onFilter = portOverlay ? onPort : traceOverlay ? onTrace : true
+      // The traced line's own verdict, not the pair's aggregate one:
+      // `r.k` is every event this pair ever carried, and the one line
+      // being traced may disagree with it (an otherwise-accepted pair
+      // with one refused line among many, say) -- round 54/56's rule is
+      // that this one road takes this one line's colour.
+      const traceKind: RoadKind | null = onTrace ? (mapTraceState.verdict === 'refused' ? 'x' : 'a') : null
       // Round 49, DESIGN.md "The reach": the standing building's own
       // roads take the brightness rule "the same rule as everywhere
       // else", and its lanes are among them. A lane is laid down in
@@ -1691,10 +1987,10 @@
       // own colour rather than staying grey.
       const laneInReach = reachOverlay !== null && own && !!r.lane
       const laneNb: ReachLaneEntry | null = laneInReach ? (reachLaneBaseline.get(r.id) ?? null) : null
-      // A road off the port goes grey -- the city's own unjudged ink, the
-      // one it already lays a lane down in, rather than a second grey
-      // invented for the filter.
-      const col = !onPort ? VERDICT.q : laneNb ? VERDICT[laneNb.kind] : VERDICT[r.k]
+      // A road off the answer goes grey -- the city's own unjudged ink,
+      // the one it already lays a lane down in, rather than a second
+      // grey invented for either filter.
+      const col = !onFilter ? VERDICT.q : traceKind ? VERDICT[traceKind] : laneNb ? VERDICT[laneNb.kind] : VERDICT[r.k]
       // Brightness is the baseline (round 49, #1016). An accepted road
       // carrying nothing off today's pattern is *established*: thin, dim
       // and with no flow, so it recedes without ever leaving the map.
@@ -1706,26 +2002,30 @@
       // unplanned pair are unchanged: their colour is already the point,
       // and dimming a refusal because it happens every day would hide
       // exactly the traffic this screen exists to show.
-      const nb: { lines: OffBaselineLine[]; ring: RoadRing } | null = roadBaseline.get(r.id) ?? laneNb
+      const pairNb: RoadBaselineEntry | null = roadBaseline.get(r.id) ?? null
+      const nb: { lines: OffBaselineLine[]; ring: RoadRing } | null = pairNb ?? laneNb
       // Which roads the rule judges at all: accepted pair roads always,
       // and the reach's own lanes while it is open.
       const judged = r.k === 'a' || laneInReach
       const est = judged && nb === null
-      // A road off the port thins exactly as an established one does:
+      // A road off the answer thins exactly as an established one does:
       // one visual word for "not what is being asked about", never a
-      // second (round 54's own rule, and #868's before it).
-      const faded = est || !onPort
+      // second (round 54's own rule, and #868's before it). The traced
+      // line is a single answered question, not a volume reading, so its
+      // own road never thins for being otherwise established.
+      const faded = onTrace ? false : est || !onFilter
       const w = Math.max(faded ? 1 : 1.2, r.w * c.S * (faded ? 0.18 : 0.3))
       // Standing on a building (#868) fades every road that is not its
-      // own; the port filter fades every road it never travelled.
-      const op =
-        (r.k === 'x' ? 0.95 : !judged && r.k === 'q' ? 0.42 : !judged && r.k === 'd' ? 0.52 : est ? 0.26 : 0.8) *
-        (own ? 1 : 0.16) *
-        (onPort ? 1 : 0.16)
+      // own; either filter fades every road it never travelled.
+      const opBase = r.k === 'x' ? 0.95 : !judged && r.k === 'q' ? 0.42 : !judged && r.k === 'd' ? 0.52 : est ? 0.26 : 0.8
+      const op = (onTrace ? Math.max(opBase, 0.8) : opBase) * (own ? 1 : 0.16) * (onFilter ? 1 : 0.16)
       // A road flows exactly when it carries something off the baseline
       // or is the escalated unplanned pair -- the flow dashes are part
       // of the bright treatment, not a separate signal. Volume does not
       // earn flow, so a settled network is still, however busy it is.
+      // The trace draws its own flow instead, forward on an accepted
+      // line and never on a refused one -- the read this screen exists
+      // to show for one line rather than for a baseline.
       //
       // Standing narrows that to this building's own roads; it does not
       // widen it. The round-49 mockup flows every own road in the reach
@@ -1735,7 +2035,7 @@
       // as everywhere else". So an established road the standing host
       // owns recedes exactly like any other, and the dashes stay the
       // mark of a line off the pattern rather than of ownership.
-      const flow = (!reachOverlay || own) && onPort && (r.k === 'x' || nb !== null)
+      const flow = traceOverlay ? onTrace && traceKind === 'a' : (!reachOverlay || own) && onFilter && (r.k === 'x' || nb !== null)
       const reversed = !!reachOverlay?.reverseIds.has(r.id)
       let cum = 0
       const pieces = roadPieces(r, ents)
@@ -1757,23 +2057,21 @@
       // makes a dim road read as one hairline rather than as a soft band
       // (round-49/index.html:869-871).
       if (glowD.length && !faded) glows.push({ d: glowD.join(''), stroke: col, sw: R2(w + 4), so: 0.07 })
-      // The ring, at the end the traffic arrived at. It hugs the road's
-      // end and throbs in place -- it never pulses outward, because a
-      // ring that grows reads as something spreading and nothing is
-      // spreading (DESIGN.md, owner 2026-09-07). The same `.halo` rule
-      // the flag pill uses, so there is one motion in the city, not two.
+      // The arrival mark, at the end the traffic arrived at. #1057: it
+      // is the arrived-at building's own outline, not a circle on the
+      // ground beside it -- a ring round a dot is how the flat map marks
+      // a node, and the city has a silhouette to draw instead. Nothing
+      // else about the mark changes: same ink, same weight, same states,
+      // same lifetime, and the same `.halo` rule the flag pill uses, so
+      // it still throbs in place and never pulses outward (DESIGN.md,
+      // owner 2026-09-07) and there is one motion in the city, not two.
+      //
+      // The outline itself is drawn by `building()` below, off this map,
+      // so it is the footprint path the building already draws rather
+      // than a second idea of where the building is.
       if (nb && judged) {
-        const ringAt = (e: Pt) => {
-          const rr = R2(Math.max(5, c.S * 0.7))
-          solids.push({
-            kind: 'other',
-            v: e[1] + 8,
-            paints: [{ cx: R2(X(c, e[0])), cy: R2(Y(c, e[1])), rx: rr, ry: rr, stroke: col, sw: 1.4, cls: 'halo' }],
-            lamps: [],
-          })
-        }
-        if (nb.ring.start) ringAt(r.pts[0])
-        if (nb.ring.end) ringAt(r.pts[r.pts.length - 1])
+        if (nb.ring.start) for (const b of endBuildings(r, 'start', pairNb)) arrivedInk.set(b.id, col)
+        if (nb.ring.end) for (const b of endBuildings(r, 'end', pairNb)) arrivedInk.set(b.id, col)
       }
       // #991: the district-pair aggregate has no per-building source to
       // name (only the reach's own strands, below, resolve to one host),
@@ -1815,16 +2113,17 @@
       // building that is neither the standing host nor one it reaches
       // or is reached by fades, reusing one visual word for "not what
       // matters right now" rather than inventing a second.
-      // ... and the port filter with them (#1055): a host not on the
-      // port dims inside a lit district, and a district with none goes
-      // to outline by every one of its buildings dimming at once. Only a
-      // machine the answer could name is asked: a router or a bridge
-      // post is not a host, and dimming it would be the drawing
-      // answering a question nobody put to it.
+      // ... and the port filter and the trace with them (#1055, #1050):
+      // a host not on the answer dims inside a lit district, and a
+      // district with none goes to outline by every one of its
+      // buildings dimming at once. Only a machine the answer could name
+      // is asked: a router or a bridge post is not a host, and dimming
+      // it would be the drawing answering a question nobody put to it.
       const dim =
         (d?.dark ?? false) ||
         (reachOverlay ? !reachOverlay.litBuildingIds.has(b.id) : false) ||
-        (portOverlay && b.host ? !portOverlay.litBuildingIds.has(b.id) : false)
+        (portOverlay && b.host ? !portOverlay.litBuildingIds.has(b.id) : false) ||
+        (traceOverlay && b.host ? !traceOverlay.litBuildingIds.has(b.id) : false)
       // Presence is the building's own ink (round 49, #1016): a host not
       // heard for the quiet window goes grey with a dashed footprint, one
       // marked quiet on purpose goes white and translucent. Both stay on
@@ -1855,6 +2154,15 @@
           dash: dashed ? '3 3' : undefined,
         },
       ]
+      // The off-baseline arrival mark (#1057): this building's own
+      // outline, in the ink of the road that carried the traffic, over
+      // the footprint the building already draws. `.halo` is the flag
+      // pill's own rule, so it throbs in place and never pulses outward
+      // (DESIGN.md, owner 2026-09-07); `arrived` is what a check points
+      // at. The animation drives stroke-width, so `sw` here is only what
+      // a reduced-motion reader sees held still -- the ring's own 1.4.
+      const arrived = arrivedInk.get(b.id)
+      if (arrived) paints.push({ d: pin(0), fill: 'none', stroke: arrived, sw: 1.4, cls: 'halo arrived' })
       const what = b.kind === 'router' ? 'router' : b.kind === 'router-ant' ? 'router with antennas' : b.kind === 'post' ? 'bridge post' : 'host'
       // The mark (#981, round 46): whatever the flag and watchlist
       // ledgers say about this machine, and nothing else. There is no
@@ -1969,7 +2277,10 @@
       const h = compact ? 20 : d.rulesPushed ? 28 : 40
       if (!claim(x, y, w, h)) continue
       plaques.push({ d, x, y, w: R2(w), ink: inkOf(d) })
-      const t = portOverlay?.tallies.get(d.id)
+      // The trace's own tallies (#1050) take the same rectangle the port
+      // filter's do -- the two never carry one at once, since only one
+      // of the overlays is ever active.
+      const t = portOverlay?.tallies.get(d.id) ?? traceOverlay?.tallies.get(d.id)
       if (!t) continue
       const tw = t.length * 6 + 16
       const ty = R2(y + h + 15)
@@ -2959,9 +3270,9 @@
         stroke-linecap={p.cls === 'round' ? 'round' : undefined}
       />
     {:else}
-      <!-- `cls` carries the off-baseline ring's `halo`, which is what
-           makes it throb in place; the animation sets stroke-width, so
-           it overrides the attribute below by design. -->
+      <!-- No ellipse carries `halo` any more (#1057 moved the arrival
+           mark onto the building's own outline); `cls` stays because a
+           Paint carries one and this is the sink that renders it. -->
       <ellipse class={p.cls} cx={p.cx} cy={p.cy} rx={p.rx} ry={p.ry} fill={p.fill ?? 'none'} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} />
     {/if}
   {/each}
@@ -2973,6 +3284,10 @@
 {/snippet}
 
 <div class="city" data-stop={effectiveStop} bind:this={cityEl}>
+  <!-- The traced line's own crumb, plus its list (#1018 round 53, #1050
+       round 56 A1) -- the same component Topography mounts, so the same
+       markup and behaviour appear on the city too. -->
+  <TraceCrumb />
   <svg
     bind:this={svgEl}
     viewBox="0 0 {STAGE_W} {STAGE_H}"
@@ -3153,7 +3468,11 @@
                 <path d={diamond(geomCam, s.b.u, s.b.v, s.b.R * 1.9, 0)} fill="var(--accent)" fill-opacity="0.07" stroke="var(--accent)" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="4 5" />
               {/if}
               {#each s.paints as p, j (j)}
-                <path d={p.d} fill={p.fill} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} stroke-dasharray={p.dash} />
+                <!-- `cls` carries the off-baseline arrival outline's
+                     `halo arrived` (#1057), which is what makes it throb
+                     in place; the animation sets stroke-width, so it
+                     overrides the attribute below by design. -->
+                <path d={p.d} fill={p.fill} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} stroke-dasharray={p.dash} class={p.cls} />
               {/each}
               <g transform="translate({s.stamp.x} {s.stamp.y})">
                 <g transform="scale({s.stamp.k})" style:color={s.ink} opacity={s.pres === 'quiet' ? 0.62 : s.pres === 'intended' ? 0.55 : s.dim ? 0.62 : undefined}>
@@ -3259,6 +3578,74 @@
             >{dl.label} <tspan class="door-act">{dl.act}</tspan></text
           >
         {/each}
+        <!-- The event trace (#1050, rounds 54 & 56): the ghost first, so
+             the mark and the chip sit over its dashes rather than under
+             them. Never drawn together with a door or a drop label --
+             the trace clears the port filter, and standing, before it
+             opens. Positioned on the geometry camera like the rest of
+             this group (`traceDrawing`'s own comment has why); the
+             stop mark, the ghost's own note and the chip each wrap
+             their content in `scale({traceK})`, cancelling this
+             group's ancestor scale so they render at this file's local
+             pixel size regardless of the camera's zoom -- #1050 round
+             56 defect 3, and the same nested translate+scale shape a
+             building's own stamp uses further up for the same reason.
+             The dashed ghost path and the halo/ring below stay plain:
+             a line and a building-tracking ring are meant to scale with
+             the map the way a road does. -->
+        {#if traceDrawing.ghost}
+          <path class="trace-ghost" d={traceDrawing.ghost.d} />
+          <g transform="translate({traceDrawing.ghost.tx} {traceDrawing.ghost.ty}) scale({R2(traceK)})">
+            <text text-anchor="middle" class="ghost-t">{traceDrawing.ghost.text}</text>
+          </g>
+        {/if}
+        {#if traceDrawing.mark}
+          <!-- Where the rule stopped it: the wall's own gate when the log
+               names an out-interface, the router's own door when it does
+               not (C1, owner 2026-09-09). -->
+          <g class="trace-stop" transform="translate({R2(traceDrawing.mark.x)} {R2(traceDrawing.mark.y)}) scale({R2(traceK)})">
+            <circle r="9" fill="none" stroke="var(--alarm)" stroke-opacity="0.5" />
+            <path d="M-5 -5L5 5M-5 5L5 -5" stroke="var(--alarm)" stroke-width="2.2" stroke-linecap="round" />
+          </g>
+        {/if}
+        {#if traceDrawing.halo}
+          <!-- The sender's own halo -- alarm red for a refusal, accept
+               green for a crossing, the same pulsing ring every other
+               off-baseline arrival on this map wears. -->
+          <circle
+            class="halo"
+            cx={R2(traceDrawing.halo.x)}
+            cy={R2(traceDrawing.halo.y)}
+            r={R2(traceDrawing.halo.r)}
+            fill="none"
+            stroke={traceDrawing.halo.alarm ? 'var(--alarm)' : 'var(--accept)'}
+            stroke-width="1.4"
+          />
+        {/if}
+        {#if traceDrawing.ring}
+          <circle class="halo" cx={R2(traceDrawing.ring.x)} cy={R2(traceDrawing.ring.y)} r={R2(traceDrawing.ring.r)} fill="none" stroke="var(--accept)" stroke-width="1.2" />
+        {/if}
+        {#if traceDrawing.leader}
+          <path class="trace-leader" d={traceDrawing.leader} />
+        {/if}
+        {#if traceDrawing.chip}
+          <!-- The router's own decision, beside wherever it was made
+             (#1050, rounds 54 & 56's `verdictChip`). -->
+          <g class="trace-chip" transform="translate({R2(traceDrawing.chip.x)} {R2(traceDrawing.chip.y)}) scale({R2(traceK)})">
+            <rect
+              x="0"
+              y="-16"
+              width={R2(traceDrawing.chip.w)}
+              height="40"
+              rx="9"
+              fill={traceDrawing.chip.refused ? '#170a12' : '#0a1712'}
+              stroke={traceDrawing.chip.refused ? 'var(--alarm)' : 'var(--accept)'}
+              stroke-opacity="0.8"
+            />
+            <text x="12" y="0" class="chip-verdict" class:refused={traceDrawing.chip.refused}>{traceDrawing.chip.l1}</text>
+            <text x="12" y="15" class="chip-t">{traceDrawing.chip.l2}</text>
+          </g>
+        {/if}
         {#each scene.dropHits as dh (dh.id)}
           <!-- The aggregate mark as the control (#1002): one target over
                the mark and the word above it, in the keyboard order the
@@ -3971,7 +4358,13 @@
   /* The flagged halo hugs the building and breathes in place. It must
      never ripple outward (DESIGN.md "Honesty and motion", owner
      2026-09-07): a ring that grows reads as something spreading, and
-     nothing is spreading -- the flag is already open. */
+     nothing is spreading -- the flag is already open.
+
+     The off-baseline arrival mark wears the same rule (#1057): it is the
+     arrived-at building's own outline, `halo arrived`, so the city has
+     one motion and not two. `.arrived` is a selector for checks and
+     carries no style of its own -- what the mark looks like is the road
+     ink and weight the building's paint already sets. */
   .halo {
     animation: halo 1.6s ease-in-out infinite;
   }
@@ -4508,7 +4901,8 @@
   }
 
   .door-t,
-  .note-t {
+  .note-t,
+  .ghost-t {
     paint-order: stroke;
     stroke: var(--bg);
     stroke-width: 3.4px;
@@ -4516,6 +4910,40 @@
   }
 
   .drop-t.alarm-t {
+    fill: var(--alarm);
+  }
+
+  /* The event trace (#1050, rounds 54 & 56). The rib a refused line
+     would have taken beyond the gate it stopped at, dashed, with its
+     own note beside it -- the same treatment Topography.svelte's own
+     copy uses for the flat map. */
+  .trace-ghost {
+    fill: none;
+    stroke: var(--fg-muted);
+    stroke-width: 1.4;
+    stroke-dasharray: 2 5;
+    stroke-linecap: round;
+    opacity: 0.7;
+  }
+
+  .ghost-t {
+    font: italic 9.5px var(--font-mono);
+    fill: var(--fg-dim);
+  }
+
+  .trace-leader {
+    fill: none;
+    stroke: var(--hair-2);
+    stroke-width: 1;
+  }
+
+  /* The router's own decision, beside wherever it was made. */
+  .chip-verdict {
+    font: 700 10.5px var(--font-mono);
+    fill: var(--accept);
+  }
+
+  .chip-verdict.refused {
     fill: var(--alarm);
   }
 

@@ -388,6 +388,16 @@ type traceResponse struct {
 	// DstReached 0 is what "never reached" is drawn from.
 	SrcSeen    uint64 `json:"srcSeen"`
 	DstReached uint64 `json:"dstReached"`
+	// SameLine is the list's SAME LINE column (round 56, A1): the line's
+	// own events, newest first, the traced one included so the client can
+	// mark it, capped at eight.
+	SameLine []store.Event `json:"sameLine"`
+	// SameMinute is the list's SAME MINUTE column: the source's other
+	// events in the traced event's own clock minute, excluding anything
+	// already in SameLine, newest first, capped at eight. SameMinuteTotal
+	// is the exact count that is capped from.
+	SameMinute      []store.Event `json:"sameMinute"`
+	SameMinuteTotal uint64        `json:"sameMinuteTotal"`
 }
 
 // handleTrace serves one event's path (#1018). Same tier and same
@@ -445,15 +455,18 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 
 	res := s.Store.Trace(q)
 	if res.Event == nil {
-		writeJSON(w, http.StatusOK, traceResponse{Found: false})
+		writeJSON(w, http.StatusOK, traceResponse{Found: false, SameLine: []store.Event{}, SameMinute: []store.Event{}})
 		return
 	}
 	out := traceResponse{
-		Found:      true,
-		Verdict:    traceVerdict(res.Event.Action),
-		Event:      res.Event,
-		SrcSeen:    res.Like,
-		DstReached: res.DstReached,
+		Found:           true,
+		Verdict:         traceVerdict(res.Event.Action),
+		Event:           res.Event,
+		SrcSeen:         res.Like,
+		DstReached:      res.DstReached,
+		SameLine:        res.SameLine,
+		SameMinute:      res.SameMinute,
+		SameMinuteTotal: res.SameMinuteTotal,
 	}
 	if res.Like > 0 {
 		out.Like = res.Like - 1

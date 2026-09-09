@@ -223,6 +223,47 @@ func TestTraceEndpointAnswersOneHop(t *testing.T) {
 	}
 }
 
+func TestTraceEndpointCarriesTheList(t *testing.T) {
+	ts, s := portsServer(t)
+	// A same-minute line from cam-porch: same sender, a different
+	// destination, so it belongs in SAME MINUTE, not SAME LINE.
+	s.Store.Insert(store.Event{DeviceID: "core", Action: store.ActionAccept, Protocol: "udp", Time: time.Now(),
+		SrcIP: "10.0.30.14", DstIP: "10.0.20.5", DstPort: 53})
+
+	res, err := http.Get(ts.URL + "/api/trace?in=ether4&port=445&proto=tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var got traceResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Found {
+		t.Fatalf("the refused pair is traceable, got %+v", got)
+	}
+	// Fourteen same-line drops, capped at eight, the traced event itself
+	// among them so the list can mark it.
+	if len(got.SameLine) != 8 {
+		t.Fatalf("want the SAME LINE column capped at 8, got %d", len(got.SameLine))
+	}
+	var sawTraced bool
+	for _, e := range got.SameLine {
+		if e.ID == got.Event.ID {
+			sawTraced = true
+		}
+	}
+	if !sawTraced {
+		t.Fatal("the traced event must appear in its own SameLine column")
+	}
+	if got.SameMinuteTotal != 1 || len(got.SameMinute) != 1 {
+		t.Fatalf("want one same-minute line (the DNS lookup), got total=%d rows=%+v", got.SameMinuteTotal, got.SameMinute)
+	}
+	if got.SameMinute[0].DstPort != 53 {
+		t.Fatalf("want the DNS lookup in SAME MINUTE, got %+v", got.SameMinute[0])
+	}
+}
+
 func TestTraceEndpointMissesHonestly(t *testing.T) {
 	ts, _ := portsServer(t)
 

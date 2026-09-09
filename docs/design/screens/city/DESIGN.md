@@ -121,7 +121,12 @@ per-element table is in `../../concepts/round-49/README.md`.
 `source → destination · port · proto`. A line seen on **3 distinct days
 of the last 14** is *established* and recedes — thin, dim, no flow. A
 line off that pattern is *off-baseline*: full width, bright, flow
-dashes, and a small ring throbbing in place at the end it arrived at.
+dashes, and the building it arrived at wearing its own outline,
+throbbing in place, in the road's ink (#1057, owner 2026-09-09 — the
+city marks a building by its silhouette; a ring round a dot is the flat
+map's word, not the city's). Where the road ends at a district rather
+than one host, that is every building on the plate; where the reach
+resolves it to one host, it is that host alone.
 Refused stays red with the ✕ where the rule stopped it. Both thresholds
 are configurable; the baseline is learned from recurrence and never
 maintained by hand.
@@ -307,8 +312,8 @@ Everything drawn arrived; nothing was provoked. A boundary with no log
 rule is grey and dashed, never guessed at, and no road is drawn across
 it — a road there would claim a log line that was never written.
 Motion: road flow dashes on off-baseline lines, the flagged halo and the
-off-baseline ring throbbing in place (never pulsing outward, owner
-2026-09-07), camera moves between stops; all instant under reduced
+off-baseline arrival outline throbbing in place (never pulsing outward,
+owner 2026-09-07), camera moves between stops; all instant under reduced
 motion. Every building and
 district has an accessible name; the
 keyboard walks buildings within a district and districts within the

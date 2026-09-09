@@ -9,6 +9,7 @@ import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
 import { layoutGround } from '../lib/city/layout'
+import { roadEnds } from '../lib/city/baselineRoads'
 import { faceOf } from '../lib/city/walls'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
@@ -18,9 +19,11 @@ import { authState } from '../lib/auth.svelte'
 import { coverageState } from '../lib/coverage.svelte'
 import { baselineState } from '../lib/baseline.svelte'
 import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
-import type { ClientEvent, Device } from '../lib/types'
+import type { ClientEvent, Device, FirewallEvent } from '../lib/types'
 import { emptyFilters } from '../lib/types'
 import { portFilterState } from '../lib/portFilter.svelte'
+import { mapTraceState } from '../lib/mapTrace.svelte'
+import type { TraceResponse } from '../lib/api'
 import City from './City.svelte'
 
 // #915: twelve of these tests timed out on the GitLab runner against
@@ -1119,9 +1122,11 @@ describe('the reach follows the brightness rule (round 49, #1016)', () => {
     const bright = stand()
     expect(Number(road(bright.container).getAttribute('stroke-opacity'))).toBeGreaterThan(dimOp)
     expect(Number(road(bright.container).getAttribute('stroke-width'))).toBeGreaterThan(dimW)
-    // Bright brings the flow dashes and the ring at the arrival end.
+    // Bright brings the flow dashes and the outline at the arrival end
+    // (#1057: an outline on the arrived-at building, never a circle).
     expect(bright.container.querySelector('[data-road="bridge-lan|vlan-srv"].flow')).not.toBeNull()
-    expect(bright.container.querySelector('.city ellipse.halo, .city circle.halo')).not.toBeNull()
+    expect(bright.container.querySelector('.city path.halo.arrived')).not.toBeNull()
+    expect(bright.container.querySelector('.city ellipse.halo, .city circle.halo')).toBeNull()
   })
 
   it('the standing building’s own lane takes part in the rule too, not the scenery ink', () => {
@@ -1513,18 +1518,34 @@ describe('City: brightness by baseline', () => {
     expect(container.querySelectorAll(`path.flow[data-road="${other.id}"]`).length).toBe(0)
   })
 
-  it('throbs a ring in place at the end the traffic arrived at, and none when nothing is off the baseline', () => {
+  it('throbs the arrived-at building\u2019s own outline, and nothing when nothing is off the baseline', () => {
     const pick = pairRoad()!
+    // Which end of this road each district sits at, asked of the same
+    // function `rollUpRoads` asks, so the line below is aimed at the
+    // road's `end` rather than at whichever district the fixture happens
+    // to list first (#1057: a judged road with `ring.end`).
+    const ends = roadEnds(pick.r, ground.districts)!
+    const from = ground.districts.find((d) => d.id === ends.start)!
+    const to = ground.districts.find((d) => d.id === ends.end)!
+
     const plain = render(City, { props: { stop: 'district', ground } })
-    const before = plain.container.querySelectorAll('ellipse.halo').length
+    expect(plain.container.querySelectorAll('.halo.arrived').length).toBe(0)
     plain.unmount()
 
-    baselineState.off = offDoc([aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip)])
+    baselineState.off = offDoc([aLine(from.buildings[0].ip, to.buildings[0].ip)])
     const { container } = render(City, { props: { stop: 'district', ground } })
-    // One more ring than before: one line, arriving at one end. The
-    // ring's motion is the shared `.halo` rule, which breathes in place
-    // and never ripples outward.
-    expect(container.querySelectorAll('ellipse.halo').length).toBe(before + 1)
+
+    // The mark is the destination's own footprint outline, drawn inside
+    // the building's group -- so it is on the building by construction,
+    // not merely near it.
+    const outlined = (b: { id: string }) => container.querySelector(`.blk[data-cid="${b.id}"] path.halo.arrived`)
+    for (const b of to.buildings) expect(outlined(b)).not.toBeNull()
+    // Nothing at the end the traffic left from.
+    for (const b of from.buildings) expect(outlined(b)).toBeNull()
+    // And no circle anywhere: the ring on the ground is gone, both the
+    // <ellipse> the old mark drew and any <circle> standing in for it.
+    expect(container.querySelector('.city ellipse.halo, .city circle.halo')).toBeNull()
+    expect(container.querySelectorAll('circle.arrived, ellipse.arrived').length).toBe(0)
   })
 
   it('opens the off-baseline card from the road, naming the line, the port, the count and the verdict in plain words', async () => {
@@ -2129,6 +2150,166 @@ describe('the port filter on the city (#1055, round 54)', () => {
 
     key(document.body, 'Escape')
     expect(portFilterState.active).toBe(false)
+    expect(container.querySelector('.plate[data-cid="vlan-iot"]')).not.toBeNull()
+  })
+})
+
+describe('the event trace on the city (#1050, rounds 54 & 56)', () => {
+  afterEach(() => mapTraceState.clear())
+
+  const road = (c: HTMLElement, id: string) => c.querySelector(`path[data-road="${id}"]`)
+
+  /** Drives the store the way a landed fetch would, mirroring the port
+   * filter's own `filterTo` above. */
+  function openTrace(event: FirewallEvent, verdict: TraceResponse['verdict'], answer: Partial<TraceResponse> = {}) {
+    mapTraceState.request = { in: event.inInterface, out: event.outInterface || undefined, port: event.dstPort, proto: event.protocol }
+    mapTraceState.result = { found: true, verdict, event, like: 0, srcSeen: 0, dstReached: 0, sameLine: [], sameMinute: [], sameMinuteTotal: 0, ...answer }
+  }
+
+  /** cam-porch → tom-desktop in the mockup's own words: iot-1 → lan-1,
+   * refused at the LAN wall with an out-interface named -- round 56's
+   * C1 gate case. Overridable for the other two shapes. */
+  function traceEvent(overrides: Partial<FirewallEvent> = {}): FirewallEvent {
+    return {
+      id: 1,
+      time: '2026-09-09T22:04:31Z',
+      deviceId: 'rb5009',
+      sourceIp: '10.10.0.1',
+      action: 'drop',
+      ruleLabel: '17',
+      ruleName: '#17 default drop',
+      chain: 'forward',
+      inInterface: 'vlan-iot',
+      outInterface: 'bridge-lan',
+      protocol: 'tcp',
+      srcIp: '10.30.0.10',
+      dstIp: '10.10.0.10',
+      dstPort: 445,
+      srcHostName: 'iot-1',
+      dstHostName: 'lan-1',
+      raw: '',
+      ...overrides,
+    }
+  }
+
+  /** The plate's own footprint, the same bounding-box technique the
+   * port filter's door test above uses to prove a door stands on the
+   * wall it claims to. */
+  function plateBox(c: HTMLElement, id: string) {
+    const d = c.querySelector(`.plate[data-cid="${id}"] path`)!.getAttribute('d')!
+    const nums = [...d.matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => Number(m[0]))
+    const xs = nums.filter((_, i) => i % 2 === 0)
+    const ys = nums.filter((_, i) => i % 2 === 1)
+    return { x0: Math.min(...xs) - 4, x1: Math.max(...xs) + 4, y0: Math.min(...ys) - 4, y1: Math.max(...ys) + 4 }
+  }
+
+  function stopPoint(c: HTMLElement): { x: number; y: number } | null {
+    const t = c.querySelector('.trace-stop')?.getAttribute('transform')
+    if (!t) return null
+    const m = /translate\((-?[\d.]+) (-?[\d.]+)\)/.exec(t)!
+    return { x: Number(m[1]), y: Number(m[2]) }
+  }
+
+  it('keeps the traced pair’s own road in the verdict colour and dims the rest, removing none (refused)', () => {
+    openTrace(traceEvent(), 'refused', { srcSeen: 14, dstReached: 0 })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    expect(road(container, 'bridge-lan|vlan-iot')?.getAttribute('stroke')).toBe('var(--alarm)')
+    // Nothing is taken off the city: an unrelated pair is still drawn,
+    // grey and faint rather than gone.
+    const off = road(container, 'bridge-lan|vlan-srv')
+    expect(off).not.toBeNull()
+    expect(off?.getAttribute('stroke')).toBe('var(--fg-dim)')
+    expect(Number(off?.getAttribute('stroke-opacity'))).toBeLessThan(0.2)
+  })
+
+  it('stands the ✕ at the destination’s own gate when the log names an out-interface (C1), with the ghost on to the host', () => {
+    openTrace(traceEvent(), 'refused', { srcSeen: 14, dstReached: 0 })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    const stop = stopPoint(container)
+    expect(stop).not.toBeNull()
+    const box = plateBox(container, 'bridge-lan')
+    expect(stop!.x).toBeGreaterThanOrEqual(box.x0)
+    expect(stop!.x).toBeLessThanOrEqual(box.x1)
+
+    // Somewhere left to draw a ghost to, unlike the router-door case.
+    expect(container.querySelector('.trace-ghost')).not.toBeNull()
+    expect(container.querySelector('.ghost-t')?.textContent).toBe('would have reached lan-1 · stopped at the LAN wall')
+    // The sender's own halo only -- a refusal draws no ring at the far
+    // end, which would say "never reached" a second time.
+    expect(container.querySelectorAll('circle.halo').length).toBe(1)
+  })
+
+  it('stands the ✕ on the router’s own door when the log names no out-interface, with no ghost', () => {
+    const event = traceEvent({
+      inInterface: 'ether1',
+      outInterface: '',
+      srcIp: '203.0.113.7',
+      dstIp: '10.10.0.1',
+      srcHostName: undefined,
+      dstHostName: 'rb5009',
+      ruleLabel: '1',
+      ruleName: '#1 input drop',
+    })
+    openTrace(event, 'refused', { srcSeen: 0, dstReached: 0 })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    // The WAN bridge is the only drawable "in road" for a boundary with
+    // no out-interface (the city draws none from a plain district
+    // straight to its own router -- portOverlay's own note).
+    expect(road(container, 'rb-wan')?.getAttribute('stroke')).toBe('var(--alarm)')
+    expect(road(container, 'wan-span')?.getAttribute('stroke')).toBe('var(--alarm)')
+    expect(container.querySelector('.trace-stop')).not.toBeNull()
+    expect(container.querySelector('.trace-ghost')).toBeNull()
+    expect(container.querySelector('.chip-verdict.refused')?.textContent).toContain('REFUSED')
+  })
+
+  it('keeps both roads green with flow and rings the end it reached (accepted)', () => {
+    const event = traceEvent({
+      inInterface: 'bridge-lan',
+      outInterface: 'vlan-srv',
+      srcIp: '10.10.0.10',
+      dstIp: '10.20.0.10',
+      srcHostName: 'lan-1',
+      dstHostName: 'srv-1',
+      action: 'accept',
+      ruleLabel: '12',
+      ruleName: '#12 accept',
+    })
+    openTrace(event, 'accepted', { srcSeen: 3, dstReached: 12 })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    expect(road(container, 'bridge-lan|vlan-srv')?.getAttribute('stroke')).toBe('var(--accept)')
+    expect(container.querySelector('[data-road="bridge-lan|vlan-srv"].flow')).not.toBeNull()
+    expect(container.querySelector('.trace-stop')).toBeNull()
+    expect(container.querySelector('.trace-ghost')).toBeNull()
+    // The sender's halo and the ring at the end it reached.
+    expect(container.querySelectorAll('circle.halo').length).toBe(2)
+    expect(container.querySelector('.chip-verdict')?.classList.contains('refused')).toBe(false)
+  })
+
+  it('carries the trace’s own tallies under each end’s district plaque', () => {
+    openTrace(traceEvent(), 'refused', { srcSeen: 14, dstReached: 0 })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    const chips = [...container.querySelectorAll('.flat .chip-t')].map((t) => t.textContent)
+    expect(chips).toContain('iot-1 · 14× in the window')
+    expect(chips).toContain('lan-1 · never reached')
+  })
+
+  it('clears on Esc, the same rung the port filter takes', () => {
+    openTrace(traceEvent(), 'refused', { srcSeen: 14, dstReached: 0 })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    key(document.body, 'Escape')
+    expect(mapTraceState.active).toBe(false)
     expect(container.querySelector('.plate[data-cid="vlan-iot"]')).not.toBeNull()
   })
 })
