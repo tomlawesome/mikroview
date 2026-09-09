@@ -93,4 +93,7 @@ Numbered for the owner's reply (session counter continues).
 
 ## Verdict
 
-Pending.
+Owner, 2026-09-09: "They look good. Proceed. We'll fix them later if
+need be." Ratified as drawn. Questions 2–4 were not answered, so the
+build takes the drawing as is: same-minute is the clock minute, the
+list is a pop-over, the input drop keeps the Internet halo.
