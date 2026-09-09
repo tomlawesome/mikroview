@@ -6,10 +6,11 @@ import { buildHour } from '../lib/metricsSeries'
 import { formatHM } from '../lib/format'
 import MetricsSeismograph from './MetricsSeismograph.svelte'
 
-// jsdom implements no ResizeObserver, and `bind:clientWidth` compiles to
-// one -- see Metrics.svelte.test.ts's own stub for why a no-op is enough
-// here too (jsdom reports every box as zero-sized regardless, so the
-// drum draws at its own minimum width).
+// jsdom implements no ResizeObserver, and the drum measures itself with
+// one (#690 -- it used to be `bind:clientWidth`, which compiled to one
+// too) -- see Metrics.svelte.test.ts's own stub for why a no-op is
+// enough here too (jsdom reports every box as zero-sized regardless, so
+// the drum draws at its own minimum width).
 class ResizeObserverStub {
   observe() {}
   unobserve() {}

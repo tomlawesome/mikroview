@@ -23,7 +23,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-import type { Entity, RuleUsage } from '../lib/types'
+import type { Entity, Flag, FlagType, RuleUsage } from '../lib/types'
 import type { RouterFilterRule } from '../lib/api'
 
 const fetchEntities = vi.fn(async (): Promise<Entity[]> => [])
@@ -542,6 +542,66 @@ describe('Entities named-things table (#675)', () => {
 
     const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('cam-porch'))
     expect(row?.querySelector('.mk-flagged')?.textContent).toBe('✱ flagged')
+  })
+
+  // The whole marks column at once, over one small fixture. #690
+  // replaced the per-row scan over flagsState.list and
+  // watchlistState.entries with an index built once per change of that
+  // state; this pins every key that index is built on, so a wrong key
+  // shows up as a wrong mark rather than as a quiet miss:
+  //  - a new_device flag matches on MAC regardless of case
+  //  - an alarm-family flag matches after its ' -> port N' suffix
+  //  - a cleared flag and a disabled watch mark nothing
+  //  - an advisory-family (▲) flag is not an alarm
+  //  - a watch matches on source MAC as well as destination/source IP,
+  //    and only a no-logging watch says the ring is broken
+  it('pins the marks for a mixed fixture of flags and watches (#690)', async () => {
+    const { fetchDeviceMACs } = await import('../lib/api')
+    const seen = { firstSeen: '2026-01-01T00:00:00Z', lastSeen: new Date().toISOString() }
+    vi.mocked(fetchDeviceMACs).mockResolvedValue([
+      { mac: 'AA:BB:CC:00:00:01', ...seen, lastIp: '10.0.50.1' },
+      { mac: 'DE:AD:BE:EF:00:02', ...seen, lastIp: '10.0.50.2' },
+    ])
+    fetchEntities.mockResolvedValue([
+      { type: 'host', key: '10.0.50.1', label: 'gate', tags: [] },
+      { type: 'host', key: '10.0.50.2', label: 'nas-50', tags: [] },
+      { type: 'host', key: '10.0.50.3', label: 'printer', tags: [] },
+      { type: 'host', key: '10.0.50.4', label: 'desk', tags: [] },
+    ])
+    const flag = (id: string, type: FlagType, target: string, cleared = false): Flag => ({
+      id,
+      type,
+      target,
+      detail: '',
+      count: 1,
+      ...seen,
+      cleared,
+    })
+    flagsState.list = [
+      flag('n1', 'new_device', 'aa:bb:cc:00:00:01'),
+      flag('a1', 'port_scan', '10.0.50.2 -> port 22'),
+      flag('a2', 'critical_port', '10.0.50.1', true),
+      flag('a3', 'activity_spike', '10.0.50.3'),
+    ]
+    watchlistState.entries = [
+      { id: 'w1', enabled: true, source: { mac: 'de:ad:be:ef:00:02' }, createdAt: seen.firstSeen },
+      { id: 'w2', enabled: false, destIp: '10.0.50.3', createdAt: seen.firstSeen },
+      { id: 'w3', enabled: true, source: { ip: '10.0.50.4' }, createdAt: seen.firstSeen },
+    ]
+    watchlistState.coverage = { w1: 'no-logging', w2: 'no-logging', w3: 'covered' }
+    const { container } = render(Entities)
+    await settle()
+
+    const marksOf = (label: string) => {
+      const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) =>
+        tr.textContent?.includes(label),
+      )
+      return [...(row?.querySelectorAll('.mk') ?? [])].map((m) => m.textContent)
+    }
+    expect(marksOf('gate')).toEqual(['▲ new talker'])
+    expect(marksOf('nas-50')).toEqual(['◉ watched · ○ ring broken', '✱ flagged'])
+    expect(marksOf('printer')).toEqual([])
+    expect(marksOf('desk')).toEqual(['◉ watched'])
   })
 
   // Round 38 removed the hint under every view on the owner's word
