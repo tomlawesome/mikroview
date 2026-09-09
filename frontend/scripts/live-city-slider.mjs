@@ -17,7 +17,7 @@
 // (walls, gates, the river) is live-city-stops.mjs's and live-city-
 // walls.mjs's job, not this one's.
 
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedAndSettle } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
@@ -88,11 +88,15 @@ check(
   })) === 200,
   'the filter-rule table is pushed',
 )
-feedRaw('firewall,info A|lane| forward: in:bridge-lan out:ether1, connection-state:new, proto TCP (SYN), 10.0.10.20:5100->203.0.113.9:443, len 60')
-
-await new Promise((r) => setTimeout(r, 1200))
+await feedAndSettle(
+  page,
+  'firewall,info A|lane| forward: in:bridge-lan out:ether1, connection-state:new, proto TCP (SYN), 10.0.10.20:5100->203.0.113.9:443, len 60',
+)
 await page.setViewportSize({ width: 1600, height: 900 })
-await page.reload()
+// No reload: this is the session's first navigation to Topography
+// (session() lands on Stream), so the mount effect that refetches
+// zones/policy/coverage already runs on this one mount -- there is
+// nothing pushed earlier for a reload to pick up.
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
 
@@ -124,7 +128,7 @@ const STOP_LABELS = ['clients', 'services', 'zones', 'city', 'borough', 'distric
 
 await slider.focus()
 await page.keyboard.press('Home')
-await new Promise((r) => setTimeout(r, 300))
+await new Promise((r) => setTimeout(r, 300)) // the stop change is a 620ms camera tween
 
 for (let i = 0; i < STOP_LABELS.length; i++) {
   const label = STOP_LABELS[i]
@@ -154,7 +158,7 @@ for (let i = 0; i < STOP_LABELS.length; i++) {
 
   if (i < STOP_LABELS.length - 1) {
     await page.keyboard.press('ArrowRight')
-    await new Promise((r) => setTimeout(r, 700))
+    await new Promise((r) => setTimeout(r, 700)) // the stop change is a 620ms camera tween
   }
 }
 
@@ -168,7 +172,7 @@ for (let i = STOP_LABELS.length - 1; i >= 0; i--) {
   )
   if (i > 0) {
     await page.keyboard.press('ArrowLeft')
-    await new Promise((r) => setTimeout(r, 700))
+    await new Promise((r) => setTimeout(r, 700)) // the stop change is a 620ms camera tween
   }
 }
 

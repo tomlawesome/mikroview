@@ -183,12 +183,13 @@ async function clearFilters() {
   await ensureFiltersOpen()
   if (await page.isVisible('.bar.thin .tf-clear').catch(() => false)) {
     await page.click('.bar.thin .tf-clear').catch(() => {})
-    await page.waitForTimeout(300)
     // Clearing removes the only element the click landed on (the
     // button's own `{#if hasActiveFilters}` guard unmounts it the
     // instant the filters it cleared go empty), which the window's
     // click-away listener reads as a click outside the box -- so the
     // strip folds itself as a side effect of Clear, not just of Fold.
+    // Wait for that real unmount instead of guessing how long it takes.
+    await page.waitForSelector('.bar.thin .tf-clear', { state: 'detached', timeout: 5000 }).catch(() => {})
     // Reopen for the same reason every other read in this file does.
     await ensureFiltersOpen()
   }
@@ -288,7 +289,7 @@ await clearFilters()
 await page.fill('input[aria-label="Source — name, IP or CIDR"]', '198.51.100.240/29')
 const cidrInShown = await waitUntil(() => rowFor(CIDR_IN_RULE).isVisible())
 check(!!cidrInShown, 'a source address inside the typed CIDR is shown')
-await page.waitForTimeout(600) // let a (would-be) refetch/re-render settle before the negative check
+await page.waitForTimeout(600) // 2x FILTER_DEBOUNCE_MS (300ms, App.svelte): let a (would-be) refetch/re-render settle before the negative check
 check(!(await rowFor(CIDR_OUT_RULE).isVisible().catch(() => false)), 'a source address outside the typed CIDR is not shown')
 
 // --- Port box: a well-known service name, not just a bare number ----------
@@ -296,7 +297,7 @@ await clearFilters()
 await page.fill('input[aria-label="Port — number or service"]', 'https')
 const httpsRowShown = await waitUntil(() => rowFor(CHAIN_RULE).isVisible())
 check(!!httpsRowShown, 'typing a well-known service name matches its port (443/https)')
-await page.waitForTimeout(600)
+await page.waitForTimeout(600) // 2x FILTER_DEBOUNCE_MS (300ms, App.svelte): let a (would-be) refetch/re-render settle before the negative check
 check(
   !(await rowFor(SRCNAT_RULE).isVisible().catch(() => false)),
   'a row on an unrelated port (53/DNS) is excluded by the same text search',

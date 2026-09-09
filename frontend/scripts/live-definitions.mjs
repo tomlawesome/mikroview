@@ -252,7 +252,7 @@ async function waitForPortScanFlag(target, { timeoutMs = 20000 } = {}) {
   while (Date.now() < deadline) {
     const flags = await api('GET', '/api/flags')
     if ((flags.body?.flags ?? []).some((f) => f.type === 'port_scan' && f.target === target)) return true
-    await new Promise((r) => setTimeout(r, 500))
+    await new Promise((r) => setTimeout(r, 250))
   }
   return false
 }

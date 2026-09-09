@@ -7,7 +7,7 @@
 // pushed here -- so the honest "state not pushed" path is what a real
 // browser renders when nothing named the tunnel's state, and the river
 // itself carries no dash of any kind.
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedAndSettle } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -56,21 +56,21 @@ check(
 // the city to know a tunnel exists at all, with no state, since nothing
 // here ever pushes a wireguard-interface, wireguard-peer or ppp-active
 // table for this device.
+const riverLines = []
 for (let i = 0; i < 4; i++) {
-  feedRaw(`firewall,info A|city| forward: in:bridge-lan out:ether1, connection-state:new, proto TCP (SYN), 10.0.10.2${i}:5${100 + i}->203.0.113.9:443, len 60`)
-  feedRaw(`firewall,info A|river-in| input: in:ether1 out:bridge, connection-state:new, proto UDP, 198.51.100.9:500->10.0.10.1:500, len 200`)
+  riverLines.push(`firewall,info A|city| forward: in:bridge-lan out:ether1, connection-state:new, proto TCP (SYN), 10.0.10.2${i}:5${100 + i}->203.0.113.9:443, len 60`)
+  riverLines.push(`firewall,info A|river-in| input: in:ether1 out:bridge, connection-state:new, proto UDP, 198.51.100.9:500->10.0.10.1:500, len 200`)
 }
-feedRaw(`firewall,info A|city| forward: in:bridge-lan out:wg0, connection-state:new, proto UDP, 10.0.10.20:51820->10.9.0.2:51820, len 60`)
+riverLines.push(`firewall,info A|city| forward: in:bridge-lan out:wg0, connection-state:new, proto UDP, 10.0.10.20:51820->10.9.0.2:51820, len 60`)
+await feedAndSettle(page, ...riverLines)
 
-await new Promise((r) => setTimeout(r, 1500))
 await page.setViewportSize({ width: 1600, height: 900 })
-await page.reload()
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
 
 const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
 await slider.fill('3') // the city stop; the seven-stop axis is clients 0 .. street 6 (#869)
-await new Promise((r) => setTimeout(r, 900))
+await page.waitForSelector('[data-card="topography"] .city g[aria-label^="The Internet as a river"]', { timeout: 10000 })
 
 const river = await page.evaluate(() => {
   const city = document.querySelector('[data-card="topography"] .city')
@@ -96,16 +96,16 @@ check(
 await page.screenshot({ path: `${OUT}/city.png` })
 
 await slider.fill('6') // the street stop, the right-hand end of the seven-stop axis (#869)
-await new Promise((r) => setTimeout(r, 900))
+await page.waitForSelector('[data-card="topography"] .city .plate', { timeout: 10000 })
 // Shift+arrow pans the camera at any stop (live-city-stops.mjs uses the
 // same keys); north is toward the river, so walking it there is the
 // same "look at the water" an operator would do.
 await page.locator('.city .plate').first().focus()
 for (let i = 0; i < 6; i++) {
   await page.keyboard.press('Shift+ArrowUp')
-  await new Promise((r) => setTimeout(r, 60))
+  await new Promise((r) => setTimeout(r, 60)) // let each pan register before the next keypress
 }
-await new Promise((r) => setTimeout(r, 600))
+await new Promise((r) => setTimeout(r, 600)) // settle the pan's 620ms tween before the screenshot
 await page.screenshot({ path: `${OUT}/street.png` })
 console.log(`${OUT}/city.png`)
 console.log(`${OUT}/street.png`)

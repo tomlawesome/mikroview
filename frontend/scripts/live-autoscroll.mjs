@@ -15,7 +15,7 @@
 // below are unchanged in substance -- what the freeze must do is what it
 // always had to do -- only the selector and the two tooltip readings
 // follow the control to where it now lives.
-import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
 
 // Scoped to the centred card: the deck mounts the neighbouring cards
 // too, and the whisper belongs to the Stream card.
@@ -50,7 +50,11 @@ const tooltipBefore = await page.getAttribute(FOLLOW, 'title')
 check(/newest line/i.test(tooltipBefore ?? ''), `the pill's tooltip describes following new lines (${tooltipBefore})`)
 
 await page.click(FOLLOW)
-await page.waitForTimeout(200)
+await page.waitForFunction(
+  (sel) => document.querySelector(sel)?.textContent?.trim() === 'follow',
+  FOLLOW,
+  { timeout: 5000 },
+)
 
 check((await page.textContent(FOLLOW))?.trim() === 'follow', 'and reads "follow" -- the way back -- once off')
 const tooltipAfter = await page.getAttribute(FOLLOW, 'title')
@@ -62,9 +66,13 @@ check(
 const frozenCount = await page.locator('.row').count()
 check(frozenCount > 0, `the frozen window has rows (${frozenCount})`)
 
-// New events arrive while frozen -- none of them may appear.
+// New events arrive while frozen -- none of them may appear. Wait for
+// the server to have actually counted them (the freeze under test is a
+// client-rendering concern, not an ingest one) rather than guessing how
+// long ingest takes.
+const beforeAfterFreeze = await eventsTotal(page)
 feedSyslog(50, 'after-freeze')
-await page.waitForTimeout(1500)
+await waitForEventsTotal(page, beforeAfterFreeze + 50)
 
 check(
   (await page.locator('.row[title*="after-freeze"]').count()) === 0,
@@ -75,13 +83,14 @@ check((await page.locator('.row').count()) === frozenCount, `row count is unchan
 // Navigating away to another view and back must not disturb the freeze
 // -- LiveTable unmounts on every view switch, so this only proves
 // anything if appState.frozenPool genuinely outlives the component.
+// goTo() itself already blocks until the destination card is centred,
+// which is proof enough that the switch (and so the unmount) happened.
 await goTo(page, 'Metrics')
-await page.waitForTimeout(300)
 
 // Back to the live view via its own rail item -- the rail has no
 // re-click-to-return-to-live behaviour the old menu trigger had.
 await goTo(page, 'Stream')
-await page.waitForTimeout(300)
+await page.waitForSelector(`${CARD} .row`, { timeout: 10000 })
 check(
   (await page.locator('.row[title*="after-freeze"]').count()) === 0,
   'the live view is still frozen after visiting another view',
@@ -91,7 +100,7 @@ check(
 // what was already frozen, never pulling in "after-freeze" just because
 // the filter changed.
 await page.fill('input.rule', 'batch-b')
-await page.waitForTimeout(300)
+await page.waitForFunction(() => document.querySelectorAll('.row[title*="batch-a"]').length === 0, { timeout: 5000 })
 
 const batchBCount = await page.locator('.row').count()
 check(batchBCount > 0, `filtering to batch-b while frozen narrows the table (${batchBCount} rows)`)
@@ -101,7 +110,7 @@ check((await page.locator('.row[title*="after-freeze"]').count()) === 0, 'after-
 // Clearing the filter re-widens within the same frozen pool -- batch-a
 // comes back, after-freeze still does not.
 await page.fill('input.rule', '')
-await page.waitForTimeout(300)
+await page.waitForFunction(() => document.querySelectorAll('.row[title*="batch-a"]').length > 0, { timeout: 5000 })
 
 check((await page.locator('.row[title*="batch-a"]').count()) > 0, 'clearing the filter brings batch-a back')
 check(

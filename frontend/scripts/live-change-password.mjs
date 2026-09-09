@@ -100,8 +100,8 @@ check(newLogin.status === 200, `the new password signs in (${newLogin.status})`)
 // The account actions live on the scene bar's account chip since #616's
 // deck retired the rail, the toolbar and the atlas overlay.
 
-await page.reload({ waitUntil: 'networkidle' })
-await page.waitForSelector('#main-content', { timeout: 15000 })
+// No reload: the change already left this browser's own session and app
+// state intact (checked above), so the account menu is reachable as is.
 await openAccountMenu(page)
 check(
   await page.isVisible('.account .menu button.row:has-text("Change password")'),
