@@ -19,6 +19,7 @@ testing-and-ci skill (owner, 2026-09-08).
 ## live-flags-watchlist: the reconnaissance row never appears (5 s)
 
 - 2026-09-08 · 70d828ec (dev) · pipeline 775, gate:scenarios 2/4, job 8448 · `locator.waitFor: Timeout 5000ms exceeded` at `live-flags-watchlist.mjs:130` waiting for `tr.frow.mem` for 192.168.1.61 with text "Internal reconnaissance"; 776's job 8473 ran the same shard on the same commit and passed it.
+- 2026-09-09 · e0c2f251 (dev) · pipeline 800, gate:scenarios 2/4, job 8848 · same `locator.waitFor` 5000 ms timeout at `live-flags-watchlist.mjs:130` for 192.168.1.61 "Internal reconnaissance"; pipeline 801 on the same commit passed.
 
 ## live-verdicts: undo never puts the chips back (5 s)
 
