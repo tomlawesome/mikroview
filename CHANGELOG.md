@@ -18,6 +18,37 @@ rewritten.
 
 ### Added
 
+- **"What is this thing?" now has an answer built from evidence you
+  already have** (#410, data only -- the card's own design comes later).
+  `GET /api/hosts/{ip}/dossier` assembles one address's traffic
+  fingerprint (who it reaches, who reaches it, the ports with their
+  known names, and whether it talks on a timer or in bursts), its MAC
+  with the vendor behind it, the names it goes by and which layer
+  supplied each, lease-versus-fixed from what your routers pushed, first
+  and last seen, the firewall rules its traffic matched, and a suggested
+  identity that always carries its evidence and a confidence in words.
+  The suggestion comes from a small readable table -- MQTT plus a clock
+  check plus a couple of fixed endpoints reads IoT-ish, SMB with RDP
+  reads Windows-ish -- and no row may claim more than its ceiling. What
+  is not known is said, block by block: an address is only called
+  *fixed* when a router actually pushed a DHCP table that omits it, and
+  a router that never pushed one leaves the question open rather than
+  guessing. The card may print an `nmap` command or a browser URL for
+  **you** to run; mikroview never connects to a host on your network.
+- **MAC vendor lookups, from IEEE's own registry** (#410, `oui.*`, on by
+  default). The first three octets of a hardware address name the
+  organisation IEEE assigned them to, which is usually the most useful
+  thing you can learn about a host you do not recognise. mikroview
+  fetches the MA-L registry itself, daily and conditionally, and caches
+  it under the data directory -- no vendor data ships in the image, and
+  none is redistributed: IEEE publishes the file for direct download but
+  grants no redistribution, so your instance fetches its own copy. Until
+  the first fetch lands, vendor answers say "no vendor data yet" rather
+  than guessing, and a registry over a month old is labelled stale
+  rather than quietly trusted. Three answers are deliberately not vendor
+  names: a locally-administered address (no vendor exists -- it is a VM,
+  a container or a randomised MAC), a block IEEE sub-delegated, and an
+  assignee who paid to be listed privately.
 - **A host that stops talking is no longer forgotten** (#1016, data
   model only). The map used to work out its hosts from the last few
   thousand events in the browser, so a host that went silent scrolled
