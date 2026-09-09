@@ -1022,7 +1022,15 @@ func main() {
 		}
 	}
 	syncDefinitions()
-	definitions.SetOnChange(syncDefinitions)
+	// SetOnChange rather than a call in each API write handler: this is
+	// the one funnel every definition change already goes through,
+	// whichever door it came in by, so a future door cannot forget to
+	// tell the screens. The notice itself only says "definitions", never
+	// what they now are -- the client refetches (see hub.Change).
+	definitions.SetOnChange(func() {
+		syncDefinitions()
+		h.Notify(hub.ChangeDefinitions)
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1448,6 +1456,28 @@ func main() {
 		ThirdPartyNotices: thirdPartyNotices,
 		ConfigProblems:    configProblems,
 		Persistence:       persistenceInfo,
+	}
+
+	// The live-check harness's two test hooks (#1063, #1064): a watch
+	// clock it can move forward, and a reset that puts the instance back
+	// to having seen nothing between scenarios.
+	//
+	// Read straight from the environment rather than through
+	// internal/config, and so absent from docs/configuration.md, because
+	// this is not an operator setting: a documented option is one somebody
+	// eventually turns on. With it unset the routes are never registered
+	// at all -- see internal/api/testhooks.go for the rest of the
+	// reasoning.
+	if os.Getenv("MV_TEST_HOOKS") == "1" {
+		srv.TestHooks = true
+		// The reset empties the definitions store outright, shipped rows
+		// included, so the catalogue has to be laid down again -- the same
+		// call every boot makes above, with the same settings and
+		// defaults.
+		srv.Reseed = func() error {
+			return engine.SeedShippedDefinitions(definitions, detectorSeed, shippedDefaults)
+		}
+		logging.New("test-hooks").Warn("MV_TEST_HOOKS=1: the test-only routes POST /api/test/clock and POST /api/test/reset are registered. An admin can move this instance's watch clock forward and erase every event, flag, match, pushed router table and definition it holds. This exists for the live-check harness -- never set it on a real deployment.")
 	}
 
 	// The range the memory control may move within, read from this

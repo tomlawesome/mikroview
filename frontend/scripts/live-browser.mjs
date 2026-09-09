@@ -142,12 +142,47 @@ const ENV_SCRIPT = path.join(REPO, process.env.MV_ENV_SCRIPT || 'scripts/live-en
 // live-env.sh (plain HTTP on loopback) it changes nothing.
 setGlobalDispatcher(new Agent({ connect: { rejectUnauthorized: false } }))
 
+/**
+ * preSessionFeeds remembers every feed made before session() opened its
+ * page, so resetInstance can put them back.
+ *
+ * THIS IS TEMPORARY, AND IT GOES WHEN THE SCENARIOS MOVE.
+ *
+ * Thirty-three scenarios call a feed helper and *then* call session() --
+ * live-smoke.mjs feeds 200 lines and waits for 100 rows on the first
+ * screen. #1064's reset empties the event ring at the start of session(),
+ * which takes exactly those events with it, and each of those scenarios
+ * then waits for rows that will never arrive. Replaying is what makes the
+ * reset invisible to a scenario that did nothing wrong: it fed, the
+ * instance was wiped underneath it, and it is fed again.
+ *
+ * The real fix is for those scenarios to feed *after* session(), at which
+ * point nothing here is doing anything and the whole mechanism -- this
+ * list, feed(), and the replay loop in resetInstance -- comes out. It
+ * lives here rather than in each scenario deliberately: the alternative
+ * was editing thirty-three files that other work is already touching, to
+ * carry a workaround that is meant to be deleted.
+ *
+ * Only feeds made before the first session() are replayed. Afterwards
+ * there is nothing to protect them from -- the reset has already
+ * happened, and a scenario feeding mid-run wants exactly one delivery.
+ */
+const preSessionFeeds = []
+let sessionOpened = false
+
+function feed(run) {
+  run()
+  if (!sessionOpened) preSessionFeeds.push(run)
+}
+
 /** feedSyslog pushes synthetic events into the running instance. */
 export function feedSyslog(n, label = 'live-test-rule') {
-  execFileSync(ENV_SCRIPT, ['syslog', String(n), label], {
-    stdio: 'ignore',
-    cwd: REPO,
-  })
+  feed(() =>
+    execFileSync(ENV_SCRIPT, ['syslog', String(n), label], {
+      stdio: 'ignore',
+      cwd: REPO,
+    }),
+  )
 }
 
 /**
@@ -164,10 +199,12 @@ export function feedRaw(...lines) {
   // opens a TLS session per call, so a scenario feeding two hundred
   // lines one call at a time paid two hundred handshakes and process
   // starts for them (#1061).
-  execFileSync(ENV_SCRIPT, ['raw', ...lines], {
-    stdio: 'ignore',
-    cwd: REPO,
-  })
+  feed(() =>
+    execFileSync(ENV_SCRIPT, ['raw', ...lines], {
+      stdio: 'ignore',
+      cwd: REPO,
+    }),
+  )
 }
 
 /** eventsTotal reads the instance's lifetime event count (/api/stats). */
@@ -217,7 +254,7 @@ export async function feedAndSettle(page, ...lines) {
 export function feedPortScan(n, sourceIp) {
   const args = ['portscan', String(n)]
   if (sourceIp) args.push(sourceIp)
-  execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO })
+  feed(() => execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO }))
 }
 
 /**
@@ -233,7 +270,7 @@ export function feedInternalRecon(n, sourceIp, port) {
   const args = ['recon', String(n)]
   if (sourceIp) args.push(sourceIp)
   if (port) args.push(String(port))
-  execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO })
+  feed(() => execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO }))
 }
 
 /**
@@ -508,7 +545,39 @@ export async function goTo(page, label, { unfold = true } = {}) {
   }
 }
 
-export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream', unfoldFilter = true } = {}) {
+/**
+ * resetInstance puts the shared instance back to having seen nothing:
+ * events, flags, matches, pushed router tables, definitions and
+ * suggestions all go; accounts, sessions, devices, ingest tokens,
+ * settings and the setup ledger stay (#1064, POST /api/test/reset).
+ *
+ * Scenarios in a shard share one instance and run in filename order, so
+ * without this each one inherits whatever its siblings left -- and pays
+ * for it in neutraliser rules, scenario-private interface names and
+ * enough traffic to out-rank somebody else's leftovers. Pipelines 819 and
+ * 820 were both that failure.
+ *
+ * A 404 is not a failure. The route exists only where the process was
+ * started with MV_TEST_HOOKS=1, which live-env.sh does and a shipped
+ * image does not, so the container flavour of this harness runs the same
+ * scenarios against an instance that simply cannot be reset. That is a
+ * weaker guarantee, not a broken run.
+ */
+async function resetInstance(page) {
+  const res = await page.request.fetch(`${URL_BASE}/api/test/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+  })
+  if (res.status() === 404) return
+  if (res.status() !== 200) {
+    throw new Error(`POST /api/test/reset answered ${res.status()} -- the instance was not reset, so this run would be judging residue`)
+  }
+  // Whatever the scenario fed before signing in went with the reset; put
+  // it back before the page is navigated anywhere that reads it.
+  for (const run of preSessionFeeds) run()
+}
+
+export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream', unfoldFilter = true, keep = false } = {}) {
   browser = await launchBrowser()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
@@ -541,6 +610,14 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
   // (App.svelte wraps all of them in it) -- unlike the old `input.rule`
   // wait, it does not assume which view is the landing page.
   await page.waitForSelector('#main-content', { timeout: 15000 })
+
+  // Signed in, nothing navigated yet: the one moment a reset can happen
+  // without a page reading half-cleared state. Once per process -- a
+  // scenario that opens a second session is opening a second tab on its
+  // own instance, not starting again. keep: true opts out for a scenario
+  // that deliberately wants what a sibling left behind.
+  if (!keep && !sessionOpened) await resetInstance(page)
+  sessionOpened = true
 
   // Before anything else touches the page: a first-run instance layers
   // the setup modal over the shell, and every scenario but the wizard's

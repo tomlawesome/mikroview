@@ -10,7 +10,18 @@ interface WSEnvelope {
   type: string
   events?: FirewallEvent[]
   dropped?: number
+  change?: ServerChange
 }
+
+/**
+ * ServerChange names something on the server that a screen may now be
+ * showing a stale answer about (internal/hub's Change).
+ *
+ * A name and nothing else, deliberately: the listener refetches through
+ * the ordinary API, so this socket never becomes a second, partial copy
+ * of an endpoint's answer that could drift from it.
+ */
+export type ServerChange = 'router-state' | 'definitions'
 
 // LiveSocket is the client side of the live-tail feed: connects to
 // /api/ws, applies exponential backoff with jitter on disconnect, and
@@ -33,6 +44,22 @@ export class LiveSocket {
   // (ipLookup, routerLookup, ruleMatcher's seq/id); ws.ts was the
   // exception.
   private generation = 0
+  // Listeners for change notices. A subscriber list rather than a direct
+  // call into the store that cares: which screens act on a change, and
+  // whether the signed-in role may even read what they would refetch, is
+  // App.svelte's decision -- this file's job is to deliver the notice.
+  private changeListeners = new Set<(change: ServerChange) => void>()
+
+  /**
+   * onChange registers fn for every change notice the server sends, and
+   * returns the function that unregisters it. Call that on teardown: a
+   * listener left behind would keep refetching for a session that has
+   * ended.
+   */
+  onChange(fn: (change: ServerChange) => void): () => void {
+    this.changeListeners.add(fn)
+    return () => this.changeListeners.delete(fn)
+  }
 
   connect() {
     this.stopped = false
@@ -77,6 +104,12 @@ export class LiveSocket {
       }
       if (msg.type === 'events' && msg.events) {
         appState.appendLive(msg.events)
+      }
+      // A frame of its own, not a field on an event batch -- a quiet
+      // network produces no batches at all, and an instance nothing is
+      // currently logging is exactly when a pushed table matters most.
+      if (msg.type === 'changed' && msg.change) {
+        for (const fn of this.changeListeners) fn(msg.change)
       }
       if (typeof msg.dropped === 'number') {
         // Cumulative total for this connection, not a delta -- see

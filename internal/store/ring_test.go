@@ -506,3 +506,36 @@ func TestStatsOldestHeldFollowsCapacityEvictionNotRetention(t *testing.T) {
 		t.Errorf("buffer reach %v exceeds what three minutely events can hold", reach)
 	}
 }
+
+// TestResetEmptiesTheRingButNotTheIDSequence pins both halves of Reset's
+// contract (#1064). Everything derived from traffic goes; the ID
+// sequence does not restart, because a WebSocket client already holding
+// event 900 has no way to tell a fresh event 1 from a stale delivery.
+func TestResetEmptiesTheRingButNotTheIDSequence(t *testing.T) {
+	s := New(10, time.Hour)
+	now := time.Now()
+	for i := 0; i < 6; i++ {
+		s.Insert(mkEvent(now, "core", ActionDrop))
+	}
+
+	s.Reset()
+
+	if got := len(s.Query(Query{Limit: 100}).Events); got != 0 {
+		t.Errorf("the ring still holds %d events", got)
+	}
+	stats := s.Stats()
+	if stats.Total != 0 {
+		t.Errorf("Stats().Total = %d, want 0", stats.Total)
+	}
+	if len(stats.ByAction) != 0 {
+		t.Errorf("Stats().ByAction = %v, want empty", stats.ByAction)
+	}
+	if len(stats.TopRules) != 0 {
+		t.Errorf("Stats().TopRules = %v, want empty", stats.TopRules)
+	}
+
+	next := s.Insert(mkEvent(now, "core", ActionDrop))
+	if next.ID <= 6 {
+		t.Errorf("the first event after a reset got ID %d, reusing an ID a client may already hold", next.ID)
+	}
+}

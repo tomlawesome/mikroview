@@ -80,30 +80,39 @@ check(
   'the two-boundary filter table is accepted',
 )
 
-// A watch window that opens a couple of minutes from now and closes a
-// minute later, computed from this process's own clock rather than the
-// server's -- the live-check harness runs both in the same container, so
-// clock skew is not a real risk, and the couple of minutes' buffer
-// absorbs the both being a few seconds off. Refuses outright rather than
-// silently building a wrong window within a few minutes of UTC midnight,
-// where "3 minutes from now" would wrap onto a date whose clock-only
-// (Days-empty) window reads as a different, already-past occurrence.
-function computeWindow(bufferMin, lengthMin) {
-  const now = new Date()
-  const mins = now.getUTCHours() * 60 + now.getUTCMinutes()
-  if (mins + bufferMin + lengthMin >= 1440) {
-    throw new Error('too close to UTC midnight to safely compute a watch window for this scenario -- rerun in a few minutes')
-  }
-  const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
-  return {
-    start: fmt(mins + bufferMin),
-    end: fmt(mins + bufferMin + lengthMin),
-    closesAt: new Date(now.getTime() + (bufferMin + lengthMin) * 60000),
-  }
+// The server's own clock, and the lever that moves it (#1063:
+// POST /api/test/clock, registered only because live-env.sh starts the
+// instance with MV_TEST_HOOKS=1). An advance of 0 is how this scenario
+// asks the server what time it thinks it is, which is the clock the
+// window below has to be computed against -- not this process's.
+async function advanceClock(advance) {
+  const res = await api('POST', '/api/test/clock', { advance })
+  check(res.status === 200, `the test clock answers (advance ${advance}, ${res.status})`)
+  return new Date(res.body?.now)
 }
 
+// A watch window that opens a minute after the server's now and closes a
+// minute later. Read the server's clock rather than this process's
+// because the same clock has to decide both what the window means and
+// whether it has closed -- and because the advance below is what makes
+// "has closed" true, with no real minutes spent.
+//
+// The old UTC-midnight refusal is gone with the waiting. It existed
+// because a window computed a few minutes before midnight wrapped onto
+// the next date and read as a different, already-past occurrence; now
+// that the clock is ours to move, the scenario simply steps the server
+// over midnight first and computes the window on the far side.
+const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+const minutesOfDay = (d) => d.getUTCHours() * 60 + d.getUTCMinutes()
+
+let serverNow = await advanceClock('0s')
+if (minutesOfDay(serverNow) + 2 >= 1440) {
+  serverNow = await advanceClock(`${1440 - minutesOfDay(serverNow) + 1}m`)
+}
+const opensAt = minutesOfDay(serverNow) + 1
+const win = { start: fmt(opensAt), end: fmt(opensAt + 1) }
+
 const PORT = 47001
-const win = computeWindow(2, 1)
 
 const entryRes = await api('POST', '/api/definitions', {
   name: 'fall-watch-broken sentinel',
@@ -124,21 +133,20 @@ async function ringFor(entryId) {
   return { ring: d?.expectation?.ring, coverage: d?.coverage }
 }
 
-// Wait out the window itself (real time -- FillWatchNights is lazy, not a
-// timer, so nothing records the empty occurrence until it has actually
-// closed), then poll the read path (which runs FillWatchNights on every
-// call) until the ring agrees. A generous ceiling above the window's own
-// close, not a tight one -- this is proving a real close happened, not
-// this scenario's patience.
-const waitMs = win.closesAt.getTime() - Date.now() + 5000
-if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs))
+// Past the window's close in one call. FillWatchNights is lazy rather
+// than a timer, so nothing records the empty occurrence until something
+// reads the definitions -- which is what the poll below does, on the same
+// read path the fall itself uses. Three minutes clears a window that
+// opens in one and closes in two, with a minute to spare; none of it is
+// real time.
+await advanceClock('3m')
 
 let settled = null
-const deadline = Date.now() + 60000
+const deadline = Date.now() + 20000
 while (Date.now() < deadline) {
   settled = await ringFor(id)
   if (settled.ring?.broken === true) break
-  await new Promise((r) => setTimeout(r, 2000))
+  await new Promise((r) => setTimeout(r, 500))
 }
 check(settled?.ring?.broken === true, `the server records the ring broken -- last saw ${JSON.stringify(settled)}`)
 check(settled?.coverage === 'covered', `the entry's own boundary is covered by the rule pushed on it -- got ${settled?.coverage}`)
