@@ -493,6 +493,7 @@ case "${1:-}" in
   build) shift; [ -n "${1:-}" ] || { echo "usage: $0 build PATH" >&2; exit 2; }; mkdir -p "$(dirname "$1")"; build "$1" ;;
   syslog) shift; syslog "$@" ;;
   raw) shift; raw "$@" ;;
+  rawfrom) shift; rawfrom "$@" ;;
   portscan) shift; portscan "$@" ;;
   recon) shift; recon "$@" ;;
   down) down ;;
