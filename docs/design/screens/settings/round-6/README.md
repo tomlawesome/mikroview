@@ -85,4 +85,14 @@ does not apply here.
 
 ## Verdicts
 
-(none yet)
+Owner, 2026-09-09: *"The styling is exactly the same … No one asked for
+the full sentence style either. I explicitly asked you for a GitLab
+style builder/bar."* Clarified: the sameness is *"generic boxes/cards
+on the flat blueish background, zero use of colour anywhere in
+connection to the rest of the UI"*; flags (the docket) is the closest
+screen; the bar's behaviour should be GitLab's, its style uniquely
+mikroview's.
+
+→ Round 7 restores the bar and draws it in the docket's inks. The
+sentence-as-editor does not carry forward.
+
