@@ -2141,7 +2141,10 @@
       else if (lineCard) closeLineCard()
       else if (compose) compose = null
       else if (mapTraceState.active) mapTraceState.clear()
-      else if (portFilterState.active || portFilterState.open) portFilterState.clear()
+      // The city has the same rung in its own ladder (#1055) and owns it
+      // while it is the surface being read: two handlers on one window
+      // would otherwise take two rungs at once on a single press.
+      else if (cityStop === null && (portFilterState.active || portFilterState.open)) portFilterState.clear()
       else if (reach) surface()
     }
   }
@@ -2787,12 +2790,15 @@
 
   function crossAltitudeCentre(intoCity: boolean) {
     if (intoCity) {
-      // #1018's two filters are the flat map's, and only the flat map's:
-      // the city gets the same two tools in its own round (#1050). So
-      // they clear on the way over rather than staying on behind a
-      // control that is no longer drawn -- a map filtered by something
-      // the operator cannot see is the worse of the two states.
-      portFilterState.clear()
+      // The trace is still the flat map's alone -- the city gets it in a
+      // round of its own (#1050) -- so it clears on the way over rather
+      // than staying on behind a drawing that cannot show it.
+      //
+      // The port filter no longer does (#1055): the city answers the
+      // same question from the same store and the pill is drawn on both
+      // sides, so the selection survives the crossing in both
+      // directions. Clearing it would have thrown away the operator's
+      // own question for moving the slider.
       mapTraceState.clear()
       if (reach && reachIsHost) {
         // Handed to City's own pending-descend effect (#868's own
@@ -4463,7 +4469,6 @@
        data rather than switched on. The off-baseline tally stays -- it
        is a count, not a control. -->
   <div class="pills" role="group" aria-label="Map overlays">
-    {#if cityStop === null}
     <!-- The port pill (#1018, round 53), bottom-left where round 49's
          two lens pills were before #981 retired them. Three shapes and
          no other surface: idle it is `⌕ port`; clicking opens it into a
@@ -4471,7 +4476,12 @@
          the window, a field for a typed list, then tcp / udp; and with
          something selected it collapses onto the answer. No Show
          button: the map filters as the selection changes (owner,
-         2026-09-08, "it loads automatically"). -->
+         2026-09-08, "it loads automatically").
+
+         Drawn at every altitude (#1055, round 54): the city filters to
+         the same answer from the same store, so hiding the control on
+         that side would have been a tool the operator could only reach
+         by moving the slider. -->
     {#if portFilterState.open}
       <div
         class="pill p edit"
@@ -4534,7 +4544,6 @@
       <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
     {:else}
       <button class="pill p" aria-pressed="false" aria-expanded="false" onclick={openPortPicker}>⌕ port</button>
-    {/if}
     {/if}
     <!-- `⟡ off-baseline today · N`, ahead of the ⚑ count, in the accept
          ink (round-49/index.html's `chrome`, the `.nmk` mark, and

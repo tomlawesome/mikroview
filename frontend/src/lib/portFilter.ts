@@ -176,6 +176,17 @@ export function zoneTally(onPort: number, total: number, label: string): string 
 }
 
 /**
+ * plaqueTally is the same count under a district's plaque in the city:
+ * `2 of 12 · 445/tcp`. The lane card has a line of its own to spend on
+ * the word "hosts"; the plaque has a chip under a name and a subnet, and
+ * round 54 draws the short form there (its README, and the `city-port`
+ * shot). One counting rule, two lengths of sentence -- not two counts.
+ */
+export function plaqueTally(onPort: number, total: number, label: string): string {
+  return `${onPort} of ${total} · ${label}`
+}
+
+/**
  * emptyNote is the one line the map writes under itself when the window
  * carried nothing on the port -- not an empty state, a sentence.
  *
