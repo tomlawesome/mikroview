@@ -519,23 +519,13 @@
   // The visible line: a cubic pulled through the waist, dying there, or
   // (for an internet edge) the limb alone -- ribPath's own cubic,
   // reversed, landing on the lane's slot rather than the waist (#726).
+  // Drawn from cubicOf/quadOf's own points rather than a second
+  // computation of the same curve (#1053) -- two copies of "where the
+  // waist handles sit" is exactly how the lateral-rib hook fix could
+  // have landed in only one of them.
   function edgePath(l: Line): string {
-    const { from, to, off } = l
-    if (isInternetEdge(l) && l.crosses) {
-      const spread = internetSlotSpread(l)
-      const laneAnchor = from.kind === 'zone' ? from : to
-      const waistPt = { x: 700 + spread, y: 302 }
-      const laneCtrl = { x: laneAnchor.x + (700 - laneAnchor.x) * 0.25, y: 420 }
-      const waistCtrl = { x: 700 + spread * 2.2, y: 380 }
-      const pt = (p: { x: number; y: number }) => `${p.x + off.x} ${p.y + off.y}`
-      return from.kind === 'zone'
-        ? `M ${pt(laneAnchor)} C ${pt(laneCtrl)}, ${pt(waistCtrl)}, ${pt(waistPt)}`
-        : `M ${pt(waistPt)} C ${pt(waistCtrl)}, ${pt(laneCtrl)}, ${pt(laneAnchor)}`
-    }
-    const w = { x: WAIST.x + off.x, y: WAIST.y + off.y }
-    if (l.crosses) {
-      return `M ${from.x + off.x} ${from.y + off.y} C ${w.x} ${w.y}, ${w.x} ${w.y}, ${to.x + off.x} ${to.y + off.y}`
-    }
+    const c = cubicOf(l)
+    if (c) return `M ${c[0].x} ${c[0].y} C ${c[1].x} ${c[1].y}, ${c[2].x} ${c[2].y}, ${c[3].x} ${c[3].y}`
     const q = quadOf(l)
     return `M ${q[0].x} ${q[0].y} Q ${q[1].x} ${q[1].y}, ${q[2].x} ${q[2].y}`
   }
@@ -581,6 +571,25 @@
       return from.kind === 'zone'
         ? [at(laneAnchor), at(laneCtrl), at(waistCtrl), at(waistPt)]
         : [at(waistPt), at(waistCtrl), at(laneCtrl), at(laneAnchor)]
+    }
+    // A lateral pair -- both ends on the same side of the waist, like two
+    // adjacent zone lanes (LAN <-> Servers) -- used to pull both handles
+    // onto the waist point itself (`w, w` below). With both handles on
+    // one point the curve overshot past the nearer end's own x and
+    // doubled back into a small hook right where it turned (#1053).
+    // Handles that stop partway to the pair's own midpoint keep the bend
+    // inside the two ends' own x-range -- still rising toward the
+    // waist's height, never past either end -- while a pair that
+    // straddles the waist still meets there exactly, unchanged below.
+    if ((from.x - WAIST.x) * (to.x - WAIST.x) > 0) {
+      const midX = (from.x + to.x) / 2
+      // 0.6: far enough toward the midpoint/waist height to read as a
+      // real bend rather than a near-straight line; the unit test below
+      // is what actually guards against a reversal creeping back in.
+      const PULL = 0.6
+      const c1 = at({ x: from.x + (midX - from.x) * PULL, y: from.y + (WAIST.y - from.y) * PULL })
+      const c2 = at({ x: to.x + (midX - to.x) * PULL, y: to.y + (WAIST.y - to.y) * PULL })
+      return [at(from), c1, c2, at(to)]
     }
     const w = at(WAIST)
     return [at(from), w, w, at(to)]
