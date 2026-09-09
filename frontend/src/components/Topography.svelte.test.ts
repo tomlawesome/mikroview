@@ -1371,9 +1371,17 @@ describe('the round-30 layout (#699)', () => {
       interface: `bridge${i + 1}`,
       comment: `Lane ${i + 1}`,
     }))
-    appState.events = Array.from({ length: 5 }, (_, i) =>
-      event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20`, dstPort: 443, action: 'accept' }),
-    )
+    appState.events = [
+      // A public-sourced inbound event on ether1 is what actually makes
+      // it the WAN (zonesState.wanInterface, #850) -- without one,
+      // ether1 is just an undeclared boundary, which #1054's declared-
+      // first ranking now correctly leaves off the map instead of
+      // drawing it as a sixth lane.
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' }),
+      ...Array.from({ length: 5 }, (_, i) =>
+        event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20`, dstPort: 443, action: 'accept' }),
+      ),
+    ]
     const { container } = render(Topography)
     flushSync()
 
