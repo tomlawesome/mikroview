@@ -404,12 +404,12 @@ PY
   echo "sent ${1:-100} events labelled ${2:-live-test-rule}" >&2
 }
 
-# raw LINE -- deliver one exact syslog line, for scenarios needing a
+# raw LINE... -- deliver exact syslog lines over one connection, for scenarios needing a
 # specific shape (a control-port hit, say) rather than the bulk
 # generators. Scenarios must use this rather than opening their own
 # socket: there is no plaintext listener left for them to talk to.
 raw() {
-  printf '%s\n' "$1" | send_tls
+  printf '%s\n' "$@" | send_tls
 }
 
 # portscan N [source-ip] -- N distinct destination ports from one source
@@ -467,5 +467,5 @@ case "${1:-}" in
   portscan) shift; portscan "$@" ;;
   recon) shift; recon "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|build PATH|syslog N [label]|raw LINE|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|build PATH|syslog N [label]|raw LINE...|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
 esac
