@@ -526,13 +526,26 @@ export interface RouterPPPActive {
 export interface FlagsResponse {
   flags: Flag[]
   timeSeries: FlagTimeBucket[]
+  // Whether any enabled detection is still warming (#768) -- the
+  // learning shelf's "why is mikroview silent" signal, carried on this
+  // response since the owner moved it off GET /api/definitions
+  // (2026-09-02). undefined means the server could not say (no live
+  // engine wired, or an older build): the shelf then makes no claim
+  // rather than a false one.
+  baselinesWarming?: boolean
 }
 
 export async function fetchFlags(): Promise<FlagsResponse> {
   const res = await fetch('/api/flags')
   if (!res.ok) throw new ApiError(`fetchFlags: ${res.status}`, res.status)
   const body = await res.json()
-  return { flags: body.flags ?? [], timeSeries: body.timeSeries ?? [] }
+  return {
+    flags: body.flags ?? [],
+    timeSeries: body.timeSeries ?? [],
+    // Left undefined unless the server actually sent a boolean --
+    // absence is its own answer here, never coerced to false.
+    baselinesWarming: typeof body.baselinesWarming === 'boolean' ? body.baselinesWarming : undefined,
+  }
 }
 
 // clearAllFlags clears every currently-active flag in one request

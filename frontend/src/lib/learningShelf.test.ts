@@ -2,50 +2,24 @@
 
 import { describe, expect, it } from 'vitest'
 import { anyBaselineWarming } from './learningShelf'
-import type { LearningState } from './types'
 
-// #642's ruling, amendment 2: "warming" means observed-but-below-floor
-// (ready < keys) on an enabled detection -- exactly the state
-// engine.Snapshot.ProvisionalFire can fire in. No traffic at all
-// (keys 0) is not warming: nothing observed can land on the shelf, so
-// claiming "a spike would show here" would be false.
-describe('anyBaselineWarming (#642)', () => {
-  const learning = (keys: number, ready: number): LearningState => ({
-    floor: { minDurationSeconds: 1209600 },
-    keys,
-    ready,
+// #768: the shelf's warming state is now one field on the GET
+// /api/flags response, not a projection of the definitions catalogue.
+// What the field *means* is unchanged (#642's ruling, amendment 2) and
+// is pinned server-side in internal/api/flags_test.go; what this pins
+// is the one distinction the frontend still owns -- a server that did
+// not answer is not a server that said "no".
+describe('anyBaselineWarming (#642, moved to the flags response by #768)', () => {
+  it('reports true when the flags response says a baseline is warming', () => {
+    expect(anyBaselineWarming({ baselinesWarming: true })).toBe(true)
   })
 
-  it('reports true when an enabled detection has an observed key below its floor', () => {
-    expect(anyBaselineWarming([{ enabled: true, learning: learning(3, 1) }])).toBe(true)
+  it('reports false when the flags response says nothing is warming', () => {
+    expect(anyBaselineWarming({ baselinesWarming: false })).toBe(false)
   })
 
-  it('reports false for an empty detector list', () => {
-    expect(anyBaselineWarming([])).toBe(false)
-  })
-
-  it('ignores a disabled detection, however warm its baseline', () => {
-    expect(anyBaselineWarming([{ enabled: false, learning: learning(3, 0) }])).toBe(false)
-  })
-
-  it('ignores a detection with no warm-up concept at all', () => {
-    expect(anyBaselineWarming([{ enabled: true }])).toBe(false)
-  })
-
-  it('does not call "no traffic seen yet" warming -- nothing observed can be provisional', () => {
-    expect(anyBaselineWarming([{ enabled: true, learning: learning(0, 0) }])).toBe(false)
-  })
-
-  it('reports false once every observed key is ready', () => {
-    expect(anyBaselineWarming([{ enabled: true, learning: learning(4, 4) }])).toBe(false)
-  })
-
-  it('one warming detection among settled ones is enough', () => {
-    expect(
-      anyBaselineWarming([
-        { enabled: true, learning: learning(4, 4) },
-        { enabled: true, learning: learning(2, 1) },
-      ]),
-    ).toBe(true)
+  it('reports false when the server did not answer -- absence is not a claim', () => {
+    expect(anyBaselineWarming({})).toBe(false)
+    expect(anyBaselineWarming({ baselinesWarming: undefined })).toBe(false)
   })
 })
