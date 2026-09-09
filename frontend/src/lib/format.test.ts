@@ -214,15 +214,21 @@ describe('formatLastHeard', () => {
     expect(formatLastHeard('2026-09-02T14:00:00Z', now)).toBe('Wednesday 14:00')
   })
 
+  // Past the window the date half is formatDayMonth's own rendering, and
+  // that is locale-driven ("31 Aug" here, "Aug 31" on CI's runner), so
+  // these assert on the helper rather than on one locale's spelling.
   it('eight days ago, past the 7-day window, renders day + short month + time', () => {
     const now = new Date('2026-09-08T14:00:00Z').getTime()
-    expect(formatLastHeard('2026-08-31T14:00:00Z', now)).toBe('31 Aug 14:00')
+    const iso = '2026-08-31T14:00:00Z'
+    expect(formatLastHeard(iso, now)).toBe(`${formatDayMonth(iso)} 14:00`)
   })
 
   it('crosses a year boundary without leaking a year into the output', () => {
     const now = new Date('2027-01-02T09:15:00Z').getTime()
-    const out = formatLastHeard('2026-12-25T09:15:00Z', now)
-    expect(out).toBe('25 Dec 09:15')
+    const iso = '2026-12-25T09:15:00Z'
+    const out = formatLastHeard(iso, now)
+    expect(out).toBe(`${formatDayMonth(iso)} 09:15`)
+    expect(out).toContain('Dec')
     expect(out).not.toContain('2026')
     expect(out).not.toContain('2027')
   })
