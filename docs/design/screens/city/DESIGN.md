@@ -160,6 +160,63 @@ number, glyph or tally on either map at any stop -- the counts are
 words on the click card, `2 flags · 1 watch`. The escalated unplanned
 road stays in alarm ink with its callout.
 
+## Two filters on the map (round 53, #1018)
+
+Neither is a new view: both redraw this one, and both are the flat map's
+only — the city gets the same two tools in a round of its own (#1050).
+The rule they share is **dim to the answer, remove nothing**: every rib,
+card and dot stays where it was, greyed, so the answer is read against
+the whole network rather than against a cropped one.
+
+**By port.** A pill bottom-left, where round 49's lens pills were, reads
+`⌕ port`. Clicking opens it into a bar of the same shape: the ports the
+window carried or a pushed rule names, as chips to click, several at
+once; a short field for a typed list (`22,23 ↵`); then `tcp` / `udp`.
+There is no Show button — the map filters as the selection changes
+(owner, 2026-09-08). Selected, the pill collapses onto the answer,
+`⌕ 445/tcp · 2 lines seen · 3 doors`, with a ✕ beside it; Esc clears it
+too.
+
+Filtered, a rib the port crossed keeps its verdict colour at full width
+— both halves, because a crossing is one packet through the router —
+and every other rib is one thin grey line. A lane card keeps the hosts
+seen on the port lit and its count line reads `2 of 12 hosts on
+445/tcp`; a card with nothing on the port recedes whole.
+
+**A door marks every rule that names the port, seen or not** (owner:
+seen plus policy). Two posts across the rib where the rule sits, the
+leaf swung open for accept and a bar across for a refusal, labelled
+`#12 accept`. A rule that refuses stops the packet on the way in, so its
+door sits on the in-interface's half; a rule that accepts opens the way
+out, so its door sits on the out-interface's half. A rule with no
+dst-port is not a door: it covers every port and so says nothing about
+this one. Where the map draws no rib of its own under a door, the door
+brings its own faint grey guide — policy, never a verdict ink.
+
+**Nothing seen is one line under the map**, not an empty state: `no
+logged traffic on 3389/tcp in the window · one rule names it — #23 wan →
+any drop, the door on the WAN side`. The door is still drawn.
+
+**By event.** A trace is the one hop the router knows: the lane it came
+in on, the rule that decided, the NAT if any, the lane it left on. It
+opens from the map's unplanned callout (`trace ▸`) and from a stream
+row's own ⌖ beside the interfaces. The two lit halves take the verdict's
+colour at full width and everything else goes grey. A refused line ends
+at a ✕ on the router, and the rib it *would* have taken is dashed with
+the note `would have reached tom-desktop · never left the router`; an
+accepted one reaches its far end with a ring. The router's decision is a
+chip beside the router (`✕ REFUSED · #17 default drop` / `in: iot → out:
+— · 445/tcp · 22:04`), and the whole story is one crumb at the top: who
+→ who, the port, the verdict and its rule, the time, `and 13 more like
+it ▸`, Esc. The others are said, never drawn as a union. The lit hosts
+keep a one-line tally (`cam-porch · 14× in the window`, `tom-desktop ·
+never reached`).
+
+Both tools swap the legend for their own entries and take it away again
+when they clear. Both read `GET /api/ports` and `GET /api/trace`, which
+answer from the logged lines and the pushed filter table and nothing
+else.
+
 ## The reach
 
 **Clicking anything on the map, at any stop, opens its reach** — a
@@ -295,6 +352,11 @@ Round 49 is built in M11 under #1016: the always-on treatment and
 declare on both surfaces, the overlay pills, hosts at the top level,
 click-anything reach with pinned cards, living hosts, the baseline
 register and `expected`, and live-gate scenarios for all of it.
+
+Round 53 is built in M11 under #1018: the port filter and the event
+trace above, on the flat map, with `GET /api/ports` and `GET /api/trace`
+behind them. The same two tools on the city surface, and a small trace
+button on the host card, are #1050.
 
 ## Superseded
 

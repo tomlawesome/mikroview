@@ -253,12 +253,21 @@ if (mine && waist.name === mine.name) {
   console.log(`  - waist count skipped: the map's primary device is "${waist.name}", not this scenario's "${mine?.name}"`)
 }
 
-// The pill row in a real browser (#715 item 3, as round 49 left it).
-// The two exclusive base lens tabs are gone -- traffic is the picture,
-// coverage is always on, policy was deleted -- so what the row has to
-// carry now is exactly two overlay toggles and nothing else. Asserted
-// here rather than in a scenario of its own because the row is on every
-// screen this file already drives.
+// The pill row in a real browser (#715 item 3, as #981 and #1018 left
+// it). Asserted here rather than in a scenario of its own because the
+// row is on every screen this file already drives.
+//
+// This block asserted two overlay *toggles* until now, which is what
+// round 49 drew and what #981 then took away -- "something that's
+// always there is easy to ignore" (owner, 2026-09-08). The scenario was
+// not updated with the code, so it has been failing on `dev` ever since,
+// asserting a control the app deliberately no longer has. Corrected
+// here, with #1018 (which is what put a control back in the row), and
+// recorded on its own issue.
+//
+// What the row carries now: no lens row at all, no toggle of any kind,
+// and one filter -- the port pill, which does not switch a layer on and
+// off, it redraws the map to an answer and goes away with its own ✕.
 await open2D()
 const row = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
@@ -271,32 +280,31 @@ const row = await page.evaluate(() => {
   }
 })
 check(row.lensRows === 0, `no lens row is drawn at all (${row.lensRows})`)
-check(row.ovs.length === 2, `two overlay toggles and no more (${row.ovs.map((o) => o.text).join(' · ')})`)
-check(
-  row.ovs.some((o) => o.text.includes('flags')) && row.ovs.some((o) => o.text.includes('watch')),
-  `the two are flags and watch (${row.ovs.map((o) => o.text).join(' · ')})`,
-)
-check(
-  row.ovs.every((o) => o.pressed === 'true'),
-  'both overlays arrive switched on, as round 49 draws the scene',
-)
+check(row.ovs.length === 1, `one control in the row and no more (${row.ovs.map((o) => o.text).join(' · ')})`)
+check(row.ovs[0]?.text === '⌕ port', `and it is the port filter (${row.ovs[0]?.text})`)
+check(row.ovs[0]?.pressed === 'false', `which arrives unset, filtering nothing (${row.ovs[0]?.pressed})`)
 
-// A toggle latches, and latches on its own: switching one leaves the
-// other where it was. That independence is what made them a different
-// family from the lens tabs, and it outlived the tabs.
-//
-// The click and the read are two steps on purpose. Svelte 5 applies a
-// state change to the DOM in a microtask, so clicking and reading
-// aria-pressed inside one page.evaluate always reads the value the
-// click was about to replace -- the assertion fails on a control that
-// works. Playwright clicks, the page settles, a separate evaluate reads.
+// It opens into the picker bar in place, rather than latching a layer
+// on. The click and the read are two steps on purpose: Svelte 5 applies
+// a state change in a microtask, so clicking and reading inside one
+// page.evaluate reads the value the click was about to replace.
 await page.click('[data-card="topography"] [aria-label="Map overlays"] button >> nth=0')
-await page.waitForTimeout(300)
-const afterToggle = await page.evaluate(() =>
-  [...document.querySelectorAll('[data-card="topography"] [aria-label="Map overlays"] button')].map((b) => b.getAttribute('aria-pressed')),
+await page.waitForTimeout(400)
+const opened = await page.evaluate(() => {
+  const card = document.querySelector('[data-card="topography"]')
+  return {
+    bar: !!card?.querySelector('.pill.p.edit'),
+    idle: !!card?.querySelector('.pills .pill.p:not(.edit)'),
+  }
+})
+check(opened.bar, 'clicking it opens the picker as a bar of the same shape')
+check(!opened.idle, 'which takes the pill\'s place rather than sitting beside it')
+await page.keyboard.press('Escape')
+await page.waitForTimeout(200)
+check(
+  (await page.locator('[data-card="topography"] .pill.p.edit').count()) === 0,
+  'and Esc puts it away again',
 )
-check(afterToggle[0] === 'false', `an overlay latches off when clicked (${afterToggle[0]})`)
-check(afterToggle[1] === 'true', `and leaves the other overlay where it was (${afterToggle[1]})`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 done()

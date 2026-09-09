@@ -101,6 +101,13 @@
   // browser's view of it.
   import { hostsState, presenceOf, HOST_QUIET_AFTER_MS, type HostPresence } from '../lib/hosts.svelte'
   import { baselineState } from '../lib/baseline.svelte'
+  // The two filters on the map (#1018, round 53). Neither is a new
+  // view: they redraw this one. portFilter.ts holds the arithmetic and
+  // the wording, the two stores hold what is selected and what the
+  // server answered, and everything below only draws it.
+  import { portFilterState } from '../lib/portFilter.svelte'
+  import { mapTraceState } from '../lib/mapTrace.svelte'
+  import { doorAccepts, doorHalf, emptyNote, litRibs, parsePortList, ribKey, zoneTally } from '../lib/portFilter'
   import type { OffBaselineLine } from '../lib/baseline'
   import type { Host } from '../lib/api'
 
@@ -245,6 +252,10 @@
 
   interface HostRow {
     dots: HostDot[]
+    /** The hosts past the tenth dot -- what `+N` stands for. Kept, not
+     * just counted, so a filter can say how many of *them* are in its
+     * answer from the same list the row was built from (#1018). */
+    hidden: HostDot[]
     more: number
     total: number
     quiet: number
@@ -302,6 +313,7 @@
     out.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
     return {
       dots: out.slice(0, MAX_HOST_DOTS),
+      hidden: out.slice(MAX_HOST_DOTS),
       more: Math.max(0, out.length - MAX_HOST_DOTS),
       total: out.length,
       quiet: out.filter((d) => d.presence === 'quiet').length,
@@ -566,18 +578,28 @@
 
   const mid = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
 
-  /** The half of this direction's own line nearest its own island. */
-  function halfPath(l: Line): string {
+  /** The half of this direction's own line nearest its own island, as
+   * its own four control points -- pulled out of halfPath (#1018) so a
+   * door's posts and a traced half sit on the curve that is actually
+   * drawn rather than on a second guess at where it runs, the same
+   * reason quadOf exists for the leader's anchor. */
+  function halfCubic(l: Line): [Pt, Pt, Pt, Pt] | null {
     const c = cubicOf(l)
-    if (!c) return edgePath(l)
+    if (!c) return null
     const [p0, p1, p2, p3] = c
     const a = mid(p0, p1)
     const b = mid(p1, p2)
     const cc = mid(p2, p3)
     const d = mid(a, b)
     const e = mid(b, cc)
-    const f = mid(d, e)
-    return `M ${R2(p0.x)} ${R2(p0.y)} C ${R2(a.x)} ${R2(a.y)}, ${R2(d.x)} ${R2(d.y)}, ${R2(f.x)} ${R2(f.y)}`
+    return [p0, a, d, mid(d, e)]
+  }
+
+  /** The half of this direction's own line nearest its own island. */
+  function halfPath(l: Line): string {
+    const h = halfCubic(l)
+    if (!h) return edgePath(l)
+    return `M ${R2(h[0].x)} ${R2(h[0].y)} C ${R2(h[1].x)} ${R2(h[1].y)}, ${R2(h[2].x)} ${R2(h[2].y)}, ${R2(h[3].x)} ${R2(h[3].y)}`
   }
 
   /** The middle of the half actually drawn: where this boundary's card
@@ -588,15 +610,9 @@
       const [a, b, cc] = quadOf(l)
       return { x: (a.x + 2 * b.x + cc.x) / 4, y: (a.y + 2 * b.y + cc.y) / 4 }
     }
-    // The same de Casteljau halving halfPath does, then the cubic's own
-    // midpoint: (p0 + 3c1 + 3c2 + p3) / 8.
-    const [p0, p1, p2, p3] = c
-    const a = mid(p0, p1)
-    const b = mid(p1, p2)
-    const cc = mid(p2, p3)
-    const d = mid(a, b)
-    const e = mid(b, cc)
-    const f = mid(d, e)
+    // The same half halfPath draws, then that cubic's own midpoint:
+    // (p0 + 3c1 + 3c2 + p3) / 8.
+    const [p0, a, d, f] = halfCubic(l) ?? c
     return { x: (p0.x + 3 * a.x + 3 * d.x + f.x) / 8, y: (p0.y + 3 * a.y + 3 * d.y + f.y) / 8 }
   }
 
@@ -2009,7 +2025,21 @@
    * `savedS`/`savedCentre`). */
   function descend(zoneId: string, host: string, ip: string) {
     closeLineCard()
+    clearMapFilters()
     reach = { subject: hostSubject(ip), zoneId, host, ip }
+  }
+
+  /** Standing on something clears #1018's two filters, the same way
+   * opening one of them clears the reach. Three answers layered on one
+   * map would stack their crumbs on each other and leave nobody able to
+   * say which of them a dim rib was dim because of.
+   *
+   * Declared here rather than beside the filters themselves because the
+   * three descends below call it, and they are declared above the
+   * filter block. */
+  function clearMapFilters() {
+    portFilterState.clear()
+    mapTraceState.clear()
   }
 
   /** The two zones a ground-plan road joins, or null when it joins none
@@ -2034,6 +2064,7 @@
    * boundary interface is the side lib/reach matches against. */
   function descendZone(z: { id: string; name: string; cidr: string | null }) {
     closeLineCard()
+    clearMapFilters()
     reach = { subject: { kind: 'zone', iface: z.id }, zoneId: z.id, host: z.name, ip: z.cidr ?? '' }
   }
 
@@ -2050,6 +2081,7 @@
       return
     }
     closeLineCard()
+    clearMapFilters()
     reach = { subject: { kind: 'rib', a, b }, zoneId: a, host: pairName(a, b), ip: '' }
   }
 
@@ -2091,10 +2123,15 @@
     }
     if (e.key === 'Escape') {
       // Esc walks out one level: the open card first, then the composer,
-      // then the reach itself.
+      // then a filter on the map, then the reach itself. A filter is
+      // above the reach in that order because it is the outermost thing
+      // the operator turned on: leaving the map filtered while surfacing
+      // out of a reach would put them somewhere they did not ask to be.
       if (nodeCard) nodeCard = null
       else if (lineCard) closeLineCard()
       else if (compose) compose = null
+      else if (mapTraceState.active) mapTraceState.clear()
+      else if (portFilterState.active || portFilterState.open) portFilterState.clear()
       else if (reach) surface()
     }
   }
@@ -2740,6 +2777,13 @@
 
   function crossAltitudeCentre(intoCity: boolean) {
     if (intoCity) {
+      // #1018's two filters are the flat map's, and only the flat map's:
+      // the city gets the same two tools in its own round (#1050). So
+      // they clear on the way over rather than staying on behind a
+      // control that is no longer drawn -- a map filtered by something
+      // the operator cannot see is the worse of the two states.
+      portFilterState.clear()
+      mapTraceState.clear()
       if (reach && reachIsHost) {
         // Handed to City's own pending-descend effect (#868's own
         // consumer, shared with the flags "where" link) rather than
@@ -3207,8 +3251,22 @@
     nodeCard = null
   }
 
-  function onWindowClick() {
+  function onWindowClick(e: MouseEvent) {
     if (nodeCard) nodeCard = null
+    // The picker has no Done button and needs none: clicking away from
+    // it is what closes it, and the selection it made stays on the map.
+    // Guarded on the row itself rather than on the bar, so a click on
+    // the ✕ beside it is not read as a click away from it.
+    //
+    // isConnected is the other half, and it is not defensive padding:
+    // the click that *opens* the picker lands on the idle pill, which
+    // this same click has just replaced with the bar. By the time the
+    // window sees it, that button is detached, its ancestor chain is
+    // gone, and `closest` answers null -- so without this the picker
+    // would close on the click that opened it, every time.
+    if (portFilterState.open && !(e.target instanceof Element && (!e.target.isConnected || e.target.closest('.pills')))) {
+      portFilterState.closePicker()
+    }
   }
 
   // The degraded map (#802; round 36, carried into rounds 37-38).
@@ -3567,6 +3625,367 @@
     if (target === document.body) return true
     return target === mapSvgEl || target.closest('.stage') !== null
   }
+
+  // --- the two filters (#1018, round 53) -----------------------------------
+  //
+  // Neither adds anything to the map. Both dim it to their own answer:
+  // what is on the port, or what one line did. Nothing is removed --
+  // every rib, card and dot stays where it was, greyed, so the answer is
+  // read against the whole network rather than against a cropped one.
+  //
+  // The two are mutually exclusive by construction: opening one clears
+  // the other. Two filters at once would leave the operator unable to
+  // say which of them a dim rib was dim because of.
+
+  // Settled, not merely selected: between a chip's click and its answer
+  // there is nothing to draw, and dimming on `active` alone would put
+  // "0 of 12 hosts on 22/tcp" and a wholly grey map on screen for the
+  // length of every request -- an answer to a question still in flight.
+  const portOn = $derived(portFilterState.active && portFilterState.settled)
+  const traceOn = $derived(mapTraceState.active)
+  const filterOn = $derived(portOn || traceOn)
+
+  /**
+   * Every direction the trace lights: the half it came in on and the
+   * half it left on, in the verdict's own ink.
+   *
+   * An accepted line crossed, so both halves of its pair light -- that
+   * is one packet through the router, not a claim about traffic coming
+   * back. A refused line has no out-interface to reach, so only the
+   * half it arrived on lights, and it dies at the waist where the ✕ is.
+   */
+  const traceLit = $derived.by((): Map<string, 'accept' | 'refused'> => {
+    const out = new Map<string, 'accept' | 'refused'>()
+    const e = mapTraceState.event
+    if (!e || !mapTraceState.verdict) return out
+    const verdict = mapTraceState.verdict === 'accepted' ? 'accept' : 'refused'
+    const inIface = e.inInterface ?? ''
+    const outIface = e.outInterface ?? ''
+    if (inIface === '' && outIface === '') return out
+    out.set(ribKey(inIface, outIface), verdict)
+    if (verdict === 'accept' && inIface !== '' && outIface !== '') out.set(ribKey(outIface, inIface), verdict)
+    return out
+  })
+
+  /** What the filter in force lights, keyed the same way reality.ts
+   * keys a direction, so a lit direction and a drawn one are one string
+   * rather than two conventions that agree until they do not. */
+  const lit = $derived(portOn ? litRibs(portFilterState.ribs) : traceOn ? traceLit : new Map())
+
+  interface LitHalf {
+    key: string
+    d: string
+    verdict: 'accept' | 'refused'
+    width: number
+    /** Where the line stopped, for the refusal's ✕, or null. */
+    stop: Pt | null
+    /** Where it arrived, for an accepted trace's ring, or null. */
+    ring: Pt | null
+  }
+
+  /**
+   * The lit layer. Drawn over the dimmed map rather than instead of it,
+   * so a rib that is both drawn and lit keeps its own geometry: one
+   * curve, two treatments, never two curves that could disagree.
+   *
+   * A direction with no drawable line -- a boundary the map has no
+   * island for -- is dropped rather than drawn somewhere plausible,
+   * the same refusal lineFor already makes for the unfiltered map.
+   */
+  const litHalves = $derived.by((): LitHalf[] => {
+    const out: LitHalf[] = []
+    for (const [key, verdict] of lit) {
+      const [from, to] = key.split('|')
+      const line = lineFor(from, to, verdict === 'accept')
+      if (!line) continue
+      out.push({
+        key,
+        d: halfPath(line),
+        verdict,
+        // Full width for the answer, whatever the volume: the filter is
+        // not a traffic reading, it is "this is the one you asked about".
+        width: verdict === 'accept' ? 2.6 : 2.4,
+        stop: verdict === 'refused' ? deathPoint(line) : null,
+        ring: verdict === 'accept' && traceOn ? ringPoint(line) : null,
+      })
+    }
+    return out
+  })
+
+  /** Where a refused trace stopped: the ✕ on the router's edge. */
+  const traceStop = $derived(traceOn ? (litHalves.find((h) => h.stop)?.stop ?? null) : null)
+  const traceRing = $derived(traceOn ? (litHalves.find((h) => h.ring)?.ring ?? null) : null)
+
+  /** A point on a cubic at t -- de Casteljau again, the one place a
+   * door's posts are placed from. */
+  function bezAt(c: [Pt, Pt, Pt, Pt], t: number): Pt {
+    const u = 1 - t
+    return {
+      x: u * u * u * c[0].x + 3 * u * u * t * c[1].x + 3 * u * t * t * c[2].x + t * t * t * c[3].x,
+      y: u * u * u * c[0].y + 3 * u * u * t * c[1].y + 3 * u * t * t * c[2].y + t * t * t * c[3].y,
+    }
+  }
+
+  interface DrawnDoor {
+    key: string
+    label: string
+    action: string
+    who: string
+    accepts: boolean
+    /** The two posts, the leaf or bar between them, and the label. */
+    posts: string
+    leaf: string
+    lx: number
+    ly: number
+    anchor: 'start' | 'end'
+    /** The direction the door sits on, so an unused rib can be told
+     * apart from an off-filter one and dimmed less (round 53). */
+    half: string
+    /** The rib itself, where nothing else on the map draws it. */
+    guide: string | null
+  }
+
+  const DOOR_T = 0.46
+  const DOOR_W = 8
+
+  /** Every direction the unfiltered map already draws a line for. A
+   * door whose own direction is not in here has no rib under it -- the
+   * pair was never observed and no coverage half covers it -- so the
+   * door draws its own faint guide, in the dim grey rather than in any
+   * verdict ink: it is where a rule sits, not where anything went. */
+  const drawnHalfKeys = $derived(
+    new Set([...drawnReality.drawn.map((d) => d.r.key), ...drawnCoverage.drawn.map((d) => d.edge.key)]),
+  )
+
+  /**
+   * The doors: every pushed rule that names the selected port, drawn as
+   * two posts across the rib where the rule sits -- the leaf swung open
+   * for accept, a bar across for anything that refuses.
+   *
+   * Policy, never traffic. A door on a rib nobody used still draws, and
+   * that rib dims less than the rest, because knowing where a door is
+   * open even when unused is the point of interrogating a port (owner,
+   * 2026-09-08).
+   */
+  const drawnDoors = $derived.by((): DrawnDoor[] => {
+    if (!portOn) return []
+    const out: DrawnDoor[] = []
+    for (const door of portFilterState.placedDoors) {
+      const half = doorHalf(door)
+      if (!half) continue
+      const line = lineFor(half.from, half.to, true)
+      if (!line) continue
+      const c = halfCubic(line)
+      if (!c) continue
+      const p = bezAt(c, DOOR_T)
+      const q = bezAt(c, Math.min(1, DOOR_T + 0.02))
+      const len = Math.hypot(q.x - p.x, q.y - p.y) || 1
+      const tx = (q.x - p.x) / len
+      const ty = (q.y - p.y) / len
+      const nx = -ty
+      const ny = tx
+      const a = { x: p.x + nx * DOOR_W, y: p.y + ny * DOOR_W }
+      const b = { x: p.x - nx * DOOR_W, y: p.y - ny * DOOR_W }
+      const accepts = doorAccepts(door)
+      // The label sits off the posts on whichever side has more room --
+      // away from the router, which is where the cards are not.
+      const side = p.x < WAIST.x ? -1 : 1
+      out.push({
+        key: `${door.device}#${door.ordinal}`,
+        label: door.label,
+        action: door.action,
+        who: door.who,
+        accepts,
+        posts:
+          `M ${R2(a.x - tx * 4)} ${R2(a.y - ty * 4)} L ${R2(a.x + tx * 4)} ${R2(a.y + ty * 4)}` +
+          ` M ${R2(b.x - tx * 4)} ${R2(b.y - ty * 4)} L ${R2(b.x + tx * 4)} ${R2(b.y + ty * 4)}`,
+        leaf: accepts
+          ? `M ${R2(a.x)} ${R2(a.y)} L ${R2(a.x - nx * 7 + tx * 9)} ${R2(a.y - ny * 7 + ty * 9)}`
+          : `M ${R2(a.x)} ${R2(a.y)} L ${R2(b.x)} ${R2(b.y)}`,
+        lx: R2(p.x + nx * (DOOR_W + 8) * side),
+        ly: R2(p.y + ny * (DOOR_W + 8) * side + 3),
+        anchor: nx * side < 0 ? 'end' : 'start',
+        half: ribKey(half.from, half.to),
+        guide: drawnHalfKeys.has(ribKey(half.from, half.to)) ? null : halfPath(line),
+      })
+    }
+    return out
+  })
+
+  /** The directions carrying a door -- dimmed less than the rest. */
+  const doorHalves = $derived(new Set(drawnDoors.map((d) => d.half)))
+
+  /** How dim an off-filter direction is drawn. Never removed: the
+   * answer is read against the whole network. */
+  function dimFor(key: string): number {
+    if (!filterOn) return 1
+    if (lit.has(key)) return 1
+    return doorHalves.has(key) ? 0.6 : 0.4
+  }
+
+  /** The addresses the filter lights: the hosts on the port, or the two
+   * ends of the traced line. */
+  const litHosts = $derived.by((): Set<string> => {
+    if (portOn) return portFilterState.hostIps
+    const e = mapTraceState.event
+    if (!e) return new Set<string>()
+    return new Set([e.srcIp, e.dstIp].filter((ip): ip is string => !!ip))
+  })
+
+  /** The lane card's line under a filter: `2 of 12 hosts on 445/tcp`
+   * for the port, and the traced end's own tally for the trace
+   * (`cam-porch · 14× today`, `tom-desktop · never reached`). */
+  function filterTally(row: HostRow): string | null {
+    if (portOn) {
+      const on = row.dots.filter((d) => litHosts.has(d.ip)).length + hiddenLitHosts(row)
+      return zoneTally(on, row.total, portFilterState.label)
+    }
+    const e = mapTraceState.event
+    if (!e) return null
+    if (e.srcIp && row.dots.some((d) => d.ip === e.srcIp)) {
+      return `${e.srcHostName || e.srcIp} · ${mapTraceState.srcSeen}× in the window`
+    }
+    if (e.dstIp && row.dots.some((d) => d.ip === e.dstIp)) {
+      const name = e.dstHostName || e.dstIp
+      return mapTraceState.dstReached > 0
+        ? `${name} · reached ${mapTraceState.dstReached}×`
+        : `${name} · never reached`
+    }
+    return null
+  }
+
+  /** Hosts on the port that this lane has but the card does not draw --
+   * the `+N` overflow. Counted so the tally is about the lane, not
+   * about the ten dots that happened to fit. */
+  function hiddenLitHosts(row: HostRow): number {
+    return row.hidden.filter((d) => litHosts.has(d.ip)).length
+  }
+
+  /** Whether a lane card has anything the filter is about. A card with
+   * nothing on the port dims whole -- it is still there, it just has no
+   * part in the answer. */
+  function laneInFilter(z: ZoneInfo, row: HostRow): boolean {
+    if (!filterOn) return true
+    if (row.dots.some((d) => litHosts.has(d.ip)) || hiddenLitHosts(row) > 0) return true
+    for (const key of lit.keys()) {
+      const [from, to] = key.split('|')
+      if (from === z.id || to === z.id) return true
+    }
+    return [...doorHalves].some((key) => key.split('|').includes(z.id))
+  }
+
+  /** The one line under the map when the window carried nothing on the
+   * port -- a sentence, not an empty state. The door is still drawn. */
+  const nothingSeenNote = $derived(
+    portFilterState.nothingSeen ? emptyNote(portFilterState.label, portFilterState.doors) : null,
+  )
+
+  /** The trace's chip beside the router: the router's own decision. */
+  const traceChip = $derived.by((): { verdict: string; rule: string; path: string } | null => {
+    const e = mapTraceState.event
+    if (!mapTraceState.request) return null
+    if (!e) return null
+    const rule = e.ruleName || e.ruleLabel || 'no rule named'
+    const verdict =
+      mapTraceState.verdict === 'accepted'
+        ? `✓ ACCEPTED · ${rule}`
+        : mapTraceState.verdict === 'refused'
+          ? `✕ REFUSED · ${rule}`
+          : `· ${rule}`
+    const proto = (e.protocol ?? '').toLowerCase()
+    const port = e.dstPort ? `${e.dstPort}/${proto || '?'}` : proto
+    // NAT where the router said it translated, and nothing where it did
+    // not: an absent translation is not a translation to nowhere.
+    const nat = e.natIp ? `${e.chain ?? 'nat'} → ${e.natIp}${e.natPort ? `:${e.natPort}` : ''} · ` : ''
+    const path = `in: ${e.inInterface || '—'} → out: ${e.outInterface || '—'} · ${nat}${port} · ${formatHM(e.time)}`
+    return { verdict, rule, path }
+  })
+
+  /** The ghost: the rib the refused line would have taken, dashed, with
+   * the note beside it. Drawn from the destination's own lane, and only
+   * where the map has one -- an address in no drawn zone gets no ghost
+   * rather than a guessed one. */
+  const traceGhost = $derived.by((): { d: string; at: Pt; text: string } | null => {
+    const e = mapTraceState.event
+    if (!traceOn || mapTraceState.verdict !== 'refused' || !e?.dstIp || !e.inInterface) return null
+    const zone = zones.find((z) => {
+      if (z.hosts.some((h) => h.ip === e.dstIp)) return true
+      if (!z.cidr) return false
+      const cidr = parseCidr(z.cidr)
+      return cidr ? addressInCidr(e.dstIp ?? '', cidr) : false
+    })
+    if (!zone || zone.id === e.inInterface) return null
+    const line = lineFor(zone.id, e.inInterface, true)
+    if (!line) return null
+    // Over the card it names, in the slot the lane's service list uses
+    // (and vacates under a filter). Anywhere on the ghost's own curve
+    // puts a long note across the dashes it annotates, which is the one
+    // place a label must not be; over the card, it reads as being about
+    // that card, which it is.
+    const i = zones.findIndex((z) => z.id === zone.id)
+    const text = `would have reached ${e.dstHostName || e.dstIp} · never left the router`
+    // Kept inside the nominal frame: the leftmost lane is close enough
+    // to the edge that a note centred on it runs off it, and the frame
+    // grows for nodes, not for labels.
+    const halfW = text.length * 2.9
+    return {
+      d: halfPath(line),
+      at: { x: Math.min(Math.max(laneX(i, zones.length), halfW + 12), 1400 - halfW - 12), y: 470 },
+      text,
+    }
+  })
+
+  /** Opening one filter closes the other, and both close the reach:
+   * three answers layered on one map would leave nobody able to say
+   * which of them a dim rib was dim because of. */
+  async function openPortPicker() {
+    mapTraceState.clear()
+    await portFilterState.openPicker()
+  }
+
+  /** What the callout asks for: the pair it names, exactly. A pair the
+   * router logged with no out-interface says so (`noOut`) rather than
+   * leaving it unset -- unset means "any", and the trace would then be
+   * free to land on a newer line that *did* leave the router, which is a
+   * different thing from the one the card is about. */
+  function traceAsk(r: RealityEdge, asked: { port: number; proto: string } | undefined) {
+    return {
+      in: r.from,
+      out: r.to === '' ? undefined : r.to,
+      noOut: r.to === '' ? true : undefined,
+      port: asked?.port,
+      proto: asked?.proto,
+    }
+  }
+
+  function openTrace(req: Parameters<typeof mapTraceState.open>[0]) {
+    portFilterState.clear()
+    if (reach) surface()
+    void mapTraceState.open(req)
+  }
+
+  /** The picker's text field: enter applies the list, and a list that
+   * cannot be read whole is refused rather than half-applied. */
+  async function applyTypedPorts() {
+    const parsed = parsePortList(portFilterState.typed)
+    if (parsed === null) {
+      portFilterState.typedBad = true
+      return
+    }
+    portFilterState.typedBad = false
+    await portFilterState.setPorts(parsed)
+  }
+
+  /** #1018's cross-page handoff: a stream row names an event and flips
+   * to this view. Read and cleared on arrival, whether that is this
+   * component's own mount or the instant the slot changes under an
+   * already-mounted tab -- the same one-shot idiom pendingDescend uses. */
+  $effect(() => {
+    const pending = topologyNavState.pendingTrace
+    if (!pending) return
+    topologyNavState.pendingTrace = null
+    openTrace(pending)
+  })
 </script>
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
@@ -3667,6 +4086,96 @@
           </div>
         {/if}
       {/if}
+    </div>
+  {/if}
+  <!-- The traced line's own crumb (#1018, round 53): the whole story in
+       one line at the top of the map -- who → who, the port, the
+       verdict and the rule that made it, and how many more lines like
+       it there are. The others are said, never drawn: a union of forty
+       identical refusals is a smear, not an answer (owner, 2026-09-08).
+       Same shape and same wording grammar as the reach's crumb above,
+       so the two read as one product. -->
+  {#if traceOn}
+    <div class="crumb trace-crumb" aria-label="The traced line">
+      <div class="path">
+        {#if mapTraceState.loading}
+          <span class="here">tracing…</span>
+        {:else if mapTraceState.event}
+          {@const e = mapTraceState.event}
+          <span class="here">{e.srcHostName || e.srcIp || 'unknown'}</span>
+          {#if e.srcHostName && e.srcIp}<span class="ip">{e.srcIp}</span>{/if}
+          <span aria-hidden="true">→</span>
+          <span class="here">{e.dstHostName || e.dstIp || 'unknown'}</span>
+          {#if e.dstHostName && e.dstIp}<span class="ip">{e.dstIp}</span>{/if}
+          <i class="bar"></i>
+          <!-- RouterOS logs the protocol in caps; every other port label
+               on this map (the pill, the door, the reach's card) reads
+               `445/tcp`, so this one does too. -->
+          {#if e.dstPort}<span>{e.dstPort}/{(e.protocol ?? '?').toLowerCase()}</span>{/if}
+          <span class:alarm={mapTraceState.verdict === 'refused'}>
+            {mapTraceState.verdict === 'refused' ? 'refused' : mapTraceState.verdict === 'accepted' ? 'accepted' : 'logged'}
+            at {e.ruleName || e.ruleLabel || 'no rule named'}
+          </span>
+          <span>{formatHM(e.time)}</span>
+          {#if mapTraceState.like > 0}
+            <i class="bar"></i>
+            <!-- The others are a click into the stream, not a drawing:
+                 "and 41 more like it", never a union on the map. -->
+            <button
+              class="crumb-link"
+              onclick={() => {
+                appState.resetFilters()
+                if (e.srcIp) appState.setFilter('srcQuery', e.srcIp)
+                if (e.dstIp) appState.setFilter('dstQuery', e.dstIp)
+                if (e.dstPort) appState.setFilter('port', String(e.dstPort))
+                appState.view = 'live'
+              }}>and <b>{mapTraceState.like} more like it</b> ▸</button
+            >
+          {/if}
+        {:else}
+          <!-- An honest miss: the window holds nothing matching, said in
+               words rather than drawn as a path that went nowhere. -->
+          <span class="here">nothing in the window matches that line</span>
+        {/if}
+        <i class="bar"></i>
+        <button class="crumb-link esc" onclick={() => mapTraceState.clear()}>Esc ▸</button>
+      </div>
+    </div>
+  {/if}
+  <!-- Both tools swap the legend for their own entries (round 53's
+       `chrome`). The map carries no legend of its own -- round 49
+       decided the material is the statement -- so this appears with a
+       filter and goes with it, which is also the rule #981 set for the
+       flag and watch marks: something always there is easy to ignore. -->
+  {#if filterOn}
+    <div class="map-legend" aria-label="What this filter's colours mean">
+      <span><i class="sw ok"></i>accepted</span>
+      <span><i class="sw al"></i>refused</span>
+      {#if portOn}
+        <span>
+          <svg width="14" height="11" aria-hidden="true"
+            ><path d="M2 1V10M12 1V10" stroke="var(--accept)" stroke-width="1.5" stroke-linecap="round" /><path
+              d="M2 1L8 5.5"
+              stroke="var(--accept)"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            /></svg
+          >door open</span
+        >
+        <span>
+          <svg width="14" height="11" aria-hidden="true"
+            ><path d="M2 1V10M12 1V10" stroke="var(--alarm)" stroke-width="1.5" stroke-linecap="round" /><path
+              d="M2 5.5H12"
+              stroke="var(--alarm)"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            /></svg
+          >door shut</span
+        >
+      {:else if traceGhost}
+        <span><i class="sw ghost"></i>would have gone</span>
+      {/if}
+      <span><i class="sw off"></i>off the {portOn ? 'port' : 'line'}</span>
     </div>
   {/if}
   <!-- The health dials (#648, rounds 19-20; repositioned #682 clear of
@@ -3854,6 +4363,79 @@
        data rather than switched on. The off-baseline tally stays -- it
        is a count, not a control. -->
   <div class="pills" role="group" aria-label="Map overlays">
+    {#if cityStop === null}
+    <!-- The port pill (#1018, round 53), bottom-left where round 49's
+         two lens pills were before #981 retired them. Three shapes and
+         no other surface: idle it is `⌕ port`; clicking opens it into a
+         bar of the same shape -- chips for the ports seen or named in
+         the window, a field for a typed list, then tcp / udp; and with
+         something selected it collapses onto the answer. No Show
+         button: the map filters as the selection changes (owner,
+         2026-09-08, "it loads automatically"). -->
+    {#if portFilterState.open}
+      <div
+        class="pill p edit"
+        role="group"
+        aria-label="Pick ports — click to select, several at once; or type a list and press enter"
+      >
+        <span aria-hidden="true">⌕</span>
+        <span class="ports" role="group" aria-label="Ports seen or named in the window">
+          {#each portFilterState.candidates as c (c.port)}
+            <button
+              class="chip"
+              class:on={portFilterState.ports.includes(c.port)}
+              aria-pressed={portFilterState.ports.includes(c.port)}
+              title={c.count > 0
+                ? `${c.count} line${c.count === 1 ? '' : 's'} on ${c.port}/${[...new Set(c.protos)].join(' and ')} in the window${c.named ? ' — and a pushed rule names it' : ''}`
+                : `nothing logged on ${c.port} in the window — a pushed rule names it`}
+              onclick={() => portFilterState.togglePort(c.port)}>{c.port}</button
+            >
+          {/each}
+          {#if portFilterState.candidates.length === 0}
+            <span class="chip-none">no ports seen or named yet</span>
+          {/if}
+        </span>
+        <input
+          class="typed"
+          class:bad={portFilterState.typedBad}
+          bind:value={portFilterState.typed}
+          placeholder="22,23 ↵"
+          aria-label="Or type ports, comma separated, and press enter"
+          aria-invalid={portFilterState.typedBad}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              applyTypedPorts()
+            }
+          }}
+        />
+        <span class="bar"></span>
+        <span class="seg" role="group" aria-label="Protocol">
+          {#each ['tcp', 'udp'] as const as pr (pr)}
+            <button
+              class="chip"
+              class:on={portFilterState.proto === pr}
+              aria-pressed={portFilterState.proto === pr}
+              onclick={() => portFilterState.setProto(portFilterState.proto === pr ? '' : pr)}>{pr}</button
+            >
+          {/each}
+        </span>
+      </div>
+      {#if portOn}
+        <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
+      {/if}
+    {:else if portOn}
+      <button
+        class="pill p on"
+        aria-pressed="true"
+        title="filtered to {portFilterState.label} — click to change, ✕ to clear"
+        onclick={openPortPicker}>⌕ <b>{portFilterState.label}</b> <em>· {portFilterState.summary}</em></button
+      >
+      <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
+    {:else}
+      <button class="pill p" aria-pressed="false" aria-expanded="false" onclick={openPortPicker}>⌕ port</button>
+    {/if}
+    {/if}
     <!-- `⟡ off-baseline today · N`, ahead of the ⚑ count, in the accept
          ink (round-49/index.html's `chrome`, the `.nmk` mark, and
          DESIGN.md's own wording with the separator). Not a control: it
@@ -3986,7 +4568,18 @@
         >
           <title>{coverageLabel(d.edge)}</title>
           <path class="edge-hit" d={halfPath(d.line)} />
-          <path class="cedge" class:dark={d.cov === 'dark'} class:quiet={d.cov === 'quiet'} d={halfPath(d.line)} />
+          <!-- Under a filter every direction that is not the answer
+               becomes one thin grey line, and a direction carrying a
+               door recedes less than the rest (#1018). Nothing is
+               removed: the answer is read against the whole map. -->
+          <path
+            class="cedge"
+            class:dark={d.cov === 'dark'}
+            class:quiet={d.cov === 'quiet'}
+            class:port-off={filterOn}
+            d={halfPath(d.line)}
+            style:opacity={filterOn ? dimFor(d.edge.key) : undefined}
+          />
         </g>
       {/each}
 
@@ -4063,17 +4656,23 @@
             >
               <title>{realityLabel(d.r)}</title>
               <path class="edge-hit" d={whole ? edgePath(d.line) : halfPath(d.line)} />
+              <!-- Under a filter this keeps its own curve and loses its
+                   verdict ink: one thin grey line, dimmed, never taken
+                   off the map (#1018). The lit layer further down draws
+                   the answer over it, on the same curve. -->
               <path
                 class="redge"
-                class:alarm={whole}
+                class:alarm={whole && !filterOn}
                 class:dropped={!whole && d.r.accepts === 0}
                 class:established={est}
-                class:offbase={nb}
+                class:offbase={nb && !filterOn}
+                class:port-off={filterOn}
                 d={whole ? edgePath(d.line) : halfPath(d.line)}
-                style:stroke-width="{est ? Math.max(1, realityWidth(d.r) * 0.6) : realityWidth(d.r)}px"
-                style:stroke={whole ? undefined : verdictInk(d.r)}
+                style:stroke-width="{filterOn ? 1.4 : est ? Math.max(1, realityWidth(d.r) * 0.6) : realityWidth(d.r)}px"
+                style:stroke={filterOn ? 'var(--fg-muted)' : whole ? undefined : verdictInk(d.r)}
+                style:opacity={filterOn ? dimFor(d.r.key) : undefined}
               />
-              {#if nb}
+              {#if nb && !filterOn}
                 {@const rp = ringPoint(d.line)}
                 <!-- The flow: dashes travelling the way the traffic ran, so
                      the bright half reads as something happening now rather
@@ -4088,7 +4687,7 @@
                   <circle class="nb-ring" cx={R2(rp.x)} cy={R2(rp.y)} r="6" />
                 {/if}
               {/if}
-              {#if d.r.drops > 0}
+              {#if d.r.drops > 0 && !filterOn}
                 {@const bar = edgeBarAt(d.line)}
                 <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
                   <line class="edge-bar" class:alarm-bar={whole} x1="-7" y1="0" x2="7" y2="0" />
@@ -4096,6 +4695,65 @@
               {/if}
             </g>
           {/if}
+        {/each}
+
+        <!-- The lit layer (#1018): what the filter in force is about,
+             drawn over the dimmed map on the same curves rather than
+             instead of them, so a rib that is both drawn and lit cannot
+             end up with two geometries that disagree. Full width in the
+             verdict's own ink -- the filter is not a volume reading, it
+             is "this is the one you asked about" -- with the flow moving
+             on an accepted half, as everywhere else. -->
+        {#each litHalves as h (h.key)}
+          <g class="lit-g">
+            <path
+              class="lit-half"
+              class:refused={h.verdict === 'refused'}
+              d={h.d}
+              style:stroke-width="{h.width}px"
+            />
+            {#if h.verdict === 'accept'}
+              <path class="flow lit-flow" d={h.d} style:stroke-width="{Math.max(1.1, h.width * 0.45)}px" />
+            {/if}
+          </g>
+        {/each}
+        <!-- The rib a refused line would have taken, dashed, with the
+             note beside it. Never a solid line: nothing travelled it,
+             and the whole reason it is dashed is that the router's log
+             ends at the router. -->
+        {#if traceGhost}
+          <path class="trace-ghost" d={traceGhost.d} />
+          <text class="trace-note" x={R2(traceGhost.at.x)} y={R2(traceGhost.at.y)} text-anchor="middle"
+            >{traceGhost.text}</text
+          >
+        {/if}
+        <!-- Where a refused line stopped, and where an accepted one
+             arrived. -->
+        {#if traceStop}
+          <g class="trace-stop" transform="translate({R2(traceStop.x)} {R2(traceStop.y)})">
+            <circle r="9" fill="none" stroke="var(--alarm)" stroke-opacity="0.5" />
+            <path d="M-5 -5L5 5M-5 5L5 -5" stroke="var(--alarm)" stroke-width="2.2" stroke-linecap="round" />
+          </g>
+        {/if}
+        {#if traceRing}
+          <circle class="nb-ring trace-ring" cx={R2(traceRing.x)} cy={R2(traceRing.y)} r="7" />
+        {/if}
+        <!-- The doors (#1018): every pushed rule that names the selected
+             port, seen or not. Two posts across the rib where the rule
+             sits, the leaf swung open for accept and a bar across for a
+             refusal. Not traffic and never counted as any. -->
+        {#each drawnDoors as door (door.key)}
+          <g class="door" class:shut={!door.accepts}>
+            <title>{door.label} · {door.who} — a pushed rule names this port here</title>
+            {#if door.guide}
+              <path class="door-guide" d={door.guide} />
+            {/if}
+            <path class="door-post" d={door.posts} />
+            <path class="door-post" d={door.leaf} />
+            <text class="door-t" x={door.lx} y={door.ly} text-anchor={door.anchor}
+              >{door.label} <tspan class="door-act">{door.accepts ? 'accept' : door.action}</tspan></text
+            >
+          </g>
         {/each}
 
         <!-- The second delta: intent nothing arrived to fill. -->
@@ -4114,7 +4772,7 @@
                at full width over a plate 12 wide, saying a second time
                what the card below already says (#897 item 2). A silent
                direction skips its empty label the same way. -->
-          {#if d !== worstUnplanned && !silentDir(d.r.key)}
+          {#if d !== worstUnplanned && !silentDir(d.r.key) && !filterOn}
             {@const badge = trafficBadges[di]}
             <g
               class="detail"
@@ -4153,7 +4811,7 @@
              reality plate already does, and where the mockup's own
              drawer ultimately led. Only the middle layer is missing
              (Fable 5, #715 item 4; the finding is on the issue). -->
-        {#if worstUnplanned && worstUnplannedCard}
+        {#if worstUnplanned && worstUnplannedCard && !filterOn}
           {@const c = worstUnplannedCard}
           {@const [line1, line2] = cardLines(worstUnplanned.r)}
           <g
@@ -4181,8 +4839,53 @@
             <text class="alarm-t" x={c.x - c.w / 2 + CARD_PAD} y={c.y + 6}>{line1}</text>
             <text class="chip-t" x={c.x - c.w / 2 + CARD_PAD} y={c.y + 20}>{line2}</text>
           </g>
+          <!-- The trace opens from the flag's own chip (#1018, round
+               53). A token on the card, not a sentence: `trace ▸`, the
+               same `▸` grammar every other action on this map uses. It
+               takes its own click back from the card, which opens the
+               stream. -->
+          {@const asked = worstUnplanned.r.topAsked[0]}
+          <g
+            class="detail uc-trace"
+            role="button"
+            tabindex="0"
+            aria-label="Trace one of these lines on the map"
+            onclick={(e) => {
+              e.stopPropagation()
+              openTrace(traceAsk(worstUnplanned.r, asked))
+            }}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                openTrace(traceAsk(worstUnplanned.r, asked))
+              }
+            }}
+          >
+            <text class="uc-trace-t" x={c.x + c.w / 2 - CARD_PAD} y={c.y + 20} text-anchor="end">trace ▸</text>
+          </g>
         {/if}
-        {#each ghostIntents as g, gi (g.edge.key)}
+        <!-- The router's own decision, beside the router (#1018): what
+             it did, which rule did it, the two lanes and the NAT. The
+             leader joins it to the waist card so it reads as the
+             router's answer rather than a floating note. -->
+        {#if traceChip}
+          <!-- Accepted green, refused red, and neither for a log, mark
+               or NAT line: those say which kind of rule logged the
+               packet, not whether it passed, so the chip takes the
+               page's own ink rather than picking a verdict for them. -->
+          <g
+            class="detail trace-chip"
+            class:refused={mapTraceState.verdict === 'refused'}
+            class:unjudged={!mapTraceState.verdict}
+          >
+            <rect x="308" y="234" width="248" height="42" rx="9" />
+            <text class="alarm-t chip-verdict" x="320" y="252">{traceChip.verdict}</text>
+            <text class="chip-t" x="320" y="267">{traceChip.path}</text>
+            <path class="trace-leader" d="M556 254 L 572 258" />
+          </g>
+        {/if}
+        {#each filterOn ? [] : ghostIntents as g, gi (g.edge.key)}
           {@const badge = trafficBadges[drawnReality.drawn.length + gi]}
           <g class="detail">
             <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
@@ -4215,7 +4918,7 @@
           {:else}
             <text x="-82" y="14" class="n-sub">no public traffic observed yet</text>
           {/if}
-          {#if internetAggregate}
+          {#if internetAggregate && !filterOn}
             {@render aggregateBar(internetAggregate, -100, 200, 34, 16, { id: zonesState.wanInterface ?? '', name: 'the internet' })}
           {/if}
         </g>
@@ -4261,7 +4964,7 @@
             {#if t.state === 'down' || t.state === 'unknown'}
               <text x="54" y="-4" class="n-cov {t.covClass}">{t.stateLabel}</text>
             {/if}
-            {#if t.aggregate}
+            {#if t.aggregate && !filterOn}
               {@render aggregateBar(t.aggregate, -84, 188, 32, 16, { id: t.iface, name: t.iface })}
             {/if}
           </g>
@@ -4319,9 +5022,13 @@
         {@const agg = zoneAggregate(z)}
         {@const row = laneHostRow(z)}
         {@const ink = LANE_INKS[i % LANE_INKS.length]}
+        <!-- Under a filter a lane with nothing in the answer recedes
+             whole (#1018): still drawn, still clickable, simply not part
+             of what was asked. -->
         <g
           transform="translate({laneX(i, zones.length)} 490)"
           class="zone"
+          class:lane-off={filterOn && !laneInFilter(z, row)}
           role="button"
           tabindex="0"
           data-zone={z.id}
@@ -4374,8 +5081,14 @@
                 {#each row.dots as d, di (d.key)}
                   {@const w = nodeWarnings(d.ip)}
                   {@const dotNb = hostOffBaseline(d.ip)}
+                  <!-- Under a filter only the hosts in the answer stay
+                       lit; the rest recede without leaving the card
+                       (#1018). A dot is never removed -- "2 of 12" is a
+                       statement about twelve hosts, and the twelve have
+                       to still be there for it to be one. -->
                   <g
                     class="hot"
+                    class:dot-off={filterOn && !litHosts.has(d.ip)}
                     role="button"
                     tabindex="0"
                     aria-label="{hostDotLabel(d)} — open its reach"
@@ -4453,7 +5166,14 @@
               </g>
               <!-- The count line: how many hosts the lane has, and how
                    many of them are not being heard from. -->
-              <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally">{hostTally(row)}</text>
+              <!-- Under a filter this says what the filter is about --
+                   `2 of 12 hosts on 445/tcp`, or the traced end's own
+                   tally -- and goes back to the presence count when the
+                   filter clears. -->
+              {@const tally = filterOn ? filterTally(row) : null}
+              <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally" class:filter-tally={!!tally}
+                >{tally ?? hostTally(row)}</text
+              >
             {/if}
             <!-- Round 49: the card says `name · subnet` and stops.
                  LOGGED / DARK / COVERED are gone from it -- the ribs
@@ -4477,7 +5197,7 @@
                  mockup draws it nowhere, so it is off (#715 item 9). The
                  count itself stays: `zones.svelte.ts:161` sorts the lane row
                  by it, so it is load-bearing data, not dead code. -->
-            {#if agg}
+            {#if agg && !filterOn}
               <!-- Flush with the card and 16 tall (#699; round 30's
                    `translate(-108 110)` at 216x16, the-whole.html:
                    1009-1015). The old 188x12 floated inset under a
@@ -4496,7 +5216,10 @@
       <g class="svc">
         {#each zones as z, i (z.id)}
           {@const svc = laneServices(z)}
-          {#if svc}
+          <!-- Silent under a filter: this lane's busiest ports are a
+               different question from the one being asked, and two port
+               answers on one card is the map saying two things at once. -->
+          {#if svc && !filterOn}
             <!-- "Ports floating in the wind" (owner, #723): the port list
                  named nothing it sat above -- a 24-unit gap to the card
                  with no line, no plate, nothing between them. Pulled in
@@ -4624,6 +5347,14 @@
           {/if}
         {/each}
       </g>
+
+      <!-- Nothing seen on the port is one line under the map, not an
+           empty state (#1018, round 53). The map is not broken and the
+           doors above are still drawn; this says why it looks quiet and
+           what policy has to say about the port anyway. -->
+      {#if nothingSeenNote}
+        <text x="700" y="662" text-anchor="middle" class="note-t">{nothingSeenNote}</text>
+      {/if}
 
       {#if zones.length === 0}
         <!-- The honest empty state: the place before the data. -->
@@ -7087,9 +7818,15 @@
     font-size: 10px;
   }
 
+  /* Round 30 strokes this `var(--ink-2)` (the-whole.html's `.chip-t`);
+     the port dropped the fill, and SVG's own default is black -- so the
+     unplanned callout's second line, `caught by #17 default drop · 14×
+     · open ▸`, has been drawn in black on a black map. Found while
+     building #1018's own chip, which uses the same class. */
   .chip-t {
     font-family: var(--font-mono);
     font-size: 9px;
+    fill: var(--fg-muted);
   }
 
   .alarm-t {
@@ -7902,5 +8639,377 @@
 
   .nc-act:hover {
     border-color: var(--accent);
+  }
+
+  /* --- the two filters (#1018, round 53) --------------------------------- */
+  /* The port pill, bottom-left where round 49's lens pills were: one
+     shape in three states, ported from round-53/index.html's `.pill.p`,
+     `.pill.p.on` and `.pill.p.edit`. */
+  .pill {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    padding: 3px 11px 3px 9px;
+    border: 1px solid var(--hair-2);
+    border-radius: 999px;
+    background: transparent;
+    font: 600 10.5px var(--font-mono);
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .pill:hover {
+    border-color: var(--fg-dim);
+  }
+
+  .pill.p.on {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+
+  .pill.p.on b {
+    color: var(--fg);
+  }
+
+  .pill.p.on em {
+    font-style: normal;
+    color: var(--fg-dim);
+    margin-left: 4px;
+  }
+
+  /* The ✕ is its own control, not a hot corner of the pill: clearing a
+     filter and changing it are different intentions, and one target
+     doing both is the misclick nobody notices they made. */
+  .pill-x {
+    align-self: center;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    color: var(--fg-dim);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .pill-x:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  /* Open, the pill becomes a bar of the same shape (owner, 2026-09-08:
+     "make it look more like the bar" -- "click and select"). No Show
+     button: the map filters as the selection changes. */
+  .pill.p.edit {
+    cursor: default;
+    gap: 0;
+    padding: 3px 10px 3px 9px;
+    color: var(--fg-dim);
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    max-width: min(60vw, 640px);
+  }
+
+  .pill.p.edit .ports,
+  .pill.p.edit .seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .pill.p.edit .ports {
+    margin-left: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .pill.p.edit .chip {
+    background: none;
+    border: 0;
+    padding: 1px 6px;
+    border-radius: 999px;
+    color: var(--fg-dim);
+    font: 600 10.5px var(--font-mono);
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+
+  .pill.p.edit .chip:hover {
+    color: var(--fg-muted);
+  }
+
+  .pill.p.edit .chip.on {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--fg);
+  }
+
+  .pill.p.edit .chip-none {
+    padding: 1px 6px;
+    color: var(--fg-dim);
+    font-style: italic;
+  }
+
+  .pill.p.edit .typed {
+    width: 84px;
+    margin-left: 4px;
+    background: transparent;
+    border: 0;
+    padding: 1px 4px;
+    font: 600 10.5px var(--font-mono);
+    letter-spacing: 0.04em;
+    color: var(--fg);
+    outline: none;
+  }
+
+  .pill.p.edit .typed::placeholder {
+    color: var(--fg-dim);
+    opacity: 0.7;
+    font-weight: 400;
+  }
+
+  /* A list that cannot be read whole is refused, and says so where it
+     was typed rather than by quietly filtering to half of it. */
+  .pill.p.edit .typed.bad {
+    color: var(--alarm);
+    box-shadow: inset 0 -1px 0 var(--alarm);
+  }
+
+  .pill.p.edit .bar {
+    width: 1px;
+    height: 12px;
+    background: var(--hair-2);
+    margin: 0 8px;
+  }
+
+  /* Both tools swap the legend for their own entries, and the map has
+     none otherwise: round 49 ruled the material is the statement. */
+  .map-legend {
+    position: absolute;
+    bottom: 13px;
+    right: 24px;
+    z-index: 2;
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    font: 9.5px var(--font-mono);
+    color: var(--fg-dim);
+    letter-spacing: 0.02em;
+    pointer-events: none;
+  }
+
+  .map-legend span {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+  }
+
+  .map-legend i.sw {
+    width: 14px;
+    height: 3px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+
+  .map-legend i.sw.ok {
+    background: var(--accept);
+    opacity: 0.85;
+  }
+
+  .map-legend i.sw.al {
+    background: var(--alarm);
+  }
+
+  .map-legend i.sw.ghost {
+    background: repeating-linear-gradient(90deg, var(--fg-dim) 0 2px, transparent 2px 5px);
+    opacity: 0.8;
+  }
+
+  .map-legend i.sw.off {
+    background: var(--fg-muted);
+    opacity: 0.5;
+  }
+
+  /* The lit layer: full width in the verdict's own ink. Not a volume
+     reading -- this is "the one you asked about". */
+  .lit-half {
+    fill: none;
+    stroke: var(--accept);
+    stroke-linecap: round;
+    opacity: 0.85;
+  }
+
+  .lit-half.refused {
+    stroke: var(--alarm);
+    opacity: 0.8;
+    filter: drop-shadow(0 0 5px color-mix(in srgb, var(--alarm) 40%, transparent));
+  }
+
+  .lit-flow {
+    fill: none;
+    stroke: var(--accept);
+    stroke-opacity: 0.9;
+  }
+
+  /* Off the filter: one thin grey line, dimmed, never removed. The
+     opacity itself is inline (dimFor), because a direction carrying a
+     door recedes less than the rest. */
+  .redge.port-off,
+  .cedge.port-off {
+    stroke-dasharray: none;
+    filter: none;
+  }
+
+  .cedge.port-off {
+    stroke: var(--fg-muted);
+  }
+
+  /* A dot not in the answer recedes; it is never taken off the card,
+     because "2 of 12" is a claim about twelve hosts. */
+  .dot-off {
+    opacity: 0.2;
+  }
+
+  .lane-off {
+    opacity: 0.45;
+  }
+
+  .filter-tally {
+    fill: var(--fg-muted);
+  }
+
+  /* The rib a door stands on where the map draws none of its own: the
+     boundary the rule guards, in the dim grey and at the door's own
+     0.6, never in a verdict ink. Policy, and it must never read as a
+     line that happened. */
+  .door-guide {
+    fill: none;
+    stroke: var(--fg-muted);
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    opacity: 0.6;
+  }
+
+  /* A door: two posts across the rib where a rule sits, the leaf swung
+     open for accept and a bar across for a refusal. */
+  .door-post {
+    fill: none;
+    stroke: var(--accept);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+
+  .door.shut .door-post {
+    stroke: var(--alarm);
+  }
+
+  .door-t {
+    font: 600 9px var(--font-mono);
+    fill: var(--fg-dim);
+  }
+
+  .door-act {
+    fill: var(--accept);
+  }
+
+  .door.shut .door-act {
+    fill: var(--alarm);
+  }
+
+  /* The rib a refused line would have taken. Dashed, always: nothing
+     travelled it, and the router's log ends at the router. */
+  .trace-ghost {
+    fill: none;
+    stroke: var(--fg-muted);
+    stroke-width: 1.4;
+    stroke-dasharray: 2 5;
+    stroke-linecap: round;
+    opacity: 0.7;
+  }
+
+  .trace-ring {
+    stroke: var(--accept);
+  }
+
+  /* The ghost's own note. Its own size and ink rather than the
+     "never exercised" badge's `.ghost-t`, which is a modifier on
+     `.edge-badge` and inherits that plate's font -- alone it would take
+     the SVG's 16px default and run off the frame. */
+  .trace-note {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-style: italic;
+    fill: var(--fg-dim);
+  }
+
+  /* The three labels the two filters add sit over lines by design --
+     a door stands on a rib, and the ghost's note runs beside the dashes
+     it is about. Round 53's own device for that is the mockup's
+     `.flat text`: the glyphs are painted over a stroke of the page
+     colour, so whatever runs under them passes behind rather than
+     through. Same numbers as the mockup. */
+  .trace-note,
+  .door-t,
+  .note-t {
+    paint-order: stroke;
+    stroke: var(--bg);
+    stroke-width: 3.4px;
+    stroke-linejoin: round;
+  }
+
+  /* The router's own decision, beside the router. */
+  .trace-chip rect {
+    fill: color-mix(in srgb, var(--accept) 8%, var(--bg-raised));
+    stroke: var(--accept);
+    stroke-opacity: 0.8;
+  }
+
+  .trace-chip.refused rect {
+    fill: color-mix(in srgb, var(--alarm) 8%, var(--bg-raised));
+    stroke: var(--alarm);
+  }
+
+  .trace-chip.unjudged rect {
+    fill: var(--bg-raised);
+    stroke: var(--hair-2);
+  }
+
+  .trace-chip.unjudged .chip-verdict {
+    fill: var(--fg-muted);
+  }
+
+  .trace-chip .chip-verdict {
+    fill: var(--accept);
+  }
+
+  .trace-chip.refused .chip-verdict {
+    fill: var(--alarm);
+  }
+
+  .trace-leader {
+    fill: none;
+    stroke: var(--hair-2);
+    stroke-width: 1;
+  }
+
+  /* Nothing seen: one line under the map, not an empty state. */
+  .note-t {
+    font: 11px var(--font-mono);
+    fill: var(--fg-dim);
+  }
+
+  /* `trace ▸` on the unplanned callout -- a token, not a sentence. */
+  .uc-trace-t {
+    font: 600 10px var(--font-mono);
+    fill: var(--accent);
+    cursor: pointer;
+  }
+
+  .uc-trace:hover .uc-trace-t,
+  .uc-trace:focus-visible .uc-trace-t {
+    text-decoration: underline;
   }
 </style>

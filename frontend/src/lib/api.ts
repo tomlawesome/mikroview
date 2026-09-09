@@ -17,6 +17,7 @@ import type {
   NameProvenance,
   EventsResult,
   Filters,
+  FirewallEvent,
   Flag,
   FlagTimeBucket,
   Healthz,
@@ -1505,4 +1506,134 @@ export async function deleteBaselineExpected(key: string): Promise<string | null
   const res = await deleteJSON(`/api/baseline/${encodeURIComponent(key)}/expected`)
   if (res.ok) return null
   return (await res.text()) || `deleteBaselineExpected: ${res.status}`
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// The two filters on the living topology (#1018, round 53)
+//
+// Appended as its own delimited block for the reason the two blocks
+// above give: this file's other in-flight changes and this one should
+// not land on the same lines.
+// ─────────────────────────────────────────────────────────────────────
+
+// PortCandidate is one chip in the picker. `count` is how many logged
+// lines named the port in the window and `named` whether a pushed
+// filter rule scopes to it -- a port with count 0 and named true is a
+// door nothing has knocked at, which is exactly the thing worth asking
+// about.
+export interface PortCandidate {
+  port: number
+  proto: string
+  count: number
+  named: boolean
+}
+
+// PortRib is one direction of one boundary pair on the selected port.
+// `out` is empty for a line the router logged with no out-interface --
+// the ordinary shape of a forward drop, and the reason the map draws
+// that direction dying at the router rather than reaching anywhere.
+export interface PortRib {
+  in: string
+  out: string
+  events: number
+  accepts: number
+  drops: number
+  refusedBy?: string
+}
+
+export interface PortHost {
+  ip: string
+  name?: string
+  events: number
+  accepts: number
+  drops: number
+}
+
+// PortDoor is a pushed filter rule that *names* the port, seen or not.
+// Policy, never traffic: the map draws it in its own vocabulary (two
+// posts across a rib) so it can never be read as a line that happened.
+export interface PortDoor {
+  device: string
+  label: string
+  ordinal: number
+  action: string
+  chain: string
+  in?: string
+  out?: string
+  dstPort: string
+  who: string
+  comment?: string
+}
+
+export interface PortsResponse {
+  generatedAt: number
+  windowSeconds: number
+  candidates: PortCandidate[]
+  selection?: { ports: number[]; proto: string; label: string }
+  events: number
+  accepts: number
+  drops: number
+  lines: number
+  ribs: PortRib[]
+  hosts: PortHost[]
+  doors: PortDoor[]
+}
+
+// fetchPorts asks where a port is used. With no ports it asks only what
+// the picker should offer, which is the same request the map makes when
+// the pill is first opened.
+export async function fetchPorts(ports: number[], proto: string): Promise<PortsResponse> {
+  const qs = new URLSearchParams()
+  if (ports.length > 0) qs.set('port', ports.join(','))
+  if (proto) qs.set('proto', proto)
+  const res = await fetch(`/api/ports${qs.size > 0 ? `?${qs}` : ''}`)
+  if (!res.ok) throw new ApiError(`fetchPorts: ${res.status}`, res.status)
+  return res.json()
+}
+
+// TraceRequest names the one line to trace. Either form resolves to one
+// event server-side: `event` where the caller holds an id (a stream
+// row), and the pair/port where it does not (the map's own unplanned
+// callout, which is a rolled-up pair rather than a single line).
+export interface TraceRequest {
+  event?: number
+  in?: string
+  out?: string
+  port?: number
+  proto?: string
+  src?: string
+  dst?: string
+  // noOut asks for a line that never reached an out-interface at all --
+  // the ordinary shape of a forward drop. Distinct from leaving `out`
+  // unset, which means "any": a caller tracing the pair a callout names
+  // would otherwise be free to land on a newer line that did leave the
+  // router, and the drawing and the callout would then disagree about
+  // what happened.
+  noOut?: boolean
+}
+
+// TraceResponse is one hop through the router, as the router knows it.
+// `found: false` is an honest miss -- the window holds nothing matching
+// -- and is drawn as words, never as a path that went nowhere.
+export interface TraceResponse {
+  found: boolean
+  verdict?: 'accepted' | 'refused'
+  event?: FirewallEvent
+  like: number
+  srcSeen: number
+  dstReached: number
+}
+
+export async function fetchTrace(req: TraceRequest): Promise<TraceResponse> {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(req)) {
+    if (v === undefined || v === null || v === '' || v === false) continue
+    // A flag travels as `1`, not as the word "true": the server reads
+    // `noOut=1` and nothing else, so String(true) would be silently
+    // ignored rather than refused.
+    qs.set(k, v === true ? '1' : String(v))
+  }
+  const res = await fetch(`/api/trace?${qs}`)
+  if (!res.ok) throw new ApiError(`fetchTrace: ${res.status}`, res.status)
+  return res.json()
 }
