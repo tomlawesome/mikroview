@@ -64,4 +64,7 @@ per field, placeholders per key mode), plus:
 
 ## Verdicts
 
-(none yet)
+Owner, 2026-09-09: *"Editor looks great. Round 8 approved."*
+
+→ Round 8 is the ratified design for #829's conditions editor. The
+build follows this file and its "For the build" list, plus round 7's.
