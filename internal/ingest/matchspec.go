@@ -193,3 +193,24 @@ func CoversPort(spec string, port int) Coverage {
 	}
 	return result
 }
+
+// NamesPorts reports whether a rule's dst-port condition *names* the
+// port -- that is, whether it scopes by port at all and that scope
+// admits it.
+//
+// The difference from CoversPort is the empty spec, and it is the whole
+// point of this function: a rule with no dst-port covers every port,
+// but it names none. #1018 draws a door wherever a rule names the
+// selected port, and drawing one on every unscoped rule would put a
+// door on every boundary for every port, which says nothing.
+func NamesPorts(spec string, ports []int) bool {
+	if strings.TrimSpace(spec) == "" {
+		return false
+	}
+	for _, p := range ports {
+		if CoversPort(spec, p) == Covers {
+			return true
+		}
+	}
+	return false
+}

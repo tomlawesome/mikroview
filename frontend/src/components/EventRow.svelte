@@ -15,6 +15,7 @@
   import { columnState } from '../lib/columns.svelte'
   import ActionBadge from './ActionBadge.svelte'
   import RouterRuleButton from './RouterRuleButton.svelte'
+  import TraceOnMapButton from './TraceOnMapButton.svelte'
   import CopyButton from './CopyButton.svelte'
   import EditNameButton from './EditNameButton.svelte'
   // Asked per pencil below rather than left to EditNameButton's own
@@ -92,6 +93,16 @@
   // to resolve against the same table the translation came from -- a NAT
   // event's log-prefix names a rule in the NAT table, not the filter
   // table (#445).
+  // What the trace trigger's title names the line as -- the two ends and
+  // the port, in the row's own vocabulary, so the button says which line
+  // it is about rather than "this one".
+  const traceLabel = $derived(
+    [event.srcHostName || event.srcIp, '→', event.dstHostName || event.dstIp]
+      .filter(Boolean)
+      .join(' ')
+      .concat(event.dstPort ? ` · ${event.dstPort}/${event.protocol ?? '?'}` : '') || 'this line',
+  )
+
   const natFilterKey = $derived(
     event.chain?.toLowerCase() === 'srcnat'
       ? 'srcQuery'
@@ -410,6 +421,13 @@
         >{event.outInterface}</span>
       {/if}
       {#if !event.inInterface && !event.outInterface}—{/if}
+      <!-- #1018: the line's own hop, drawn on the map. Beside the
+           interfaces because the hop *is* the two interfaces -- the
+           same "the trigger sits with the cell it is about" placement
+           the IP and port lookups already follow. -->
+      {#if event.inInterface || event.outInterface}
+        <TraceOnMapButton id={event.id} label={traceLabel} />
+      {/if}
     </span>
   {/snippet}
 
@@ -615,6 +633,13 @@
         >{event.outInterface}</span>
       {/if}
       {#if !event.inInterface && !event.outInterface}—{/if}
+      <!-- #1018: the line's own hop, drawn on the map. Beside the
+           interfaces because the hop *is* the two interfaces -- the
+           same "the trigger sits with the cell it is about" placement
+           the IP and port lookups already follow. -->
+      {#if event.inInterface || event.outInterface}
+        <TraceOnMapButton id={event.id} label={traceLabel} />
+      {/if}
     </span>
 
     {#if event.dstPort}

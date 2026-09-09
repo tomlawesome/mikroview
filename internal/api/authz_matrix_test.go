@@ -291,6 +291,10 @@ var authzMatrix = []routeExpectation{
 
 	{http.MethodGet, "/api/baseline/off", accessViewer,
 		"today's off-baseline lines (#1016 round 49): the source/destination/port/protocol lines seen today that are not on the established pattern, with the threshold that judged them. Same viewer-tier read as GET /api/hosts directly above and for the same reason -- a non-admin looking at the map is exactly who needs to see what is off pattern today. Deliberately not on readOnlyRoutes for the same reason either, and more sharply: this is the operator's private address space with destinations and ports attached, which no bearer token has ever been able to read. Established lines are unreachable through this endpoint by design, not by permission -- see handleBaselineOff"},
+	{http.MethodGet, "/api/ports", accessViewer,
+		"the port filter's answer (#1018 round 53): which boundaries and hosts carried a port in the window, and which pushed filter rules name it. Same viewer-tier read as GET /api/baseline/off directly above and for the same reason -- a non-admin looking at the map is exactly who asks where a port is used. Deliberately not on readOnlyRoutes for the same reason too: it is the operator's private address space with a port attached, which no bearer token has ever been able to read"},
+	{http.MethodGet, "/api/trace", accessViewer,
+		"one logged line's single hop through the router (#1018 round 53): the interfaces it came in and left on, the rule that decided, the NAT if any. Same viewer tier and the same off-readOnlyRoutes reasoning as GET /api/ports above -- it names both ends of one connection on the operator's own network"},
 	{http.MethodPut, "/api/baseline/{key}/expected", accessUser,
 		"saying a line is expected is an on-record statement that traffic belongs, and it is the only way a line leaves the bright state early -- the same weight as marking a quiet host intended, so the same user tier and the same audit line. It also exempts the line from eviction, which is a second reason it is not a viewer's to make"},
 	{http.MethodDelete, "/api/baseline/{key}/expected", accessUser,
