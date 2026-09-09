@@ -21,6 +21,7 @@ import type {
   Flag,
   FlagTimeBucket,
   Healthz,
+  HostDossier,
   HourTopBucket,
   MACRegistryEntry,
   PersistenceInfo,
@@ -316,6 +317,16 @@ export async function fetchStatsTops(): Promise<HourTopBucket[]> {
   if (!res.ok) throw new ApiError(`fetchStatsTops: ${res.status}`, res.status)
   const body = await res.json()
   return body.tops ?? []
+}
+
+// The device dossier (#410): everything mikroview already knows about
+// one address, assembled server-side. Never a 404 -- an address nobody
+// has heard of comes back as a dossier that says so, block by block --
+// so any non-2xx here is a real failure and the card offers try again.
+export async function fetchHostDossier(ip: string): Promise<HostDossier> {
+  const res = await fetch(`/api/hosts/${encodeURIComponent(ip)}/dossier`)
+  if (!res.ok) throw new ApiError(`fetchHostDossier: ${res.status}`, res.status)
+  return res.json()
 }
 
 export async function lookupIp(ip: string): Promise<ReputationResult> {

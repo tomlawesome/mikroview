@@ -1604,3 +1604,177 @@ export interface TuneLoggingRenderResponse {
   changed: number
   routeros: TuneLoggingRouterInfo
 }
+
+// ---- The device dossier (#410) --------------------------------------
+//
+// GET /api/hosts/{ip}/dossier, mirroring internal/dossier's Go types
+// field for field. Two habits of that package survive into these types
+// and matter when reading them: a `known: false` block means mikroview
+// has nothing to say, not that the answer is "no"; and `absent` is the
+// card's honesty list, naming in plain words everything the dossier
+// could not answer.
+
+export interface DossierVendor {
+  known: boolean
+  name?: string
+  oui?: string
+  registry?: string
+  private?: boolean
+  subDelegated?: boolean
+  reason?: string
+}
+
+export interface DossierRegistryStatus {
+  source?: string
+  loaded: boolean
+  entries: number
+  fetchedAt?: string
+  fromCache?: boolean
+  stale?: boolean
+  note?: string
+}
+
+export interface DossierSeen {
+  known: boolean
+  firstSeen?: string
+  firstSeenSource?: string
+  lastSeen?: string
+  events: number
+  windowStart?: string
+  interfaces?: string[]
+  note?: string
+}
+
+export interface DossierNames {
+  known: boolean
+  name?: string
+  source?: string
+  sourceNote?: string
+  ownLabel?: string
+  note?: string
+}
+
+export interface DossierMac {
+  known: boolean
+  address?: string
+  source?: string
+  locallyAdministered: boolean
+  locallyAdministeredNote?: string
+  groupNote?: string
+  vendor: DossierVendor
+  registry: DossierRegistryStatus
+  firstSeen?: string
+  lastSeen?: string
+  note?: string
+}
+
+export interface DossierAddress {
+  assignment: string
+  note: string
+  device?: string
+  hostname?: string
+  leaseMac?: string
+  arpMac?: string
+  consulted?: string[]
+}
+
+export interface DossierPeer {
+  ip: string
+  name?: string
+  country?: string
+  scope: string
+  events: number
+  ports?: number[]
+  lastSeen: string
+}
+
+export interface DossierPortUse {
+  port: number
+  protocol?: string
+  name?: string
+  direction: string
+  events: number
+  peers: number
+  lastSeen: string
+}
+
+export interface DossierCadence {
+  known: boolean
+  spanSeconds?: number
+  meanGapSeconds?: number
+  medianGapSeconds?: number
+  shape?: string
+  note?: string
+}
+
+export interface DossierTraffic {
+  known: boolean
+  destinations?: DossierPeer[]
+  talkers?: DossierPeer[]
+  ports?: DossierPortUse[]
+  moreDestinations?: number
+  moreTalkers?: number
+  morePorts?: number
+  cadence: DossierCadence
+  note?: string
+}
+
+export interface DossierRuleMatch {
+  label: string
+  name?: string
+  chain?: string
+  action?: string
+  device?: string
+  comment?: string
+  commentKnown: boolean
+  events: number
+  lastSeen: string
+}
+
+export interface DossierFirewall {
+  known: boolean
+  rules?: DossierRuleMatch[]
+  more?: number
+  note?: string
+}
+
+export interface DossierEvidence {
+  signal: string
+  detail: string
+}
+
+// Confidence is the backend's own word -- 'weak', 'fair' or 'strong'.
+// It is rendered as that word and never as a number or a colour: the
+// card narrows, it does not score.
+export interface DossierIdentity {
+  suggested: boolean
+  profile?: string
+  label?: string
+  confidence?: string
+  because?: string
+  evidence?: DossierEvidence[]
+  alternatives?: string[]
+  note: string
+}
+
+// A command for the operator to run. mikroview prints it and never
+// runs it -- see internal/dossier.Probe for why that line exists.
+export interface DossierProbe {
+  command?: string
+  url?: string
+  note: string
+}
+
+export interface HostDossier {
+  ip: string
+  generatedAt: string
+  seen: DossierSeen
+  names: DossierNames
+  mac: DossierMac
+  address: DossierAddress
+  traffic: DossierTraffic
+  firewall: DossierFirewall
+  identity: DossierIdentity
+  suggestedProbe?: DossierProbe
+  absent?: string[]
+}
