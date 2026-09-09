@@ -89,6 +89,13 @@ type definitionView struct {
 	// and for an expectation, whose structure is fixed. See
 	// engine.DetectionSpec.
 	Detection *engine.DetectionSpec `json:"detection,omitempty"`
+	// Family is the flag family an operator filed a custom detector
+	// under (#829) -- the ink the docket, the fall and the map draw its
+	// flags in. Absent for a shipped definition, whose family is the
+	// design record's own classification of the built-ins and is held in
+	// the frontend palette by definition id, and absent for a custom one
+	// nobody has filed yet.
+	Family engine.Family `json:"family,omitempty"`
 	// Dispatch is what this definition costs the ingest path, and is set
 	// only where an operator chose the conditions that decide it.
 	Dispatch *dispatchView `json:"dispatch,omitempty"`
@@ -224,6 +231,7 @@ func (s *Server) definitionViewFor(sd engine.StoredDefinition, rulesByDevice map
 		ParamSchema: d.ParamSchema,
 		Provenance:  d.Provenance,
 		Available:   sd.Available,
+		Family:      d.Family,
 	}
 	if !sd.Available {
 		// Nothing below can be answered for a definition this binary
@@ -592,6 +600,10 @@ type createDefinitionRequest struct {
 	Kind        engine.Kind         `json:"kind"`
 	Expectation *expectationRequest `json:"expectation"`
 	Detection   *detectionRequest   `json:"detection"`
+	// Family files the new detector under a flag family (#829). Optional
+	// -- an unfiled detector wears the operator-authored accent, which is
+	// what every custom detector wore before the field existed.
+	Family engine.Family `json:"family"`
 }
 
 // ErrProgrammaticIsShippedOnly is the reasoning behind the one creation
@@ -699,6 +711,7 @@ func (s *Server) createCustomDetection(w http.ResponseWriter, r *http.Request, r
 	d := engine.NewDefinition(strings.TrimSpace(req.Name), engine.IntentDetection, engine.KindDeclarative)
 	d.Enabled = true
 	d.Provenance = engine.Provenance{Origin: engine.ProvenanceCustom}
+	d.Family = req.Family
 	d.ParamSchema = engine.CustomDetectionParamSchema()
 	d.Params = engine.Params{
 		"threshold": req.Detection.Threshold,
@@ -736,6 +749,10 @@ type updateDefinitionRequest struct {
 	Scope       *engine.Scope       `json:"scope"`
 	Params      engine.Params       `json:"params"`
 	Expectation *expectationRequest `json:"expectation"`
+	// Family re-files a custom detector under a flag family (#829); the
+	// empty string clears the filing. Refused for a shipped definition,
+	// the same way Name is.
+	Family *engine.Family `json:"family"`
 }
 
 // handleDefinitionsUpdate applies whichever of enabled, scope, params
@@ -847,6 +864,12 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 	}
 	if req.Name != nil && !isExpectation {
 		if err := s.Definitions.SetName(id, *req.Name); err != nil {
+			writeDefinitionError(w, err)
+			return
+		}
+	}
+	if req.Family != nil {
+		if err := s.Definitions.SetFamily(id, *req.Family); err != nil {
 			writeDefinitionError(w, err)
 			return
 		}
