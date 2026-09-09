@@ -31,6 +31,8 @@ func (f fakeVendors) Status() oui.Status { return f.status }
 
 var testNow = time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 
+func ptrTime(t time.Time) *time.Time { return &t }
+
 // TestAssembleKnowingNothing is the absence contract: an address nobody
 // has heard of produces a whole dossier that says so, block by block,
 // and never a blank field a UI would have to interpret.
@@ -99,7 +101,7 @@ func TestAssembleReadsAnIoTHost(t *testing.T) {
 		}},
 		Vendors: fakeVendors{
 			vendor: oui.Vendor{Known: true, Name: "Espressif Inc.", Registry: "MA-L"},
-			status: oui.Status{Source: oui.SourceURL, Loaded: true, Entries: 40114, FetchedAt: testNow.Add(-time.Hour)},
+			status: oui.Status{Source: oui.SourceURL, Loaded: true, Entries: 40114, FetchedAt: ptrTime(testNow.Add(-time.Hour))},
 		},
 		Lookups: Lookups{
 			PortName: func(port int) string {
@@ -120,7 +122,7 @@ func TestAssembleReadsAnIoTHost(t *testing.T) {
 	}
 
 	// First-seen comes from the register, which outlives the window.
-	if !d.Seen.FirstSeen.Equal(testNow.Add(-30 * 24 * time.Hour)) {
+	if d.Seen.FirstSeen == nil || !d.Seen.FirstSeen.Equal(testNow.Add(-30*24*time.Hour)) {
 		t.Errorf("firstSeen = %v, want the presence register's", d.Seen.FirstSeen)
 	}
 	if !strings.Contains(d.Seen.FirstSeenSource, "presence register") {

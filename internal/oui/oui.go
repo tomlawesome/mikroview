@@ -121,11 +121,15 @@ type Vendor struct {
 // from, when, and how much of it there is. The dossier prints it beside
 // any vendor answer so a name is never shown without its provenance.
 type Status struct {
-	Source string `json:"source"`
+	Source string `json:"source,omitempty"`
 	// Loaded is false until the first successful fetch or cache read.
-	Loaded    bool      `json:"loaded"`
-	Entries   int       `json:"entries"`
-	FetchedAt time.Time `json:"fetchedAt,omitempty"`
+	Loaded  bool `json:"loaded"`
+	Entries int  `json:"entries"`
+	// FetchedAt is nil until something has been fetched or read from
+	// the cache -- a pointer rather than a zero time.Time, which would
+	// serialise as the year 1 and read as a date rather than as
+	// "never".
+	FetchedAt *time.Time `json:"fetchedAt,omitempty"`
 	// FromCache reports that the currently-served data came off disk
 	// and has not yet been confirmed against IEEE in this process.
 	FromCache bool `json:"fromCache,omitempty"`
@@ -255,8 +259,11 @@ func (r *Registry) Status() Status {
 	st := Status{
 		Source:    r.url,
 		Entries:   len(r.entries),
-		FetchedAt: r.fetchedAt,
 		FromCache: r.fromCache,
+	}
+	if !r.fetchedAt.IsZero() {
+		at := r.fetchedAt
+		st.FetchedAt = &at
 	}
 	if len(r.entries) == 0 {
 		st.Note = "no vendor data yet -- the OUI registry has not been fetched; vendor names appear after the first refresh"
