@@ -26,10 +26,23 @@
 // same shape live-topography-port-trace.mjs uses for 3389 on the flat
 // map.
 //
-// Runs early in the `city` family (alphabetically before -declared and
-// -marks... actually after those two, before -reach/-river/-slider/
-// -stops/-walls), so its own assertions land before any sibling adds
-// traffic of its own to the shared estate.
+// Runs after -declared and -marks in the `city` family (alphabetical
+// order, scripts/run-scenarios.sh), so it shares the live instance with
+// whatever traffic they already pushed -- and `vlan-srv`'s own door
+// depends on that. The city's lane row is capped at five, busiest first
+// (`zonesState.zones`, over the whole shared event buffer): a district
+// with no lane in that row gets no gate for `doorSpot` to stand a door
+// on, even though the door is correctly in the API's own answer (#1055
+// bug, round 54 follow-up -- the same crowding-out live-city-marks.mjs's
+// header describes for `vlan-mark` evicting `wlan-wsh`/`vlan-guest`).
+// By the time this scenario runs, -declared's `vlan-quiet`/`vlan-lit`
+// and -marks' `vlan-iot` are already lanes with their own event counts,
+// and `bridge-lan`/`vlan-srv` are new arrivals with only this file's own
+// traffic behind them -- exactly the shape that loses the cap. So
+// before feeding its own traffic this scenario reads the existing
+// non-WAN lanes' event counts and sends enough SMB connections to clear
+// the cap's cutoff, rather than a fixed handful that only happened to
+// be enough before -declared and -marks existed.
 import { session, check, done, feedRaw } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
@@ -122,11 +135,59 @@ check(
   'the filter table is pushed, one rule naming 445 and one naming 3389',
 )
 
+// How busy the busiest lane already on record is, other than the WAN
+// itself -- read before this scenario adds anything of its own, so a
+// sibling's leftover traffic (live-city-marks.mjs's port scan on
+// `vlan-iot`, say) cannot outrank `vlan-srv`/`bridge-lan` for the city's
+// five-lane cap and leave this scenario's own door undrawn. The WAN is
+// excluded the same way `zonesState.deviceWans` finds it: whichever
+// inbound interface most often carries a public source address.
+function isPublicIp(ip) {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip || '')
+  if (!m) return false
+  const a = Number(m[1])
+  const b = Number(m[2])
+  if (a === 10 || a === 127) return false
+  if (a === 172 && b >= 16 && b <= 31) return false
+  if (a === 192 && b === 168) return false
+  return true
+}
+const before = await (await page.request.get(`${URL_BASE}/api/events`)).json()
+const wanIn = new Map()
+for (const e of before.events ?? []) {
+  if (e.inInterface && isPublicIp(e.srcIp)) wanIn.set(e.inInterface, (wanIn.get(e.inInterface) ?? 0) + 1)
+}
+let wanIface = null
+let wanCount = 0
+for (const [iface, n] of wanIn) {
+  if (n > wanCount) {
+    wanIface = iface
+    wanCount = n
+  }
+}
+const laneCounts = new Map()
+for (const e of before.events ?? []) {
+  for (const iface of [e.inInterface, e.outInterface]) {
+    if (!iface || iface === wanIface) continue
+    laneCounts.set(iface, (laneCounts.get(iface) ?? 0) + 1)
+  }
+}
+// `bridge-lan` and `vlan-srv` are two *new* lanes this scenario is about
+// to add, both carrying the same count -- so for both to land in the
+// cap's five, that count has to beat whichever lane is currently in
+// fourth place (the top three existing lanes plus these two make five
+// without displacing anything this scenario does not need to). Fewer
+// than four existing lanes means the cap was never in play.
+const beatCount = [...laneCounts.values()].sort((a, b) => b - a)[3] ?? 0
+const smbHosts = beatCount + 5
+
 // Real SMB traffic, LAN to Servers, accepted: 445/tcp is what this
 // scenario filters to. 3389 is named by a rule above and never crossed.
-for (const [i, host] of [61, 62, 63].entries()) {
+// Enough connections to outrank the city's five-lane cap regardless of
+// what a sibling left behind (see the header).
+for (let i = 0; i < smbHosts; i++) {
   feedRaw(
-    `firewall,info A|city-smb| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), 10.0.10.${host}:5${100 + i}->10.0.40.61:445, len 60`,
+    `firewall,info A|city-smb| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), 10.0.10.${61 + (i % 190)}:5${100 + (i % 900)}->10.0.40.61:445, len 60`,
   )
 }
 
