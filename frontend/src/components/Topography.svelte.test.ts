@@ -16,6 +16,8 @@ import { wizardState } from '../lib/wizard.svelte'
 import { altitudeStopState } from '../lib/altitudeStop.svelte'
 import { hostsState } from '../lib/hosts.svelte'
 import { baselineState } from '../lib/baseline.svelte'
+import { portFilterState } from '../lib/portFilter.svelte'
+import { mapTraceState } from '../lib/mapTrace.svelte'
 import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { Host } from '../lib/api'
 import type { RouterFilterRule, RouterIPAddress } from '../lib/api'
@@ -194,6 +196,12 @@ beforeEach(() => {
   topologyNavState.pendingFlagId = null
   topologyNavState.pendingWatchId = null
   topologyNavState.pendingDescend = null
+  topologyNavState.pendingTrace = null
+  // #1018's two filters are module-level singletons too, so a test that
+  // filtered the map would otherwise leave the next one's map filtered.
+  portFilterState.clear()
+  portFilterState.proto = 'tcp'
+  mapTraceState.clear()
   wizardState.open = false
   // Every test starts on a fresh slider: altitudeStopState is a
   // module-level singleton that persists across reloads, so a test that
@@ -641,13 +649,17 @@ describe('crossing the altitude centre (#869)', () => {
   // sides and there is nothing to remember across the centre. What the
   // crossing still carries -- the reach, and the camera -- is asserted
   // below.
-  it('carries no overlay state across the centre, because there is none to carry', () => {
+  // #1018's port pill is the flat map's own furniture and only its own:
+  // the city gets the same two tools in a round of its own (#1050). So
+  // it is drawn left of centre and gone right of it -- a filter control
+  // over a surface it cannot filter would be a promise the map breaks.
+  it('carries no overlay state across the centre, and leaves the port pill on the flat side', () => {
     const { container } = render(Topography)
     flushSync()
-    expect(container.querySelectorAll('.pills .pill').length).toBe(0)
+    expect(container.querySelectorAll('.pills .pill').length).toBe(0) // ◆ city, the default
 
     crossTo(container, '2') // to zones: the 2D side
-    expect(container.querySelectorAll('.pills .pill').length).toBe(0)
+    expect(container.querySelectorAll('.pills .pill').length).toBe(1)
 
     crossTo(container, '4') // back across, to borough
     expect(container.querySelectorAll('.pills .pill').length).toBe(0)
@@ -1006,10 +1018,11 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
   })
 })
 
-describe('the lens row (round 49 reduced it to two pills; #981 took those)', () => {
-  it("renders no lens tabs and no overlay pills at all", () => {
+describe('the lens row (round 49 reduced it to two pills; #981 took those; #1018 put a filter there)', () => {
+  it('renders no lens tabs and no overlay pills -- only the port filter', () => {
     const { container } = render(Topography)
     flushSync()
+    showTheMap(container)
 
     expect(container.querySelector('.lenses')).toBeNull() // the old top-right strip
     expect(container.querySelector('.wlens2')).toBeNull() // the lens bar itself
@@ -1017,9 +1030,13 @@ describe('the lens row (round 49 reduced it to two pills; #981 took those)', () 
 
     // Owner, 2026-09-08 (#981): there is no toggle -- "something that's
     // always there is easy to ignore; if it's not always there you know
-    // it's there for a reason."
-    expect(container.querySelectorAll('.pills .pill').length).toBe(0)
-    expect(container.querySelectorAll('[aria-label="Map overlays"] button').length).toBe(0)
+    // it's there for a reason." The one pill in this row is #1018's port
+    // filter, which is not a lens: it does not switch a layer on and off,
+    // it redraws the map to an answer, and it goes away with the ✕.
+    const pills = [...container.querySelectorAll('.pills .pill')]
+    expect(pills.length).toBe(1)
+    expect(pills[0].textContent?.trim()).toBe('⌕ port')
+    expect(pills[0].getAttribute('aria-pressed')).toBe('false')
   })
 })
 
@@ -2365,11 +2382,13 @@ describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () =
 describe('#715 item 3, as #981 left it: the marks are the data, not an overlay', () => {
   const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
 
-  it('leaves nothing in the overlay row but the off-baseline tally', () => {
+  it('leaves nothing in the overlay row but the off-baseline tally and the port pill', () => {
     const { container } = render(Topography)
     flushSync()
+    showTheMap(container)
 
-    expect([...container.querySelectorAll('[aria-label="Map overlays"] button')].length).toBe(0)
+    const buttons = [...container.querySelectorAll('[aria-label="Map overlays"] button')]
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual(['⌕ port'])
     expect(container.querySelector('[role="tablist"]')).toBeNull()
   })
 
@@ -3414,8 +3433,12 @@ describe('living hosts on the 2D map (#1016)', () => {
       watchlistState.entries = [watchEntry({ destIp: '10.0.1.20' })]
       const { container } = render(Topography)
       flushSync()
+      showTheMap(container)
 
-      expect(container.querySelectorAll('.pills .pill').length).toBe(0)
+      // The one pill in the row is #1018's port filter, and it switches
+      // neither of these marks: take the flag and the watcher away and
+      // both go, whatever the filter is doing.
+      expect([...container.querySelectorAll('.pills .pill')].map((p) => p.textContent?.trim())).toEqual(['⌕ port'])
       expect(container.querySelector('.zone .hostrow .h-halo')).not.toBeNull()
       expect(container.querySelector('.zone .hostrow .h-watch')).not.toBeNull()
     })
@@ -4765,5 +4788,494 @@ describe('the reach, drawn to round 49 (#1016)', () => {
       flushSync()
       expect(container.querySelector('.membrane-layer')).toBeNull()
     })
+  })
+})
+
+// ---------------------------------------------------------------------
+// #1018, round 53: the two filters on the living topology. Neither is a
+// new view -- both redraw this one, and the rule they are drawn to is
+// "dim to the answer, remove nothing".
+// ---------------------------------------------------------------------
+describe('the port filter (#1018, round 53)', () => {
+  const lanes: RouterIPAddress[] = [
+    { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
+    { address: '10.0.20.1/24', network: '10.0.20.0', interface: 'ether3', comment: 'Servers' },
+    { address: '10.0.30.1/24', network: '10.0.30.0', interface: 'ether4', comment: 'IoT' },
+  ]
+
+  // Round 49's own data story, which round 53 filters: 445/tcp accepted
+  // between LAN and Servers, and IoT talking on something else.
+  function seedMap() {
+    zonesState.pushed = lanes
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether3', srcIp: '10.0.10.21', srcHostName: 'tom-desktop', dstIp: '10.0.20.5', dstPort: 445, protocol: 'tcp' }),
+      event({ inInterface: 'bridge1', outInterface: 'ether3', srcIp: '10.0.10.34', srcHostName: 'laptop-anna', dstIp: '10.0.20.5', dstPort: 445, protocol: 'tcp' }),
+      event({ inInterface: 'ether4', outInterface: 'ether3', srcIp: '10.0.30.14', srcHostName: 'cam-porch', dstIp: '10.0.20.5', dstPort: 53, protocol: 'udp' }),
+    ]
+  }
+
+  /** Drives the store the way a landed fetch would, which is how every
+   * other store in this file is driven. */
+  function filterTo(ports: number[], answer: Partial<(typeof portFilterState)['answer']> = {}) {
+    portFilterState.ports = ports
+    portFilterState.proto = 'tcp'
+    portFilterState.answer = {
+      generatedAt: 1,
+      windowSeconds: 3600,
+      candidates: [],
+      events: 2,
+      accepts: 2,
+      drops: 0,
+      lines: 2,
+      ribs: [{ in: 'bridge1', out: 'ether3', events: 2, accepts: 2, drops: 0 }],
+      hosts: [{ ip: '10.0.10.21', name: 'tom-desktop', events: 2, accepts: 2, drops: 0 }],
+      doors: [],
+      ...answer,
+    }
+    portFilterState.answeredKey = portFilterState.key
+  }
+
+  function door(overrides: Partial<(typeof portFilterState)['doors'][number]> = {}) {
+    return {
+      device: 'core',
+      label: '#12',
+      ordinal: 12,
+      action: 'accept',
+      chain: 'forward',
+      in: 'bridge1',
+      out: 'ether3',
+      dstPort: '445',
+      who: 'bridge1 → ether3 accept',
+      ...overrides,
+    }
+  }
+
+  it('opens the pill into a bar of the same shape, with no Show button in it', () => {
+    seedMap()
+    portFilterState.open = true
+    portFilterState.answer = {
+      ...portFilterState.answer,
+      candidates: [
+        { port: 445, proto: 'tcp', count: 16, named: true },
+        { port: 3389, proto: 'tcp', count: 0, named: true },
+      ],
+    }
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const bar = container.querySelector('.pill.p.edit')!
+    expect(bar).not.toBeNull()
+    expect([...bar.querySelectorAll('.ports .chip')].map((c) => c.textContent)).toEqual(['445', '3389'])
+    expect([...bar.querySelectorAll('.seg .chip')].map((c) => c.textContent)).toEqual(['tcp', 'udp'])
+    // Owner, 2026-09-08: "no show button, it loads automatically".
+    expect([...bar.querySelectorAll('button')].some((b) => /show/i.test(b.textContent ?? ''))).toBe(false)
+    expect(bar.querySelector('input')).not.toBeNull()
+  })
+
+  it('collapses onto the answer, with the ✕ as its own control', () => {
+    seedMap()
+    filterTo([445], { doors: [door(), door({ label: '#23', ordinal: 23, action: 'drop' })] })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelector('.pill.p.on')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      '⌕ 445/tcp · 2 lines seen · 2 doors',
+    )
+    expect(container.querySelector('.pill-x')).not.toBeNull()
+  })
+
+  it('keeps the crossed rib in its verdict ink and greys every other one, removing none', () => {
+    seedMap()
+    filterTo([445])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    // Both halves of the crossing light: one packet through the router,
+    // not a claim about traffic coming back.
+    expect(container.querySelectorAll('.lit-half').length).toBe(2)
+    expect(container.querySelector('.lit-half.refused')).toBeNull()
+
+    // Nothing is removed -- every rib the map drew is still drawn, thin
+    // and grey, with the off-filter ones at the dim opacity.
+    const off = [...container.querySelectorAll('.redge.port-off')]
+    expect(off.length).toBeGreaterThan(0)
+    for (const r of off) {
+      expect(r.getAttribute('style')).toContain('var(--fg-muted)')
+    }
+    expect(off.some((r) => (r.getAttribute('style') ?? '').includes('opacity: 0.4'))).toBe(true)
+  })
+
+  it('draws a refused direction in the alarm ink and lights only the half it arrived on', () => {
+    seedMap()
+    filterTo([445], { ribs: [{ in: 'ether4', out: '', events: 14, accepts: 0, drops: 14 }], accepts: 0, drops: 14, hosts: [] })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const lit = [...container.querySelectorAll('.lit-half')]
+    expect(lit.length).toBe(1)
+    expect(lit[0].classList.contains('refused')).toBe(true)
+  })
+
+  it('lights only the hosts on the port and counts the lane against itself', () => {
+    seedMap()
+    filterTo([445])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const tallies = [...container.querySelectorAll('.hosttally')].map((t) => t.textContent)
+    expect(tallies).toContain('1 of 2 hosts on 445/tcp')
+    // A dot off the port recedes but is never taken off the card: "1 of
+    // 2" is a claim about the two hosts the card draws.
+    const dimmed = [...container.querySelectorAll('.zone .hostrow .dot-off')]
+    expect(dimmed.length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.zone .hostrow .h-dot').length).toBeGreaterThan(dimmed.length)
+  })
+
+  it('dims a lane with nothing on the port whole, and keeps it on the map', () => {
+    seedMap()
+    filterTo([445])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const off = [...container.querySelectorAll('.zone.lane-off')]
+    expect(off.length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.zone').length).toBeGreaterThan(off.length)
+  })
+
+  // "Knowing where a door is open (even if unused) is useful
+  // information" (owner, 2026-09-08). A door on a rib nobody used still
+  // draws, and its rib recedes less than the rest.
+  // Every rib on this map converges on the router, so two doors picked
+  // at the same fraction land in the same crowded place. The chooser
+  // measures clearance instead; here that has to separate them.
+  it('keeps two doors on converging ribs off each other', () => {
+    seedMap()
+    filterTo([445], {
+      doors: [door(), door({ label: '#31', ordinal: 31, action: 'drop', in: 'ether4', out: 'ether3' })],
+    })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const doors = [...container.querySelectorAll('.door')]
+    expect(doors.length).toBe(2)
+    const at = (g: Element) => {
+      const d = g.querySelector('.door-post')!.getAttribute('d') ?? ''
+      const [, x, y] = /^M ([-\d.]+) ([-\d.]+)/.exec(d) ?? []
+      return { x: Number(x), y: Number(y) }
+    }
+    const [a, b] = doors.map(at)
+    expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(20)
+  })
+
+  it('draws a door wherever a rule names the port, on a used rib and an unused one alike', () => {
+    seedMap()
+    filterTo([445], {
+      doors: [door(), door({ label: '#31', ordinal: 31, action: 'drop', in: 'ether4', out: 'ether3' })],
+    })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const doors = [...container.querySelectorAll('.door')]
+    expect(doors.length).toBe(2)
+    expect(doors.map((d) => d.querySelector('.door-t')?.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      '#12 accept',
+      '#31 drop',
+    ])
+    // Accept is a leaf that swings open, a refusal is a bar across.
+    expect(doors[0].classList.contains('shut')).toBe(false)
+    expect(doors[1].classList.contains('shut')).toBe(true)
+    // The unused rib the drop guards recedes less than the rest.
+    const halves = [...container.querySelectorAll('.redge.port-off, .cedge.port-off')]
+    expect(halves.some((h) => (h.getAttribute('style') ?? '').includes('opacity: 0.6'))).toBe(true)
+  })
+
+  // The fit chip keeps its own corner; the legend goes to the left of it.
+  // jsdom lays nothing out, so the real overlap is caught in
+  // live-topography-port-trace.mjs against measured rects -- this pins
+  // the wiring: the legend's `right` is driven by the chip's own width
+  // rather than by a guess that is right at 100 % and wrong at 1000 %.
+  it('places its legend clear of the fit chip rather than under it', () => {
+    seedMap()
+    filterTo([445], { doors: [door()] })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const legend = container.querySelector<HTMLElement>('.map-legend')!
+    const chip = container.querySelector<HTMLElement>('.fitchip')!
+    expect(chip).not.toBeNull()
+    const right = Number(/right:\s*([\d.]+)px/.exec(legend.getAttribute('style') ?? '')?.[1])
+    // The chip sits 16px in and measures 0 wide under jsdom, so the
+    // legend's own inset has to clear that inset by the stated gap.
+    expect(right).toBeGreaterThanOrEqual(32)
+    expect(componentSource).toMatch(/fitChipW = el \? el\.getBoundingClientRect\(\)\.width : 0/)
+  })
+
+  it('says nothing was seen in one line under the map, and still draws the door', () => {
+    seedMap()
+    filterTo([3389], {
+      events: 0,
+      accepts: 0,
+      drops: 0,
+      lines: 0,
+      ribs: [],
+      hosts: [],
+      doors: [door({ label: '#23', ordinal: 23, action: 'drop', in: 'ether4', out: '', who: 'ether4 → any drop' })],
+    })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelector('.note-t')?.textContent).toBe(
+      'no logged traffic on 3389/tcp in the window · one rule names it — #23 ether4 → any drop, the door on the ether4 side',
+    )
+    expect(container.querySelectorAll('.door').length).toBe(1)
+    // Not an empty state: the map is still there behind the sentence.
+    expect(container.querySelectorAll('.zone').length).toBe(3)
+  })
+
+  it('swaps the legend for its own entries, and takes it away with the filter', () => {
+    seedMap()
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    expect(container.querySelector('.map-legend')).toBeNull()
+
+    filterTo([445], { doors: [door()] })
+    flushSync()
+    const legend = container.querySelector('.map-legend')!
+    expect(legend.textContent?.replace(/\s+/g, ' ')).toContain('door open')
+    expect(legend.textContent?.replace(/\s+/g, ' ')).toContain('off the port')
+  })
+
+  it('goes quiet about everything the filter is not about', () => {
+    seedMap()
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    expect(container.querySelectorAll('.edge-badge').length).toBeGreaterThan(0)
+
+    filterTo([445])
+    flushSync()
+    // Two port answers on one card is the map saying two things at once.
+    expect(container.querySelectorAll('.edge-badge').length).toBe(0)
+    expect(container.querySelectorAll('.svc-t').length).toBe(0)
+  })
+
+  // Three answers layered on one map would stack their crumbs on each
+  // other and leave nobody able to say which of them a dim rib was dim
+  // because of.
+  it('gets out of the way when the operator stands on something', () => {
+    seedMap()
+    filterTo([445])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    expect(container.querySelector('.lit-half')).not.toBeNull()
+
+    container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(portFilterState.active).toBe(false)
+    expect(container.querySelector('.lit-half')).toBeNull()
+  })
+
+  it('clears on Esc', () => {
+    seedMap()
+    filterTo([445])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    expect(container.querySelector('.lit-half')).not.toBeNull()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    flushSync()
+    expect(portFilterState.active).toBe(false)
+    expect(container.querySelector('.lit-half')).toBeNull()
+  })
+})
+
+describe('the event trace (#1018, round 53)', () => {
+  const lanes: RouterIPAddress[] = [
+    { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
+    { address: '10.0.30.1/24', network: '10.0.30.0', interface: 'ether4', comment: 'IoT' },
+  ]
+
+  function seedMap() {
+    zonesState.pushed = lanes
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether4', srcIp: '10.0.10.21', srcHostName: 'tom-desktop', dstIp: '10.0.30.14', dstPort: 80, protocol: 'tcp' }),
+      event({ inInterface: 'ether4', outInterface: 'bridge1', srcIp: '10.0.30.14', srcHostName: 'cam-porch', dstIp: '10.0.10.21', dstPort: 445, protocol: 'tcp' }),
+    ]
+  }
+
+  function traceRefused() {
+    mapTraceState.request = { event: 7 }
+    mapTraceState.result = {
+      found: true,
+      verdict: 'refused',
+      event: event({
+        id: 7,
+        action: 'drop',
+        ruleLabel: '#17 default drop',
+        inInterface: 'ether4',
+        outInterface: undefined,
+        srcIp: '10.0.30.14',
+        srcHostName: 'cam-porch',
+        dstIp: '10.0.10.21',
+        dstHostName: 'tom-desktop',
+        dstPort: 445,
+        protocol: 'tcp',
+      }),
+      like: 13,
+      srcSeen: 14,
+      dstReached: 0,
+    }
+  }
+
+  it('draws the crumb, the chip and the one lit half of a refusal', () => {
+    seedMap()
+    traceRefused()
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const crumb = container.querySelector('.trace-crumb')!.textContent!.replace(/\s+/g, ' ')
+    expect(crumb).toContain('cam-porch')
+    expect(crumb).toContain('tom-desktop')
+    expect(crumb).toContain('445/tcp')
+    expect(crumb).toContain('refused at #17 default drop')
+    // The others are said, never drawn as a union.
+    expect(crumb).toContain('and 13 more like it')
+    expect(crumb).toContain('Esc ▸')
+
+    const chip = container.querySelector('.trace-chip.refused')!
+    expect(chip.querySelector('.chip-verdict')?.textContent).toBe('✕ REFUSED · #17 default drop')
+    expect(chip.querySelector('.chip-t')?.textContent).toContain('in: ether4 → out: —')
+
+    const lit = [...container.querySelectorAll('.lit-half')]
+    expect(lit.length).toBe(1)
+    expect(lit[0].classList.contains('refused')).toBe(true)
+    // A refusal ends at the router.
+    expect(container.querySelector('.trace-stop')).not.toBeNull()
+    expect(container.querySelector('.trace-ring')).toBeNull()
+  })
+
+  it('dashes the rib the refused line would have taken, and says so beside it', () => {
+    seedMap()
+    traceRefused()
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelector('.trace-ghost')).not.toBeNull()
+    expect(container.querySelector('.trace-note')?.textContent).toBe(
+      'would have reached tom-desktop · never left the router',
+    )
+  })
+
+  it('gives the traced ends their own one-line tallies', () => {
+    seedMap()
+    traceRefused()
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const tallies = [...container.querySelectorAll('.hosttally')].map((t) => t.textContent)
+    expect(tallies).toContain('cam-porch · 14× in the window')
+    // The far end was never reached, and the number says so rather than
+    // the drawing implying it.
+    expect(tallies).toContain('tom-desktop · never reached')
+  })
+
+  it('lights both halves of an accepted line and rings where it arrived', () => {
+    seedMap()
+    mapTraceState.request = { event: 8 }
+    mapTraceState.result = {
+      found: true,
+      verdict: 'accepted',
+      event: event({
+        id: 8,
+        action: 'accept',
+        ruleLabel: '#8 lan → iot',
+        inInterface: 'bridge1',
+        outInterface: 'ether4',
+        srcIp: '10.0.10.21',
+        srcHostName: 'tom-desktop',
+        dstIp: '10.0.30.14',
+        dstHostName: 'cam-porch',
+        dstPort: 80,
+        protocol: 'tcp',
+      }),
+      like: 0,
+      srcSeen: 1,
+      dstReached: 1,
+    }
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelectorAll('.lit-half').length).toBe(2)
+    expect(container.querySelector('.lit-half.refused')).toBeNull()
+    expect(container.querySelector('.trace-stop')).toBeNull()
+    expect(container.querySelector('.trace-chip')?.classList.contains('refused')).toBe(false)
+    // No ghost on an accepted line: it reached its far end.
+    expect(container.querySelector('.trace-ghost')).toBeNull()
+  })
+
+  // Found while building this chip, which uses the same class: `.chip-t`
+  // carried no fill at all, so SVG's own black was drawing the
+  // unplanned callout's second line on a black map. Asserted against
+  // the stylesheet rather than a computed colour, the same way this
+  // file already pins a raw CSS value it cares about.
+  it('gives the class both chips write their second line in a fill, so it is not black on black', () => {
+    expect(componentSource).toMatch(/\.chip-t \{[^}]*fill: var\(--fg-muted\);/)
+  })
+
+  it('says an honest miss in words rather than drawing a path that went nowhere', () => {
+    seedMap()
+    mapTraceState.request = { in: 'ether4', port: 3389 }
+    mapTraceState.result = { found: false, like: 0, srcSeen: 0, dstReached: 0 }
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelector('.trace-crumb')?.textContent).toContain('nothing in the window matches that line')
+    expect(container.querySelector('.lit-half')).toBeNull()
+    expect(container.querySelector('.trace-chip')).toBeNull()
+  })
+
+  it('opens from a stream row through the same one-shot slot the descend uses', () => {
+    seedMap()
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    topologyNavState.requestTrace({ event: 7 })
+    flushSync()
+    // Read and cleared on arrival, so a later visit does not reopen it.
+    expect(topologyNavState.pendingTrace).toBeNull()
+    expect(mapTraceState.request).toEqual({ event: 7 })
+  })
+
+  it('clears on Esc', () => {
+    seedMap()
+    traceRefused()
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    expect(container.querySelector('.trace-crumb')).not.toBeNull()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    flushSync()
+    expect(mapTraceState.active).toBe(false)
+    expect(container.querySelector('.trace-crumb')).toBeNull()
   })
 })
