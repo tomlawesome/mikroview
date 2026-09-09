@@ -1102,7 +1102,12 @@ func main() {
 	setupStore, err := setup.OpenWithBackend(setupBackend)
 	mustOpenStore(setupLog, err)
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
-	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
+	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Devices: device.ConfigNames(cfg.Devices), Entities: entityStore, RouterHosts: routerState}
+	// #600: the registry answers device display names through the same
+	// resolver, so a rename stored by one operator is what every
+	// /api/devices reader sees. Wired here rather than at NewRegistry
+	// because the resolver needs the entity store, which opens later.
+	devices.SetNames(names)
 
 	// Warm restart (#795): put back the derived state a restart would
 	// otherwise throw away -- the hourline's per-minute counters, each

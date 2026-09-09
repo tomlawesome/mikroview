@@ -92,6 +92,15 @@ type deviceView struct {
 	// the same box. The wizard's step 2 and the fleet cards read it;
 	// neither re-derives it.
 	MultihomedCandidates []string `json:"multihomedCandidates,omitempty"`
+	// NameSource is where Name came from (internal/naming's Source*
+	// values), so every reader of this list gets the name *and* the
+	// reason for it -- the same question GET /api/naming/provenance
+	// answers for a host token (#413), asked here for the device the
+	// fleet cards and the live view's device column show (#600).
+	// "config-device" is a name config.yaml decides and no label can
+	// out-rank; "entity" is a stored rename; "none" means the raw id is
+	// what shows.
+	NameSource string `json:"nameSource"`
 }
 
 // multihomedCandidatesByDevice indexes Registry.MultihomedCandidates by
@@ -119,6 +128,11 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			Info:                 info,
 			Status:               deviceStatus(info, s.DeviceStaleAfter, now),
 			MultihomedCandidates: multihomed[info.ID],
+			// Registry.List already resolved Name through the same
+			// resolver; this asks it the second half of the question
+			// rather than re-deriving the name here, so the two can
+			// never disagree.
+			NameSource: s.Naming.DeviceProvenance(info.ID).Source,
 		}
 		if version, ok := s.effectiveRouterOSVersion(info); ok {
 			v.RouterOSVersion = version
