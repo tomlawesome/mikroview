@@ -17,7 +17,7 @@
 // The data story is round 49's, which round 53 filters: 445/tcp
 // accepted from LAN to Servers, refused from IoT, and 3389/tcp seen
 // nowhere with one rule naming it.
-import { session, check, done, feedRaw, goTo } from './live-browser.mjs'
+import { session, check, done, feedRaw, goTo, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -34,6 +34,39 @@ const { page, consoleErrors } = await session()
 // values. Read on its own rather than folded into the two big reads
 // below, so the same measurement serves both without either of them
 // needing a helper shipped into the page.
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(page, selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
+
+/** Two real paints -- Svelte 5 applies state to the DOM in a microtask,
+ * so a value read in the same tick as the click that changed it is the
+ * value about to be replaced. No CSS transition backs these particular
+ * elements, so this is what "let it settle" actually needs. */
+function nextPaint(page) {
+  return page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+}
+
 async function legendClearsFitChip() {
   return page.evaluate((sel) => {
     const card = document.querySelector(sel)
@@ -241,37 +274,46 @@ check(
 
 // Two accepted SMB lines, LAN -> Servers, and fourteen refusals from
 // IoT: round 49's own unplanned pair, which is what the trace opens on.
-for (const [i, host] of [21, 34].entries()) {
-  feedRaw(
+// Collected and fed each as one call rather than one per line -- a
+// separate TLS handshake and process start per line is the exact cost
+// #1061 exists to cut.
+const smbLines = [21, 34].map(
+  (host, i) =>
     `firewall,info A|smb-out| forward: in:bridge-lan out:ether3, connection-state:new, proto TCP (SYN), 10.0.10.${host}:5${100 + i}->10.0.20.5:445, len 60`,
-  )
-}
-for (let i = 0; i < 14; i++) {
-  feedRaw(
+)
+const refusedLines = Array.from(
+  { length: 14 },
+  (_, i) =>
     `firewall,info D|default drop| forward: in:ether4 out:bridge-lan, connection-state:new, proto TCP (SYN), 10.0.30.14:5${200 + i}->10.0.10.21:445, len 60`,
-  )
-}
+)
 // Traffic on other ports, so there is something for the filter to dim
 // and something else for the picker to offer.
-for (let i = 0; i < 6; i++) {
-  feedRaw(
+const webLines = Array.from(
+  { length: 6 },
+  (_, i) =>
     `firewall,info A|web| forward: in:bridge-lan out:ether1, connection-state:new, proto TCP (SYN), 10.0.10.${40 + i}:5${300 + i}->203.0.113.9:443, len 60`,
-  )
-}
+)
 // A lane with nothing to do with 445 and no rule naming it: the card
 // that has to recede whole while staying on the map. Also this
 // scenario's only traffic on `ether5`, and (with `smb-out` above) on
 // `ether3` -- sized to clear the lane-row cap (see `printLines` above)
 // rather than a fixed handful that only happened to be enough before
 // live-topography-layout.mjs existed.
-for (let i = 0; i < printLines; i++) {
-  feedRaw(
+const printLinesArr = Array.from(
+  { length: printLines },
+  (_, i) =>
     `firewall,info A|print| forward: in:ether5 out:ether3, connection-state:new, proto TCP (SYN), 10.0.40.${10 + (i % 240)}:5${400 + (i % 500)}->10.0.20.9:9100, len 60`,
-  )
-}
+)
 
-await new Promise((r) => setTimeout(r, 1500))
+const beforeFeed = await eventsTotal(page)
+feedRaw(...smbLines, ...refusedLines, ...webLines, ...printLinesArr)
+await waitForEventsTotal(page, beforeFeed + smbLines.length + refusedLines.length + webLines.length + printLinesArr.length)
+
 await page.setViewportSize({ width: 1600, height: 900 })
+// zonesState/policyState/coverageState (and the reality picture they
+// feed) only refresh on load, not from a push made straight over the
+// ingest API -- the lane row, the doors and the escalated callout below
+// all need a reload to see this estate and traffic together.
 await page.reload()
 await page.click('.rail-name >> text=Topography')
 // The altitude defaults to the city (#869); these two tools are the
@@ -279,7 +321,7 @@ await page.click('.rail-name >> text=Topography')
 await page.waitForSelector(`${CARD} .altitude input[type="range"]`, { timeout: 15000 })
 await page.locator(`${CARD} .altitude input[type="range"]`).fill('1')
 await page.waitForSelector(`${CARD} .zone`, { state: 'attached', timeout: 15000 })
-await page.waitForTimeout(600)
+await waitForSettle(page, `${CARD} .camera`)
 
 // --- the port pill ------------------------------------------------------
 
@@ -315,7 +357,7 @@ await page.waitForSelector(`${CARD} .lit-half`, { state: 'attached', timeout: 10
 // the selection it made stays on the map.
 await page.locator(`${CARD} .stage`).click({ position: { x: 20, y: 20 } })
 await page.waitForSelector(`${CARD} .pill.p.on`, { timeout: 10000 })
-await page.waitForTimeout(400)
+await nextPaint(page)
 
 const filtered = await page.evaluate((sel) => {
   const card = document.querySelector(sel)
@@ -410,7 +452,7 @@ check(empty.zones === lanesBefore, `and the map is still there behind the senten
 await page.screenshot({ path: `${OUT}/port-empty.png` })
 
 await page.locator(`${CARD} .pill-x`).click()
-await page.waitForTimeout(300)
+await page.waitForSelector(`${CARD} .lit-half`, { state: 'detached', timeout: 3000 }).catch(() => {})
 check((await page.locator(`${CARD} .lit-half`).count()) === 0, 'the ✕ puts the map back')
 
 // --- the trace ----------------------------------------------------------
@@ -421,7 +463,6 @@ check((await page.locator(`${CARD} .lit-half`).count()) === 0, 'the ✕ puts the
 await page.waitForSelector(`${CARD} .uc-trace`, { state: 'attached', timeout: 15000 })
 await page.locator(`${CARD} .uc-trace .uc-trace-t`).click()
 await page.waitForSelector(`${CARD} .trace-crumb`, { timeout: 10000 })
-await page.waitForTimeout(600)
 
 // B1 (round 56, #1050): the callout's own `trace ▸` now opens the list
 // itself as soon as the answer lands, not only a click on the crumb's
@@ -503,12 +544,12 @@ await page.screenshot({ path: `${OUT}/trace.png` })
 // crumb standing, the second clears the trace underneath it -- rather
 // than clearing everything in one press.
 await page.keyboard.press('Escape')
-await page.waitForTimeout(300)
+await page.waitForSelector(`${CARD} .picker`, { state: 'detached', timeout: 3000 }).catch(() => {})
 check((await page.locator(`${CARD} .picker`).count()) === 0, 'the first Esc closes the list')
 check((await page.locator(`${CARD} .trace-crumb`).count()) === 1, 'and leaves the crumb standing')
 
 await page.keyboard.press('Escape')
-await page.waitForTimeout(300)
+await page.waitForSelector(`${CARD} .trace-crumb`, { state: 'detached', timeout: 3000 }).catch(() => {})
 check((await page.locator(`${CARD} .trace-crumb`).count()) === 0, 'the second Esc clears the trace underneath it')
 check((await page.locator(`${CARD} .map-legend`).count()) === 0, 'and the legend goes with it')
 
@@ -526,7 +567,7 @@ const accepted = page
 await accepted.scrollIntoViewIfNeeded()
 await accepted.locator('.cell.iface button[aria-label^="Trace"]').click()
 await page.waitForSelector(`${CARD} .trace-crumb`, { timeout: 15000 })
-await page.waitForTimeout(600)
+await nextPaint(page)
 
 const reached = await page.evaluate((sel) => {
   const card = document.querySelector(sel)
@@ -552,7 +593,6 @@ check(!reached.stop && !reached.ghost, 'nothing stopped it, so there is no ✕ a
 
 await page.screenshot({ path: `${OUT}/trace-accepted.png` })
 await page.keyboard.press('Escape')
-await page.waitForTimeout(300)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 

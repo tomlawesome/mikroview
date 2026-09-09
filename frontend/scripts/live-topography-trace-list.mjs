@@ -27,7 +27,7 @@
 // every pair already on record other than the one this scenario means
 // to escalate gets an explicit forward accept of its own, named rather
 // than left to fall to 'unplanned' by default.
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedRaw, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -37,6 +37,39 @@ mkdirSync(OUT, { recursive: true })
 const CARD = '[data-card="topography"]'
 
 const { page, consoleErrors } = await session()
+
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
+
+/** Two real paints -- Svelte 5 applies state to the DOM in a microtask,
+ * so a value read in the same tick as the click that changed it is the
+ * value about to be replaced. No CSS transition backs these particular
+ * elements, so this is what "let it settle" actually needs. */
+function nextPaint() {
+  return page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+}
 
 let DEVICE
 for (let i = 0; i < 40 && !DEVICE; i++) {
@@ -143,19 +176,17 @@ check(
 // its composer, once both scenarios had run against one instance.
 const SRC = '10.0.30.77'
 const DST = '10.0.15.77'
-for (let i = 0; i < 6; i++) {
-  feedRaw(
-    `firewall,info D|default drop| forward: in:ether4 out:bridge-tl, connection-state:new, proto TCP (SYN), ${SRC}:5${200 + i}->${DST}:445, len 60`,
-  )
-}
+const sameLineLines = Array.from(
+  { length: 6 },
+  (_, i) => `firewall,info D|default drop| forward: in:ether4 out:bridge-tl, connection-state:new, proto TCP (SYN), ${SRC}:5${200 + i}->${DST}:445, len 60`,
+)
 // Three more from the same source, same clock minute, a different
 // destination and port each time -- SAME MINUTE's own rows, excluded
 // from SAME LINE because the port differs.
-for (let i = 0; i < 3; i++) {
-  feedRaw(
-    `firewall,info A|print| forward: in:ether4 out:ether3, connection-state:new, proto TCP (SYN), ${SRC}:5${300 + i}->10.0.20.79:${9100 + i}, len 60`,
-  )
-}
+const sameMinuteLines = Array.from(
+  { length: 3 },
+  (_, i) => `firewall,info A|print| forward: in:ether4 out:ether3, connection-state:new, proto TCP (SYN), ${SRC}:5${300 + i}->10.0.20.79:${9100 + i}, len 60`,
+)
 // Ordinary traffic on both ends of the traced pair -- planned by the
 // two Internet accepts above, so none of it can outrank the callout --
 // and plenty of it: the flat map draws only the five busiest zones
@@ -165,38 +196,46 @@ for (let i = 0; i < 3; i++) {
 // and the callout fell back to this scenario's own SAME MINUTE pair
 // (pipeline 820, gate shard 3/4). The sources cycle over a few hosts so
 // each district stays under the city's eight-building cap.
-for (let i = 0; i < 120; i++) {
-  feedRaw(
-    `firewall,info A|lan internet| forward: in:bridge-tl out:ether1, connection-state:new, proto TCP (SYN), 10.0.15.${90 + (i % 4)}:5${400 + i}->203.0.113.9:443, len 60`,
-  )
-}
-for (let i = 0; i < 80; i++) {
-  feedRaw(
-    `firewall,info A|iot internet| forward: in:ether4 out:ether1, connection-state:new, proto TCP (SYN), 10.0.30.${50 + (i % 2)}:5${600 + i}->203.0.113.9:443, len 60`,
-  )
-}
+const lanInternetLines = Array.from(
+  { length: 120 },
+  (_, i) => `firewall,info A|lan internet| forward: in:bridge-tl out:ether1, connection-state:new, proto TCP (SYN), 10.0.15.${90 + (i % 4)}:5${400 + i}->203.0.113.9:443, len 60`,
+)
+const iotInternetLines = Array.from(
+  { length: 80 },
+  (_, i) => `firewall,info A|iot internet| forward: in:ether4 out:ether1, connection-state:new, proto TCP (SYN), 10.0.30.${50 + (i % 2)}:5${600 + i}->203.0.113.9:443, len 60`,
+)
 // The traced destination also has to be the *source* of some crossing to
 // stand on the map as a building at all (zones.svelte.ts's own
 // host-attribution counts only the private side of a boundary-crossing
 // event) -- without this, the far side of the ghost has nowhere to
 // point, the same trap live-city-reach.mjs's own comment names for srv1.
-feedRaw(`firewall,info A|reply| forward: in:bridge-tl out:ether3, connection-state:new, proto TCP (SYN), ${DST}:5500->10.0.20.80:443, len 60`)
+const replyLine = `firewall,info A|reply| forward: in:bridge-tl out:ether3, connection-state:new, proto TCP (SYN), ${DST}:5500->10.0.20.80:443, len 60`
 
-await new Promise((r) => setTimeout(r, 1500))
+// Every line above, over two hundred of them, collected and fed as one
+// call rather than one per line: a separate TLS handshake and process
+// start per line is the exact cost #1061 exists to cut.
+const allLines = [...sameLineLines, ...sameMinuteLines, ...lanInternetLines, ...iotInternetLines, replyLine]
+const beforeFeed = await eventsTotal(page)
+feedRaw(...allLines)
+await waitForEventsTotal(page, beforeFeed + allLines.length)
+
 await page.setViewportSize({ width: 1600, height: 900 })
-await page.reload()
+// This session has not yet visited Topography, so its own $effect
+// (zonesState/policyState/etc, gated on appState.devices) fires fresh on
+// this first navigation -- no reload needed to see the tables and events
+// pushed above.
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector(`${CARD} .altitude input[type="range"]`, { timeout: 15000 })
 await page.locator(`${CARD} .altitude input[type="range"]`).fill('1') // the zone stop, the flat map's own
 await page.waitForSelector(`${CARD} .zone`, { state: 'attached', timeout: 15000 })
-await page.waitForTimeout(600)
+await waitForSettle(`${CARD} .camera`)
 
 // --- opening the trace from the unplanned callout's own `trace ▸` -------
 
 await page.waitForSelector(`${CARD} .uc-trace`, { state: 'attached', timeout: 15000 })
 await page.locator(`${CARD} .uc-trace .uc-trace-t`).click()
 await page.waitForSelector(`${CARD} .trace-crumb`, { timeout: 10000 })
-await page.waitForTimeout(600)
+await nextPaint()
 
 const flat = await page.evaluate((sel) => {
   const card = document.querySelector(sel)
@@ -237,7 +276,7 @@ await page.screenshot({ path: `${OUT}/flat-trace.png` })
 // waiting on a toggle click.
 
 await page.waitForSelector(`${CARD} .picker`, { timeout: 10000 })
-await page.waitForTimeout(300)
+await nextPaint()
 check(
   (await page.locator(`${CARD} .trace-crumb .crumb-link[aria-expanded="true"]`).count()) === 1,
   "B1: the callout's own trace opens the list without a click",
@@ -265,7 +304,7 @@ await page.screenshot({ path: `${OUT}/flat-trace-list.png` })
 
 await page.keyboard.press('ArrowDown')
 await page.keyboard.press('Enter')
-await page.waitForTimeout(500)
+await nextPaint()
 
 const retraced = await page.evaluate((sel) => {
   const card = document.querySelector(sel)
@@ -281,12 +320,12 @@ check(retraced.onIndex === 1, `the second row is now the traced one (${retraced.
 // --- Esc closes the list first, a second Esc clears the trace -----------
 
 await page.keyboard.press('Escape')
-await page.waitForTimeout(300)
+await page.waitForSelector(`${CARD} .picker`, { state: 'detached', timeout: 3000 }).catch(() => {})
 check((await page.locator(`${CARD} .picker`).count()) === 0, 'the first Esc closes the list')
 check((await page.locator(`${CARD} .trace-crumb`).count()) === 1, 'and leaves the crumb standing')
 
 await page.keyboard.press('Escape')
-await page.waitForTimeout(300)
+await page.waitForSelector(`${CARD} .trace-crumb`, { state: 'detached', timeout: 3000 }).catch(() => {})
 check((await page.locator(`${CARD} .trace-crumb`).count()) === 0, 'the second Esc clears the trace underneath it')
 
 // --- the same crumb, on the city ------------------------------------------
@@ -302,7 +341,6 @@ check((await page.locator(`${CARD} .trace-crumb`).count()) === 0, 'the second Es
 await page.waitForSelector(`${CARD} .uc-trace`, { state: 'attached', timeout: 10000 })
 await page.locator(`${CARD} .uc-trace .uc-trace-t`).click()
 await page.waitForSelector(`${CARD} .trace-crumb`, { timeout: 10000 })
-await page.waitForTimeout(400)
 
 // The district stop (#869), not the wider city/borough overview: roads
 // there carry the raw interface ids this scenario's pairs are keyed by
@@ -310,7 +348,7 @@ await page.waitForTimeout(400)
 // city/borough draw inter-borough roads instead, which do not.
 await page.locator(`${CARD} .altitude input[type="range"]`).fill('5')
 await page.waitForSelector(`${CARD} .city`, { state: 'attached', timeout: 15000 })
-await page.waitForTimeout(900)
+await nextPaint()
 
 const city = await page.evaluate((sel) => {
   const card = document.querySelector(sel)
@@ -341,7 +379,6 @@ check(city.crumbs === 1, `the same crumb mounts on the city too, exactly once ($
 await page.screenshot({ path: `${OUT}/city-trace.png` })
 
 await page.keyboard.press('Escape')
-await page.waitForTimeout(300)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 
