@@ -15,6 +15,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/coverage"
+	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -93,6 +94,19 @@ type Server struct {
 	// empty, unpersisted store), same always-usable convention as Flags
 	// above.
 	Definitions *engine.DefinitionsStore
+	// Decommissions holds every retiring network segment (#460): the
+	// range, its clean-window clock, and the names the router last knew
+	// inside it. Its own store rather than a corner of Definitions,
+	// because a decommission watch is not a stored Definition -- see
+	// engine.DecommissionWatches for why its logic has to be Go. nil is
+	// valid and disables the whole surface with a 503 rather than a
+	// panic, matching the optional-store convention below.
+	Decommissions *decommission.Store
+	// DecommissionCleanWindow is the configured default offered when a
+	// watch is created (config engine.decommissionCleanWindow). Each
+	// watch keeps the window it was created with, so changing this never
+	// retunes a decommission already under way.
+	DecommissionCleanWindow time.Duration
 	// Entities is the persisted, admin-manageable (type, key) -> label/
 	// tags store backing GET/POST/DELETE /api/entities (issue #107) --
 	// the shared foundation for a future mail-sender allowlist and
@@ -463,6 +477,15 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/definitions/{id}/replay", s.handleDefinitionsReplay},
 		{http.MethodPost, "/api/definitions/{id}/promote", s.handleDefinitionsPromote},
 		{http.MethodPost, "/api/definitions/{id}/observing", s.handleDefinitionsSetObserving},
+
+		// Retiring a network segment (#460). One GET for the whole
+		// surface, because an offer and a ghost are the same object one
+		// decision apart and the map paints both together.
+		{http.MethodGet, "/api/decommission", s.handleDecommission},
+		{http.MethodPost, "/api/decommission/watches", s.handleDecommissionCreate},
+		{http.MethodPost, "/api/decommission/dismiss", s.handleDecommissionDismiss},
+		{http.MethodPost, "/api/decommission/watches/{id}/force", s.handleDecommissionForce},
+		{http.MethodDelete, "/api/decommission/watches/{id}", s.handleDecommissionDelete},
 
 		// Where the name shown for one row token comes from, and
 		// whether labelling it here would change anything (issue

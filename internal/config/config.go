@@ -798,6 +798,19 @@ type Engine struct {
 	// Anything it does not already hold is seeded on boot from this
 	// binary's shipped catalogue (see engine.SeedShippedDefinitions).
 	DefinitionsStorePath string `yaml:"definitionsStorePath"`
+	// DecommissionStorePath persists the decommission watches (#460):
+	// each retiring network segment, its clean-window clock and the
+	// last-known names inside the range it retired. Same optional
+	// contract as the two above -- left empty, the watches still work and
+	// simply do not survive a restart.
+	DecommissionStorePath string `yaml:"decommissionStorePath"`
+	// DecommissionCleanWindow is how long a retired range must stay
+	// completely silent before it leaves the map (#460, owner ruling
+	// 2026-08-17: "measured in hours, not days -- param, hours-scale
+	// default"). It is the default offered when a watch is created; each
+	// watch keeps the window it was created with, so changing this does
+	// not retune decommissions already under way.
+	DecommissionCleanWindow time.Duration `yaml:"decommissionCleanWindow"`
 }
 
 // Blocklist configures internal/blocklist's local IP/CIDR "known-bad"
@@ -1264,6 +1277,11 @@ func defaults() Config {
 		Engine: Engine{
 			StorePath:            DefaultDataDir + "/engine-state.json",
 			DefinitionsStorePath: DefaultDataDir + "/definitions.json",
+			// Mirrors decommission.DefaultCleanWindow -- kept as a
+			// literal so this package stays a dependency-free leaf, the
+			// same reasoning Blocklist.Sources gives just below.
+			DecommissionStorePath:   DefaultDataDir + "/decommission.json",
+			DecommissionCleanWindow: 6 * time.Hour,
 		},
 		Blocklist: Blocklist{
 			// Mirrors internal/blocklist.DefaultSources -- kept as a
@@ -1802,6 +1820,14 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH"); v != "" {
 		cfg.Engine.DefinitionsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_DECOMMISSION_STORE_PATH"); v != "" {
+		cfg.Engine.DecommissionStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_DECOMMISSION_CLEAN_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Engine.DecommissionCleanWindow = d
+		}
 	}
 	if v := os.Getenv("MIKROVIEW_SNAPSHOT_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
