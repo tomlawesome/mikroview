@@ -50,6 +50,7 @@
   import { hostSubject, portsLine, reachFor, reachLineSummary } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
   import { isPublicIp, formatHM, formatRelative } from '../lib/format'
+  import { dossierState } from '../lib/dossier.svelte'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
@@ -77,7 +78,7 @@
     type Placed,
   } from '../lib/topography/cluster'
   import { layoutGround, plateHalfWidth } from '../lib/city/layout'
-  import { cityInputFrom } from '../lib/city/input'
+  import { cityInputFrom, ghostCityZones } from '../lib/city/input'
   import { hostMarksFrom } from '../lib/city/presence'
   import {
     EXPECTED_LABEL,
@@ -121,6 +122,12 @@
   } from '../lib/portFilter'
   import type { OffBaselineLine } from '../lib/baseline'
   import type { Host } from '../lib/api'
+  // The decommission ghost (#460, round 55): a segment the router has
+  // stopped carrying, still drawn where it was until its watch retires.
+  import DecommissionCard from './DecommissionCard.svelte'
+  import { decommissionsState } from '../lib/decommission.svelte'
+  import { GHOST_INK, ghostStateOf, ghostTally, retiredNote, stragglerCallout, undoable } from '../lib/decommission'
+  import type { DecommissionOffer, DecommissionWatch, GhostState } from '../lib/types'
 
   // Five fixed lane inks. The fifth was --marked until #715 item 11 --
   // the ink this same screen uses for watchers, so one colour carried
@@ -144,6 +151,11 @@
       // honest picture while the register is unread and the wrong one
       // the moment it lands.
       baselineState.refresh()
+      // What has left the router and what is still being watched for
+      // stragglers (#460). Refreshed with the rest rather than on its
+      // own timer: an offer appears on a push, and a push is what moves
+      // every other table here too.
+      decommissionsState.refresh()
     }
   })
 
@@ -158,8 +170,229 @@
   // something behind it and vanishes when there is not, on both
   // surfaces, and nothing switches it.
 
-  const zones = $derived(zonesState.zones)
+  // A retired boundary's lane is its ghost (#460, round 55): the ghost
+  // stands exactly where the segment was, so the live lane for that
+  // boundary steps aside rather than being drawn beside it.
+  //
+  // The two can genuinely coexist for a while -- zones are derived from
+  // the event buffer, and a straggler is by definition traffic still
+  // arriving on a range that has been retired -- and drawing both would
+  // put the same segment on the map twice, once as a working lane and
+  // once as the thing that says it is gone.
+  const zones = $derived(zonesState.zones.filter((z) => !ghostLanes.some((g) => g.iface === z.id)))
   const eps = $derived(appState.stats?.eventsPerSecond ?? 0)
+
+  /* ---------------- the ghost lanes (#460, round 55) ---------------- */
+
+  // A lane for a segment that has left the router: offered and not yet
+  // answered, or answered yes and still being watched.
+  //
+  // Round 55's second open question was decided by Fable on 2026-09-09:
+  // the ghost stays exactly where the segment was and nothing reflows
+  // around it -- its whole point is that the operator recognises the
+  // place. The lane row is ordered busiest-first and a departed segment
+  // has stopped talking, so its place is the end of the row, which is
+  // also where the mockup draws it. The row itself re-spaces by count,
+  // as it already does for any fifth lane (four at 285/577/848/1116,
+  // five at 188/444/700/956/1212), so the ghost costs the live lanes
+  // nothing but width.
+  interface GhostLane {
+    key: string
+    device: string
+    iface: string
+    name: string
+    cidr: string
+    state: GhostState
+    watch: DecommissionWatch | null
+    offer: DecommissionOffer | null
+    /** The last-known hosts, frozen at the moment the range went. */
+    hosts: { label: string; ip: string }[]
+  }
+
+  // One dot per address, not one per table that named it: routerstate's
+  // frozen snapshot is newest-named first and a single address can be in
+  // it twice, once from the lease table and once from ARP. The first
+  // entry wins, which is the newest name.
+  const ghostHosts = (known: readonly { address: string; name?: string }[]) => {
+    const seen = new Set<string>()
+    const out: { label: string; ip: string }[] = []
+    for (const k of known) {
+      if (seen.has(k.address)) continue
+      seen.add(k.address)
+      out.push({ label: k.name || k.address, ip: k.address })
+    }
+    return out
+  }
+
+  const ghostLanes = $derived.by((): GhostLane[] => {
+    const out: GhostLane[] = []
+    for (const o of decommissionsState.offers) {
+      out.push({
+        key: `offer:${o.device}|${o.cidr}`,
+        device: o.device,
+        iface: o.interface,
+        name: o.name || o.interface,
+        cidr: o.cidr,
+        state: 'none',
+        watch: null,
+        offer: o,
+        hosts: ghostHosts(o.lastKnown ?? []),
+      })
+    }
+    for (const w of decommissionsState.ghosts) {
+      out.push({
+        key: `watch:${w.id}`,
+        device: w.device,
+        iface: w.interface,
+        name: w.name || w.interface,
+        cidr: w.cidr,
+        state: ghostStateOf(w, nowMs),
+        watch: w,
+        offer: null,
+        hosts: ghostHosts(w.lastKnown ?? []),
+      })
+    }
+    return out
+  })
+
+  // Lanes, live and ghost together. Every geometry answer -- the pitch,
+  // the rib curves, the callout stops -- is asked of this rather than of
+  // the live zones, so a ghost is spaced like a lane because it is one.
+  const laneCount = $derived(zones.length + ghostLanes.length)
+
+  // Which card is open on a ghost, and which ghost. The offer opens by
+  // itself -- a segment leaving the router is the moment the offer is
+  // about, and an offer nobody is shown is not an offer -- while the
+  // ghost's own card and the straggler's are opened by pointing at them.
+  let openGhostKey = $state<string | null>(null)
+  let openStragglerKey = $state<string | null>(null)
+  let ghostBusy = $state(false)
+  let ghostError = $state<string | null>(null)
+
+  // The offer answers itself first: while one is pending it is the card
+  // on the map, because it is the only card here with a question in it.
+  const pendingOffer = $derived(ghostLanes.find((g) => g.state === 'none') ?? null)
+  const openGhostLane = $derived(ghostLanes.find((g) => g.key === openGhostKey) ?? null)
+  const stragglerLane = $derived(
+    ghostLanes.find((g) => g.key === openStragglerKey && g.state === 'broken' && g.watch?.lastStraggler) ?? null,
+  )
+  // The one ghost whose watch a straggler has just broken. One, not all:
+  // the alarm arc and its callout are drawn for the line that needs
+  // answering now, the same way the map escalates one unplanned pair
+  // rather than every one of them.
+  const brokenGhost = $derived(ghostLanes.find((g) => g.state === 'broken' && g.watch?.lastStraggler) ?? null)
+
+  function openGhost(g: GhostLane) {
+    ghostError = null
+    openGhostKey = openGhostKey === g.key ? null : g.key
+  }
+
+  // Where a straggler's peer lives, so the alarm arc lands on the lane
+  // the traffic actually reached. Null where no pushed address table
+  // claims it -- the arc is not drawn at all then, rather than being
+  // pointed at a lane that might not be the right one.
+  function laneIndexForIp(ip: string | undefined): number | null {
+    if (!ip) return null
+    for (let i = 0; i < zones.length; i++) {
+      const c = zones[i].cidr
+      if (!c) continue
+      const parsed = parseCidr(c)
+      if (parsed && addressInCidr(ip, parsed)) return i
+    }
+    return null
+  }
+
+  // The friendliest name anything on this map has for an address. The
+  // bare address where nothing named it -- never a guess.
+  function nameForIp(ip: string | undefined): string {
+    if (!ip) return ''
+    for (const z of zones) {
+      const h = z.hosts.find((x) => x.ip === ip)
+      if (h?.label) return h.label
+    }
+    return ip
+  }
+
+  // One decommission card at a time, and which one is a precedence, not
+  // a choice: a straggler the operator has just opened outranks the
+  // ghost's own card, which outranks an offer waiting to be answered.
+  // Round 55 never draws two, and two cards on one ghost would be the
+  // map saying two things about the same place.
+  const decommCard = $derived.by((): { kind: 'offer' | 'ghost' | 'straggler'; lane: GhostLane } | null => {
+    if (stragglerLane) return { kind: 'straggler', lane: stragglerLane }
+    if (openGhostLane && openGhostLane.watch) return { kind: 'ghost', lane: openGhostLane }
+    if (pendingOffer) return { kind: 'offer', lane: pendingOffer }
+    return null
+  })
+
+  let decommCardEl = $state<HTMLElement | null>(null)
+  let decommCardPlace = $state<Placement | null>(null)
+  let decommCardTick = $state(0)
+
+  // Placed the same way every other card on this map is placed, so it
+  // clears its own subject and the stage edge. The one difference round
+  // 55 asks for is in the card itself: the leader is heavier, because a
+  // ghost is faint and a hairline to a faint thing reads as nothing.
+  $effect(() => {
+    const open = decommCard
+    const svg = mapSvgEl
+    const host = topoEl
+    const card = decommCardEl
+    void altitude
+    void stageTick
+    void decommCardTick
+    void laneCount
+
+    if (!open || !svg || !host || !card || reach) {
+      decommCardPlace = null
+      return
+    }
+    const map = unitMapper(svg, host)
+    const stage = stageRect(svg, host)
+    if (!map || !stage) {
+      decommCardPlace = null
+      return
+    }
+    const gi = ghostLanes.indexOf(open.lane)
+    if (gi < 0) {
+      decommCardPlace = null
+      return
+    }
+    const gx = laneX(zones.length + gi, laneCount)
+    const anchor = map({ x: gx, y: 486 })
+    // The ghost's own plate is the one thing the card must not sit on:
+    // it is what the card is about, and round 55 puts the card beside
+    // the ghost for exactly that reason.
+    const avoid = [mapRect(map, { x: gx - cardHalf, y: 466, w: cardW, h: 150 })]
+    const softAvoid = zones.map((_z, i) => mapRect(map, { x: laneX(i, laneCount) - cardHalf, y: 466, w: cardW, h: 150 }))
+    decommCardPlace = placeCard({ anchor, card: cardSize(card), stage, avoid, softAvoid, prefer: ['right', 'left', 'top'] })
+  })
+
+  // The card grows when force-remove opens its confirm state, and a
+  // placement worked out for the short card would leave the tall one
+  // sitting on the ghost it is about (#1028's lesson, same fix).
+  $effect(() => {
+    const card = decommCardEl
+    if (!card) return
+    return watchCardSize(card, () => decommCardTick++)
+  })
+
+  async function answerOffer(lane: GhostLane, yes: boolean) {
+    if (!lane.offer) return
+    ghostBusy = true
+    const err = yes ? await decommissionsState.accept(lane.offer) : await decommissionsState.dismiss(lane.offer)
+    ghostBusy = false
+    ghostError = err
+  }
+
+  async function forceRemoveGhost(lane: GhostLane, why: string) {
+    if (!lane.watch) return
+    ghostBusy = true
+    const err = await decommissionsState.force(lane.watch.id, why)
+    ghostBusy = false
+    ghostError = err
+    if (!err) openGhostKey = null
+  }
 
   const primaryDevice = $derived.by(() => {
     const list = appState.devices
@@ -210,7 +443,10 @@
   const STAGE_INSET = 24
 
   const laneScale = $derived.by(() => {
-    const n = zones.length
+    // Ghost lanes are counted here too: a ghost is a lane the row has to
+    // make room for, and leaving it out would let the cards overlap at
+    // exactly the moment a fifth lane appears.
+    const n = laneCount
     if (n < 2) return 1
     const want = n * LANE_CARD_W + (n - 1) * LANE_GAP
     const room = STAGE_W - 2 * STAGE_INSET
@@ -430,7 +666,7 @@
     if (t) return { x: t.placed.anchor.x, y: t.placed.anchor.y, kind: 'tunnel' }
     const i = zones.findIndex((z) => z.id === iface)
     if (i === -1) return null
-    return { x: laneX(i, zones.length), y: 484, kind: 'zone', idx: i }
+    return { x: laneX(i, laneCount), y: 484, kind: 'zone', idx: i }
   }
 
   // A line between two anchors, shared by both lenses: the Traffic lens
@@ -504,7 +740,7 @@
   // position in the edge list.
   function internetSlotSpread(l: Line): number {
     const laneAnchor = l.from.kind === 'zone' ? l.from : l.to
-    return slotSpread(laneAnchor.idx ?? 0, zones.length)
+    return slotSpread(laneAnchor.idx ?? 0, laneCount)
   }
 
   // A refusal dies on the waist's near side, so its bar is never behind
@@ -1595,7 +1831,7 @@
     }
     // The dot's own point on the map, in the lane card's space plus the
     // lane's own offset.
-    const anchor = map({ x: laneX(open.zi, zones.length) + hostDotX(open.di), y: 490 + HOST_DOT_Y })
+    const anchor = map({ x: laneX(open.zi, laneCount) + hostDotX(open.di), y: 490 + HOST_DOT_Y })
     // The dot's own plate is the one thing the card must not sit on: it
     // is the thing being pointed at. Measured off the drawing, for the
     // reason the boundary card's own placement gives above (#1028).
@@ -2624,6 +2860,9 @@
         quietKeys,
         [],
         cityHostMarks,
+        // The retired segments, laid out as districts so the city draws
+        // a ghost where the flat map draws a ghost lane (#460).
+        ghostCityZones(decommissionsState.offers, decommissionsState.ghosts, nowMs, primaryDevice?.id ?? ''),
       ),
     ),
   )
@@ -2850,8 +3089,15 @@
   const activeFlags = $derived(flagsState.list.filter((f) => !f.cleared))
   const alarmFlagCount = $derived(activeFlags.filter((f) => familyOf(f.type).mark === '✱').length)
   const advisoryFlagCount = $derived(activeFlags.length - alarmFlagCount)
-  const watcherTotal = $derived(watchlistState.entries.length)
-  const watcherBroken = $derived(watchlistState.brokenCount)
+  // A ghost is a watched thing, so the dials count it: round 55's "the
+  // header counts move with the watch -- ◉ +1 while it holds, ○ +1 while
+  // it is broken". A decommission watch is a programmatic definition and
+  // never reaches the definitions store, so it cannot be double-counted
+  // through watchlistState.
+  const ghostWatchers = $derived(ghostLanes.filter((g) => g.watch !== null).length)
+  const ghostWatchersBroken = $derived(ghostLanes.filter((g) => g.watch !== null && g.state === 'broken').length)
+  const watcherTotal = $derived(watchlistState.entries.length + ghostWatchers)
+  const watcherBroken = $derived(watchlistState.brokenCount + ghostWatchersBroken)
   const watcherHealthy = $derived(watcherTotal - watcherBroken)
 
   const DIAL_R = 20
@@ -3425,8 +3671,8 @@
     ]
     zones.forEach((_z, i) => {
       // The lane card, its label above it and its aggregate bar below.
-      boxes.push({ x: laneX(i, zones.length) - cardHalf, y: 466, w: cardW, h: 150 })
-      curves.push(samplePath(ribCurve(i, zones.length)))
+      boxes.push({ x: laneX(i, laneCount) - cardHalf, y: 466, w: cardW, h: 150 })
+      curves.push(samplePath(ribCurve(i, laneCount)))
     })
     return { boxes, curves }
   })
@@ -3491,7 +3737,7 @@
   // drew around them -- padding those two again would push the default
   // map a couple of pixels off round 49's own drawing for no reason.
   const mapNodeBoxes = $derived.by((): Box[] => {
-    const boxes: Box[] = zones.map((_z, i) => ({ x: laneX(i, zones.length) - cardHalf, y: 466, w: cardW, h: 150 }))
+    const boxes: Box[] = zones.map((_z, i) => ({ x: laneX(i, laneCount) - cardHalf, y: 466, w: cardW, h: 150 }))
     for (const t of drawnTunnels) boxes.push(cardBox(t.placed, t.aggregate !== null))
     return boxes
   })
@@ -4094,7 +4340,7 @@
     const halfW = text.length * 2.9
     return {
       d: halfPath(line),
-      at: { x: Math.min(Math.max(laneX(i, zones.length), halfW + 12), 1400 - halfW - 12), y: 470 },
+      at: { x: Math.min(Math.max(laneX(i, laneCount), halfW + 12), 1400 - halfW - 12), y: 470 },
       text,
     }
   })
@@ -4116,7 +4362,7 @@
     const lines = [`would have reached ${e.dstHostName || e.dstIp}`, zone ? `stopped at the ${zone.name} boundary` : 'stopped at the boundary']
     const halfW = Math.max(...lines.map((l) => l.length)) * 2.9
     const i = zone ? zones.findIndex((z) => z.id === zone.id) : -1
-    const x = i >= 0 ? Math.min(Math.max(laneX(i, zones.length), halfW + 12), 1400 - halfW - 12) : refusedGateStop.x
+    const x = i >= 0 ? Math.min(Math.max(laneX(i, laneCount), halfW + 12), 1400 - halfW - 12) : refusedGateStop.x
     return { at: { x, y: 470 }, lines }
   })
 
@@ -4288,14 +4534,16 @@
        decided the material is the statement -- so this appears with a
        filter and goes with it, which is also the rule #981 set for the
        flag and watch marks: something always there is easy to ignore. -->
-  {#if filterOn}
+  {#if filterOn || ghostLanes.length > 0}
     <div
       class="map-legend"
       style:right="{legendRight}px"
       aria-label="What this filter's colours mean"
     >
-      <span><i class="sw ok"></i>accepted</span>
-      <span><i class="sw al"></i>refused</span>
+      {#if filterOn}
+        <span><i class="sw ok"></i>accepted</span>
+        <span><i class="sw al"></i>refused</span>
+      {/if}
       {#if portOn}
         <span>
           <svg width="14" height="11" aria-hidden="true"
@@ -4320,7 +4568,22 @@
       {:else if traceGhost}
         <span><i class="sw ghost"></i>would have gone</span>
       {/if}
-      <span><i class="sw off"></i>off the {portOn ? 'port' : 'line'}</span>
+      {#if filterOn}
+        <span><i class="sw off"></i>off the {portOn ? 'port' : 'line'}</span>
+      {/if}
+      <!-- The ghost's own entry (#460, round 55). It appears with a
+           ghost and goes with it, the rule #981 set for every mark on
+           this map: something always there is easy to ignore, and a
+           legend line for a state nothing is in explains nothing. -->
+      {#each [...new Set(ghostLanes.map((g) => g.state))] as gs (gs)}
+        <span
+          ><i class="sw" style:background="repeating-linear-gradient(90deg, {GHOST_INK[gs]} 0 3px, transparent 3px 6px)"></i>ghost · {gs === 'none'
+            ? 'offered, no watch yet'
+            : gs === 'holding'
+              ? 'watch holding'
+              : 'watch broken — a straggler'}</span
+        >
+      {/each}
     </div>
   {/if}
   <!-- The health dials (#648, rounds 19-20; repositioned #682 clear of
@@ -4688,7 +4951,7 @@
         />
       {/each}
       {#if tunnelIface && tunnelGhostLane !== null}
-        {@const gx = laneX(tunnelGhostLane, zones.length)}
+        {@const gx = laneX(tunnelGhostLane, laneCount)}
         <path class="rib-ghost" d="M 1100 186 C 945 300, {gx + 95} 385, {gx} 476" />
       {/if}
       <!-- The material, under everything (round 49): every dark or quiet
@@ -4739,9 +5002,21 @@
         <!-- Before pair-carrying traffic arrives, the lanes' simple
              volume ribs keep the place alive. -->
         {#each zones as z, i (z.id)}
-          <path class="rib" d={ribPath(i, zones.length)} stroke={LANE_INKS[i % LANE_INKS.length]} stroke-width="2.4" />
+          <path class="rib" d={ribPath(i, laneCount)} stroke={LANE_INKS[i % LANE_INKS.length]} stroke-width="2.4" />
         {/each}
       {/if}
+
+      <!-- The ghost's own rib (#460): still tied to the router, drawn
+           dashed and in the watch's ink, because the segment is no
+           longer carried but the place still is. -->
+      {#each ghostLanes as g, gi (g.key)}
+        <path
+          class="rib grib"
+          d={ribPath(zones.length + gi, laneCount)}
+          stroke={GHOST_INK[g.state]}
+          stroke-opacity={g.state === 'none' ? 0.55 : 0.8}
+        />
+      {/each}
 
         <!-- The reality overlay (#629): what actually happened, pair by
              pair. Accepted traffic crosses; drops die at the waist
@@ -5024,6 +5299,54 @@
             <text class="uc-trace-t" x={c.x + c.w / 2 - CARD_PAD} y={c.y + 20} text-anchor="end">trace ▸</text>
           </g>
         {/if}
+
+        <!-- The straggler (#460, round 55): a line to or from a range
+             that was declared dead. It takes the same arc an unplanned
+             pair takes -- a pair with no rib of its own -- because it is
+             the same kind of statement: traffic the map had no reason to
+             expect. The line may be perfectly legal and still be this;
+             what makes it a violation is only that the range is gone. -->
+        {#if brokenGhost && brokenGhost.watch?.lastStraggler && !filterOn}
+          {@const s = brokenGhost.watch.lastStraggler}
+          {@const gi = ghostLanes.indexOf(brokenGhost)}
+          {@const gx = laneX(zones.length + gi, laneCount)}
+          {@const ti = laneIndexForIp(s.peer)}
+          {@const call = stragglerCallout(brokenGhost.watch, s, nameForIp(s.peer))}
+          {#if ti !== null}
+            {@const tx = laneX(ti, laneCount)}
+            {@const dir = tx < gx ? -1 : 1}
+            <path
+              class="rib straggler-rib"
+              d="M {R2(gx + dir * 22)} 486 C {R2(gx + dir * 122)} 415, {R2(tx - dir * 116)} 415, {R2(tx - dir * 22)} 486"
+            />
+          {/if}
+          <!-- The callout says who it was, so the operator reads a name
+               they gave a machine rather than an address the move left
+               behind. It sits between the two lanes, on the arc. -->
+          {@const cx = ti !== null ? (gx + laneX(ti, laneCount)) / 2 : gx}
+          <g
+            class="detail straggler-call"
+            role="button"
+            tabindex="0"
+            aria-label="{call.head} — open this straggler"
+            onclick={(e) => {
+              e.stopPropagation()
+              openStragglerKey = openStragglerKey === brokenGhost.key ? null : brokenGhost.key
+            }}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                openStragglerKey = openStragglerKey === brokenGhost.key ? null : brokenGhost.key
+              }
+            }}
+          >
+            <rect class="uc-box" x={cx - 150} y="417" width="300" height={CARD_H} rx="9" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.8" />
+            <circle cx={cx - 136} cy="430" r="3" fill="var(--alarm)" />
+            <text class="alarm-t" x={cx - 124} y="433">{call.head}</text>
+            <text class="chip-t" x={cx - 124} y="447">{call.detail} · open ▸</text>
+          </g>
+        {/if}
         <!-- The router's own decision (#1018): what it did, which rule
              did it, the two lanes and the NAT. Beside the router by
              default, so the leader reads as the router's own answer; or
@@ -5193,7 +5516,7 @@
              whole (#1018): still drawn, still clickable, simply not part
              of what was asked. -->
         <g
-          transform="translate({laneX(i, zones.length)} 490)"
+          transform="translate({laneX(i, laneCount)} 490)"
           class="zone"
           class:lane-off={filterOn && !laneInFilter(z, row)}
           role="button"
@@ -5375,6 +5698,74 @@
         </g>
       {/each}
 
+      <!-- The ghost lanes (#460, round 55): a segment the router has
+           stopped carrying, kept in its place on the map until its watch
+           retires. Round 30's lane card, hollowed: the plate is dashed
+           and unfilled, the lane dot is a ring rather than a disc, the
+           hosts are rings because they are names the range last had
+           rather than machines anyone can see now, and the whole thing
+           is drawn in its watch's own ink -- grey while the offer is
+           unanswered, watch purple while it holds, alarm red when a
+           straggler has just contradicted the declaration. -->
+      {#each ghostLanes as g, gi (g.key)}
+        {@const ink = GHOST_INK[g.state]}
+        {@const strag = g.watch?.lastStraggler ?? null}
+        <g
+          transform="translate({laneX(zones.length + gi, laneCount)} 490)"
+          class="zone ghost-lane"
+          class:broken={g.state === 'broken'}
+          role="button"
+          tabindex="0"
+          data-ghost={g.cidr}
+          aria-label="{g.name} — retired range {g.cidr}, watch {g.state}"
+          onclick={(e) => {
+            e.stopPropagation()
+            openGhost(g)
+          }}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              e.stopPropagation()
+              openGhost(g)
+            }
+          }}
+        >
+          <rect class="isl gisl" x={-cardHalf} y="0" width={cardW} height="106" rx="12" stroke={ink} stroke-opacity={g.state === 'none' ? 0.5 : 0.75} />
+          <circle class="gdot" cx={-cardHalf + cardPad} cy="22" r="3.5" stroke={ink} />
+          <text x={-cardHalf + cardPad + 11} y="26" class="n-name gname">{g.name}</text>
+          <text x={cardHalf - 14} y="26" class="n-cidr" text-anchor="end">{g.cidr}</text>
+          {#if g.hosts.length > 0}
+            <g class="hostrow">
+              {#each g.hosts.slice(0, MAX_HOST_DOTS) as h, hi (h.ip)}
+                <g>
+                  <title>{h.label} · last known here; the range is retired</title>
+                  <circle class="ghost-host" cx={hostDotX(hi)} cy={HOST_DOT_Y} r={hostDotR} />
+                  <!-- The straggler wears the halo, so the ring the
+                       operator has to deal with is the one the callout
+                       is about rather than whichever came first. -->
+                  {#if g.state === 'broken' && strag?.address === h.ip}
+                    <circle class="halo ghost-halo" cx={hostDotX(hi)} cy={HOST_DOT_Y} r={hostDotR + 2.5} />
+                  {/if}
+                </g>
+              {/each}
+              <text x={hostDotX(Math.min(g.hosts.length, MAX_HOST_DOTS)) + 2} y={HOST_DOT_Y + 4} class="c-label">last known</text>
+            </g>
+          {/if}
+          <text x={-cardHalf + cardPad} y="82" class="n-sub gsub" style:fill={g.state === 'none' ? undefined : ink}>
+            {ghostTally(g.state, g.watch, g.offer, nowMs)}
+          </text>
+          <!-- The watcher pip, the same bar every live lane carries: a
+               ghost is a watched thing, and round 55 asks for the same
+               pip rather than a mark of its own. -->
+          {#if g.watch && !filterOn}
+            {@render aggregateBar({ watchCount: 1, watchBroken: g.state === 'broken' ? 1 : 0, flagCount: 0 }, -cardHalf, cardW, 110, 16, {
+              id: g.iface,
+              name: g.name,
+            })}
+          {/if}
+        </g>
+      {/each}
+
       <!-- Depth, not zoom (#699). Round 30's depth stops *add* layers --
            services, then the clients beneath their own lane -- where the
            build scaled the same picture up and pushed its right edge off
@@ -5393,14 +5784,14 @@
                  to a small, proximate gap and given a leader tick down to
                  the card's own top edge (y=490), the tie every other
                  label on this map already has via its plate or its line. -->
-            <text x={laneX(i, zones.length)} y="472" text-anchor="middle" class="svc-t">{svc}</text>
-            <line class="svc-leader" x1={laneX(i, zones.length)} y1="477" x2={laneX(i, zones.length)} y2="489" />
+            <text x={laneX(i, laneCount)} y="472" text-anchor="middle" class="svc-t">{svc}</text>
+            <line class="svc-leader" x1={laneX(i, laneCount)} y1="477" x2={laneX(i, laneCount)} y2="489" />
           {/if}
         {/each}
       </g>
       <g class="cli">
         {#each zones as z, i (z.id)}
-          {@const cx = laneX(i, zones.length)}
+          {@const cx = laneX(i, laneCount)}
           {@const spread = Math.min(70, lanePitch * 0.26)}
           {@const drawn = z.hosts.slice(0, 3)}
           {@const ink = LANE_INKS[i % LANE_INKS.length]}
@@ -5523,8 +5914,39 @@
         <text x="700" y="662" text-anchor="middle" class="note-t">{nothingSeenNote}</text>
       {/if}
 
-      {#if zones.length === 0}
-        <!-- The honest empty state: the place before the data. -->
+      <!-- Retirement is silent (#460, round 55): six quiet hours and the
+           ghost leaves by itself, the map goes back to what it was, and
+           one line under it says what happened. The undo stands for the
+           hour after, because a retirement nobody was asked about should
+           be reversible by the person who finds out afterwards. -->
+      {#each decommissionsState.retired.filter((w) => undoable(w, nowMs)) as w (w.id)}
+        <text x="700" y={nothingSeenNote ? 678 : 662} text-anchor="middle" class="note-t"
+          >{retiredNote(w)} ·
+          <tspan
+            class="b"
+            role="button"
+            tabindex="0"
+            aria-label="Undo the retirement of {w.cidr} — bring the ghost back"
+            onclick={(e) => {
+              e.stopPropagation()
+              void decommissionsState.undo(w.id)
+            }}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                void decommissionsState.undo(w.id)
+              }
+            }}>undo ▸</tspan
+          ></text
+        >
+      {/each}
+
+      {#if laneCount === 0}
+        <!-- The honest empty state: the place before the data. A ghost
+             lane counts against it -- a retired segment is something
+             that arrived, and saying "nothing has arrived yet" beside
+             one drawn on the map would be untrue. -->
         <g transform="translate(700 500)">
           <rect class="isl ghost" x="-108" y="0" width="216" height="106" rx="12" />
           <text x="0" y="40" text-anchor="middle" class="n-sub">nothing has arrived yet — waiting for data, not broken</text>
@@ -6248,6 +6670,9 @@
           {/if}
           <button class="hot" disabled={hostBusy} onclick={dismissHost}>dismiss ▸</button>
         {/if}
+        <!-- #410: the host click reaches the dossier. One hook, no state
+             of its own -- lib/dossier.svelte.ts owns the card. -->
+        <button class="dim" onclick={(e) => dossierState.open(d.ip, e.currentTarget)}>dossier ▸</button>
         <button class="dim" onclick={openStreamFromHost}>stream ▸</button>
         <button
           class="dim"
@@ -6258,6 +6683,61 @@
         >
       </div>
     </div>
+  {/if}
+
+  <!-- The decommission card (#460, round 55): the offer, the ghost or
+       the straggler, in the one component the city draws too. -->
+  {#if decommCard && !reach}
+    <DecommissionCard
+      bind:element={decommCardEl}
+      kind={decommCard.kind}
+      offer={decommCard.lane.offer}
+      watch={decommCard.lane.watch}
+      peerName={nameForIp(decommCard.lane.watch?.lastStraggler?.peer)}
+      {nowMs}
+      place={decommCardPlace}
+      busy={ghostBusy}
+      error={ghostError}
+      onaccept={() => answerOffer(decommCard.lane, true)}
+      ondismiss={() => answerOffer(decommCard.lane, false)}
+      onforce={(why) => forceRemoveGhost(decommCard.lane, why)}
+      onclose={() => {
+        openStragglerKey = null
+        openGhostKey = null
+      }}
+      ontrace={() => {
+        const s = decommCard.lane.watch?.lastStraggler
+        if (!s) return
+        const ti = laneIndexForIp(s.peer)
+        openTrace(
+          { in: s.interface || undefined, out: ti !== null ? zones[ti].id : undefined, port: s.port, proto: s.protocol },
+          { openList: true },
+        )
+      }}
+      onwatchhost={() => {
+        const s = decommCard.lane.watch?.lastStraggler
+        if (!s) return
+        topologyNavState.requestWatchDraft({
+          who: s.address,
+          toward: s.peer ? `${s.peer}${s.port ? `:${s.port}` : ''}` : undefined,
+          mode: 'expect',
+          provenance: `from a straggler on the retired range ${decommCard.lane.cidr}`,
+        })
+        appState.view = 'watchlist'
+      }}
+      onreach={() => {
+        const s = decommCard.lane.watch?.lastStraggler
+        if (s) descend(decommCard.lane.iface, s.name || s.address, s.address)
+      }}
+      onstream={() => {
+        appState.resetFilters()
+        appState.setFilter('srcQuery', decommCard.lane.cidr)
+        appState.view = 'live'
+      }}
+      onwatchlist={() => {
+        appState.view = 'watchlist'
+      }}
+    />
   {/if}
 
   {#if boundaryCard && !reach && !hostCard}
@@ -6990,6 +7470,75 @@
     fill: none;
     stroke-linecap: round;
     opacity: 0.55;
+  }
+
+  /* --- the ghost lane (#460, round 55) ----------------------------------- */
+
+  /* The rib to a ghost: still there, no longer carried. Dashed and in
+     the watch's own ink, drawn at the material's weight rather than a
+     live lane's 2.4px -- a segment nothing is routing is not a volume. */
+  .grib {
+    opacity: 1;
+    stroke-width: 1.6;
+    stroke-dasharray: 3 6;
+  }
+
+  /* The ghost's plate: round 30's lane card, hollowed. No fill of its
+     own beyond the island's, a dashed border in the state's ink, and a
+     glow only when a straggler has broken it -- the one moment on this
+     lane that is asking for something. */
+  .gisl {
+    fill-opacity: 0.35;
+    stroke-dasharray: 4 5;
+  }
+
+  .ghost-lane.broken .gisl {
+    filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.35));
+  }
+
+  /* The lane dot is a ring, not a disc: the lane is a place that was,
+     not a place that is. */
+  .gdot {
+    fill: none;
+    stroke-width: 1.2;
+  }
+
+  /* The name reads a step back from a live lane's, because it is the
+     name the range had rather than one anything answers to now. */
+  .gname {
+    fill: var(--fg-muted);
+  }
+
+  .gsub {
+    font-size: 10px;
+  }
+
+  /* A last-known host: the quiet material, dashed tighter and faded. It
+     is a name the range last had, not a machine anyone can see. */
+  .ghost-host {
+    fill: none;
+    stroke: var(--fg-dim);
+    stroke-width: 1.1;
+    stroke-dasharray: 2 2.5;
+    opacity: 0.7;
+  }
+
+  .ghost-halo {
+    fill: none;
+    stroke: var(--alarm);
+  }
+
+  /* The straggler's line: the same arc an unplanned pair takes, in the
+     same reserved saturated colour, because it is the same kind of
+     statement -- traffic the map had no reason to expect. */
+  .straggler-rib {
+    opacity: 1;
+    stroke: var(--alarm);
+    stroke-width: 2;
+  }
+
+  .straggler-call {
+    cursor: pointer;
   }
 
   /* --- the shared edge chrome (#628) ------------------------------------- */

@@ -200,9 +200,11 @@ skipping one that did costs a green pipeline that tested nothing.
 Live-check is slow and it holds the workstation while it runs, which is
 the bottleneck #673 set out to relieve: its image exists so `make
 live-check` can run somewhere other than the machine you are working on.
-Somewhere else and local -- **not** in CI. No pipeline on either host
-runs the gate, and none should; a job proposing to was closed unmerged
-(#704, #705) once that was clear.
+Since 2026-09-08 that somewhere also includes GitLab CI: `gate:scenarios`
+runs it as four parallel shards, on every MR and `dev` pipeline, blocking
+the merge (see "The gate blocks the merge, in CI" below). #704 and #705,
+which closed a job proposing that unmerged, were superseded once the move
+became deliberate -- they are not still-standing objections.
 
 The image carries **all three engines**, and `MV_BROWSER` picks one --
 `chromium` (the default), `firefox` or `webkit`. That is the second half

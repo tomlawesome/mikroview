@@ -45,10 +45,10 @@ import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-br
 const EXPECT_IP = '198.51.100.110'
 const RESOLVE_IP = '198.51.100.111'
 
+const { page, consoleErrors } = await session()
+
 feedPortScan(20, EXPECT_IP)
 feedPortScan(20, RESOLVE_IP)
-
-const { page, consoleErrors } = await session()
 
 async function openFlags() {
   await goTo(page, 'Flags')

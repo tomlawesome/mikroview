@@ -34,7 +34,7 @@
 // clearing restores" is itself part of what #644 asked for -- the
 // cleanup step is also the assertion.
 
-import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, waitForStreamRows } from './live-browser.mjs'
 
 const CARD = '.card[data-card="live"]'
 
@@ -75,12 +75,13 @@ async function visibleBuckets(page) {
   return series.slice(Math.max(0, series.length - WHISPER_WINDOW_MINUTES))
 }
 
-feedSyslog(120, 'stream-interiors')
-
 // unfoldFilter: false -- this scenario owns the fold. session() opens the
 // stream's filter for every other scenario, which would leave the two
 // checks below asserting against a box already unfolded (#667).
-const { page, consoleErrors } = await session({ waitForEvents: 60, unfoldFilter: false })
+const { page, consoleErrors } = await session({ unfoldFilter: false })
+
+feedSyslog(120, 'stream-interiors')
+await waitForStreamRows(page, 60)
 
 // Rounds 36-38: following is the `following` pill on the whisper's own
 // line, not a button on the scene bar -- the whisper commands the stream

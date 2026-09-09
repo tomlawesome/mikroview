@@ -32,14 +32,14 @@
 // the navigation that caused it (the trap live-topography-edges.mjs
 // records at length).
 
-import { session, feedSyslog, check, responsive, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, goTo, waitForStreamRows } from './live-browser.mjs'
 
+const { page, consoleErrors } = await session()
 // Enough traffic that the hourline has an hour to talk about at all --
 // `.rate` renders regardless, but a page with no minutes on its axis is
 // not the page the design was drawn against.
 feedSyslog(60, 'warm-restart')
-
-const { page, consoleErrors } = await session({ waitForEvents: 20 })
+await waitForStreamRows(page, 20)
 
 /** apiUrl resolves a path against the page's own origin, for page.request. */
 function apiUrl(path) {

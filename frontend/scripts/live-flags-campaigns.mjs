@@ -31,10 +31,10 @@ import { session, check, done, feedPortScan, feedInternalRecon, waitForFlag, goT
 // is.
 const SRC = '192.168.1.63'
 
+const { page, consoleErrors } = await session()
+
 feedPortScan(20, SRC)
 feedInternalRecon(12, SRC, 445)
-
-const { page, consoleErrors } = await session()
 
 // Server-side first (#354): a locator timeout cannot say whether a
 // detector raised nothing or the row merely had not rendered yet. The

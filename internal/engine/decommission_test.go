@@ -28,15 +28,17 @@ type decommStore struct {
 type decommObservation struct {
 	src, dst string
 	at       time.Time
+	obs      decommission.Observation
 }
 
 func (s *decommStore) Active() []decommission.Watch { return s.watches }
 
-func (s *decommStore) RecordTraffic(srcIP, dstIP string, at time.Time) []decommission.Watch {
-	s.recorded = append(s.recorded, decommObservation{src: srcIP, dst: dstIP, at: at})
+func (s *decommStore) RecordTraffic(srcIP, dstIP string, at time.Time, obs decommission.Observation) []decommission.Watch {
+	s.recorded = append(s.recorded, decommObservation{src: srcIP, dst: dstIP, at: at, obs: obs})
 	var hit []decommission.Watch
 	for i := range s.watches {
 		if s.watches[i].Matches(srcIP, dstIP) {
+			s.watches[i].RecordSighting(srcIP, dstIP, at, obs)
 			s.watches[i].RecordTraffic(at)
 			hit = append(hit, s.watches[i])
 		}

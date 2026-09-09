@@ -23,14 +23,21 @@
 //     list. GET /api/auth/users is admin-only (#657), so a viewer
 //     issuing it would be a page that loads and immediately 403s.
 
-import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, eventsTotal, waitForEventsTotal, waitForStreamRows } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
+const { page, consoleErrors } = await session()
+
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.
+// Wait for the server's own count, not just the rows: the memory group
+// below reads the polled stats when Settings mounts, and the rows reach
+// the page over the socket well before that count moves.
+const countedBefore = await eventsTotal(page)
 feedSyslog(40, 'live-engine-room')
-const { page, consoleErrors } = await session({ waitForEvents: 40 })
+await waitForEventsTotal(page, countedBefore + 40)
+await waitForStreamRows(page, 40)
 
 const PEOPLE = '#people'
 const MACHINES = '#keys'
@@ -96,6 +103,11 @@ const bufferCount = () =>
     return m ? Number(m[1].replace(/\D/g, '')) : null
   })
 
+// The row reads the client's polled stats (STATS_REFRESH_MS), which can
+// still be the pre-feed snapshot when Settings mounts -- so wait for the
+// poll to catch up with the count the server already confirmed above,
+// rather than reading the row once and pinning a stale 0 (#1065).
+await page.locator(BUFFER_ROW).filter({ hasText: /[1-9][\d,\s ]*\s+of\s/ }).waitFor({ timeout: 15000 })
 const before = await bufferCount()
 check(before !== null && before > 0, `memory says how many events the buffer holds (got ${before})`)
 

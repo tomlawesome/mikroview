@@ -1604,3 +1604,320 @@ export interface TuneLoggingRenderResponse {
   changed: number
   routeros: TuneLoggingRouterInfo
 }
+
+// ---- The device dossier (#410) --------------------------------------
+//
+// GET /api/hosts/{ip}/dossier, mirroring internal/dossier's Go types
+// field for field. Two habits of that package survive into these types
+// and matter when reading them: a `known: false` block means mikroview
+// has nothing to say, not that the answer is "no"; and `absent` is the
+// card's honesty list, naming in plain words everything the dossier
+// could not answer.
+
+export interface DossierVendor {
+  known: boolean
+  name?: string
+  oui?: string
+  registry?: string
+  private?: boolean
+  subDelegated?: boolean
+  reason?: string
+}
+
+export interface DossierRegistryStatus {
+  source?: string
+  loaded: boolean
+  entries: number
+  fetchedAt?: string
+  fromCache?: boolean
+  stale?: boolean
+  note?: string
+}
+
+export interface DossierSeen {
+  known: boolean
+  firstSeen?: string
+  firstSeenSource?: string
+  lastSeen?: string
+  events: number
+  windowStart?: string
+  interfaces?: string[]
+  note?: string
+}
+
+export interface DossierNames {
+  known: boolean
+  name?: string
+  source?: string
+  sourceNote?: string
+  ownLabel?: string
+  note?: string
+}
+
+export interface DossierMac {
+  known: boolean
+  address?: string
+  source?: string
+  locallyAdministered: boolean
+  locallyAdministeredNote?: string
+  groupNote?: string
+  vendor: DossierVendor
+  registry: DossierRegistryStatus
+  firstSeen?: string
+  lastSeen?: string
+  note?: string
+}
+
+export interface DossierAddress {
+  assignment: string
+  note: string
+  device?: string
+  hostname?: string
+  leaseMac?: string
+  arpMac?: string
+  consulted?: string[]
+}
+
+export interface DossierPeer {
+  ip: string
+  name?: string
+  country?: string
+  scope: string
+  events: number
+  ports?: number[]
+  lastSeen: string
+}
+
+export interface DossierPortUse {
+  port: number
+  protocol?: string
+  name?: string
+  direction: string
+  events: number
+  peers: number
+  lastSeen: string
+}
+
+export interface DossierCadence {
+  known: boolean
+  spanSeconds?: number
+  meanGapSeconds?: number
+  medianGapSeconds?: number
+  shape?: string
+  note?: string
+}
+
+export interface DossierTraffic {
+  known: boolean
+  destinations?: DossierPeer[]
+  talkers?: DossierPeer[]
+  ports?: DossierPortUse[]
+  moreDestinations?: number
+  moreTalkers?: number
+  morePorts?: number
+  cadence: DossierCadence
+  note?: string
+}
+
+export interface DossierRuleMatch {
+  label: string
+  name?: string
+  chain?: string
+  action?: string
+  device?: string
+  comment?: string
+  commentKnown: boolean
+  events: number
+  lastSeen: string
+}
+
+export interface DossierFirewall {
+  known: boolean
+  rules?: DossierRuleMatch[]
+  more?: number
+  note?: string
+}
+
+export interface DossierEvidence {
+  signal: string
+  detail: string
+}
+
+// Confidence is the backend's own word -- 'weak', 'fair' or 'strong'.
+// It is rendered as that word and never as a number or a colour: the
+// card narrows, it does not score.
+export interface DossierIdentity {
+  suggested: boolean
+  profile?: string
+  label?: string
+  confidence?: string
+  because?: string
+  evidence?: DossierEvidence[]
+  alternatives?: string[]
+  note: string
+}
+
+// A command for the operator to run. mikroview prints it and never
+// runs it -- see internal/dossier.Probe for why that line exists.
+export interface DossierProbe {
+  command?: string
+  url?: string
+  note: string
+}
+
+export interface HostDossier {
+  ip: string
+  generatedAt: string
+  seen: DossierSeen
+  names: DossierNames
+  mac: DossierMac
+  address: DossierAddress
+  traffic: DossierTraffic
+  firewall: DossierFirewall
+  identity: DossierIdentity
+  suggestedProbe?: DossierProbe
+  absent?: string[]
+}
+
+// ---------------------------------------------------------------------
+// Decommission watches (#460), as drawn in design round 55.
+//
+// A segment the router stopped carrying is offered to the operator:
+// "watch the dead range for stragglers?", with a receipt replayed over
+// the event ring. Say yes and the segment stays on both surfaces as a
+// ghost, painted by its watch state, until six quiet hours retire it.
+// These types mirror internal/api/decommission.go's JSON exactly.
+// ---------------------------------------------------------------------
+
+// Mirrors internal/decommission.State -- the watch's own vocabulary.
+// 'draining' is a watch that has seen traffic and is counting its window
+// again from the last line; the map paints it with 'broken', because to
+// the operator both mean "this range is still talking".
+export type DecommissionState = 'holding' | 'draining' | 'broken' | 'retired'
+
+// The ghost's ink is its watch state, and the map needs one state the
+// watch does not have: 'none' is a segment that has left the router and
+// been offered but not yet answered, so nothing is watched and the ghost
+// is drawn in the plain dark ink. Round 55: grey before the watch
+// starts, watch-purple holding, alarm-red broken.
+export type GhostState = 'none' | 'holding' | 'broken'
+
+// Mirrors internal/routerstate.KnownHost -- one address the router had a
+// name for at the moment the range went. Frozen at that instant: the
+// lease and ARP tables for a retired range drain away over the pushes
+// that follow, so a name looked up later would be missing exactly when
+// it is wanted. No entry means no name, never a guessed one.
+export interface DecommissionKnownHost {
+  address: string
+  name?: string
+  source?: string
+  seenAt: string
+}
+
+// Mirrors internal/api's decommissionReceiptView -- the replay behind
+// the offer. Never the count alone: "would have caught 3" means nothing
+// without the period it was counted over, which is why the span travels
+// with it. Fable's 2026-09-09 ruling: the receipt replays whatever the
+// ring holds up to 24 h and says the span it actually covered, and it is
+// not tied to the 6 h clean window.
+export interface DecommissionReceipt {
+  emissionCount: number
+  // Who the replay actually caught, most-seen first. "Would have caught
+  // 3" is an abstraction until the operator sees which device it means,
+  // which is why round 55 draws the addresses inside the sentence. Absent
+  // where the replay retained no addresses, and a name is absent where no
+  // push ever named that address.
+  addresses?: { address: string; name?: string; count: number }[]
+  start: string
+  end: string
+  duration: string
+  eventCount: number
+  truncated: boolean
+}
+
+// Shown instead of a receipt when there is nothing to replay against --
+// an honest refusal rather than a flattering zero.
+export interface DecommissionDecline {
+  reason: string
+}
+
+// Mirrors internal/api's decommissionOfferView -- one segment that has
+// left the router, with the receipt that argues for watching it.
+export interface DecommissionOffer {
+  device: string
+  cidr: string
+  address: string
+  interface: string
+  name: string
+  departedAt: string
+  lastKnown?: DecommissionKnownHost[]
+  coverage: WatchlistCoverage
+  receipt?: DecommissionReceipt
+  decline?: DecommissionDecline
+  suggested: { cleanWindow: string }
+}
+
+// Mirrors internal/decommission.Sighting -- the most recent line that
+// broke the watch, which is what the straggler callout and its card are
+// drawn from. One sighting, not a list: a single straggler is the whole
+// finding, so what the operator needs is the one that just happened.
+export interface DecommissionSighting {
+  address: string
+  name?: string
+  peer?: string
+  protocol?: string
+  port?: number
+  interface?: string
+  rule?: string
+  action?: string
+  at: string
+}
+
+// Mirrors internal/decommission.Watch plus internal/api's
+// decommissionWatchView. cleanWindow and replaySpan are Go durations, so
+// they arrive as nanoseconds; retiresIn is the server's own rendering of
+// the remaining time, taken from the same computation as state so the
+// countdown and the paint can never disagree.
+export interface DecommissionWatch {
+  id: string
+  cidr: string
+  device: string
+  interface: string
+  name: string
+  createdAt: string
+  cleanWindow: number
+  lastTrafficAt?: string
+  trafficCount: number
+  covered: boolean
+  detached: boolean
+  forcedAt?: string
+  forcedBy?: string
+  forcedReason?: string
+  retiredAt?: string
+  // The frozen enrichment, copied from the departure at the moment the
+  // offer was answered (internal/decommission.Straggler, the same shape
+  // routerstate's KnownHost has).
+  lastKnown?: DecommissionKnownHost[]
+  replayCount: number
+  replaySpan: number
+  lastStraggler?: DecommissionSighting
+  state: DecommissionState
+  retiresIn: string
+  coverage: WatchlistCoverage
+  // When set, the retirement can still be taken back -- round 55's
+  // "undo for the hour after". Absent on a watch that has not retired.
+  undoableUntil?: string
+}
+
+// Mirrors internal/api's decommissionResponse. One call for the whole
+// surface: an offer and a ghost are the same object one decision apart,
+// so splitting them would mean two requests that can disagree about a
+// segment mid-answer.
+export interface DecommissionResponse {
+  offers: DecommissionOffer[]
+  watches: DecommissionWatch[]
+  // #367's caveat, carried outward: false means at least one router
+  // feeds events but never pushed its filter table, so "nothing is
+  // logging this" cannot be trusted as a definite negative.
+  evidenceComplete: boolean
+}

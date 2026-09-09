@@ -23,7 +23,13 @@ class IpLookupState {
 
   private requestId = 0
 
-  open(ip: string, rect: DOMRect) {
+  // The button that opened this, kept so a surface reached *through*
+  // this popover -- the dossier card (#410) -- can hand focus back to
+  // the same trigger once it closes, rather than to a menu item that
+  // has since gone.
+  trigger: HTMLElement | null = null
+
+  open(ip: string, rect: DOMRect, trigger: HTMLElement | null = null) {
   // Hold the stream while this is open (#413's "the stream holds while
   // you edit", stated once for every row-anchored surface). Newest-at-top
   // pushes rows down as events arrive, and a popover anchored to a row
@@ -31,6 +37,7 @@ class IpLookupState {
   // different token does not take a second hold it will never release.
     if (this.anchor === null) appState.holdStream()
     this.anchor = { ip, x: rect.left, y: rect.bottom }
+    this.trigger = trigger
     this.result = null
     this.error = null
     this.loading = true

@@ -7,6 +7,8 @@ import type {
   AuditResult,
   AuthSession,
   CoverageEvidence,
+  DecommissionResponse,
+  DecommissionWatch,
   Definition,
   DefinitionParamSchema,
   DetectorScope,
@@ -21,6 +23,7 @@ import type {
   Flag,
   FlagTimeBucket,
   Healthz,
+  HostDossier,
   HourTopBucket,
   MACRegistryEntry,
   PersistenceInfo,
@@ -316,6 +319,16 @@ export async function fetchStatsTops(): Promise<HourTopBucket[]> {
   if (!res.ok) throw new ApiError(`fetchStatsTops: ${res.status}`, res.status)
   const body = await res.json()
   return body.tops ?? []
+}
+
+// The device dossier (#410): everything mikroview already knows about
+// one address, assembled server-side. Never a 404 -- an address nobody
+// has heard of comes back as a dossier that says so, block by block --
+// so any non-2xx here is a real failure and the card offers try again.
+export async function fetchHostDossier(ip: string): Promise<HostDossier> {
+  const res = await fetch(`/api/hosts/${encodeURIComponent(ip)}/dossier`)
+  if (!res.ok) throw new ApiError(`fetchHostDossier: ${res.status}`, res.status)
+  return res.json()
 }
 
 export async function lookupIp(ip: string): Promise<ReputationResult> {
@@ -1646,4 +1659,66 @@ export async function fetchTrace(req: TraceRequest): Promise<TraceResponse> {
   const res = await fetch(`/api/trace?${qs}`)
   if (!res.ok) throw new ApiError(`fetchTrace: ${res.status}`, res.status)
   return res.json()
+}
+
+// ---------------------------------------------------------------------
+// Decommission watches (#460): the offer, the answers, and the ghost's
+// own actions. One GET for the whole surface -- see DecommissionResponse
+// for why the offers and the watches travel together.
+// ---------------------------------------------------------------------
+
+export async function fetchDecommission(): Promise<DecommissionResponse> {
+  const res = await fetch('/api/decommission')
+  if (!res.ok) throw new ApiError(`fetchDecommission: ${res.status}`, res.status)
+  return res.json()
+}
+
+// The "yes" answer. cleanWindow is a Go duration string and is omitted
+// unless the operator changed it, so the server's configured default
+// stays the one place that number lives.
+export async function createDecommissionWatch(
+  device: string,
+  cidr: string,
+  cleanWindow?: string,
+): Promise<DecommissionWatch | string> {
+  const res = await postJSON('/api/decommission/watches', { device, cidr, cleanWindow })
+  if (res.ok) return res.json()
+  return (await res.text()) || `createDecommissionWatch: ${res.status}`
+}
+
+// The "no" answer: the zone leaves at once and no watch is created.
+export async function dismissDecommissionOffer(device: string, cidr: string): Promise<string | null> {
+  const res = await postJSON('/api/decommission/dismiss', { device, cidr })
+  if (res.ok) return null
+  return (await res.text()) || `dismissDecommissionOffer: ${res.status}`
+}
+
+// Force-remove: the ghost leaves the map now, the watch goes on in the
+// watchlist until it retires. The reason is required by the server (the
+// #385 recorded-override pattern), so an empty one is refused there
+// rather than being quietly padded here.
+export async function forceRemoveDecommissionGhost(
+  id: string,
+  reason: string,
+): Promise<DecommissionWatch | string> {
+  const res = await postJSON(`/api/decommission/watches/${encodeURIComponent(id)}/force`, { reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `forceRemoveDecommissionGhost: ${res.status}`
+}
+
+// Round 55's undo: for the hour after a watch retires by itself, the
+// retirement can be taken back and the ghost returns to the map.
+export async function undoDecommissionRetirement(id: string): Promise<DecommissionWatch | string> {
+  const res = await postJSON(`/api/decommission/watches/${encodeURIComponent(id)}/undo`)
+  if (res.ok) return res.json()
+  return (await res.text()) || `undoDecommissionRetirement: ${res.status}`
+}
+
+// Abandoning a watch outright -- distinct from retirement, which is the
+// watch finishing its job, and from force-remove, which only takes it
+// off the map.
+export async function deleteDecommissionWatch(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/decommission/watches/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteDecommissionWatch: ${res.status}`
 }

@@ -23,13 +23,14 @@
 //      500ms budget, so the Worker returns normally and nothing is
 //      refused. 45 does not finish in 20 seconds. Anything below ~40 is
 //      a test that silently passes.
-import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, waitForStreamRows } from './live-browser.mjs'
 
 const CHEAP = 'a'.repeat(38)             // matches instantly, see (1)
 const EXPENSIVE = 'a'.repeat(45) + 'b'   // does not finish in 20s, see (2)/(3)
 
+const { page, consoleErrors } = await session()
 feedSyslog(200, CHEAP)
-const { page, consoleErrors } = await session({ waitForEvents: 100 })
+await waitForStreamRows(page, 100)
 
 // #183: the initial fetch and the WebSocket stream overlap, so an event
 // arriving in both used to land in the buffer twice and give LiveTable's

@@ -20,14 +20,15 @@
 // checks scrollHeight against window.innerHeight first, specifically to
 // rule that out here.
 
-import { session, feedSyslog, check, done, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
+import { session, feedSyslog, check, done, eventsTotal, waitForEventsTotal, waitForStreamRows } from './live-browser.mjs'
 
+const { page } = await session()
 // Comfortably past MAX_RENDERED_ROWS (800), same reasoning as
 // live-autoscroll.mjs: below that threshold nothing ever gets evicted
 // regardless of order, so the interesting behaviour (a long, genuinely
 // scrollable table) doesn't exist yet.
 feedSyslog(450, 'order-batch-a')
-const { page } = await session({ waitForEvents: 400 })
+await waitForStreamRows(page, 400)
 feedSyslog(450, 'order-batch-b')
 await page.waitForFunction(() => document.querySelectorAll('.row').length >= 800, null, { timeout: 30000 })
 

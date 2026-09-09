@@ -18,7 +18,7 @@
 import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import path from 'path'
-import { session, feedSyslog, goTo, check, done } from './live-browser.mjs'
+import { session, feedSyslog, goTo, check, done, waitForStreamRows } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -32,10 +32,11 @@ const fixtureExport = readFileSync(
   'utf8',
 )
 
+const { page, consoleErrors } = await session()
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.
 feedSyslog(20, 'live-tune-logging')
-const { page, consoleErrors } = await session({ waitForEvents: 20 })
+await waitForStreamRows(page, 20)
 
 // --- Reach the page the way the wizard's finish screen offers it ------
 // (#435 decision 2's other way in is a dark boundary's own card on the

@@ -27,8 +27,9 @@ import { session, feedSyslog, feedRaw, check, responsive, done, goTo, unfoldStre
 
 const URL_BASE = process.env.MV_URL
 
-feedSyslog(3, 'fall-probe')
 const { page, consoleErrors } = await session({ landing: 'fall' })
+
+feedSyslog(3, 'fall-probe')
 
 // The ingest token must be scoped to exactly the device the probe events
 // carry (see live-before-router-lookup.mjs's own comment on this same lookup),

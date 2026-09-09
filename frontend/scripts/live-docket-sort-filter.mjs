@@ -46,10 +46,11 @@ async function api(page, method, path, body) {
 // margin live-flags-clearing takes ("20, not 15").
 const LOW_IP = '198.51.100.120'
 const HIGH_IP = '198.51.100.121'
-feedPortScan(18, LOW_IP)
-feedPortScan(30, HIGH_IP)
 
 const { page } = await session()
+
+feedPortScan(18, LOW_IP)
+feedPortScan(30, HIGH_IP)
 
 // --- Flags: the head group of the ratified active table ---
 

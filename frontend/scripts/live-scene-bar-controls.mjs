@@ -15,12 +15,13 @@
 // claimed, does what it did, and is absent from the scenes it does not
 // belong to. Only the claimed place changed.
 
-import { session, feedSyslog, check, goTo, done } from './live-browser.mjs'
+import { session, feedSyslog, check, goTo, done, waitForStreamRows } from './live-browser.mjs'
 
+const { page, consoleErrors } = await session()
 // Events in the buffer, so the controls have something to act on and
 // csv has something to be enabled for.
 feedSyslog(100)
-const { page, consoleErrors } = await session({ waitForEvents: 50 })
+await waitForStreamRows(page, 50)
 
 // The active card -- the deck mounts the neighbouring cards too, each
 // with a scene bar of its own.
