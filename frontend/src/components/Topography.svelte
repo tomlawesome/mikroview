@@ -107,6 +107,7 @@
   // server answered, and everything below only draws it.
   import { portFilterState } from '../lib/portFilter.svelte'
   import { mapTraceState } from '../lib/mapTrace.svelte'
+  import TraceCrumb from './TraceCrumb.svelte'
   import {
     chooseDoorSpot,
     doorAccepts,
@@ -2149,6 +2150,9 @@
       if (nodeCard) nodeCard = null
       else if (lineCard) closeLineCard()
       else if (compose) compose = null
+      // The list (#1050, A1) is its own rung: Esc closes it first, a
+      // second Esc clears the trace underneath it.
+      else if (mapTraceState.active && mapTraceState.listOpen) mapTraceState.listOpen = false
       else if (mapTraceState.active) mapTraceState.clear()
       // The city has the same rung in its own ladder (#1055) and owns it
       // while it is the surface being read: two handlers on one window
@@ -4142,10 +4146,10 @@
     }
   }
 
-  function openTrace(req: Parameters<typeof mapTraceState.open>[0]) {
+  function openTrace(req: Parameters<typeof mapTraceState.open>[0], opts?: Parameters<typeof mapTraceState.open>[1]) {
     portFilterState.clear()
     if (reach) surface()
-    void mapTraceState.open(req)
+    void mapTraceState.open(req, opts)
   }
 
   /** The picker's text field: enter applies the list, and a list that
@@ -4272,60 +4276,10 @@
       {/if}
     </div>
   {/if}
-  <!-- The traced line's own crumb (#1018, round 53): the whole story in
-       one line at the top of the map -- who → who, the port, the
-       verdict and the rule that made it, and how many more lines like
-       it there are. The others are said, never drawn: a union of forty
-       identical refusals is a smear, not an answer (owner, 2026-09-08).
-       Same shape and same wording grammar as the reach's crumb above,
-       so the two read as one product. -->
-  {#if traceOn}
-    <div class="crumb trace-crumb" aria-label="The traced line">
-      <div class="path">
-        {#if mapTraceState.loading}
-          <span class="here">tracing…</span>
-        {:else if mapTraceState.event}
-          {@const e = mapTraceState.event}
-          <span class="here">{e.srcHostName || e.srcIp || 'unknown'}</span>
-          {#if e.srcHostName && e.srcIp}<span class="ip">{e.srcIp}</span>{/if}
-          <span aria-hidden="true">→</span>
-          <span class="here">{e.dstHostName || e.dstIp || 'unknown'}</span>
-          {#if e.dstHostName && e.dstIp}<span class="ip">{e.dstIp}</span>{/if}
-          <i class="bar"></i>
-          <!-- RouterOS logs the protocol in caps; every other port label
-               on this map (the pill, the door, the reach's card) reads
-               `445/tcp`, so this one does too. -->
-          {#if e.dstPort}<span>{e.dstPort}/{(e.protocol ?? '?').toLowerCase()}</span>{/if}
-          <span class:alarm={mapTraceState.verdict === 'refused'}>
-            {mapTraceState.verdict === 'refused' ? 'refused' : mapTraceState.verdict === 'accepted' ? 'accepted' : 'logged'}
-            at {e.ruleName || e.ruleLabel || 'no rule named'}
-          </span>
-          <span>{formatHM(e.time)}</span>
-          {#if mapTraceState.like > 0}
-            <i class="bar"></i>
-            <!-- The others are a click into the stream, not a drawing:
-                 "and 41 more like it", never a union on the map. -->
-            <button
-              class="crumb-link"
-              onclick={() => {
-                appState.resetFilters()
-                if (e.srcIp) appState.setFilter('srcQuery', e.srcIp)
-                if (e.dstIp) appState.setFilter('dstQuery', e.dstIp)
-                if (e.dstPort) appState.setFilter('port', String(e.dstPort))
-                appState.view = 'live'
-              }}>and <b>{mapTraceState.like} more like it</b> ▸</button
-            >
-          {/if}
-        {:else}
-          <!-- An honest miss: the window holds nothing matching, said in
-               words rather than drawn as a path that went nowhere. -->
-          <span class="here">nothing in the window matches that line</span>
-        {/if}
-        <i class="bar"></i>
-        <button class="crumb-link esc" onclick={() => mapTraceState.clear()}>Esc ▸</button>
-      </div>
-    </div>
-  {/if}
+  <!-- The traced line's own crumb, plus its list (#1018 round 53, #1050
+       round 56 A1) -- lifted into its own component so the same markup
+       mounts on the city too. -->
+  <TraceCrumb />
   <!-- Both tools swap the legend for their own entries (round 53's
        `chrome`). The map carries no legend of its own -- round 49
        decided the material is the statement -- so this appears with a
@@ -5040,7 +4994,9 @@
             <text class="chip-t" x={c.x - c.w / 2 + CARD_PAD} y={c.y + 20}>{line2}</text>
           </g>
           <!-- The trace opens from the flag's own chip (#1018, round
-               53). A token on the card, not a sentence: `trace ▸`, the
+               53), and opens the list with it (#1050, round 56, B1) so
+               the operator lands on the picker rather than a random
+               line. A token on the card, not a sentence: `trace ▸`, the
                same `▸` grammar every other action on this map uses. It
                takes its own click back from the card, which opens the
                stream. -->
@@ -5052,13 +5008,13 @@
             aria-label="Trace one of these lines on the map"
             onclick={(e) => {
               e.stopPropagation()
-              openTrace(traceAsk(worstUnplanned.r, asked))
+              openTrace(traceAsk(worstUnplanned.r, asked), { openList: true })
             }}
             onkeydown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
                 e.stopPropagation()
-                openTrace(traceAsk(worstUnplanned.r, asked))
+                openTrace(traceAsk(worstUnplanned.r, asked), { openList: true })
               }
             }}
           >
