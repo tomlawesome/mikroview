@@ -37,8 +37,64 @@ const presence: FlagFamily = { ink: '#b8c56a', mark: '▲' }
 // card, so that one flag took down every scene at once.
 const custom: FlagFamily = { ink: '#9db8e8', mark: '▲' }
 
+// What their authors filed the operator-authored detectors under (#829),
+// keyed by the same string a flag carries as its type -- a custom
+// detector's definition id. Empty until something reads the definitions
+// list; a flag whose detector is not in it falls through to the accent
+// below, exactly as every custom flag did before the family field
+// existed.
+//
+// A module-level register rather than a parameter on familyOf, because
+// the ink has to reach a dozen call sites that have a flag and nothing
+// else: the docket, the fall, the map, the totals bar and the station's
+// own chips all ask familyOf(f.type) and know nothing about definitions.
+// Passing the family down each of those paths would be the same fact
+// threaded through five components; registering it once lets them pick
+// it up unchanged.
+const customFamilies = new Map<string, FlagFamily>()
+
+// rememberCustomFamilies replaces the register wholesale from the
+// definitions list. Wholesale, not merged, so a detector that was
+// deleted or re-filed to nothing stops wearing an ink nothing chose --
+// a merge would leave the old answer in place for exactly the case the
+// operator changed it.
+export function rememberCustomFamilies(byType: Record<string, string | undefined>): void {
+  customFamilies.clear()
+  for (const [type, name] of Object.entries(byType)) {
+    if (!name) continue
+    const fam = NAMED_FAMILIES[name]
+    if (fam) customFamilies.set(type, fam)
+  }
+}
+
+// The seven the operator may choose between, in the order the picker
+// draws them (round 7/8 of #490): the six the record assigns to the
+// built-ins, worst first, then the operator-authored accent.
+export const NAMED_FAMILIES: Record<string, FlagFamily> = {
+  hostile,
+  scan,
+  outbound,
+  repeat,
+  surge,
+  presence,
+  custom,
+}
+
+// The picker's own order, and the names the API stores -- listed once
+// here so the editor and the register cannot come to disagree about
+// which seven there are.
+export const FAMILY_NAMES: readonly string[] = [
+  'hostile',
+  'scan',
+  'outbound',
+  'repeat',
+  'surge',
+  'presence',
+  'custom',
+]
+
 export function familyOf(type: string): FlagFamily {
-  return FLAG_FAMILIES[type as FlagType] ?? custom
+  return FLAG_FAMILIES[type as FlagType] ?? customFamilies.get(type) ?? custom
 }
 
 // The families worst-first, as the record lists them: alarms before

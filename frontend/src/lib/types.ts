@@ -539,6 +539,20 @@ export interface DetectorSettings {
   // with -- Definition.distance flattened to the one bit the bench shows
   // (#787), so a row can say it has been tuned without the panel open.
   overridden?: boolean
+  // Carried through from Definition.detection (#829). The bench's
+  // conditions editor renders it, and its presence is also what tells a
+  // row apart from a shipped detector whose structure is Go.
+  detection?: DefinitionDetection
+  // Carried through from Definition.family (#829) -- what the family
+  // picker shows as chosen, and the ink the whole drawer wears.
+  family?: string
+  // Carried through from Definition.structure (#829): a shipped
+  // declarative detector's own conditions, read off its builder. Present
+  // only on a shipped row, and its presence is what tells the bench which
+  // of the two clones a shipped row offers -- a server-side copy that
+  // arrives carrying the conditions, or a draft that carries the scope
+  // and the numbers and asks for the conditions to be written.
+  structure?: DefinitionDetection
 }
 
 // Mirrors internal/api's definitionView (issue #407) -- one definition
@@ -679,6 +693,17 @@ export interface Definition {
   // here -- they are ordinary params, tuned through the same editor as
   // every other definition's.
   detection?: DefinitionDetection
+  // The flag family an operator filed a custom detector under (#829) --
+  // the ink its flags wear on the docket, the fall and the map. Absent
+  // for a shipped definition, whose family the palette already holds by
+  // definition id, and for a custom one nobody has filed yet.
+  family?: string
+  // A shipped declarative detector's own match structure, read back off
+  // the builder that assembled it (#829). Read-only: writing it back
+  // changes nothing. Absent for a custom detection, which carries
+  // `detection` instead, and for a shipped detector whose logic is Go
+  // with no conditions in it to report.
+  structure?: DefinitionDetection
   // What this definition costs the ingest path. Set only where an
   // operator chose the conditions that decide it.
   dispatch?: DefinitionDispatch

@@ -240,6 +240,13 @@ type Definition struct {
 	// DetectionSpec for the structure/tunable split and why nothing in
 	// it serialises non-deterministically.
 	Detection *DetectionSpec `json:"detection,omitempty"`
+	// Family is the flag family an operator filed this detector under
+	// (#829). Display only -- see Family's own doc comment -- and set on
+	// a custom definition alone, since a shipped detector's family is
+	// already the design record's, held in the frontend's palette by
+	// definition id. Empty means "not filed", and reads exactly as an
+	// unfiled detector always did.
+	Family Family `json:"family,omitempty"`
 }
 
 // newDefinitionID returns a random 32-character hex string. Mirrors
@@ -306,6 +313,9 @@ func (d Definition) Validate() error {
 	if err := d.validateDetectionBlock(); err != nil {
 		return err
 	}
+	if err := d.validateFamily(); err != nil {
+		return err
+	}
 	if _, err := ValidateParams(d.ParamSchema, d.Params); err != nil {
 		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
 	}
@@ -341,6 +351,27 @@ func (d Definition) validateDetectionBlock() error {
 		return fmt.Errorf("engine: definition %q: a detection block belongs only to a custom detection definition, and this one is intent=%q provenance=%q", d.ID, d.Intent, d.Provenance.Origin)
 	}
 	if err := d.Detection.Validate(); err != nil {
+		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
+	}
+	return nil
+}
+
+// validateFamily checks who may be filed under a flag family, and that
+// the family named is one of the seven.
+//
+// Only a custom definition may carry one. A shipped detector's family is
+// the design record's own classification of the sixteen built-ins, held
+// in the frontend palette by definition id, so a stored one here would be
+// a second answer to a question already answered -- and the two could
+// disagree after an upgrade retuned the record.
+func (d Definition) validateFamily() error {
+	if d.Family == "" {
+		return nil
+	}
+	if d.Provenance.Origin != ProvenanceCustom {
+		return fmt.Errorf("engine: definition %q: only a custom definition is filed under a flag family; a shipped one's family is the design record's, keyed by its own id", d.ID)
+	}
+	if err := ValidateFamily(d.Family); err != nil {
 		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
 	}
 	return nil

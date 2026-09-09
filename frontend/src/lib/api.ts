@@ -10,6 +10,7 @@ import type {
   DecommissionResponse,
   DecommissionWatch,
   Definition,
+  DefinitionCondition,
   DefinitionParamSchema,
   DetectorScope,
   Device,
@@ -735,6 +736,24 @@ export interface DefinitionUpdate {
   scope?: DetectorScope
   params?: Record<string, unknown>
   expectation?: WatchlistEntryRequest
+  // The flag family a custom detector is filed under (#829); the empty
+  // string clears the filing. Absent leaves it alone, like every other
+  // field here.
+  family?: string
+  // A custom detector's structure -- its conditions and the aggregation
+  // around them -- as the conditions editor saves it (#829). Threshold
+  // and window are deliberately not in here: they are ordinary params
+  // and go up under `params` above, so there is one door onto each value
+  // rather than two.
+  detection?: DefinitionStructureUpdate
+}
+
+export interface DefinitionStructureUpdate {
+  conditions: DefinitionCondition[]
+  key: string
+  counting: string
+  distinctField?: string
+  detailTemplate: string
 }
 
 export async function updateDefinition(id: string, req: DefinitionUpdate): Promise<Definition | string> {
@@ -893,6 +912,37 @@ export async function deleteWatchlistEntry(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/definitions/${encodeURIComponent(id)}`)
   if (res.ok) return null
   return (await res.text()) || `deleteWatchlistEntry: ${res.status}`
+}
+
+// createCustomDetection creates an operator-authored detector from what
+// the conditions editor has in it (#829). Used where cloning could not
+// be: a shipped detector whose matching is Go carries no conditions to
+// copy, so its copy is written here and created on the first Save rather
+// than existing server-side half-built.
+export async function createCustomDetection(req: {
+  name: string
+  family?: string
+  detection: DefinitionStructureUpdate & { threshold: number; window: string }
+}): Promise<Definition | string> {
+  const res = await postJSON('/api/definitions', {
+    name: req.name,
+    intent: 'detection',
+    kind: 'declarative',
+    family: req.family ?? '',
+    detection: req.detection,
+  })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `createCustomDetection: ${res.status}`
+}
+
+// deleteDefinition removes an operator-authored detector. Shipped
+// definitions are never deleted, only ever paused (engine.Definition's
+// own invariant), and the server refuses one -- so the bench only ever
+// offers this on a custom row.
+export async function deleteDefinition(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/definitions/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteDefinition: ${res.status}`
 }
 
 // definitionEntry pulls the operator-facing entry out of a definition
