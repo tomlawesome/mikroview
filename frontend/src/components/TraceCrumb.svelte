@@ -392,7 +392,13 @@
        top-left furniture on either surface. */
     left: calc(50% - 196px);
     z-index: 9;
-    width: 574px;
+    /* The mockup's 574px fits its short host names; real rows carry
+       dotted addresses and rule names, so the panel grows to its
+       columns' content up to a cap that still clears the screen edge,
+       rather than ellipsising the SAME MINUTE port and rule away. */
+    width: max-content;
+    min-width: 574px;
+    max-width: 760px;
     display: flex;
     flex-wrap: wrap;
     gap: 0;
@@ -424,7 +430,11 @@
   }
 
   .picker .col {
-    flex: 1;
+    /* Each column takes its own content width -- SAME LINE rows are
+       short (time and verdict; the line itself is in the heading), SAME
+       MINUTE rows carry the peer, port and rule -- and only shrinks
+       (ellipsising, see .row) once the panel hits its cap. */
+    flex: 1 1 auto;
     padding: 8px 10px 7px;
     min-width: 0;
   }
