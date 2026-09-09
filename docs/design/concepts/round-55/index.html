@@ -2282,7 +2282,7 @@ function ghostLane(n, state, opt) {
   });
   s += '<text x="' + (-90 + n.hosts.length * 17 - 4) + '" y="60" class="c-label">last known</text>';
   s += '<text x="-90" y="82" class="n-sub" style="font-size:10px' + (state === 'broken' ? ';fill:var(--alarm)' : state === 'holding' ? ';fill:var(--watch)' : '') + '">' +
-    { none: 'gone from the router at 22:07 · 3 hosts were here', holding: 'retired 22:07 · watch holding · quiet ' + (opt.hours || 0) + ' h of 6 h', broken: 'retired 22:07 · WATCH BROKEN · 3 lines since 22:07' }[state] + '</text>';
+    { none: 'gone at 22:07 · 3 hosts were here', holding: 'retired 22:07 · holding · ' + (opt.hours || 0) + ' h of 6 h', broken: 'retired 22:07 · BROKEN · 3 lines' }[state] + '</text>';
   if (state !== 'none' && (opt.flags || opt.watch)) s += hbar2({ hb: [opt.watch ? '◉ 1' : null, state === 'broken' && opt.flags ? '✱ 1' : null] }, 216, -108, 110);
   return s + '</g>';
 }
@@ -2308,6 +2308,13 @@ const STRAGGLER_CALLOUT_FLAT = '<g class="detail"><g class="hot" transform="tran
   '<text x="14" y="1" class="alarm-t">STRAGGLER · 10.0.70.14 → nas · tcp/554</text>' +
   '<text x="14" y="15" class="chip-t">was ‘garage-cam’ until 1 Aug · in: iot · 3× · trace ▸</text></g></g>';
 
+/* the leader to a card, heavier than round 49's hairline: a ghost is
+   faint by design, so the line that ties its card to it must not be */
+const leader_49 = leader;
+leader = function (from, to) {
+  return leader_49(from, to).replace('stroke="var(--hair-2)" stroke-width="1"', 'stroke="var(--accent)" stroke-opacity="0.75" stroke-width="1.8"')
+    .replace('r="3" fill="var(--accent)"', 'r="4" fill="var(--accent)"');
+};
 /* ---- the cards: one offer, one ghost card, on both surfaces ---- */
 const RECEIPT = '<div class="s wt"><i class="sw" style="background:var(--watch);opacity:.9"></i>in the last 24 h a watch here would have caught <b>3 lines</b> — all from 10.0.70.14, last named <b>garage-cam</b></div>';
 CARDS.offer = (px) => ({ px: px, w: 312, pinned: 1, n: 'Garage has left the router', sub: '10.0.70.0/24',
@@ -2350,7 +2357,7 @@ render = function (id) {
   const flat = document.getElementById('st-' + id).querySelector('g.flat');
   const m = roadPoint(STRAGGLER_ROAD, 0.4);
   const mx = X(c, m[0]), my = Y(c, m[1]);
-  const bx = 700, by = 556;
+  const bx = 690, by = 614;
   flat.innerHTML += '<path d="M' + R2(mx) + ' ' + R2(my) + 'L' + R2(bx + 334) + ' ' + R2(by + 8) + '" stroke="var(--alarm)" stroke-opacity="0.6" stroke-width="1"/>' +
     '<g transform="translate(' + R2(bx) + ' ' + R2(by) + ')" class="hot">' +
     '<rect x="0" y="0" width="334" height="46" rx="10" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.85"/>' +
@@ -2377,19 +2384,19 @@ Object.keys(SCENES).forEach((k) => { delete SCENES[k]; });
 const CITY_C = [-9, 29, 5.7];
 Object.assign(SCENES, {
   'flat-offer': { flat: 1, five: 1, ghost: 'none', alt: 1, flags: 1, watch: 1, hdr: [6, 7, 1],
-    cards: [{ from: [1212, 486], lead: [1230, 462], make: () => CARDS.offer([1076, 190]) }] },
+    cards: [{ from: [1212, 486], lead: [1230, 386], make: () => CARDS.offer([1076, 190]) }] },
   'city-offer': { c: CITY_C, compact: 1, roofs: 1, river: 1, alt: 3, flags: 1, watch: 1, ghost: 'none', hdr: [6, 7, 1],
-    cards: [{ at: [91, 10], make: (px) => CARDS.offer([px[0] - 720, px[1] - 230]) }] },
+    cards: [{ at: [91, 10], lead: [1236, 226], make: () => CARDS.offer([1080, 30]) }] },
   'flat-ghost': { flat: 1, five: 1, ghost: 'holding', alt: 1, flags: 1, watch: 1, hdr: [6, 8, 1] },
   'city-ghost': { c: CITY_C, compact: 1, roofs: 1, river: 1, alt: 3, flags: 1, watch: 1, ghost: 'holding', hdr: [6, 8, 1] },
   'flat-straggler': { flat: 1, five: 1, ghost: 'broken', straggler: 1, alt: 1, flags: 1, watch: 1, hdr: [7, 8, 2],
-    cards: [{ from: [1044, 446], lead: [1110, 446], make: () => CARDS.straggler([1076, 190]) }] },
+    cards: [{ from: [1044, 446], lead: [1110, 386], make: () => CARDS.straggler([1076, 190]) }] },
   'city-straggler': { c: CITY_C, compact: 1, roofs: 1, river: 1, alt: 3, flags: 1, watch: 1, ghost: 'broken', straggler: 1, hdr: [7, 8, 2],
-    cards: [{ at: [91, 36], make: (px) => CARDS.straggler([px[0] - 200, px[1] + 100]) }] },
+    cards: [{ at: [91, 36], lead: [1236, 404], make: () => CARDS.straggler([1080, 404]) }] },
   'flat-retire': { flat: 1, five: 1, ghost: 'holding', hours: 4, alt: 1, flags: 1, watch: 1, hdr: [6, 8, 1],
-    cards: [{ from: [1212, 486], lead: [1230, 484], make: () => CARDS.ghost([1076, 150], 1) }] },
+    cards: [{ from: [1212, 486], lead: [1230, 392], make: () => CARDS.ghost([1076, 150], 1) }] },
   'city-retire': { c: CITY_C, compact: 1, roofs: 1, river: 1, alt: 3, flags: 1, watch: 1, ghost: 'holding', hdr: [6, 8, 1],
-    cards: [{ at: [91, 10], make: (px) => CARDS.ghost([px[0] - 720, px[1] - 230], 0) }] },
+    cards: [{ at: [91, 10], lead: [1236, 210], make: () => CARDS.ghost([1080, 30], 0) }] },
   'flat-gone': { flat: 1, alt: 1, flags: 1, watch: 1, hdr: [6, 7, 1],
     note: 'Garage · 10.0.70.0/24 retired at 04:11 — quiet for 6 h — the ghost has left the map and the watch is closed · <tspan class="b">undo ▸</tspan>' }
 });
