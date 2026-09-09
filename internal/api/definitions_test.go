@@ -1129,6 +1129,33 @@ func TestHandleDefinitionsCloneRefusesShipped(t *testing.T) {
 	}
 }
 
+// TestShippedDeclarativeStructureIsServed is the half of #829 the clone
+// depends on: until it, a shipped declarative detector's conditions
+// existed only as Go, and a copy of one could not start from what the
+// original actually matches. The structure is read-only and belongs to
+// the binary, so it is served under its own name rather than as the
+// `detection` block a PUT can rewrite.
+func TestShippedDeclarativeStructureIsServed(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	decl := mustGetDefinition(t, ts, "port_scan")
+	if decl.Structure == nil || len(decl.Structure.Conditions) == 0 {
+		t.Fatalf("port_scan served no structure: %+v", decl.Structure)
+	}
+	if decl.Detection != nil {
+		t.Error("a shipped detector served a detection block; that field is the operator's own stored structure")
+	}
+
+	// A detector with no declarative builder reports no structure rather
+	// than an error: it still lists, it simply has no conditions to show.
+	code := mustGetDefinition(t, ts, "activity_spike")
+	if code.Structure != nil {
+		t.Errorf("a shipped code detector served a structure: %+v", code.Structure)
+	}
+}
+
 // mustGetDefinition reads one definition as the API serves it.
 func mustGetDefinition(t *testing.T, ts *httptest.Server, id string) definitionView {
 	t.Helper()

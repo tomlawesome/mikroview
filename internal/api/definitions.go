@@ -96,6 +96,23 @@ type definitionView struct {
 	// the frontend palette by definition id, and absent for a custom one
 	// nobody has filed yet.
 	Family engine.Family `json:"family,omitempty"`
+	// Structure is what a *shipped* declarative detector matches on and
+	// how it counts, read back off the builder that assembled it (#829).
+	//
+	// Exposed for one reason: cloning a shipped detector into a custom
+	// one has to start from the conditions the original actually uses,
+	// and those existed only as Go until this. Without it the copy
+	// arrives with an empty bar and the operator is asked to reconstruct
+	// a detector they only wanted to adjust.
+	//
+	// Not the same field as Detection above, and deliberately so.
+	// Detection is the operator's own stored structure, the thing a PUT
+	// can rewrite; this is a read-only account of the binary's, and
+	// writing it back changes nothing. Absent for a custom detection
+	// (which has Detection), for an expectation, and for a shipped
+	// programmatic detector, whose logic is Go with no conditions in it
+	// to report.
+	Structure *engine.DetectionSpec `json:"structure,omitempty"`
 	// Dispatch is what this definition costs the ingest path, and is set
 	// only where an operator chose the conditions that decide it.
 	Dispatch *dispatchView `json:"dispatch,omitempty"`
@@ -254,6 +271,9 @@ func (s *Server) definitionViewFor(sd engine.StoredDefinition, rulesByDevice map
 			v.Dispatch.Reason = alwaysConsultedReason
 		}
 	}
+	if d.Detection == nil && d.Intent == engine.IntentDetection && d.Kind == engine.KindDeclarative {
+		v.Structure = shippedStructureOf(d)
+	}
 	if d.Intent != engine.IntentExpectation {
 		return v
 	}
@@ -262,6 +282,32 @@ func (s *Server) definitionViewFor(sd engine.StoredDefinition, rulesByDevice map
 	}
 	v.Coverage = definitionCoverage(d, rulesByDevice, evidenceComplete)
 	return v
+}
+
+// shippedStructureOf builds d's live logic just far enough to read its
+// conditions and aggregation back off it, or nil where there is nothing
+// to read.
+//
+// nil is the answer for a shipped detector with no declarative builder
+// registered -- the baseline-backed ones, device_silence, the reputation
+// passes -- and for one whose stored params no longer satisfy its own
+// builder. Both are ordinary rather than exceptional, and neither is an
+// error worth failing a list request over: the detector still lists, it
+// simply reports no structure, and the clone path reads that as "this one
+// carries scope and numbers only".
+//
+// Rebuilt per call rather than cached. It is a list-time cost on a
+// handful of definitions, the builders do no I/O, and a cache keyed by id
+// would have to be invalidated on every params write -- a stale answer
+// here would show an operator the conditions of a detector as it was
+// configured two edits ago.
+func shippedStructureOf(d engine.Definition) *engine.DetectionSpec {
+	built, err := engine.BuildShippedDeclarativeDefinition(d)
+	if err != nil || built == nil {
+		return nil
+	}
+	spec := built.Structure()
+	return &spec
 }
 
 // definitionCoverage applies #367's evidence-completeness downgrade to
