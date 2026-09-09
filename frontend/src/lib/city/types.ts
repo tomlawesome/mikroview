@@ -6,6 +6,7 @@
 // views share (docs/design/screens/city/DESIGN.md): the zones stop
 // draws it flat (#869), the city stops draw it in isometric.
 import type { Coverage } from '../coverageRule'
+import type { GhostState } from '../types'
 import type { CityHost } from './presence'
 import type { Pt } from './project'
 
@@ -126,6 +127,12 @@ export interface District {
    * rulesPushed) or when a table is pushed but names no accept rule on
    * any of this district's boundaries. */
   gates: DistrictGate[]
+  /** Set only on a segment the router has stopped carrying (#460, round
+   * 55), carried through from CityZone: the plate draws with no fill,
+   * a dashed wall all round and its last-known hosts faded inside, all
+   * in the watch's own ink, and no road runs from the router because
+   * the router no longer has one. */
+  ghost?: GhostState
   /** No router has ever pushed a rule table (distinct from `dark`,
    * which means a table WAS pushed and nothing on it logs): the wall
    * draws with no gates, and the plaque says why rather than leaving
