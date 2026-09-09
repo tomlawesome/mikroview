@@ -19,7 +19,7 @@ import type { RoadRing } from './baselineRoads'
 export interface ReachLaneEntry {
   /** Today's off-baseline lines on this lane; never empty. */
   lines: OffBaselineLine[]
-  /** The end the traffic arrived at, for the throbbing ring. */
+  /** The end the traffic arrived at, for the throbbing arrival mark. */
   ring: RoadRing
   /** The ink the lane takes: the verdict of what it carries. A lane is
    * laid down in unjudged ink (`layout.ts` draws it `k: 'q'`) because
@@ -48,17 +48,19 @@ export interface LaneSubject {
 /**
  * Roll today's off-baseline lines onto the reach's lanes.
  *
- * The ring goes at the end the traffic arrived at, the same rule the
+ * The mark goes at the end the traffic arrived at, the same rule the
  * pair roads follow. A lane's `pts[0]` is the building itself and its
  * last point is the district's own gate, so:
  *
- * - a line *to* this host arrived here, and rings the lane's start;
- * - a line *from* this host arrived somewhere else, and rings whatever
+ * - a line *to* this host arrived here, and marks the lane's start --
+ *   which is this host's own building, the one case where the reach
+ *   resolves the arrival to a single host (#1057);
+ * - a line *from* this host arrived somewhere else, and marks whatever
  *   draws that somewhere -- the peer's own lane or the pair road between
- *   the districts. Ringing the gate instead would put the mark at a
- *   place no traffic arrived at, which is the guess this refuses.
+ *   the districts. Marking the gate instead would put it at a place no
+ *   traffic arrived at, which is the guess this refuses.
  *
- * A host that is both ends of a line (it talked to itself) rings the
+ * A host that is both ends of a line (it talked to itself) marks the
  * start, because it did arrive there.
  */
 export function rollUpLanes(off: OffBaseline, lanes: readonly LaneSubject[]): ReachLaneBaseline {

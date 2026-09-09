@@ -40,6 +40,7 @@ async function push(payload) {
 const LAN1 = '10.0.10.21'
 const SRV1 = '10.0.40.10'
 const IOT_PEER = '10.0.20.30'
+const LAN2 = '10.0.10.22'
 // A third pair, involving neither LAN1 nor its own districts, that
 // standing on LAN1 has nothing to do with -- the fade set's control.
 const IOT_HOST = '10.0.20.31'
@@ -95,6 +96,16 @@ for (let i = 0; i < 4; i++) {
 // A pair LAN1 has nothing to do with: iot-host to workshop-host.
 for (let i = 0; i < 6; i++) {
   feedRaw(`firewall,info A|other| forward: in:vlan-iot out:wlan-wsh, connection-state:new, proto TCP (SYN), ${IOT_HOST}:5${300 + i}->${WSH_HOST}:22, len 60`)
+}
+// A second LAN host, quieter than LAN1 so it never takes its place in
+// the keyboard walk. It is here so bridge-lan draws lanes at all:
+// layout.ts lays a building's own street only where a district has two
+// or more of them, and LAN1's lane is what carries the arrival mark
+// checked below (#1057). On a shared instance an earlier scenario has
+// usually put a second host on this lane already; this makes the floor
+// its own rather than borrowed.
+for (let i = 0; i < 2; i++) {
+  feedRaw(`firewall,info A|reach| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), ${LAN2}:5${400 + i}->${SRV1}:443, len 60`)
 }
 await new Promise((r) => setTimeout(r, 1200))
 
@@ -170,6 +181,30 @@ const srv1Opacity = await page.locator(`[data-card="topography"] .city .blk[data
 check(srv1Opacity !== null, `the peer building is found (fill-opacity ${srv1Opacity})`)
 // building()'s dim styling drops this same paint to 0.22; lit stands at 0.4.
 check(Number(srv1Opacity) > 0.3, `the accepted peer, reached through the gate, is not dimmed (${srv1Opacity})`)
+
+// --- the arrival mark: the host's own outline (#1057) -----------------
+//
+// srv1 spoke to LAN1 (the line fed above), so the traffic arrived *at*
+// LAN1 -- the one case where the reach resolves an arrival to a single
+// host, and the outline goes on that host's own building. LAN1's own
+// lane carries it: standing makes the lane a drawn line rather than
+// scenery, so the brightness rule judges it whatever the district pair
+// around it reads. Read as a <path> inside LAN1's own group, so it is on
+// the building rather than merely near it, and with the ground circle
+// asserted absent: the ring beside a building is what this replaced.
+const arrivalMark = await page.evaluate((cid) => {
+  const city = document.querySelector('[data-card="topography"] .city')
+  if (!city) return null
+  const host = city.querySelector(`.blk[data-cid="${cid}"]`)
+  return {
+    onHost: !!host?.querySelector('path.halo.arrived'),
+    rounds: city.querySelectorAll('circle.halo, ellipse.halo').length,
+    loose: city.querySelectorAll('.halo.arrived').length - city.querySelectorAll('.blk .halo.arrived').length,
+  }
+}, lan1Cid)
+check(!!arrivalMark?.onHost, `the building the traffic arrived at wears its own throbbing outline (${JSON.stringify(arrivalMark)})`)
+check(arrivalMark?.rounds === 0, `and no circle or ellipse ring is drawn on the ground beside it (${arrivalMark?.rounds})`)
+check(arrivalMark?.loose === 0, `nothing but a building wears the arrival mark (${arrivalMark?.loose} loose)`)
 
 // --- the composer, opened from the standing host's card ---------------
 //
