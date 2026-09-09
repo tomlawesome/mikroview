@@ -94,6 +94,18 @@ check(
   'the four lane ranges are pushed',
 )
 
+// A third table kind this scenario does not otherwise touch, cleared
+// explicitly: `live-topography-layout.mjs` runs right before this
+// scenario and pushes a DHCP-lease table naming `10.0.10.21` as
+// `anna-macbook-pro-16` on this same device and interface. A push
+// replaces its own kind's whole table, but ip-address and filter-rule
+// pushes above do nothing to a *lease* table, so that name would
+// otherwise still be on record when the trace below reads it back --
+// and it names the same host this scenario traces by raw IP. Pushing
+// an empty lease table makes the answer this scenario's own, not
+// whatever a sibling happened to leave named.
+check((await push({ kind: 'dhcp-lease', page: 1, pages: 1, records: [] })) === 200, 'this device\'s lease table is cleared, not inherited')
+
 // This scenario shares one live instance with whatever sorted ahead of
 // it in the slice (scripts/run-scenarios.sh: filename order, leftovers
 // persist). Its escalated callout has to be the ether4->bridge-lan
@@ -135,6 +147,62 @@ const neutralizers = [...leftoverPairs].map((pair, i) => {
     comment: 'a sibling scenario\'s leftover pair, named here so it cannot outrank this scenario\'s own callout',
   }
 })
+
+// A second, independent shape the same shared instance leaves behind:
+// the flat map's lane row is capped at five, busiest first
+// (`zonesState.zones`, over the whole shared event buffer) -- the same
+// cap live-city-port.mjs's own header describes for the isometric city.
+// `live-topography-layout.mjs` runs right before this scenario in
+// scripts/run-scenarios.sh's filename order and leaves five lanes of
+// its own (`bridge-srv`, `bridge-iot`, `bridge-guest`, `bridge-lab`,
+// each with real traffic both ways), which can outrank `ether3`
+// (Servers) and `ether5` (Guest) below -- both light on traffic of
+// their own -- and evict them from the row. A lane with no row entry
+// gets no gate for a door to stand on, so `#12`'s and `#31`'s doors
+// (both on `ether3`) would silently stop drawing even though the API's
+// own answer still names them, and the accepted trace's landing zone
+// (`ether3` again) would have nowhere to place its ring.
+//
+// So this scenario reads the busiest lane already on record (the same
+// WAN-exclusion `zonesState.deviceWans` uses: whichever inbound
+// interface most often carries a public source) and sizes its own
+// `ether3`/`ether5` traffic to clear the cap regardless of what a
+// sibling left behind.
+function isPublicIp(ip) {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip || '')
+  if (!m) return false
+  const a = Number(m[1])
+  const b = Number(m[2])
+  if (a === 10 || a === 127) return false
+  if (a === 172 && b >= 16 && b <= 31) return false
+  if (a === 192 && b === 168) return false
+  return true
+}
+const wanIn = new Map()
+for (const e of before.events ?? []) {
+  if (e.inInterface && isPublicIp(e.srcIp)) wanIn.set(e.inInterface, (wanIn.get(e.inInterface) ?? 0) + 1)
+}
+let wanIface = null
+let wanCount = 0
+for (const [iface, n] of wanIn) {
+  if (n > wanCount) {
+    wanIface = iface
+    wanCount = n
+  }
+}
+const laneCounts = new Map()
+for (const e of before.events ?? []) {
+  for (const iface of [e.inInterface, e.outInterface]) {
+    if (!iface || iface === wanIface) continue
+    laneCounts.set(iface, (laneCounts.get(iface) ?? 0) + 1)
+  }
+}
+// This scenario is about to add four lanes of its own (`bridge-lan`,
+// `ether3`, `ether4`, `ether5`), leaving room for at most one existing
+// lane to also survive the cap -- so the weakest of its own four has to
+// beat the *second*-busiest lane already on record, not the busiest.
+const beatCount = [...laneCounts.values()].sort((a, b) => b - a)[1] ?? 0
+const printLines = beatCount + 5
 
 // The rule table the doors come from. Three rules name a port; the
 // fourth deliberately names none, and must draw no door at all -- a
@@ -191,10 +259,14 @@ for (let i = 0; i < 6; i++) {
   )
 }
 // A lane with nothing to do with 445 and no rule naming it: the card
-// that has to recede whole while staying on the map.
-for (let i = 0; i < 3; i++) {
+// that has to recede whole while staying on the map. Also this
+// scenario's only traffic on `ether5`, and (with `smb-out` above) on
+// `ether3` -- sized to clear the lane-row cap (see `printLines` above)
+// rather than a fixed handful that only happened to be enough before
+// live-topography-layout.mjs existed.
+for (let i = 0; i < printLines; i++) {
   feedRaw(
-    `firewall,info A|print| forward: in:ether5 out:ether3, connection-state:new, proto TCP (SYN), 10.0.40.${10 + i}:5${400 + i}->10.0.20.9:9100, len 60`,
+    `firewall,info A|print| forward: in:ether5 out:ether3, connection-state:new, proto TCP (SYN), 10.0.40.${10 + (i % 240)}:5${400 + (i % 500)}->10.0.20.9:9100, len 60`,
   )
 }
 
