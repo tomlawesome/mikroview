@@ -1219,7 +1219,6 @@ about a host you don't recognise. It backs the [device dossier](#device-dossier-
 ```yaml
 oui:
   enabled: true
-  url: https://standards-oui.ieee.org/oui/oui.csv
   cachePath: /var/lib/mikroview/oui-registry.json
 ```
 
@@ -1262,11 +1261,10 @@ Three answers are deliberately not vendor names:
 
 Set `enabled: false` to switch the feed off entirely -- no fetch, no
 refresh goroutine, and dossiers report vendor lookups as unavailable.
-`url` only needs setting if you mirror the file internally or must go
-through a proxy; whatever you point it at must still resolve to a public
-address, which is what stops the setting from becoming a way to make
-mikroview fetch `169.254.169.254`. Refresh cadence is not configurable,
-for the same over-polling reason as the blocklist.
+There is deliberately no source setting: IEEE is the only publisher of
+this registry, and the two feeds above take a vetted menu rather than an
+arbitrary URL for the same reason. Refresh cadence is not configurable
+either, for the same over-polling reason as the blocklist.
 
 ## Port lookup
 
@@ -3587,7 +3585,6 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
 | `MIKROVIEW_OUI_ENABLED` | `oui.enabled` -- the IEEE MAC-vendor registry feed (see [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default)) |
-| `MIKROVIEW_OUI_URL` | `oui.url` -- only for an internal mirror or proxy; it must still resolve to a public address |
 | `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
 | `MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH` | `engine.definitionsStorePath` -- where the definitions store (issue #404) lives: shipped detectors, migrated watchlist expectations, and eventually builder-authored custom definitions, all in one document |

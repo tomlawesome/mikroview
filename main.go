@@ -953,7 +953,7 @@ func main() {
 	ouiLog := logging.New("oui")
 	var ouiRegistry *oui.Registry
 	if cfg.OUI.Enabled {
-		ouiRegistry = oui.New(cfg.OUI.URL, cfg.OUI.CachePath, ouiLog)
+		ouiRegistry = oui.New(cfg.OUI.CachePath, ouiLog)
 	}
 
 	// routerState (issue #186 step 4): each device's most recent pushed

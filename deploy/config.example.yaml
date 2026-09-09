@@ -324,11 +324,11 @@ store:
 # available yet rather than guessing. Refresh is a fixed daily
 # conditional request, not configurable.
 #
-# url only needs setting if you mirror the file internally or must go
-# through a proxy; it must still resolve to a public address.
+# There is no source setting: IEEE is the only publisher of this
+# registry, the same way the two feeds above take a vetted menu rather
+# than an arbitrary URL.
 # oui:
 #   enabled: true
-#   url: https://standards-oui.ieee.org/oui/oui.csv
 #   cachePath: /var/lib/mikroview/oui-registry.json
 
 # Optional: friendly display names shown in place of a raw RouterOS rule

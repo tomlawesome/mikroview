@@ -5,10 +5,9 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
-
-	"github.com/tomlawesome/mikroview/internal/oui"
 )
 
 func TestLoadPrecedence(t *testing.T) {
@@ -966,6 +965,20 @@ func TestSnapshotIntervalAtTheMinimumIsAccepted(t *testing.T) {
 	}
 }
 
+// The registry's URL is deliberately not a config field: there is one
+// publisher, named by internal/oui.SourceURL, following the vetted-menu
+// pattern Blocklist and NetClass already set. This asserts the absence,
+// so re-adding a URL setting has to be a decision rather than a drift.
+func TestOUIHasNoURLSetting(t *testing.T) {
+	if _, ok := reflect.TypeOf(OUI{}).FieldByName("URL"); ok {
+		t.Error("config.OUI grew a URL field -- the source is internal/oui.SourceURL, not operator input")
+	}
+	t.Setenv("MIKROVIEW_OUI_URL", "https://mirror.example.invalid/oui.csv")
+	if _, err := Load("", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOUIDefaultsToEnabledAgainstTheIEEERegistry(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
@@ -974,9 +987,6 @@ func TestOUIDefaultsToEnabledAgainstTheIEEERegistry(t *testing.T) {
 	if !cfg.OUI.Enabled {
 		t.Error("OUI.Enabled = false, want the vendor feed on by default")
 	}
-	if cfg.OUI.URL != oui.SourceURL {
-		t.Errorf("OUI.URL = %q, want internal/oui.SourceURL (%q) -- the two must not drift", cfg.OUI.URL, oui.SourceURL)
-	}
 	if cfg.OUI.CachePath != "/var/lib/mikroview/oui-registry.json" {
 		t.Errorf("OUI.CachePath = %q, want it under the data directory", cfg.OUI.CachePath)
 	}
@@ -984,7 +994,6 @@ func TestOUIDefaultsToEnabledAgainstTheIEEERegistry(t *testing.T) {
 
 func TestOUIEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_OUI_ENABLED", "false")
-	t.Setenv("MIKROVIEW_OUI_URL", "https://mirror.example.com/oui.csv")
 	t.Setenv("MIKROVIEW_OUI_CACHE_PATH", "/data/oui.json")
 	cfg, err := Load("", nil)
 	if err != nil {
@@ -992,9 +1001,6 @@ func TestOUIEnvVarsOverrideDefaults(t *testing.T) {
 	}
 	if cfg.OUI.Enabled {
 		t.Error("MIKROVIEW_OUI_ENABLED=false did not switch the feed off")
-	}
-	if cfg.OUI.URL != "https://mirror.example.com/oui.csv" {
-		t.Errorf("OUI.URL = %q, want the mirror", cfg.OUI.URL)
 	}
 	if cfg.OUI.CachePath != "/data/oui.json" {
 		t.Errorf("OUI.CachePath = %q, want the override", cfg.OUI.CachePath)
@@ -1013,8 +1019,5 @@ func TestOUIYAMLCanDisableTheFeed(t *testing.T) {
 	}
 	if cfg.OUI.Enabled {
 		t.Error("oui.enabled: false in YAML did not switch the feed off")
-	}
-	if cfg.OUI.URL != oui.SourceURL {
-		t.Errorf("OUI.URL = %q, want the default to survive an unrelated override", cfg.OUI.URL)
 	}
 }

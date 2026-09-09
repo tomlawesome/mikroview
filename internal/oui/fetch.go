@@ -32,10 +32,11 @@ const (
 // rebinding cannot slip past it the way an up-front hostname check
 // allows.
 //
-// It matters more here than for the other feeds, because this feed's
-// URL is operator-settable (see config.OUI.URL): the guard is what
-// keeps "point it at your own mirror" from also meaning "point it at
-// 169.254.169.254 and read the result out of a log line".
+// The URL is a constant (see SourceURL), so the guard is not defending
+// against operator input here -- it is defending against DNS: whoever
+// answers for standards-oui.ieee.org on the operator's network could
+// otherwise point this fetch at 169.254.169.254 and read the result out
+// of a log line.
 type fetchClient struct {
 	http *http.Client
 }

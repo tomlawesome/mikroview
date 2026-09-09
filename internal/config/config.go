@@ -851,25 +851,21 @@ type NetClass struct {
 // registry that turns a hardware address' first three octets into the
 // organisation that registered them (issue #410's device dossier).
 //
-// On by default. It differs from Blocklist and NetClass above in having
-// a URL rather than a menu of source names, for the plain reason that
-// there is only one source: IEEE's own registry, which no other
-// publisher can second-source. A menu of one would be a menu. The URL
-// exists so an operator who mirrors the file internally -- or whose
-// egress policy sends it through a proxy -- can point at their copy;
-// it is not an invitation to attribute MACs from an arbitrary
-// publisher, and internal/oui's SSRF guard still refuses any URL that
-// resolves to a non-public address.
+// On by default, and with no source setting at all: there is exactly
+// one publisher of this registry, and it is named by
+// internal/oui.SourceURL. That follows Blocklist and NetClass above,
+// which take vetted source *names* and deliberately not arbitrary URLs
+// -- an operator enabling a feed is trusting mikroview's vetting of it.
+// Mirroring the file internally, or reaching it through a proxy, is a
+// separate feature and would arrive on that same vetted-name pattern.
 //
-// Refresh cadence is not configurable, same reasoning as Blocklist and
-// NetClass -- see internal/oui.RefreshInterval.
+// Refresh cadence is not configurable either, same reasoning as
+// Blocklist and NetClass -- see internal/oui.RefreshInterval.
 type OUI struct {
 	// Enabled at false switches the feed off entirely: no fetch, no
 	// goroutine, and a dossier that reports vendor data as unavailable
 	// rather than pretending an address has no vendor.
 	Enabled bool `yaml:"enabled"`
-	// URL is the registry CSV to fetch. Empty means the IEEE default.
-	URL string `yaml:"url"`
 	// CachePath is where the parsed registry is kept between restarts,
 	// so vendor names are available immediately on start rather than
 	// after the first fetch. Empty disables the cache (the feed then
@@ -1294,13 +1290,7 @@ func defaults() Config {
 			Sources: []string{"tor", "apple_private_relay", "x4b_vpn"},
 		},
 		OUI: OUI{
-			Enabled: true,
-			// Mirrors internal/oui.SourceURL -- a literal here to keep
-			// this package a dependency-free leaf, same as Blocklist and
-			// NetClass above. TestOUIDefaultURLMatchesTheOUIPackage pins
-			// the two together so they cannot drift the way NetClass's
-			// list once did.
-			URL:       "https://standards-oui.ieee.org/oui/oui.csv",
+			Enabled:   true,
 			CachePath: DefaultDataDir + "/oui-registry.json",
 		},
 		Snapshot: Snapshot{
@@ -1803,9 +1793,6 @@ func applyEnv(cfg *Config) {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.OUI.Enabled = b
 		}
-	}
-	if v := os.Getenv("MIKROVIEW_OUI_URL"); v != "" {
-		cfg.OUI.URL = v
 	}
 	if v := os.Getenv("MIKROVIEW_OUI_CACHE_PATH"); v != "" {
 		cfg.OUI.CachePath = v

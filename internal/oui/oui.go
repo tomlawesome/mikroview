@@ -48,7 +48,13 @@ const RefreshInterval = 24 * time.Hour
 const StaleAfter = 30 * 24 * time.Hour
 
 // SourceURL is the IEEE MA-L (MAC Address Block Large) public listing:
-// the registry that maps a 24-bit OUI to the organisation holding it.
+// the registry that maps a 24-bit OUI to the organisation holding it,
+// and the only source this feed has. It is a constant rather than a
+// config field for the same reason internal/blocklist and
+// internal/netclass take vetted source *names* instead of URLs: an
+// operator enabling a feed is trusting mikroview's vetting of it, and a
+// free-text URL is a different feature (a mirror, behind a proxy) that
+// belongs on the vetted-name pattern if anyone asks for it.
 //
 // Terms of use, checked 2026-09-09 before this feed was wired up.
 // IEEE publishes the MA-L public listing for direct download at
@@ -152,22 +158,24 @@ type Registry struct {
 	fromCache bool
 	etag      string
 
+	// url is SourceURL for every registry New builds. It is a field
+	// rather than a bare use of the constant so the cache can record
+	// which source wrote it (see cacheFile.Source), and so this
+	// package's own tests can point a Registry at an httptest server
+	// without opening a URL setting to the outside world.
 	url       string
 	cachePath string
 	client    *fetchClient
 	log       *slog.Logger
 }
 
-// New builds a Registry for the configured source URL and cache path.
-// No network access happens here: the cache is read (so a restart
-// serves vendors immediately), and Lookup reports "no vendor data yet"
-// until either that read or the first Refresh succeeds.
-func New(url, cachePath string, log *slog.Logger) *Registry {
-	if url == "" {
-		url = SourceURL
-	}
+// New builds a Registry for the given cache path. No network access
+// happens here: the cache is read (so a restart serves vendors
+// immediately), and Lookup reports "no vendor data yet" until either
+// that read or the first Refresh succeeds.
+func New(cachePath string, log *slog.Logger) *Registry {
 	r := &Registry{
-		url:       url,
+		url:       SourceURL,
 		cachePath: cachePath,
 		client:    newFetchClient(),
 		log:       log,
@@ -176,9 +184,11 @@ func New(url, cachePath string, log *slog.Logger) *Registry {
 	return r
 }
 
-// Enabled reports whether this registry has somewhere to fetch from --
-// main.go uses it to decide whether to start a refresh ticker at all,
-// the same way blocklist.HasFeeds and netclass.HasSources are used.
+// Enabled reports whether there is a registry to refresh at all --
+// main.go uses it to decide whether to start a refresh ticker, the same
+// way blocklist.HasFeeds and netclass.HasSources are used. A nil
+// *Registry is what `oui.enabled: false` produces, and every method
+// here is nil-safe so a switched-off feed answers rather than panics.
 func (r *Registry) Enabled() bool { return r != nil && r.url != "" }
 
 // Lookup returns what the registry knows about m's prefix.
