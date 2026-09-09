@@ -167,6 +167,15 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A filter table is the only push that can change whether a retiring
+	// segment could be seen at all, so a decommission watch's broken/
+	// holding answer is re-derived here rather than on a timer (#460):
+	// switching logging on for a rule clears a broken ghost on the next
+	// push, not at some arbitrary later moment.
+	if payload.Kind == ingest.KindFilterRule {
+		s.refreshDecommissionCoverage()
+	}
+
 	// #186 step 5: never persist a raw payload wholesale. RouterState
 	// above is in-memory only by design, and nothing here logs the
 	// decoded records themselves either -- only their shape -- for the

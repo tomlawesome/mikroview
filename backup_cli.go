@@ -68,6 +68,11 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"mac_registry", cfg.DeviceMAC.StorePath},
 		{"engine_state", cfg.Engine.StorePath},
 		{"definitions", cfg.Engine.DefinitionsStorePath},
+		// Decommission watches (#460): operator-created state with a
+		// clock in it, so a restore or move carries them on where they
+		// were rather than making the operator re-create each one and
+		// wait the clean window out again (owner, 2026-09-09).
+		{"decommission", cfg.Engine.DecommissionStorePath},
 		{"audit", cfg.Audit.StorePath},
 		{"setup", cfg.Setup.StorePath},
 		{"settings", cfg.Store.SettingsStorePath},

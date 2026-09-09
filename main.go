@@ -47,6 +47,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/coverage"
+	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -831,6 +832,20 @@ func main() {
 	definitions, err := engine.OpenDefinitionsStoreWithBackend(definitionsBackend)
 	mustOpenStore(definitionsLog, err)
 
+	// decommissions (#460) holds every retiring network segment: the
+	// range, its clean-window clock, and the names the router last knew
+	// inside it. Its own document rather than a corner of the definitions
+	// one, because a decommission watch is not a stored Definition --
+	// provenance=custom implies kind=declarative, and this state machine
+	// is Go (see engine.DecommissionWatches).
+	decommissionLog := logging.New("decommission")
+	decommissionBackend, err := persistence.backendFor(bootCtx, "decommission", cfg.Engine.DecommissionStorePath)
+	if err != nil {
+		decommissionLog.Warn(err.Error())
+	}
+	decommissions, err := decommission.OpenWithBackend(decommissionBackend)
+	mustOpenStore(decommissionLog, err)
+
 	detectorDefaults := engine.DetectorDefaults{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
@@ -1007,8 +1022,9 @@ func main() {
 			Sink:         engine.MatchlogSinkWithNights(matchLog, definitions),
 			Observations: definitions,
 		},
-		Flags:      fs,
-		Reputation: rep,
+		Flags:        fs,
+		Reputation:   rep,
+		Decommission: decommissions,
 	})
 	syncDefinitions := func() {
 		for _, problem := range registry.Sync() {
@@ -1023,6 +1039,11 @@ func main() {
 	}
 	syncDefinitions()
 	definitions.SetOnChange(syncDefinitions)
+	// A watch accepted, force-removed or retired has to reach the engine
+	// on the next event, not the next restart -- the same next-event
+	// contract #407 gave definition edits. Sync rebuilds the whole
+	// decommission set from the store, so one hook covers all three.
+	decommissions.SetOnChange(syncDefinitions)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1399,41 +1420,44 @@ func main() {
 	}
 
 	srv := &api.Server{
-		Store:             st,
-		History:           hist,
-		HistoryControl:    hist,
-		Devices:           devices,
-		MACRegistry:       macRegistry,
-		Setup:             setupStore,
-		Settings:          settingsStore,
-		Hub:               h,
-		Reputation:        rep,
-		NetClass:          nc,
-		Flags:             fs,
-		Definitions:       definitions,
-		Entities:          entityStore,
-		Coverage:          coverageStore,
-		Hosts:             hostRegister,
-		Baseline:          baselineRegister,
-		HostQuietAfter:    cfg.Baseline.HostQuietAfter,
-		Naming:            names,
-		Rules:             ru,
-		Audit:             auditStore,
-		Suggest:           suggestStore,
-		DefaultWatchPorts: cfg.Flags.CriticalPorts,
-		MatchLog:          matchLog,
-		Learning:          eng,
-		DeviceStaleAfter:  cfg.Flags.DeviceStaleAfter,
-		Auth:              authStore,
-		Sessions:          auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
-		LoginLimiter:      auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
-		SecureCookie:      cfg.Auth.SecureCookie,
-		TrustedProxies:    trustedProxies,
-		ClientIPHeader:    cfg.Listen.ClientIPHeader,
-		Tokens:            tokenStore,
-		IngestLimiter:     auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
-		RouterState:       routerState,
-		Vault:             routerBackupVault,
+		Store:          st,
+		History:        hist,
+		HistoryControl: hist,
+		Devices:        devices,
+		MACRegistry:    macRegistry,
+		Setup:          setupStore,
+		Settings:       settingsStore,
+		Hub:            h,
+		Reputation:     rep,
+		NetClass:       nc,
+		Flags:          fs,
+		Definitions:    definitions,
+
+		Decommissions:           decommissions,
+		DecommissionCleanWindow: cfg.Engine.DecommissionCleanWindow,
+		Entities:                entityStore,
+		Coverage:                coverageStore,
+		Hosts:                   hostRegister,
+		Baseline:                baselineRegister,
+		HostQuietAfter:          cfg.Baseline.HostQuietAfter,
+		Naming:                  names,
+		Rules:                   ru,
+		Audit:                   auditStore,
+		Suggest:                 suggestStore,
+		DefaultWatchPorts:       cfg.Flags.CriticalPorts,
+		MatchLog:                matchLog,
+		Learning:                eng,
+		DeviceStaleAfter:        cfg.Flags.DeviceStaleAfter,
+		Auth:                    authStore,
+		Sessions:                auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
+		LoginLimiter:            auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
+		SecureCookie:            cfg.Auth.SecureCookie,
+		TrustedProxies:          trustedProxies,
+		ClientIPHeader:          cfg.Listen.ClientIPHeader,
+		Tokens:                  tokenStore,
+		IngestLimiter:           auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:             routerState,
+		Vault:                   routerBackupVault,
 		SetupInstance: api.SetupInstance{
 			TLSEnabled: cfg.TLS.Enabled,
 			Hosts:      cfg.TLS.Hosts,
@@ -1708,7 +1732,7 @@ func main() {
 	// Best-effort: each store already logs its own save failures, so a
 	// Close error here is just the shutdown-budget case, worth one
 	// line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, hostRegister, baselineRegister)
+	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, decommissions, hostRegister, baselineRegister)
 
 	// One last snapshot, for the same reason and under the same budget
 	// (#795). Ingest and evaluation have both stopped by now, so this

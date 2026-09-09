@@ -55,6 +55,7 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"mac_registry":  {"deviceMac", "storePath"},
 		"engine_state":  {"engine", "storePath"},
 		"definitions":   {"engine", "definitionsStorePath"},
+		"decommission":  {"engine", "decommissionStorePath"},
 		"audit":         {"audit", "storePath"},
 		"setup":         {"setup", "storePath"},
 		"settings":      {"store", "settingsStorePath"},
