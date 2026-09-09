@@ -159,8 +159,8 @@ feedRaw(line2)
 // for a scenario, and a bare UI wait cannot tell "not there yet" from
 // "never coming."
 let observedCount = 0
-for (let i = 0; i < 40 && observedCount < 2; i++) {
-  await page.waitForTimeout(500)
+for (let i = 0; i < 80 && observedCount < 2; i++) {
+  await page.waitForTimeout(250)
   const got = await api(page, 'GET', '/api/definitions')
   const d = (got.body?.definitions ?? []).find((x) => x.id === entry?.id)
   observedCount = d?.expectation?.observed?.length ?? 0
@@ -204,10 +204,11 @@ check(
 
 const permitAllBtn = openDrawer().getByRole('button', { name: /permit all/ })
 if (await permitAllBtn.count()) await permitAllBtn.click()
-await page.waitForTimeout(300)
 
 await openDrawer().getByRole('button', { name: /fence now/ }).click()
-await page.waitForTimeout(300)
+// isVisible() does not wait (live-suggestions-matches.mjs's own header
+// note on this trap) -- wait for the chip's real state before reading it.
+await rowFor(NAME).locator('.wchip2', { hasText: 'fencing' }).waitFor({ timeout: 5000 })
 check(
   await rowFor(NAME).locator('.wchip2', { hasText: 'fencing' }).isVisible(),
   'fence now turns the chip to fencing',

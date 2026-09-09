@@ -13,11 +13,36 @@
 // Self-contained: pushes its own address and filter-rule tables whole,
 // including the extra lane and the never-exercised rule the ghost needs.
 
-import { session, check, done, feedRaw, feedSyslog as syslog } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedSyslog as syslog, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session()
+
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
 
 syslog(2, 'topo-reality-probe')
 let DEVICE
@@ -85,11 +110,12 @@ check(
 // (bridge1→ether1 accepts, intended), held (ether1→bridge1 drops on the
 // refusing rule -- policy doing its job), and unplanned (an accepted
 // flow into the quiet lane no rule anywhere anticipates).
+const plannedHeldLines = []
 for (let i = 0; i < 6; i++) {
-  feedRaw(`firewall,info A|planned-web| forward: in:bridge1 out:ether1, connection-state:new, proto TCP (SYN), 192.168.1.${20 + i}:5${100 + i}->203.0.113.9:443, len 60`)
-  feedRaw(`firewall,info D|forward-drop| forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 198.51.100.${30 + i}:4${400 + i}->192.168.1.10:23, len 60`)
+  plannedHeldLines.push(`firewall,info A|planned-web| forward: in:bridge1 out:ether1, connection-state:new, proto TCP (SYN), 192.168.1.${20 + i}:5${100 + i}->203.0.113.9:443, len 60`)
+  plannedHeldLines.push(`firewall,info D|forward-drop| forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 198.51.100.${30 + i}:4${400 + i}->192.168.1.10:23, len 60`)
 }
-feedRaw('firewall,info A|mystery-accept| forward: in:ether1 out:ether5, connection-state:new, proto TCP (SYN), 203.0.113.66:41000->10.9.0.20:8443, len 60')
+const mysteryLine = 'firewall,info A|mystery-accept| forward: in:ether1 out:ether5, connection-state:new, proto TCP (SYN), 203.0.113.66:41000->10.9.0.20:8443, len 60'
 // The held pair rides its own boundary, ether5→bridge1, which no other
 // scenario feeds: on a shared suite instance the ether1→bridge1 pair
 // has accepts from five earlier scenarios, so its verdict is unplanned
@@ -109,14 +135,23 @@ feedRaw('firewall,info A|mystery-accept| forward: in:ether1 out:ether5, connecti
 // 20 clears layout's fixed 8 with room to spare; bridge1 (fed by nearly
 // every sibling scenario) is always first regardless, so this only has
 // to beat the other four, fixed-size lanes actually in the running.
-for (let i = 0; i < 20; i++) {
-  feedRaw(`firewall,info D|quiet-block| forward: in:ether5 out:bridge1, connection-state:new, proto TCP (SYN), 10.9.0.${40 + i}:3${300 + i}->192.168.1.10:445, len 60`)
-}
+const quietBlockLines = Array.from(
+  { length: 20 },
+  (_, i) => `firewall,info D|quiet-block| forward: in:ether5 out:bridge1, connection-state:new, proto TCP (SYN), 10.9.0.${40 + i}:3${300 + i}->192.168.1.10:445, len 60`,
+)
 
-// Reload so the freshly pushed tables are re-fetched alongside the
-// freshly arrived events (the same honest path the map's first load takes).
-await new Promise((r) => setTimeout(r, 1200))
-await page.reload()
+// Every line above collected and fed as one call rather than one per
+// line -- a separate TLS handshake and process start per line is the
+// exact cost #1061 exists to cut.
+const allLines = [...plannedHeldLines, mysteryLine, ...quietBlockLines]
+const beforeFeed = await eventsTotal(page)
+feedRaw(...allLines)
+await waitForEventsTotal(page, beforeFeed + allLines.length)
+
+// This session has not yet visited Topography, so its own $effect
+// (zonesState/policyState/etc, gated on appState.devices) fires fresh on
+// this first navigation -- the honest "first load" path, with no reload
+// needed to see the tables and events pushed above.
 await page.click('.rail-name >> text=Topography')
 // #869: off the city default and onto zones before waiting on anything
 // the 2D map draws -- see the coverage scenario for the full note.
@@ -176,7 +211,7 @@ check(
 // zones the same way the badges above are -- see the coverage scenario
 // for the full note. Off zones and onto services before touching either.
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
-await new Promise((r) => setTimeout(r, 700))
+await waitForSettle('[data-card="topography"] .camera')
 const escalated = page.locator('[data-card="topography"] .unplanned-card')
 if ((await escalated.count()) > 0) {
   await escalated.first().click()
