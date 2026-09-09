@@ -154,9 +154,30 @@
         ? setInterval(() => watchlistState.refresh().catch(handleApiError), WATCHLIST_COVERAGE_REFRESH_MS)
         : undefined
 
+    // The interval above is the backstop, not the mechanism. Coverage is
+    // an answer about pushed router tables and the definitions read
+    // against them, so it changes at exactly two moments the server
+    // already knows about -- a router pushing a table, and a definition
+    // being written -- and the socket is already open. Without this, an
+    // operator who switched logging on for a rule and watched it push
+    // sat looking at a ring still claiming nothing could feed the watch,
+    // for up to a minute, with no way to tell a slow poll from a change
+    // that had not registered.
+    //
+    // Same canEdit gate and the same refresh call as the interval, so a
+    // notice can never fetch something the poll would not have.
+    const stopListeningForChanges = authState.canEdit
+      ? liveSocket.onChange((change) => {
+          if (change === 'router-state' || change === 'definitions') {
+            watchlistState.refresh().catch(handleApiError)
+          }
+        })
+      : undefined
+
     const tickInterval = setInterval(() => appState.tick(), TICK_MS)
 
     return () => {
+      stopListeningForChanges?.()
       liveSocket.disconnect()
       clearInterval(statsInterval)
       clearInterval(watchlistInterval)

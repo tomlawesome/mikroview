@@ -149,6 +149,22 @@ func New() *Store {
 	}
 }
 
+// Reset drops every device's pushed tables and every unauthenticated
+// version hint, putting the Store back to what New returns. Written for
+// the test-only POST /api/test/reset (#1064): a filter or NAT table a
+// sibling scenario pushed is the residue that makes the next one's
+// coverage answer depend on which scenarios ran before it.
+//
+// In-memory only by this package's design, so there is nothing to
+// persist and nothing on disk to tidy up -- a real router simply pushes
+// again on its next cycle.
+func (s *Store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.devices = make(map[string]*deviceState)
+	s.versionHints = make(map[string]versionHint)
+}
+
 // Apply stores one validated page of pushed state for device. The
 // payload has already been strictly decoded and validated by
 // internal/ingest -- this only decides where it lands.

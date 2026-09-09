@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"sync"
@@ -401,6 +402,30 @@ func (s *FileStore) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Stats{Count: len(s.index), Capacity: s.capacity, Full: len(s.index) >= s.capacity}
+}
+
+// Reset implements Store: truncates the log to nothing and drops the
+// open-record index, so the next Append starts a fresh record rather than
+// collapsing into one a previous scenario left open.
+//
+// Truncate plus an explicit seek, not a re-open: the handle is in append
+// mode, where the kernel positions every write at the current end of
+// file, so a stale offset cannot make the next line land past a hole --
+// but Stats and the scan path read through their own handles from zero,
+// and leaving the file's length where it was would have them reading
+// zero bytes as records.
+func (s *FileStore) Reset() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.f.Truncate(0); err != nil {
+		return fmt.Errorf("matchlog: truncating %s: %w", s.path, err)
+	}
+	if _, err := s.f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("matchlog: rewinding %s: %w", s.path, err)
+	}
+	s.index = make(map[string]string)
+	return nil
 }
 
 // Close implements Store.
