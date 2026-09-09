@@ -6,6 +6,11 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-topography-port-trace: waitForSelector(.note-t) times out (10 s) after other scenarios
+
+- 2026-09-09 · 274276e8 (feature/m11-rounds-2, local) · 15-scenario batch (live-city-*, live-watchlist-*, live-topography-edges, this one, ...), scenario 11/15 · `page.waitForSelector: Timeout 10000ms exceeded` waiting for `[data-card="topography"] .note-t` at `live-topography-port-trace.mjs:276`; every check up to it passed. Ran clean against a fresh instance with no baseline feed and no preceding scenarios, same commit.
+- 2026-09-09 · b41bd1f1 (feature/m11-rounds-2, local) · same 15-scenario batch, same position, after merging work/1053-rib-hook · same `.note-t` timeout at the same line; ran clean standalone again immediately after, at 2abaaa0e.
+
 ## live-rule-regex: goTo times out (10 s) on the runner
 
 - 2026-09-08 · 3fb82271 (!1002) · pipeline 763, gate:scenarios 3/4 · `page.waitForFunction: Timeout 10000ms exceeded` at `live-browser.mjs:385` from `live-rule-regex.mjs:32`; the other 20 scenarios in the shard passed. Same family as #1011 (goTo never settles under runner load).
