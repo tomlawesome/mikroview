@@ -38,6 +38,7 @@ Round 56 was drawn first, so the numbering is out of order.
   the first action, marked hot, and its confirm state is the whole
   contract: the ghost leaves the map now, the watch goes on in the
   watchlist until it retires, and it can only be forgotten from there.
+- **The leader is heavier than round 49's.** A ghost is faint by design, so the line from its card to it is accent ink at 1.8px, and the card sits beside the ghost on both surfaces.
 - **Retirement is silent.** Six quiet hours and the ghost leaves by
   itself; the map goes back to round 49's, with one note line and an
   *undo* for the hour after.
