@@ -24,10 +24,16 @@ import { session, check, done, feedAndSettle } from './live-browser.mjs'
 const URL_BASE = process.env.MV_URL
 
 // The retired segment, kept off every other scenario's ranges so the
-// offer this one asserts on is the offer this one caused.
-const GHOST_CIDR = '10.0.70.0/24'
+// offer this one asserts on is the offer this one caused -- and so the
+// receipt names one address rather than several. This was 10.0.70.0/24,
+// which live-city-declared also feeds (10.0.70.2x): the two share an
+// instance, so the replay found their four addresses beside this one's
+// straggler, and the receipt fell to listing bare addresses instead of
+// "all from 10.0.72.14, last named garage-cam". Any range added here
+// must be one no other live-* scenario touches.
+const GHOST_CIDR = '10.0.72.0/24'
 const GHOST_IFACE = 'vlan-garage'
-const STRAGGLER = '10.0.70.14'
+const STRAGGLER = '10.0.72.14'
 
 const { page, consoleErrors } = await session()
 
@@ -58,7 +64,7 @@ const LIVE_LANES = [
   { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge-lan', comment: 'LAN' },
   { address: '10.0.40.1/24', network: '10.0.40.0', interface: 'vlan-srv', comment: 'Servers' },
 ]
-const GARAGE = { address: '10.0.70.1/24', network: '10.0.70.0', interface: GHOST_IFACE, comment: 'Garage' }
+const GARAGE = { address: '10.0.72.1/24', network: '10.0.72.0', interface: GHOST_IFACE, comment: 'Garage' }
 
 const addressCycle = (records) => ({ kind: 'ip-address', page: 1, pages: 1, routerosVersion: '7.23.3 (stable)', records })
 
@@ -79,7 +85,7 @@ check(
     page: 1,
     pages: 1,
     routerosVersion: '7.23.3 (stable)',
-    records: [{ address: STRAGGLER, mac: '64:d1:54:00:70:14', hostname: 'garage-cam' }],
+    records: [{ address: STRAGGLER, mac: '64:d1:54:00:72:14', hostname: 'garage-cam' }],
   })) === 200,
   'the router pushes the lease that names the address',
 )
