@@ -477,6 +477,7 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/hosts", s.handleHostsList},
 		{http.MethodPut, "/api/hosts/{key}/mark", s.handleHostMarkPut},
 		{http.MethodDelete, "/api/hosts/{key}/mark", s.handleHostMarkDelete},
+		{http.MethodGet, "/api/hosts/{ip}/dossier", s.handleHostDossier},
 
 		// The baseline line register (issue #1016, round 49). Only
 		// today's off-baseline lines are reachable -- there is
