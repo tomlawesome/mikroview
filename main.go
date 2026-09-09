@@ -47,6 +47,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/coverage"
+	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -60,6 +61,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
+	"github.com/tomlawesome/mikroview/internal/oui"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
@@ -831,6 +833,20 @@ func main() {
 	definitions, err := engine.OpenDefinitionsStoreWithBackend(definitionsBackend)
 	mustOpenStore(definitionsLog, err)
 
+	// decommissions (#460) holds every retiring network segment: the
+	// range, its clean-window clock, and the names the router last knew
+	// inside it. Its own document rather than a corner of the definitions
+	// one, because a decommission watch is not a stored Definition --
+	// provenance=custom implies kind=declarative, and this state machine
+	// is Go (see engine.DecommissionWatches).
+	decommissionLog := logging.New("decommission")
+	decommissionBackend, err := persistence.backendFor(bootCtx, "decommission", cfg.Engine.DecommissionStorePath)
+	if err != nil {
+		decommissionLog.Warn(err.Error())
+	}
+	decommissions, err := decommission.OpenWithBackend(decommissionBackend)
+	mustOpenStore(decommissionLog, err)
+
 	detectorDefaults := engine.DetectorDefaults{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
@@ -942,6 +958,19 @@ func main() {
 	netclassLog := logging.New("netclass")
 	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
 
+	// oui (issue #410): the IEEE MA-L registry behind MAC vendor
+	// lookups in the device dossier. Same runtime-fetch contract as the
+	// two feeds above -- no registry data ships in the binary -- with an
+	// on-disk cache, so an operator opening a dossier straight after a
+	// restart sees vendor names rather than waiting on a 4MB download.
+	// Nil-safe throughout: a disabled feed answers every lookup with
+	// "no vendor data", never with a wrong name.
+	ouiLog := logging.New("oui")
+	var ouiRegistry *oui.Registry
+	if cfg.OUI.Enabled {
+		ouiRegistry = oui.New(cfg.OUI.CachePath, ouiLog)
+	}
+
 	// routerState (issue #186 step 4): each device's most recent pushed
 	// state, in-memory only by that package's design. Constructed here,
 	// before the definitions are registered, because an expectation
@@ -1007,8 +1036,9 @@ func main() {
 			Sink:         engine.MatchlogSinkWithNights(matchLog, definitions),
 			Observations: definitions,
 		},
-		Flags:      fs,
-		Reputation: rep,
+		Flags:        fs,
+		Reputation:   rep,
+		Decommission: decommissions,
 	})
 	syncDefinitions := func() {
 		for _, problem := range registry.Sync() {
@@ -1023,6 +1053,11 @@ func main() {
 	}
 	syncDefinitions()
 	definitions.SetOnChange(syncDefinitions)
+	// A watch accepted, force-removed or retired has to reach the engine
+	// on the next event, not the next restart -- the same next-event
+	// contract #407 gave definition edits. Sync rebuilds the whole
+	// decommission set from the store, so one hook covers all three.
+	decommissions.SetOnChange(syncDefinitions)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1102,7 +1137,12 @@ func main() {
 	setupStore, err := setup.OpenWithBackend(setupBackend)
 	mustOpenStore(setupLog, err)
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
-	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
+	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Devices: device.ConfigNames(cfg.Devices), Entities: entityStore, RouterHosts: routerState}
+	// #600: the registry answers device display names through the same
+	// resolver, so a rename stored by one operator is what every
+	// /api/devices reader sees. Wired here rather than at NewRegistry
+	// because the resolver needs the entity store, which opens later.
+	devices.SetNames(names)
 
 	// Warm restart (#795): put back the derived state a restart would
 	// otherwise throw away -- the hourline's per-minute counters, each
@@ -1268,6 +1308,40 @@ func main() {
 		}()
 	}
 
+	// OUI registry refresh (issue #410): same shape as the two sweeps
+	// above, jittered for the same thundering-herd reason netclass
+	// gives -- IEEE serves this file to everyone who asks, and it
+	// should not be asked by every instance at once. The first fetch
+	// runs after the jitter rather than at start, because a cached
+	// registry is already serving lookups by then; a cold start with no
+	// cache reports "no vendor data yet" until it lands, which is the
+	// honest state and not an error.
+	if ouiRegistry.Enabled() {
+		go func() {
+			defer logging.Recover(ouiLog)
+			jitter := time.Duration(rand.Int64N(int64(time.Hour)))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitter):
+			}
+			ouiRegistry.Refresh(ctx)
+			ticker := time.NewTicker(oui.RefreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					func() {
+						defer logging.Recover(ouiLog)
+						ouiRegistry.Refresh(ctx)
+					}()
+				}
+			}
+		}()
+	}
+
 	// SSO (issue #43): additive on top of local auth, never a
 	// replacement -- see internal/oidc and auth.Store.
 	// FindOrCreateOIDCUser. A misconfigured or unreachable provider must
@@ -1399,41 +1473,44 @@ func main() {
 	}
 
 	srv := &api.Server{
-		Store:             st,
-		History:           hist,
-		HistoryControl:    hist,
-		Devices:           devices,
-		MACRegistry:       macRegistry,
-		Setup:             setupStore,
-		Settings:          settingsStore,
-		Hub:               h,
-		Reputation:        rep,
-		NetClass:          nc,
-		Flags:             fs,
-		Definitions:       definitions,
-		Entities:          entityStore,
-		Coverage:          coverageStore,
-		Hosts:             hostRegister,
-		Baseline:          baselineRegister,
-		HostQuietAfter:    cfg.Baseline.HostQuietAfter,
-		Naming:            names,
-		Rules:             ru,
-		Audit:             auditStore,
-		Suggest:           suggestStore,
-		DefaultWatchPorts: cfg.Flags.CriticalPorts,
-		MatchLog:          matchLog,
-		Learning:          eng,
-		DeviceStaleAfter:  cfg.Flags.DeviceStaleAfter,
-		Auth:              authStore,
-		Sessions:          auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
-		LoginLimiter:      auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
-		SecureCookie:      cfg.Auth.SecureCookie,
-		TrustedProxies:    trustedProxies,
-		ClientIPHeader:    cfg.Listen.ClientIPHeader,
-		Tokens:            tokenStore,
-		IngestLimiter:     auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
-		RouterState:       routerState,
-		Vault:             routerBackupVault,
+		Store:                   st,
+		History:                 hist,
+		HistoryControl:          hist,
+		Devices:                 devices,
+		MACRegistry:             macRegistry,
+		Setup:                   setupStore,
+		Settings:                settingsStore,
+		Hub:                     h,
+		Reputation:              rep,
+		NetClass:                nc,
+		OUI:                     ouiRegistry,
+		Flags:                   fs,
+		Definitions:             definitions,
+		Decommissions:           decommissions,
+		DecommissionCleanWindow: cfg.Engine.DecommissionCleanWindow,
+		Entities:                entityStore,
+		Coverage:                coverageStore,
+		Hosts:                   hostRegister,
+		Baseline:                baselineRegister,
+		HostQuietAfter:          cfg.Baseline.HostQuietAfter,
+		Naming:                  names,
+		Rules:                   ru,
+		Audit:                   auditStore,
+		Suggest:                 suggestStore,
+		DefaultWatchPorts:       cfg.Flags.CriticalPorts,
+		MatchLog:                matchLog,
+		Learning:                eng,
+		DeviceStaleAfter:        cfg.Flags.DeviceStaleAfter,
+		Auth:                    authStore,
+		Sessions:                auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
+		LoginLimiter:            auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
+		SecureCookie:            cfg.Auth.SecureCookie,
+		TrustedProxies:          trustedProxies,
+		ClientIPHeader:          cfg.Listen.ClientIPHeader,
+		Tokens:                  tokenStore,
+		IngestLimiter:           auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:             routerState,
+		Vault:                   routerBackupVault,
 		SetupInstance: api.SetupInstance{
 			TLSEnabled: cfg.TLS.Enabled,
 			Hosts:      cfg.TLS.Hosts,
@@ -1708,7 +1785,7 @@ func main() {
 	// Best-effort: each store already logs its own save failures, so a
 	// Close error here is just the shutdown-budget case, worth one
 	// line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, hostRegister, baselineRegister)
+	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, decommissions, hostRegister, baselineRegister)
 
 	// One last snapshot, for the same reason and under the same budget
 	// (#795). Ingest and evaluation have both stopped by now, so this

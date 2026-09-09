@@ -150,6 +150,11 @@ var excludedFromMigration = map[string]string{
 		"does generate -- tls.storePath -- is carried.",
 	"TLS.KeyFile": "the private key paired with TLS.CertFile, and the same reasoning: supplied and " +
 		"mounted by the operator, not written by mikroview.",
+	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not state the operator owns: " +
+		"the feed re-fetches it within a day of the move and reports \"no vendor data yet\" until it " +
+		"does, so nothing an operator believes they moved is lost by leaving four megabytes of " +
+		"somebody else's registry behind. It is also data mikroview has no permission to redistribute " +
+		"(see internal/oui.SourceURL), which is a second reason not to copy it around.",
 	"Postgres.DSNFile": "a mounted secret carrying a database password. It is deliberately not in the " +
 		"data directory (storage.go's readDSNFile explains why it is a file at all), and copying a " +
 		"credential into a freshly created volume during a migration would spread it, not move it.",

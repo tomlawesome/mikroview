@@ -126,6 +126,38 @@ describe('the lane row is ordered by how busy each lane is', () => {
   })
 })
 
+describe('a declared lane outranks one seen only in the event buffer (#1054)', () => {
+  it('keeps a quiet declared lane on the map over a busier undeclared one', () => {
+    // Six candidate lanes for five slots: bridge1-5 are all in the
+    // pushed address table (declared), with bridge5 the quietest of
+    // them. bridge6 is seen only in the event buffer -- a scan on an
+    // interface the router has not declared -- and is the busiest lane
+    // overall. Ranking by event count alone would let bridge6 evict
+    // bridge5; declared-first keeps every declared lane on the map and
+    // drops bridge6 instead.
+    zonesState.pushed = [
+      { address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: '' },
+      { address: '192.168.2.1/24', network: '192.168.2.0', interface: 'bridge2', comment: '' },
+      { address: '192.168.3.1/24', network: '192.168.3.0', interface: 'bridge3', comment: '' },
+      { address: '192.168.4.1/24', network: '192.168.4.0', interface: 'bridge4', comment: '' },
+      { address: '192.168.5.1/24', network: '192.168.5.0', interface: 'bridge5', comment: '' },
+    ]
+    appState.events = [
+      ...Array.from({ length: 6 }, (_, i) => event({ id: i, deviceId: 'router1', inInterface: 'bridge6', srcIp: `192.168.6.${i + 2}` })),
+      ...Array.from({ length: 5 }, (_, i) => event({ id: 10 + i, deviceId: 'router1', inInterface: 'bridge1', srcIp: `192.168.1.${i + 2}` })),
+      ...Array.from({ length: 4 }, (_, i) => event({ id: 20 + i, deviceId: 'router1', inInterface: 'bridge2', srcIp: `192.168.2.${i + 2}` })),
+      ...Array.from({ length: 3 }, (_, i) => event({ id: 30 + i, deviceId: 'router1', inInterface: 'bridge3', srcIp: `192.168.3.${i + 2}` })),
+      ...Array.from({ length: 2 }, (_, i) => event({ id: 40 + i, deviceId: 'router1', inInterface: 'bridge4', srcIp: `192.168.4.${i + 2}` })),
+      event({ id: 50, deviceId: 'router1', inInterface: 'bridge5', srcIp: '192.168.5.2' }),
+    ]
+
+    const laneIds = zonesState.zones.map((z) => z.id)
+    expect(laneIds).toHaveLength(5)
+    expect(new Set(laneIds)).toEqual(new Set(['bridge1', 'bridge2', 'bridge3', 'bridge4', 'bridge5']))
+    expect(laneIds).not.toContain('bridge6')
+  })
+})
+
 describe('the drawn tunnels leave the lane row (#877, #890)', () => {
   it('keeps a pushed WireGuard interface out of the lanes and names it as the node', () => {
     // Before this, a WireGuard interface could only ever be a lane:
