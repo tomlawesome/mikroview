@@ -337,6 +337,17 @@
   const viewTransform = $derived('translate(' + R2(viewCam.ox) + ' ' + R2(viewCam.oy) + ') scale(' + R2(S / Sgeom) + ')')
   const viewport = $derived(viewportRect(viewCam))
 
+  /** The inverse of `viewTransform`'s own scale -- nested inside it
+   * (the same `translate(point) scale(traceK)` shape a building's own
+   * stamp already uses, below), it cancels that scale back to exactly
+   * this component's local pixel units, so whatever it wraps renders at
+   * a fixed size regardless of how far the camera is zoomed, while the
+   * translate it sits inside still moves with the pan and the zoom
+   * (#1050 round 56 defect 3: the trace's ✕, chip and ghost note used
+   * to be drawn at the isometric drawing's own scale, legible only by
+   * accident at whichever zoom this component happened to open on). */
+  const traceK = $derived(Sgeom / S)
+
   type Focus = { districtId: string | null; id: string } | null
   let focus = $state<Focus>(null)
 
@@ -1494,6 +1505,14 @@
     const e = mapTraceState.event
     const verdict = mapTraceState.verdict
     if (!e || !verdict) return EMPTY_TRACE_DRAWING
+    // Positioned on the geometry camera, same as the rest of the
+    // isometric drawing (`scene`, buildings, plates) -- their own tests
+    // read a `.trace-stop`/`.trace-chip` translate straight against a
+    // plate's own drawn path, which only lines up when both are in the
+    // same pre-pan/zoom units. #1050 round 56 defect 3 is a rendered
+    // *size* bug, not a position one, and the render block below fixes
+    // that with a counter-scale on each piece's own content instead of
+    // moving the anchor to a different camera.
     const c = geomCam
     const g = ground
     const refused = verdict === 'refused'
@@ -3563,18 +3582,28 @@
              the mark and the chip sit over its dashes rather than under
              them. Never drawn together with a door or a drop label --
              the trace clears the port filter, and standing, before it
-             opens. -->
+             opens. Positioned on the geometry camera like the rest of
+             this group (`traceDrawing`'s own comment has why); the
+             stop mark, the ghost's own note and the chip each wrap
+             their content in `scale({traceK})`, cancelling this
+             group's ancestor scale so they render at this file's local
+             pixel size regardless of the camera's zoom -- #1050 round
+             56 defect 3, and the same nested translate+scale shape a
+             building's own stamp uses further up for the same reason.
+             The dashed ghost path and the halo/ring below stay plain:
+             a line and a building-tracking ring are meant to scale with
+             the map the way a road does. -->
         {#if traceDrawing.ghost}
           <path class="trace-ghost" d={traceDrawing.ghost.d} />
-          <text x={traceDrawing.ghost.tx} y={traceDrawing.ghost.ty} text-anchor="middle" class="ghost-t"
-            >{traceDrawing.ghost.text}</text
-          >
+          <g transform="translate({traceDrawing.ghost.tx} {traceDrawing.ghost.ty}) scale({R2(traceK)})">
+            <text text-anchor="middle" class="ghost-t">{traceDrawing.ghost.text}</text>
+          </g>
         {/if}
         {#if traceDrawing.mark}
           <!-- Where the rule stopped it: the wall's own gate when the log
                names an out-interface, the router's own door when it does
                not (C1, owner 2026-09-09). -->
-          <g class="trace-stop" transform="translate({R2(traceDrawing.mark.x)} {R2(traceDrawing.mark.y)})">
+          <g class="trace-stop" transform="translate({R2(traceDrawing.mark.x)} {R2(traceDrawing.mark.y)}) scale({R2(traceK)})">
             <circle r="9" fill="none" stroke="var(--alarm)" stroke-opacity="0.5" />
             <path d="M-5 -5L5 5M-5 5L5 -5" stroke="var(--alarm)" stroke-width="2.2" stroke-linecap="round" />
           </g>
@@ -3602,7 +3631,7 @@
         {#if traceDrawing.chip}
           <!-- The router's own decision, beside wherever it was made
              (#1050, rounds 54 & 56's `verdictChip`). -->
-          <g class="trace-chip" transform="translate({R2(traceDrawing.chip.x)} {R2(traceDrawing.chip.y)})">
+          <g class="trace-chip" transform="translate({R2(traceDrawing.chip.x)} {R2(traceDrawing.chip.y)}) scale({R2(traceK)})">
             <rect
               x="0"
               y="-16"
