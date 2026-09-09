@@ -1106,26 +1106,104 @@ func TestHandleDefinitionsCloneExpectation(t *testing.T) {
 	}
 }
 
-// TestHandleDefinitionsCloneRefusesShipped pins the other half of #407's
-// clone contract: a shipped detection definition's logic is Go keyed by
-// its own id, so a "clone" would be an envelope evaluating nothing.
-// Refused with the reason, not silently accepted.
-func TestHandleDefinitionsCloneRefusesShipped(t *testing.T) {
+// TestHandleDefinitionsCloneRefusesShippedCodeDetector pins what is left
+// of #407's clone refusal after #829 narrowed it. A shipped detector
+// whose matching is Go with no conditions in it -- no declarative
+// builder registered -- still cannot be copied, because there is nothing
+// to copy: the refusal now says that, and points at the editor, rather
+// than saying no shipped detector can ever be started from.
+func TestHandleDefinitionsCloneRefusesShippedCodeDetector(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
-	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/port_scan/clone", cloneRequest{})
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/activity_spike/clone", cloneRequest{})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 for cloning a shipped detection definition, got %d", resp.StatusCode)
+		t.Fatalf("expected 400 for cloning a shipped code detector, got %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "cannot be cloned") {
+	if !strings.Contains(string(body), "built into this binary as Go") {
 		t.Errorf("expected the refusal to state its reason, got %q", body)
+	}
+}
+
+// TestHandleDefinitionsCloneShippedDeclarative is #829's clone path: a
+// shipped declarative detector's structure can be read back off its own
+// builder, so the copy arrives carrying the conditions the original
+// actually matches on rather than an empty bar.
+//
+// The three things the issue asks of the copy are all asserted here,
+// because each has its own way of going quietly wrong: a copy with no
+// conditions looks fine until it never fires; a copy that starts enabled
+// duplicates the original's flags while it is being edited; and a copy
+// that lands as shipped cannot be renamed or edited at all.
+func TestHandleDefinitionsCloneShippedDeclarative(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	original := mustGetDefinition(t, ts, "port_scan")
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/port_scan/clone", cloneRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 201 cloning a shipped declarative detector, got %d: %s", resp.StatusCode, body)
+	}
+	made := mustDecodeDefinition(t, resp)
+
+	if made.ID == "port_scan" {
+		t.Error("the copy kept the original's id; a clone needs its own identity")
+	}
+	if made.Name != original.Name+" (copy)" {
+		t.Errorf("copy name = %q, want %q", made.Name, original.Name+" (copy)")
+	}
+	if made.Provenance.Origin != engine.ProvenanceCustom {
+		t.Errorf("copy provenance = %q, want custom -- a copy nobody can edit is no use", made.Provenance.Origin)
+	}
+	if made.Enabled {
+		t.Error("the copy started enabled; #787 decision C pauses it so a half-edited detector never runs")
+	}
+	if made.Detection == nil || len(made.Detection.Conditions) == 0 {
+		t.Fatalf("the copy arrived with no conditions: %+v", made.Detection)
+	}
+	if made.Structure != nil {
+		t.Error("the copy reported a shipped structure; it carries its own stored one")
+	}
+
+	// The conditions are the original's, not an invention: the shipped
+	// view's own structure block is the thing being copied, so the two
+	// have to agree field for field.
+	want := original.Structure
+	if want == nil {
+		t.Fatal("port_scan reported no structure, so there was nothing for the clone to copy")
+	}
+	if !reflect.DeepEqual(made.Detection.Conditions, want.Conditions) {
+		t.Errorf("copy conditions = %+v, want the original's %+v", made.Detection.Conditions, want.Conditions)
+	}
+	if made.Detection.Key != want.Key || made.Detection.Counting != want.Counting || made.Detection.DistinctField != want.DistinctField {
+		t.Errorf("copy aggregation = %q/%q/%q, want %q/%q/%q",
+			made.Detection.Key, made.Detection.Counting, made.Detection.DistinctField,
+			want.Key, want.Counting, want.DistinctField)
+	}
+	// Scope and the two tunable numbers come across; anything the
+	// original tuned that a custom detection has no schema for does not.
+	if !reflect.DeepEqual(made.Scope, original.Scope) {
+		t.Errorf("copy scope = %+v, want the original's %+v", made.Scope, original.Scope)
+	}
+	for _, name := range []string{"threshold", "window"} {
+		if original.Params[name] != nil && made.Params[name] == nil {
+			t.Errorf("copy dropped param %q, which a custom detection does declare", name)
+		}
+	}
+	for name := range made.Params {
+		if name != "threshold" && name != "window" {
+			t.Errorf("copy carried param %q, which a custom detection has no schema for", name)
+		}
 	}
 }
 
@@ -1677,6 +1755,46 @@ func TestCustomDetectionFamilyRoundTrip(t *testing.T) {
 	defer bad.Body.Close()
 	if bad.StatusCode == http.StatusOK {
 		t.Error("PUT stored a family nothing can draw")
+	}
+}
+
+// TestUpdateDetectionStructure is the save half of the conditions editor.
+// Until #829 a custom detector's structure was write-once at create time,
+// because nothing in the UI could author a condition; the editor's Save
+// is this PUT, and what it must not do is quietly leave the old
+// conditions in place while reporting success.
+func TestUpdateDetectionStructure(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	made := mustCreateCustomDetection(t, ts, "Garage probes")
+
+	got := mustPutDefinition(t, ts, made.ID, updateDefinitionRequest{
+		Detection: &detectionStructureRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldSourceAddress, Operator: engine.OpInCIDR, Values: []string{"10.0.70.0/24"}},
+				{Field: engine.FieldAction, Operator: engine.OpEquals, Values: []string{"drop"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingDistinct,
+			DistinctField:  engine.FieldDestinationAddress,
+			DetailTemplate: "{Count} hosts in the garage range probed by {SourceAddress}",
+		},
+	})
+	if got.Detection == nil || len(got.Detection.Conditions) != 2 {
+		t.Fatalf("conditions after save = %+v, want the two just sent", got.Detection)
+	}
+	if got.Detection.Conditions[0].Operator != engine.OpInCIDR {
+		t.Errorf("first condition = %+v, want inCIDR", got.Detection.Conditions[0])
+	}
+	if got.Detection.DistinctField != engine.FieldDestinationAddress {
+		t.Errorf("distinctField after save = %q", got.Detection.DistinctField)
+	}
+	// Threshold and window are params and stay params: a structure save
+	// must not disturb the numbers the params editor owns.
+	if got.Params["threshold"] == nil || got.Params["window"] == nil {
+		t.Errorf("a structure save lost the tuning params: %+v", got.Params)
 	}
 }
 
