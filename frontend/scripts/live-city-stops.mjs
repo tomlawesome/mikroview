@@ -10,7 +10,7 @@
 // being built in parallel and was not available to import. Once it
 // lands this scenario should lean on it instead of carrying its own.
 
-import { session, check, done, feedRaw, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL

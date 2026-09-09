@@ -23,7 +23,7 @@
 // pair the city-wide wall escalates, the same wording and the same code
 // path either way.
 
-import { session, check, done, feedRaw, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 // The one host that sends the unplanned, no-rule-label traffic below --

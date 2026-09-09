@@ -26,7 +26,7 @@
 // order, and a lane an earlier scenario also pushed rules for would
 // make this scenario's reading depend on run order.
 
-import { session, check, done, feedRaw, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
