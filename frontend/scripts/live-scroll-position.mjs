@@ -231,17 +231,26 @@ const target = await page.evaluate(() => {
 })
 check(target !== null, 'a discovered row is on screen at this scroll position to name')
 
-const targetRow = `.etable tbody tr:has(td:nth-child(3):text-is("${target}"))`
-await page.click(`${targetRow} .rename-btn`)
-await page.fill(`${targetRow} .rename-input`, 'live-scroll-check')
+// The row, found by its address cell. Not `td:nth-child(3):text-is(...)`
+// any more: `:text-is()` compares an element's *immediate* text nodes,
+// so it stops matching a cell as soon as the address is wrapped in
+// anything -- which is what #410 did, putting the dossier door on the
+// address. The cell's own text is the stable fact, so match on that,
+// anchored so one address is never a prefix of another.
+const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const targetRow = page
+  .locator('.etable tbody tr')
+  .filter({ has: page.locator('td:nth-child(3)', { hasText: new RegExp(`^${escaped}$`) }) })
+await targetRow.locator('.rename-btn').click()
+await targetRow.locator('.rename-input').fill('live-scroll-check')
 
 // Saved with Enter, not by clicking Save: Playwright scrolls a click
 // target into view first, which would hide exactly the defect under
 // test if the button ever sat off screen.
-await page.focus(`${targetRow} .rename-input`)
+await targetRow.locator('.rename-input').focus()
 await page.keyboard.press('Enter')
-// Native querySelector inside the browser has no :has()/:text-is() --
-// those are Playwright-only extensions -- so the row is found here by
+// Native querySelector inside the browser has no :has() text filter --
+// that is a Playwright-only extension -- so the row is found here by
 // plain DOM matching on the same stable address column instead.
 await page.waitForFunction(
   (key) => {
