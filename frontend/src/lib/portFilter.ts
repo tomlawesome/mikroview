@@ -168,10 +168,18 @@ export function doorAccepts(door: Pick<PortDoor, 'action'>): boolean {
 
 /**
  * zoneTally is a lane card's own line under a port filter: `2 of 12
- * hosts on 445/tcp`. Counted over the hosts the card actually draws, so
+ * hosts on 445/tcp`. Counted over the hosts the surface knows about, so
  * the number and the lit dots are the same claim.
+ *
+ * Null where the surface knows of no host here at all (#1056). "0 of 0"
+ * is not a finding, it is a fraction with nothing on either side of it,
+ * and the road and the door already say what happened at that boundary.
+ * A host seen on the port but unknown to the register is not counted and
+ * is not drawn -- the same rule the marks already follow -- so `onPort`
+ * can never run past `total` and the card can never read `1 of 0`.
  */
-export function zoneTally(onPort: number, total: number, label: string): string {
+export function zoneTally(onPort: number, total: number, label: string): string | null {
+  if (total === 0) return null
   return `${onPort} of ${total} host${total === 1 ? '' : 's'} on ${label}`
 }
 
@@ -180,9 +188,11 @@ export function zoneTally(onPort: number, total: number, label: string): string 
  * `2 of 12 · 445/tcp`. The lane card has a line of its own to spend on
  * the word "hosts"; the plaque has a chip under a name and a subnet, and
  * round 54 draws the short form there (its README, and the `city-port`
- * shot). One counting rule, two lengths of sentence -- not two counts.
+ * shot). One counting rule, two lengths of sentence -- not two counts,
+ * including the empty district's silence above.
  */
-export function plaqueTally(onPort: number, total: number, label: string): string {
+export function plaqueTally(onPort: number, total: number, label: string): string | null {
+  if (total === 0) return null
   return `${onPort} of ${total} · ${label}`
 }
 

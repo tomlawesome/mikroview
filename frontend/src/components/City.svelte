@@ -69,7 +69,6 @@
   import type { Coverage } from '../lib/coverageRule'
   import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
-  import { addressInCidr, parseCidr } from '../lib/addressMatch'
   import { portFilterState } from '../lib/portFilter.svelte'
   import { doorAccepts, doorHalf, emptyNote, litRibs, plaqueTally } from '../lib/portFilter'
   import type { PortDoor } from '../lib/api'
@@ -1275,12 +1274,19 @@
    * A rib names interfaces and a road is a district pair, and that join
    * lives in one function for exactly this reason.
    *
-   * Buildings come from the answer's own host list. A district's tally
-   * is counted over its whole subnet rather than over the eight
-   * buildings its plate draws (layout.ts's MAX_BUILDINGS), by the same
-   * `addressInCidr` that put those hosts in the zone: "1 of 5" is a
-   * claim about the district, and a plate that draws four of its five
-   * machines must not turn that into a claim about four.
+   * Buildings come from the answer's own host list, and so does the
+   * numerator of a district's tally -- but only through the buildings
+   * the district actually has (#1056). A host the register has never
+   * answered for is not a building and is not counted: counting it
+   * against a district that draws none of it put `1 of 0 · 445/tcp`
+   * under the Servers plaque on #1055's live capture. Its road and its
+   * door still light, which is what says the traffic was there.
+   *
+   * The denominator is the district's own host count -- the buildings
+   * on the plate plus the `more` beyond it (layout.ts's MAX_BUILDINGS)
+   * -- because "1 of 5" is a claim about the district and a plate that
+   * draws four of its five machines must not turn it into a claim about
+   * four. A district the register knows no host in gets no tally at all.
    */
   const portOverlay = $derived.by((): PortOverlay | null => {
     if (!portOn) return null
@@ -1302,10 +1308,14 @@
     const litBuildingIds = new Set<string>()
     const tallies = new Map<string, string>()
     for (const d of ground.districts) {
-      for (const b of d.buildings) if (b.ip && onPort.has(b.ip)) litBuildingIds.add(b.id)
-      const cidr = d.cidr ? parseCidr(d.cidr) : null
-      const on = cidr ? portFilterState.hosts.filter((h) => addressInCidr(h.ip, cidr)).length : 0
-      tallies.set(d.id, plaqueTally(on, d.buildings.length + d.more, portFilterState.label))
+      let on = 0
+      for (const b of d.buildings) {
+        if (!b.ip || !onPort.has(b.ip)) continue
+        litBuildingIds.add(b.id)
+        on++
+      }
+      const line = plaqueTally(on, d.buildings.length + d.more, portFilterState.label)
+      if (line) tallies.set(d.id, line)
     }
     const doors: DoorSpot[] = []
     for (const door of portFilterState.placedDoors) {

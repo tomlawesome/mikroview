@@ -4947,6 +4947,38 @@ describe('the port filter (#1018, round 53)', () => {
     expect(container.querySelectorAll('.zone .hostrow .h-dot').length).toBeGreaterThan(dimmed.length)
   })
 
+  // #1056, found on #1055's live capture of the city: the answer's host
+  // list is the log lines' own, and an address nothing has registered
+  // draws no dot. Counting it anyway put `1 of 0` under a plaque; the
+  // same arithmetic sits under these cards.
+  it('leaves a host it draws no dot for out of the tally, and says nothing where there is no host', () => {
+    zonesState.pushed = [
+      ...lanes,
+      { address: '10.0.40.1/24', network: '10.0.40.0', interface: 'ether5', comment: 'Guest' },
+    ]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether3', srcIp: '10.0.10.21', srcHostName: 'tom-desktop', dstIp: '10.0.20.5', dstPort: 445, protocol: 'tcp' }),
+    ]
+    // The one host on the port is inside the Servers lane's subnet and
+    // has never been registered, so no card draws a dot for it.
+    filterTo([445], { hosts: [{ ip: '10.0.20.99', name: '', events: 2, accepts: 2, drops: 0 }] })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const tallies = [...container.querySelectorAll('.hosttally')].map((t) => t.textContent ?? '')
+    expect(tallies.some((t) => t.startsWith('0 of'))).toBe(true)
+    expect(tallies.some((t) => t.startsWith('1 of'))).toBe(false)
+    // A lane with no known host says nothing rather than `0 of 0`: this
+    // surface draws no row at all there, so there are fewer of these
+    // lines than there are cards. zoneTally refuses the same fraction
+    // outright (portFilter.test.ts), which is what the city needs.
+    expect(tallies.some((t) => t.startsWith('0 of 0'))).toBe(false)
+    expect(container.querySelectorAll('.zone').length).toBeGreaterThan(tallies.length)
+    // The rib is what says the traffic was there, and it still does.
+    expect(container.querySelectorAll('.lit-half').length).toBe(2)
+  })
+
   it('dims a lane with nothing on the port whole, and keeps it on the map', () => {
     seedMap()
     filterTo([445])

@@ -3936,7 +3936,14 @@
 
   /** The lane card's line under a filter: `2 of 12 hosts on 445/tcp`
    * for the port, and the traced end's own tally for the trace
-   * (`cam-porch · 14× today`, `tom-desktop · never reached`). */
+   * (`cam-porch · 14× today`, `tom-desktop · never reached`).
+   *
+   * The port's count runs over this row's own dots -- the hosts the
+   * surface knows about -- and never over the answer's host list
+   * directly, so an address seen on the port that no lane draws is not
+   * counted anywhere (#1056). Null falls back to the presence count
+   * below, which is what a lane with no known host says instead of a
+   * fraction with nothing on either side of it. */
   function filterTally(row: HostRow): string | null {
     if (portOn) {
       const on = row.dots.filter((d) => litHosts.has(d.ip)).length + hiddenLitHosts(row)
