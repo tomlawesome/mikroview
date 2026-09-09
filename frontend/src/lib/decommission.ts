@@ -30,31 +30,42 @@ export const GHOST_INK: Record<GhostState, string> = {
   broken: 'var(--alarm)',
 }
 
-// ghostStateOf maps the watch's four-state machine onto the three inks
-// the map paints with.
+// STRAGGLER_ALARM_MS is how long a straggler holds the ghost red.
 //
-// The mapping that matters is 'draining' -> 'broken'. Internally
-// 'draining' means a straggler was seen and the clean-window clock
-// restarted, and 'broken' means nothing logs the range so the watch
-// cannot answer at all. To the operator both say the same thing -- this
-// retired range is not safely quiet -- and round 55 draws exactly one
-// alarm state, so both take the alarm ink. Which of the two it is shows
-// in the tally line, never in the colour.
+// Round 55 draws both ends of this and no rule between them: at 22:41 a
+// straggler turns the ghost alarm-red, and at 03:52 -- same watch, three
+// stragglers behind it, four hours of quiet since -- the ghost is back in
+// watch purple. So the alarm is the arrival, not the history. An hour is
+// the boundary because it is the one the ghost already shows: the tally
+// counts whole hours, so a ghost that cannot yet claim an hour of quiet
+// is saying "0 h of 6 h", and that is exactly the moment the alarm is
+// still true. Nothing is invented to hold the two scenes apart.
+const STRAGGLER_ALARM_MS = 3_600_000
+
+// ghostStateOf answers what the ghost is painted in.
+//
+// It reads the watch's own record rather than the server's State string,
+// because the server's four states and the map's three inks are not the
+// same question. 'draining' means a straggler was seen at some point and
+// the clock restarted, which stays true for the rest of the watch's life;
+// the map's alarm is about now.
+//
+// Two things make a ghost red. A straggler just arrived -- the range was
+// declared dead and something contradicted the declaration. Or nothing
+// logs the range at all, in which case the watch cannot claim quiet and
+// says so rather than reporting silence it never had the means to hear
+// (the same honesty #546's broken ring exists for). Which of the two it
+// is shows in the tally line, never in the colour.
 //
 // An unanswered offer has no watch at all: that is 'none', the grey the
 // segment is drawn in between leaving the router and being answered.
-export function ghostStateOf(watch: DecommissionWatch | null | undefined): GhostState {
-  if (!watch) return 'none'
-  switch (watch.state) {
-    case 'holding':
-      return 'holding'
-    case 'draining':
-    case 'broken':
-      return 'broken'
-    default:
-      // 'retired' -- the ghost has left the map, so nothing is painted.
-      return 'none'
+export function ghostStateOf(watch: DecommissionWatch | null | undefined, nowMs: number): GhostState {
+  if (!watch || watch.state === 'retired') return 'none'
+  if (!watch.covered) return 'broken'
+  if (watch.trafficCount > 0 && watch.lastTrafficAt && nowMs - Date.parse(watch.lastTrafficAt) < STRAGGLER_ALARM_MS) {
+    return 'broken'
   }
+  return 'holding'
 }
 
 // hoursOfWindow renders "4 h of 6 h": how long the range has been quiet
@@ -188,7 +199,7 @@ export function offerQuestion(offer: DecommissionOffer): string {
 // card and the straggler's so the operator can see exactly what stays
 // behind when the ghost leaves the map.
 export function watchlistRowText(watch: DecommissionWatch, nowMs: number): string {
-  const state = ghostStateOf(watch)
+  const state = ghostStateOf(watch, nowMs)
   if (state === 'broken') {
     return watch.trafficCount > 0
       ? `broken · ${watch.trafficCount} line${watch.trafficCount === 1 ? '' : 's'}`
