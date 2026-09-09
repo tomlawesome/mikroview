@@ -102,7 +102,7 @@
   import type { OffBaselineLine } from '../lib/baseline'
   import { hostMarksFrom, presenceNote, quietFor, type CityHost, type HostPresence } from '../lib/city/presence'
   import CityDeviceDefs from './CityDeviceDefs.svelte'
-  import type { Building, CityPeer, District, DistrictGate, Ground, RoadKind } from '../lib/city/types'
+  import type { Building, CityPeer, District, DistrictGate, Ground, Road, RoadKind } from '../lib/city/types'
 
   let {
     stop,
@@ -988,6 +988,39 @@
     return r.id.slice(0, bar) === d.id || r.id.slice(bar + 1) === d.id
   }
 
+  /**
+   * The buildings standing at one end of a road -- what the off-baseline
+   * arrival mark outlines (#1057).
+   *
+   * Three cases, all answered from the ground's own ids rather than from
+   * geometry:
+   *
+   * - a lane names its host in `from` (layout.ts), so its start is that
+   *   one building -- the reach's own case, where the traffic resolves
+   *   to a single host;
+   * - a pair road that ends at a router or a bridge post names it in
+   *   `from`/`to`, so that node's own building is the end. The WAN road
+   *   is this: a line to an address outside every district rings the
+   *   wan end, and the wan end is drawn at the router the road runs to;
+   * - otherwise the end is a district's wall, and the district's
+   *   buildings are what stands there.
+   *
+   * The issue offers "the district's buildings, or the district plaque's
+   * building" for that last case. Only the first exists here: a plaque
+   * is a text label under the plate (`plaques`, in the scene below) with
+   * no building of its own, so there is no plaque building to outline.
+   */
+  function endBuildings(r: Road, which: 'start' | 'end', pair: RoadBaselineEntry | null): Building[] {
+    const nodeId = which === 'start' ? r.from : r.to
+    if (nodeId) {
+      const b = allBuildings.find((x) => x.id === nodeId)
+      return b ? [b] : []
+    }
+    const id = pair?.ends[which] ?? null
+    const d = id ? ground.districts.find((x) => x.id === id) : null
+    return d ? d.buildings : []
+  }
+
   /** Which roads draw the line toward `counterpart` from `token`, and
    * the counterpart they draw -- the join between a strand and the
    * ground's own road ids, shared by all three subjects so none of them
@@ -1620,6 +1653,18 @@
     const ents = new Map<string, Entity>()
     for (const b of allBuildings) ents.set(b.id, { u: b.u, v: b.v, R: b.R })
 
+    /**
+     * Building id -> the ink of the road whose off-baseline traffic
+     * arrived there (#1057). Filled by the road loop below and read by
+     * `building()`, which draws the outline on the footprint path it is
+     * already drawing, so the mark cannot drift off the building.
+     *
+     * One entry per building however many roads arrive at it: two roads
+     * carrying different verdicts into the same building is one mark in
+     * the later road's ink, not two outlines fighting over one edge.
+     */
+    const arrivedInk = new Map<string, string>()
+
     // The bollards, cross and red mark a dropped road ends at (#865) --
     // pulled out so standing on a building (#868) can pin the same mark
     // exactly where a blocked strand's own road would have crossed the
@@ -1706,7 +1751,8 @@
       // unplanned pair are unchanged: their colour is already the point,
       // and dimming a refusal because it happens every day would hide
       // exactly the traffic this screen exists to show.
-      const nb: { lines: OffBaselineLine[]; ring: RoadRing } | null = roadBaseline.get(r.id) ?? laneNb
+      const pairNb: RoadBaselineEntry | null = roadBaseline.get(r.id) ?? null
+      const nb: { lines: OffBaselineLine[]; ring: RoadRing } | null = pairNb ?? laneNb
       // Which roads the rule judges at all: accepted pair roads always,
       // and the reach's own lanes while it is open.
       const judged = r.k === 'a' || laneInReach
@@ -1757,23 +1803,21 @@
       // makes a dim road read as one hairline rather than as a soft band
       // (round-49/index.html:869-871).
       if (glowD.length && !faded) glows.push({ d: glowD.join(''), stroke: col, sw: R2(w + 4), so: 0.07 })
-      // The ring, at the end the traffic arrived at. It hugs the road's
-      // end and throbs in place -- it never pulses outward, because a
-      // ring that grows reads as something spreading and nothing is
-      // spreading (DESIGN.md, owner 2026-09-07). The same `.halo` rule
-      // the flag pill uses, so there is one motion in the city, not two.
+      // The arrival mark, at the end the traffic arrived at. #1057: it
+      // is the arrived-at building's own outline, not a circle on the
+      // ground beside it -- a ring round a dot is how the flat map marks
+      // a node, and the city has a silhouette to draw instead. Nothing
+      // else about the mark changes: same ink, same weight, same states,
+      // same lifetime, and the same `.halo` rule the flag pill uses, so
+      // it still throbs in place and never pulses outward (DESIGN.md,
+      // owner 2026-09-07) and there is one motion in the city, not two.
+      //
+      // The outline itself is drawn by `building()` below, off this map,
+      // so it is the footprint path the building already draws rather
+      // than a second idea of where the building is.
       if (nb && judged) {
-        const ringAt = (e: Pt) => {
-          const rr = R2(Math.max(5, c.S * 0.7))
-          solids.push({
-            kind: 'other',
-            v: e[1] + 8,
-            paints: [{ cx: R2(X(c, e[0])), cy: R2(Y(c, e[1])), rx: rr, ry: rr, stroke: col, sw: 1.4, cls: 'halo' }],
-            lamps: [],
-          })
-        }
-        if (nb.ring.start) ringAt(r.pts[0])
-        if (nb.ring.end) ringAt(r.pts[r.pts.length - 1])
+        if (nb.ring.start) for (const b of endBuildings(r, 'start', pairNb)) arrivedInk.set(b.id, col)
+        if (nb.ring.end) for (const b of endBuildings(r, 'end', pairNb)) arrivedInk.set(b.id, col)
       }
       // #991: the district-pair aggregate has no per-building source to
       // name (only the reach's own strands, below, resolve to one host),
@@ -1855,6 +1899,15 @@
           dash: dashed ? '3 3' : undefined,
         },
       ]
+      // The off-baseline arrival mark (#1057): this building's own
+      // outline, in the ink of the road that carried the traffic, over
+      // the footprint the building already draws. `.halo` is the flag
+      // pill's own rule, so it throbs in place and never pulses outward
+      // (DESIGN.md, owner 2026-09-07); `arrived` is what a check points
+      // at. The animation drives stroke-width, so `sw` here is only what
+      // a reduced-motion reader sees held still -- the ring's own 1.4.
+      const arrived = arrivedInk.get(b.id)
+      if (arrived) paints.push({ d: pin(0), fill: 'none', stroke: arrived, sw: 1.4, cls: 'halo arrived' })
       const what = b.kind === 'router' ? 'router' : b.kind === 'router-ant' ? 'router with antennas' : b.kind === 'post' ? 'bridge post' : 'host'
       // The mark (#981, round 46): whatever the flag and watchlist
       // ledgers say about this machine, and nothing else. There is no
@@ -2959,9 +3012,9 @@
         stroke-linecap={p.cls === 'round' ? 'round' : undefined}
       />
     {:else}
-      <!-- `cls` carries the off-baseline ring's `halo`, which is what
-           makes it throb in place; the animation sets stroke-width, so
-           it overrides the attribute below by design. -->
+      <!-- No ellipse carries `halo` any more (#1057 moved the arrival
+           mark onto the building's own outline); `cls` stays because a
+           Paint carries one and this is the sink that renders it. -->
       <ellipse class={p.cls} cx={p.cx} cy={p.cy} rx={p.rx} ry={p.ry} fill={p.fill ?? 'none'} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} />
     {/if}
   {/each}
@@ -3153,7 +3206,11 @@
                 <path d={diamond(geomCam, s.b.u, s.b.v, s.b.R * 1.9, 0)} fill="var(--accent)" fill-opacity="0.07" stroke="var(--accent)" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="4 5" />
               {/if}
               {#each s.paints as p, j (j)}
-                <path d={p.d} fill={p.fill} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} stroke-dasharray={p.dash} />
+                <!-- `cls` carries the off-baseline arrival outline's
+                     `halo arrived` (#1057), which is what makes it throb
+                     in place; the animation sets stroke-width, so it
+                     overrides the attribute below by design. -->
+                <path d={p.d} fill={p.fill} fill-opacity={p.fo} stroke={p.stroke} stroke-opacity={p.so} stroke-width={p.sw} stroke-dasharray={p.dash} class={p.cls} />
               {/each}
               <g transform="translate({s.stamp.x} {s.stamp.y})">
                 <g transform="scale({s.stamp.k})" style:color={s.ink} opacity={s.pres === 'quiet' ? 0.62 : s.pres === 'intended' ? 0.55 : s.dim ? 0.62 : undefined}>
@@ -3971,7 +4028,13 @@
   /* The flagged halo hugs the building and breathes in place. It must
      never ripple outward (DESIGN.md "Honesty and motion", owner
      2026-09-07): a ring that grows reads as something spreading, and
-     nothing is spreading -- the flag is already open. */
+     nothing is spreading -- the flag is already open.
+
+     The off-baseline arrival mark wears the same rule (#1057): it is the
+     arrived-at building's own outline, `halo arrived`, so the city has
+     one motion and not two. `.arrived` is a selector for checks and
+     carries no style of its own -- what the mark looks like is the road
+     ink and weight the building's paint already sets. */
   .halo {
     animation: halo 1.6s ease-in-out infinite;
   }

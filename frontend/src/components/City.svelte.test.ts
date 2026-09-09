@@ -9,6 +9,7 @@ import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
 import { layoutGround } from '../lib/city/layout'
+import { roadEnds } from '../lib/city/baselineRoads'
 import { faceOf } from '../lib/city/walls'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
@@ -1119,9 +1120,11 @@ describe('the reach follows the brightness rule (round 49, #1016)', () => {
     const bright = stand()
     expect(Number(road(bright.container).getAttribute('stroke-opacity'))).toBeGreaterThan(dimOp)
     expect(Number(road(bright.container).getAttribute('stroke-width'))).toBeGreaterThan(dimW)
-    // Bright brings the flow dashes and the ring at the arrival end.
+    // Bright brings the flow dashes and the outline at the arrival end
+    // (#1057: an outline on the arrived-at building, never a circle).
     expect(bright.container.querySelector('[data-road="bridge-lan|vlan-srv"].flow')).not.toBeNull()
-    expect(bright.container.querySelector('.city ellipse.halo, .city circle.halo')).not.toBeNull()
+    expect(bright.container.querySelector('.city path.halo.arrived')).not.toBeNull()
+    expect(bright.container.querySelector('.city ellipse.halo, .city circle.halo')).toBeNull()
   })
 
   it('the standing building’s own lane takes part in the rule too, not the scenery ink', () => {
@@ -1513,18 +1516,34 @@ describe('City: brightness by baseline', () => {
     expect(container.querySelectorAll(`path.flow[data-road="${other.id}"]`).length).toBe(0)
   })
 
-  it('throbs a ring in place at the end the traffic arrived at, and none when nothing is off the baseline', () => {
+  it('throbs the arrived-at building\u2019s own outline, and nothing when nothing is off the baseline', () => {
     const pick = pairRoad()!
+    // Which end of this road each district sits at, asked of the same
+    // function `rollUpRoads` asks, so the line below is aimed at the
+    // road's `end` rather than at whichever district the fixture happens
+    // to list first (#1057: a judged road with `ring.end`).
+    const ends = roadEnds(pick.r, ground.districts)!
+    const from = ground.districts.find((d) => d.id === ends.start)!
+    const to = ground.districts.find((d) => d.id === ends.end)!
+
     const plain = render(City, { props: { stop: 'district', ground } })
-    const before = plain.container.querySelectorAll('ellipse.halo').length
+    expect(plain.container.querySelectorAll('.halo.arrived').length).toBe(0)
     plain.unmount()
 
-    baselineState.off = offDoc([aLine(pick.a.buildings[0].ip, pick.b.buildings[0].ip)])
+    baselineState.off = offDoc([aLine(from.buildings[0].ip, to.buildings[0].ip)])
     const { container } = render(City, { props: { stop: 'district', ground } })
-    // One more ring than before: one line, arriving at one end. The
-    // ring's motion is the shared `.halo` rule, which breathes in place
-    // and never ripples outward.
-    expect(container.querySelectorAll('ellipse.halo').length).toBe(before + 1)
+
+    // The mark is the destination's own footprint outline, drawn inside
+    // the building's group -- so it is on the building by construction,
+    // not merely near it.
+    const outlined = (b: { id: string }) => container.querySelector(`.blk[data-cid="${b.id}"] path.halo.arrived`)
+    for (const b of to.buildings) expect(outlined(b)).not.toBeNull()
+    // Nothing at the end the traffic left from.
+    for (const b of from.buildings) expect(outlined(b)).toBeNull()
+    // And no circle anywhere: the ring on the ground is gone, both the
+    // <ellipse> the old mark drew and any <circle> standing in for it.
+    expect(container.querySelector('.city ellipse.halo, .city circle.halo')).toBeNull()
+    expect(container.querySelectorAll('circle.arrived, ellipse.arrived').length).toBe(0)
   })
 
   it('opens the off-baseline card from the road, naming the line, the port, the count and the verdict in plain words', async () => {

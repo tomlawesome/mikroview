@@ -183,6 +183,13 @@ const measure = () =>
       wrong: [...new Set(wrong)],
       viewport: vp ? { w: Number(vp.getAttribute('width')), h: Number(vp.getAttribute('height')) } : null,
       nodes: city.querySelectorAll('svg *').length,
+      // #1057: the off-baseline arrival mark is the arrived-at
+      // building's own outline. `arrived` is read inside `.blk` on
+      // purpose -- a path with the class floating loose in the drawing
+      // would be the old ring wearing a new name.
+      arrived: city.querySelectorAll('.blk path.halo.arrived').length,
+      looseArrived: city.querySelectorAll('.halo.arrived').length - city.querySelectorAll('.blk .halo.arrived').length,
+      haloRounds: city.querySelectorAll('circle.halo, ellipse.halo').length,
     }
   })
 
@@ -212,6 +219,19 @@ for (let i = 0; i < STOPS.length; i++) {
     const lit = lampRadii.filter((r) => r > 0)
     check(lit.length > 0, `${at}: at least one gate lamp is lit (${lit.length} of ${lampRadii.length} lamp circles have r>0)`)
   }
+  // #1057: the arrival mark is a building's own outline, so no circle or
+  // ellipse throbs anywhere in the city, at any stop, and nothing but a
+  // building wears the mark.
+  //
+  // Absence only, here. This estate judges no road the mark could land
+  // on: every lane<->ether1 pair carries the inbound drop feed as well
+  // as its accepts, so the pair reads 'holding' and the brightness rule
+  // leaves it alone, and the lane-to-lane pair is unplanned. That was as
+  // true of the ring this replaced. The positive claim -- the arrived-at
+  // building wearing the outline -- is live-city-reach.mjs's, where a
+  // real arrival lands on a real host.
+  check(m.haloRounds === 0, `${at}: no circle or ellipse arrival ring is drawn (${m.haloRounds})`)
+  check(m.looseArrived === 0, `${at}: nothing wears the arrival mark except a building (${m.looseArrived} loose, ${m.arrived} on buildings)`)
   check(m.unnamed === 0, `${at}: every district and building carries an accessible name (${m.unnamed} bare)`)
   check(!!m.viewport, `${at}: the minimap shows the viewport`)
   if (m.viewport && lastViewport) check(m.viewport.w < lastViewport.w, `${at}: the viewport rect is smaller than at the last stop (${m.viewport.w.toFixed(1)} < ${lastViewport.w.toFixed(1)})`)
