@@ -27,24 +27,15 @@ const FOLLOW = `${CARD} .whisper .hand-btn.follow`
 // lives -- below that threshold every event renders regardless of
 // autoscroll, and the bug is invisible.
 //
-// The split is load-bearing, not stylistic: the client's initial GET
-// /api/events asks for limit:500 (state.svelte.ts), so no amount of
-// seeding gets the page past 500 rows. Only events arriving over the
-// WebSocket, after the page is up, can drive the window past the 800-row
-// cap. Feeding both batches over the socket leaves the wait below never
-// satisfied.
-//
-// Batch-a therefore has to reach the page through that initial GET, and
-// the reset inside session() (#1064) empties the ring before this
-// scenario has fed anything -- so it feeds afterwards and reloads, which
-// is the one place in this suite a reload is the point rather than a
-// habit (#1062).
+// The split is load-bearing, not stylistic: it is what gets the window
+// past its 800-row cap. The client's initial GET /api/events asks for
+// limit:500 (state.svelte.ts), so seeding before the page is up can
+// never do it -- only events arriving over the WebSocket afterwards can,
+// and both batches do, which is why they are fed in two goes with the
+// page waiting on the first before the second lands.
 const { page } = await session()
 
-const before = await eventsTotal(page)
 feedSyslog(450, 'batch-a')
-await waitForEventsTotal(page, before + 450)
-await page.reload({ waitUntil: 'networkidle' })
 await waitForStreamRows(page, 400)
 
 feedSyslog(450, 'batch-b')

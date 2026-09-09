@@ -43,6 +43,16 @@ await waitForStreamRows(page, 50)
 const reach = page.locator('.filterline .spans .reach')
 check(await reach.isVisible(), 'the buffer reach indicator is visible on the filter line')
 
+// The spans read the buffer from the polled stats, not from the rows the
+// socket delivers, so the reach still says "nothing held yet" for up to
+// one poll after the rows are on screen. Wait for the buffer to stop
+// being empty; what it then says is what the check below judges.
+await page.waitForFunction(
+  () => !/nothing held yet/.test(document.querySelector('.filterline .spans .reach')?.textContent ?? ''),
+  null,
+  { timeout: 15000 },
+)
+
 const reachText = (await reach.textContent())?.trim() ?? ''
 check(
   /^holding \d+ (s|min|h|d)$/.test(reachText),
