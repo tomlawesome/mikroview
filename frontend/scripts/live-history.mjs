@@ -36,12 +36,16 @@ const SECRET_RULE = 'mv856-history'
 // Bulk first, so the day file exists and has something to compress, then
 // the marked lines whose addresses the assertions below look for.
 feedSyslog(40, 'history')
-for (let i = 0; i < 5; i++) {
-  feedRaw(
-    `firewall,info H|${SECRET_RULE}| forward: in:bridge1 out:ether1, connection-state:new, ` +
+// One connection per call to send_tls used to mean five TLS handshakes
+// for five lines (#1061) -- feedRaw takes them all in one.
+feedRaw(
+  ...Array.from(
+    { length: 5 },
+    (_, i) =>
+      `firewall,info H|${SECRET_RULE}| forward: in:bridge1 out:ether1, connection-state:new, ` +
       `proto TCP (SYN), ${SECRET_SRC}:5${i}100->${SECRET_DST}:443, len 60`,
-  )
-}
+  ),
+)
 
 const { page, consoleErrors } = await session({ waitForEvents: 20 })
 
@@ -65,7 +69,7 @@ async function retainedFiles(timeoutMs = 20000) {
     }
     if (names.length > 0) return names
     if (Date.now() > deadline) return []
-    await new Promise((r) => setTimeout(r, 500))
+    await new Promise((r) => setTimeout(r, 250))
   }
 }
 

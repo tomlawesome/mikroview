@@ -93,7 +93,7 @@ async function waitFor(fn, { timeoutMs = 8000 } = {}) {
   while (Date.now() < deadline) {
     last = await fn()
     if (last) return last
-    await page.waitForTimeout(300)
+    await page.waitForTimeout(250)
   }
   return last
 }
