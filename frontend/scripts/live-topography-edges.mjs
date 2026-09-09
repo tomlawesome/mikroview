@@ -23,7 +23,25 @@ import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
 
-const LANES = ['bridge1', 'bridge2', 'bridge3']
+// Not `bridge1`/`bridge2`/`bridge3`: `bridge1` is the de facto generic
+// "LAN" name roughly twenty other scenarios reuse, and two of this
+// shard's own siblings that sort before this file (live-suggestions-
+// matches.mjs, live-token-copy.mjs) each feed an *accepted* event
+// (`A|...|`) on exactly `in:ether1 out:bridge1` before this scenario
+// ever runs. Event history is never cleared between scenarios -- only
+// the pushed rule/zone tables are -- so by the time this file pushes
+// its own drop-only rule for that same pair, reality.ts's verdict rule
+// (`r.accepts > 0 ? 'unplanned' : 'holding'`) still sees those stale
+// accepts and calls the pair 'unplanned' instead of 'holding'. An
+// 'unplanned' pair draws its reality line the full lane-to-waist
+// corridor rather than a short calm one near the waist -- and that
+// corridor runs directly along Lane 1's own (much shorter) dark
+// coverage boundary, which is the "two edges drawn along each other"
+// this scenario exists to catch (#726) -- a false positive from a
+// sibling's leftover traffic, not the regression it looks like. Lane
+// names nothing else in the suite touches sidestep the contamination
+// rather than guessing which siblings to out-race.
+const LANES = ['edges-lane1', 'edges-lane2', 'edges-lane3']
 
 syslog(2, 'topo-edges-probe')
 let DEVICE
@@ -95,7 +113,7 @@ const rules = [
     logPrefix: 'D|topo-edges|',
     log: true,
     inInterface: 'ether1',
-    outInterface: 'bridge1',
+    outInterface: LANES[0],
   },
   {
     ordinal: 11,
@@ -106,7 +124,7 @@ const rules = [
     logPrefix: 'D|topo-edges|',
     log: true,
     inInterface: 'ether1',
-    outInterface: 'bridge2',
+    outInterface: LANES[1],
   },
   {
     ordinal: 12,
@@ -115,7 +133,7 @@ const rules = [
     action: 'accept',
     srcAddressList: '',
     logPrefix: '',
-    inInterface: 'bridge3',
+    inInterface: LANES[2],
     dstPort: 53,
     protocol: 'udp',
   },
@@ -126,12 +144,12 @@ const rules = [
   // geometry it measures.
   {
     ordinal: 13,
-    comment: 'bridge1 out to the web, turned off',
+    comment: `${LANES[0]} out to the web, turned off`,
     chain: 'forward',
     action: 'accept',
     srcAddressList: '',
     logPrefix: '',
-    inInterface: 'bridge1',
+    inInterface: LANES[0],
     outInterface: 'ether1',
     dstPort: 8443,
     protocol: 'tcp',
@@ -172,8 +190,27 @@ await page.waitForSelector('[data-card="topography"] .cedge', { timeout: 10000 }
 // `.cedge` alone is now a handful of paths and would let two traffic
 // edges run along each other unnoticed -- which is the exact fault
 // #726 is about.
+//
+// Filtered to boundaries naming one of *this* scenario's own lanes:
+// reality.ts's realityEdges groups the device's whole event history by
+// raw interface pair, unscoped to the zone table currently pushed, and
+// that history is never cleared between scenarios -- only the pushed
+// rule/zone tables are. So a shared instance deep into a shard carries
+// "orphan" reality edges for every interface pair an earlier sibling's
+// device rule table ever named (its own dark boundary reads a raw name
+// like "bridge1", not a Lane N zone, because no current address table
+// names it any more). Those orphans are real geometry on the same map,
+// can legitimately run near each other or near this scenario's own
+// lines by sheer coincidence of the auto-fit layout, and are not what
+// this file's own aim (this scenario's boundaries do not overlap) is
+// about -- counting them turned a sibling's leftover traffic into a
+// false #726 regression. Every one of this scenario's own boundaries
+// names a Lane in its aria-label (the ip-address table's own `comment`
+// fields above); an orphan's does not.
 const runs = await page.evaluate(() => {
-  const paths = [...document.querySelectorAll('[data-card="topography"] path.cedge, [data-card="topography"] path.redge')]
+  const paths = [...document.querySelectorAll('[data-card="topography"] path.cedge, [data-card="topography"] path.redge')].filter((p) =>
+    /Lane \d/.test(p.closest('[aria-label]')?.getAttribute('aria-label') ?? ''),
+  )
   const sample = (p) => {
     const len = p.getTotalLength()
     return Array.from({ length: 61 }, (_, i) => {
