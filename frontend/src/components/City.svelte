@@ -55,7 +55,7 @@
     type Pt,
     type Stop,
   } from '../lib/city/project'
-  import { gateToward, lerpP, roadPieces, type Entity } from '../lib/city/roads'
+  import { gateToward, lerpP, roadPieces, type Entity, type Gate } from '../lib/city/roads'
   import { hostSubject, reachFor, reachLineSummary, type ReachStrand, type ReachSubject, type ReachSummary } from '../lib/reach'
   import { composeCommand, reachComposeInput } from '../lib/compose'
   import { riverScene } from '../lib/city/river'
@@ -69,6 +69,9 @@
   import type { Coverage } from '../lib/coverageRule'
   import { authState } from '../lib/auth.svelte'
   import { entitiesState } from '../lib/entities.svelte'
+  import { portFilterState } from '../lib/portFilter.svelte'
+  import { doorAccepts, doorHalf, emptyNote, litRibs, plaqueTally } from '../lib/portFilter'
+  import type { PortDoor } from '../lib/api'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { HOST_QUIET_AFTER_MS, hostsState, presenceOf } from '../lib/hosts.svelte'
@@ -149,6 +152,10 @@
    * again the wall's own height (walls.ts's WALL_H), the mockup's ratio. */
   const GATE_POST_HALF = 0.6
   const GATE_POST_H = 2.25
+  /** How tall a door stands (#1055) -- a shade proud of the gate post it
+   * stands beside, so the two read as a door in a gate rather than as
+   * four posts in a row. */
+  const DOOR_H = 2.6
 
   /* ---------------- the model ---------------- */
 
@@ -580,6 +587,11 @@
     const savedS = stand ? stand.savedS : S
     const savedCentre = stand ? stand.savedCentre : centre
     stand = { ...subject, savedS, savedCentre }
+    // Standing clears the port filter, exactly as it does on the flat
+    // map (#1018's own rule, kept here by #1055). Two answers layered on
+    // one city would stack their dimming on each other and leave nobody
+    // able to say which of them a grey road was grey because of.
+    portFilterState.clear()
     // Each reach starts from the drawing: the last building's draft does
     // not follow you to the next one.
     composerOpen = false
@@ -614,6 +626,16 @@
     if (openDropId) {
       e.preventDefault()
       closeDropCard()
+      return
+    }
+    // The filter is the outermost thing the operator turned on, so it
+    // comes off before where they are standing -- the flat map reads the
+    // ladder in the same order. It is this handler's rung while the city
+    // is the surface being read: Topography stands its own down for a
+    // city stop so one press can never take two.
+    if (portFilterState.active || portFilterState.open) {
+      e.preventDefault()
+      portFilterState.clear()
       return
     }
     if (stand) {
@@ -807,6 +829,12 @@
          * standing in the same edge, and so a live check can count the
          * gates the city drew (#1022). */
         gate?: { districtId: string; side: WallSide; gateKey: string; toward: string; coverage: Coverage }
+        /** Present on a door (#1055): the leaf swings open for an accept
+         * and a bar goes across for a refusal, and the title names the
+         * rule that put it there. Not pointable -- a door is a statement
+         * about policy, and the rule behind it is read on the gate's own
+         * card. */
+        door?: { accepts: boolean; title: string; where: string }
       }
     | {
         kind: 'building'
@@ -983,6 +1011,28 @@
   }
 
   /**
+   * Where a road toward `counterpartToken` crosses `from`'s own wall:
+   * the gate point and its outward normal, from the same gateToward the
+   * roads themselves are drawn through, so a mark or a door pinned to a
+   * wall stands exactly where the road meets it.
+   *
+   * The counterpart may be a district, a router or other node, or a
+   * bridge head this build has ground for. Nothing resolving it to a
+   * place falls back to the district's own router -- gates.ts makes the
+   * same choice for the same case -- rather than guessing a direction.
+   */
+  function wallCrossing(from: District, counterpartToken: string): Gate {
+    const d = districtOf(counterpartToken)
+    if (d) return gateToward(from, [d.u, d.v])
+    const n = ground.nodes.find((x) => x.id === counterpartToken)
+    if (n) return gateToward(from, [n.u, n.v])
+    const bridge = ground.bridges.find((br) => br.iface === counterpartToken)
+    if (bridge) return gateToward(from, bridge.f)
+    const rn = ground.nodes.find((x) => x.id === from.routerId)
+    return gateToward(from, rn ? [rn.u, rn.v] : [from.u, from.v])
+  }
+
+  /**
    * A district's reach (round 49, #1016). DESIGN.md widens the click to
    * "a building, a host dot, a district, a road" and gives one behaviour
    * for all of them: the camera comes to the subject and every road that
@@ -1088,25 +1138,10 @@
       if (flowReversed(lane.pts, summary.busiest.direction, b.u, b.v)) reverseIds.add(lane.id)
     }
 
-    // Where a road toward `counterpartToken` would cross this
-    // district's own wall -- a district or bridge head this build has
-    // ground for, or the district's own router when nothing resolves
-    // it to a place (gates.ts's own fallback for the same case).
-    function wallCrossingFor(counterpartToken: string): Pt {
-      const d = districtOf(counterpartToken)
-      if (d) return gateToward(myDistrict!, [d.u, d.v]).p
-      const n = ground.nodes.find((x) => x.id === counterpartToken)
-      if (n) return gateToward(myDistrict!, [n.u, n.v]).p
-      const bridge = ground.bridges.find((br) => br.iface === counterpartToken)
-      if (bridge) return gateToward(myDistrict!, bridge.f).p
-      const rn = ground.nodes.find((x) => x.id === myDistrict!.routerId)
-      return gateToward(myDistrict!, rn ? [rn.u, rn.v] : [myDistrict!.u, myDistrict!.v]).p
-    }
-
     let composerAnchor: Pt | null = null
     if (myDistrict && summary.topBlocked) {
       const counterpartToken = summary.topBlocked.counterpart === 'internet' ? (wan ?? '') : summary.topBlocked.counterpart
-      composerAnchor = wallCrossingFor(counterpartToken || myToken)
+      composerAnchor = wallCrossing(myDistrict, counterpartToken || myToken).p
     }
 
     for (const s of summary.strands) {
@@ -1179,7 +1214,7 @@
           const id = MARK_PREFIX + s.counterpart
           if (!lineOf.has(id)) {
             lineOf.set(id, s.counterpart)
-            dropMarks.push({ id, counterpart: s.counterpart, p: wallCrossingFor(counterpartToken || myToken), source })
+            dropMarks.push({ id, counterpart: s.counterpart, p: wallCrossing(myDistrict, counterpartToken || myToken).p, source })
           }
         }
       }
@@ -1187,6 +1222,147 @@
 
     return { ownRoadIds, reverseIds, lineOf, laneSubjects, litBuildingIds, dropMarks, composerAnchor }
   })
+
+  /* ---------------- the port filter (#1055, round 54) ---------------- */
+
+  // Round 53's tool (#1018) on this surface, drawn as round 54 draws it.
+  // The rule is round 53's own and does not change with the camera:
+  // nothing is added to the map for the filter, the map dims to the
+  // answer. So there is no port layer here -- the roads, the buildings
+  // and the plaques already on the ground say it, and what the filter
+  // adds is the doors, which are policy and have their own vocabulary.
+  //
+  // The store is the flat map's, unchanged: one selection, one answer,
+  // and the pill that drives it is drawn once in Topography at every
+  // altitude. A port cannot be lit here and dim there.
+  const portOn = $derived(portFilterState.active && portFilterState.settled)
+
+  /** A door standing in a gate: where it is, and which way its wall
+   * runs. The drawing is the scene's, below -- this half is geometry the
+   * camera has no part in, so panning never re-runs it. */
+  interface DoorSpot {
+    door: PortDoor
+    /** The gate point the rule's road crosses at, in ground units. */
+    p: Pt
+    /** Along the opening, unit length: the two posts stand either side
+     * of the gate point on this axis. */
+    axis: Pt
+    /** Half the opening, in ground units. */
+    half: number
+    /** Which wall it stands in: `<district>:<toward>`, or `bridge:<iface>`. */
+    where: string
+  }
+
+  interface PortOverlay {
+    /** Every road the port travelled, in the ground's own road ids. */
+    litRoadIds: Set<string>
+    /** Every building on the port. */
+    litBuildingIds: Set<string>
+    /** The one line under each district's plaque. */
+    tallies: Map<string, string>
+    doors: DoorSpot[]
+    /** The one line under the city when the window carried none. */
+    note: string | null
+  }
+
+  /**
+   * What the filter dims the city to.
+   *
+   * Roads come from `litRibs` -- the same set the flat map lights, keyed
+   * the same way -- put through the same `roadsToward` a reach uses, so
+   * the two surfaces cannot disagree about which road a line ran along.
+   * A rib names interfaces and a road is a district pair, and that join
+   * lives in one function for exactly this reason.
+   *
+   * Buildings come from the answer's own host list, and so does the
+   * numerator of a district's tally -- but only through the buildings
+   * the district actually has (#1056). A host the register has never
+   * answered for is not a building and is not counted: counting it
+   * against a district that draws none of it put `1 of 0 · 445/tcp`
+   * under the Servers plaque on #1055's live capture. Its road and its
+   * door still light, which is what says the traffic was there.
+   *
+   * The denominator is the district's own host count -- the buildings
+   * on the plate plus the `more` beyond it (layout.ts's MAX_BUILDINGS)
+   * -- because "1 of 5" is a claim about the district and a plate that
+   * draws four of its five machines must not turn it into a claim about
+   * four. A district the register knows no host in gets no tally at all.
+   */
+  const portOverlay = $derived.by((): PortOverlay | null => {
+    if (!portOn) return null
+    const litRoadIds = new Set<string>()
+    const seen = new Map<string, string>()
+    for (const key of litRibs(portFilterState.ribs).keys()) {
+      const [from, to] = key.split('|')
+      // A direction with no out-interface died at the router, and the
+      // city draws no road from a district to its own router -- so there
+      // is nothing to light. Lighting the road toward the WAN instead
+      // would draw a packet reaching a boundary it never got to.
+      if (!from || !to) continue
+      // Both ways round: the pair id is order-free, but which end is the
+      // bridge is not, and a boundary the river carries is two legs.
+      roadsToward(from, to, litRoadIds, seen)
+      roadsToward(to, from, litRoadIds, seen)
+    }
+    const onPort = portFilterState.hostIps
+    const litBuildingIds = new Set<string>()
+    const tallies = new Map<string, string>()
+    for (const d of ground.districts) {
+      let on = 0
+      for (const b of d.buildings) {
+        if (!b.ip || !onPort.has(b.ip)) continue
+        litBuildingIds.add(b.id)
+        on++
+      }
+      const line = plaqueTally(on, d.buildings.length + d.more, portFilterState.label)
+      if (line) tallies.set(d.id, line)
+    }
+    const doors: DoorSpot[] = []
+    for (const door of portFilterState.placedDoors) {
+      const spot = doorSpot(door)
+      if (spot) doors.push(spot)
+    }
+    return {
+      litRoadIds,
+      litBuildingIds,
+      tallies,
+      doors,
+      note: portFilterState.nothingSeen ? emptyNote(portFilterState.label, portFilterState.doors) : null,
+    }
+  })
+
+  /**
+   * Where one rule's door stands. `doorHalf` names the side the rule
+   * acts on -- the way in for a refusal, the way out for an accept --
+   * and that side decides the wall: a district's own wall at the gate
+   * the rule's road crosses, or the deck of the bridge when the side is
+   * a boundary the river carries.
+   *
+   * A side this build has no ground for gets no door. The map draws
+   * where a rule sits or says nothing; it never picks a plausible wall.
+   */
+  function doorSpot(door: PortDoor): DoorSpot | null {
+    const half = doorHalf(door)
+    if (!half) return null
+    const d = districtOf(half.from)
+    if (d) {
+      const gate = wallCrossing(d, half.to || half.from)
+      // The wall runs across the road, so the opening is the gate's own
+      // normal turned a quarter -- and the posts stand the same width
+      // apart as the gate posts already in that wall.
+      return { door, p: gate.p, axis: [-gate.n1[1], gate.n1[0]], half: GATE_HALF_WIDTH, where: d.id + ':' + (half.to || half.from) }
+    }
+    const bridge = ground.bridges.find((br) => br.iface === half.from)
+    if (bridge) {
+      const dx = bridge.f[0] - bridge.t[0]
+      const dy = bridge.f[1] - bridge.t[1]
+      const len = Math.hypot(dx, dy) || 1
+      // Across the deck, at its middle: the bridge is the boundary, and
+      // its width is the opening the rule stands in.
+      return { door, p: bridge.mid, axis: [-dy / len, dx / len], half: bridge.w * 0.5, where: 'bridge:' + bridge.iface }
+    }
+    return null
+  }
 
   /** The reach's own lanes under the brightness rule (round 49, #1016).
    *
@@ -1386,6 +1562,53 @@
       }
     }
 
+    // The doors (#1055, round 54): every pushed rule that names the
+    // selected port, two posts across the opening it guards, with the
+    // leaf swung open for an accept and a bar across for anything that
+    // refuses. Policy, never traffic -- the same two-post vocabulary the
+    // flat map uses for the same rule, moved from the rib to the wall,
+    // so a door can never be misread as a line that happened. An unused
+    // door still stands: knowing where one is open even when nobody
+    // knocked is the point of interrogating a port (owner, 2026-09-08).
+    const doorLabels: { x: number; y: number; label: string; act: string; accepts: boolean; key: string }[] = []
+    for (const spot of portOverlay?.doors ?? []) {
+      const accepts = doorAccepts(spot.door)
+      const ink = accepts ? 'var(--accept)' : 'var(--alarm)'
+      const foot = (sgn: number): Pt => [spot.p[0] + spot.axis[0] * spot.half * sgn, spot.p[1] + spot.axis[1] * spot.half * sgn]
+      const a = foot(1)
+      const b = foot(-1)
+      const px = (q: Pt, z = 0) => R2(X(c, q[0])) + ' ' + R2(Y(c, q[1], z))
+      const posts = 'M' + px(a) + 'L' + px(a, DOOR_H) + 'M' + px(b) + 'L' + px(b, DOOR_H)
+      // The leaf hangs from the near post and swings in over the
+      // opening; the bar runs post to post at the same height, so the
+      // two read as one drawing with one thing changed.
+      const leaf = accepts
+        ? 'M' + px(a, DOOR_H) + 'L' + R2(X(c, spot.p[0]) + (X(c, a[0]) - X(c, spot.p[0])) * 0.15) + ' ' + R2(Y(c, spot.p[1], DOOR_H * 0.55))
+        : 'M' + px(a, DOOR_H * 0.55) + 'L' + px(b, DOOR_H * 0.55)
+      solids.push({
+        kind: 'other',
+        v: spot.p[1] + 0.8,
+        paints: [
+          { d: posts, stroke: ink, sw: 2, cls: 'round' },
+          { d: leaf, stroke: ink, sw: 2, cls: 'round' },
+        ],
+        lamps: [],
+        door: {
+          accepts,
+          title: spot.door.label + ' · ' + spot.door.who + ' — a pushed rule names this port here',
+          where: spot.where,
+        },
+      })
+      doorLabels.push({
+        x: R2(X(c, spot.p[0])),
+        y: R2(Y(c, spot.p[1], DOOR_H) - 8),
+        label: spot.door.label,
+        act: accepts ? 'accept' : spot.door.action,
+        accepts,
+        key: spot.door.device + '#' + spot.door.ordinal,
+      })
+    }
+
     // Roads, cut into pieces that carry their own depth.
     const dropLabels: { x: number; y: number; text: string; alarm: boolean }[] = []
     /** The aggregate marks that have a breakdown to open, as boxes over
@@ -1454,6 +1677,11 @@
     for (const r of g.roads) {
       if (r.lane && !showLanes) continue
       const own = !reachOverlay || reachOverlay.ownRoadIds.has(r.id)
+      // The port filter (#1055) asks the same question of a road that
+      // standing does, and answers it the same way: the roads the port
+      // travelled keep their verdict colour, the rest recede. Nothing is
+      // taken off the map -- the answer is read against the whole city.
+      const onPort = !portOverlay || portOverlay.litRoadIds.has(r.id)
       // Round 49, DESIGN.md "The reach": the standing building's own
       // roads take the brightness rule "the same rule as everywhere
       // else", and its lanes are among them. A lane is laid down in
@@ -1463,7 +1691,10 @@
       // own colour rather than staying grey.
       const laneInReach = reachOverlay !== null && own && !!r.lane
       const laneNb: ReachLaneEntry | null = laneInReach ? (reachLaneBaseline.get(r.id) ?? null) : null
-      const col = laneNb ? VERDICT[laneNb.kind] : VERDICT[r.k]
+      // A road off the port goes grey -- the city's own unjudged ink, the
+      // one it already lays a lane down in, rather than a second grey
+      // invented for the filter.
+      const col = !onPort ? VERDICT.q : laneNb ? VERDICT[laneNb.kind] : VERDICT[r.k]
       // Brightness is the baseline (round 49, #1016). An accepted road
       // carrying nothing off today's pattern is *established*: thin, dim
       // and with no flow, so it recedes without ever leaving the map.
@@ -1480,10 +1711,17 @@
       // and the reach's own lanes while it is open.
       const judged = r.k === 'a' || laneInReach
       const est = judged && nb === null
-      const w = Math.max(est ? 1 : 1.2, r.w * c.S * (est ? 0.18 : 0.3))
+      // A road off the port thins exactly as an established one does:
+      // one visual word for "not what is being asked about", never a
+      // second (round 54's own rule, and #868's before it).
+      const faded = est || !onPort
+      const w = Math.max(faded ? 1 : 1.2, r.w * c.S * (faded ? 0.18 : 0.3))
       // Standing on a building (#868) fades every road that is not its
-      // own.
-      const op = (r.k === 'x' ? 0.95 : !judged && r.k === 'q' ? 0.42 : !judged && r.k === 'd' ? 0.52 : est ? 0.26 : 0.8) * (own ? 1 : 0.16)
+      // own; the port filter fades every road it never travelled.
+      const op =
+        (r.k === 'x' ? 0.95 : !judged && r.k === 'q' ? 0.42 : !judged && r.k === 'd' ? 0.52 : est ? 0.26 : 0.8) *
+        (own ? 1 : 0.16) *
+        (onPort ? 1 : 0.16)
       // A road flows exactly when it carries something off the baseline
       // or is the escalated unplanned pair -- the flow dashes are part
       // of the bright treatment, not a separate signal. Volume does not
@@ -1497,7 +1735,7 @@
       // as everywhere else". So an established road the standing host
       // owns recedes exactly like any other, and the dashes stay the
       // mark of a line off the pattern rather than of ownership.
-      const flow = (!reachOverlay || own) && (r.k === 'x' || nb !== null)
+      const flow = (!reachOverlay || own) && onPort && (r.k === 'x' || nb !== null)
       const reversed = !!reachOverlay?.reverseIds.has(r.id)
       let cum = 0
       const pieces = roadPieces(r, ents)
@@ -1518,7 +1756,7 @@
       // established road drops it along with its width, which is what
       // makes a dim road read as one hairline rather than as a soft band
       // (round-49/index.html:869-871).
-      if (glowD.length && !est) glows.push({ d: glowD.join(''), stroke: col, sw: R2(w + 4), so: 0.07 })
+      if (glowD.length && !faded) glows.push({ d: glowD.join(''), stroke: col, sw: R2(w + 4), so: 0.07 })
       // The ring, at the end the traffic arrived at. It hugs the road's
       // end and throbs in place -- it never pulses outward, because a
       // ring that grows reads as something spreading and nothing is
@@ -1577,7 +1815,16 @@
       // building that is neither the standing host nor one it reaches
       // or is reached by fades, reusing one visual word for "not what
       // matters right now" rather than inventing a second.
-      const dim = (d?.dark ?? false) || (reachOverlay ? !reachOverlay.litBuildingIds.has(b.id) : false)
+      // ... and the port filter with them (#1055): a host not on the
+      // port dims inside a lit district, and a district with none goes
+      // to outline by every one of its buildings dimming at once. Only a
+      // machine the answer could name is asked: a router or a bridge
+      // post is not a host, and dimming it would be the drawing
+      // answering a question nobody put to it.
+      const dim =
+        (d?.dark ?? false) ||
+        (reachOverlay ? !reachOverlay.litBuildingIds.has(b.id) : false) ||
+        (portOverlay && b.host ? !portOverlay.litBuildingIds.has(b.id) : false)
       // Presence is the building's own ink (round 49, #1016): a host not
       // heard for the quiet window goes grey with a dashed footprint, one
       // marked quiet on purpose goes white and translucent. Both stay on
@@ -1708,12 +1955,25 @@
     // rule table was ever pushed. It carries no coverage word any more,
     // so it needs no room for one.
     const plaques: { d: District; x: number; y: number; w: number; ink: string }[] = []
+    // The filter's own line under a plaque (#1055): `2 of 12 · 445/tcp`,
+    // in the same chip the footbridge's state wears. It stands under the
+    // plaque it belongs to, claims its own rectangle like every other
+    // label here, and is drawn only where the plaque itself was -- a
+    // tally floating over a district whose name was dropped for space
+    // would belong to nothing.
+    const portTallies: { id: string; x: number; y: number; w: number; t: string }[] = []
     for (const d of g.districts) {
       const x = R2(X(c, d.u))
       const y = R2(Y(c, d.v + d.r) + 5)
       const w = compact ? d.name.length * 7.2 + 26 : 200
-      if (!claim(x, y, w, compact ? 20 : d.rulesPushed ? 28 : 40)) continue
+      const h = compact ? 20 : d.rulesPushed ? 28 : 40
+      if (!claim(x, y, w, h)) continue
       plaques.push({ d, x, y, w: R2(w), ink: inkOf(d) })
+      const t = portOverlay?.tallies.get(d.id)
+      if (!t) continue
+      const tw = t.length * 6 + 16
+      const ty = R2(y + h + 15)
+      if (claim(x, ty - 9, tw, 18)) portTallies.push({ id: d.id, x, y: ty, w: R2(tw), t })
     }
     // Only a footbridge carries a state chip: the road bridge (the WAN)
     // never reads up/down/quiet, it is only ever lamped or unlit, and
@@ -1730,7 +1990,7 @@
       bridgeChips.push({ x, y, w: R2(w), t, stroke })
     }
 
-    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, bridgeChips, dropLabels, markHits, dropHits, claim }
+    return { groundPaints, glows, plates, solids: paintOrder(solids), rings, plaques, portTallies, bridgeChips, dropLabels, doorLabels, markHits, dropHits, claim }
   })
 
   /** Names float over buildings at the street stop, for what the
@@ -2853,6 +3113,15 @@
               >
                 {@render otherPaints(s.paints, s.lamps)}
               </g>
+            {:else if s.door}
+              <!-- `data-door` names the wall the rule put this door in,
+                   the same way a gate post carries `data-gate` (#1022):
+                   the door is the only thing drawn per rule, and without
+                   it a check has nothing to ask where it stands. -->
+              <g class="door" class:shut={!s.door.accepts} data-door={s.door.where}>
+                <title>{s.door.title}</title>
+                {@render otherPaints(s.paints, s.lamps)}
+              </g>
             {:else}
               {@render otherPaints(s.paints, s.lamps)}
             {/if}
@@ -2958,6 +3227,12 @@
             {/if}
           </g>
         {/each}
+        {#each scene.portTallies as ch (ch.id)}
+          <g transform="translate({ch.x} {ch.y})">
+            <rect x={R2(-ch.w / 2)} y="-9" width={ch.w} height="18" rx="9" fill="#080c16" fill-opacity="0.9" stroke="var(--hair)" />
+            <text x="0" y="3.5" text-anchor="middle" class="chip-t">{ch.t}</text>
+          </g>
+        {/each}
         {#each toppers as t (t.b.id)}
           <g transform="translate({t.x} {t.y})">
             <text x="0" y="-13" text-anchor="middle" class="st-name" class:st-dim={t.quiet}>{t.b.name}</text>
@@ -2975,6 +3250,14 @@
         {/each}
         {#each scene.dropLabels as dl, i (i)}
           <text x={dl.x} y={dl.y} text-anchor="middle" class="drop-t" class:alarm-t={dl.alarm}>{dl.text}</text>
+        {/each}
+        {#each scene.doorLabels as dl (dl.key)}
+          <!-- `#12 accept`: the rule's number and what it does, the flat
+               map's own two tokens. Above the door rather than beside
+               it, because a gate has a wall on both sides. -->
+          <text x={dl.x} y={dl.y} text-anchor="middle" class="door-t" class:shut={!dl.accepts}
+            >{dl.label} <tspan class="door-act">{dl.act}</tspan></text
+          >
         {/each}
         {#each scene.dropHits as dh (dh.id)}
           <!-- The aggregate mark as the control (#1002): one target over
@@ -3036,6 +3319,13 @@
         {/each}
       </g>
     </g>
+    <!-- Nothing seen: the same one line the flat map writes, under the
+         city rather than under the map, and outside the panned group --
+         it is about the answer, not about a place, so it does not move
+         when the camera does. The doors stay drawn behind it. -->
+    {#if portOverlay?.note}
+      <text x={STAGE_W / 2} y={STAGE_H - 18} text-anchor="middle" class="note-t">{portOverlay.note}</text>
+    {/if}
   </svg>
 
   {#if standBuilding || standDistrict || standRoad}
@@ -4190,6 +4480,39 @@
   .drop-t {
     font: 600 9.5px var(--font-mono);
     fill: var(--drop);
+  }
+
+  /* The port filter's doors and its one line (#1055, round 54). The
+     posts carry the verdict's own ink and their round cap from the paint
+     itself, as every other solid here does, so nothing about them is
+     said twice. The label takes the flat map's own weight and its
+     painted-over stroke, so a door standing over a road stays readable
+     where the road runs under its words. */
+  .door-t {
+    font: 600 9.5px var(--font-mono);
+    fill: var(--fg-dim);
+  }
+
+  .door-act {
+    fill: var(--accept);
+  }
+
+  .door-t.shut .door-act {
+    fill: var(--alarm);
+  }
+
+  /* Nothing seen: one line under the city, not an empty state. */
+  .note-t {
+    font: 11px var(--font-mono);
+    fill: var(--fg-dim);
+  }
+
+  .door-t,
+  .note-t {
+    paint-order: stroke;
+    stroke: var(--bg);
+    stroke-width: 3.4px;
+    stroke-linejoin: round;
   }
 
   .drop-t.alarm-t {

@@ -20,6 +20,7 @@ import { baselineState } from '../lib/baseline.svelte'
 import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { ClientEvent, Device } from '../lib/types'
 import { emptyFilters } from '../lib/types'
+import { portFilterState } from '../lib/portFilter.svelte'
 import City from './City.svelte'
 
 // #915: twelve of these tests timed out on the GitLab runner against
@@ -1913,5 +1914,221 @@ describe('the drop card (#1002)', () => {
     // Second Escape surfaces, exactly as it did before there was a card.
     key(document.body, 'Escape')
     expect(container.querySelector('.crumb')).toBeNull()
+  })
+})
+
+// #1055 (round 54): round 53's port filter on this surface. The rule is
+// round 53's own and does not change with the camera -- nothing is added
+// to the map for the filter, the map dims to the answer -- so these
+// mirror the flat map's own cases in Topography.svelte.test.ts and check
+// the city's own three additions: the tally under a plaque, the door in
+// a gate, and the one line under the city.
+describe('the port filter on the city (#1055, round 54)', () => {
+  beforeEach(() => {
+    portFilterState.clear()
+    portFilterState.proto = 'tcp'
+  })
+  afterEach(() => portFilterState.clear())
+
+  /** Drives the store the way a landed fetch would, which is how every
+   * other store in this file is driven. 445/tcp between LAN and Servers:
+   * one host each side of it, and nothing else on the port. */
+  function filterTo(ports: number[], answer: Partial<(typeof portFilterState)['answer']> = {}) {
+    portFilterState.ports = ports
+    portFilterState.answer = {
+      generatedAt: 1,
+      windowSeconds: 3600,
+      candidates: [],
+      events: 2,
+      accepts: 2,
+      drops: 0,
+      lines: 2,
+      ribs: [{ in: 'bridge-lan', out: 'vlan-srv', events: 2, accepts: 2, drops: 0 }],
+      hosts: [
+        { ip: '10.10.0.10', name: 'lan-1', events: 2, accepts: 2, drops: 0 },
+        { ip: '10.20.0.10', name: 'srv-1', events: 2, accepts: 2, drops: 0 },
+      ],
+      doors: [],
+      ...answer,
+    }
+    portFilterState.answeredKey = portFilterState.key
+  }
+
+  function door(overrides: Partial<(typeof portFilterState)['doors'][number]> = {}) {
+    return {
+      device: 'rb5009',
+      label: '#12',
+      ordinal: 12,
+      action: 'accept',
+      chain: 'forward',
+      in: 'bridge-lan',
+      out: 'vlan-srv',
+      dstPort: '445',
+      who: 'bridge-lan → vlan-srv accept',
+      ...overrides,
+    }
+  }
+
+  const road = (c: HTMLElement, id: string) => c.querySelector(`path[data-road="${id}"]`)
+  /** A building is dim when its stamp takes the faded opacity -- the one
+   * visual word this file uses for "not what matters right now". */
+  const dimmed = (c: HTMLElement, id: string) => c.querySelector(`.blk[data-cid="${id}"] g[opacity="0.62"]`) !== null
+
+  it('keeps the roads the port travelled in their verdict ink and greys the rest, removing none', () => {
+    filterTo([445])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    // Both halves of the crossing are one road here, and it keeps the
+    // colour it already had.
+    expect(road(container, 'bridge-lan|vlan-srv')?.getAttribute('stroke')).toBe('var(--accept)')
+    // Nothing is taken off the city: the unplanned pair is still drawn,
+    // grey and faint rather than gone.
+    const off = road(container, 'bridge-lan|vlan-iot')
+    expect(off).not.toBeNull()
+    expect(off?.getAttribute('stroke')).toBe('var(--fg-dim)')
+    expect(Number(off?.getAttribute('stroke-opacity'))).toBeLessThan(0.2)
+  })
+
+  it('dims the hosts off the port and leaves a district with none in outline', () => {
+    filterTo([445])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    expect(dimmed(container, 'bridge-lan/10.10.0.10')).toBe(false)
+    expect(dimmed(container, 'vlan-srv/10.20.0.10')).toBe(false)
+    // A lane-mate that was not on the port recedes inside a lit district.
+    expect(dimmed(container, 'bridge-lan/10.10.0.11')).toBe(true)
+    // A district with nothing on the port goes to outline -- every one
+    // of its buildings at once, which is the same word.
+    for (const b of ground.districts.find((d) => d.id === 'vlan-iot')!.buildings) {
+      expect(dimmed(container, b.id)).toBe(true)
+    }
+  })
+
+  it('writes the tally under each district plaque, counted over the whole subnet', () => {
+    filterTo([445])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    const chips = [...container.querySelectorAll('.flat .chip-t')].map((t) => t.textContent)
+    // LAN draws six of its nine hosts (layout.ts's MAX_BUILDINGS); the
+    // tally is about the district, not about the six.
+    expect(chips).toContain('1 of 9 · 445/tcp')
+    expect(chips).toContain('1 of 4 · 445/tcp')
+    expect(chips).toContain('0 of 5 · 445/tcp')
+  })
+
+  // #1056, from #1055's own live capture: the Servers plaque read `1 of
+  // 0 · 445/tcp` because the machine that received the lines had never
+  // been registered, so the district drew no building for it while the
+  // answer's host list still counted it.
+  it('leaves a host it draws no building for out of the tally, and still lights its road', () => {
+    filterTo([445], {
+      hosts: [{ ip: '10.20.0.99', name: '', events: 2, accepts: 2, drops: 0 }],
+    })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    const chips = [...container.querySelectorAll('.flat .chip-t')].map((t) => t.textContent)
+    // Servers has four known hosts and 10.20.0.99 is none of them.
+    expect(chips).toContain('0 of 4 · 445/tcp')
+    expect(chips).not.toContain('1 of 4 · 445/tcp')
+    expect(chips.some((t) => /^1 of 0/.test(t ?? ''))).toBe(false)
+    // The road is what says the traffic was there, and it still does.
+    expect(road(container, 'bridge-lan|vlan-srv')?.getAttribute('stroke')).toBe('var(--accept)')
+  })
+
+  it('stands a door in the gate the rule crosses, and on the bridge deck for a WAN rule', () => {
+    filterTo([445], {
+      doors: [
+        door(),
+        door({ label: '#23', ordinal: 23, action: 'drop', in: 'ether1', out: '', who: 'ether1 → any drop' }),
+        door({ label: '#31', ordinal: 31, action: 'drop', in: 'vlan-guest', who: 'vlan-guest → vlan-srv drop' }),
+      ],
+    })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    const doors = [...container.querySelectorAll('.door')]
+    // An accept acts on the way out, so its door is in the Servers wall
+    // at the gate the LAN road enters; a refusal acts on the way in, so
+    // the WAN drop stands on the bridge deck and Guest's on its own
+    // wall. Sorted, because a door is painted at its own depth like
+    // everything else here, not in the order the rules were read.
+    expect(doors.map((d) => d.getAttribute('data-door')).sort()).toEqual([
+      'bridge:ether1',
+      'vlan-guest:vlan-srv',
+      'vlan-srv:bridge-lan',
+    ])
+    // A leaf that swings open for an accept, a bar across for a refusal.
+    const shut = new Map(doors.map((d) => [d.getAttribute('data-door'), d.classList.contains('shut')]))
+    expect(shut.get('vlan-srv:bridge-lan')).toBe(false)
+    expect(shut.get('bridge:ether1')).toBe(true)
+    expect(shut.get('vlan-guest:vlan-srv')).toBe(true)
+    expect([...container.querySelectorAll('.door-t')].map((t) => t.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      '#12 accept',
+      '#23 drop',
+      '#31 drop',
+    ])
+
+    // And it really is on that wall: the door's posts stand inside the
+    // Servers plate's own footprint, not somewhere plausible nearby.
+    const plate = container.querySelector('.plate[data-cid="vlan-srv"] path')!.getAttribute('d')!
+    const nums = [...plate.matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => Number(m[0]))
+    const xs = nums.filter((_, i) => i % 2 === 0)
+    const ys = nums.filter((_, i) => i % 2 === 1)
+    const srvDoor = doors.find((d) => d.getAttribute('data-door') === 'vlan-srv:bridge-lan')!
+    const post = srvDoor.querySelector('path')!.getAttribute('d')!
+    const [, px, py] = /^M(-?[\d.]+) (-?[\d.]+)/.exec(post)!.map(Number)
+    expect(px).toBeGreaterThanOrEqual(Math.min(...xs) - 4)
+    expect(px).toBeLessThanOrEqual(Math.max(...xs) + 4)
+    // The posts stand up out of the plate, so only the foot is inside it.
+    expect(py).toBeGreaterThanOrEqual(Math.min(...ys) - 4)
+    expect(py).toBeLessThanOrEqual(Math.max(...ys) + 4)
+  })
+
+  it('says nothing was seen in one line under the city, and still draws the door', () => {
+    filterTo([3389], {
+      events: 0,
+      accepts: 0,
+      drops: 0,
+      lines: 0,
+      ribs: [],
+      hosts: [],
+      doors: [door({ label: '#23', ordinal: 23, action: 'drop', in: 'ether1', out: '', who: 'ether1 → any drop' })],
+    })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    expect(container.querySelector('.note-t')?.textContent).toBe(
+      'no logged traffic on 3389/tcp in the window · one rule names it — #23 ether1 → any drop, the door on the ether1 side',
+    )
+    expect(container.querySelectorAll('.door').length).toBe(1)
+    // Not an empty state: the city is still there behind the sentence.
+    expect(container.querySelectorAll('.plate').length).toBe(ground.districts.length)
+  })
+
+  it('gets out of the way when the operator stands on something', async () => {
+    filterTo([445])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+    const tallies = () => [...container.querySelectorAll('.flat .chip-t')].filter((t) => t.textContent?.includes('445/tcp'))
+    expect(tallies().length).toBeGreaterThan(0)
+
+    await fireEvent.click(container.querySelector('.plate[data-cid="bridge-lan"]') as Element)
+    flushSync()
+    expect(portFilterState.active).toBe(false)
+    expect(tallies().length).toBe(0)
+  })
+
+  it('clears on Esc, before it surfaces from standing', () => {
+    filterTo([445])
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    key(document.body, 'Escape')
+    expect(portFilterState.active).toBe(false)
+    expect(container.querySelector('.plate[data-cid="vlan-iot"]')).not.toBeNull()
   })
 })
