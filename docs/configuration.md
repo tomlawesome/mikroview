@@ -1208,6 +1208,67 @@ and its space is already covered by `x4b_datacenter`.
 Refresh cadence is not configurable, for the same over-polling reason as
 the blocklist.
 
+## MAC vendor lookups (optional, on by default)
+
+Every event from a LAN host carries that host's hardware address, and the
+first three octets of one are an *OUI* -- a block IEEE assigned to a
+named organisation. Looking it up turns `dc:a6:32:...` into "Raspberry Pi
+Trading Ltd", which is usually the single most useful thing you can learn
+about a host you don't recognise. It backs the device dossier (see
+[API reference](#api-reference)'s `GET /api/hosts/{ip}/dossier`).
+
+```yaml
+oui:
+  enabled: true
+  url: https://standards-oui.ieee.org/oui/oui.csv
+  cachePath: /var/lib/mikroview/oui-registry.json
+```
+
+**No vendor data ships in mikroview.** Your instance fetches IEEE's MA-L
+registry itself, once a day, and caches the parsed result at `cachePath`
+so vendor names are there the moment it restarts rather than a minute
+later. The daily poll is conditional (`If-None-Match`), so an unchanged
+registry costs a few hundred bytes instead of the file's ~4 MB.
+
+On the licensing, because it is the reason for that arrangement: IEEE
+publishes the MA-L listing for direct download, free, without
+registration, and with no licence or usage conditions attached -- so
+fetching it and looking addresses up in it is plainly fine. What nobody
+is granted is permission to *redistribute* it, so shipping a copy inside
+mikroview would be passing on someone else's data without the right to.
+Your own copy, fetched from IEEE, avoids that question entirely and has
+the side benefit of being current rather than as old as your release.
+
+Until the first fetch completes, a dossier says vendor data is not
+available yet -- it never guesses, and it never presents "we haven't
+downloaded the registry" as "this device has no vendor". A registry
+older than 30 days keeps being used and is *labelled* stale rather than
+quietly trusted; a fetch that fails leaves the previous data in place.
+
+Three answers are deliberately not vendor names:
+
+- **Locally administered addresses.** The second-lowest bit of the first
+  octet says "this address was made up locally". No vendor ever
+  registered it, so there is nothing to look up -- and that is the
+  finding, not a failure: it means a virtual machine, a container, or a
+  phone randomising its Wi-Fi address. `02:42:...` is Docker,
+  `52:54:00:...` is KVM/QEMU.
+- **Sub-delegated blocks.** A few hundred OUIs are held by IEEE itself,
+  because they are carved into smaller MA-M/MA-S assignments listed in
+  files mikroview does not fetch. Reporting those devices as made by
+  "IEEE Registration Authority" would be nonsense, so they are reported
+  as sub-delegated with the vendor unknown.
+- **Private listings.** Some assignees pay to have their name withheld.
+  The block is registered; IEEE just won't say to whom.
+
+Set `enabled: false` to switch the feed off entirely -- no fetch, no
+refresh goroutine, and dossiers report vendor lookups as unavailable.
+`url` only needs setting if you mirror the file internally or must go
+through a proxy; whatever you point it at must still resolve to a public
+address, which is what stops the setting from becoming a way to make
+mikroview fetch `169.254.169.254`. Refresh cadence is not configurable,
+for the same over-polling reason as the blocklist.
+
 ## Port lookup
 
 Clicking the "i" affordance next to a source/destination port shows what
@@ -3470,6 +3531,9 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
+| `MIKROVIEW_OUI_ENABLED` | `oui.enabled` -- the IEEE MAC-vendor registry feed (see [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default)) |
+| `MIKROVIEW_OUI_URL` | `oui.url` -- only for an internal mirror or proxy; it must still resolve to a public address |
+| `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
 | `MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH` | `engine.definitionsStorePath` -- where the definitions store (issue #404) lives: shipped detectors, migrated watchlist expectations, and eventually builder-authored custom definitions, all in one document |
 | `MIKROVIEW_SNAPSHOT_INTERVAL` | `snapshot.interval` -- how often a warm-restart snapshot is written (see [Warm restart](#warm-restart-what-survives-a-restart)); anything under 30s falls back to the default |
