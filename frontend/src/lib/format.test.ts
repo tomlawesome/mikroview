@@ -10,6 +10,7 @@ import {
   parseGoDurationSeconds,
   formatDaysSince,
   formatDayMonth,
+  formatLastHeard,
 } from './format'
 
 describe('formatTimeMs', () => {
@@ -183,5 +184,50 @@ describe('formatDayMonth', () => {
 
   it('returns the input unchanged when it does not parse, same as its neighbours', () => {
     expect(formatDayMonth('not a date')).toBe('not a date')
+  })
+})
+
+// #710's round-38 cutover: Fleet's and Entities' "last heard" line moved
+// off formatRelative's bare "3d ago" onto this rule. TZ is pinned to UTC
+// by vitest.config.ts, so the ISO fixtures below double as wall-clock
+// times and the day-boundary math is exact rather than approximate.
+describe('formatLastHeard', () => {
+  it('under an hour, matches formatSpacedAge\'s short form', () => {
+    const now = new Date('2026-09-08T14:00:00Z').getTime()
+    const fiftyNineAgo = new Date(now - 59 * 60_000).toISOString()
+    expect(formatLastHeard(fiftyNineAgo, now)).toBe('59 m')
+  })
+
+  it('just past an hour but still today, renders the clock time alone', () => {
+    const now = new Date('2026-09-08T14:00:00Z').getTime()
+    const sixtyOneAgo = new Date(now - 61 * 60_000).toISOString()
+    expect(formatLastHeard(sixtyOneAgo, now)).toBe('12:59')
+  })
+
+  it('yesterday, renders weekday name and clock time', () => {
+    const now = new Date('2026-09-08T14:00:00Z').getTime()
+    expect(formatLastHeard('2026-09-07T21:14:00Z', now)).toBe('Monday 21:14')
+  })
+
+  it('six days ago, still within the 7-day window, renders weekday and time', () => {
+    const now = new Date('2026-09-08T14:00:00Z').getTime()
+    expect(formatLastHeard('2026-09-02T14:00:00Z', now)).toBe('Wednesday 14:00')
+  })
+
+  it('eight days ago, past the 7-day window, renders day + short month + time', () => {
+    const now = new Date('2026-09-08T14:00:00Z').getTime()
+    expect(formatLastHeard('2026-08-31T14:00:00Z', now)).toBe('31 Aug 14:00')
+  })
+
+  it('crosses a year boundary without leaking a year into the output', () => {
+    const now = new Date('2027-01-02T09:15:00Z').getTime()
+    const out = formatLastHeard('2026-12-25T09:15:00Z', now)
+    expect(out).toBe('25 Dec 09:15')
+    expect(out).not.toContain('2026')
+    expect(out).not.toContain('2027')
+  })
+
+  it('returns the input unchanged when it does not parse, same as its neighbours', () => {
+    expect(formatLastHeard('not a date', Date.now())).toBe('not a date')
   })
 })

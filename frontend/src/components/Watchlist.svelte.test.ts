@@ -169,6 +169,22 @@ describe('The suggestion body under the watches (#771)', () => {
     expect(document.getElementById('panel-suggestions')).toBeNull()
   })
 
+  // #710 round-30 fidelity: an empty candidate list used to render
+  // "MIKROVIEW SUGGESTS · 0", a count of nothing. The heading now drops
+  // the tally entirely and a quiet line explains why the body is empty
+  // instead.
+  it('drops the " · 0" from the heading and shows a quiet explanatory line when there are no open suggestions', async () => {
+    await renderWatchlist([])
+
+    const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
+    expect(heading.textContent).toBe('mikroview suggests')
+    expect(heading.querySelector('b')).toBeNull()
+
+    const empty = watchTable().querySelector('.wt-sugg-empty .empty-row') as HTMLElement
+    expect(empty).toBeTruthy()
+    expect(empty.textContent).toContain('nothing yet')
+  })
+
   it('counts only the open candidates in its heading, and names the routers that pushed any of them', async () => {
     vi.mocked(fetchSuggestions).mockResolvedValue([
       suggestion('s1', 'device', { status: 'off', routerDevice: 'rb5009' }),
