@@ -2163,7 +2163,7 @@ describe('the event trace on the city (#1050, rounds 54 & 56)', () => {
    * filter's own `filterTo` above. */
   function openTrace(event: FirewallEvent, verdict: TraceResponse['verdict'], answer: Partial<TraceResponse> = {}) {
     mapTraceState.request = { in: event.inInterface, out: event.outInterface || undefined, port: event.dstPort, proto: event.protocol }
-    mapTraceState.result = { found: true, verdict, event, like: 0, srcSeen: 0, dstReached: 0, ...answer }
+    mapTraceState.result = { found: true, verdict, event, like: 0, srcSeen: 0, dstReached: 0, sameLine: [], sameMinute: [], sameMinuteTotal: 0, ...answer }
   }
 
   /** cam-porch → tom-desktop in the mockup's own words: iot-1 → lan-1,
