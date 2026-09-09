@@ -413,6 +413,10 @@ await page.waitForSelector(LOGGED_TRIGGER, { timeout: 20000 })
 await openPopover(LOGGED_TRIGGER)
 
 feedSyslog(30, HOLD_SLUG)
+// Genuine negative assertion: proving the held rows never arrive while
+// the popup is open has no observable end-state to wait on -- only that
+// nothing showed up within a window long enough for ingest to have
+// delivered them if the hold were not in effect.
 await page.waitForTimeout(4000)
 const heldRows = await page.locator(`.grid .row:has-text("${HOLD_SLUG}")`).count()
 check(heldRows === 0, `the stream holds while the popup is open (${heldRows} new rows appeared)`)

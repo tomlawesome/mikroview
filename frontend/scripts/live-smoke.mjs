@@ -16,17 +16,25 @@ const rows = await streamRows()
 check(rows >= 100, `live view rendered ${rows} events`)
 
 await page.fill('input.rule', 'smoke-rule')
-await page.waitForTimeout(600)
+await page.waitForFunction(() => document.querySelectorAll('.card[data-card="live"] .row').length > 0, {
+  timeout: 5000,
+})
 const filtered = await streamRows()
 check(filtered > 0, `substring filter kept ${filtered} rows`)
 
 await page.fill('input.rule', 'definitely-not-a-rule-xyz')
-await page.waitForTimeout(600)
+await page.waitForFunction(() => document.querySelectorAll('.card[data-card="live"] .row').length === 0, {
+  timeout: 5000,
+})
 const none = await streamRows()
 check(none === 0, 'a non-matching filter empties the table')
 
 await page.fill('input.rule', '')
-await page.waitForTimeout(600)
+await page.waitForFunction(
+  (min) => document.querySelectorAll('.card[data-card="live"] .row').length >= min,
+  rows,
+  { timeout: 5000 },
+)
 check(await responsive(page), 'main thread responsive throughout')
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.slice(0, 2).join(' | ') || 'none'})`)
 

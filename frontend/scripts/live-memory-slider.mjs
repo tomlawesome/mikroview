@@ -197,10 +197,24 @@ check(
     `-- filled in ${Math.round((Date.now() - fillStart) / 1000)}s`,
 )
 
-// The page polls /api/stats every 5s (App.svelte's STATS_REFRESH_MS);
-// wait one round rather than reloading, which would put the first-run
-// setup modal back over the shell.
-await page.waitForTimeout(7000)
+// The page catches up to the fill through its own poll (App.svelte's
+// STATS_REFRESH_MS), not through the stats() fetch above -- wait for the
+// event-buffer row's own live count (memory.ts's bufferRow held figure,
+// #memg .orow .ov) to reach the same floor rather than guessing how many
+// poll rounds that takes. Reloading would put the first-run setup modal
+// back over the shell, which is why this waits rather than navigating.
+await page.waitForFunction(
+  (min) => {
+    const text = document.querySelector('#memg .orow .ov')?.textContent ?? ''
+    // bufferRow (memory.ts) prints the whole row, "480 MiB · 8 412 of
+    // ~201 000 events · ...", so the held figure sits after the size and
+    // a middot -- not at the start of the string.
+    const n = Number((text.match(/(\d[\d\s]*) of/)?.[1] ?? '').replace(/\s+/g, ''))
+    return Number.isFinite(n) && n >= min
+  },
+  floorCapacity + 2000,
+  { timeout: 30000 },
+)
 
 // While the shrink is proposed, the bar itself says what would go.
 await page.focus(SLIDER)
