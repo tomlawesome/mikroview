@@ -912,6 +912,76 @@ describe('a rib is two halves (round 49, #1016)', () => {
   })
 })
 
+describe('#1053: a lateral zone-to-zone rib bends without hooking', () => {
+  // Four lanes so two of them land on the same side of the waist --
+  // laneX(0,4) and laneX(1,4) are both left of x=700, the "lateral"
+  // pair the hook was reported on (LAN <-> Servers, #1053).
+  function fourLanesWithLateralPair() {
+    zonesState.pushed = [1, 2, 3, 4].map((n) => ({
+      address: `10.0.${n}.1/24`,
+      network: `10.0.${n}.0`,
+      interface: `bridge${n}`,
+      comment: `Lane ${n}`,
+    }))
+    // Strictly decreasing counts pin the busiest-first sort: bridge1
+    // lands at index 0, bridge2 at index 1 -- both the waist's own side.
+    appState.events = [
+      ...Array.from({ length: 40 }, () => event({ inInterface: 'bridge1', srcIp: '10.0.1.20' })),
+      ...Array.from({ length: 30 }, () => event({ inInterface: 'bridge2', srcIp: '10.0.2.20' })),
+      ...Array.from({ length: 20 }, () => event({ inInterface: 'bridge3', srcIp: '10.0.3.20' })),
+      ...Array.from({ length: 10 }, () => event({ inInterface: 'bridge4', srcIp: '10.0.4.20' })),
+      event({ inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', action: 'accept' }),
+    ]
+    policyState.anyPushed = true
+    policyState.edges = [
+      { key: 'bridge2|bridge1', from: 'bridge2', to: 'bridge1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: true },
+      { key: 'bridge1|bridge2', from: 'bridge1', to: 'bridge2', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: false },
+    ]
+  }
+
+  // The curve a half actually draws -- "M x y C x1 y1, x2 y2, x3 y3" --
+  // sampled the same way the map itself samples a drawn cubic (bezAt).
+  function sampleCubicPath(d: string): { x: number; y: number }[] {
+    const n = d.match(/-?\d+(\.\d+)?/g)!.map(Number)
+    const c: [number, number][] = [
+      [n[0], n[1]],
+      [n[2], n[3]],
+      [n[4], n[5]],
+      [n[6], n[7]],
+    ]
+    const out: { x: number; y: number }[] = []
+    for (let i = 0; i <= 20; i++) {
+      const t = i / 20
+      const u = 1 - t
+      const w = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t]
+      out.push({
+        x: w[0] * c[0][0] + w[1] * c[1][0] + w[2] * c[2][0] + w[3] * c[3][0],
+        y: w[0] * c[0][1] + w[1] * c[1][1] + w[2] * c[2][1] + w[3] * c[3][1],
+      })
+    }
+    return out
+  }
+
+  // A hook is a reversal: the sampled curve moving back the way it came
+  // along x, rather than bending smoothly on toward its own far end.
+  function reversesAlongX(pts: { x: number; y: number }[]): boolean {
+    const overall = Math.sign(pts[pts.length - 1].x - pts[0].x)
+    if (overall === 0) return false
+    return pts.some((p, i) => i > 0 && Math.sign(p.x - pts[i - 1].x) === -overall)
+  }
+
+  it('never reverses direction along x on either half of the pair', () => {
+    fourLanesWithLateralPair()
+    const { container } = render(Topography)
+    flushSync()
+
+    const redge = container.querySelector('.redge')!.getAttribute('d')!
+    const cedge = container.querySelector('.cedge.dark')!.getAttribute('d')!
+    expect(reversesAlongX(sampleCubicPath(redge))).toBe(false)
+    expect(reversesAlongX(sampleCubicPath(cedge))).toBe(false)
+  })
+})
+
 describe('degrading honestly without a pushed address table (#682, data gap #687; round 36 #802)', () => {
   it('never invents a subnet or a coverage verdict, and floats no note over the map', () => {
     zonesState.pushed = [] // no /ip address table pushed -- #687's data gap, not a rendering bug
