@@ -289,6 +289,9 @@ var authzMatrix = []routeExpectation{
 	{http.MethodDelete, "/api/hosts/{key}/mark", accessUser,
 		"withdraws that statement, putting the host back to whatever its own last-seen time says it is -- same tier as making it, exactly as DELETE /api/coverage/declarations/{key} sits at its sibling's tier"},
 
+	{http.MethodGet, "/api/hosts/{ip}/dossier", accessViewer,
+		"the device dossier (#410): everything already known about one address, assembled -- its traffic, MAC and vendor, names and their provenance, lease-versus-fixed, first/last seen, matched rules, and a suggested identity with its evidence. A read of data this instance already holds, at the same viewer tier as GET /api/hosts above and for the same reason: identifying an unknown host is exactly what a non-admin looking at the map needs to do. It changes nothing and it never touches the host it describes -- the probe command it prints is for the operator to run. Deliberately not on readOnlyRoutes, and more sharply than GET /api/hosts: this is one host's traffic, ports, peers and hardware address in a single response, which no bearer token has ever been able to read"},
+
 	{http.MethodGet, "/api/baseline/off", accessViewer,
 		"today's off-baseline lines (#1016 round 49): the source/destination/port/protocol lines seen today that are not on the established pattern, with the threshold that judged them. Same viewer-tier read as GET /api/hosts directly above and for the same reason -- a non-admin looking at the map is exactly who needs to see what is off pattern today. Deliberately not on readOnlyRoutes for the same reason either, and more sharply: this is the operator's private address space with destinations and ports attached, which no bearer token has ever been able to read. Established lines are unreachable through this endpoint by design, not by permission -- see handleBaselineOff"},
 	{http.MethodPut, "/api/baseline/{key}/expected", accessUser,

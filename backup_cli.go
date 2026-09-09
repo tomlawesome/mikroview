@@ -110,6 +110,11 @@ var excludedFromBackup = map[string]string{
 	"GeoIP.DBPath": "an external MaxMind database file the operator downloads themselves (#372), not " +
 		"a store mikroview writes -- there is nothing here for a restore to reproduce that a fresh " +
 		"download would not already give back.",
+	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not mikroview's own state -- the " +
+		"next refresh re-fetches it in seconds, so a restore saves nothing. It is also somebody " +
+		"else's data, published with no permission to redistribute it (see internal/oui.SourceURL), " +
+		"and a backup is a copy that travels: keeping it out means an operator's backup carries " +
+		"their network's evidence and not four megabytes of IEEE's registry.",
 }
 
 // jsonLinesStore is the one backedUpStores entry whose on-disk shape is
