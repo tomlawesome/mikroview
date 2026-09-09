@@ -23,7 +23,7 @@
 // pair the city-wide wall escalates, the same wording and the same code
 // path either way.
 
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedAndSettle } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 // The one host that sends the unplanned, no-rule-label traffic below --
@@ -41,6 +41,13 @@ for (let i = 0; i < 40 && !DEVICE; i++) {
 }
 check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`)
 
+// Reload is load-only, kept uniformly across this helper's three call
+// sites (#1061): the middle call, after lanes and the filter-rule table
+// are pushed, needs a fresh mount to pick up zonesState and policyState,
+// which only refetch from Topography's own mount effect (Topography.svelte)
+// and not from the REST pushes themselves. The first and third calls do
+// not strictly need a fresh fetch, but sharing one reloading helper is
+// simpler and safer than splitting the behaviour by call site.
 async function toDistrictStop() {
   await page.setViewportSize({ width: 1600, height: 900 })
   await page.reload()
@@ -48,15 +55,16 @@ async function toDistrictStop() {
   await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
   const slider = page.locator('[data-card="topography"] .altitude input[type="range"]')
   await slider.fill('5') // the district stop; the seven-stop axis is clients 0 .. street 6 (#869)
-  await new Promise((r) => setTimeout(r, 900))
+  await new Promise((r) => setTimeout(r, 900)) // the stop change is a 620ms camera tween
 }
 
 // --- Before any push: a boundary-derived district, no gates, and said why --
 
+const preLines = []
 for (let i = 0; i < 3; i++) {
-  feedRaw(`firewall,info A|walls-pre| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), 10.0.10.2${i}:5${100 + i}->10.0.40.10:443, len 60`)
+  preLines.push(`firewall,info A|walls-pre| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), 10.0.10.2${i}:5${100 + i}->10.0.40.10:443, len 60`)
 }
-await new Promise((r) => setTimeout(r, 900))
+await feedAndSettle(page, ...preLines)
 await toDistrictStop()
 
 // The gate count, back after #1022 (owner decision on #1016).
@@ -170,13 +178,15 @@ check(
 // guest-isolation event against those two lost, and the composer named
 // the sibling's rule instead of this scenario's. Six against two is this
 // scenario's own traffic winning on its own terms.
+const wallsLines = []
 for (let i = 0; i < 6; i++) {
-  feedRaw(`firewall,info A|walls| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), 10.0.10.2${i}:5${100 + i}->10.0.40.10:443, len 60`)
-  feedRaw(`firewall,info D|guest-isolation| forward: in:vlan-guest out:bridge-lan, connection-state:new, proto TCP (SYN), 10.0.30.20:5${200 + i}->10.0.10.10:445, len 60`)
+  wallsLines.push(`firewall,info A|walls| forward: in:bridge-lan out:vlan-srv, connection-state:new, proto TCP (SYN), 10.0.10.2${i}:5${100 + i}->10.0.40.10:443, len 60`)
+  wallsLines.push(`firewall,info D|guest-isolation| forward: in:vlan-guest out:bridge-lan, connection-state:new, proto TCP (SYN), 10.0.30.20:5${200 + i}->10.0.10.10:445, len 60`)
 }
 for (let i = 0; i < 9; i++) {
-  feedRaw(`firewall,info D|| forward: in:bridge-lan out:vlan-iot, connection-state:new, proto TCP (SYN), ${IOT_UNPLANNED_SRC}:5${300 + i}->10.0.20.20:22, len 60`)
+  wallsLines.push(`firewall,info D|| forward: in:bridge-lan out:vlan-iot, connection-state:new, proto TCP (SYN), ${IOT_UNPLANNED_SRC}:5${300 + i}->10.0.20.20:22, len 60`)
 }
+await feedAndSettle(page, ...wallsLines)
 
 await toDistrictStop()
 
@@ -210,7 +220,10 @@ async function standOn(cid) {
   }
   if (!found) return null
   await page.keyboard.press('Enter')
-  await new Promise((r) => setTimeout(r, 900))
+  // Standing sets City.svelte's `stand` state synchronously, and
+  // `data-stop` is derived straight from it, so waiting for the
+  // attribute is exact rather than a guess at how long standing takes.
+  await page.waitForSelector('[data-card="topography"] .city[data-stop="street"]', { timeout: 10000 })
   return page.locator('[data-card="topography"] .city')
 }
 
@@ -222,12 +235,12 @@ async function standOn(cid) {
 // focus on it.
 async function draftFrom(cid) {
   await page.locator(`[data-card="topography"] .city [data-cid="${cid}"]`).first().hover()
-  await new Promise((r) => setTimeout(r, 400))
   const draft = page.locator('[data-card="topography"] .city .bcard.hcard [data-draft-rule]')
+  await draft.first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   if ((await draft.count()) === 0) return null
   await draft.first().click()
-  await new Promise((r) => setTimeout(r, 400))
   const composer = page.locator('[data-card="topography"] .city .composer')
+  await composer.first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   if ((await composer.count()) === 0) return null
   return (await composer.first().textContent()) ?? ''
 }
@@ -244,8 +257,9 @@ check(
   "standing on its own host, the unplanned pair says so plainly rather than guessing one -- whichever pair the city-wide wall escalates",
 )
 
+// No settle sleep: toDistrictStop() below reloads, which discards
+// whatever state Escape left behind anyway.
 await page.keyboard.press('Escape')
-await new Promise((r) => setTimeout(r, 900))
 
 // --- The refused guest boundary, read at the street stop (#865, #1036) ----
 //
@@ -277,12 +291,14 @@ check(
   `the composer names the rule that refused the boundary, from the event itself (${JSON.stringify((guestDraft ?? '').slice(0, 240))})`,
 )
 await page.keyboard.press('Escape')
-await new Promise((r) => setTimeout(r, 900))
+// composerOpen flips synchronously (City.svelte), so waiting for the
+// card to detach is exact rather than a guess at the closing tween.
+await page.waitForSelector('[data-card="topography"] .city .composer', { state: 'detached', timeout: 5000 })
 
 // And the road itself says only the plain word: the rule's name is the
 // card's to carry, not the drawing's (#991, #1036).
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('3') // the city stop
-await new Promise((r) => setTimeout(r, 900))
+await new Promise((r) => setTimeout(r, 900)) // the stop change is a 620ms camera tween
 const cityText = (await page.locator('[data-card="topography"] .city').textContent()) ?? ''
 check(cityText.includes('dropped'), 'at the city stop the refused road carries the plain mark')
 check(

@@ -68,7 +68,7 @@ if (raised.every((r) => r.ok)) {
   // click clears, and a click anywhere else disarms.
   check(!(await page.isVisible('.docket .bubble.armed')), 'the bubble starts unarmed')
   await page.click('.docket .bubble:has-text("clear all")')
-  await page.waitForTimeout(150)
+  await page.waitForSelector('.docket .bubble.armed:has-text("confirm")', { timeout: 5000 })
   check(
     await page.isVisible('.docket .bubble.armed:has-text("confirm")'),
     'one click arms it -- alarm-red, and relabelled confirm',
@@ -79,15 +79,18 @@ if (raised.every((r) => r.ok)) {
   // A click anywhere else disarms it without clearing, so an armed
   // bubble cannot ambush a later stray click.
   await page.click('table.ftable thead')
-  await page.waitForTimeout(150)
+  await page.waitForSelector('.docket .bubble.armed', { state: 'detached', timeout: 5000 })
   check(!(await page.isVisible('.docket .bubble.armed')), 'a click anywhere else disarms it without a second click')
   check((await activeCount()) === armedCount, 'nothing was cleared by an arm that was never confirmed')
 
   // The real thing: arm, then confirm.
   await page.click('.docket .bubble:has-text("clear all")')
-  await page.waitForTimeout(150)
+  await page.waitForSelector('.docket .bubble.armed:has-text("confirm")', { timeout: 5000 })
   await page.click('.docket .bubble.armed:has-text("confirm")')
-  await page.waitForTimeout(600)
+  await page.waitForFunction(
+    () => document.querySelectorAll('section[aria-label^="Active flags"] tr.frow').length === 0,
+    { timeout: 8000 },
+  )
 
   check((await activeCount()) === 0, 'the second click clears every active flag, including any late rule_spike')
 
@@ -106,7 +109,7 @@ if (raised.every((r) => r.ok)) {
   // optimistic client state.
   await page.reload({ waitUntil: 'networkidle' })
   await goTo(page, 'Flags')
-  await page.waitForTimeout(500)
+  await page.waitForSelector('text=Nothing open.', { timeout: 5000 })
   check(
     await page.isVisible('text=Nothing open.'),
     'the cleared state survived a reload -- Clear all reached the server, not just the local optimistic update',

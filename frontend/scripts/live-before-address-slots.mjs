@@ -71,7 +71,6 @@ check(
   `no /ip address table has been pushed yet — the degraded state is real, not staged (${before.status()} ${JSON.stringify(beforeBody)})`,
 )
 
-await page.reload()
 await page.click('.rail-name >> text=Topography')
 // #869 made the city the axis's centre and its default stop, and the 2D
 // stage is put away there. Everything below reads the 2D map's zone
@@ -140,11 +139,11 @@ check(
 await page.click(`${topo} .deg-go`)
 await page.waitForSelector('.setup-wizard', { timeout: 5000 })
 check(true, 'the statement\'s "Run setup… ▸" opens the setup wizard')
-// A reload rather than the modal's own close: the wizard opens at the
-// first step still waiting, and on an instance where nothing is waiting
-// that is the finish pane, whose close leaves for the landing card. The
-// scenario is not testing the wizard, only the way in.
-await page.reload()
+// Escape drives the same dismiss() the ✕ does. It may leave for the
+// landing card if nothing is waiting (the finish pane's own dismiss),
+// but the scenario re-navigates to Topography next, so where it lands
+// here does not matter -- only that the modal is gone.
+await page.keyboard.press('Escape')
 await page.waitForSelector('.setup-wizard', { state: 'hidden', timeout: 10000 })
 
 // --- with a table pushed, the card returns to its normal state --------------
@@ -163,6 +162,9 @@ check(
   'the zone table is pushed whole',
 )
 
+// zonesState.refresh() only runs from Topography's own mount effect,
+// keyed on the device list rather than this push (Topography.svelte) --
+// load-only, so the freshly pushed table needs a reload to reach the map.
 await page.reload()
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector(`${topo} .zone`, { timeout: 10000 })

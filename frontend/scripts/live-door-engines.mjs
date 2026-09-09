@@ -65,6 +65,11 @@ for (const [name, engine, required] of [
   // desync read below would report sync where there is only patience.
   await page.waitForTimeout(6000)
   const g = await doorGeometry(page)
+  // A second sample after another 700ms of the same CSS rain animation --
+  // there is no discrete "moved" event to wait for (no transitionend
+  // listener exists anywhere in the app), so this is real elapsed time a
+  // continuously-running animation needs before two samples can show
+  // different transforms.
   await page.waitForTimeout(700)
   const g2 = await doorGeometry(page)
   check(g.strokes >= 10, `[${name}] the fall renders its strokes -- ${g.strokes}`)
