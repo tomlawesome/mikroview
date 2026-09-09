@@ -54,6 +54,11 @@ devices:
   sending logs from an IP *not* listed here still appear in the UI and
   `/api/devices`, labelled by their raw IP with `configured: false`, so
   you can identify and add them rather than silently losing their events.
+  A `name` set here is the one everyone sees, and the app will not let
+  anybody change it from the browser: the pencil on a device says the
+  name comes from this file and that changing it here is the way to
+  change it. A router you have not listed can be renamed in the app, and
+  that name is stored on the server, so everyone signed in sees it.
 
 ### How events are stored
 
