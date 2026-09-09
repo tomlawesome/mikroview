@@ -649,20 +649,31 @@ describe('crossing the altitude centre (#869)', () => {
   // sides and there is nothing to remember across the centre. What the
   // crossing still carries -- the reach, and the camera -- is asserted
   // below.
-  // #1018's port pill is the flat map's own furniture and only its own:
-  // the city gets the same two tools in a round of its own (#1050). So
-  // it is drawn left of centre and gone right of it -- a filter control
-  // over a surface it cannot filter would be a promise the map breaks.
-  it('carries no overlay state across the centre, and leaves the port pill on the flat side', () => {
+  // #1018's port pill was the flat map's own furniture until #1055 gave
+  // the city the same filter from the same store. It is one control at
+  // every altitude now, and the selection it carries survives the
+  // crossing in both directions -- clearing it would throw away the
+  // operator's own question for moving the slider.
+  it('draws the port pill on both sides of the centre, and carries the selection across', () => {
     const { container } = render(Topography)
     flushSync()
-    expect(container.querySelectorAll('.pills .pill').length).toBe(0) // ◆ city, the default
+    expect(container.querySelectorAll('.pills .pill').length).toBe(1) // ◆ city, the default
+    expect(container.querySelector('.pills .pill')?.textContent?.trim()).toBe('⌕ port')
 
     crossTo(container, '2') // to zones: the 2D side
     expect(container.querySelectorAll('.pills .pill').length).toBe(1)
 
+    portFilterState.ports = [445]
+    portFilterState.proto = 'tcp'
+    portFilterState.answer = { ...portFilterState.answer, events: 2, lines: 2 }
+    portFilterState.answeredKey = portFilterState.key
+    flushSync()
+    expect(container.querySelector('.pill.p.on')?.textContent).toContain('445/tcp')
+
     crossTo(container, '4') // back across, to borough
-    expect(container.querySelectorAll('.pills .pill').length).toBe(0)
+    expect(portFilterState.active).toBe(true)
+    expect(container.querySelector('.city')).not.toBeNull()
+    expect(container.querySelector('.pill.p.on')?.textContent).toContain('445/tcp')
   })
 
   it('hands a 2D reach across the centre to the same host, standing on it in the city', () => {
