@@ -248,7 +248,7 @@
               onclick={() => openRow(row.ev)}
             >
               <span class="t">{row.time}</span>
-              <span class="v {row.verdictClass}">{row.verdict}</span>
+              <span class="v {row.verdictClass}" title={row.verdict}>{row.verdict}</span>
               {#if row.traced}<span class="now">TRACED</span>{/if}
             </button>
           {/each}
@@ -268,8 +268,8 @@
               onclick={() => openRow(row.ev)}
             >
               <span class="t">{row.time}</span>
-              <span class="d">{row.detail}</span>
-              <span class="v {row.verdictClass}">{row.verdict}</span>
+              <span class="d" title={row.detail}>{row.detail}</span>
+              <span class="v {row.verdictClass}" title={row.verdict}>{row.verdict}</span>
             </button>
           {/each}
           <button type="button" class="foot" onclick={openStreamForMinute}>
@@ -436,6 +436,20 @@
     font: inherit;
     color: inherit;
     text-align: left;
+    /* #1050 round 56 defect 1: without this, a row's own min-content
+       width (its text, unwrapped) floors how far flexbox can shrink it,
+       so a long verdict or detail pushed the row past the column and
+       the column past the panel. `overflow: hidden` here sets the row's
+       own used minimum width to 0 per the flexbox spec, so its children
+       below can shrink and ellipsis instead. */
+    overflow: hidden;
+  }
+
+  .picker .row .d,
+  .picker .row .v {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .picker .row:hover {
