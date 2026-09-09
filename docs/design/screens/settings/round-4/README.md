@@ -61,4 +61,23 @@ stragglers (garage-cam .14, ev-charger .31), watched a second way.
 
 ## Verdicts
 
-_(none yet)_
+Owner, 2026-09-09: *"Yes conditions editor looks good - but - lets bring
+it stylistically in line with the rest of the new UI, and less
+aesthetically like a generic program. This is mikroview - it should LOOK
+like mikroview."* And: take the approach GitLab took with its
+click-to-select search/filter bar — one bar, pick the field, then the
+verb, then the value; each finished line a chip.
+
+→ Round 5 redraws in the built app's own look with the token bar as the
+way a line is written. The sentence grammar, counting sentence, Reads
+as, and Clone's two truths carry forward.
+
+Open questions, answered:
+
+1. "is between" is offered for time of day as well as ports — *"Sure,
+   any reason not to?"*
+2. Try and Save both wait until every line is complete; an unfinished
+   line says "finish this line" beside both. Owner: *"Try and save
+   should both wait."* Round 4 had drawn Try running early on the lines
+   that held; a receipt for a detector other than the one on screen is
+   a quiet lie, so it goes.
