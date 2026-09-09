@@ -107,6 +107,7 @@
   // server answered, and everything below only draws it.
   import { portFilterState } from '../lib/portFilter.svelte'
   import { mapTraceState } from '../lib/mapTrace.svelte'
+  import TraceCrumb from './TraceCrumb.svelte'
   import {
     chooseDoorSpot,
     doorAccepts,
@@ -2149,10 +2150,13 @@
       if (nodeCard) nodeCard = null
       else if (lineCard) closeLineCard()
       else if (compose) compose = null
-      else if (mapTraceState.active) mapTraceState.clear()
-      // The city has the same rung in its own ladder (#1055) and owns it
-      // while it is the surface being read: two handlers on one window
-      // would otherwise take two rungs at once on a single press.
+      // The list (#1050, A1) is its own rung: Esc closes it first, a
+      // second Esc clears the trace underneath it. The city has the same
+      // rung in its own ladder (#1055) and owns it while it is the
+      // surface being read: two handlers on one window would otherwise
+      // take two rungs at once on a single press.
+      else if (cityStop === null && mapTraceState.active && mapTraceState.listOpen) mapTraceState.listOpen = false
+      else if (cityStop === null && mapTraceState.active) mapTraceState.clear()
       else if (cityStop === null && (portFilterState.active || portFilterState.open)) portFilterState.clear()
       else if (reach) surface()
     }
@@ -2799,16 +2803,13 @@
 
   function crossAltitudeCentre(intoCity: boolean) {
     if (intoCity) {
-      // The trace is still the flat map's alone -- the city gets it in a
-      // round of its own (#1050) -- so it clears on the way over rather
-      // than staying on behind a drawing that cannot show it.
-      //
-      // The port filter no longer does (#1055): the city answers the
-      // same question from the same store and the pill is drawn on both
-      // sides, so the selection survives the crossing in both
-      // directions. Clearing it would have thrown away the operator's
-      // own question for moving the slider.
-      mapTraceState.clear()
+      // The trace no longer clears on the way over (round 56, #1050,
+      // same rule the port filter follows for #1055): the city draws its
+      // own copy of the traced road, the ✕ and the ghost, and mounts the
+      // same crumb, so the selection survives the crossing in both
+      // directions the same way the port filter's does. Clearing it here
+      // would throw away the operator's own question for moving the
+      // slider, onto a view that can now answer it.
       if (reach && reachIsHost) {
         // Handed to City's own pending-descend effect (#868's own
         // consumer, shared with the flags "where" link) rather than
@@ -3700,8 +3701,12 @@
    *
    * An accepted line crossed, so both halves of its pair light -- that
    * is one packet through the router, not a claim about traffic coming
-   * back. A refused line has no out-interface to reach, so only the
-   * half it arrived on lights, and it dies at the waist where the ✕ is.
+   * back. A refused line with no out-interface named (an input-chain
+   * drop) never reached one, so only the half it arrived on lights, and
+   * it dies at the waist where the ✕ is. A refused line the router
+   * *did* name an out-interface for (a forward-chain drop, C1, round
+   * 56) got as far as the far boundary before being stopped there, so
+   * it lights the same way an accept does -- both halves, red.
    */
   const traceLit = $derived.by((): Map<string, 'accept' | 'refused'> => {
     const out = new Map<string, 'accept' | 'refused'>()
@@ -3712,7 +3717,11 @@
     const outIface = e.outInterface ?? ''
     if (inIface === '' && outIface === '') return out
     out.set(ribKey(inIface, outIface), verdict)
-    if (verdict === 'accept' && inIface !== '' && outIface !== '') out.set(ribKey(outIface, inIface), verdict)
+    // Both directions carry the same verdict whenever the line reached
+    // an out-interface at all: an accept crossed it, and a forward-chain
+    // refusal (C1) reached the far boundary before being stopped there.
+    // An input-chain refusal names no out-interface and stays one-sided.
+    if (inIface !== '' && outIface !== '') out.set(ribKey(outIface, inIface), verdict)
     return out
   })
 
@@ -3732,6 +3741,21 @@
     ring: Pt | null
   }
 
+  /** C1 (round 56): where a forward-chain refusal's ✕ stands when the
+   * log names an out-interface -- the far end of the destination's own
+   * half, exactly where an accepted trace's ring would sit, because the
+   * line got through the router and was stopped at the far boundary
+   * rather than at the router itself. Null for an input-chain refusal
+   * (no out-interface at all), which still dies at the waist. */
+  const refusedGateStop = $derived.by((): Pt | null => {
+    if (!traceOn || mapTraceState.verdict !== 'refused') return null
+    const e = mapTraceState.event
+    if (!e?.inInterface || !e?.outInterface) return null
+    const line = lineFor(e.inInterface, e.outInterface, true)
+    if (!line) return null
+    return ringPoint(line)
+  })
+
   /**
    * The lit layer. Drawn over the dimmed map rather than instead of it,
    * so a rib that is both drawn and lit keeps its own geometry: one
@@ -3745,7 +3769,11 @@
     const out: LitHalf[] = []
     for (const [key, verdict] of lit) {
       const [from, to] = key.split('|')
-      const line = lineFor(from, to, verdict === 'accept')
+      // A refusal that reached the far boundary (refusedGateStop) draws
+      // the same full curve an accept does; one that died at the
+      // router does not.
+      const crosses = verdict === 'accept' || (traceOn && verdict === 'refused' && !!refusedGateStop)
+      const line = lineFor(from, to, crosses)
       if (!line) continue
       out.push({
         key,
@@ -3754,14 +3782,15 @@
         // Full width for the answer, whatever the volume: the filter is
         // not a traffic reading, it is "this is the one you asked about".
         width: verdict === 'accept' ? 2.6 : 2.4,
-        stop: verdict === 'refused' ? deathPoint(line) : null,
+        stop: verdict === 'refused' ? (refusedGateStop ?? deathPoint(line)) : null,
         ring: verdict === 'accept' && traceOn ? ringPoint(line) : null,
       })
     }
     return out
   })
 
-  /** Where a refused trace stopped: the ✕ on the router's edge. */
+  /** Where a refused trace stopped: the far gate (C1) or the router's
+   * own edge. */
   const traceStop = $derived(traceOn ? (litHalves.find((h) => h.stop)?.stop ?? null) : null)
   const traceRing = $derived(traceOn ? (litHalves.find((h) => h.ring)?.ring ?? null) : null)
 
@@ -3998,6 +4027,19 @@
     portFilterState.nothingSeen ? emptyNote(portFilterState.label, portFilterState.doors) : null,
   )
 
+  /** Where the chip sits: beside the router, round 53/54's own fixed
+   * spot -- or beside the ✕ when C1 moves it to the far gate, since the
+   * chip always sits by the ✕ it explains. */
+  const traceChipBox = $derived.by((): Pt => {
+    const atRouter = { x: 308, y: 234 }
+    if (!refusedGateStop) return atRouter
+    const w = 248
+    return {
+      x: Math.min(Math.max(refusedGateStop.x - w / 2, 12), 1400 - w - 12),
+      y: Math.max(refusedGateStop.y - 96, 20),
+    }
+  })
+
   /** The trace's chip beside the router: the router's own decision. */
   const traceChip = $derived.by((): { verdict: string; rule: string; path: string } | null => {
     const e = mapTraceState.event
@@ -4022,10 +4064,14 @@
   /** The ghost: the rib the refused line would have taken, dashed, with
    * the note beside it. Drawn from the destination's own lane, and only
    * where the map has one -- an address in no drawn zone gets no ghost
-   * rather than a guessed one. */
+   * rather than a guessed one. Only for a refusal that dies at the
+   * router (no out-interface named): one that reached the far boundary
+   * (C1, `refusedGateStop`) has nowhere further to draw toward, and
+   * `traceStopNote` carries its own words instead. */
   const traceGhost = $derived.by((): { d: string; at: Pt; text: string } | null => {
     const e = mapTraceState.event
     if (!traceOn || mapTraceState.verdict !== 'refused' || !e?.dstIp || !e.inInterface) return null
+    if (refusedGateStop) return null
     const zone = zones.find((z) => {
       if (z.hosts.some((h) => h.ip === e.dstIp)) return true
       if (!z.cidr) return false
@@ -4053,6 +4099,27 @@
     }
   })
 
+  /** C1's own two grey words, in the ghost's place, once the ✕ already
+   * stands at the far gate: there is nowhere left to draw a dashed rib
+   * toward, so the note alone says what would have happened. Anchored
+   * the same way the ghost's own note was -- over the destination's
+   * lane, in the slot its service list vacates under a filter. */
+  const traceStopNote = $derived.by((): { at: Pt; lines: string[] } | null => {
+    const e = mapTraceState.event
+    if (!refusedGateStop || !e?.dstIp) return null
+    const zone = zones.find((z) => {
+      if (z.hosts.some((h) => h.ip === e.dstIp)) return true
+      if (!z.cidr) return false
+      const cidr = parseCidr(z.cidr)
+      return cidr ? addressInCidr(e.dstIp ?? '', cidr) : false
+    })
+    const lines = [`would have reached ${e.dstHostName || e.dstIp}`, zone ? `stopped at the ${zone.name} boundary` : 'stopped at the boundary']
+    const halfW = Math.max(...lines.map((l) => l.length)) * 2.9
+    const i = zone ? zones.findIndex((z) => z.id === zone.id) : -1
+    const x = i >= 0 ? Math.min(Math.max(laneX(i, zones.length), halfW + 12), 1400 - halfW - 12) : refusedGateStop.x
+    return { at: { x, y: 470 }, lines }
+  })
+
   /** Opening one filter closes the other, and both close the reach:
    * three answers layered on one map would leave nobody able to say
    * which of them a dim rib was dim because of. */
@@ -4076,10 +4143,10 @@
     }
   }
 
-  function openTrace(req: Parameters<typeof mapTraceState.open>[0]) {
+  function openTrace(req: Parameters<typeof mapTraceState.open>[0], opts?: Parameters<typeof mapTraceState.open>[1]) {
     portFilterState.clear()
     if (reach) surface()
-    void mapTraceState.open(req)
+    void mapTraceState.open(req, opts)
   }
 
   /** The picker's text field: enter applies the list, and a list that
@@ -4206,59 +4273,15 @@
       {/if}
     </div>
   {/if}
-  <!-- The traced line's own crumb (#1018, round 53): the whole story in
-       one line at the top of the map -- who → who, the port, the
-       verdict and the rule that made it, and how many more lines like
-       it there are. The others are said, never drawn: a union of forty
-       identical refusals is a smear, not an answer (owner, 2026-09-08).
-       Same shape and same wording grammar as the reach's crumb above,
-       so the two read as one product. -->
-  {#if traceOn}
-    <div class="crumb trace-crumb" aria-label="The traced line">
-      <div class="path">
-        {#if mapTraceState.loading}
-          <span class="here">tracing…</span>
-        {:else if mapTraceState.event}
-          {@const e = mapTraceState.event}
-          <span class="here">{e.srcHostName || e.srcIp || 'unknown'}</span>
-          {#if e.srcHostName && e.srcIp}<span class="ip">{e.srcIp}</span>{/if}
-          <span aria-hidden="true">→</span>
-          <span class="here">{e.dstHostName || e.dstIp || 'unknown'}</span>
-          {#if e.dstHostName && e.dstIp}<span class="ip">{e.dstIp}</span>{/if}
-          <i class="bar"></i>
-          <!-- RouterOS logs the protocol in caps; every other port label
-               on this map (the pill, the door, the reach's card) reads
-               `445/tcp`, so this one does too. -->
-          {#if e.dstPort}<span>{e.dstPort}/{(e.protocol ?? '?').toLowerCase()}</span>{/if}
-          <span class:alarm={mapTraceState.verdict === 'refused'}>
-            {mapTraceState.verdict === 'refused' ? 'refused' : mapTraceState.verdict === 'accepted' ? 'accepted' : 'logged'}
-            at {e.ruleName || e.ruleLabel || 'no rule named'}
-          </span>
-          <span>{formatHM(e.time)}</span>
-          {#if mapTraceState.like > 0}
-            <i class="bar"></i>
-            <!-- The others are a click into the stream, not a drawing:
-                 "and 41 more like it", never a union on the map. -->
-            <button
-              class="crumb-link"
-              onclick={() => {
-                appState.resetFilters()
-                if (e.srcIp) appState.setFilter('srcQuery', e.srcIp)
-                if (e.dstIp) appState.setFilter('dstQuery', e.dstIp)
-                if (e.dstPort) appState.setFilter('port', String(e.dstPort))
-                appState.view = 'live'
-              }}>and <b>{mapTraceState.like} more like it</b> ▸</button
-            >
-          {/if}
-        {:else}
-          <!-- An honest miss: the window holds nothing matching, said in
-               words rather than drawn as a path that went nowhere. -->
-          <span class="here">nothing in the window matches that line</span>
-        {/if}
-        <i class="bar"></i>
-        <button class="crumb-link esc" onclick={() => mapTraceState.clear()}>Esc ▸</button>
-      </div>
-    </div>
+  <!-- The traced line's own crumb, plus its list (#1018 round 53, #1050
+       round 56 A1) -- lifted into its own component so the same markup
+       mounts on the city too, which draws its own copy of this same
+       component rather than sharing this one: hidden here exactly when
+       `.stage` is, so the two never both show at once (an earlier build
+       of this left it unconditional, which put two crumbs on screen at
+       the city stop, both wired to the same store). -->
+  {#if cityStop === null}
+    <TraceCrumb />
   {/if}
   <!-- Both tools swap the legend for their own entries (round 53's
        `chrome`). The map carries no legend of its own -- round 49
@@ -4851,6 +4874,15 @@
           <text class="trace-note" x={R2(traceGhost.at.x)} y={R2(traceGhost.at.y)} text-anchor="middle"
             >{traceGhost.text}</text
           >
+        {:else if traceStopNote}
+          <!-- C1: the ✕ already stands at the far gate, so there is
+               nowhere left to draw a dashed rib toward -- the two grey
+               words say what would have happened instead. -->
+          <text class="trace-note" x={R2(traceStopNote.at.x)} y={R2(traceStopNote.at.y)} text-anchor="middle">
+            {#each traceStopNote.lines as line, i (i)}
+              <tspan x={R2(traceStopNote.at.x)} dy={i ? 12 : 0}>{line}</tspan>
+            {/each}
+          </text>
         {/if}
         <!-- Where a refused line stopped, and where an accepted one
              arrived. -->
@@ -4965,7 +4997,9 @@
             <text class="chip-t" x={c.x - c.w / 2 + CARD_PAD} y={c.y + 20}>{line2}</text>
           </g>
           <!-- The trace opens from the flag's own chip (#1018, round
-               53). A token on the card, not a sentence: `trace ▸`, the
+               53), and opens the list with it (#1050, round 56, B1) so
+               the operator lands on the picker rather than a random
+               line. A token on the card, not a sentence: `trace ▸`, the
                same `▸` grammar every other action on this map uses. It
                takes its own click back from the card, which opens the
                stream. -->
@@ -4977,23 +5011,24 @@
             aria-label="Trace one of these lines on the map"
             onclick={(e) => {
               e.stopPropagation()
-              openTrace(traceAsk(worstUnplanned.r, asked))
+              openTrace(traceAsk(worstUnplanned.r, asked), { openList: true })
             }}
             onkeydown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
                 e.stopPropagation()
-                openTrace(traceAsk(worstUnplanned.r, asked))
+                openTrace(traceAsk(worstUnplanned.r, asked), { openList: true })
               }
             }}
           >
             <text class="uc-trace-t" x={c.x + c.w / 2 - CARD_PAD} y={c.y + 20} text-anchor="end">trace ▸</text>
           </g>
         {/if}
-        <!-- The router's own decision, beside the router (#1018): what
-             it did, which rule did it, the two lanes and the NAT. The
-             leader joins it to the waist card so it reads as the
-             router's answer rather than a floating note. -->
+        <!-- The router's own decision (#1018): what it did, which rule
+             did it, the two lanes and the NAT. Beside the router by
+             default, so the leader reads as the router's own answer; or
+             beside the ✕ once C1 (round 56) moves it to the far gate,
+             since the chip always sits by the ✕ it explains. -->
         {#if traceChip}
           <!-- Accepted green, refused red, and neither for a log, mark
                or NAT line: those say which kind of rule logged the
@@ -5004,10 +5039,17 @@
             class:refused={mapTraceState.verdict === 'refused'}
             class:unjudged={!mapTraceState.verdict}
           >
-            <rect x="308" y="234" width="248" height="42" rx="9" />
-            <text class="alarm-t chip-verdict" x="320" y="252">{traceChip.verdict}</text>
-            <text class="chip-t" x="320" y="267">{traceChip.path}</text>
-            <path class="trace-leader" d="M556 254 L 572 258" />
+            <rect x={traceChipBox.x} y={traceChipBox.y} width="248" height="42" rx="9" />
+            <text class="alarm-t chip-verdict" x={traceChipBox.x + 12} y={traceChipBox.y + 18}>{traceChip.verdict}</text>
+            <text class="chip-t" x={traceChipBox.x + 12} y={traceChipBox.y + 33}>{traceChip.path}</text>
+            {#if refusedGateStop}
+              <path
+                class="trace-leader"
+                d="M {R2(traceChipBox.x + 248)} {R2(traceChipBox.y + 20)} L {R2(refusedGateStop.x)} {R2(refusedGateStop.y)}"
+              />
+            {:else}
+              <path class="trace-leader" d="M556 254 L 572 258" />
+            {/if}
           </g>
         {/if}
         {#each filterOn ? [] : ghostIntents as g, gi (g.edge.key)}

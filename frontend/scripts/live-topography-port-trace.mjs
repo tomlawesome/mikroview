@@ -423,6 +423,14 @@ await page.locator(`${CARD} .uc-trace .uc-trace-t`).click()
 await page.waitForSelector(`${CARD} .trace-crumb`, { timeout: 10000 })
 await page.waitForTimeout(600)
 
+// B1 (round 56, #1050): the callout's own `trace ▸` now opens the list
+// itself as soon as the answer lands, not only a click on the crumb's
+// own "and N more like it" -- live-topography-trace-list.mjs proves the
+// list's own two columns; this scenario only needs to know it is open,
+// since that is what makes the Esc ladder below two presses rather than
+// one.
+await page.waitForSelector(`${CARD} .picker`, { timeout: 10000 })
+
 const traced = await page.evaluate((sel) => {
   const card = document.querySelector(sel)
   const lit = [...card.querySelectorAll('.lit-half')]
@@ -435,7 +443,7 @@ const traced = await page.evaluate((sel) => {
     litRefused: lit.filter((l) => l.classList.contains('refused')).length,
     stop: !!card.querySelector('.trace-stop'),
     ghost: !!card.querySelector('.trace-ghost'),
-    ghostNote: card.querySelector('.trace-note')?.textContent?.trim(),
+    ghostNote: card.querySelector('.trace-note')?.textContent?.replace(/\s+/g, ' ').trim(),
     tallies: [...card.querySelectorAll('.hosttally')].map((t) => t.textContent?.trim()),
     legend: card.querySelector('.map-legend')?.textContent?.replace(/\s+/g, ' ').trim(),
     off: card.querySelectorAll('.redge.port-off, .cedge.port-off').length,
@@ -451,12 +459,22 @@ check(/and 13 more like it/.test(traced.crumb ?? ''), 'and how many more like it
 check(/Esc ▸/.test(traced.crumb ?? ''), 'and how to put the map back')
 check(traced.refusedChip && /^✕ REFUSED/.test(traced.verdict ?? ''), `the router's decision is a chip beside it (${traced.verdict})`)
 check(/^in: ether4 → out: bridge-lan · 445\/tcp/.test(traced.path ?? ''), `the chip names both lanes and the port (${traced.path})`)
-check(traced.lit === 1 && traced.litRefused === 1, `one half is lit, in the verdict ink (${traced.lit})`)
-check(traced.stop, 'and it ends at a ✕ on the router')
-check(traced.ghost, 'the rib it would have taken is dashed')
+// C1 (round 56, #1050): the log names an out-interface (out:
+// bridge-lan), so the router forwarded the line before the LAN boundary
+// refused it -- both halves light in the alarm ink, same as
+// live-topography-trace-list.mjs's own IoT-to-LAN pair proves. Round 53
+// had this pair dying at the router with one half lit; C1 moved its ✕
+// to the far gate instead.
+check(traced.lit === 2 && traced.litRefused === 2, `both halves of the crossing light, in the alarm ink (${traced.lit})`)
+check(traced.stop, 'and it still ends at a ✕, now at the far gate rather than the router (C1, round 56)')
+// There is nowhere left to draw a dashed rib to once the ✕ already
+// stands at the far boundary -- unlike round 53's router-death case
+// (an input-chain drop naming no out-interface), which this file does
+// not trace.
+check(!traced.ghost, `no ghost is drawn to the far gate (${traced.ghost})`)
 check(
-  traced.ghostNote === 'would have reached 10.0.10.21 · never left the router',
-  `with the note beside it (${traced.ghostNote})`,
+  /would have reached 10\.0\.10\.21.*stopped at the LAN boundary/.test(traced.ghostNote ?? ''),
+  `the far gate's own two grey words say where it stopped, not "never left the router" (${traced.ghostNote})`,
 )
 check(
   traced.tallies.some((t) => /never reached/.test(t ?? '')),
@@ -466,7 +484,11 @@ check(
   traced.tallies.some((t) => /14× in the window/.test(t ?? '')),
   'and the end it came from carries its own count',
 )
-check(/would have gone/.test(traced.legend ?? ''), `the legend swaps for the trace's own entries (${traced.legend})`)
+// "would have gone" glosses the ghost's own dashed rib; with none drawn
+// for a far-gate refusal (C1, round 56) the legend has nothing to swap
+// it in for, though the plain accepted/refused/off entries still show.
+check(!/would have gone/.test(traced.legend ?? ''), `no ghost, nothing for the legend to gloss (${traced.legend})`)
+check(/off the line/.test(traced.legend ?? ''), `but the ordinary entries still show (${traced.legend})`)
 const traceLegendBox = await legendClearsFitChip()
 check(
   traceLegendBox.clear,
@@ -476,9 +498,18 @@ check(traced.off > 0, 'everything else is grey')
 
 await page.screenshot({ path: `${OUT}/trace.png` })
 
+// B1 (round 56, #1050): the list opened on top of the trace above, so
+// Esc now has two rungs -- the first closes the list and leaves the
+// crumb standing, the second clears the trace underneath it -- rather
+// than clearing everything in one press.
 await page.keyboard.press('Escape')
 await page.waitForTimeout(300)
-check((await page.locator(`${CARD} .trace-crumb`).count()) === 0, 'Esc clears the trace')
+check((await page.locator(`${CARD} .picker`).count()) === 0, 'the first Esc closes the list')
+check((await page.locator(`${CARD} .trace-crumb`).count()) === 1, 'and leaves the crumb standing')
+
+await page.keyboard.press('Escape')
+await page.waitForTimeout(300)
+check((await page.locator(`${CARD} .trace-crumb`).count()) === 0, 'the second Esc clears the trace underneath it')
 check((await page.locator(`${CARD} .map-legend`).count()) === 0, 'and the legend goes with it')
 
 // --- the other way in, and the other verdict ----------------------------

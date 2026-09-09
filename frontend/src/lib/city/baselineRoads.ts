@@ -39,10 +39,16 @@ import type { District, Ground, Road } from './types'
  *
  * Both can be true: one road folds both directions (layout.ts), so a
  * road can carry a new line each way, and each end that received one
- * gets its own ring. Neither is true when the road carries off-baseline
+ * gets its own mark. Neither is true when the road carries off-baseline
  * lines whose destination is not either of its ends -- possible only if
- * the ground and the register disagree, and drawn as no ring rather than
+ * the ground and the register disagree, and drawn as no mark rather than
  * as a guessed one.
+ *
+ * The name is the city's original circle. What the city draws now is the
+ * arrived-at building's own outline (#1057, owner 2026-09-09); the flat
+ * map still draws a ring, which fits a map of dots. Which end arrived is
+ * the same fact either way, so this stays the answer to it and the
+ * drawing decides the shape.
  */
 export interface RoadRing {
   start: boolean
@@ -53,7 +59,7 @@ export interface RoadRing {
 export interface RoadBaselineEntry {
   /** Today's off-baseline lines on this road; never empty. */
   lines: OffBaselineLine[]
-  /** The end(s) the traffic arrived at, for the throbbing ring. */
+  /** The end(s) the traffic arrived at, for the throbbing arrival mark. */
   ring: RoadRing
   /** Entity id at `pts[0]`, and at the last point. */
   ends: { start: string; end: string }
@@ -201,7 +207,7 @@ export function rollUpRoads(ground: Ground, off: OffBaseline, wanId: string | nu
       out.set(id, had)
     }
     had.lines.push(l)
-    // The ring sits at the end the traffic arrived at -- the
+    // The mark sits at the end the traffic arrived at -- the
     // destination's own end of this road.
     if (dst === had.ends.start) had.ring.start = true
     else if (dst === had.ends.end) had.ring.end = true

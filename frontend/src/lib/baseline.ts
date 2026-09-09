@@ -8,7 +8,9 @@
 // · proto`. A line seen on at least `config.days` distinct days of the
 // last `config.of` is *established* and recedes -- thin, dim, no flow. A
 // line off that pattern is *off-baseline*: full width, bright, flow
-// dashes, and a small ring at the end it arrived at.
+// dashes, and an outline on the building at the end it arrived at
+// (#1057; it was a ring on the ground until the city learned to mark a
+// building by its own silhouette).
 //
 // The server sends only the off-baseline lines, never the established
 // ones. That is the design, not an optimisation: on a busy network the
