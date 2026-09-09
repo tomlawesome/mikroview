@@ -48,6 +48,12 @@ const (
 	// internal/naming.Resolver.Port, which does the int-to-string
 	// conversion at the one call site that actually has an int).
 	TypePort = "port"
+	// TypeDevice keys an entity by a router's device id -- the identity
+	// on every event's deviceId, never its display name (issue #600).
+	// The id is what tokens, pushed router state and filters are keyed
+	// by, so it is deliberately the key here too: renaming a device
+	// changes what is shown and nothing else.
+	TypeDevice = "device"
 )
 
 // Entity is one persisted record: a friendly label and/or free-form tags

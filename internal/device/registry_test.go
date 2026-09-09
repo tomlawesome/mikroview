@@ -206,3 +206,77 @@ func TestMultihomedCandidatesListsEveryDiscoveredDevice(t *testing.T) {
 		t.Fatalf("expected 1 candidate with 2 discovered devices, got %+v", got)
 	}
 }
+
+// fixedNames is a NameLookup standing in for internal/naming.Resolver:
+// device must not import it (see NameLookup's comment), and what the
+// registry does with an answer is the same whatever produced it.
+type fixedNames map[string]string
+
+func (f fixedNames) Device(id string) string { return f[id] }
+
+// TestListServesTheStoredName is issue #600's requirement at the layer
+// it is stored: a rename one person saved is what every reader of List
+// gets -- GET /api/devices, the wizard's command blocks, the silence
+// flag's wording -- rather than the name only that person's browser
+// knows about.
+func TestListServesTheStoredName(t *testing.T) {
+	r := NewRegistry([]config.Device{{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1"}})
+	r.Resolve("192.168.1.1", time.Now())
+	r.Resolve("10.0.0.9", time.Now())
+	r.SetNames(fixedNames{"10.0.0.9": "lab crs"})
+
+	got := map[string]string{}
+	for _, info := range r.List() {
+		got[info.ID] = info.Name
+	}
+	if got["10.0.0.9"] != "lab crs" {
+		t.Errorf("discovered device name = %q, want the stored rename", got["10.0.0.9"])
+	}
+	if got["core"] != "Core Router" {
+		t.Errorf("configured device name = %q, want config.yaml's own name", got["core"])
+	}
+}
+
+// A declaration with no name, and a registry with no resolver at all,
+// both still display as something: the raw id. Nothing renders an empty
+// device cell, and removing a label restores the id the editor promised.
+func TestListFallsBackToTheRawID(t *testing.T) {
+	r := NewRegistry([]config.Device{{ID: "unnamed", SourceIP: "192.168.1.2"}})
+	r.Resolve("192.168.1.2", time.Now())
+
+	list := r.List()
+	if len(list) != 1 || list[0].Name != "unnamed" {
+		t.Fatalf("List() = %+v, want the id as the displayed name", list)
+	}
+
+	r.SetNames(fixedNames{"unnamed": "Spare"})
+	if list = r.List(); list[0].Name != "Spare" {
+		t.Errorf("Name = %q, want the stored rename once one exists", list[0].Name)
+	}
+}
+
+// Order is stable, configured first then by id. Scenarios and the setup
+// wizard read devices[0] as "the router this instance watches"; under
+// the old map order a second device made that answer change from one
+// request to the next.
+func TestListOrdersConfiguredFirstThenByID(t *testing.T) {
+	r := NewRegistry([]config.Device{
+		{ID: "zeta", Name: "Zeta", SourceIP: "192.168.1.9"},
+		{ID: "alpha", Name: "Alpha", SourceIP: "192.168.1.1"},
+	})
+	r.Resolve("10.0.0.9", time.Now())
+	r.Resolve("10.0.0.2", time.Now())
+
+	for i := 0; i < 20; i++ {
+		var ids []string
+		for _, info := range r.List() {
+			ids = append(ids, info.ID)
+		}
+		want := []string{"alpha", "zeta", "10.0.0.2", "10.0.0.9"}
+		for j := range want {
+			if ids[j] != want[j] {
+				t.Fatalf("List() ids = %v, want %v", ids, want)
+			}
+		}
+	}
+}

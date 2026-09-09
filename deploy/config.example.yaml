@@ -207,12 +207,27 @@ store:
 # its whole warm-up. definitionsStorePath (issue #404) persists the
 # definitions store -- shipped detectors, migrated watchlist
 # expectations, and eventually builder-authored custom definitions, all
-# in one document. Both already default under /var/lib/mikroview (see
+# in one document. decommissionStorePath (issue #460) persists the
+# decommission watches -- each retiring network segment, its clean-window
+# clock, and the names the router last knew inside that range; left
+# unset, watches still work, they just do not survive a restart. All
+# three already default under /var/lib/mikroview (see
 # deploy/docker-compose.yml for the matching volume mount) -- only
-# uncomment this block to move either path.
+# uncomment this block to move a path. decommissionCleanWindow is how
+# long a retired range must stay completely silent before it leaves the
+# map; any traffic to or from the range restarts the clock. It only sets
+# the default offered when a watch is created -- a watch already under
+# way keeps the window it started with. Must be between 1h and 48h (see
+# docs/configuration.md's CFG-0093): a router only pushes its address
+# table every 15-30 minutes, so anything shorter risks declaring a range
+# clean before a straggler could have spoken, and anything longer stops
+# being a matter of hours. See docs/configuration.md's "Network segment
+# decommissioning" section.
 # engine:
 #   storePath: /var/lib/mikroview/engine-state.json
 #   definitionsStorePath: /var/lib/mikroview/definitions.json
+#   decommissionStorePath: /var/lib/mikroview/decommission.json
+#   decommissionCleanWindow: 6h
 
 # Warm restart (issue #795): every few minutes mikroview writes a small
 # JSON file holding the counters, rolling windows and device first/last
@@ -307,6 +322,29 @@ store:
 #     # - x4b_datacenter  # opt-in: broad, ~10% of IPv4, noisy as a signal
 #     # - aws             # opt-in: official AWS ranges, with region detail
 #     # - gcp             # opt-in: official Google Cloud ranges
+
+# Optional (on by default): MAC vendor lookups, from IEEE's own MA-L
+# registry. It turns the first three octets of a hardware address into
+# the organisation that registered them, for the device dossier
+# (issue #410) -- and, just as usefully, says when there is no vendor to
+# find at all, because the address is locally administered (a VM,
+# container, or a phone randomising its Wi-Fi MAC).
+#
+# The registry is fetched at runtime from IEEE and cached under the data
+# directory: no vendor data ships in the image. IEEE publishes the file
+# for direct download at no charge with no licence or usage conditions
+# attached; there is no permission to redistribute it, which is why your
+# instance fetches its own copy rather than receiving one from us. Until
+# the first fetch completes, the dossier says vendor data is not
+# available yet rather than guessing. Refresh is a fixed daily
+# conditional request, not configurable.
+#
+# There is no source setting: IEEE is the only publisher of this
+# registry, the same way the two feeds above take a vetted menu rather
+# than an arbitrary URL.
+# oui:
+#   enabled: true
+#   cachePath: /var/lib/mikroview/oui-registry.json
 
 # Optional: friendly display names shown in place of a raw RouterOS rule
 # label (e.g. "r13") or a raw host IP, everywhere they appear in the UI

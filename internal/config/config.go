@@ -798,6 +798,19 @@ type Engine struct {
 	// Anything it does not already hold is seeded on boot from this
 	// binary's shipped catalogue (see engine.SeedShippedDefinitions).
 	DefinitionsStorePath string `yaml:"definitionsStorePath"`
+	// DecommissionStorePath persists the decommission watches (#460):
+	// each retiring network segment, its clean-window clock and the
+	// last-known names inside the range it retired. Same optional
+	// contract as the two above -- left empty, the watches still work and
+	// simply do not survive a restart.
+	DecommissionStorePath string `yaml:"decommissionStorePath"`
+	// DecommissionCleanWindow is how long a retired range must stay
+	// completely silent before it leaves the map (#460, owner ruling
+	// 2026-08-17: "measured in hours, not days -- param, hours-scale
+	// default"). It is the default offered when a watch is created; each
+	// watch keeps the window it was created with, so changing this does
+	// not retune decommissions already under way.
+	DecommissionCleanWindow time.Duration `yaml:"decommissionCleanWindow"`
 }
 
 // Blocklist configures internal/blocklist's local IP/CIDR "known-bad"
@@ -845,6 +858,32 @@ type NetClass struct {
 	// unrecognized entry is logged and skipped, degrade-not-crash like
 	// every other optional integration here.
 	Sources []string `yaml:"sources"`
+}
+
+// OUI configures internal/oui's MAC-vendor lookups: the IEEE MA-L
+// registry that turns a hardware address' first three octets into the
+// organisation that registered them (issue #410's device dossier).
+//
+// On by default, and with no source setting at all: there is exactly
+// one publisher of this registry, and it is named by
+// internal/oui.SourceURL. That follows Blocklist and NetClass above,
+// which take vetted source *names* and deliberately not arbitrary URLs
+// -- an operator enabling a feed is trusting mikroview's vetting of it.
+// Mirroring the file internally, or reaching it through a proxy, is a
+// separate feature and would arrive on that same vetted-name pattern.
+//
+// Refresh cadence is not configurable either, same reasoning as
+// Blocklist and NetClass -- see internal/oui.RefreshInterval.
+type OUI struct {
+	// Enabled at false switches the feed off entirely: no fetch, no
+	// goroutine, and a dossier that reports vendor data as unavailable
+	// rather than pretending an address has no vendor.
+	Enabled bool `yaml:"enabled"`
+	// CachePath is where the parsed registry is kept between restarts,
+	// so vendor names are available immediately on start rather than
+	// after the first fetch. Empty disables the cache (the feed then
+	// re-downloads on every start).
+	CachePath string `yaml:"cachePath"`
 }
 
 // Postgres optionally moves mikroview's persisted state off this host
@@ -1070,6 +1109,7 @@ type Config struct {
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 	Blocklist  Blocklist  `yaml:"blocklist"`
 	NetClass   NetClass   `yaml:"netClass"`
+	OUI        OUI        `yaml:"oui"`
 	Engine     Engine     `yaml:"engine"`
 	Snapshot   Snapshot   `yaml:"snapshot"`
 	History    History    `yaml:"history"`
@@ -1237,6 +1277,11 @@ func defaults() Config {
 		Engine: Engine{
 			StorePath:            DefaultDataDir + "/engine-state.json",
 			DefinitionsStorePath: DefaultDataDir + "/definitions.json",
+			// Mirrors decommission.DefaultCleanWindow -- kept as a
+			// literal so this package stays a dependency-free leaf, the
+			// same reasoning Blocklist.Sources gives just below.
+			DecommissionStorePath:   DefaultDataDir + "/decommission.json",
+			DecommissionCleanWindow: 6 * time.Hour,
 		},
 		Blocklist: Blocklist{
 			// Mirrors internal/blocklist.DefaultSources -- kept as a
@@ -1261,6 +1306,10 @@ func defaults() Config {
 			// the same ranges, so leaving Apple's own list out is what
 			// makes ordinary iPhone/iPad/Mac traffic read as a VPN exit.
 			Sources: []string{"tor", "apple_private_relay", "x4b_vpn"},
+		},
+		OUI: OUI{
+			Enabled:   true,
+			CachePath: DefaultDataDir + "/oui-registry.json",
 		},
 		Snapshot: Snapshot{
 			Interval: defaultSnapshotInterval,
@@ -1758,11 +1807,27 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
 		cfg.Blocklist.Sources = parseStringList(v)
 	}
+	if v := os.Getenv("MIKROVIEW_OUI_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.OUI.Enabled = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_OUI_CACHE_PATH"); v != "" {
+		cfg.OUI.CachePath = v
+	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_STORE_PATH"); v != "" {
 		cfg.Engine.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH"); v != "" {
 		cfg.Engine.DefinitionsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_DECOMMISSION_STORE_PATH"); v != "" {
+		cfg.Engine.DecommissionStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_DECOMMISSION_CLEAN_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Engine.DecommissionCleanWindow = d
+		}
 	}
 	if v := os.Getenv("MIKROVIEW_SNAPSHOT_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

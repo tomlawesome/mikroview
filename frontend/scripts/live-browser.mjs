@@ -158,9 +158,18 @@ export function feedSyslog(n, label = 'live-test-rule') {
  * TLS is the only listener since #189 removed the plaintext ones, so a
  * hand-rolled UDP send delivers nothing at all -- silently, since there
  * is no longer anything bound to refuse it.
+ *
+ * `sourceIp` (optional, 127.0.0.0/8) is which address the line appears
+ * to arrive from, and so which device it lands under: the harness
+ * declares one router on 127.0.0.1, so anything else auto-discovers as
+ * a router config.yaml has not declared. #600 needs one of those -- a
+ * device whose name nothing but the app decides -- and it is the only
+ * way to get one without declaring a second device for every scenario.
  */
-export function feedRaw(line) {
-  execFileSync(ENV_SCRIPT, ['raw', line], {
+export function feedRaw(line, sourceIp) {
+  const args = ['raw', line]
+  if (sourceIp) args.push(sourceIp)
+  execFileSync(ENV_SCRIPT, args, {
     stdio: 'ignore',
     cwd: REPO,
   })

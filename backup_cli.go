@@ -68,6 +68,11 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"mac_registry", cfg.DeviceMAC.StorePath},
 		{"engine_state", cfg.Engine.StorePath},
 		{"definitions", cfg.Engine.DefinitionsStorePath},
+		// Decommission watches (#460): operator-created state with a
+		// clock in it, so a restore or move carries them on where they
+		// were rather than making the operator re-create each one and
+		// wait the clean window out again (owner, 2026-09-09).
+		{"decommission", cfg.Engine.DecommissionStorePath},
 		{"audit", cfg.Audit.StorePath},
 		{"setup", cfg.Setup.StorePath},
 		{"settings", cfg.Store.SettingsStorePath},
@@ -110,6 +115,11 @@ var excludedFromBackup = map[string]string{
 	"GeoIP.DBPath": "an external MaxMind database file the operator downloads themselves (#372), not " +
 		"a store mikroview writes -- there is nothing here for a restore to reproduce that a fresh " +
 		"download would not already give back.",
+	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not mikroview's own state -- the " +
+		"next refresh re-fetches it in seconds, so a restore saves nothing. It is also somebody " +
+		"else's data, published with no permission to redistribute it (see internal/oui.SourceURL), " +
+		"and a backup is a copy that travels: keeping it out means an operator's backup carries " +
+		"their network's evidence and not four megabytes of IEEE's registry.",
 }
 
 // jsonLinesStore is the one backedUpStores entry whose on-disk shape is
