@@ -146,7 +146,7 @@ check(watchB.status === 201 && watchA.status === 201, 'two watchlist entries are
 // table (#676/#761, Watchlist.svelte:784), one `tr.wt-row` per watch
 // with the name in `td.k`, and its heads carry `.th-sort` rather than
 // Flags' `.sorth`.
-const WATCHES = '#panel-watchlist .watch-table'
+const WATCHES = '#panel-watchlist .watch-table-section .watch-table'
 
 await goTo(page, 'Watchlist')
 await page.waitForSelector(`${WATCHES} tr.wt-row td.k`, { timeout: 15000 })
