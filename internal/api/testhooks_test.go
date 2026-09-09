@@ -9,12 +9,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/engine"
+	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/ingest"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
 // TestTestHookRoutesAreAbsentWithoutTheFlag is the half of the switch that
-// matters on a real deployment: with MV_TEST_HOOKS unset, the route is not
+// matters on a real deployment: with MV_TEST_HOOKS unset, neither route is
 // registered, so the mux answers 404 -- "no such path", the same answer a
 // typo gets -- rather than 403, which would confirm the endpoint exists
 // and is merely closed today.
@@ -24,14 +29,14 @@ func TestTestHookRoutesAreAbsentWithoutTheFlag(t *testing.T) {
 		t.Fatal("TestHooks defaults to on -- it must be off unless main saw MV_TEST_HOOKS=1")
 	}
 	for _, r := range s.routes() {
-		if r.path == "/api/test/clock" {
+		if r.path == "/api/test/clock" || r.path == "/api/test/reset" {
 			t.Fatalf("%s %s is in the route table with the flag off", r.method, r.path)
 		}
 	}
 
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
-	for _, path := range []string{"/api/test/clock"} {
+	for _, path := range []string{"/api/test/clock", "/api/test/reset"} {
 		resp := postJSON(t, &http.Client{}, ts.URL+path, map[string]any{})
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
@@ -124,6 +129,95 @@ func TestTestClockRefusesToGoBackwards(t *testing.T) {
 	}
 	if off := s.testClockOffset.Load(); off != 0 {
 		t.Errorf("a refused advance still moved the clock by %v", time.Duration(off))
+	}
+}
+
+// TestTestResetClearsWhatItSaysAndKeepsTheRest is #1064's contract, which
+// is as much about what survives as about what goes: a reset that signed
+// the harness out, forgot the device its events arrive from, or reopened
+// the setup wizard would be useless between scenarios however thoroughly
+// it emptied the ring.
+func TestTestResetClearsWhatItSaysAndKeepsTheRest(t *testing.T) {
+	s, st := newTestServer(t)
+	s.TestHooks = true
+	s.Reseed = func() error {
+		return engine.SeedShippedDefinitions(s.Definitions, nil, engine.DefaultShippedDefaults())
+	}
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	// Traffic, a flag with an expectation recorded against it, a pushed
+	// table, an operator watch and a match: one of everything the reset
+	// claims to clear.
+	for i := 0; i < 5; i++ {
+		st.Insert(store.Event{SourceIP: "10.0.0.5", Action: store.ActionDrop, RuleLabel: "residue"})
+	}
+	s.Flags.Add(flags.TypePortScan, "10.0.0.5", "left behind by a sibling scenario", time.Now())
+	s.Flags.Exclude(flags.TypePortScan, "10.0.0.5")
+	pushFilterRules(t, s, "core", []ingest.FilterRule{{Ordinal: 0, Chain: "forward", Action: "drop", Log: true}})
+	if err := s.Definitions.UpsertExpectation(watchlist.Entry{ID: "residue-watch", Ports: []int{22}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MatchLog.Append("residue-watch", matchlog.Tuple{
+		Source: matchlog.Identity{IP: "10.0.0.5"}, DestIP: "10.0.0.9", Port: 22,
+	}, store.Event{SourceIP: "10.0.0.5"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Identity, which must all still be here afterwards.
+	keeper, err := s.Auth.CreateUser("keeper", "password123", auth.RoleUser, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawToken, _, err := s.Tokens.Create("kept token", auth.TokenKindIngest, "core", keeper, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	devicesBefore := len(s.Devices.List())
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/test/reset", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/test/reset = %d, want 200", resp.StatusCode)
+	}
+
+	if got := st.Stats().Total; got != 0 {
+		t.Errorf("the event store still counts %d events", got)
+	}
+	if got := len(st.Query(store.Query{Limit: 100}).Events); got != 0 {
+		t.Errorf("the ring still holds %d events", got)
+	}
+	if got := len(s.Flags.List()); got != 0 {
+		t.Errorf("%d flags survived", got)
+	}
+	if got := len(s.Flags.ListExclusions()); got != 0 {
+		t.Errorf("%d exclusions/expectations survived", got)
+	}
+	if _, _, ok := s.RouterState.FilterRules("core"); ok {
+		t.Error("the pushed filter table survived")
+	}
+	if _, ok, _ := s.Definitions.GetExpectation("residue-watch"); ok {
+		t.Error("the operator watch survived")
+	}
+	if got := s.MatchLog.Stats().Count; got != 0 {
+		t.Errorf("%d matches survived", got)
+	}
+
+	// Re-seeded, not left empty: an instance evaluating nothing at all
+	// would fail the next scenario in a way that looks like anything but
+	// a reset.
+	if got := len(s.Definitions.List()); got == 0 {
+		t.Error("the shipped catalogue was not laid back down after the reset")
+	}
+
+	if _, ok := s.Auth.Get(keeper.ID); !ok {
+		t.Error("the account was deleted -- accounts are identity and must survive")
+	}
+	if _, ok := s.Tokens.Authenticate(rawToken, auth.TokenKindIngest, time.Now()); !ok {
+		t.Error("the ingest token stopped working -- live-env.sh issues one before any scenario runs")
+	}
+	if got := len(s.Devices.List()); got != devicesBefore {
+		t.Errorf("the device registry went from %d to %d -- devices are identity here", devicesBefore, got)
 	}
 }
 

@@ -1395,6 +1395,32 @@ func (s *Store) ClearAll(now time.Time) int {
 	return cleared
 }
 
+// Reset empties the store: every flag, active or cleared, every
+// permanent exclusion and every expectation a verdict recorded (both
+// live in excluded -- see Exclude), and the rolling per-minute series.
+// Written for the test-only POST /api/test/reset (#1064).
+//
+// The exclusions go too, and that is the point rather than an oversight:
+// an expectation left behind by a sibling scenario is exactly the residue
+// that makes a later verdict scenario judge a pair it never raised. This
+// is a test hook, so "forever" ends when the harness says so; nothing
+// operator-facing can reach it.
+//
+// shedActive is left alone. It counts evidence this process dropped under
+// pressure over its whole life, which stays true however many times the
+// visible set is emptied.
+func (s *Store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.byID = make(map[string]*Flag)
+	s.clearedCount = 0
+	s.excluded = make(map[string]Exclusion)
+	s.minuteBuckets = [flagTimeSeriesMinutes]map[Type]uint64{}
+	s.minuteBucketTime = [flagTimeSeriesMinutes]int64{}
+	s.persistLocked()
+}
+
 // Exclude permanently marks (t, target) as excluded -- from this call
 // on, add() (and so every Add/AddWithConfidence/AddWithDetail call) is a
 // silent no-op for that exact pair, forever, until a matching

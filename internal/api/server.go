@@ -216,11 +216,16 @@ type Server struct {
 	// from an HTTP request is a much larger thing to get wrong than the
 	// one read path #1063 needed to stop waiting on.
 	Now func() time.Time
-	// TestHooks turns on the test-only route POST /api/test/clock and
-	// nothing else. Off unless main saw MV_TEST_HOOKS=1; when off the
-	// route is not registered at all, so it 404s rather than 403s -- see
-	// testhooks.go.
+	// TestHooks turns on the test-only routes (POST /api/test/clock and
+	// POST /api/test/reset) and nothing else. Off unless main saw
+	// MV_TEST_HOOKS=1; when off the routes are not registered at all, so
+	// they 404 rather than 403 -- see testhooks.go.
 	TestHooks bool
+	// Reseed re-applies this binary's shipped catalogue after
+	// POST /api/test/reset empties the definitions store. Set by main
+	// alongside TestHooks; nil means the reset leaves the store empty,
+	// which is only ever a test fixture's situation.
+	Reseed func() error
 	// testClockOffset is how far POST /api/test/clock has moved this
 	// process's definitions clock forward, in nanoseconds. Zero unless
 	// that route exists and something called it.
@@ -404,8 +409,8 @@ func (s *Server) routes() []route {
 	rs := s.apiRoutes()
 	// Appended rather than declared inline so the ordinary table stays
 	// exactly the set a shipped image serves: with MV_TEST_HOOKS unset
-	// the pattern is never registered, so it 404s like any unknown path
-	// instead of existing and refusing (see testhooks.go).
+	// these two patterns are never registered, so they 404 like any
+	// unknown path instead of existing and refusing (see testhooks.go).
 	if s.TestHooks {
 		rs = append(rs, s.testHookRoutes()...)
 	}

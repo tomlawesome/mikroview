@@ -600,6 +600,37 @@ func (s *DefinitionsStore) deleteLocking(id string) (bool, error) {
 	return true, nil
 }
 
+// Reset empties the store completely -- every operator expectation and
+// every shipped definition's stored state alike -- and re-stamps
+// watchingSince, so the nightly fill judges windows from now rather than
+// from a boot the caller has just discarded the evidence of.
+//
+// Written for the test-only POST /api/test/reset (#1064), and the one
+// place in this package that ignores refuseIfImmutable. That guard exists
+// so an operator action cannot discard a shipped or undecodable
+// definition by accident; a caller that has asked for the whole store to
+// be emptied has made no accident, and leaving shipped rows behind would
+// hand the next scenario exactly the tuned or disabled detector the reset
+// was called to get rid of. The caller is expected to re-seed this
+// binary's catalogue immediately afterwards (Server.Reseed in
+// internal/api) -- an empty store evaluates nothing at all.
+func (s *DefinitionsStore) Reset() int {
+	n := s.resetLocking()
+	s.notifyChange()
+	return n
+}
+
+func (s *DefinitionsStore) resetLocking() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n := len(s.raw)
+	s.raw = make(map[string]json.RawMessage)
+	s.watchingSince = time.Now()
+	s.persistLocked()
+	return n
+}
+
 // refuseIfImmutable reports ErrDefinitionImmutable when existing decodes
 // to a shipped or unavailable definition -- shared by Upsert (refusing
 // to overwrite one) and Delete (refusing to remove one). Must be called

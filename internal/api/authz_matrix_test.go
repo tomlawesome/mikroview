@@ -335,15 +335,21 @@ var authzMatrix = []routeExpectation{
 		"the admin action trail; also the record an attacker would want to read to see whether they were noticed"},
 
 	// -- Test hooks (MV_TEST_HOOKS=1 only) -----------------------------
-	// Registered only when the process was started with that variable
-	// set, which no shipped image does -- so on a real deployment this is
-	// not refused, it does not exist. The row pins the tier it enforces on
-	// the harness instances where it *does*;
-	// TestTestHookRoutesAreAbsentWithoutTheFlag pins the absence.
+	// These two are registered only when the process was started with
+	// that variable set, which no shipped image does -- so on a real
+	// deployment they are not refused, they do not exist. The rows below
+	// pin the tier they enforce on the harness instances where they *do*
+	// exist; TestTestHookRoutesAreAbsentWithoutTheFlag pins the absence.
 	{http.MethodPost, "/api/test/clock", accessAdmin,
 		"moves this process's watch clock forward (#1063), so a scenario that needs a watch window to have closed " +
-			"does not have to wait real minutes for it. Admin because the flag is the real gate and there is no " +
-			"reason for the second lock to be weaker than the one on PUT /api/settings/store, which changes far less"},
+			"does not have to wait real minutes for it. Admin, matching the reset beside it: the flag is the real " +
+			"gate, and there is no reason for the second lock to be weaker than the one on PUT /api/settings/store, " +
+			"which changes far less"},
+	{http.MethodPost, "/api/test/reset", accessAdmin,
+		"erases every event, flag, match, pushed router table and definition on the instance (#1064) -- the single " +
+			"most destructive call in this API, and the only one that discards evidence a viewer or user was " +
+			"relying on without so much as a confirm body. Admin for the same reason PUT /api/settings/history is, " +
+			"and gated behind MV_TEST_HOOKS on top of that"},
 }
 
 // TestEveryRouteIsInTheAuthorizationMatrix is the guard that makes the
@@ -387,9 +393,9 @@ func TestEveryRouteIsInTheAuthorizationMatrix(t *testing.T) {
 // asserts each of the four caller kinds gets what the matrix says.
 func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 	s := newAuthTestServer(t)
-	// The matrix covers the MV_TEST_HOOKS route, so the server it is
-	// driven against has to be one that registers it. Turning the flag on
-	// here rather than in newTestServer keeps every other test running
+	// The matrix covers the two MV_TEST_HOOKS routes, so the server it is
+	// driven against has to be one that registers them. Turning the flag
+	// on here rather than in newTestServer keeps every other test running
 	// against the route table a shipped image serves.
 	s.TestHooks = true
 	ts := httptest.NewServer(s.Routes())
