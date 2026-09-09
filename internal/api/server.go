@@ -539,6 +539,7 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodPost, "/api/decommission/watches", s.handleDecommissionCreate},
 		{http.MethodPost, "/api/decommission/dismiss", s.handleDecommissionDismiss},
 		{http.MethodPost, "/api/decommission/watches/{id}/force", s.handleDecommissionForce},
+		{http.MethodPost, "/api/decommission/watches/{id}/undo", s.handleDecommissionUndo},
 		{http.MethodDelete, "/api/decommission/watches/{id}", s.handleDecommissionDelete},
 
 		// Where the name shown for one row token comes from, and

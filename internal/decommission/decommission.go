@@ -136,6 +136,71 @@ type Straggler struct {
 	SeenAt time.Time `json:"seenAt"`
 }
 
+// Sighting is the most recent straggler in full: which address inside
+// the dead range was seen, who it spoke to, and on what.
+//
+// Watch.TrafficCount answers "how much", and LastTrafficAt answers
+// "when". Neither answers the question an operator actually asks of a
+// range they retired -- *what is still talking, and to whom* -- and
+// #485's ratified surface draws that answer as a callout and a card
+// beside the ghost. This is that answer, carried on the record rather
+// than reconstructed by every surface from the match log, so the map,
+// the watchlist and the API cannot each pick a different straggler out
+// of the same evidence.
+//
+// Every field but Address and At is optional, and absent rather than
+// guessed. The same honesty rule Straggler states: a router line that
+// did not say which interface it arrived on yields a Sighting with no
+// interface, never a plausible one.
+type Sighting struct {
+	// Address is the end of the event inside the dead range -- the
+	// straggler itself, as chosen by the rule Watch.RecordSighting
+	// documents.
+	Address string `json:"address"`
+	// Name is the last-known name for Address, taken from the watch's
+	// own frozen LastKnown snapshot. Absent when no push ever named it,
+	// so the surface shows the bare address rather than a guess.
+	Name string `json:"name,omitempty"`
+	// Peer is the other end of the event: what the straggler was
+	// talking to, or what was still talking at it.
+	Peer string `json:"peer,omitempty"`
+	// Protocol is the event's protocol as the router wrote it.
+	Protocol string `json:"protocol,omitempty"`
+	// Port is the destination port of the event -- the service, not the
+	// ephemeral end, which is what makes "still backing up to the NAS"
+	// readable off one line.
+	Port int `json:"port,omitempty"`
+	// Interface is the in-interface the router saw the event arrive on.
+	Interface string `json:"interface,omitempty"`
+	// Rule is the rule label that judged the event, so an operator can
+	// see which of their own rules is still carrying this traffic.
+	Rule string `json:"rule,omitempty"`
+	// Action is the router's verdict on the line -- a straggler that is
+	// being dropped is a different problem from one still being
+	// accepted.
+	Action string `json:"action,omitempty"`
+	// At is when the sighting was taken, on the same clock the clean
+	// window runs on (mikroview's receive time, not the router's
+	// self-reported one -- see RecordTraffic).
+	At time.Time `json:"at"`
+}
+
+// Observation carries the facts about one event that are not its
+// addresses, so a caller can hand the whole line over in one argument
+// rather than growing RecordTraffic a parameter per field.
+//
+// It exists as a struct rather than as a store.Event because
+// internal/decommission does not import internal/store and must not:
+// this package holds the record and the state rule, and staying free of
+// the event type is what keeps it testable without one.
+type Observation struct {
+	Protocol  string
+	Port      int
+	Interface string
+	Rule      string
+	Action    string
+}
+
 // Watch is one retiring segment: the record, the clock, and everything
 // needed to paint it.
 //
@@ -180,6 +245,15 @@ type Watch struct {
 	// threshold -- one straggler is a violation -- but the operator's
 	// answer to "is this one stubborn device or the whole subnet".
 	TrafficCount int `json:"trafficCount"`
+	// LastStraggler is the observation that most recently broke this
+	// watch, in full (see Sighting). One and not a list, because one
+	// straggler is the whole finding: the range was declared dead, so a
+	// single packet contradicts the declaration, and there is no
+	// threshold for a second one to cross. An operator working through a
+	// draining segment fixes the thing that is talking now, and the next
+	// event replaces this. The history of every straggler is the match
+	// log's job, not the record's.
+	LastStraggler *Sighting `json:"lastStraggler,omitempty"`
 
 	// Covered records whether anything is logging traffic that would
 	// reach this range. False makes the watch StateBroken: it cannot
@@ -227,6 +301,8 @@ var (
 	ErrWindowRange  = fmt.Errorf("decommission: the clean window must be between %s and %s", MinCleanWindow, MaxCleanWindow)
 	ErrNoSuchWatch  = errors.New("decommission: no such watch")
 	ErrAlreadyEnded = errors.New("decommission: that watch has already retired")
+	ErrNotRetired   = errors.New("decommission: that watch has not retired, so there is no retirement to undo")
+	ErrUndoExpired  = fmt.Errorf("decommission: that retirement is more than %s old and can no longer be undone", UndoWindow)
 )
 
 // NormaliseCIDR reduces a router-written address to the network prefix
@@ -410,5 +486,48 @@ func (w *Watch) RecordTraffic(at time.Time) {
 		// regardless -- otherwise the watch would report holding while
 		// holding evidence to the contrary.
 		w.LastTrafficAt = w.CreatedAt
+	}
+}
+
+// RecordSighting stores the full detail of one straggler: which end of
+// the event was inside the dead range, what it was talking to, and on
+// what.
+//
+// The straggler is whichever end of the event this watch contains,
+// source first -- the same rule internal/engine/decommission.go's emit()
+// uses to choose the subject of the violation it renders. The two must
+// agree: an emission naming one address beside a card naming the other
+// would describe two different problems from one packet. Source first
+// because a device still speaking from the old range is the case the
+// operator can act on, and where both ends are inside it the source is
+// still the honest subject.
+//
+// The same staleness guard RecordTraffic states applies here, for the
+// same reason: an observation at or before the current clock is ignored
+// rather than allowed to rewrite the record. So callers must record the
+// sighting *before* RecordTraffic advances the clock -- see
+// Store.RecordTraffic, which is the only caller that does both.
+func (w *Watch) RecordSighting(srcIP, dstIP string, at time.Time, obs Observation) {
+	if !w.RetiredAt.IsZero() {
+		return
+	}
+	if !at.After(w.clockFrom()) {
+		return
+	}
+	straggler, peer := srcIP, dstIP
+	if !w.Contains(straggler) {
+		straggler, peer = dstIP, srcIP
+	}
+	name, _ := w.NameFor(straggler)
+	w.LastStraggler = &Sighting{
+		Address:   straggler,
+		Name:      name,
+		Peer:      peer,
+		Protocol:  obs.Protocol,
+		Port:      obs.Port,
+		Interface: obs.Interface,
+		Rule:      obs.Rule,
+		Action:    obs.Action,
+		At:        at,
 	}
 }
