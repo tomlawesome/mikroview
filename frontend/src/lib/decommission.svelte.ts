@@ -102,8 +102,13 @@ class DecommissionsState {
     return null
   }
 
-  async forget(id: string): Promise<string | null> {
-    const err = await deleteDecommissionWatch(id)
+  // The watchlist's own "forget" (#1069): the watch force-remove's
+  // warning says can only be ended from here. reason mirrors force's own
+  // #385 pattern -- the caller (Watchlist.svelte) requires one before
+  // this is ever called, matching the card's own gate on its reason
+  // field.
+  async forget(id: string, reason: string): Promise<string | null> {
+    const err = await deleteDecommissionWatch(id, reason)
     if (!err) await this.refresh()
     return err
   }

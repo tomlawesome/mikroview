@@ -197,6 +197,25 @@ await ghostCard.first().waitFor({ state: 'visible', timeout: 10000 })
 const ghostText = (await ghostCard.first().textContent()) ?? ''
 check(ghostText.includes('WATCHLIST'), 'the ghost card shows the watchlist row, so what would stay behind is visible before it does')
 
+// #1069: `watchlist ▸` has to land on the row it names, not just the
+// tab -- that row is the whole of what the card's own watchlist row and
+// its later force-remove warning ("can only be forgotten from there")
+// are talking about.
+await ghostCard.locator('button', { hasText: 'watchlist ▸' }).first().click()
+await page.waitForSelector('.decomm-section', { timeout: 10000 })
+const decommRow = page.locator('.decomm-section tr.wt-row', { hasText: GHOST_CIDR })
+check((await decommRow.count()) > 0, "the card's watchlist ▸ door lands on the watch's own row in the watchlist")
+const decommRowText = (await decommRow.first().textContent()) ?? ''
+check(
+  decommRowText.includes('holding'),
+  `and the row carries the same state word the card's own watchlist line does (${JSON.stringify(decommRowText)})`,
+)
+check((await page.locator('.decomm-section tr.wt-drawer').count()) > 0, "and the row's drawer opens on arrival")
+
+await toMap()
+await ghostLane.first().dispatchEvent('click')
+await ghostCard.first().waitFor({ state: 'visible', timeout: 10000 })
+
 await ghostCard.locator('button.hot').first().click()
 const confirmText = (await ghostCard.first().textContent()) ?? ''
 check(confirmText.includes('The ghost leaves the map now'), 'force-remove states its contract before it is taken')

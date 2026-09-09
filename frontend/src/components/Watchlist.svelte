@@ -43,7 +43,15 @@
   import { topologyNavState, type PendingWatchDraft } from '../lib/topologyNav.svelte'
   import { fetchWatchlistMatches } from '../lib/api'
   import { fallState, boundaryKeyOf, type FallBoundary } from '../lib/fall.svelte'
+  // #1069: the decommission surface's own state and vocabulary -- the
+  // watchlist row this page draws for a decommission watch reuses
+  // watchlistRowText/ghostNote/retiredNote/forgetContract rather than
+  // paraphrasing the ghost's card in new words. See decommission.ts's
+  // own file comment for why the sentences all live there.
+  import { decommissionsState } from '../lib/decommission.svelte'
+  import { forgetContract, ghostNote, ghostStateOf, retiredNote, watchlistRowText } from '../lib/decommission'
   import type {
+    DecommissionWatch,
     Suggestion,
     WatchlistBoundary,
     WatchlistEntry,
@@ -68,6 +76,11 @@
     // rather than an N+1 per row. `older ▸` in a drawer pages further
     // back per entry; see loadOlderMatches.
     matchesState.load()
+    // #1069: the decommission watches this page's own table lists below
+    // the ordinary watches. Fetched here too (not only from the map),
+    // since an operator following the ghost card's `watchlist ▸` link
+    // may never have visited the map this session.
+    decommissionsState.refresh()
   })
 
   function sourceLabel(e: WatchlistEntry): string {
@@ -508,6 +521,24 @@
     topologyNavState.pendingWatchId = null
     const exists = watchlistState.entries.some((e) => e.id === id)
     watchDrawerId = exists ? id : null
+  })
+
+  // #1069's own version: the ghost card's `watchlist ▸` door lands on
+  // the row its watch draws below. Scrolled into view rather than left
+  // to the drawer opening alone -- unlike the dial's pendingWatchId
+  // above, this table sits under the ordinary watches and suggestions,
+  // so a long list could leave the newly opened drawer off-screen.
+  $effect(() => {
+    const id = topologyNavState.pendingDecommissionWatchId
+    if (id === null) return
+    topologyNavState.pendingDecommissionWatchId = null
+    const exists = decommissionsState.watches.some((w) => w.id === id)
+    decommDrawerId = exists ? id : null
+    if (exists) {
+      tick().then(() => {
+        document.getElementById(`decomm-watch-${id}`)?.scrollIntoView?.({ block: 'center' })
+      })
+    }
   })
 
   // "pause watch" / "resume watch" (#676): the plain enable toggle the
@@ -1163,6 +1194,89 @@
     resetting = false
   }
 
+  // --- #1069: decommission watches, a third body under the watches ----
+  //
+  // "The watchlist page does not list decommission watches" was the bug:
+  // the ghost's card (DecommissionCard.svelte) offers a `watchlist ▸`
+  // door and its force-remove warning promises the watch "can only be
+  // forgotten from there", but nothing here ever drew one. This section
+  // is the same idea round 33's suggestions body already establishes --
+  // a distinct set of rows under the ordinary watches, in the same
+  // table language -- except a decommission watch has its own honest
+  // columns (a range and when it started, not a boundary or a window),
+  // so it gets its own small table rather than being squeezed into the
+  // ratified one's column headings.
+  let decommDrawerId = $state<string | null>(null)
+  let decommConfirmId = $state<string | null>(null)
+  let decommReason = $state('')
+  let decommBusy = $state(false)
+  let decommError = $state<string | null>(null)
+
+  type DecommRow = { watch: DecommissionWatch; retired: boolean; broken: boolean; stateText: string }
+
+  // Every decommission watch the server knows about, newest first --
+  // active, force-removed-but-still-draining and retired alike, since
+  // "forget" (see below) has to reach all of them, not only the ones
+  // still drawn as a ghost on the map.
+  const decommissionRows = $derived.by((): DecommRow[] =>
+    [...decommissionsState.watches]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map((w) => {
+        const retired = w.state === 'retired'
+        // watchlistRowText already answers this exact question for a
+        // watch still under way (it is what the ghost's own card draws
+        // in its `.wrow`) -- retired is the one state it was never
+        // asked to cover, because a retired watch is never drawn as a
+        // ghost (decommissionsState.ghosts excludes it).
+        return {
+          watch: w,
+          retired,
+          broken: !retired && ghostStateOf(w, appState.now) === 'broken',
+          stateText: retired ? 'retired' : watchlistRowText(w, appState.now),
+        }
+      }),
+  )
+
+  function toggleDecommDrawer(id: string) {
+    decommDrawerId = decommDrawerId === id ? null : id
+    decommConfirmId = null
+    decommReason = ''
+  }
+
+  function openDecommForget(id: string) {
+    decommConfirmId = id
+    decommReason = ''
+    decommError = null
+  }
+
+  function cancelDecommForget() {
+    decommConfirmId = null
+    decommReason = ''
+  }
+
+  // "forget" is the watchlist's own action the card's force-remove
+  // warning points at -- it ends the watch outright, and (the same #385
+  // pattern force-remove carries) records why, which is why the button
+  // stays disabled until a reason is typed, matching the card's own
+  // gate on its reason field.
+  async function forgetDecommissionWatch(w: DecommissionWatch) {
+    const reason = decommReason.trim()
+    if (!reason) return
+    decommError = null
+    decommBusy = true
+    try {
+      const err = await decommissionsState.forget(w.id, reason)
+      if (err) decommError = err
+      else {
+        decommDrawerId = null
+        decommConfirmId = null
+        decommReason = ''
+      }
+    } finally {
+      decommBusy = false
+    }
+  }
+
   // --- Round-30 fidelity flag (#700, #691) ----------------------------
   //
   // Round 30: "no page heading and no strap, anywhere" (owner,
@@ -1765,6 +1879,95 @@
         </tbody>
       </table>
   </section>
+
+  <!-- #1069: decommission watches. Its own table, its own honest
+       columns -- see the script's own section comment for why this is
+       not squeezed into the ratified table's boundary/window/last-event
+       headings above. Rendered only once there is something to show:
+       unlike the ordinary watch table, an empty state here has nothing
+       useful to say (nothing here ever prompts creating one). -->
+  {#if decommissionRows.length > 0}
+    <section class="section decomm-section" aria-label="Decommission watches">
+      <h3 class="section-title">Decommission watches</h3>
+      {#if decommError}<p class="error" role="alert">{decommError}</p>{/if}
+      <table class="watch-table">
+        <thead>
+          <tr>
+            <th>watch</th>
+            <th>since</th>
+            <th>state</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each decommissionRows as row (row.watch.id)}
+            <tr
+              id="decomm-watch-{row.watch.id}"
+              class="wt-row"
+              class:watching={!row.retired && !row.broken}
+              class:ring-broken={row.broken}
+              onclick={() => toggleDecommDrawer(row.watch.id)}
+            >
+              <td class="k">{row.watch.name || row.watch.interface} · {row.watch.cidr}</td>
+              <td class="t">retired {formatHM(row.watch.createdAt)}</td>
+              <td><span class="wchip2" class:broken={row.broken} class:paused={row.retired}>{row.stateText}</span></td>
+              <td>
+                <button
+                  class="openc"
+                  aria-expanded={decommDrawerId === row.watch.id}
+                  aria-label="{decommDrawerId === row.watch.id ? 'Close' : 'Open'} the drawer for {row.watch.name ||
+                    row.watch.interface}"
+                  onclick={(ev) => {
+                    ev.stopPropagation()
+                    toggleDecommDrawer(row.watch.id)
+                  }}
+                >
+                  ▸
+                </button>
+              </td>
+            </tr>
+            {#if decommDrawerId === row.watch.id}
+              <tr class="wt-drawer" class:ring-broken={row.broken}>
+                <td colspan="4">
+                  <div class="dwr">
+                    <div class="dcol">
+                      <p class="story">
+                        {row.retired ? retiredNote(row.watch) : ghostNote(row.broken ? 'broken' : 'holding', row.watch, null, appState.now)}
+                      </p>
+                      {#if decommConfirmId === row.watch.id}
+                        <p class="story hot"><b>{forgetContract(row.watch)}</b></p>
+                        <label class="wf-field"
+                          ><span class="lab">why</span><input
+                            bind:value={decommReason}
+                            placeholder="why this watch is being forgotten…"
+                            aria-label="Why this watch is being forgotten"
+                          /></label
+                        >
+                      {/if}
+                    </div>
+                    <div class="dwr-acts">
+                      {#if decommConfirmId === row.watch.id}
+                        <button
+                          class="act hot"
+                          disabled={decommBusy || !decommReason.trim()}
+                          onclick={() => forgetDecommissionWatch(row.watch)}
+                        >
+                          {decommBusy ? 'Forgetting…' : 'forget this watch'}
+                        </button>
+                        <button class="act quiet" onclick={cancelDecommForget}>cancel</button>
+                      {:else}
+                        <button class="act quiet remove" onclick={() => openDecommForget(row.watch.id)}>forget</button>
+                      {/if}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            {/if}
+          {/each}
+        </tbody>
+      </table>
+    </section>
+  {/if}
   </div>
 </div>
 
@@ -2014,6 +2217,18 @@
     font-weight: 600;
   }
 
+  /* #1069's own forget warning, the same alarm-ink treatment
+     DecommissionCard.svelte gives its force-remove quote (its own
+     `.quote.hot`) -- the one drawer action on this page that cannot be
+     taken back. */
+  .dwr .story.hot {
+    color: var(--alarm);
+  }
+
+  .dwr .story.hot b {
+    color: var(--alarm);
+  }
+
   /* Round 33 replaced the drawer's verbatim `.lines` element with the
      `.matches` list below -- round 33's watch drawers draw no `.lines`
      at all (the six left in suggestions-matches.html are the flags
@@ -2071,6 +2286,17 @@
   .dwr .act:disabled {
     opacity: 0.6;
     cursor: default;
+  }
+
+  /* "forget this watch": the same alarm border/ink DecommissionCard's
+     own hot `.go` button wears for force-remove. */
+  .dwr .act.hot {
+    color: var(--alarm);
+    border-color: color-mix(in srgb, var(--alarm) 45%, transparent);
+  }
+
+  .dwr .act.hot:hover {
+    border-color: var(--alarm);
   }
 
   /* THE DRAFT, and the same stripe/state idioms carried onto the two
