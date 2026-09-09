@@ -103,6 +103,11 @@ const bufferCount = () =>
     return m ? Number(m[1].replace(/\D/g, '')) : null
   })
 
+// The row reads the client's polled stats (STATS_REFRESH_MS), which can
+// still be the pre-feed snapshot when Settings mounts -- so wait for the
+// poll to catch up with the count the server already confirmed above,
+// rather than reading the row once and pinning a stale 0 (#1065).
+await page.locator(BUFFER_ROW).filter({ hasText: /[1-9][\d,\s ]*\s+of\s/ }).waitFor({ timeout: 15000 })
 const before = await bufferCount()
 check(before !== null && before > 0, `memory says how many events the buffer holds (got ${before})`)
 
