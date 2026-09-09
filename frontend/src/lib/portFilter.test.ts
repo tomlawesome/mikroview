@@ -141,6 +141,14 @@ describe('what the map writes', () => {
     expect(plaqueTally(0, 3, '3389/tcp')).toBe('0 of 3 · 3389/tcp')
   })
 
+  // #1056: a fraction with nothing on either side of it is not a
+  // finding. Where the surface knows of no host at all it says nothing
+  // and lets the road and the door carry the answer.
+  it('says nothing at all where there is no host to count', () => {
+    expect(zoneTally(0, 0, '445/tcp')).toBeNull()
+    expect(plaqueTally(0, 0, '445/tcp')).toBeNull()
+  })
+
   // Nothing seen is a sentence, not an empty state, and the wording
   // follows the number of rules because "no rule names it either" is a
   // different -- and more interesting -- finding.

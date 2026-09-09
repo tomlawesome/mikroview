@@ -2019,6 +2019,26 @@ describe('the port filter on the city (#1055, round 54)', () => {
     expect(chips).toContain('0 of 5 · 445/tcp')
   })
 
+  // #1056, from #1055's own live capture: the Servers plaque read `1 of
+  // 0 · 445/tcp` because the machine that received the lines had never
+  // been registered, so the district drew no building for it while the
+  // answer's host list still counted it.
+  it('leaves a host it draws no building for out of the tally, and still lights its road', () => {
+    filterTo([445], {
+      hosts: [{ ip: '10.20.0.99', name: '', events: 2, accepts: 2, drops: 0 }],
+    })
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+
+    const chips = [...container.querySelectorAll('.flat .chip-t')].map((t) => t.textContent)
+    // Servers has four known hosts and 10.20.0.99 is none of them.
+    expect(chips).toContain('0 of 4 · 445/tcp')
+    expect(chips).not.toContain('1 of 4 · 445/tcp')
+    expect(chips.some((t) => /^1 of 0/.test(t ?? ''))).toBe(false)
+    // The road is what says the traffic was there, and it still does.
+    expect(road(container, 'bridge-lan|vlan-srv')?.getAttribute('stroke')).toBe('var(--accept)')
+  })
+
   it('stands a door in the gate the rule crosses, and on the bridge deck for a WAN rule', () => {
     filterTo([445], {
       doors: [
