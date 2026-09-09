@@ -264,6 +264,37 @@ variables:
         exit 1
       fi
 
+# Standing on an earlier run instead of repeating it (#1066, ported from
+# Orbit's reuse gate, orbit #898). A push that only touched one shard's
+# scenario files used to rerun all four gate:scenarios shards plus
+# gate:image, test:container and test:postgres. Each of those jobs now
+# hashes what scripts/ci-reuse-inputs.js's JOB_INPUTS says it reads, and
+# stands on an earlier successful run of the same job on this same merge
+# request when the hash has not moved. docs/quality-strategy.md, "What
+# stands on what", has the job-by-job reasoning; test:go and test:frontend
+# are deliberately left out (#1066: cheap enough already).
+#
+# Merge requests only -- .gitlab-ci.yml is itself one of every job's
+# inputs (JOB_INPUTS' COMMON), so a delivery-branch pipeline and any
+# change to this file both run everything, same as before this existed.
+#
+# Nothing here can fail a job: every fault ci-reuse-gate.js meets -- no
+# CI_REUSE_TOKEN, no network, an expired evidence artefact, an unknown
+# job -- reads as "no earlier run to stand on", which reruns the job. That
+# is the only direction that can never be wrong, which is also why this
+# never adopts `workflow: auto_cancel: on_job_failure` (orbit #923): the
+# owner wants the full line to run so one push shows every failure.
+.reuse_gate: &reuse_gate |
+  if node scripts/ci-reuse-gate.js gate "$CI_JOB_NAME"; then
+    exit 0
+  fi
+
+# The other half: the proof the next pipeline reads back. The LAST line of
+# a candidate job's `script:`, so it is reached only when everything
+# before it passed -- never in `after_script`, which runs whatever the job
+# did, including a failure before this line.
+.reuse_evidence: &reuse_evidence node scripts/ci-reuse-gate.js evidence "$CI_JOB_NAME"
+
 # ---------------------------------------------------------------------------
 # POLICY — the three-lane promotion order, dev -> preview -> main, with no
 # shortcuts. Replaces .github/workflows/branch-policy.yml, which cannot see
@@ -370,9 +401,9 @@ lint:frontend:
   image: node:22-alpine
   <<: *dev_or_mr_code_frontend
   script:
-    # The CHR watch suites (scripts/chr-watch) have node:test suites that no
-    # other job runs, so they run here.
-    - node --test scripts/chr-watch/*.test.js
+    # The CHR watch suites (scripts/chr-watch) and #1066's reuse gate have
+    # node:test suites that no other job runs, so they run here.
+    - node --test scripts/chr-watch/*.test.js scripts/ci-reuse-inputs.test.js scripts/ci-reuse-gate.test.js
     - cd frontend
     - npm ci
     - npx svelte-check --tsconfig ./tsconfig.app.json
@@ -525,7 +556,12 @@ test:postgres:
     # is older than the server; pg_isready does not care. No `exit` in
     # this loop: before_script and script share one shell, and an early
     # exit here would end the job green with nothing tested.
-    - apt-get -qq update && apt-get -qq install -y postgresql-client >/dev/null
+    # nodejs alongside postgresql-client: #1066's reuse gate is plain
+    # Node (scripts/ci-reuse-gate.js), and this image has neither by
+    # default. Paid here rather than skipped for a reused run -- the
+    # postgres wait above already started before script: runs -- but it
+    # is cheap next to the `go test -race` this can now skip.
+    - apt-get -qq update && apt-get -qq install -y postgresql-client nodejs >/dev/null
     - |
       ready=0
       for attempt in $(seq 1 40); do
@@ -534,10 +570,16 @@ test:postgres:
       done
       [ "$ready" = 1 ] || { echo "postgres never became ready"; false; }
   script:
+    - *reuse_gate
     # internal/matchlog alongside internal/persist (#243 slice 6): its
     # Postgres backend is a second, independent SQL sink with its own
     # table and needs the same real-database coverage.
     - go test -race -count=1 ./internal/persist/... ./internal/matchlog/...
+    - *reuse_evidence
+  artifacts:
+    paths:
+      - ci-reuse-evidence/
+    expire_in: 1 week
 
 # Container smoke test, ported from GitHub's ci.yml (#942, the second
 # half). Builds the production image and runs it the way
@@ -582,6 +624,11 @@ test:container:
     DOCKER_HOST: unix:///var/run/docker.sock
     APP: mikroview-test-$CI_JOB_ID
   script:
+    # apk before the reuse gate: this image is Alpine and carries neither
+    # Node nor curl by default, and #1066's gate (scripts/ci-reuse-gate.js)
+    # needs Node to run at all.
+    - apk add --no-cache nodejs >/dev/null
+    - *reuse_gate
     - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
     - docker build --tag "$APP" .
     - >-
@@ -596,16 +643,23 @@ test:container:
         if docker run --rm --network "container:$APP" alpine:3.22 \
              wget -q -O /dev/null --no-check-certificate https://127.0.0.1:8080/api/healthz; then
           echo "healthz answered on attempt $attempt"
-          exit 0
+          break
         fi
         sleep 1
+        if [ "$attempt" = 20 ]; then
+          echo "healthz never answered; container log follows"
+          docker logs "$APP"
+          exit 1
+        fi
       done
-      echo "healthz never answered; container log follows"
-      docker logs "$APP"
-      exit 1
+    - *reuse_evidence
   after_script:
     - docker rm --force "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
     - docker image rm "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
+  artifacts:
+    paths:
+      - ci-reuse-evidence/
+    expire_in: 1 week
 
 # ---------------------------------------------------------------------------
 # GATE — the live-check gate, sharded (#1004).
@@ -669,6 +723,11 @@ gate:image:
     DOCKER_HOST: unix:///var/run/docker.sock
     IMAGE: $CI_REGISTRY_IMAGE/live-check
   script:
+    # apk before the reuse gate (#1066): this image is Alpine and carries
+    # neither Node nor curl by default, and scripts/ci-reuse-gate.js needs
+    # Node to run at all.
+    - apk add --no-cache nodejs >/dev/null
+    - *reuse_gate
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
     - |
       TAG="df-$(sha256sum live-check.Dockerfile | cut -c1-12)"
@@ -685,6 +744,11 @@ gate:image:
       fi
       # Retag in the registry, without pulling: the shards name this tag.
       docker buildx imagetools create -t "$IMAGE:$CI_COMMIT_REF_SLUG" "$IMAGE:$TAG"
+    - *reuse_evidence
+  artifacts:
+    paths:
+      - ci-reuse-evidence/
+    expire_in: 1 week
 
 # One slice each. `parallel: 4` sets CI_NODE_INDEX (1-based) and
 # CI_NODE_TOTAL, which is exactly MV_SHARD's shape. Four, because the
@@ -701,6 +765,10 @@ gate:scenarios:
   parallel: 4
   timeout: 30m
   script:
+    # #1066: CI_JOB_NAME under `parallel: 4` is "gate:scenarios 1/4" etc,
+    # exactly the shape scripts/ci-reuse-inputs.js's JOB_INPUTS uses. Node
+    # is already in this image, so no install is needed to run the gate.
+    - *reuse_gate
     - set -o pipefail
     # #1032: how much CPU does a shard actually use, as opposed to how
     # long it occupies a slot? The infra audit ranked this job the
@@ -732,6 +800,13 @@ gate:scenarios:
       MV_SHARD="$CI_NODE_INDEX/$CI_NODE_TOTAL" make live-check 2>&1 | tee "gate-shard-$CI_NODE_INDEX.log"
       mv_rc=$?
       echo "MV_CPU_END=$(awk '/^usage_usec/{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null) MV_T_END=$(date +%s)" >> /tmp/mv-cpu-$CI_NODE_INDEX
+      # Evidence only on a real pass (#1066): the LAST thing this shard
+      # does when it did the work, so a red or cancelled shard leaves none
+      # and the next pipeline reruns it rather than trusting a shard that
+      # never finished.
+      if [ "$mv_rc" -eq 0 ]; then
+        node scripts/ci-reuse-gate.js evidence "$CI_JOB_NAME"
+      fi
       exit $mv_rc
   # after_script now does arithmetic and nothing else: both readings are
   # taken above and left on disk, which is also how they survive into
@@ -788,6 +863,7 @@ gate:scenarios:
     paths:
       - gate-shard-*.log
       - cpu-measure-shard-*.txt
+      - ci-reuse-evidence/
     expire_in: 1 week
 
 # The four standalone shell checks (scripts/run-live-scripts.sh), once,
