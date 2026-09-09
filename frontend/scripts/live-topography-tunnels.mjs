@@ -23,6 +23,31 @@ import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
 
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
+
 syslog(2, 'topo-tunnels-probe')
 let DEVICE
 for (let i = 0; i < 40 && !DEVICE; i++) {
@@ -128,7 +153,7 @@ async function openTheMap() {
   await page.waitForSelector('[data-card="topography"] [aria-label="Map overlays"]', { timeout: 10000 })
   await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 15000 })
   await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
-  await page.waitForTimeout(1200)
+  await waitForSettle('[data-card="topography"] .camera')
 }
 
 /** Everything this scenario judges, read off the rendered map. */
@@ -235,31 +260,50 @@ for (const n of [2, 3, 5]) {
 // The pan and the fit chip are one control between them: a map that can
 // be dragged away with no way home is worse than one that cannot move.
 const svgSel = '[data-card="topography"] .stage > svg'
+
+/**
+ * Poll the SVG's own viewBox attribute until it stops changing. Pan and
+ * wheel zoom (Topography.svelte's onMapWheel/panMap) write it straight
+ * from the pointer with no animation; the fit chip's own return-to-frame
+ * (fitMap) eases over a real 240ms, cancelled via cancelAnimationFrame if
+ * interrupted. Either way this is the actual end state, not a guess at it.
+ */
+async function waitForViewBoxSettle(timeoutMs = 800) {
+  const read = () => page.getAttribute(svgSel, 'viewBox')
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(30)
+    const cur = await read()
+    if (cur === last) return cur
+    last = cur
+  }
+  return last
+}
+
 const before = await page.getAttribute(svgSel, 'viewBox')
 const stage = await page.locator(svgSel).boundingBox()
 await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
 await page.mouse.down()
 await page.mouse.move(stage.x + stage.width / 2 - 180, stage.y + stage.height / 2 - 90, { steps: 12 })
 await page.mouse.up()
-await page.waitForTimeout(200)
-const panned = await page.getAttribute(svgSel, 'viewBox')
+const panned = await waitForViewBoxSettle()
 check(panned !== before, `dragging the map pans it (${before} -> ${panned})`)
 
 const chipSel = '[data-card="topography"] .fitchip'
 check((await page.getAttribute(chipSel, 'class'))?.includes('hand'), 'the fit chip marks a view moved by hand')
 await page.click(chipSel)
-await page.waitForTimeout(500)
-check((await page.getAttribute(svgSel, 'viewBox')) === before, `the fit chip returns to the fitted frame (${await page.getAttribute(svgSel, 'viewBox')})`)
+const backToFit1 = await waitForViewBoxSettle()
+check(backToFit1 === before, `the fit chip returns to the fitted frame (${backToFit1})`)
 
 // Wheel zoom, about the pointer, and the chip's percentage moving with it.
 await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
 await page.mouse.wheel(0, -600)
-await page.waitForTimeout(200)
-const zoomed = (await page.getAttribute(svgSel, 'viewBox')).split(' ').map(Number)
+const zoomed = (await waitForViewBoxSettle()).split(' ').map(Number)
 check(zoomed[2] < Number(before.split(' ')[2]), `the wheel zooms the map in (${zoomed.join(' ')})`)
 await page.click(chipSel)
-await page.waitForTimeout(500)
-check((await page.getAttribute(svgSel, 'viewBox')) === before, 'and the fit chip brings the whole map back again')
+const backToFit2 = await waitForViewBoxSettle()
+check(backToFit2 === before, 'and the fit chip brings the whole map back again')
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 
