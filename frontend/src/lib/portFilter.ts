@@ -252,3 +252,72 @@ export interface PickerPort {
 export function placeableDoors(doors: PortDoor[]): PortDoor[] {
   return doors.filter((d) => doorHalf(d) !== null)
 }
+
+/** A point in the map's own units. */
+export interface Point {
+  x: number
+  y: number
+}
+
+// Where along its own rib a door may stand. Not the midpoint and not a
+// fixed fraction: every rib on this map converges on the router, so a
+// fixed t puts every door in the same crowded place, on top of each
+// other and across whatever else is passing through. The span stops
+// short of both ends -- a door on the card is not on the boundary, and
+// a door at the waist is in the pile-up.
+export const DOOR_T_MIN = 0.3
+export const DOOR_T_MAX = 0.8
+export const DOOR_T_STEPS = 11
+
+/** The fractions along a rib a door is tried at, lane end first. */
+export function doorTs(): number[] {
+  const out: number[] = []
+  for (let i = 0; i < DOOR_T_STEPS; i++) {
+    out.push(DOOR_T_MIN + ((DOOR_T_MAX - DOOR_T_MIN) * i) / (DOOR_T_STEPS - 1))
+  }
+  return out
+}
+
+/**
+ * chooseDoorSpot picks where on its own rib a door stands: the sampled
+ * point with the most room around it.
+ *
+ * `others` is every other drawn rib, sampled, plus the doors already
+ * placed -- so doors spread out along their ribs rather than stacking
+ * where the ribs happen to meet, and a door's own posts never land on a
+ * line crossing behind them.
+ *
+ * `toward` is the nearest thing found, which is what the label is then
+ * placed *away* from: a door's label is the one part of it that has a
+ * side to choose, and choosing the crowded side wastes the clearance
+ * the point was picked for.
+ *
+ * Ties keep the earlier candidate, and the candidates run lane end
+ * first, so an empty map puts every door nearest its own card rather
+ * than at whichever sample happened to sort first.
+ */
+export function chooseDoorSpot(
+  candidates: Point[],
+  others: Point[][],
+): { index: number; clearance: number; toward: Point | null } {
+  let best: { index: number; clearance: number; toward: Point | null } = {
+    index: 0,
+    clearance: -1,
+    toward: null,
+  }
+  candidates.forEach((p, index) => {
+    let clearance = Infinity
+    let toward: Point | null = null
+    for (const line of others) {
+      for (const q of line) {
+        const d = Math.hypot(p.x - q.x, p.y - q.y)
+        if (d < clearance) {
+          clearance = d
+          toward = q
+        }
+      }
+    }
+    if (clearance > best.clearance + 1e-6) best = { index, clearance, toward }
+  })
+  return best
+}

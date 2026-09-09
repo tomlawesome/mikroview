@@ -2,7 +2,9 @@
 import { describe, it, expect } from 'vitest'
 import type { PortDoor, PortRib } from './api'
 import {
+  chooseDoorSpot,
   doorHalf,
+  doorTs,
   emptyNote,
   litRibs,
   parsePortList,
@@ -184,5 +186,71 @@ describe('the picker offers one chip per port (#1018)', () => {
   it('keeps a port only a rule names, with nothing carried on it', () => {
     const got = pickerPorts([{ port: 3389, proto: 'tcp', count: 0, named: true }])
     expect(got).toEqual([{ port: 3389, count: 0, named: true, protos: [] }])
+  })
+})
+
+describe('where a door stands on its rib (#1018)', () => {
+  // Every rib on this map converges on the router, so a fixed fraction
+  // put every door in the same crowded place -- on top of each other and
+  // across whatever else passed through. The chooser samples its own rib
+  // and takes the point with the most room.
+  const own = doorTs().map((t) => ({ x: 0, y: 100 - t * 100 }))
+
+  it('walks away from a rib converging on the same end', () => {
+    // A neighbour that hugs the far end (y near 0) and falls away toward
+    // the near end -- the shape of two ribs meeting at the router.
+    const other = [
+      { x: 2, y: 0 },
+      { x: 6, y: 20 },
+      { x: 20, y: 40 },
+      { x: 60, y: 70 },
+    ]
+    const got = chooseDoorSpot(own, [other])
+    // The lane end (index 0, t = 0.3, y = 70) is furthest from it.
+    expect(got.index).toBe(0)
+    expect(got.toward).not.toBeNull()
+    expect(got.clearance).toBeGreaterThan(30)
+  })
+
+  it('moves toward the router when that is where the room is', () => {
+    // The mirror image: the neighbour crowds the lane end instead.
+    const other = [
+      { x: 2, y: 100 },
+      { x: 6, y: 80 },
+      { x: 20, y: 60 },
+      { x: 60, y: 30 },
+    ]
+    const got = chooseDoorSpot(own, [other])
+    expect(got.index).toBe(doorTs().length - 1)
+  })
+
+  it('takes the lane end when nothing is near, and when everything ties', () => {
+    expect(chooseDoorSpot(own, []).index).toBe(0)
+    expect(chooseDoorSpot(own, []).toward).toBeNull()
+    // Equidistant from every candidate: a tie keeps the earlier one, and
+    // the candidates run lane end first.
+    const parallel = own.map((p) => ({ x: p.x + 40, y: p.y }))
+    expect(chooseDoorSpot(own, [parallel]).index).toBe(0)
+  })
+
+  it('keeps two doors on converging ribs apart', () => {
+    // The first door lands, then the second is measured against it as
+    // well as against the ribs -- which is what stops them stacking
+    // where the two ribs meet.
+    const ribA = doorTs().map((t) => ({ x: -t * 60, y: 100 - t * 100 }))
+    const ribB = doorTs().map((t) => ({ x: t * 60, y: 100 - t * 100 }))
+    const first = chooseDoorSpot(ribA, [ribB])
+    const second = chooseDoorSpot(ribB, [ribA, [ribA[first.index]]])
+    const a = ribA[first.index]
+    const b = ribB[second.index]
+    expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(40)
+  })
+
+  it('offers eleven points, lane end first, over the middle of the rib', () => {
+    const ts = doorTs()
+    expect(ts.length).toBe(11)
+    expect(ts[0]).toBeCloseTo(0.3, 6)
+    expect(ts[ts.length - 1]).toBeCloseTo(0.8, 6)
+    expect([...ts].sort((x, y) => x - y)).toEqual(ts)
   })
 })
