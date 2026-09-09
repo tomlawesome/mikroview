@@ -77,4 +77,19 @@ Numbered for the owner's reply.
 
 ## Verdict
 
-Pending.
+Owner, 2026-09-09 (#1050 notes 14845, 14852):
+
+- Card trace button (Q14): a button that traces the host's most recent
+  event is "borderline useless at normal network speeds — you might as
+  well make it a 'random trace' button." Dropped for good. Trace must
+  be reachable from the stream, and the control should offer "a
+  drop-down of similar events / events around the same time".
+- City ✕ placement (Q13): undecided at the verdict; settled by pick C1
+  below.
+- Scope: the port filter on the city is accepted (#1055, built).
+
+Proposals followed as note 14847; the owner picked **A1 / B1 / C1**:
+the crumb's "and N more like it" opens a list in place (A1); roads and
+the unplanned callout keep `trace ▸`, hosts get none (B1); the ✕ stands
+at the destination's gate when the log names an out-interface, on the
+router when it names none, on both surfaces (C1). Drawn in round 56.
