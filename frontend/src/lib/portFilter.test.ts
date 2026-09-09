@@ -13,6 +13,7 @@ import {
   placeableDoors,
   portLabel,
   ribKey,
+  plaqueTally,
   zoneTally,
 } from './portFilter'
 
@@ -130,6 +131,22 @@ describe('what the map writes', () => {
   it('counts the lane against itself, not against the ten dots that fit', () => {
     expect(zoneTally(2, 12, '445/tcp')).toBe('2 of 12 hosts on 445/tcp')
     expect(zoneTally(0, 1, '445/tcp')).toBe('0 of 1 host on 445/tcp')
+  })
+
+  // The city's plaque has a chip's width to say the same thing in, so it
+  // says it shorter (#1055, round 54's own `city-port`). Same count,
+  // fewer words -- never a second count.
+  it('says the same tally short enough for a plaque', () => {
+    expect(plaqueTally(2, 12, '445/tcp')).toBe('2 of 12 · 445/tcp')
+    expect(plaqueTally(0, 3, '3389/tcp')).toBe('0 of 3 · 3389/tcp')
+  })
+
+  // #1056: a fraction with nothing on either side of it is not a
+  // finding. Where the surface knows of no host at all it says nothing
+  // and lets the road and the door carry the answer.
+  it('says nothing at all where there is no host to count', () => {
+    expect(zoneTally(0, 0, '445/tcp')).toBeNull()
+    expect(plaqueTally(0, 0, '445/tcp')).toBeNull()
   })
 
   // Nothing seen is a sentence, not an empty state, and the wording

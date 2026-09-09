@@ -649,20 +649,31 @@ describe('crossing the altitude centre (#869)', () => {
   // sides and there is nothing to remember across the centre. What the
   // crossing still carries -- the reach, and the camera -- is asserted
   // below.
-  // #1018's port pill is the flat map's own furniture and only its own:
-  // the city gets the same two tools in a round of its own (#1050). So
-  // it is drawn left of centre and gone right of it -- a filter control
-  // over a surface it cannot filter would be a promise the map breaks.
-  it('carries no overlay state across the centre, and leaves the port pill on the flat side', () => {
+  // #1018's port pill was the flat map's own furniture until #1055 gave
+  // the city the same filter from the same store. It is one control at
+  // every altitude now, and the selection it carries survives the
+  // crossing in both directions -- clearing it would throw away the
+  // operator's own question for moving the slider.
+  it('draws the port pill on both sides of the centre, and carries the selection across', () => {
     const { container } = render(Topography)
     flushSync()
-    expect(container.querySelectorAll('.pills .pill').length).toBe(0) // ◆ city, the default
+    expect(container.querySelectorAll('.pills .pill').length).toBe(1) // ◆ city, the default
+    expect(container.querySelector('.pills .pill')?.textContent?.trim()).toBe('⌕ port')
 
     crossTo(container, '2') // to zones: the 2D side
     expect(container.querySelectorAll('.pills .pill').length).toBe(1)
 
+    portFilterState.ports = [445]
+    portFilterState.proto = 'tcp'
+    portFilterState.answer = { ...portFilterState.answer, events: 2, lines: 2 }
+    portFilterState.answeredKey = portFilterState.key
+    flushSync()
+    expect(container.querySelector('.pill.p.on')?.textContent).toContain('445/tcp')
+
     crossTo(container, '4') // back across, to borough
-    expect(container.querySelectorAll('.pills .pill').length).toBe(0)
+    expect(portFilterState.active).toBe(true)
+    expect(container.querySelector('.city')).not.toBeNull()
+    expect(container.querySelector('.pill.p.on')?.textContent).toContain('445/tcp')
   })
 
   it('hands a 2D reach across the centre to the same host, standing on it in the city', () => {
@@ -5004,6 +5015,38 @@ describe('the port filter (#1018, round 53)', () => {
     const dimmed = [...container.querySelectorAll('.zone .hostrow .dot-off')]
     expect(dimmed.length).toBeGreaterThan(0)
     expect(container.querySelectorAll('.zone .hostrow .h-dot').length).toBeGreaterThan(dimmed.length)
+  })
+
+  // #1056, found on #1055's live capture of the city: the answer's host
+  // list is the log lines' own, and an address nothing has registered
+  // draws no dot. Counting it anyway put `1 of 0` under a plaque; the
+  // same arithmetic sits under these cards.
+  it('leaves a host it draws no dot for out of the tally, and says nothing where there is no host', () => {
+    zonesState.pushed = [
+      ...lanes,
+      { address: '10.0.40.1/24', network: '10.0.40.0', interface: 'ether5', comment: 'Guest' },
+    ]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether3', srcIp: '10.0.10.21', srcHostName: 'tom-desktop', dstIp: '10.0.20.5', dstPort: 445, protocol: 'tcp' }),
+    ]
+    // The one host on the port is inside the Servers lane's subnet and
+    // has never been registered, so no card draws a dot for it.
+    filterTo([445], { hosts: [{ ip: '10.0.20.99', name: '', events: 2, accepts: 2, drops: 0 }] })
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const tallies = [...container.querySelectorAll('.hosttally')].map((t) => t.textContent ?? '')
+    expect(tallies.some((t) => t.startsWith('0 of'))).toBe(true)
+    expect(tallies.some((t) => t.startsWith('1 of'))).toBe(false)
+    // A lane with no known host says nothing rather than `0 of 0`: this
+    // surface draws no row at all there, so there are fewer of these
+    // lines than there are cards. zoneTally refuses the same fraction
+    // outright (portFilter.test.ts), which is what the city needs.
+    expect(tallies.some((t) => t.startsWith('0 of 0'))).toBe(false)
+    expect(container.querySelectorAll('.zone').length).toBeGreaterThan(tallies.length)
+    // The rib is what says the traffic was there, and it still does.
+    expect(container.querySelectorAll('.lit-half').length).toBe(2)
   })
 
   it('dims a lane with nothing on the port whole, and keeps it on the map', () => {
