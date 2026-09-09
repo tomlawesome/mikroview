@@ -131,12 +131,11 @@ for (let i = 0; i < STOP_LABELS.length; i++) {
   const m = await measure()
   check(m.value === String(i), `stop ${i} (${label}): the slider reports it (value ${m.value})`)
   // #981 left no lens toggle here and none has come back. #1018 put one
-  // control in the row -- the port filter -- and it belongs to the flat
-  // map alone: the city gets the same two tools in a round of its own
-  // (#1050), so the row is bare right of centre.
+  // control in the row -- the port filter -- and #1055 carried it across
+  // the centre: the same pill, idle, at every stop, and nothing else.
   check(
-    m.overlayControls.join(' ') === (i < 3 ? '⌕ port' : ''),
-    `${label}: the overlay row carries the port pill on the flat side and nothing at all on the city's (${JSON.stringify(m.overlayControls)})`,
+    m.overlayControls.join(' ') === '⌕ port',
+    `${label}: the overlay row carries the port pill and nothing else, either side of centre (${JSON.stringify(m.overlayControls)})`,
   )
 
   if (i < 3) {
@@ -164,7 +163,7 @@ for (let i = STOP_LABELS.length - 1; i >= 0; i--) {
   const m = await measure()
   check(m.value === String(i), `walking back, stop ${i} (${STOP_LABELS[i]}): the slider reports it (value ${m.value})`)
   check(
-    m.overlayControls.join(' ') === (i < 3 ? '⌕ port' : ''),
+    m.overlayControls.join(' ') === '⌕ port',
     `${STOP_LABELS[i]}: the overlay row still reads the same after the round trip (${JSON.stringify(m.overlayControls)})`,
   )
   if (i > 0) {
