@@ -23,9 +23,9 @@
     "copyleft licence on a scanner or bot (semgrep, renovate) carries no",
     "distribution obligation the way a shipped dependency's would.",
     "",
-    "Checked by tools/supply-chain/pins-policy.mjs, run by hand",
-    "(`node tools/supply-chain/pins-policy.mjs`) pending a CI job -- wiring it",
-    "into .gitlab-ci.yml is separate work this pass did not touch."
+    "Checked by tools/supply-chain/pins-policy.mjs, run in CI by",
+    "lint:supply-chain-pins in .gitlab-ci.yml, and by hand with",
+    "`node tools/supply-chain/pins-policy.mjs`."
   ],
   "updateOwner": "mikroview maintainers",
   "ciActions": [
