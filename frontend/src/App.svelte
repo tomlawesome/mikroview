@@ -1,6 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from './lib/state.svelte'
+  import { subscribe as subscribeVisibility } from './lib/visibility'
   import { liveSocket } from './lib/ws'
   import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
@@ -144,18 +145,52 @@
     // WATCHLIST_COVERAGE_REFRESH_MS above is what keeps it correct after.
     if (authState.canEdit) watchlistState.refresh().catch(handleApiError)
 
-    const statsInterval = setInterval(() => {
+    function refreshStats() {
       appState.refreshDevicesAndStats().catch(handleApiError)
       flagsState.refresh().catch(handleApiError)
-    }, STATS_REFRESH_MS)
+    }
 
+    function refreshWatchlist() {
+      watchlistState.refresh().catch(handleApiError)
+    }
+
+    let statsInterval: ReturnType<typeof setInterval> | undefined
     // Its own slower interval rather than riding statsInterval -- see
     // WATCHLIST_COVERAGE_REFRESH_MS's own comment for why the two cadences
     // are deliberately different rather than an oversight.
-    const watchlistInterval =
-      authState.canEdit
-        ? setInterval(() => watchlistState.refresh().catch(handleApiError), WATCHLIST_COVERAGE_REFRESH_MS)
+    let watchlistInterval: ReturnType<typeof setInterval> | undefined
+    let tickInterval: ReturnType<typeof setInterval> | undefined
+
+    function startIntervals() {
+      statsInterval = setInterval(refreshStats, STATS_REFRESH_MS)
+      watchlistInterval = authState.canEdit
+        ? setInterval(refreshWatchlist, WATCHLIST_COVERAGE_REFRESH_MS)
         : undefined
+      tickInterval = setInterval(() => appState.tick(), TICK_MS)
+    }
+
+    function stopIntervals() {
+      clearInterval(statsInterval)
+      clearInterval(watchlistInterval)
+      clearInterval(tickInterval)
+    }
+
+    startIntervals()
+
+    // #1088: a backgrounded tab gains nothing from polling at full rate.
+    // Pause statsInterval/watchlistInterval/tickInterval while hidden, and
+    // on return do one immediate refresh (not just a resumed interval) so
+    // the numbers aren't stale for up to a further full interval on top of
+    // however long the tab was hidden.
+    const stopWatchingVisibility = subscribeVisibility((hidden) => {
+      if (hidden) {
+        stopIntervals()
+        return
+      }
+      refreshStats()
+      if (authState.canEdit) refreshWatchlist()
+      startIntervals()
+    })
 
     // The interval above is the backstop, not the mechanism. Coverage is
     // an answer about pushed router tables and the definitions read
@@ -177,14 +212,11 @@
         })
       : undefined
 
-    const tickInterval = setInterval(() => appState.tick(), TICK_MS)
-
     return () => {
+      stopWatchingVisibility()
       stopListeningForChanges?.()
       liveSocket.disconnect()
-      clearInterval(statsInterval)
-      clearInterval(watchlistInterval)
-      clearInterval(tickInterval)
+      stopIntervals()
     }
   })
 
