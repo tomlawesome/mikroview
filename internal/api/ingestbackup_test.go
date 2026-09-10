@@ -1,0 +1,246 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package api
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/backupslice"
+	"github.com/tomlawesome/mikroview/internal/backupvault"
+)
+
+// backupIngestServer is ingestTestServer with an empty vault and the
+// slice receiver wired, which is what the endpoint needs to do anything.
+func backupIngestServer(t *testing.T, device string) (*httptest.Server, *Server, string) {
+	t.Helper()
+	ts, s, token := ingestTestServer(t, device)
+	v, err := backupvault.Open(t.TempDir(), testRetentionKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Vault = v
+	s.BackupSlices = backupslice.New(v)
+	return ts, s, token
+}
+
+func postBackupSlice(t *testing.T, ts *httptest.Server, token string, body any) *http.Response {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/ingest/router-backup", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func decodeSliceResponse(t *testing.T, resp *http.Response) backupSliceResponse {
+	t.Helper()
+	defer resp.Body.Close()
+	var out backupSliceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decoding the response: %v", err)
+	}
+	return out
+}
+
+// realisticBackup is a plausible `.backup`: the RouterOS plain header
+// and enough bytes to need several slices.
+func realisticBackup(n int) []byte {
+	body := append([]byte{0x88, 0xac, 0xa1, 0xb1}, bytes.Repeat([]byte("configuration"), n)...)
+	return body
+}
+
+func TestBackupArrivesOverTheIngestChannelInSlices(t *testing.T) {
+	ts, s, token := backupIngestServer(t, "rb5009")
+	file := realisticBackup(6000) // ~78KB, so several slices
+	const sliceSize = 32768
+	totalSlices := (len(file) + sliceSize - 1) / sliceSize
+
+	begin := postBackupSlice(t, ts, token, map[string]any{
+		"op":          "begin",
+		"kind":        backupvault.KindBackup,
+		"totalBytes":  len(file),
+		"totalSlices": totalSlices,
+	})
+	if begin.StatusCode != http.StatusOK {
+		t.Fatalf("begin = %d, want 200", begin.StatusCode)
+	}
+	started := decodeSliceResponse(t, begin)
+	if started.TransferID == "" {
+		t.Fatal("begin returned no transfer id")
+	}
+
+	var last backupSliceResponse
+	for i := 0; i < totalSlices; i++ {
+		end := (i + 1) * sliceSize
+		if end > len(file) {
+			end = len(file)
+		}
+		resp := postBackupSlice(t, ts, token, map[string]any{
+			"op":         "slice",
+			"transferId": started.TransferID,
+			"index":      i,
+			"data":       base64.StdEncoding.EncodeToString(file[i*sliceSize : end]),
+		})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("slice %d = %d, want 200", i, resp.StatusCode)
+		}
+		last = decodeSliceResponse(t, resp)
+	}
+	if !last.Done {
+		t.Fatal("the last slice did not complete the transfer")
+	}
+
+	// It must land in the vault indistinguishably from an SFTP arrival.
+	gens := s.Vault.Generations("rb5009")
+	if len(gens) != 1 {
+		t.Fatalf("the vault holds %d generations, want 1", len(gens))
+	}
+	got, err := s.Vault.Open("rb5009", gens[0].ID, backupvault.KindBackup)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if !bytes.Equal(got, file) {
+		t.Fatal("the reassembled backup does not match what was sent")
+	}
+}
+
+func TestBackupSliceNeedsAnIngestToken(t *testing.T) {
+	ts, _, _ := backupIngestServer(t, "rb5009")
+	resp := postBackupSlice(t, ts, "", map[string]any{"op": "begin", "kind": backupvault.KindBackup, "totalBytes": 100, "totalSlices": 1})
+	resp.Body.Close()
+	// 401 or 403, matching what the router-state push already returns
+	// for a missing token: requireAuth refuses before the ingest mux is
+	// reached at all.
+	if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("an unauthenticated push = %d, want 401 or 403", resp.StatusCode)
+	}
+}
+
+// TestOneDeviceCannotContinueAnothersTransfer is the reason the transfer
+// id is server-assigned and scoped to the device that began it: a token
+// is readable by anyone with `read` on the router it came from (#186),
+// so a second router's token must not be able to feed bytes into the
+// first router's backup.
+func TestOneDeviceCannotContinueAnothersTransfer(t *testing.T) {
+	ts, s, token := backupIngestServer(t, "rb5009")
+
+	admin, ok := s.Auth.ByUsername("admin")
+	if !ok {
+		t.Fatal("the admin account was not created")
+	}
+	otherToken, _, err := s.Tokens.Create("router-2", auth.TokenKindIngest, "hex-s", admin, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+
+	begin := postBackupSlice(t, ts, token, map[string]any{
+		"op": "begin", "kind": backupvault.KindRsc, "totalBytes": 64, "totalSlices": 1,
+	})
+	started := decodeSliceResponse(t, begin)
+
+	resp := postBackupSlice(t, ts, otherToken, map[string]any{
+		"op": "slice", "transferId": started.TransferID, "index": 0,
+		"data": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 64)),
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("another device continuing the transfer = %d, want 404", resp.StatusCode)
+	}
+	if len(s.Vault.Routers()) != 0 {
+		t.Fatal("a hijacked transfer reached the vault")
+	}
+}
+
+func TestBackupSliceRefusalsAreReportedAsBadRequests(t *testing.T) {
+	ts, s, token := backupIngestServer(t, "rb5009")
+
+	cases := []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"an unknown op", map[string]any{"op": "nonsense"}, http.StatusBadRequest},
+		{"a file over the vault's cap", map[string]any{
+			"op": "begin", "kind": backupvault.KindBackup,
+			"totalBytes": backupvault.MaxFileBytes + 1, "totalSlices": 600,
+		}, http.StatusBadRequest},
+		{"an unknown kind", map[string]any{
+			"op": "begin", "kind": "config", "totalBytes": 100, "totalSlices": 1,
+		}, http.StatusBadRequest},
+		{"a slice for an unknown transfer", map[string]any{
+			"op": "slice", "transferId": "0123456789abcdef", "index": 0,
+			"data": base64.StdEncoding.EncodeToString([]byte("x")),
+		}, http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := postBackupSlice(t, ts, token, tc.body)
+			resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				t.Fatalf("%s = %d, want %d", tc.name, resp.StatusCode, tc.want)
+			}
+		})
+	}
+	if len(s.Vault.Routers()) != 0 {
+		t.Fatal("a refused transfer left something in the vault")
+	}
+}
+
+func TestSlicesOutOfOrderAbortTheTransfer(t *testing.T) {
+	ts, s, token := backupIngestServer(t, "rb5009")
+	file := realisticBackup(4000)
+	const sliceSize = 32768
+	totalSlices := (len(file) + sliceSize - 1) / sliceSize
+
+	begin := postBackupSlice(t, ts, token, map[string]any{
+		"op": "begin", "kind": backupvault.KindBackup,
+		"totalBytes": len(file), "totalSlices": totalSlices,
+	})
+	started := decodeSliceResponse(t, begin)
+
+	// Skip slice 0 and offer slice 1. The router script aborts on any
+	// refusal and starts over next run, so nothing is kept.
+	resp := postBackupSlice(t, ts, token, map[string]any{
+		"op": "slice", "transferId": started.TransferID, "index": 1,
+		"data": base64.StdEncoding.EncodeToString(file[:sliceSize]),
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("an out-of-order slice = %d, want 400", resp.StatusCode)
+	}
+	if len(s.Vault.Routers()) != 0 {
+		t.Fatal("an aborted transfer reached the vault")
+	}
+}
+
+func TestBackupIngestRefusedWithNoVault(t *testing.T) {
+	ts, s, token := backupIngestServer(t, "rb5009")
+	s.Vault = nil
+	s.BackupSlices = nil
+	resp := postBackupSlice(t, ts, token, map[string]any{
+		"op": "begin", "kind": backupvault.KindBackup, "totalBytes": 100, "totalSlices": 1,
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a push with no vault = %d, want 503", resp.StatusCode)
+	}
+}

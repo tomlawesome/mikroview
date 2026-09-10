@@ -13,6 +13,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/backupslice"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/coverage"
@@ -321,6 +322,10 @@ type Server struct {
 	// drop box (internal/backupsftp) writes to it directly; the HTTP
 	// handlers here only ever read it back and download from it.
 	Vault *backupvault.Vault
+	// BackupSlices reassembles a backup pushed over the ingest channel
+	// in slices (#955). Nil where no vault is configured -- the handler
+	// refuses rather than accepting a file it has nowhere to put.
+	BackupSlices *backupslice.Receiver
 	// vaultUnlock is which session, if any, currently holds the vault's
 	// optional passphrase open (#956, routerbackupslock.go).
 	vaultUnlock vaultUnlockState
