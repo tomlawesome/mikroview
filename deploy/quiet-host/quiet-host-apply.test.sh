@@ -148,4 +148,25 @@ rm -f "$QH_DIR/hold"
 "$SCRIPT" >/dev/null
 [ -f "$QH_DIR/failed" ] && { echo "FAIL - release should clear the failed marker"; fail=1; } || echo "ok - release cleared the failed marker"
 
+# #1094: a hold file can claim any expires= far in the future; the host
+# must cap the hold at MAX_HOLD_S regardless of what the file says. This
+# test can't fake the system clock, so it simulates elapsed time through
+# the file's own started= field: a started= far enough in the past pushes
+# started+MAX_HOLD_S below "now" even though expires claims 10 days out.
+cat >"$TMP/bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$TMP/bin/systemctl"
+rm -f "$QH_DIR/hold" "$QH_STATE/concurrent.orig" "$QH_DIR/applied" "$QH_DIR/failed"
+write_config
+long_started=$(( $(date +%s) - 4000 ))
+far_expires=$(( $(date +%s) + 864000 ))
+printf 'job=888\nurl=https://example.invalid/jobs/888\nstarted=%s\nexpires=%s\n' \
+  "$long_started" "$far_expires" >"$QH_DIR/hold"
+out=$("$SCRIPT")
+check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 4" "a hold expiry beyond MAX_HOLD_S past started is treated as expired"
+[ -f "$QH_DIR/hold" ] && { echo "FAIL - capped-expired hold should be deleted"; fail=1; } || echo "ok - capped-expired hold deleted"
+echo "$out" | grep -q 'capped' && echo "ok - capped expiry logged" || { echo "FAIL - capped expiry not logged: $out"; fail=1; }
+
 exit $fail

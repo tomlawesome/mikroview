@@ -15,6 +15,11 @@
 # second time and says so.
 set -euo pipefail
 
+# The largest legitimate hold is a job timeout plus 300s (scripts/quiet-host.sh
+# bounds it to now + CI_JOB_TIMEOUT + 300, under now+1800 for perf:promotion's
+# 25m timeout); 3600 sits above the longest job that holds one.
+MAX_HOLD_S=3600
+
 QH_DIR="${QH_DIR:-/srv/quiet-host}"
 # The saved value lives outside the watched directory, so saving it does
 # not re-trigger quiet-host.path (five starts in ten seconds hit systemd's
@@ -91,6 +96,22 @@ if [ -f "$HOLD" ]; then
   case "$flag_expires" in
     ''|*[!0-9]*) flag_expires=0 ;; # malformed -- treat as already expired
   esac
+
+  flag_started=$(grep -m1 '^started=' "$HOLD" | cut -d= -f2-)
+  case "$flag_started" in
+    ''|*[!0-9]*) flag_started=$now ;; # malformed -- fall back to now
+  esac
+
+  # #1094: the hold file's expires= is written by an unprivileged job and
+  # not otherwise trusted -- cap it at MAX_HOLD_S past the hold's own
+  # started= (or now, if that is missing) regardless of what the file
+  # claims.
+  ceiling=$((flag_started + MAX_HOLD_S))
+  if [ "$flag_expires" -gt "$ceiling" ]; then
+    echo "hold expiry capped: file requested expires=$flag_expires, capping to $ceiling for job=$flag_job"
+    flag_expires=$ceiling
+  fi
+
   if [ "$flag_expires" -gt "$now" ]; then
     held=1
   else
