@@ -236,49 +236,27 @@
       "reviewBy": "2026-11-05"
     },
     {
-      "name": "Node.js (CI build/test image)",
-      "reference": "node:22-alpine",
-      "shipped": false,
-      "license": "MIT",
-      "source": "https://github.com/nodejs/docker-node",
-      "locations": [
-        ".gitlab-ci.yml"
-      ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
-    },
-    {
-      "name": "Node.js (CI browser-test image)",
-      "reference": "node:22-bookworm",
-      "shipped": false,
-      "license": "MIT",
-      "source": "https://github.com/nodejs/docker-node",
-      "locations": [
-        ".gitlab-ci.yml"
-      ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
-    },
-    {
-      "name": "Node.js (Dockerfile frontend build stage)",
+      "name": "Node.js (frontend build stage and the Alpine CI jobs, #1106)",
       "reference": "node:26-alpine",
       "shipped": false,
       "license": "MIT",
       "source": "https://github.com/nodejs/docker-node",
       "locations": [
-        "Dockerfile"
+        "Dockerfile",
+        ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
+      "reviewedOn": "2026-09-10",
+      "reviewBy": "2026-11-10"
     },
     {
-      "name": "Node.js (live-check.Dockerfile base image, #1078)",
+      "name": "Node.js (live-check base image and the Debian CI jobs, #1078, #1106)",
       "reference": "node:26-bookworm",
       "shipped": false,
       "license": "MIT",
       "source": "https://github.com/nodejs/docker-node",
       "locations": [
-        "live-check.Dockerfile"
+        "live-check.Dockerfile",
+        ".gitlab-ci.yml"
       ],
       "reviewedOn": "2026-09-10",
       "reviewBy": "2026-11-10"

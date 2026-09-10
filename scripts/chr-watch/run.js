@@ -16,8 +16,8 @@
 //                     and scripts/chr-report.sh already use, sent as the
 //                     PRIVATE-TOKEN header.
 //
-// Plain Node 22, no npm dependencies: this only ever runs inside the
-// chr-watch:run CI job (node:22-alpine), never as part of the frontend
+// Plain Node, no npm dependencies: this only ever runs inside the
+// chr-watch:run CI job (node:26-alpine), never as part of the frontend
 // build, so there is nothing to install for it.
 //
 // Exits non-zero for every state except 'ok', so the scheduled pipeline
