@@ -384,6 +384,49 @@ describe('refresh() racing an optimistic mutation (#1074)', () => {
     expect(flagsState.list).toEqual([fresh])
     expect(flagsState.baselinesWarming).toBe(true)
   })
+
+  // Review finding on the #1074 fix: the generation counter stops a
+  // refresh that *started before* a mutation from overwriting it, but a
+  // refresh that starts *after* the mutation bumped generation (so it
+  // passes its own gen check) and resolves *while the mutation's own
+  // network call is still pending* replaces .list with fresh objects,
+  // detaching the object the mutation captured. The mutation's post-await
+  // write then lands on that detached object, invisible to the UI.
+  it('does not let a refresh during the mutation swallow the mutation`s post-await write', async () => {
+    const original = flag('port_scan', '203.0.113.9', {
+      cleared: true,
+      verdict: 'checked',
+      verdictBy: 'alice',
+      verdictAt: 't',
+    })
+    flagsState.list = [original]
+
+    // undoVerdict's own request hangs...
+    let resolveDelete!: (f: Flag) => void
+    vi.mocked(deleteFlagVerdict).mockReturnValue(new Promise<Flag>((r) => (resolveDelete = r)))
+    const undoPromise = flagsState.undoVerdict(original.id)
+    expect(flagsState.list[0].verdict).toBeUndefined() // optimistic reopen applied
+
+    // ...a refresh starts after undoVerdict bumped generation (so its gen
+    // check passes) and resolves with the pre-undo snapshot before
+    // undoVerdict's own request does.
+    vi.mocked(fetchFlags).mockResolvedValue({
+      flags: [
+        flag('port_scan', '203.0.113.9', { id: original.id, cleared: true, verdict: 'checked', verdictBy: 'alice', verdictAt: 't' }),
+      ],
+      timeSeries: [],
+      baselinesWarming: undefined,
+    })
+    await flagsState.refresh()
+
+    // undoVerdict's request finally resolves with the server-confirmed undo.
+    resolveDelete(flag('port_scan', '203.0.113.9', { id: original.id, cleared: false }))
+    await undoPromise
+
+    const current = flagsState.list.find((f) => f.id === original.id)
+    expect(current?.cleared).toBe(false)
+    expect(current?.verdict).toBeUndefined()
+  })
 })
 
 // #642: the open-flags count is the settled ledger's count. A
