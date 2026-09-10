@@ -187,7 +187,13 @@ export function layoutGround(input: CityInput): Ground {
 
   let inkIndex = 0
   const placeBorough = (routerId: string, name: string, at: Pt, slots: Pt[]): Borough => {
-    const zones = input.zones.filter((z) => z.routerId === routerId).slice(0, slots.length)
+    const ownedZones = input.zones.filter((z) => z.routerId === routerId)
+    const zones = ownedZones.slice(0, slots.length)
+    // A router with more zones than slots loses the rest of them off the
+    // ground plan, same as a district's own `more` for hosts it could
+    // not draw (#1073): counted on the borough rather than silently
+    // gone -- no district, no roads, no signal, but not invisible.
+    const moreZones = Math.max(0, ownedZones.length - slots.length)
     const ids: string[] = []
     let u0 = at[0] - 12
     let u1 = at[0] + 12
@@ -229,7 +235,7 @@ export function layoutGround(input: CityInput): Ground {
       v0 = Math.min(v0, v - r)
       v1 = Math.max(v1, v + r)
     })
-    const b: Borough = { routerId, name, districtIds: ids, bounds: { u0, u1, v0, v1 } }
+    const b: Borough = { routerId, name, districtIds: ids, bounds: { u0, u1, v0, v1 }, moreZones }
     boroughs.push(b)
     return b
   }
