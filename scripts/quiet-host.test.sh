@@ -76,4 +76,22 @@ grep -q "released hold" "$TMP/release.out" && echo "ok - release reported" || { 
 "$SCRIPT" release >"$TMP/release2.out" 2>&1
 grep -q "nothing to release" "$TMP/release2.out" && echo "ok - nothing-to-release" || { echo "FAIL - nothing-to-release: $(cat "$TMP/release2.out")"; fail=1; }
 
+# #1092: a FAILED marker (written by quiet-host-apply.sh's host side when
+# it cannot confirm gitlab-runner picked up the reload) makes hold fail
+# loudly and promptly with that reason, rather than either reading a
+# stale 90s timeout as the only signal or -- before this fix -- never
+# checking for it and reporting success it never confirmed. Written
+# directly rather than through fake_unit, which only ever writes
+# applied: this is the host's failure path, not its success one.
+printf 'systemctl reload gitlab-runner exited 1 for job=9999 at %s\n' "$(date +%s)" >"$QH_MOUNT/failed"
+if CI_JOB_ID=9999 "$SCRIPT" hold >"$TMP/hold-failed.out" 2>&1; then
+  echo "FAIL - hold should fail loudly when the host reports FAILED"; fail=1
+else
+  check "$?" "5" "a FAILED marker exits 5"
+  grep -q "systemctl reload gitlab-runner exited 1" "$TMP/hold-failed.out" \
+    && echo "ok - hold reports the host's failure reason" \
+    || { echo "FAIL - hold reports the host's failure reason: $(cat "$TMP/hold-failed.out")"; fail=1; }
+fi
+rm -f "$QH_MOUNT/hold" "$QH_MOUNT/applied" "$QH_MOUNT/failed"
+
 exit $fail

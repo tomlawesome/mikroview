@@ -25,6 +25,7 @@ CONFIG="${CONFIG:-/etc/gitlab-runner/config.toml}"
 HOLD="$QH_DIR/hold"
 ORIG="$QH_STATE/concurrent.orig"
 APPLIED="$QH_DIR/applied"
+FAILED="$QH_DIR/failed"
 
 apply_hold() {
   job="$1"
@@ -39,7 +40,33 @@ apply_hold() {
     printf '%s\n' "$value" >"$ORIG"
   fi
   sed -i 's/^concurrent = .*/concurrent = 1/' "$CONFIG"
-  systemctl reload gitlab-runner 2>/dev/null || true
+
+  # #1092: the old `|| true` swallowed a reload failure and wrote APPLIED
+  # regardless, so perf:promotion believed the host was quiet while other
+  # jobs still ran alongside it. Check the exit status for real.
+  reload_rc=0
+  systemctl reload gitlab-runner || reload_rc=$?
+  if [ "$reload_rc" -ne 0 ]; then
+    printf 'systemctl reload gitlab-runner exited %s for job=%s at %s\n' \
+      "$reload_rc" "$job" "$(date +%s)" >"$FAILED"
+    echo "FAILED: systemctl reload gitlab-runner exited $reload_rc -- hold not confirmed for job=$job" >&2
+    return 1
+  fi
+
+  # A successful reload only proves the signal was delivered and
+  # accepted, not that gitlab-runner re-read the file -- there is no CLI
+  # to ask it its live concurrency. The strongest check reachable from a
+  # script (README.md, "Verify it") is that the config still reads what
+  # this run wrote to it.
+  picked_up=$(sed -n 's/^concurrent = \(.*\)$/\1/p' "$CONFIG")
+  if [ "$picked_up" != "1" ]; then
+    printf '%s reads concurrent=%s after reload, not 1, for job=%s at %s\n' \
+      "$CONFIG" "$picked_up" "$job" "$(date +%s)" >"$FAILED"
+    echo "FAILED: $CONFIG reads concurrent=$picked_up after reload, not 1 -- hold not confirmed for job=$job" >&2
+    return 1
+  fi
+
+  rm -f "$FAILED"
   printf 'concurrent=1 at %s for job=%s\n' "$(date +%s)" "$job" >"$APPLIED"
   echo "HOLD applied: concurrent=1 for job=$job"
 }
@@ -48,7 +75,7 @@ release_hold() {
   value=$(cat "$ORIG")
   sed -i "s/^concurrent = .*/concurrent = $value/" "$CONFIG"
   systemctl reload gitlab-runner 2>/dev/null || true
-  rm -f "$ORIG" "$APPLIED"
+  rm -f "$ORIG" "$APPLIED" "$FAILED"
   echo "RELEASE: restored concurrent=$value"
 }
 
@@ -72,7 +99,14 @@ if [ -f "$HOLD" ]; then
 fi
 
 if [ "$held" -eq 1 ]; then
-  if [ -f "$ORIG" ]; then
+  if [ -f "$FAILED" ]; then
+    # #1092: the previous attempt could not confirm the reload, so there
+    # is nothing to stand on -- retry the reload and verification rather
+    # than re-marking APPLIED on faith. apply_hold's own ORIG guard makes
+    # this safe to call again: it will not re-save the original value,
+    # only redo the (idempotent) sed and the reload+verify.
+    apply_hold "$flag_job"
+  elif [ -f "$ORIG" ]; then
     # A fresh flag can land right after an expired one was released but
     # before this run: keep the marker naming the job that holds now, so
     # the job side's wait for "job=<its id>" sees it.
