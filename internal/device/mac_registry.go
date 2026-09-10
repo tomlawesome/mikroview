@@ -63,15 +63,35 @@ type MACRegistry struct {
 	// no-op on a nil receiver.
 	wb    *persist.WriteBehind
 	byMAC map[string]*MACEntry
+
+	// dirty is set by Seen/NoteIP under mu and cleared once
+	// runPersistLoop has encoded and handed the current state to wb --
+	// see persistDirtyLocked and runPersistLoop. This is the fix for
+	// #1087: Seen, called on the ingest hot path for every event
+	// carrying a SrcMAC, only ever flips a bool under a lock it already
+	// holds; it never marshals.
+	dirty bool
+
+	// wake/stopPersist/persistDone drive runPersistLoop, the one
+	// background goroutine a registry with a backend runs -- started in
+	// OpenMACRegistryWithBackend, stopped by Close. All nil when wb is
+	// nil (no backend configured, nothing to run off the ingest
+	// goroutine). wake is buffered 1, the same "never block the caller,
+	// coalesce a burst into one wakeup" shape persist.WriteBehind's own
+	// wake channel uses.
+	wake        chan struct{}
+	stopPersist chan struct{}
+	persistDone chan struct{}
 }
 
-// macRegistryPersistMinInterval rate-limits persistLocked's actual disk
-// writes, same reasoning as flags.persistMinInterval: Seen is called on
-// the ingest hot path for every single event carrying a SrcMAC, not just
-// the rare truly-new ones, so an unconditional marshal + atomic rename
-// per call would put disk I/O directly on that path. A var rather than a
-// const so tests that need every call to persist immediately can shrink
-// it.
+// macRegistryPersistMinInterval rate-limits the write-behind writer's
+// actual disk writes, same reasoning as flags.persistMinInterval: Seen
+// is called on the ingest hot path for every single event carrying a
+// SrcMAC, not just the rare truly-new ones, so an unconditional marshal
+// + atomic rename per call would put disk I/O directly on that path. A
+// var rather than a const so tests that need every call to persist
+// immediately can shrink it. See macRegistryPersistFlushInterval for the
+// separate rate limit on the encode itself.
 // Now persist.WriteBehind's MinInterval (see OpenMACRegistryWithBackend)
 // rather than a field this type checks itself -- the rate-limiting/
 // back-off logic that used to live here, and its #377 stall-under-load
@@ -91,6 +111,18 @@ var macRegistryPersistMinInterval = time.Second
 // persist.Clock advances the window by hand instead of guessing at it
 // from elapsed time.
 var macRegistryPersistClock persist.Clock
+
+// macRegistryPersistFlushInterval is the minimum spacing runPersistLoop
+// leaves between one encode finishing and the next starting, stamped
+// after an encode completes rather than before it starts -- the same
+// "stamped after" reasoning persist.WriteBehind's own MinInterval
+// documents (its fix for #377), applied one layer up. Unrelated to
+// macRegistryPersistMinInterval, which rate-limits the write-behind
+// writer's own backend attempts -- this rate-limits the encode itself,
+// which used to run on the caller's goroutine on every single Seen call
+// (issue #1087). A var rather than a const so a test can shrink it
+// rather than wait out two real seconds.
+var macRegistryPersistFlushInterval = 2 * time.Second
 
 // OpenMACRegistry loads path if it exists (a missing file is the
 // expected first-run case, not an error) and returns a MACRegistry that
@@ -139,6 +171,12 @@ func OpenMACRegistryWithBackend(b persist.Backend) (*MACRegistry, error) {
 		return nil, err
 	}
 	r.wb = wb
+	if r.wb != nil {
+		r.wake = make(chan struct{}, 1)
+		r.stopPersist = make(chan struct{})
+		r.persistDone = make(chan struct{})
+		go r.runPersistLoop()
+	}
 	return r, nil
 }
 
@@ -150,15 +188,22 @@ func OpenMACRegistryWithBackend(b persist.Backend) (*MACRegistry, error) {
 // process). A registry with no backend configured (wb == nil) is a safe
 // no-op.
 func (r *MACRegistry) Flush(ctx context.Context) error {
+	r.persistIfDirty()
 	return r.wb.Flush(ctx)
 }
 
-// Close stops this registry's write-behind writer goroutine, flushing
-// whatever is still dirty within persist.SaveTimeout before returning --
-// main's shutdown joins on this so a change made right before exit is
-// not silently dropped. A registry with no backend configured (wb ==
-// nil) is a safe no-op. Not safe to call Seen after Close.
+// Close stops runPersistLoop and this registry's write-behind writer
+// goroutine, flushing whatever is still dirty within persist.SaveTimeout
+// before returning -- main's shutdown joins on this so a change made
+// right before exit is not silently dropped. A registry with no backend
+// configured (wb == nil) is a safe no-op. Not safe to call Seen after
+// Close.
 func (r *MACRegistry) Close(ctx context.Context) error {
+	if r.wb != nil {
+		close(r.stopPersist)
+		<-r.persistDone
+	}
+	r.persistIfDirty()
 	return r.wb.Close(ctx)
 }
 
@@ -199,7 +244,7 @@ func (r *MACRegistry) Seen(mac string, now time.Time) bool {
 	e.LastSeen = now
 
 	r.pruneLocked()
-	r.persistLocked()
+	r.persistDirtyLocked()
 	return isNew
 }
 
@@ -226,7 +271,7 @@ func (r *MACRegistry) NoteIP(mac, ip string) {
 		return
 	}
 	e.LastIP = ip
-	r.persistLocked()
+	r.persistDirtyLocked()
 }
 
 // List returns a snapshot of every known MAC entry, most-recently-seen
@@ -278,23 +323,107 @@ func (r *MACRegistry) pruneLocked() {
 	})
 }
 
-// persistLocked encodes the current state and hands it to the
-// write-behind writer (see persist.WriteBehind), which coalesces it
-// with whatever else is pending and persists it off this goroutine,
-// under its own deadline and rate limit. Marshal failures are swallowed
-// rather than surfaced to Seen's caller: the in-memory state (which
-// every read goes through) stays correct either way, so a transient
-// disk issue degrades to "won't survive a restart right now" rather
-// than breaking live detection. Must be called with r.mu already held --
-// see flags.Store.persistLocked's own doc comment for the "lock covers
-// the encode, not the backend call" contract this mirrors.
-func (r *MACRegistry) persistLocked() {
+// persistDirtyLocked records that the in-memory state has changed since
+// the last encode and wakes runPersistLoop -- a non-blocking, buffered
+// send, so a burst of calls while the loop is already awake (or busy
+// encoding) costs nothing beyond the flag write. It never marshals and
+// never touches wb directly -- see runPersistLoop and persistIfDirty for
+// where that work actually happens, off this goroutine. Every field
+// Seen touches on a repeat sighting (LastSeen) is treated the same as a
+// brand-new entry here: both simply mark the registry dirty and wake the
+// loop, which decides when to actually pay for the encode -- see
+// runPersistLoop's own doc comment for why a separate "structural vs.
+// not" tier is not needed once the encode itself is off the ingest
+// goroutine. Must be called with r.mu held.
+func (r *MACRegistry) persistDirtyLocked() {
 	if r.wb == nil {
 		return
 	}
-	data, err := json.MarshalIndent(r.listLocked(), "", "  ")
+	r.dirty = true
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// runPersistLoop is this registry's one background goroutine -- started
+// by OpenMACRegistryWithBackend when a backend is configured, stopped by
+// Close -- that owns every encode. Idle (nothing dirty), it blocks on
+// wake so it costs nothing between changes. Once woken, it encodes right
+// away if this is the first dirty change in a while (the same "no wait,
+// since the last-attempt stamp starts zero" first-call behaviour
+// persist.WriteBehind.run documents), then leaves at least
+// macRegistryPersistFlushInterval before the next encode, however many
+// further mutations land in between -- exactly the coalescing MarkDirty
+// already gives the backend write, one layer up for the encode itself.
+//
+// Before #1087, Seen unconditionally ran json.MarshalIndent over the
+// whole registry on every call, on the single ingest goroutine, under
+// r.mu -- including the ordinary case where a MAC already known simply
+// had its LastSeen bumped. Seen now only ever flips r.dirty; this loop
+// is the only place that marshals.
+func (r *MACRegistry) runPersistLoop() {
+	defer close(r.persistDone)
+	var lastEncode time.Time
+	for {
+		r.mu.Lock()
+		dirty := r.dirty
+		r.mu.Unlock()
+
+		if !dirty {
+			select {
+			case <-r.wake:
+				continue
+			case <-r.stopPersist:
+				return
+			}
+		}
+
+		if !lastEncode.IsZero() {
+			if wait := macRegistryPersistFlushInterval - time.Since(lastEncode); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-timer.C:
+				case <-r.stopPersist:
+					timer.Stop()
+					r.persistIfDirty()
+					return
+				}
+			}
+		}
+
+		r.persistIfDirty()
+		lastEncode = time.Now()
+	}
+}
+
+// persistIfDirty encodes and hands the current state to wb if anything
+// has changed since the last successful encode, and is a no-op
+// otherwise. The dirty flag is cleared in the same critical section that
+// takes the listLocked snapshot, so a mutation landing after this
+// unlocks is never lost -- it simply sets r.dirty again for the next
+// call to pick up. A marshal failure puts the flag back so the next call
+// retries rather than silently giving up on the change. Marshal failures
+// are otherwise swallowed rather than surfaced to a caller: the
+// in-memory state (which every read goes through) stays correct either
+// way, so a transient encoding problem degrades to "won't survive a
+// restart right now" rather than breaking live detection.
+func (r *MACRegistry) persistIfDirty() {
+	r.mu.Lock()
+	if !r.dirty || r.wb == nil {
+		r.mu.Unlock()
+		return
+	}
+	r.dirty = false
+	list := r.listLocked()
+	r.mu.Unlock()
+
+	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding MAC registry for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
+		r.mu.Lock()
+		r.dirty = true
+		r.mu.Unlock()
 		return
 	}
 	r.wb.MarkDirty(data)

@@ -343,10 +343,23 @@ type Register struct {
 
 	cfg Config
 
-	// lastEncode/deferred implement the encode-side half of the rate
-	// limit -- see persistLocked.
-	lastEncode time.Time
-	deferred   bool
+	// dirty is set by any mutating method under mu and cleared once
+	// runPersistLoop has encoded and handed the current state to wb --
+	// see persistDirtyLocked and runPersistLoop. This is the whole fix
+	// for #1087: the ingest goroutine only ever flips a bool under a
+	// lock it already holds, never marshals.
+	dirty bool
+
+	// wake/stopPersist/persistDone drive runPersistLoop, the one
+	// background goroutine a Register with a backend runs -- started in
+	// OpenWithBackend, stopped by Close. All nil when wb is nil (no
+	// backend configured, nothing to run off the ingest goroutine). wake
+	// is buffered 1, the same "never block the caller, coalesce a burst
+	// into one wakeup" shape persist.WriteBehind's own wake channel
+	// uses.
+	wake        chan struct{}
+	stopPersist chan struct{}
+	persistDone chan struct{}
 
 	// shed counts observations dropped at the cap because every entry
 	// carried an expected mark, over this process's lifetime.
@@ -404,6 +417,12 @@ func OpenWithBackend(b persist.Backend, cfg Config) (*Register, error) {
 		return nil, err
 	}
 	r.wb = wb
+	if r.wb != nil {
+		r.wake = make(chan struct{}, 1)
+		r.stopPersist = make(chan struct{})
+		r.persistDone = make(chan struct{})
+		go r.runPersistLoop()
+	}
 	return r, nil
 }
 
@@ -426,8 +445,9 @@ func (r *Register) Config() Config {
 //
 // Called once per ingested event, on the single ingest goroutine (see
 // main.go's ingestOneRecovered), beside hosts.Register.Observe and with
-// the same cost: one mutex-protected map update and, at most once per
-// persistMinInterval, one JSON encode -- never a disk write.
+// the same cost: one mutex-protected map update and a dirty flag flip.
+// No JSON encode and no disk write ever happen on this path -- see
+// persistDirtyLocked and runPersistLoop.
 func (r *Register) Observe(iface, srcIP, dstIP string, port int, proto string, outcome Outcome, at time.Time) bool {
 	// Nil-receiver safe, the same convention hosts.Register.Observe and
 	// persist.WriteBehind follow: a caller with no register configured (a
@@ -461,14 +481,8 @@ func (r *Register) Observe(iface, srcIP, dstIP string, port int, proto string, o
 		if at.Before(l.FirstSeen) {
 			l.FirstSeen = at
 		}
-		// A day that was not already set is structural: it can flip the
-		// line from off-baseline to established, which is a change worth
-		// reaching disk promptly rather than at the next un-deferred
-		// encode. A repeat sighting on a day already recorded is the
-		// ordinary high-volume case and is rate-limited.
-		structural := l.Days&1 == 0
 		l.Days |= 1
-		r.persistLocked(structural)
+		r.persistDirtyLocked()
 		return true
 	}
 
@@ -497,7 +511,7 @@ func (r *Register) Observe(iface, srcIP, dstIP string, port int, proto string, o
 		FirstSeenToday: at,
 		OutcomeToday:   outcome,
 	}
-	r.persistLocked(true)
+	r.persistDirtyLocked()
 	return true
 }
 
@@ -606,7 +620,7 @@ func (r *Register) Expect(key, reason, by string) (Line, error) {
 		return Line{}, ErrUnknownLine
 	}
 	l.Expected = &Expected{Reason: reason, By: by, At: time.Now()}
-	r.persistLocked(true)
+	r.persistDirtyLocked()
 	return copyLine(l), nil
 }
 
@@ -628,7 +642,7 @@ func (r *Register) Unexpect(key string) bool {
 		return false
 	}
 	l.Expected = nil
-	r.persistLocked(true)
+	r.persistDirtyLocked()
 	return true
 }
 
@@ -705,44 +719,115 @@ func copyLine(l *Line) Line {
 	return out
 }
 
-// persistMinInterval rate-limits persistLocked -- both the encode and,
-// through persist.WriteBehind, the write. A var rather than a const so a
-// test needing every call to persist immediately can shrink it, the same
-// convention internal/hosts.persistMinInterval uses.
+// persistMinInterval rate-limits the actual backend write inside
+// persist.WriteBehind -- unrelated to how often this register itself
+// encodes (see persistFlushInterval). A var rather than a const so a
+// test needing every write to reach the backend immediately can shrink
+// it, the same convention internal/hosts.persistMinInterval uses.
 var persistMinInterval = time.Second
 
-// persistLocked hands the current state to the write-behind writer,
-// which coalesces it with whatever else is pending and writes it off this
-// goroutine (see persist.WriteBehind).
+// persistFlushInterval is the minimum spacing runPersistLoop leaves
+// between one encode finishing and the next starting, stamped after an
+// encode completes rather than before it starts -- the same "stamped
+// after" reasoning persist.WriteBehind's own MinInterval documents (its
+// fix for #377), applied one layer up. A var rather than a const so a
+// test can shrink it rather than wait out two real seconds, the same
+// "var so tests can shrink it" convention persistMinInterval already
+// uses.
 //
-// Same two-tier rule as internal/hosts, and needed here for the same
-// reason: this is called on every ingested event, and marshalling up to
-// MaxLines entries per event -- on the ingest goroutine, under the lock
-// -- would be a real cost on exactly the sustained-traffic case the
-// write-behind design exists to keep off the hot path. A *structural*
-// change (a new line, a day newly set, a mark set or cleared) always
-// encodes; a repeat sighting on a day already recorded encodes at most
-// once per persistMinInterval.
-//
-// The trade-off, stated plainly: if the feed goes silent right after a
-// deferred sighting, that last count bump reaches disk only when Flush or
-// Close forces it. Losing it costs a few seconds of today's event count
-// after an unclean kill, never a line, never a recorded day and never a
-// mark -- the three things establishment and the operator's own
-// statements actually rest on.
-//
-// Must be called with r.mu held.
-func (r *Register) persistLocked(structural bool) {
+// #1087: this, not a rate limit on the caller's own goroutine, is what
+// keeps Observe off the JSON encode entirely. Every mutating method
+// used to marshal up to MaxLines entries itself -- on the ingest
+// goroutine, under r.mu -- at least once per persistMinInterval, and
+// immediately for a structural change. Now every mutating method only
+// ever flips r.dirty and pings a wake channel, both O(1) under a lock
+// it already holds; the encode -- the actual cost -- happens on
+// runPersistLoop's own goroutine, never on the path an event arrives
+// on.
+var persistFlushInterval = 2 * time.Second
+
+// persistDirtyLocked records that the in-memory state has changed since
+// the last encode and wakes runPersistLoop -- a non-blocking, buffered
+// send, so a burst of calls while the loop is already awake (or busy
+// encoding) costs nothing beyond the flag write. It never marshals and
+// never touches wb directly -- see runPersistLoop and persistIfDirty for
+// where that work actually happens, off this goroutine. Must be called
+// with r.mu held.
+func (r *Register) persistDirtyLocked() {
 	if r.wb == nil {
 		return
 	}
-	now := time.Now()
-	if !structural && now.Sub(r.lastEncode) < persistMinInterval {
-		r.deferred = true
+	r.dirty = true
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// runPersistLoop is this register's one background goroutine -- started
+// by OpenWithBackend when a backend is configured, stopped by Close --
+// that owns every encode. Idle (nothing dirty), it blocks on wake so it
+// costs nothing between changes. Once woken, it encodes right away if
+// this is the first dirty change in a while (the same "no wait, since
+// the last-attempt stamp starts zero" first-call behaviour
+// persist.WriteBehind.run documents), then leaves at least
+// persistFlushInterval before the next encode, however many further
+// mutations land in between -- exactly the coalescing MarkDirty already
+// gives the backend write, one layer up for the encode itself. Nothing
+// else ever calls persistIfDirty concurrently with this loop except
+// Close, which joins the loop first.
+func (r *Register) runPersistLoop() {
+	defer close(r.persistDone)
+	var lastEncode time.Time
+	for {
+		r.mu.Lock()
+		dirty := r.dirty
+		r.mu.Unlock()
+
+		if !dirty {
+			select {
+			case <-r.wake:
+				continue
+			case <-r.stopPersist:
+				return
+			}
+		}
+
+		if !lastEncode.IsZero() {
+			if wait := persistFlushInterval - time.Since(lastEncode); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-timer.C:
+				case <-r.stopPersist:
+					timer.Stop()
+					r.persistIfDirty()
+					return
+				}
+			}
+		}
+
+		r.persistIfDirty()
+		lastEncode = time.Now()
+	}
+}
+
+// persistIfDirty encodes and hands the current state to wb if anything
+// has changed since the last successful encode, and is a no-op
+// otherwise. The dirty flag is cleared in the same critical section that
+// takes the listLocked snapshot, so a mutation landing after this
+// unlocks is never lost -- it simply sets r.dirty again for the next
+// call to pick up. A marshal failure puts the flag back so the next call
+// retries rather than silently giving up on the change.
+func (r *Register) persistIfDirty() {
+	r.mu.Lock()
+	if !r.dirty || r.wb == nil {
+		r.mu.Unlock()
 		return
 	}
-
+	r.dirty = false
 	list := r.listLocked()
+	r.mu.Unlock()
+
 	ptrs := make([]*Line, len(list))
 	for i := range list {
 		ptrs[i] = &list[i]
@@ -750,45 +835,35 @@ func (r *Register) persistLocked(structural bool) {
 	data, err := json.MarshalIndent(storeFile{Lines: ptrs}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding the baseline line register failed: %v -- this change exists only in memory and will be lost on restart", err))
+		r.mu.Lock()
+		r.dirty = true
+		r.mu.Unlock()
 		return
 	}
-	r.lastEncode = now
-	r.deferred = false
 	r.wb.MarkDirty(data)
 }
 
-// Flush forces whatever is currently dirty -- including an encode this
-// register deferred, see persistLocked -- to the backend now, without
+// Flush forces whatever is currently dirty to the backend now, without
 // waiting out the debounce interval, and blocks until that attempt
 // finishes or ctx expires. A register with no backend configured is a
 // safe no-op.
 func (r *Register) Flush(ctx context.Context) error {
-	r.encodeDeferred()
+	r.persistIfDirty()
 	return r.wb.Flush(ctx)
 }
 
-// Close stops the write-behind writer, flushing whatever is still dirty
-// before returning -- main's shutdown joins on this so a line seen right
-// before exit is not silently dropped. A register with no backend
-// configured is a safe no-op. Not safe to call any mutating method after
-// Close.
+// Close stops runPersistLoop and the write-behind writer, flushing
+// whatever is still dirty before returning -- main's shutdown joins on
+// this so a line seen right before exit is not silently dropped. A
+// register with no backend configured is a safe no-op. Not safe to call
+// any mutating method after Close.
 func (r *Register) Close(ctx context.Context) error {
-	r.encodeDeferred()
+	if r.wb != nil {
+		close(r.stopPersist)
+		<-r.persistDone
+	}
+	r.persistIfDirty()
 	return r.wb.Close(ctx)
-}
-
-// encodeDeferred runs the encode persistLocked skipped, if there is one,
-// so Flush and Close write the true latest state rather than the state as
-// of the last un-deferred call.
-func (r *Register) encodeDeferred() {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.deferred {
-		r.persistLocked(true)
-	}
 }
 
 // validateText rejects an empty string, text over maxLen runes, invalid
