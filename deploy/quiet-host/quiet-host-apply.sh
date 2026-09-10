@@ -49,12 +49,21 @@ apply_hold() {
   # #1092: the old `|| true` swallowed a reload failure and wrote APPLIED
   # regardless, so perf:promotion believed the host was quiet while other
   # jobs still ran alongside it. Check the exit status for real.
+  #
+  # #1103: `systemctl reload` needs an ExecReload= line the packaged
+  # gitlab-runner.service does not have, so it always exited 3 ("job type
+  # reload is not applicable") -- hidden until #1092, then failing every
+  # hold. The runner re-reads config.toml on SIGHUP (commands/multi.go,
+  # reloadSignal), and also by itself when the file's mtime changes, so
+  # send the signal to the main process directly. `systemctl kill` still
+  # exits nonzero when the unit is not running, which is the case that
+  # matters.
   reload_rc=0
-  systemctl reload gitlab-runner || reload_rc=$?
+  systemctl kill --kill-whom=main --signal=HUP gitlab-runner || reload_rc=$?
   if [ "$reload_rc" -ne 0 ]; then
-    printf 'systemctl reload gitlab-runner exited %s for job=%s at %s\n' \
+    printf 'systemctl kill -s HUP gitlab-runner exited %s for job=%s at %s\n' \
       "$reload_rc" "$job" "$(date +%s)" >"$FAILED"
-    echo "FAILED: systemctl reload gitlab-runner exited $reload_rc -- hold not confirmed for job=$job" >&2
+    echo "FAILED: systemctl kill -s HUP gitlab-runner exited $reload_rc -- hold not confirmed for job=$job" >&2
     return 1
   fi
 
@@ -79,7 +88,7 @@ apply_hold() {
 release_hold() {
   value=$(cat "$ORIG")
   sed -i "s/^concurrent = .*/concurrent = $value/" "$CONFIG"
-  systemctl reload gitlab-runner 2>/dev/null || true
+  systemctl kill --kill-whom=main --signal=HUP gitlab-runner 2>/dev/null || true
   rm -f "$ORIG" "$APPLIED" "$FAILED"
   echo "RELEASE: restored concurrent=$value"
 }
