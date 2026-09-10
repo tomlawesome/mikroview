@@ -208,13 +208,23 @@ every restart) but not fatal.
   log line. See [docs/routeros-setup.md](docs/routeros-setup.md) for the
   log-prefix convention that makes "accept vs. drop vs. reject" and the
   responsible rule visible at all.
-- **Storage**: in-memory only, a fixed-capacity ring buffer windowed to
-  a configurable retention period (default 24h) — no database, and no
-  disk persistence. All retained events are lost on restart, redeploy,
-  or crash; MikroView is a live/recent-history view, not a log archive.
-  The one deliberate exception is behavioral flags (see below), which
-  can optionally persist to a small JSON file since they're meant to
-  stay visible until a human clears them.
+- **Storage**: by default, events live in a fixed block of memory — a
+  ring buffer that overwrites the oldest event once full, windowed to
+  `store.retention` (default 24h) and gone on restart. An optional
+  on-disk history (`history:` in config.yaml, off by default) writes
+  the same events to one encrypted, compressed file per day and keeps
+  `history.days` of them, so flag thresholds can be judged against
+  weeks of real traffic rather than just what the ring still holds.
+  See
+  [docs/configuration.md](docs/configuration.md#on-disk-event-history-optional-off-by-default).
+  Behavioral flags (see below) can still persist to a small JSON file
+  as before, since they're meant to stay visible until a human clears
+  them.
+- **Router backups**: an optional SFTP drop box (`backup:` in
+  config.yaml, off by default) where the router's own nightly script
+  pushes its binary `.backup` and plain-text `.rsc` export, so the
+  copies are still to hand when the router itself is gone. See
+  [docs/configuration.md](docs/configuration.md#router-backups-over-sftp-optional-off-by-default).
 - **Behavioral flags**: watches for port scans, per-source activity
   spikes, repeated attempts against critical ports (SSH, RDP, Winbox,
   ...) from external IPs, and network-wide volume spikes — each raises a
@@ -285,8 +295,7 @@ From least to most isolated:
    the "read one file, get everything" exposure that local accounts
    still have today. See
    [docs/configuration.md](docs/configuration.md#postgres-optional) for
-   setup — added in
-   [issue #131](https://github.com/tomlawesome/mikroview/issues/131).
+   setup — added in issue #131.
 
 Pick the level that matches your network: local accounts are the floor,
 and SSO is worth preferring wherever you have an identity provider
@@ -299,6 +308,12 @@ available. Full detail and the reasoning behind each is in
   configuration (syslog forwarding, log-prefix convention)
 - [docs/configuration.md](docs/configuration.md) — config.yaml
   reference, env vars, API reference
+- [docs/reading-the-fall.md](docs/reading-the-fall.md) — how to read
+  the fall, the app's landing view
+- [docs/security-by-design.md](docs/security-by-design.md) — the
+  security properties the design commits to
+- [SECURITY.md](SECURITY.md) — threat model, hardening and how to
+  report a vulnerability
 - [brand/BRANDING.md](brand/BRANDING.md) — logo files, color tokens,
   how to regenerate the PNG exports
 - [CONTRIBUTING.md](CONTRIBUTING.md) — branching model and local
