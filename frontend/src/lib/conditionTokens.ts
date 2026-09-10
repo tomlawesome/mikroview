@@ -261,7 +261,15 @@ const CLASSIFICATIONS = new Set(['internal', 'external', 'any'])
 // list is [router, list] and an identity is [mac, address]. Both are
 // comma-separated on screen and neither is a set, so the shape rule has
 // to stop treating a comma as "one of".
-const PAIR_FIELDS = new Set(['addressListMembership', 'sourceIdentity'])
+//
+// The two pairs disagree on empty sides, though (#1076). An address list
+// with no router or no list names nothing -- both stay required. An
+// identity's engine side (matchlog.Identity.Empty, via
+// compileSourceIdentityCondition) only refuses a pair with *neither* a mac
+// nor an address; a mac with no address, or an address with no mac, is
+// still a device worth naming. sourceIdentity is handled on its own below,
+// so this set is left with the pair that really does need both sides.
+const PAIR_FIELDS = new Set(['addressListMembership'])
 
 // A range's separator on screen is an en dash (round 8 draws `1 – 1024`)
 // but nobody types one, so both it and the hyphen are accepted. A time of
@@ -318,6 +326,23 @@ export function parseValue(field: string, typed: string): ParsedValue | { error:
     const negative = NEGATIVE_OF[op]
     if (!negative) return { error: `there is no "not" for a ${verbLabel(op)} line -- take it out, or write it as a list` }
     return allowed.has(negative) ? { operator: negative, values: [] } : { error: refuse(spec, negative) }
+  }
+
+  // sourceIdentity is a pair like the others, but splitList's usual
+  // empty-dropping would turn `mac,` into a single part and reject it --
+  // the one shape the engine explicitly allows. Split on the comma without
+  // dropping empties instead, so a blank side survives as "", and only
+  // refuse where the engine itself would: not exactly two parts, or both
+  // of them blank.
+  if (field === 'sourceIdentity') {
+    const raw = text.split(',')
+    const bothEmpty = raw.length === 2 && raw.every((p) => p.trim() === '')
+    if (raw.length !== 2 || bothEmpty) {
+      return { error: 'identity takes mac,ip -- either side may be left empty, not both' }
+    }
+    const parts = raw.map((p) => p.trim())
+    const op = wanted('equals')
+    return 'error' in op ? op : { operator: op.operator, values: parts }
   }
 
   // A pair is two operands, not a set, so it never becomes inSet however
@@ -397,6 +422,11 @@ export function verbLabel(operator: string): string {
 // so a saved token can be read straight back into the bar.
 export function valueText(c: DefinitionCondition): string {
   if (c.operator === 'inRange') return `${c.values[0] ?? ''} – ${c.values[1] ?? ''}`
+  // An identity with an empty side has to read back as `mac,` -- the space
+  // the other pairs and lists use would still parse, but only because
+  // parseValue trims it away again, and `mac,` is what #1076's ruling
+  // shows on the pill.
+  if (c.field === 'sourceIdentity') return c.values.join(',')
   return c.values.join(', ')
 }
 
@@ -406,6 +436,9 @@ export function valueText(c: DefinitionCondition): string {
 // expect.
 export function editText(c: DefinitionCondition): string {
   if (c.operator === 'inRange') return `${c.values[0] ?? ''}-${c.values[1] ?? ''}`
+  // Same reasoning as valueText: an identity's empty side has to come back
+  // as `mac,`, not `mac, `, so it parses to the same pair it started as.
+  if (c.field === 'sourceIdentity') return c.values.join(',')
   return c.values.join(', ')
 }
 
