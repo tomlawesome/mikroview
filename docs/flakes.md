@@ -39,6 +39,7 @@ each, recorded together because the cause is shared (#831's contention):
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 2/4 · `live-history-control`, `live-memory-slider`
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 3/4 · `live-metrics-views` (and `live-rule-regex`, counted above)
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 4/4 · `live-topography-furniture`
+- 2026-09-10 · 5265a1f8 (!1012) · pipeline 881, gate:scenarios 4/4 · `live-watchlist-manage` exited 1 without printing a result; pipelines 879-882 shared the runner
 
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 
@@ -47,3 +48,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-learning-window: a detector's rendered line lags its own API count of sources
 
 - 2026-09-10 · 55a84437 (dev) · pipeline 864, gate:scenarios 2/4, job 9998 · three `FAIL`s of the shape `activity_spike's rendered line matches the state its own API data describes -- got "Baselines established (69 sources)", want "... (80 sources)"` (also low_slow_scan 69/80, off_hours_activity 68/80): the page's line was read while the feed was still adding sources, so the API answered later than the render did; pipeline 865, same commit, passed the shard.
+
+## live-policy: before any push, the popover says an empty table instead of "no table has been pushed"
+
+- 2026-09-10 · 135615f6 (!988, pins-policy dates only) · pipeline 880, gate:scenarios 1/4 · `FAIL before any push, the popover says no table has been pushed -- not an empty table`; four pipelines shared the runner
