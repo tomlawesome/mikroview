@@ -147,14 +147,31 @@ export function collectRepositoryPins(root = repositoryRoot) {
   }
 
   const dockerfileText = readIfExists(join(root, "Dockerfile"));
+  const liveCheckDockerfileText = readIfExists(join(root, "live-check.Dockerfile"));
   const gitlabCiText = readIfExists(join(root, ".gitlab-ci.yml"));
+
+  const imagePins = extractImagePins({
+    dockerfile: dockerfileText === undefined ? undefined : { file: "Dockerfile", text: dockerfileText },
+    gitlabCi: gitlabCiText === undefined ? undefined : { file: ".gitlab-ci.yml", text: gitlabCiText },
+  });
+
+  // live-check.Dockerfile is a second Dockerfile at the repo root (the gate
+  // image, #1004) with its own FROM line -- extractImagePins only takes one
+  // `dockerfile` argument, so it is scanned as a second pass and merged in,
+  // rather than reshaping that function's signature for one extra file (#1078).
+  if (liveCheckDockerfileText !== undefined) {
+    const liveCheckPins = extractImagePins({
+      dockerfile: { file: "live-check.Dockerfile", text: liveCheckDockerfileText },
+    });
+    for (const [reference, locations] of liveCheckPins) {
+      if (!imagePins.has(reference)) imagePins.set(reference, new Set());
+      for (const location of locations) imagePins.get(reference).add(location);
+    }
+  }
 
   return {
     actionPins: extractActionPins(fileTexts),
-    imagePins: extractImagePins({
-      dockerfile: dockerfileText === undefined ? undefined : { file: "Dockerfile", text: dockerfileText },
-      gitlabCi: gitlabCiText === undefined ? undefined : { file: ".gitlab-ci.yml", text: gitlabCiText },
-    }),
+    imagePins,
   };
 }
 
