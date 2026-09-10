@@ -75,6 +75,57 @@ func contentVersion(data []byte) int64 {
 	return v
 }
 
+// WriteFileAtomic replaces path's contents crash-safely: a temp file is
+// written in path's own directory, fsynced, renamed over path, and the
+// directory is fsynced after the rename. This is the same pattern
+// FileBackend.Save uses for its own document, factored out here so other
+// packages persisting a security-sensitive file (a sealed blob, a host
+// key) get the same durability guarantee without copying the dance --
+// see Save's own comment for why the plain rename alone is not enough.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	cleanup := func() {
+		f.Close()
+		os.Remove(tmp)
+	}
+	if err := f.Chmod(perm); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if d, err := os.Open(dir); err == nil {
+		// Best effort: some filesystems refuse to sync a directory, and
+		// a failure here costs durability of the rename, not
+		// correctness of the bytes.
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
+}
+
 // Save atomically replaces the file.
 //
 // expect is checked against contentVersion of the file's current bytes,
