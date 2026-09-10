@@ -287,6 +287,11 @@ workflow:
 # the cache a merge request pulls stays warm; pull-only on a merge
 # request, so an unreviewed branch can never write back and poison what
 # dev or another MR pulls next.
+#
+# Only for jobs that run as root (the node:22 images). The live-check
+# image runs as `node`, and a cache the root jobs saved is restored
+# root-owned into a node-user job, so its `npm ci` fails with EACCES on
+# the first rmdir (#1098). Those jobs fetch cold; it costs them ~11 s.
 .npm_cache: &npm_cache
   cache:
     key:
@@ -793,7 +798,7 @@ gate:scenarios:
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr_code, *git_safe, *npm_cache]
+  <<: [*dev_or_mr_code, *git_safe]
   parallel: 4
   timeout: 30m
   script:
@@ -905,7 +910,7 @@ gate:scripts:
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr_code, *git_safe, *npm_cache]
+  <<: [*dev_or_mr_code, *git_safe]
   timeout: 30m
   script:
     - set -o pipefail
@@ -973,7 +978,7 @@ perf:promotion:
   stage: gate
   tags: [big]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*git_safe, *npm_cache]
+  <<: *git_safe
   # The #1038 ladder, target-branch guard and all: a 25-minute job that
   # holds the whole host quiet is the one most worth not running for a
   # prose change. In practice it will almost always run anyway, because a
