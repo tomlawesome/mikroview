@@ -249,8 +249,29 @@ check(
 // upward, so any arrival there reads as counting -- hard-coding "done"
 // would be asserting a property of the harness rather than of the
 // wizard.
+// #1096: read the observation until the wizard has caught up, not once.
+// The wizard's copy of the status is its own open-time fetch plus a
+// 5-second timer (SetupWizard.svelte's POLL_MS) -- a different fetch
+// from the `status` this scenario read above. On a fresh instance the
+// wizard's first fetch can land before the server has ingested the feed,
+// so a single read raced the next poll: the scenario failed on a clean
+// instance and passed mid-shard, where events were already there.
+// settledObservation polls past three of the wizard's own intervals and
+// then returns whatever it settled at, so check() below still reports
+// the class it actually saw rather than throwing on a timeout.
+async function settledObservation(want, { timeoutMs = 16000 } = {}) {
+  const read = async () => (await page.locator('.setup-wizard .observation').getAttribute('class')) ?? ''
+  const deadline = Date.now() + timeoutMs
+  let seen = await read()
+  while (!want(seen) && Date.now() < deadline) {
+    await page.waitForTimeout(500)
+    seen = await read()
+  }
+  return seen
+}
+
 await page.locator('.setup-wizard .steps li:nth-child(3) .step-row').click()
-const ruleObservation = (await page.locator('.setup-wizard .observation').getAttribute('class')) ?? ''
+const ruleObservation = await settledObservation((c) => c.includes('counting'))
 check(
   ruleObservation.includes('counting'),
   `the rule-tagging step counts what has arrived (${ruleObservation})`,
@@ -268,8 +289,11 @@ check(
 // mistake the rule-tagging check above avoids. It failed that way on
 // first run.
 const alreadyPushed = status.devices.some((d) => Object.keys(d.pushedKinds ?? {}).length > 0)
+// Same race as step 3, and the same wait: the wizard has to agree with
+// the server before its answer means anything. The target here is
+// whichever answer the server gave, not a fixed one.
 await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').click()
-const pushObservation = (await page.locator('.setup-wizard .observation').getAttribute('class')) ?? ''
+const pushObservation = await settledObservation((c) => c.includes('arrived') === alreadyPushed)
 check(
   pushObservation.includes('arrived') === alreadyPushed,
   `the push step ${alreadyPushed ? 'reports what arrived' : 'does not claim success before anything pushed'} ` +
