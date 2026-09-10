@@ -38,7 +38,7 @@
   import { zonesState } from '../lib/zones.svelte'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
-  import { ariaSort as sortAriaSort } from '../lib/tableSort'
+  import { ariaSort as sortAriaSort, nextSort, sortGlyph } from '../lib/tableSort'
   import { formatHM, formatRelative } from '../lib/format'
   import { nightlySummary, windowLabel } from '../lib/watchWindow'
   import { topologyNavState, type PendingWatchDraft } from '../lib/topologyNav.svelte'
@@ -863,17 +863,13 @@
   let wtFilters = $state({ watch: '', boundary: '', window: '', state: '', lastEvent: '' })
 
   function wtToggleSort(key: WatchTableSortKey) {
-    if (wtSortKey === key) {
-      wtSortDir = wtSortDir === 'asc' ? 'desc' : 'asc'
-    } else {
-      wtSortKey = key
-      wtSortDir = 'asc'
-    }
+    const next = nextSort({ key: wtSortKey, dir: wtSortDir }, key, 'asc')
+    wtSortKey = next.key
+    wtSortDir = next.dir
   }
 
   function wtDirGlyph(key: WatchTableSortKey): string {
-    if (wtSortKey !== key) return ''
-    return wtSortDir === 'asc' ? '▲' : '▼'
+    return sortGlyph({ key: wtSortKey, dir: wtSortDir }, key)
   }
 
   function wtAriaSort(key: WatchTableSortKey): 'ascending' | 'descending' | 'none' {
