@@ -52,3 +52,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-policy: before any push, the popover says an empty table instead of "no table has been pushed"
 
 - 2026-09-10 · 135615f6 (!988, pins-policy dates only) · pipeline 880, gate:scenarios 1/4 · `FAIL before any push, the popover says no table has been pushed -- not an empty table`; four pipelines shared the runner
+
+## live-account-menu: the foot has no uptime segment
+
+- 2026-09-10 · 751acc43 (dev) · pipeline 891, gate:scenarios 1/4, job 10361 · `FAIL the foot carries uptime as days and hours -- got "0.4.0+g751acc43… · AGPL-3.0"`: the line rendered without its `· up N d N h` tail; pipeline 893 on the same commit passed the shard.

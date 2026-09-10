@@ -274,6 +274,8 @@ func TestHandleSetupCommandsRejectsUnsafeInput(t *testing.T) {
 		{"syslogPort non-numeric", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "abc"}},
 		{"syslogPort zero", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "0"}},
 		{"syslogPort out of range", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "70000"}},
+		{"syslogPort listen address, bad port", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "127.0.0.1:abc"}},
+		{"syslogPort listen address, zero port", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "[::]:0"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -323,6 +325,25 @@ func TestHandleSetupCommandsAcceptsSafeInput(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("device %q: status = %d, want 200", device, resp.StatusCode)
+		}
+	}
+
+	// The wizard round-trips GET /api/setup/status's Instance.SyslogPort,
+	// which is the raw listen.syslogTls address (main.go), not a bare
+	// port: ":6514" in the shipped config, "127.0.0.1:16823" under
+	// scripts/live-env.sh. Only the port part is templated (routeros.PortOf).
+	for _, port := range []string{":6514", "127.0.0.1:16823", "0.0.0.0:6514", "[::]:6514"} {
+		body, err := json.Marshal(setupCommandsRequest{Address: "mv.example.com", SyslogPort: port})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("syslogPort %q: status = %d, want 200", port, resp.StatusCode)
 		}
 	}
 }

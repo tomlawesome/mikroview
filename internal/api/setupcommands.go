@@ -327,15 +327,24 @@ func validSetupPortNumber(s string) bool {
 }
 
 // validSetupSyslogPort accepts SyslogPort empty (handleSetupCommands
-// falls back to the running configuration) or a bare port number; a
-// leading ':' is tolerated since GET /api/setup/status's own
+// falls back to the running configuration), a bare port number, or a
+// listen address whose port is one: GET /api/setup/status's own
 // Instance.SyslogPort -- the value the wizard round-trips back here
-// unless the operator overrides it -- is a listen address like ":6514".
+// unless the operator overrides it -- is listen.syslogTls verbatim
+// (":6514" shipped, "127.0.0.1:16823" under scripts/live-env.sh). Only
+// the port reaches a command (routeros.PortOf), so the host part need
+// only be well-formed.
 func validSetupSyslogPort(s string) bool {
 	if s == "" {
 		return true
 	}
-	return validSetupPortNumber(strings.TrimPrefix(s, ":"))
+	if host, port, err := net.SplitHostPort(s); err == nil {
+		if host != "" && net.ParseIP(host) == nil && !validSetupHostname(host) {
+			return false
+		}
+		return validSetupPortNumber(port)
+	}
+	return validSetupPortNumber(s)
 }
 
 // validSetupHostLabel reports whether label is a valid hostname label:
