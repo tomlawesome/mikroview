@@ -789,6 +789,34 @@ plain sight. Run this over a LAN or a VPN you control, never across the
 open internet. See [SECURITY.md](../SECURITY.md) and issue #955, which
 tracks an HTTPS-based path that does verify.
 
+### 7c-ii. HTTPS-only alternative, for a deployment with no open SFTP port
+
+Issue #955. If your network path to MikroView is HTTPS only — a reverse
+proxy in front of it, with nothing else reachable — the SFTP push in 7c
+cannot work, because it needs its own port (`backup.listen`, 47022 by
+default) open all the way through. The alternative: the router reads its
+own backup and export files in small pieces (32KB or less) and sends
+each piece as a normal HTTPS request to the same address and token step
+4 already uses, instead of opening a second connection.
+
+**Pick SFTP (7c) unless you genuinely cannot open that second port.**
+SFTP sends the whole file in one upload; HTTPS-only sends it in a dozen
+or more separate pieces, which is more moving parts and, unlike the rest
+of this page, has not yet been run end-to-end against a real router — it
+is built from the same 7.23.3 measurements 7c's script rests on, but the
+specific commands that read a request's reply back into the script and
+turn a chunk of the file into text safe to put in a web request have not
+themselves been checked on a router yet. Treat it as the option for
+someone who has no other choice, not the default.
+
+The wizard does not offer this step yet — 4b's token is still what
+authenticates it once it does. If you want to try it ahead of that,
+`internal/routeros.BackupPushScript` and
+`BackupPushScheduleCommands` in this repository generate the same shape
+of script as 7c, minus the SFTP-specific `port=`/`user=`/`dst-path=`
+values, sent to `https://<mikroview-host>/api/ingest/router-backup`
+instead of the SFTP port.
+
 ### 7d. Verify
 
 Settings' `router backups` group (admin-only) lists what has arrived
