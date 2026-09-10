@@ -2,7 +2,7 @@
 
 ## Local development
 
-Requires Go 1.26+ and Node 22+.
+Requires Go 1.27+ and Node 22+.
 
 ```sh
 make dev-backend    # go run ., syslog TLS on :6514, https on :8080 (TLS on by default -- see docs/configuration.md#tls)
@@ -95,3 +95,13 @@ explicit CVE search and a comparison against known secure and insecure
 implementations. See
 [docs/security-by-design.md](docs/security-by-design.md) for what that
 requires and why.
+
+## Project records
+
+- [docs/quality-strategy.md](docs/quality-strategy.md) — what the
+  review and gate process is
+- [docs/flakes.md](docs/flakes.md) — the flake record: checks that
+  failed and passed again on unchanged code
+- [docs/routeros-chr-exercise.md](docs/routeros-chr-exercise.md) — the
+  RouterOS CHR exercise the pipeline runs
+- [docs/decisions/](docs/decisions/) — design and delivery decisions
