@@ -471,3 +471,37 @@ func TestMACRegistryListReturnsIndependentSnapshot(t *testing.T) {
 		t.Error("mutating a List() result affected subsequent List() output")
 	}
 }
+
+// TestMACRegistryFlushWaitsForInFlightEncode: Flush must not return while
+// runPersistLoop is between clearing r.dirty and handing the bytes to
+// the writer, or the caller's "it is on disk" is a write that lands
+// later -- on dev pipeline 899 that was TestMACRegistryPersistenceRoundTrip's
+// temp dir being removed under it ("directory not empty").
+func TestMACRegistryFlushWaitsForInFlightEncode(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	macRegistryEncodeHookForTest = func() {
+		once.Do(func() { close(started) })
+		<-release
+	}
+	defer func() { macRegistryEncodeHookForTest = nil }()
+
+	b := newCountingSaveBackend()
+	r, err := OpenMACRegistryWithBackend(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(context.Background())
+
+	r.Seen("aa:bb:cc:dd:ee:ff", time.Now())
+	<-started // the loop has taken the dirty flag and is mid-encode
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+	}()
+	flushForTest(t, r)
+	if got := b.saveCount(); got != 1 {
+		t.Fatalf("Flush returned before the in-flight encode was written: saves = %d, want 1", got)
+	}
+}

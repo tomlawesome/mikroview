@@ -36,16 +36,25 @@ If the runner is ever moved off rootless Docker, or its subuid range
 changes, this number changes with it -- check `/etc/subuid` for
 `gitlab-runner` and add 999 to the start of its range.
 
+The box has no checkout and deliberately holds no GitLab token, so copy
+the files over first from a machine that has the repository (one `scp`
+per file, or the whole directory), then run the rest from where they
+landed. Check the copy before installing it: the test runs the script
+that sits beside it against temp files and touches nothing live.
+
+```
+chmod +x quiet-host-apply.sh && bash quiet-host-apply.test.sh
+```
+
 Install the script:
 
 ```
-cp quiet-host-apply.sh /usr/local/sbin/quiet-host-apply.sh
-chmod 0755 /usr/local/sbin/quiet-host-apply.sh
+install -m 0755 quiet-host-apply.sh /usr/local/sbin/quiet-host-apply.sh
 ```
 
 The host script caps any hold at one hour regardless of what the flag file
-says, so re-copy it to `/usr/local/sbin/` (the `cp` above) whenever this file
-changes for that to take effect.
+says, so re-install it (the `install` above) whenever this file changes for
+that to take effect.
 
 Install the units:
 

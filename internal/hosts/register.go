@@ -277,6 +277,12 @@ type Register struct {
 	stopPersist chan struct{}
 	persistDone chan struct{}
 
+	// encodeMu is held for the whole of persistIfDirty -- from taking
+	// the dirty flag to handing the bytes to wb -- so a Flush arriving
+	// while runPersistLoop is mid-encode waits for that encode instead of
+	// finding nothing dirty anywhere and returning before the write.
+	encodeMu sync.Mutex
+
 	// shed counts observations dropped at the cap because every entry
 	// held a mark, over this process's lifetime. Worth being able to say
 	// how many rather than only that it happened, same as
@@ -545,6 +551,11 @@ func copyHost(h *Host) Host {
 // it, the same convention internal/flags.persistMinInterval uses.
 var persistMinInterval = time.Second
 
+// persistEncodeHookForTest, when set, runs inside persistIfDirty after
+// r.dirty is cleared and before the encoded bytes reach wb -- the window
+// a Flush must not slip through. Tests only; nil otherwise.
+var persistEncodeHookForTest func()
+
 // persistFlushInterval is the minimum spacing runPersistLoop leaves
 // between one encode finishing and the next starting, stamped after an
 // encode completes rather than before it starts -- the same "stamped
@@ -638,6 +649,8 @@ func (r *Register) runPersistLoop() {
 // call to pick up. A marshal failure puts the flag back so the next call
 // retries rather than silently giving up on the change.
 func (r *Register) persistIfDirty() {
+	r.encodeMu.Lock()
+	defer r.encodeMu.Unlock()
 	r.mu.Lock()
 	if !r.dirty || r.wb == nil {
 		r.mu.Unlock()
@@ -647,6 +660,9 @@ func (r *Register) persistIfDirty() {
 	list := r.listLocked()
 	r.mu.Unlock()
 
+	if persistEncodeHookForTest != nil {
+		persistEncodeHookForTest()
+	}
 	ptrs := make([]*Host, len(list))
 	for i := range list {
 		ptrs[i] = &list[i]
