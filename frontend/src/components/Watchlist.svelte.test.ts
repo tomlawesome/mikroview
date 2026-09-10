@@ -827,6 +827,34 @@ describe('The ratified watch table (#676)', () => {
     flushSync()
     expect(watchNames()).toEqual(['alpha watch'])
   })
+
+  // #1086: the ratified table's sortable headers are plain <button>s
+  // inside a <th> with no aria-sort, so a screen reader has no way to
+  // tell which column (or direction) the rows are currently in -- unlike
+  // MetricsTable's minutes table, which has carried aria-sort on its own
+  // sortable <th>s since round 21 (ariaSort()).
+  it('carries aria-sort on the sorted column and "none" on the rest', async () => {
+    await renderWatchlist([
+      entry('e1', 'zebra watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } }),
+      entry('e2', 'alpha watch', { source: { mac: '11:22:33:44:55:66' } }),
+    ])
+
+    const headers = () => within(watchTable()).getAllByRole('columnheader')
+    const ariaSorts = () => headers().map((h) => h.getAttribute('aria-sort'))
+
+    // Default sort is by watch, ascending (wtSortKey/wtSortDir's initial
+    // state) -- "watch" is the first header, the rest (including the
+    // trailing, unsortable actions column) read "none".
+    expect(ariaSorts()).toEqual(['ascending', 'none', 'none', 'none', 'none', null])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /^watch/ }))
+    flushSync()
+    expect(ariaSorts()).toEqual(['descending', 'none', 'none', 'none', 'none', null])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /^boundary/ }))
+    flushSync()
+    expect(ariaSorts()).toEqual(['none', 'ascending', 'none', 'none', 'none', null])
+  })
 })
 
 // #680: the window and the seven nights of memory behind it. Two
