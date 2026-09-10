@@ -1508,6 +1508,7 @@ func main() {
 		DefaultWatchPorts:       cfg.Flags.CriticalPorts,
 		MatchLog:                matchLog,
 		Learning:                eng,
+		Evaluation:              eng,
 		DeviceStaleAfter:        cfg.Flags.DeviceStaleAfter,
 		Auth:                    authStore,
 		Sessions:                auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
