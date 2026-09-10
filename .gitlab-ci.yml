@@ -288,7 +288,7 @@ workflow:
 # request, so an unreviewed branch can never write back and poison what
 # dev or another MR pulls next.
 #
-# Only for jobs that run as root (the node:22 images). The live-check
+# Only for jobs that run as root (the node:26 images). The live-check
 # image runs as `node`, and a cache the root jobs saved is restored
 # root-owned into a node-user job, so its `npm ci` fails with EACCES on
 # the first rmdir (#1098). Those jobs fetch cold; it costs them ~11 s.
@@ -457,11 +457,16 @@ lint:go:
         exit 1
       fi
 
+# Every node image below tracks the major the Dockerfiles build on, not the
+# current LTS (#1106). CI sat on 22 while `Dockerfile` and
+# `live-check.Dockerfile` shipped 26, so every frontend check ran two majors
+# behind the runtime the image actually uses -- which is the thing the checks
+# are meant to be testing. Move all of them together, or the split reopens.
 lint:frontend:
   stage: lint
   # Light lane (#949): svelte-check and a few node:test files fit in 2 GB.
   tags: [light]
-  image: node:22-alpine
+  image: node:26-alpine
   <<: [*dev_or_mr_code_frontend, *npm_cache]
   script:
     # The CHR watch suites (scripts/chr-watch) and #1066's reuse gate have
@@ -475,7 +480,7 @@ lint:supply-chain-pins:
   stage: lint
   # Light lane (#949): reads two files and a policy, no install.
   tags: [light]
-  image: node:22-alpine
+  image: node:26-alpine
   <<: *dev_or_mr_code
   script:
     # #711: every action SHA and image tag CI uses must be in
@@ -526,7 +531,7 @@ test:go:
 test:frontend:
   stage: test
   tags: [light]
-  image: node:22-alpine
+  image: node:26-alpine
   <<: [*dev_or_mr_code_frontend, *npm_cache]
   # The other half of #684. lint:frontend above proves the frontend compiles;
   # nothing here proved it behaves, so this lane had the same hole GitHub did
@@ -551,7 +556,7 @@ test:frontend:
 test:build-checks:
   stage: test
   tags: [light]
-  image: node:22-bookworm
+  image: node:26-bookworm
   # Not gated by #1038: the last line below is tools/docs/check-anchors.mjs,
   # the markdown link and anchor check, and generate-notices --check reads
   # THIRD-PARTY-NOTICES.md. This job's whole reason to exist includes prose,
@@ -1277,11 +1282,11 @@ security:fuzz:
 security:npm-audit:
   stage: security
   tags: [light]
-  image: node:22-alpine
+  image: node:26-alpine
   <<: [*dev_or_mr_code_frontend, *npm_cache]
   script:
     - cd frontend
-    # node:22-alpine's bundled npm tries the fast bulk advisory endpoint
+    # The image's bundled npm tries the fast bulk advisory endpoint
     # first, and only on a failure there falls back to
     # /-/npm/v1/security/audits/quick -- the endpoint the registry is
     # retiring, and the one that actually 400'd on #931 (npm's own
@@ -1293,10 +1298,13 @@ security:npm-audit:
     # 2026-09-05 -- removed that fallback outright and only calls bulk, so
     # pin to it rather than trust whatever patch of the image's bundled
     # npm a given runner has cached. Verified in a throwaway node:22-alpine
-    # container against this frontend/: `npm install -g npm@12.0.2 && npm
-    # ci && npm audit --audit-level=high` -> "found 0 vulnerabilities",
-    # with `--loglevel verbose` showing only a POST to
-    # .../security/advisories/bulk, never to .../audits/quick.
+    # container -- the image this job ran on before #1106 -- against this
+    # frontend/: `npm install -g npm@12.0.2 && npm ci && npm audit
+    # --audit-level=high` -> "found 0 vulnerabilities", with `--loglevel
+    # verbose` showing only a POST to .../security/advisories/bulk, never
+    # to .../audits/quick. That check was not re-run on node:26-alpine and
+    # does not need to be: the explicit pin above is what decides which npm
+    # runs, so the image's own bundled version never gets a say.
     - npm install -g npm@12.0.2
     - npm ci
     - npm audit --audit-level=high
@@ -1324,14 +1332,14 @@ security:npm-audit:
 # is not in allow-licenses, so an actual dependency under AGPL still fails,
 # exactly like any other disallowed licence.
 #
-# node:22-bookworm plus the Go tarball, the same combination
+# node:26-bookworm plus the Go tarball, the same combination
 # test:build-checks uses: this job needs both toolchains in one image, and
 # the Go toolchain is the official tarball pinned to go.mod's version, since
 # Debian's packaged Go is too old to read this module.
 security:licence-policy:
   stage: security
   tags: [light]
-  image: node:22-bookworm
+  image: node:26-bookworm
   <<: [*dev_or_mr_code, *git_safe, *npm_cache]
   script:
     - node --test tools/licenses/licence-policy.test.mjs
@@ -1646,7 +1654,7 @@ chr-watch:run:
   stage: chr-exercise
   # Light lane (#949): reads one report and calls the API.
   tags: [light]
-  image: node:22-alpine
+  image: node:26-alpine
   # #952: opens, comments on or closes a tracking issue via the GitLab API
   # -- never cut mid-write.
   interruptible: false
