@@ -142,6 +142,20 @@ var authzMatrix = []routeExpectation{
 		"downloads one generation's .backup or .rsc -- a router's whole configuration, credentials included, so " +
 			"this is admin-only and every call writes an audit entry with the admin's name (#394)"},
 
+	{http.MethodPost, "/api/router-backups/unlock", accessAdmin,
+		"opens the vault's optional passphrase lock for the calling session (#956) -- admin-only for the same " +
+			"reason the download is, and the unlock is bound to the session that made this call, so the same " +
+			"admin's other sign-ins still see a locked vault"},
+	{http.MethodPost, "/api/router-backups/lock", accessAdmin,
+		"drops the vault's private key again (#956) -- admin-only, and deliberately allowed from any admin " +
+			"session rather than only the one holding the unlock: locking is never the dangerous direction"},
+	{http.MethodPost, "/api/router-backups/passphrase", accessAdmin,
+		"sets the vault passphrase and re-seals what is already stored (#956) -- admin-only, and irreversible " +
+			"without the passphrase from that moment on, mikroview's own operator included"},
+	{http.MethodDelete, "/api/router-backups/passphrase", accessAdmin,
+		"removes the vault passphrase, which requires the current one (#956): an admin who cannot open the " +
+			"vault cannot decide to stop protecting it"},
+
 	{http.MethodPut, "/api/settings/store", accessAdmin,
 		"sets the event buffer's size on the running instance (#796). Admin rather than user tier for two " +
 			"separate reasons, either sufficient: it spends the host's memory, which is an instance-wide cost " +
