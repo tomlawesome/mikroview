@@ -751,6 +751,12 @@
   // '' is the "unscoped" option -- see the boundary picker section above.
   let editBoundaryKey = $state('')
   let editSaving = $state(false)
+  // The address list this entry is scoped to, if it was created by
+  // accepting an address-list suggestion (#1077). There is no control
+  // here to change it -- it just has to survive every other edit, the
+  // same way Boundary/Source/Ports do, so it is read off the entry being
+  // edited and carried straight back in saveEditWatch's request.
+  let editSourceList = $state<WatchlistEntry['sourceList']>(undefined)
 
   function startEditWatch(e: WatchlistEntry) {
     editingId = e.id
@@ -760,6 +766,7 @@
     editMode = e.invert ? 'fence' : 'expect'
     editIncludeStructuralNoise = !!e.includeStructuralNoise
     editBoundaryKey = entryBoundaryKey(e)
+    editSourceList = e.sourceList
     wtError = null
   }
 
@@ -775,6 +782,7 @@
       name: editName.trim() || undefined,
       invert: editMode === 'fence',
       source,
+      sourceList: editSourceList,
       destIp: editMode === 'expect' ? destIp : undefined,
       ports: editMode === 'expect' ? ports : undefined,
       includeStructuralNoise: editMode === 'fence' ? editIncludeStructuralNoise : undefined,
