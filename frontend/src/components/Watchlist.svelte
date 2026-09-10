@@ -875,6 +875,11 @@
     return wtSortDir === 'asc' ? '▲' : '▼'
   }
 
+  function wtAriaSort(key: WatchTableSortKey): 'ascending' | 'descending' | 'none' {
+    if (wtSortKey !== key) return 'none'
+    return wtSortDir === 'asc' ? 'ascending' : 'descending'
+  }
+
   type WatchRow = {
     entry: WatchlistEntry
     boundary: string
@@ -1335,27 +1340,27 @@
       <table class="watch-table">
         <thead>
           <tr>
-            <th>
+            <th aria-sort={wtAriaSort('watch')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'watch'} onclick={() => wtToggleSort('watch')}>
                 watch <span class="dir">{wtDirGlyph('watch')}</span>
               </button>
             </th>
-            <th>
+            <th aria-sort={wtAriaSort('boundary')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'boundary'} onclick={() => wtToggleSort('boundary')}>
                 boundary <span class="dir">{wtDirGlyph('boundary')}</span>
               </button>
             </th>
-            <th>
+            <th aria-sort={wtAriaSort('window')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'window'} onclick={() => wtToggleSort('window')}>
                 window <span class="dir">{wtDirGlyph('window')}</span>
               </button>
             </th>
-            <th>
+            <th aria-sort={wtAriaSort('state')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'state'} onclick={() => wtToggleSort('state')}>
                 state <span class="dir">{wtDirGlyph('state')}</span>
               </button>
             </th>
-            <th>
+            <th aria-sort={wtAriaSort('lastEvent')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'lastEvent'} onclick={() => wtToggleSort('lastEvent')}>
                 last event <span class="dir">{wtDirGlyph('lastEvent')}</span>
               </button>
