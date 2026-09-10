@@ -1,6 +1,9 @@
 # Releases: rebuild from main, and re-earn the property that loses
 
-Date: 2026-08-07.
+Date: 2026-08-07. **Amended 2026-09-10** — see "The tag is the trigger" at
+the end: a release is now a `v*` tag made on GitLab, not a merge to `main`
+whose `VERSION` has no tag yet. The rebuild, the smoke test and the
+`VERSION` file all stand.
 
 ## The problem
 
@@ -63,3 +66,33 @@ thing idempotent if a workflow is re-run.
 The preview lane is untouched: it still builds, publishes, signs and
 smoke-tests every release candidate, and it remains where changes are
 proven before they go near `main`.
+
+## The tag is the trigger (2026-09-10)
+
+Owner decision on #572, the first release after development moved to
+GitLab (#935): GitLab is the source of truth, so the release tag is made
+there and GitHub reacts to it. Under the earlier rule the GitHub workflow
+minted the tag itself, as its last step, and GitLab would never have held
+it at all.
+
+What changed:
+
+- `sync:mirror-to-github` pushes `v*` tags as well as the three branches.
+  The tag must be protected on GitLab (`v*`), or the protected deploy-key
+  variable is empty and the push fails on its first check.
+- `docker.yml` runs its release job on a `v*` tag push, and refuses unless
+  the tag equals `v<VERSION>` at the tagged commit. A merge to `main` now
+  only retags preview's tested digest as `latest`; it never releases.
+- A failed release is re-run on the same tag once the cause is fixed.
+  Nothing is deleted or renumbered, because the tag never claimed the
+  publish had happened — the registry does.
+
+What did not change: the `VERSION` file is still where the version lives,
+and the bump is still part of the promotion diff. "Not a git tag pushed
+after the fact" above was about *deriving* the version from a tag; the
+tag now says when, the file still says what, and the two must agree.
+
+Release steps, in order: promote `preview` → `main`; wait for the
+promote job on GitHub; on GitLab, `git tag v<VERSION> <main sha>` and
+push it to `gitlab`; watch the tag pipeline's mirror job, then the
+`docker` run on GitHub; back-merge `main` → `preview` → `dev`.
