@@ -929,13 +929,13 @@ gate:scripts:
 # perf:promotion (#1003) -- the dev -> preview promotion gate refuses a
 # regression rather than merely recording one. It runs probe-perf.mjs
 # (frontend/scripts/probe-perf.mjs -- deck-to-deck roll times, long-task
-# totals per phase, docket-scroll frame p95) against a fresh instance
+# totals per phase, docket-scroll mean frame time) against a fresh instance
 # from scripts/live-env.sh, exactly as `make live-check` starts one, then
 # diffs the result against the committed frontend/perf-baseline.json with
 # perf-compare.mjs. No baseline yet: the run records one as an artifact
 # and passes, printing what to commit. Baseline present: a metric worse
-# than it by more than 30% *and* more than 300ms (frame p95: 30% and
-# 8ms) fails the job -- both conditions, so noise on a small number can't
+# than it by more than 30% *and* more than 300ms (mean scroll frame: 30%
+# and 4ms) fails the job -- both conditions, so noise on a small number can't
 # trip it. Accepting a regression means committing the new numbers in the
 # same MR, so the change is reviewed rather than silently overwritten.
 #
@@ -1409,10 +1409,17 @@ security:trivy-fs:
     when: [runner_system_failure, api_failure]
 
 # ---------------------------------------------------------------------------
-# SYNC — GitHub is a mirror of dev, preview and main. After a push to any of
-# the three (a merge here lands as a push), mirror-to-github pushes that
-# branch to GitHub. It runs only once the owner has set
-# MIRROR_TO_GITHUB=true (#935 step 4).
+# SYNC — GitHub is a mirror of dev, preview and main, and of release tags.
+# After a push to any of the three (a merge here lands as a push),
+# mirror-to-github pushes that branch to GitHub. It runs only once the
+# owner has set MIRROR_TO_GITHUB=true (#935 step 4).
+#
+# A `v*` tag is a release (owner decision on #572, 2026-09-10: the tag is
+# made here, because GitLab is the source of truth, and GitHub's docker
+# workflow publishes from the tag it receives). The tag must be protected
+# (`v*` under Settings > Repository) or the protected variable below is
+# empty and the job fails on its first check -- which is the right
+# outcome for an unprotected tag claiming to be a release.
 #
 # The mirror pushes over SSH with a GitHub deploy key -- one repository,
 # push only, no API access -- held in GITHUB_MIRROR_SSH_KEY, a protected
@@ -1450,11 +1457,16 @@ sync:mirror-to-github:
   # this job's rule keys off `push` rather than .dev_or_mr anyway.
   rules:
     - if: '$CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true" && ($CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "preview" || $CI_COMMIT_BRANCH == "main")'
+      variables:
+        MIRROR_REF: refs/heads/$CI_COMMIT_BRANCH
+    - if: '$CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+      variables:
+        MIRROR_REF: refs/tags/$CI_COMMIT_TAG
   variables:
     GIT_DEPTH: 0
   script:
     - apk add --no-cache git openssh-client curl jq >/dev/null
-    - test -n "$GITHUB_MIRROR_SSH_KEY" || { echo "GITHUB_MIRROR_SSH_KEY is not set -- is $CI_COMMIT_BRANCH protected?"; exit 1; }
+    - test -n "$GITHUB_MIRROR_SSH_KEY" || { echo "GITHUB_MIRROR_SSH_KEY is not set -- is ${CI_COMMIT_TAG:-$CI_COMMIT_BRANCH} protected?"; exit 1; }
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
     # GitLab's variable editor trims the key's final newline, and OpenSSH
     # refuses a key without one ("error in libcrypto", dev pipeline 198).
@@ -1470,7 +1482,9 @@ sync:mirror-to-github:
     - git remote add github git@github.com:tomlawesome/mikroview.git 2>/dev/null || git remote set-url github git@github.com:tomlawesome/mikroview.git
     # Never --force: if this is refused non-fast-forward, something wrote to
     # GitHub's copy and the branch has forked. Reconcile by merge (#935).
-    - git push github "HEAD:refs/heads/$CI_COMMIT_BRANCH"
+    # A tag refused as already existing means GitHub has a different
+    # commit under that name -- a release that was never made here.
+    - git push github "HEAD:$MIRROR_REF"
 
 # ---------------------------------------------------------------------------
 # CHR-EXERCISE — #894: weekly, boots MikroTik's own CHR image under

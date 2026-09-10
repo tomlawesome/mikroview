@@ -26,8 +26,8 @@
 //   node scripts/probe-perf.mjs
 //
 // --json <path> additionally writes a machine-readable summary (schema
-// 1: commit, per-deck wallAvgMs, per-phase long-task totalMs, and the
-// docket-scroll frame p95) for perf-compare.mjs to diff against a
+// 2: commit, per-deck wallAvgMs, per-phase long-task totalMs, and the
+// docket-scroll mean frame duration) for perf-compare.mjs to diff against a
 // baseline. It is derived from the same numbers this prints -- nothing
 // is re-measured, only reshaped once the run is over. Console output is
 // unchanged whether or not --json is given.
@@ -430,7 +430,7 @@ async function main() {
 
   if (JSON_PATH) {
     const summary = {
-      schema: 1,
+      schema: 2,
       commit: mvCommit,
       decks: Object.fromEntries(ROLL_LABELS.map((label) => [label, { wallAvgMs: deckAvg[label] }])),
       longTasks: {
@@ -438,7 +438,10 @@ async function main() {
         scroll: { totalMs: scrollLongTaskStats.total },
         idle: { totalMs: idleLongTaskStats.total },
       },
-      docketScroll: { frameP95Ms: scrollFrameStats ? scrollFrameStats.p95 : null },
+      // The mean, not the p95: over ~165 frames the p95 is quantised to
+      // whole 16.7 ms periods and flipped the gate on one frame (#1111).
+      // The p95 is still printed above for the eye.
+      docketScroll: { frameAvgMs: scrollFrameStats ? scrollFrameStats.avg : null },
     }
     fs.writeFileSync(JSON_PATH, JSON.stringify(summary, null, 2) + '\n')
   }
