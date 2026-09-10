@@ -19,10 +19,17 @@
 // an anchored popover whose row slides out from under it while you read
 // it is only observable by watching it happen.
 //
+// #644's squared columns moved the *untagged* translation's entry point:
+// the NAT cell is gone from the rows, so its trigger now lives in the
+// detail sheet each row opens (EventDetailSheet's natlookup) -- same
+// store, same two modes, same wording, rendered by the same
+// RouterNatLookup the popover embeds. A tagged event keeps its trigger
+// in the rule cell, and with it the anchored popover.
+//
 // Every line and address below is synthetic, using documentation address
 // space (RFC 5737 / RFC 1918). Nothing here comes from a real deployment.
 
-import { session, check, done, feedRaw, feedSyslog } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedSyslog, unfoldStreamFilter } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -43,19 +50,34 @@ const LOGGED_SLUG = 'mv445-nat'
 const HOLD_SLUG = 'mv445-hold'
 
 const SOURCE_BOX = 'input[aria-label="Source — name, IP or CIDR"]'
-const UNLOGGED_TRIGGER = 'button[aria-label="Narrow down which NAT rule did this"]'
+const SHEET_NAT_TRIGGER = '.sheet .natlookup'
 const LOGGED_TRIGGER = `button[aria-label="Look up the NAT rule logged as ${LOGGED_SLUG}"]`
 
 const { page, consoleErrors } = await session()
 
 // Which device the events arrive from is discovered, never assumed --
-// see live-router-lookup.mjs for the incident that lesson came from.
+// see live-before-router-lookup.mjs for the incident that lesson came from.
+//
+// Its id and its configured display name are not the same string here
+// (live-env.sh's own devices block: id "live-router", name "Live
+// Router") and the two are used in different places: the sheet/popover
+// body's own copy (RouterNatLookup.svelte) reports routerLookupState's
+// device, which EventDetailSheet.svelte's openNatLookup sets from
+// event.deviceId -- the raw id -- while the header title
+// (natTitle(deviceName, ...)) is given LiveTable.svelte's deviceName(),
+// the friendly name. Both are captured so each check below reads the
+// one the component it targets actually renders.
 feedSyslog(2, 'mv445-device-probe')
 let DEVICE
+let DEVICE_NAME
 for (let i = 0; i < 40 && !DEVICE; i++) {
   await new Promise((r) => setTimeout(r, 250))
   const res = await page.request.get(`${URL_BASE}/api/devices`)
-  if (res.ok()) DEVICE = (await res.json()).devices?.[0]?.id
+  if (res.ok()) {
+    const d = (await res.json()).devices?.[0]
+    DEVICE = d?.id
+    DEVICE_NAME = d?.name
+  }
 }
 check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`)
 
@@ -75,10 +97,45 @@ async function push(payload) {
   return res.status
 }
 
-/** Narrows the live view to one address and waits for a trigger to exist. */
-async function isolate(query, trigger) {
+/** Narrows the live view to one address and opens that row's detail
+ * sheet, where the untagged lookup's trigger lives (#644). */
+async function openRowSheet(query) {
+  // Round 30's click-to-open drawer (#697's `.fbox`) closes on Escape
+  // and on any click outside it and its strip -- both of which every
+  // sheet/popover close below does -- so the Source field this fills is
+  // not reliably mounted by the time a later call gets here. Reopen
+  // rather than assume.
+  await unfoldStreamFilter(page)
   await page.fill(SOURCE_BOX, query)
-  await page.waitForSelector(trigger, { timeout: 20000 })
+  const row = `.grid .row:has-text("${query}")`
+  await page.waitForSelector(`${row} .time-btn`, { timeout: 20000 })
+  await page.click(`${row} .time-btn`)
+  await page.waitForSelector(SHEET_NAT_TRIGGER, { timeout: 5000 })
+}
+
+/** Opens the sheet's NAT lookup section and returns the sheet's text.
+ *
+ * The sheet's mode chip renders with the section itself, before the
+ * lookup resolves -- unlike the popover's, which is the resolved signal
+ * openPopover waits on -- so this waits for the section body to move
+ * past Loading… instead.
+ */
+async function openSheetLookup() {
+  await page.click(SHEET_NAT_TRIGGER)
+  await page.waitForFunction(
+    () => {
+      const t = document.querySelector('.sheet .natsection')?.textContent ?? ''
+      return t !== '' && !t.includes('Loading…')
+    },
+    null,
+    { timeout: 15000 },
+  )
+  return page.textContent('.sheet')
+}
+
+async function closeSheet() {
+  await page.keyboard.press('Escape')
+  await page.locator('.sheet').waitFor({ state: 'hidden', timeout: 10000 })
 }
 
 /**
@@ -129,13 +186,13 @@ feedRaw(loggedLine)
     await page.request.get(`${URL_BASE}/api/routeros/${encodeURIComponent(DEVICE)}/nat`)
   ).json()
   if (!before.available) {
-    await isolate(UNLOGGED_SRC, UNLOGGED_TRIGGER)
-    const text = await openPopover(UNLOGGED_TRIGGER)
+    await openRowSheet(UNLOGGED_SRC)
+    const text = await openSheetLookup()
     check(
       text.includes('No NAT table pushed'),
-      'before any push, the popup says no table has been pushed -- not an empty table',
+      'before any push, the lookup says no table has been pushed -- not an empty table',
     )
-    await closePopover()
+    await closeSheet()
   }
 }
 
@@ -236,16 +293,16 @@ check(
 
 // --- Mode 1: not logged, so subtraction ---------------------------------
 
-await isolate(UNLOGGED_SRC, UNLOGGED_TRIGGER)
+await openRowSheet(UNLOGGED_SRC)
 {
-  const text = await openPopover(UNLOGGED_TRIGGER)
+  const text = await openSheetLookup()
 
   check(
-    text.includes(`NAT table — ${DEVICE}`),
+    text.includes(`NAT table — ${DEVICE_NAME}`),
     'the unlogged mode is announced in the header, not left to be inferred',
   )
   check(
-    (await page.textContent('.popover .chip')).trim() === 'not logged',
+    (await page.textContent('.sheet .chip')).trim() === 'not logged',
     'the mode chip reads "not logged" -- text, so it survives any colour scheme',
   )
   check(
@@ -294,7 +351,7 @@ await isolate(UNLOGGED_SRC, UNLOGGED_TRIGGER)
   // `display:` declaration outranks the UA stylesheet's rule for
   // `hidden`, so a "hidden" element can render and a rendered one can be
   // marked hidden.
-  const out = page.locator('.popover .entry.out')
+  const out = page.locator('.sheet .entry.out')
   check((await out.count()) === 5, `all five ruled-out rules are still rendered (${await out.count()})`)
   await out.first().waitFor({ state: 'visible', timeout: 5000 })
   check(true, 'ruled-out entries stay visible and readable rather than being dropped')
@@ -307,10 +364,13 @@ await isolate(UNLOGGED_SRC, UNLOGGED_TRIGGER)
     `an unlogged NAT row gets no inline rule decoration (rule cell reads "${ruleCell}")`,
   )
 }
-await closePopover()
+await closeSheet()
 
 // --- Mode 2: logged, so the rule is named -------------------------------
 
+// closeSheet() above pressed Escape, which also folds the drawer these
+// two fields live in (see openRowSheet's own comment).
+await unfoldStreamFilter(page)
 await page.fill(SOURCE_BOX, '')
 await page.fill('input.rule', LOGGED_SLUG)
 await page.waitForSelector(LOGGED_TRIGGER, { timeout: 20000 })
@@ -341,13 +401,22 @@ await closePopover()
 // Newest-at-top pushes rows down as events arrive, so a popover anchored
 // to a row it is about would slide away from under itself.
 
+// closePopover() above pressed Escape, folding the drawer again.
+await unfoldStreamFilter(page)
 await page.fill('input.rule', '')
 await page.fill(SOURCE_BOX, '')
-feedRaw(unloggedLine)
-await page.waitForSelector(UNLOGGED_TRIGGER, { timeout: 20000 })
-await openPopover(UNLOGGED_TRIGGER)
+// The hold belongs to the anchored popover (#413) -- the sheet is modal
+// and takes no hold -- and since #644 removed the untagged row trigger,
+// the tagged row's rule-cell trigger is the popover's entry point here.
+feedRaw(loggedLine)
+await page.waitForSelector(LOGGED_TRIGGER, { timeout: 20000 })
+await openPopover(LOGGED_TRIGGER)
 
 feedSyslog(30, HOLD_SLUG)
+// Genuine negative assertion: proving the held rows never arrive while
+// the popup is open has no observable end-state to wait on -- only that
+// nothing showed up within a window long enough for ingest to have
+// delivered them if the hold were not in effect.
 await page.waitForTimeout(4000)
 const heldRows = await page.locator(`.grid .row:has-text("${HOLD_SLUG}")`).count()
 check(heldRows === 0, `the stream holds while the popup is open (${heldRows} new rows appeared)`)

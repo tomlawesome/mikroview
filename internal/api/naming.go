@@ -46,25 +46,29 @@ type nameProvenanceResponse struct {
 	// effect. See this type's doc comment.
 	Editable bool `json:"editable"`
 	// Router is the device whose pushed table supplies the winning
-	// name, set only when Editable is false -- the place to go and
-	// change it.
+	// name, set only when a router-pushed name is what won -- the place
+	// to go and change it. A device name decided by config.yaml (#600)
+	// is equally uneditable and has no router to name: Source is what
+	// says which refusal this is.
 	Router string `json:"router,omitempty"`
 }
 
 // handleNameProvenance answers for one (type, key) token.
 //
-// Admin-gated, matching GET /api/entities and the editor it serves:
-// #413 gives viewers no pencil at all rather than a disabled one, so a
-// viewer has no reason to reach this, and the response is a partial map
-// of which router names which host -- the same administrative metadata
-// the entities list is gated for.
+// User-tier (#653), matching GET/POST/DELETE /api/entities and the
+// editor it serves: #413 gives a viewer role no pencil at all rather
+// than a disabled one, so a viewer has no reason to reach this, and the
+// response is a partial map of which router names which host -- the
+// same administrative metadata the entities list is gated for. Widened
+// from admin to user by #653's "watchers" bench ruling, same as the
+// entities surface it serves.
 //
 // Reads only what mikroview already holds (the entity store, the config
 // maps, and state the router pushed); nothing here contacts a device,
 // per AGENTS.md's observe-never-probe invariant.
 func (s *Server) handleNameProvenance(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
@@ -88,6 +92,14 @@ func (s *Server) handleNameProvenance(w http.ResponseWriter, r *http.Request) {
 		p = s.Naming.HostProvenance(device, key)
 	case entities.TypeRule:
 		p = s.Naming.RuleProvenance(key)
+	case entities.TypeDevice:
+		// Keyed by the device id, never its name (#600): the id is the
+		// identity every event, token and pushed table already uses,
+		// and renaming must not move it. device is ignored here -- a
+		// device is not observed "on" another device -- and the
+		// refusal case is config.yaml rather than a pushed table, so
+		// there is no router to name as the place to go.
+		p = s.Naming.DeviceProvenance(key)
 	case entities.TypePort:
 		// A key that is not a port number resolves to nothing rather
 		// than erroring: naming.Resolver.Port already treats port <= 0
@@ -109,9 +121,13 @@ func (s *Server) handleNameProvenance(w http.ResponseWriter, r *http.Request) {
 		Name:     p.Name,
 		Source:   p.Source,
 		Label:    p.Label,
-		Editable: !p.RouterWins(),
+		Editable: !p.Fixed(),
 	}
-	if !resp.Editable {
+	// Only a router-won name has a router to send the operator to.
+	// #600's other refusal -- a device named in config.yaml -- is not
+	// editable either, and naming a device as the place to change it
+	// would send them to the wrong file.
+	if p.RouterWins() {
 		resp.Router = device
 	}
 	writeJSON(w, http.StatusOK, resp)

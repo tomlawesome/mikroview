@@ -10,24 +10,30 @@ import (
 	"github.com/tomlawesome/mikroview/internal/audit"
 )
 
-// auditActor resolves the acting username for an audit entry.
+// auditActorInvariantViolation is what auditActor records when it is
+// reached with no caller in context. Every handler that records an audit
+// entry is gated by callerIsAdmin, which requires a non-nil caller, so
+// this path is unreachable through the routed API today -- but the audit
+// trail must never carry an empty actor, so the fallback stays as a
+// guard against a future handler that records an entry without that
+// gate.
 //
-// Every handler that records one is gated by callerIsAdmin, which
-// requires a non-nil caller, so "unauthenticated" is now unreachable
-// through the routed API. It used to be reachable: the detector-settings
-// and flags-exclusion endpoints had a zero-account bypass that let an
-// anonymous caller mutate them, and this made that window visible in the
-// log rather than attributing the action to an empty string. The bypass
-// is gone.
-//
-// The fallback stays as a default, not a live case -- a future handler
-// that records an entry without the gate should show up in the log as
-// something, and "unauthenticated" is a better something than "".
+// It is deliberately not "unauthenticated": that reads as a plausible
+// anonymous action, which is the wrong story for code that should never
+// run at all. Bracketed and impossible to mistake for a username, so a
+// caller reading the audit log sees a code defect on sight rather than a
+// believable actor. See TestAuditActorInvariantViolationValue.
+const auditActorInvariantViolation = "[bug: auditActor reached with no caller in context]"
+
+// auditActor resolves the acting username for an audit entry -- see
+// auditActorInvariantViolation for what it records when that invariant
+// (a caller is always present by the time a handler records an entry)
+// does not hold.
 func auditActor(r *http.Request) string {
 	if u := userFromContext(r); u != nil {
 		return u.Username
 	}
-	return "unauthenticated"
+	return auditActorInvariantViolation
 }
 
 // handleAuditList serves a windowed slice of the admin audit log --

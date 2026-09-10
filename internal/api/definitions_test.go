@@ -5,14 +5,19 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
@@ -186,27 +191,247 @@ func TestHandleDefinitionsCreateRejectsProgrammaticKind(t *testing.T) {
 	}
 }
 
-// intent=detection has nowhere on the envelope to carry a custom
-// definition's match conditions today, so it is refused with its reason
-// rather than accepted and silently never evaluated. See
-// errCustomDetectionNotBuildable.
-func TestHandleDefinitionsCreateRejectsDetectionIntent(t *testing.T) {
+// A custom detection is created from its conditions and the aggregation
+// around them, and comes back carrying both -- the whole point of #502.
+func TestHandleDefinitionsCreateCustomDetection(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
-	req := createDefinitionRequest{Name: "nope", Intent: engine.IntentDetection}
+	req := createDefinitionRequest{
+		Name:   "SSH hammering",
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} attempts against port 22 from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	}
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
+	if resp.StatusCode != http.StatusCreated {
+		resp.Body.Close()
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	got := mustDecodeDefinition(t, resp)
+
+	if got.Intent != engine.IntentDetection || got.Kind != engine.KindDeclarative {
+		t.Errorf("intent/kind = %q/%q, want detection/declarative", got.Intent, got.Kind)
+	}
+	if got.Provenance.Origin != engine.ProvenanceCustom {
+		t.Errorf("provenance = %q, want custom", got.Provenance.Origin)
+	}
+	if got.Detection == nil {
+		t.Fatal("the created detection came back without its detection block")
+	}
+	if len(got.Detection.Conditions) != 1 || got.Detection.Conditions[0].Field != engine.FieldDestinationPort {
+		t.Errorf("conditions = %+v, want the one destination-port condition", got.Detection.Conditions)
+	}
+	if got.Detection.Key != engine.KeyPerSource || got.Detection.Counting != engine.CountingTotal {
+		t.Errorf("aggregation = %q/%q, want perSource/total", got.Detection.Key, got.Detection.Counting)
+	}
+
+	// Structure in the block, tunables in Params -- the split #502
+	// ratified. Threshold and window must be reachable by the same
+	// params editor that tunes every shipped detector, not by a second
+	// editing path of their own.
+	if got.Params["threshold"] != float64(5) {
+		t.Errorf("threshold param = %v (%T), want 5", got.Params["threshold"], got.Params["threshold"])
+	}
+	if got.Params["window"] != "60s" {
+		t.Errorf("window param = %v, want 60s", got.Params["window"])
+	}
+	if !slices.ContainsFunc(got.ParamSchema, func(p engine.ParamSchema) bool { return p.Name == "threshold" }) {
+		t.Errorf("a custom detection must declare its own param schema, got %+v", got.ParamSchema)
+	}
+
+	// Replayability comes free for a declarative definition -- but only
+	// if the inspection path can build this one.
+	if !got.Replay.Known || !got.Replay.Capable {
+		t.Errorf("replay = %+v, want a custom declarative detection to be replay-capable", got.Replay)
+	}
+
+	// Narrowable on destination port, so it is not in the
+	// always-consulted bucket and must not claim to be.
+	if got.Dispatch == nil || got.Dispatch.AlwaysConsulted {
+		t.Errorf("dispatch = %+v, want a detector narrowed by its destination-port condition", got.Dispatch)
+	}
+
+	// Persisted and buildable, not merely echoed: an unbuildable stored
+	// detection reports Available=false.
+	stored, ok := s.Definitions.Get(got.ID)
+	if !ok {
+		t.Fatal("the detection was not persisted to the store")
+	}
+	if !stored.Available {
+		t.Error("the stored detection is not available, so nothing would ever evaluate it")
+	}
+}
+
+// A detector the operator wrote is theirs to rename, in place. The
+// alternative -- delete and re-create -- discards the id every flag it
+// already raised points at (#612).
+func TestHandleDefinitionsUpdateRenamesACustomDetection(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req := createDefinitionRequest{
+		Name:   "typoed naem",
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	}
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
+	if resp.StatusCode != http.StatusCreated {
+		resp.Body.Close()
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	created := mustDecodeDefinition(t, resp)
+
+	name := "corrected name"
+	renamed := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+created.ID, updateDefinitionRequest{Name: &name})
+	if renamed.StatusCode != http.StatusOK {
+		renamed.Body.Close()
+		t.Fatalf("expected 200 renaming a custom detection, got %d", renamed.StatusCode)
+	}
+	got := mustDecodeDefinition(t, renamed)
+	if got.Name != name {
+		t.Errorf("Name = %q, want %q", got.Name, name)
+	}
+	if got.ID != created.ID {
+		t.Errorf("id changed on rename: %q -> %q", created.ID, got.ID)
+	}
+	if got.Detection == nil || got.Params["threshold"] != float64(5) {
+		t.Errorf("the rename disturbed the detector: detection=%+v params=%+v", got.Detection, got.Params)
+	}
+}
+
+// A shipped definition still refuses: its name comes from the binary
+// that ships the logic, not from the deployment.
+func TestHandleDefinitionsUpdateStillRefusesToRenameAShippedDefinition(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	name := "my port scan"
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/port_scan", updateDefinitionRequest{Name: &name})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 renaming a shipped definition, got %d", resp.StatusCode)
+	}
+}
+
+// A detector whose conditions give the pre-index nothing to narrow on is
+// accepted -- watching one source address is a legitimate question --
+// but it is consulted on every event, and the definition says so rather
+// than absorbing the cost in silence.
+func TestHandleDefinitionsCreateDetectionDisclosesAlwaysConsulted(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req := createDefinitionRequest{
+		Name:   "one noisy host",
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldSourceAddress, Operator: engine.OpEquals, Values: []string{"198.51.100.7"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} events from {SourceAddress}",
+			Threshold:      3,
+			Window:         "30s",
+		},
+	}
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
+	if resp.StatusCode != http.StatusCreated {
+		resp.Body.Close()
+		t.Fatalf("expected 201 -- an un-narrowable detector is disclosed, not refused -- got %d", resp.StatusCode)
+	}
+	got := mustDecodeDefinition(t, resp)
+	if got.Dispatch == nil || !got.Dispatch.AlwaysConsulted {
+		t.Fatalf("dispatch = %+v, want alwaysConsulted", got.Dispatch)
+	}
+	if got.Dispatch.Reason != alwaysConsultedReason {
+		t.Errorf("reason = %q, want the stated one", got.Dispatch.Reason)
+	}
+}
+
+// intent=detection with no detection block has nowhere to carry its
+// match conditions, which is the definition-that-evaluates-nothing this
+// feature had to avoid creating.
+func TestHandleDefinitionsCreateDetectionRequiresItsBlock(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req := createDefinitionRequest{Name: "nothing to match on", Intent: engine.IntentDetection}
 	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 for intent=detection, got %d", resp.StatusCode)
+		t.Fatalf("expected 400 for a detection with no detection block, got %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(body), errCustomDetectionNotBuildable) {
-		t.Errorf("expected the refusal to state its reason, got %q", body)
+}
+
+// The detail template is operator input rendered into the interface, so
+// its placeholders are a closed set checked before anything is stored --
+// not at emission time, where the detector would already exist and would
+// fail the moment it should have fired.
+func TestHandleDefinitionsCreateDetectionRejectsUnresolvableTemplate(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	for _, tc := range []struct {
+		name     string
+		template string
+	}{
+		// A custom detection declares no evidence categories, so an
+		// evidence token would never resolve.
+		{"evidence token", "{Count} attempts against {Ports}"},
+		// Supplied by a different key mode than this detector's.
+		{"wrong key token", "{Count} attempts against {DestinationAddress}"},
+		{"invented token", "{Count} attempts, {Whatever}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(s.Definitions.List())
+			req := createDefinitionRequest{
+				Name:   "bad template",
+				Intent: engine.IntentDetection,
+				Detection: &detectionRequest{
+					Conditions: []engine.Condition{
+						{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+					},
+					Key:            engine.KeyPerSource,
+					Counting:       engine.CountingTotal,
+					DetailTemplate: tc.template,
+					Threshold:      5,
+					Window:         "60s",
+				},
+			}
+			resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("expected 400 for template %q, got %d", tc.template, resp.StatusCode)
+			}
+			if after := len(s.Definitions.List()); after != before {
+				t.Errorf("a refused template must leave nothing behind in the store (%d definitions before, %d after)", before, after)
+			}
+		})
 	}
 }
 
@@ -232,9 +457,9 @@ func TestHandleDefinitionsListReturnsCreatedEntries(t *testing.T) {
 
 // TestShippedDefinitionsDefaultToEnabled is the /api/definitions
 // replacement for detector_settings_test.go's own list-defaults test:
-// the whole shipped catalogue -- not just the twelve
-// LegacyDetectorIDs the old /api/detectors endpoint exposed -- is
-// enabled out of the box (engine.SeedShippedDefinitions).
+// the whole shipped catalogue -- not just the twelve detectors the old
+// /api/detectors endpoint exposed -- is enabled out of the box
+// (engine.SeedShippedDefinitions).
 func TestShippedDefinitionsDefaultToEnabled(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))
@@ -543,6 +768,97 @@ func TestHandleDefinitionsUpdate(t *testing.T) {
 	}
 }
 
+// #1077: an entry scoped to a router address list (the way
+// internal/api/suggest.go's handleSuggestionsAccept creates one when an
+// operator accepts a KindAddressList suggestion) lost that scope the
+// first time it was edited for any other reason, because
+// frontend/src/lib/api.ts's expectationBlock built the PUT body without
+// a sourceList key at all -- reproduced here with
+// TestHandleDefinitionsUpdateOmittingSourceListClearsIt asserting the
+// scope survived: it failed, got.SourceList coming back empty.
+//
+// expectationRequest.SourceList is deliberately full-replace, the same
+// as Source/DestIP/Ports/Boundary -- not a leave-alone pointer like
+// Window, see that field's own doc comment -- so making Go tolerate an
+// absent sourceList was rejected as the fix: it would special-case this
+// one field for no caller but the watchlist editor, which is exactly the
+// leave-alone trap Window's doc comment already explains the cost of.
+// The real fix is the frontend now reading sourceList off the entry it
+// is editing and resending it on every PUT (Watchlist.svelte's
+// editSourceList, api.ts's WatchlistEntryRequest.sourceList) -- both
+// tests below now document and pin that contract: omitting the field
+// still clears it (full-replace, unchanged), and the frontend's fixed
+// behaviour -- always sending it -- keeps the scope.
+func TestHandleDefinitionsUpdateOmittingSourceListClearsIt(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name: "list-scoped",
+		Expectation: &expectationRequest{
+			SourceList: watchlist.AddressListRef{Device: "rb5009", List: "iot-clients"},
+			Ports:      []int{443},
+		},
+	})
+	entry := mustDecodeDefinition(t, created)
+	if entry.Expectation.SourceList.Empty() {
+		t.Fatal("setup failed: expected the created entry to carry a SourceList")
+	}
+
+	// The shape frontend/src/lib/api.ts's expectationBlock sent before
+	// the #1077 fix: every operator-settable field except sourceList,
+	// which it never carried at all. Still full-replace, deliberately --
+	// see the doc comment above.
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{Ports: []int{443, 8443}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _, err := s.Definitions.GetExpectation(entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.SourceList.Empty() {
+		t.Errorf("expected an update that omits sourceList to clear it (full-replace, same as Boundary), got %+v", got.SourceList)
+	}
+}
+
+// The other half of the #1077 fix's contract: a PUT that does carry
+// sourceList -- what the watchlist editor now always sends, reading it
+// back off the entry being edited -- keeps the scope.
+func TestHandleDefinitionsUpdateSourceListSurvivesWhenSent(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	list := watchlist.AddressListRef{Device: "rb5009", List: "iot-clients"}
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:        "list-scoped",
+		Expectation: &expectationRequest{SourceList: list, Ports: []int{443}},
+	})
+	entry := mustDecodeDefinition(t, created)
+
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{SourceList: list, Ports: []int{443, 8443}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _, err := s.Definitions.GetExpectation(entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceList != list {
+		t.Errorf("expected SourceList to survive an update that resends it, got %+v", got.SourceList)
+	}
+}
+
 func TestHandleDefinitionsUpdateUnknownID(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))
@@ -603,6 +919,132 @@ func TestHandleDefinitionsUpdateStartsObservingWhenInverted(t *testing.T) {
 	got, _, _ := s.Definitions.GetExpectation(entry.ID)
 	if !got.Observing {
 		t.Error("expected Observing=true after switching to inverted")
+	}
+}
+
+// --- Window (#773) ---------------------------------------------------------
+
+// TestHandleDefinitionsCreateWithWindow pins that POST can set a window at
+// creation time -- before this, expectationRequest had no Window field at
+// all, so every watch created through the API was silently "always".
+func TestHandleDefinitionsCreateWithWindow(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	window := watchlist.Window{Start: 0, End: 6 * 60, Zone: "Europe/London"}
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:        "quiet hours",
+		Expectation: &expectationRequest{Ports: []int{22}, Window: &window},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	got := mustDecodeDefinition(t, resp)
+	if got.Expectation == nil || !reflect.DeepEqual(got.Expectation.Window, window) {
+		t.Errorf("expected window %+v, got %+v", window, got.Expectation)
+	}
+
+	stored, _, err := s.Definitions.GetExpectation(got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stored.Window, window) {
+		t.Errorf("window not persisted: got %+v, want %+v", stored.Window, window)
+	}
+}
+
+// TestHandleDefinitionsUpdateSetsWindow pins that PUT can set a window on
+// an existing expectation that had none.
+func TestHandleDefinitionsUpdateSetsWindow(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{Name: "e", Expectation: &expectationRequest{Ports: []int{22}}})
+	entry := mustDecodeDefinition(t, created)
+	if entry.Expectation.Window.Defined() {
+		t.Fatal("setup failed: expected the fresh entry to start with no window")
+	}
+
+	window := watchlist.Window{Start: 22 * 60, End: 6 * 60}
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{Ports: []int{22}, Window: &window},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _, _ := s.Definitions.GetExpectation(entry.ID)
+	if !reflect.DeepEqual(got.Window, window) {
+		t.Errorf("expected window %+v, got %+v", window, got.Window)
+	}
+}
+
+// TestHandleDefinitionsUpdateRejectsInvalidWindow pins that a window this
+// package cannot turn into instants -- here, a zone tzdata cannot load --
+// is refused with a 400 rather than stored to drift silently. Reuses
+// watchlist's own "made-up zone" case (window_test.go's TestWindowValidate)
+// rather than asserting a second, narrower notion of "invalid".
+func TestHandleDefinitionsUpdateRejectsInvalidWindow(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{Name: "e", Expectation: &expectationRequest{Ports: []int{22}}})
+	entry := mustDecodeDefinition(t, created)
+
+	badWindow := watchlist.Window{Start: 0, End: 6 * 60, Zone: "Middle/Earth"}
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{Ports: []int{22}, Window: &badWindow},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an unloadable zone, got %d", resp.StatusCode)
+	}
+
+	got, _, _ := s.Definitions.GetExpectation(entry.ID)
+	if got.Window.Defined() {
+		t.Errorf("a refused update must not have taken effect, got window %+v", got.Window)
+	}
+}
+
+// TestHandleDefinitionsUpdateOmittedWindowLeavesItUnchanged pins the
+// decision behind expectationRequest.Window being a pointer: an update that
+// does not mention window (as the docket form does not yet -- #772, round
+// 31) must not reset an existing window to "always" as a side effect of
+// editing something else, here Ports.
+func TestHandleDefinitionsUpdateOmittedWindowLeavesItUnchanged(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	window := watchlist.Window{Start: 0, End: 6 * 60}
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:        "e",
+		Expectation: &expectationRequest{Ports: []int{22}, Window: &window},
+	})
+	entry := mustDecodeDefinition(t, created)
+	if !reflect.DeepEqual(entry.Expectation.Window, window) {
+		t.Fatalf("setup failed: expected window %+v, got %+v", window, entry.Expectation.Window)
+	}
+
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{Ports: []int{22, 2222}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _, _ := s.Definitions.GetExpectation(entry.ID)
+	if len(got.Ports) != 2 {
+		t.Errorf("expected the port edit to apply, got %+v", got.Ports)
+	}
+	if !reflect.DeepEqual(got.Window, window) {
+		t.Errorf("expected window to survive an update that did not mention it: got %+v, want %+v", got.Window, window)
 	}
 }
 
@@ -755,26 +1197,219 @@ func TestHandleDefinitionsCloneExpectation(t *testing.T) {
 	}
 }
 
-// TestHandleDefinitionsCloneRefusesShipped pins the other half of #407's
-// clone contract: a shipped detection definition's logic is Go keyed by
-// its own id, so a "clone" would be an envelope evaluating nothing.
-// Refused with the reason, not silently accepted.
-func TestHandleDefinitionsCloneRefusesShipped(t *testing.T) {
+// TestHandleDefinitionsCloneRefusesShippedCodeDetector pins what is left
+// of #407's clone refusal after #829 narrowed it. A shipped detector
+// whose matching is Go with no conditions in it -- no declarative
+// builder registered -- still cannot be copied, because there is nothing
+// to copy: the refusal now says that, and points at the editor, rather
+// than saying no shipped detector can ever be started from.
+func TestHandleDefinitionsCloneRefusesShippedCodeDetector(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
-	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/port_scan/clone", cloneRequest{})
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/activity_spike/clone", cloneRequest{})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 for cloning a shipped detection definition, got %d", resp.StatusCode)
+		t.Fatalf("expected 400 for cloning a shipped code detector, got %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "cannot be cloned") {
+	if !strings.Contains(string(body), "built into this binary as Go") {
 		t.Errorf("expected the refusal to state its reason, got %q", body)
+	}
+}
+
+// TestHandleDefinitionsCloneShippedDeclarative is #829's clone path: a
+// shipped declarative detector's structure can be read back off its own
+// builder, so the copy arrives carrying the conditions the original
+// actually matches on rather than an empty bar.
+//
+// The three things the issue asks of the copy are all asserted here,
+// because each has its own way of going quietly wrong: a copy with no
+// conditions looks fine until it never fires; a copy that starts enabled
+// duplicates the original's flags while it is being edited; and a copy
+// that lands as shipped cannot be renamed or edited at all.
+func TestHandleDefinitionsCloneShippedDeclarative(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	original := mustGetDefinition(t, ts, "port_scan")
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/port_scan/clone", cloneRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 201 cloning a shipped declarative detector, got %d: %s", resp.StatusCode, body)
+	}
+	made := mustDecodeDefinition(t, resp)
+
+	if made.ID == "port_scan" {
+		t.Error("the copy kept the original's id; a clone needs its own identity")
+	}
+	if made.Name != original.Name+" (copy)" {
+		t.Errorf("copy name = %q, want %q", made.Name, original.Name+" (copy)")
+	}
+	if made.Provenance.Origin != engine.ProvenanceCustom {
+		t.Errorf("copy provenance = %q, want custom -- a copy nobody can edit is no use", made.Provenance.Origin)
+	}
+	if made.Enabled {
+		t.Error("the copy started enabled; #787 decision C pauses it so a half-edited detector never runs")
+	}
+	if made.Detection == nil || len(made.Detection.Conditions) == 0 {
+		t.Fatalf("the copy arrived with no conditions: %+v", made.Detection)
+	}
+	if made.Structure != nil {
+		t.Error("the copy reported a shipped structure; it carries its own stored one")
+	}
+
+	// The conditions are the original's, not an invention: the shipped
+	// view's own structure block is the thing being copied, so the two
+	// have to agree field for field.
+	want := original.Structure
+	if want == nil {
+		t.Fatal("port_scan reported no structure, so there was nothing for the clone to copy")
+	}
+	if !reflect.DeepEqual(made.Detection.Conditions, want.Conditions) {
+		t.Errorf("copy conditions = %+v, want the original's %+v", made.Detection.Conditions, want.Conditions)
+	}
+	if made.Detection.Key != want.Key || made.Detection.Counting != want.Counting || made.Detection.DistinctField != want.DistinctField {
+		t.Errorf("copy aggregation = %q/%q/%q, want %q/%q/%q",
+			made.Detection.Key, made.Detection.Counting, made.Detection.DistinctField,
+			want.Key, want.Counting, want.DistinctField)
+	}
+	// Scope and the two tunable numbers come across; anything the
+	// original tuned that a custom detection has no schema for does not.
+	if !reflect.DeepEqual(made.Scope, original.Scope) {
+		t.Errorf("copy scope = %+v, want the original's %+v", made.Scope, original.Scope)
+	}
+	for _, name := range []string{"threshold", "window"} {
+		if original.Params[name] != nil && made.Params[name] == nil {
+			t.Errorf("copy dropped param %q, which a custom detection does declare", name)
+		}
+	}
+	for name := range made.Params {
+		if name != "threshold" && name != "window" {
+			t.Errorf("copy carried param %q, which a custom detection has no schema for", name)
+		}
+	}
+}
+
+// TestShippedDeclarativeStructureIsServed is the half of #829 the clone
+// depends on: until it, a shipped declarative detector's conditions
+// existed only as Go, and a copy of one could not start from what the
+// original actually matches. The structure is read-only and belongs to
+// the binary, so it is served under its own name rather than as the
+// `detection` block a PUT can rewrite.
+func TestShippedDeclarativeStructureIsServed(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	decl := mustGetDefinition(t, ts, "port_scan")
+	if decl.Structure == nil || len(decl.Structure.Conditions) == 0 {
+		t.Fatalf("port_scan served no structure: %+v", decl.Structure)
+	}
+	if decl.Detection != nil {
+		t.Error("a shipped detector served a detection block; that field is the operator's own stored structure")
+	}
+
+	// A detector with no declarative builder reports no structure rather
+	// than an error: it still lists, it simply has no conditions to show.
+	code := mustGetDefinition(t, ts, "activity_spike")
+	if code.Structure != nil {
+		t.Errorf("a shipped code detector served a structure: %+v", code.Structure)
+	}
+}
+
+// mustGetDefinition reads one definition as the API serves it.
+func mustGetDefinition(t *testing.T, ts *httptest.Server, id string) definitionView {
+	t.Helper()
+	resp, err := http.Get(ts.URL + "/api/definitions/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		t.Fatalf("GET /api/definitions/%s = %d", id, resp.StatusCode)
+	}
+	return mustDecodeDefinition(t, resp)
+}
+
+// mustCreateCustomDetection creates an operator-authored detector and
+// returns it as the API serves it.
+func mustCreateCustomDetection(t *testing.T, ts *httptest.Server, name string) definitionView {
+	t.Helper()
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:   name,
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} attempts against port 22 from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	})
+	return mustDecodeDefinition(t, resp)
+}
+
+// TestHandleDefinitionsCloneCustomDetection is the other half of #810: a
+// custom detection is data all the way down (#502), so cloning one copies
+// its structure and its tuning into a second detector the operator can
+// edit without touching the original. The copy starts paused -- #787
+// decision C, so a half-edited detector never runs.
+func TestHandleDefinitionsCloneCustomDetection(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	src := mustCreateCustomDetection(t, ts, "SSH hammering")
+	if !src.Enabled {
+		t.Fatalf("expected the original to be enabled, so the clone's paused state is its own")
+	}
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+src.ID+"/clone", cloneRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	clone := mustDecodeDefinition(t, resp)
+	if clone.ID == src.ID || clone.ID == "" {
+		t.Errorf("expected a fresh id, got %q (original %q)", clone.ID, src.ID)
+	}
+	if clone.Name != src.Name+" (copy)" {
+		t.Errorf("expected the default copy suffix, got %q", clone.Name)
+	}
+	if clone.Enabled {
+		t.Error("expected the copy to start paused")
+	}
+	if clone.Provenance.Origin != engine.ProvenanceCustom || clone.Intent != engine.IntentDetection {
+		t.Errorf("provenance/intent = %q/%q, want custom/detection", clone.Provenance.Origin, clone.Intent)
+	}
+	if clone.Detection == nil {
+		t.Fatal("the copy came back without the structure that makes it evaluate anything")
+	}
+	if !reflect.DeepEqual(clone.Detection, src.Detection) {
+		t.Errorf("detection block = %+v, want the original's %+v", clone.Detection, src.Detection)
+	}
+	if clone.Params["threshold"] != src.Params["threshold"] || clone.Params["window"] != src.Params["window"] {
+		t.Errorf("params = %v, want the original's %v", clone.Params, src.Params)
+	}
+
+	// The copy is a second detector, not a rename of the first.
+	original, ok := s.Definitions.Get(src.ID)
+	if !ok {
+		t.Fatal("the original must still exist after cloning it")
+	}
+	if !original.Definition.Enabled {
+		t.Error("cloning must not pause the original")
 	}
 }
 
@@ -928,20 +1563,25 @@ func TestBearerTokenCannotReachDefinitions(t *testing.T) {
 }
 
 // TestDefinitionsListOpenToViewer pins the viewer-readable settings
-// widening (#490) for GET /api/definitions: a signed-in non-admin now
-// gets 200, a signed-out caller is still refused, and creating a
-// definition -- the write that sits right beside this GET -- stays
-// admin-only.
+// widening (#490) for GET /api/definitions: a signed-in caller at any
+// tier, including viewer (#653), gets 200; a signed-out caller is still
+// refused. It also pins #653's own widening of the write beside this
+// GET: creating a definition, admin-only until #653, is now open to the
+// user tier and refused only for a viewer.
 func TestDefinitionsListOpenToViewer(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
 
 	resp, err := viewerClient.Get(ts.URL + "/api/definitions")
 	if err != nil {
@@ -961,10 +1601,315 @@ func TestDefinitionsListOpenToViewer(t *testing.T) {
 		t.Errorf("expected a signed-out caller to still be refused, got %d", anonResp.StatusCode)
 	}
 
-	writeResp := postJSON(t, viewerClient, ts.URL+"/api/definitions",
+	viewerWriteResp := postJSON(t, viewerClient, ts.URL+"/api/definitions",
 		createDefinitionRequest{Name: "should-fail", Expectation: &expectationRequest{Ports: []int{22}}})
-	defer writeResp.Body.Close()
-	if writeResp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected definition creation to stay admin-only, got %d", writeResp.StatusCode)
+	defer viewerWriteResp.Body.Close()
+	if viewerWriteResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected definition creation to refuse a viewer (#653), got %d", viewerWriteResp.StatusCode)
 	}
+
+	userWriteResp := postJSON(t, userClient, ts.URL+"/api/definitions",
+		createDefinitionRequest{Name: "should-succeed", Expectation: &expectationRequest{Ports: []int{22}}})
+	defer userWriteResp.Body.Close()
+	if userWriteResp.StatusCode != http.StatusCreated {
+		t.Errorf("expected definition creation to succeed for a user (#653 widened this from admin-only), got %d", userWriteResp.StatusCode)
+	}
+}
+
+// --- replay: the candidate's count, and the live one beside it (#786) ---
+//
+// A Try answers "would have fired 3 times", and that number means little
+// without the number it is being compared against. Nothing already
+// counted can supply it -- the flag time series counts new episodes over
+// the last 60 minutes and a flag's own count is re-fires within one
+// episode, neither of which is the measurement a receipt makes (#824,
+// gap 1) -- so the handler runs the same replay a second time with the
+// definition's live params. These pin that it does, that the second
+// number is really computed from the live params rather than echoing the
+// candidate's, and that it is absent when there is no candidate to
+// compare against.
+
+// newReplayableDetection creates a custom declarative detector -- five
+// hits from one source to port 22 inside a minute -- and returns its id.
+// Custom rather than shipped so the test owns both numbers it compares.
+func newReplayableDetection(t *testing.T, ts *httptest.Server) string {
+	t.Helper()
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:   "SSH hammering",
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} attempts against port 22 from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		resp.Body.Close()
+		t.Fatalf("creating the detector to replay: expected 201, got %d", resp.StatusCode)
+	}
+	return mustDecodeDefinition(t, resp).ID
+}
+
+// seedReplayCorpus fills the store with traffic that detector can be
+// replayed over: six hits from one source inside a few seconds, and two
+// unrelated events ten minutes apart around them so the corpus *spans*
+// longer than the definition's own 60s window -- a corpus shorter than
+// the window is declined rather than counted (engine's Replay).
+func seedReplayCorpus(st *store.Store) {
+	now := time.Now()
+	insert := func(at time.Time, src string, port int) {
+		st.Insert(store.Event{
+			Time: at, ReceivedAt: at, DeviceID: "core",
+			Action: store.ActionDrop, Protocol: "TCP",
+			SrcIP: src, DstIP: "192.168.1.10", DstPort: port,
+		})
+	}
+	insert(now.Add(-10*time.Minute), "10.0.0.1", 443)
+	for i := range 6 {
+		insert(now.Add(-5*time.Minute).Add(time.Duration(i)*time.Second), "203.0.113.9", 22)
+	}
+	insert(now, "10.0.0.1", 443)
+}
+
+// postReplay posts one candidate to the replay route and decodes the
+// answer, returning the raw keys too so a test can assert a key is
+// absent rather than merely decoded as nil.
+func postReplay(t *testing.T, ts *httptest.Server, id string, params engine.Params) (replayResponse, map[string]json.RawMessage) {
+	t.Helper()
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+id+"/replay", replayRequest{Params: params})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST replay: expected 200, got %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view replayResponse
+	if err := json.Unmarshal(raw, &view); err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	return view, keys
+}
+
+func TestHandleDefinitionsReplayCountsTheLiveParamsBesideTheCandidate(t *testing.T) {
+	s, st := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	id := newReplayableDetection(t, ts)
+	seedReplayCorpus(st)
+
+	// A candidate threshold of 2 against a stored threshold of 5, over
+	// the same six hits: the two counts have to come out different, or
+	// this would pass just as well against a handler that copied the
+	// candidate's own receipt into current.
+	got, _ := postReplay(t, ts, id, engine.Params{"threshold": 2})
+	if got.Receipt == nil {
+		t.Fatalf("the candidate did not produce a receipt: %+v", got)
+	}
+	if got.Current == nil {
+		t.Fatal("a replay carrying a candidate must also answer with the live params (#786), got no current")
+	}
+	if got.Current.Receipt == nil {
+		t.Fatalf("current came back without a receipt over a corpus long enough to judge: %+v", got.Current)
+	}
+
+	// Six hits from one source inside the 60s window: a threshold of 2
+	// is crossed by the second hit and every one after it, a threshold
+	// of 5 only by the fifth and the sixth.
+	if got.Receipt.EmissionCount != 5 {
+		t.Errorf("candidate emissionCount = %d, want 5", got.Receipt.EmissionCount)
+	}
+	if got.Current.Receipt.EmissionCount != 2 {
+		t.Errorf("current emissionCount = %d, want 2 -- the live threshold of 5, not the candidate's",
+			got.Current.Receipt.EmissionCount)
+	}
+
+	// Like-for-like or it is not a comparison: same corpus, same covered
+	// window, only the params differing.
+	if got.Current.Receipt.Window.Duration != got.Receipt.Window.Duration {
+		t.Errorf("current covered %s, candidate covered %s -- both must be counted over the same window",
+			got.Current.Receipt.Window.Duration, got.Receipt.Window.Duration)
+	}
+
+	// One level deep and no further: current is itself the live-params
+	// answer, so it has no current of its own to carry.
+	nestedRaw, err := json.Marshal(got.Current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nested map[string]json.RawMessage
+	if err := json.Unmarshal(nestedRaw, &nested); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := nested["current"]; ok {
+		t.Errorf("the nested current carries a current of its own: %s", nestedRaw)
+	}
+
+	// Two replays are still not an edit: the detector the engine
+	// evaluates keeps the threshold it was created with.
+	stored, ok := s.Definitions.Get(id)
+	if !ok {
+		t.Fatal("the detector vanished")
+	}
+	if fmt.Sprint(stored.Definition.Params["threshold"]) != "5" {
+		t.Errorf("threshold = %v, want the stored 5 -- a replay writes nothing", stored.Definition.Params["threshold"])
+	}
+}
+
+func TestHandleDefinitionsReplayOmitsCurrentWithoutACandidate(t *testing.T) {
+	s, st := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	id := newReplayableDetection(t, ts)
+	seedReplayCorpus(st)
+
+	got, keys := postReplay(t, ts, id, nil)
+	if got.Receipt == nil {
+		t.Fatalf("the definition's own params did not produce a receipt: %+v", got)
+	}
+	// With no candidate the replay already ran with the live params, so
+	// the receipt above *is* the current number, and a copy of it beside
+	// itself would say nothing.
+	if _, ok := keys["current"]; ok {
+		t.Errorf("an empty candidate must not carry a current: %v", keys)
+	}
+}
+
+// TestCustomDetectionFamilyRoundTrip is #829's family field end to end:
+// filed on create, re-filed by PUT, cleared by PUT, and served back on
+// every read. Round-tripped rather than asserted at one end, because the
+// failure this guards against is a field the server accepts, stores and
+// never serves -- which looks exactly like success from the editor until
+// the drawer is reopened and the picker has forgotten.
+func TestCustomDetectionFamilyRoundTrip(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:   "Garage probes",
+		Intent: engine.IntentDetection,
+		Family: engine.FamilyScan,
+		Detection: &detectionRequest{
+			Conditions:     []engine.Condition{{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}}},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	})
+	made := mustDecodeDefinition(t, resp)
+	if made.Family != engine.FamilyScan {
+		t.Fatalf("family on create = %q, want scan", made.Family)
+	}
+	if got := mustGetDefinition(t, ts, made.ID); got.Family != engine.FamilyScan {
+		t.Errorf("family on read back = %q, want scan", got.Family)
+	}
+
+	refiled := engine.FamilyPresence
+	if got := mustPutDefinition(t, ts, made.ID, updateDefinitionRequest{Family: &refiled}); got.Family != engine.FamilyPresence {
+		t.Errorf("family after re-filing = %q, want presence", got.Family)
+	}
+
+	// Choosing nothing has to be reachable again: a picker that can only
+	// ever be set would make the first click irreversible.
+	unfiled := engine.Family("")
+	if got := mustPutDefinition(t, ts, made.ID, updateDefinitionRequest{Family: &unfiled}); got.Family != "" {
+		t.Errorf("family after clearing = %q, want empty", got.Family)
+	}
+
+	// A family nothing can draw is refused rather than stored.
+	bogus := engine.Family("chartreuse")
+	body, _ := json.Marshal(updateDefinitionRequest{Family: &bogus})
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/definitions/"+made.ID, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	bad, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bad.Body.Close()
+	if bad.StatusCode == http.StatusOK {
+		t.Error("PUT stored a family nothing can draw")
+	}
+}
+
+// TestUpdateDetectionStructure is the save half of the conditions editor.
+// Until #829 a custom detector's structure was write-once at create time,
+// because nothing in the UI could author a condition; the editor's Save
+// is this PUT, and what it must not do is quietly leave the old
+// conditions in place while reporting success.
+func TestUpdateDetectionStructure(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	made := mustCreateCustomDetection(t, ts, "Garage probes")
+
+	got := mustPutDefinition(t, ts, made.ID, updateDefinitionRequest{
+		Detection: &detectionStructureRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldSourceAddress, Operator: engine.OpInCIDR, Values: []string{"10.0.70.0/24"}},
+				{Field: engine.FieldAction, Operator: engine.OpEquals, Values: []string{"drop"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingDistinct,
+			DistinctField:  engine.FieldDestinationAddress,
+			DetailTemplate: "{Count} hosts in the garage range probed by {SourceAddress}",
+		},
+	})
+	if got.Detection == nil || len(got.Detection.Conditions) != 2 {
+		t.Fatalf("conditions after save = %+v, want the two just sent", got.Detection)
+	}
+	if got.Detection.Conditions[0].Operator != engine.OpInCIDR {
+		t.Errorf("first condition = %+v, want inCIDR", got.Detection.Conditions[0])
+	}
+	if got.Detection.DistinctField != engine.FieldDestinationAddress {
+		t.Errorf("distinctField after save = %q", got.Detection.DistinctField)
+	}
+	// Threshold and window are params and stay params: a structure save
+	// must not disturb the numbers the params editor owns.
+	if got.Params["threshold"] == nil || got.Params["window"] == nil {
+		t.Errorf("a structure save lost the tuning params: %+v", got.Params)
+	}
+}
+
+// mustPutDefinition applies one update and returns the definition as the
+// API serves it back, failing the test on anything but 200.
+func mustPutDefinition(t *testing.T, ts *httptest.Server, id string, update updateDefinitionRequest) definitionView {
+	t.Helper()
+	body, err := json.Marshal(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/definitions/"+id, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		got, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("PUT /api/definitions/%s = %d: %s", id, resp.StatusCode, got)
+	}
+	return mustDecodeDefinition(t, resp)
 }

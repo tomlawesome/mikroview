@@ -8,22 +8,30 @@ import (
 	"net/http"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/backupvault"
+	"github.com/tomlawesome/mikroview/internal/baseline"
+	"github.com/tomlawesome/mikroview/internal/coverage"
+	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/hosts"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/oidc"
+	"github.com/tomlawesome/mikroview/internal/oui"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/settings"
 	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
@@ -34,13 +42,48 @@ type Server struct {
 	Devices    *device.Registry
 	Hub        *hub.Hub
 	Reputation *reputation.Client
+	// MACRegistry is the persisted MAC-address first/last-seen history
+	// (internal/device.MACRegistry) that already backs the new-device
+	// detector -- read-only here, for GET /api/devices/macs (issue #675):
+	// the Entities page's named-things table joins a host entity (keyed
+	// on IP) against this by MACEntry.LastIP to show its MAC and how long
+	// mikroview has known it, without inventing a second persisted
+	// per-host store. Nil-guarded in handleDeviceMACs like Reputation/
+	// NetClass above -- a Server built without one (an older test) simply
+	// answers an empty list rather than panicking.
+	MACRegistry *device.MACRegistry
 	// NetClass attributes an IP to a Tor exit / VPN / datacenter /
 	// privacy relay for the manual lookup popover (issue #114). Nil means
 	// no sources were enabled, and every use is nil-guarded -- the same
 	// nil-means-disabled convention as Reputation. Deliberately display-
 	// only: it is read in handleIPLookup and nowhere near flag scoring.
 	NetClass *netclass.Classifier
-	Flags    *flags.Store
+	// OUI turns a hardware address into the organisation IEEE assigned
+	// its prefix to, for the device dossier (issue #410). Nil means the
+	// feed is switched off, and every use is nil-guarded -- the same
+	// nil-means-disabled convention as NetClass above. The package's own
+	// methods are nil-safe too, so a disabled feed answers "no vendor
+	// data" rather than needing a check at each call site.
+	OUI *oui.Registry
+	// History is the on-disk event history a replay reads before it
+	// reaches the ring (#856). Nil means memory-only, which is the
+	// default and a first-class mode, not a missing dependency -- same
+	// nil-means-disabled convention as NetClass and Reputation above.
+	// It is read for replays and nowhere else; ingest writes to it
+	// through main, not through here.
+	History engine.RetainedDays
+	// HistoryControl is that same history's switch and caps, as
+	// /api/settings/history reads and writes them (#910). Nil in tests
+	// that do not exercise it and on any instance built without one, in
+	// which case both endpoints refuse rather than pretend -- same
+	// nil-means-unavailable convention as Settings above.
+	//
+	// Separate from History rather than folded into it because they are
+	// different questions asked by different callers: History is read
+	// on the replay path and must stay the narrow "give me days" shape
+	// internal/engine defines, while this one is a settings surface.
+	HistoryControl HistoryControl
+	Flags          *flags.Store
 	// Definitions is the one document holding every definition the engine
 	// evaluates -- shipped detectors, the operator's expectations, and
 	// anything a builder UI authors from scratch (issue #404). It backs
@@ -52,6 +95,19 @@ type Server struct {
 	// empty, unpersisted store), same always-usable convention as Flags
 	// above.
 	Definitions *engine.DefinitionsStore
+	// Decommissions holds every retiring network segment (#460): the
+	// range, its clean-window clock, and the names the router last knew
+	// inside it. Its own store rather than a corner of Definitions,
+	// because a decommission watch is not a stored Definition -- see
+	// engine.DecommissionWatches for why its logic has to be Go. nil is
+	// valid and disables the whole surface with a 503 rather than a
+	// panic, matching the optional-store convention below.
+	Decommissions *decommission.Store
+	// DecommissionCleanWindow is the configured default offered when a
+	// watch is created (config engine.decommissionCleanWindow). Each
+	// watch keeps the window it was created with, so changing this never
+	// retunes a decommission already under way.
+	DecommissionCleanWindow time.Duration
 	// Entities is the persisted, admin-manageable (type, key) -> label/
 	// tags store backing GET/POST/DELETE /api/entities (issue #107) --
 	// the shared foundation for a future mail-sender allowlist and
@@ -77,6 +133,17 @@ type Server struct {
 	// would silently lose every match. Every handler that reads it must
 	// nil-check first.
 	MatchLog matchlog.Store
+	// Learning answers a definition's live baseline warm-up state (issue
+	// #639) -- purpose-named and narrow rather than a *engine.Engine
+	// field, following #407's own definitions-API precedent of never
+	// handing this package evaluation internals it does not need. Nil
+	// like MatchLog is a valid, common state (most tests, and any Server
+	// built before the engine exists): every reader treats a nil Learning
+	// exactly like a definition this method reports false for, so the
+	// "learning" field is simply omitted rather than requiring one.
+	Learning interface {
+		Learning(id string, now time.Time) (engine.LearningState, bool)
+	}
 	// Suggest is the persisted pool of watchlist entries suggested from
 	// data RouterOS has already pushed (#243 slice 5) -- backing GET/POST
 	// /api/suggestions/... (see suggest.go). Always non-nil
@@ -105,6 +172,40 @@ type Server struct {
 	// Open("") returns a usable, empty, unpersisted store), same
 	// always-usable convention as Entities/Flags/Definitions above.
 	Rules *rules.Store
+	// Coverage is the persisted set of coverage-gap declarations (issue
+	// #630/#392): an admin's on-record statement that a given boundary-
+	// direction pair is intentionally, not accidentally, quiet. Backs
+	// GET/PUT/DELETE /api/coverage/declarations (see coverage.go).
+	// Always non-nil (internal/coverage.Open("") returns a usable,
+	// empty, unpersisted store), same always-usable convention as
+	// Entities/Flags/Definitions above.
+	Coverage *coverage.Store
+	// Hosts is the host presence register (issue #1016): every host the
+	// syslog feed has shown, so the map can grey out one that has gone
+	// quiet instead of silently dropping it, plus whatever an operator
+	// has said about a quiet host. Backs GET /api/hosts and the mark
+	// endpoints (see hosts.go). Always non-nil (internal/hosts.Open("")
+	// returns a usable, empty, unpersisted register), same
+	// always-usable convention as Coverage above.
+	Hosts *hosts.Register
+	// Baseline is the line register (issue #1016, round 49): which
+	// source/destination/port/protocol lines the feed has shown and on
+	// which of the last few days, so the map can draw a line that is off
+	// the established pattern brightly and let every settled one recede.
+	// Backs GET /api/baseline/off and the expected endpoints (see
+	// baseline.go). Always non-nil (internal/baseline.Open("", cfg)
+	// returns a usable, empty, unpersisted register), same always-usable
+	// convention as Hosts above.
+	Baseline *baseline.Register
+	// HostQuietAfter is how long a host may be silent before the map
+	// draws it quiet (config baseline.hostQuietAfter, 24 hours by owner
+	// ratification on 2026-09-07). Served to the browser on
+	// GET /api/baseline/off, which is where the other two thresholds
+	// already travel -- see offBaselineResponse for why it rides there
+	// rather than on GET /api/hosts. The zero value is treated as the
+	// default by that handler's caller, so a Server built without it in a
+	// test is still coherent.
+	HostQuietAfter time.Duration
 	// Audit is the persisted, admin-only accountability log of every
 	// admin-privileged mutation (issue #112) -- who created a user,
 	// changed a detector setting, upserted/deleted an entity, created or
@@ -126,6 +227,31 @@ type Server struct {
 	// device with at least one event is always reported "live".
 	DeviceStaleAfter time.Duration
 	StartTime        time.Time
+	// Now is where the definitions read path takes the current time from
+	// -- the nightly watch fill and the ring/coverage view it renders
+	// (see s.now and handleDefinitionsList). Nil means time.Now, which is
+	// every deployment: this is a seam for tests, not a setting.
+	//
+	// Deliberately narrow. It is not a process-wide fake clock: ingest
+	// stamps, session expiry, retention and everything else keep reading
+	// time.Now directly, because a whole-process clock that can be moved
+	// from an HTTP request is a much larger thing to get wrong than the
+	// one read path #1063 needed to stop waiting on.
+	Now func() time.Time
+	// TestHooks turns on the test-only routes (POST /api/test/clock and
+	// POST /api/test/reset) and nothing else. Off unless main saw
+	// MV_TEST_HOOKS=1; when off the routes are not registered at all, so
+	// they 404 rather than 403 -- see testhooks.go.
+	TestHooks bool
+	// Reseed re-applies this binary's shipped catalogue after
+	// POST /api/test/reset empties the definitions store. Set by main
+	// alongside TestHooks; nil means the reset leaves the store empty,
+	// which is only ever a test fixture's situation.
+	Reseed func() error
+	// testClockOffset is how far POST /api/test/clock has moved this
+	// process's definitions clock forward, in nanoseconds. Zero unless
+	// that route exists and something called it.
+	testClockOffset atomic.Int64
 	// Version is main.version (the build-time-stamped short commit SHA,
 	// "dev" for a plain local build) -- passed in rather than read
 	// directly since internal/api can't import main. Surfaced on
@@ -149,6 +275,12 @@ type Server struct {
 	// is not good enough for a setting the operator believes is in
 	// effect. See config_problems.go.
 	ConfigProblems []ConfigProblem
+	// Persistence reports which backend this deployment's persisted
+	// stores (flags, definitions, watchlist entries, entities, tokens/
+	// accounts -- internal/persist's own package doc) actually use right
+	// now -- set once at boot from main.go's storage decision. See
+	// persistence.go.
+	Persistence PersistenceInfo
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -172,6 +304,12 @@ type Server struct {
 	// usable, empty, unpersisted store), same nil-never convention as
 	// Auth above.
 	Tokens *auth.TokenStore
+	// Vault is the router-backup store (#394) -- nil in tests that do
+	// not exercise it and on any instance built without one, same
+	// nil-means-disabled convention as History/NetClass above. The SFTP
+	// drop box (internal/backupsftp) writes to it directly; the HTTP
+	// handlers here only ever read it back and download from it.
+	Vault *backupvault.Vault
 	// IngestLimiter bounds how often one ingest token may call POST
 	// /api/ingest/routeros (issue #186 step 3). Reuses auth.LoginLimiter
 	// rather than a second rate-limiting primitive -- see handleIngest
@@ -186,6 +324,19 @@ type Server struct {
 	// (routerstate.New() needs no configuration); in-memory only, by
 	// that package's design.
 	RouterState *routerstate.Store
+
+	// Settings holds the small set of configuration an admin may change
+	// from inside the running app rather than in config.yaml -- today,
+	// the event buffer's size (#796). Backs PUT /api/settings/store; see
+	// settings.go. Nil is a valid state (a Server built without one, as
+	// most tests are): the PUT then refuses rather than pretending to
+	// store anything.
+	Settings *settings.Store
+	// memory is the event-buffer figure in effect and the range it may
+	// move within -- see settings.go. Populated by InitMemory at boot;
+	// unexported because it carries a mutex and an atomic, which a
+	// struct literal cannot safely fill in.
+	memory memoryState
 
 	// Setup holds what has been observed of each router's setup, for the
 	// guided wizard (#320). Nil in tests that do not exercise it, which
@@ -230,6 +381,16 @@ type Server struct {
 	// window for the one production caller of SetEnabledAndScope (this
 	// handler); zero value is ready to use, same as ingestAuditMu above.
 	definitionsEnabledScopeMu sync.Mutex
+
+	// verdictWatchlistMu serializes the verdict handlers' compound work
+	// (issue #641): an expected verdict writes an expectation into the
+	// flags store *and* permitted destinations onto the device's inverted
+	// watchlist entry, and undoing or re-judging it takes both back. Two
+	// verdicts about the same device interleaving could let one's
+	// promotion land inside the other's withdrawal, leaving the device
+	// permitted somewhere no record still claims. Zero value is ready to
+	// use, same as the two above.
+	verdictWatchlistMu sync.Mutex
 }
 
 // route is one registered endpoint. Routes are declared as data rather
@@ -247,14 +408,43 @@ type route struct {
 	handler http.HandlerFunc
 }
 
+// now is the current time as the definitions read path sees it: the
+// process clock (or Server.Now, where a test supplied one) plus whatever
+// POST /api/test/clock has been asked to add.
+//
+// The offset is separate from the Now field on purpose. Now is the base
+// clock a unit test substitutes wholesale; the offset is the movable part
+// the test-hooks route drives, and keeping them apart means a test can
+// pin the base to a fixed instant and still exercise the endpoint.
+func (s *Server) now() time.Time {
+	base := time.Now
+	if s.Now != nil {
+		base = s.Now
+	}
+	return base().Add(time.Duration(s.testClockOffset.Load()))
+}
+
 // routes returns every /api/* endpoint. Order is irrelevant to
 // ServeMux's matching (it is longest-pattern-wins, not first-match), so
 // these stay grouped by area for readability.
 func (s *Server) routes() []route {
+	rs := s.apiRoutes()
+	// Appended rather than declared inline so the ordinary table stays
+	// exactly the set a shipped image serves: with MV_TEST_HOOKS unset
+	// these two patterns are never registered, so they 404 like any
+	// unknown path instead of existing and refusing (see testhooks.go).
+	if s.TestHooks {
+		rs = append(rs, s.testHookRoutes()...)
+	}
+	return rs
+}
+
+func (s *Server) apiRoutes() []route {
 	return []route{
 		{http.MethodGet, "/api/healthz", s.handleHealthz},
 		{http.MethodGet, "/api/events", s.handleEvents},
 		{http.MethodGet, "/api/devices", s.handleDevices},
+		{http.MethodGet, "/api/devices/macs", s.handleDeviceMACs},
 		{http.MethodGet, "/api/rules", s.handleRules},
 		// The pushed rule/NAT tables (issue #186 step 4) -- session-gated
 		// reads over RouterState, entirely separate from the push
@@ -262,15 +452,66 @@ func (s *Server) routes() []route {
 		// deliberately absent from this table.
 		{http.MethodGet, "/api/routeros/{device}/rules", s.handleRouterOSRules},
 		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
+		{http.MethodGet, "/api/routeros/{device}/addresses", s.handleRouterOSAddresses},
+		// Per-tunnel state (issue #874, City 9's ingest side): WireGuard
+		// handshake-derived up/down and the /ppp/active table backing
+		// L2TP/PPTP/SSTP/OVPN alike. Same session-gated, read-only shape
+		// as the three routes above.
+		{http.MethodGet, "/api/routeros/{device}/wireguard", s.handleRouterOSWireguard},
+		{http.MethodGet, "/api/routeros/{device}/ppp-active", s.handleRouterOSPPPActive},
 		{http.MethodGet, "/api/stats", s.handleStats},
+		// #644 round 21's top port/top talker table columns -- see
+		// handleStatsTops' own doc comment for why this is a separate
+		// route rather than a field on /api/stats above.
+		{http.MethodGet, "/api/stats/tops", s.handleStatsTops},
+		// #1018's two tools on the living topology: where a port is used
+		// (seen traffic, and the pushed rules that name it), and the one
+		// hop one logged line took through the router. Reads over the
+		// event buffer and RouterState; nothing here touches the network.
+		{http.MethodGet, "/api/ports", s.handlePorts},
+		{http.MethodGet, "/api/trace", s.handleTrace},
+		// Ingest-loss "Clear all" (#1015): zeroes the four monotonic
+		// syslog-listener loss counters /api/stats' "syslog.loss" field
+		// reads, so a transient loss stops permanently marking the
+		// instance once the operator has seen it. See syslog.go.
+		{http.MethodPost, "/api/syslog/loss/clear", s.handleSyslogLossClear},
+		// The one setting an admin may change from inside the app (#796).
+		// No matching GET: the memory group's whole state rides on
+		// /api/stats' "memory" object, which every open tab is already
+		// polling for the count and capacity beside it -- see
+		// handleStats for why one payload rather than two.
+		{http.MethodPut, "/api/settings/store", s.handleStoreSettingsUpdate},
+		// The on-disk history's switch and caps (#910), which sit one
+		// storey under the memory group on the same screen. This pair
+		// does have its own GET, unlike the memory group above: what it
+		// reports -- the days actually held, the oldest and newest of
+		// them, the bytes -- is read off the retention directory, which
+		// is far too much work to hang off /api/stats' few-second poll.
+		{http.MethodGet, "/api/settings/history", s.handleHistorySettings},
+		{http.MethodPut, "/api/settings/history", s.handleHistorySettingsUpdate},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
 		{http.MethodPost, "/api/flags/clear-all", s.handleFlagsClearAll},
-		{http.MethodPost, "/api/flags/{id}/clear", s.handleFlagsClear},
-		{http.MethodPost, "/api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent},
-		{http.MethodGet, "/api/flags/exclusions", s.handleExclusionsList},
-		{http.MethodDelete, "/api/flags/exclusions/{id}", s.handleExclusionRemove},
+		{http.MethodPost, "/api/flags/{id}/verdict", s.handleFlagsVerdict},
+		// Not "/{id}/verdict" (which would mirror the POST above): that
+		// shape is structurally ambiguous against any literal-then-
+		// wildcard sibling under /api/flags/ in Go's net/http.ServeMux
+		// (both would be 4 segments, one wildcard-then-literal and one
+		// literal-then-wildcard, so a path matching both makes neither
+		// pattern more specific and ServeMux panics at registration
+		// rather than pick one -- as it did against the exclusions
+		// DELETE this table used to carry). "verdict/{id}" instead puts
+		// the wildcard last, the same shape every other DELETE-by-id
+		// route in this table already uses (definitions/{id},
+		// tokens/{id}, users/{id}).
+		{http.MethodDelete, "/api/flags/verdict/{id}", s.handleFlagsVerdictUndo},
+		// #640's ledger. Same literal-then-wildcard shape as the DELETE
+		// route above it, for the reason the comment above gives: a
+		// wildcard-then-literal fourth segment under /api/flags/ cannot
+		// be registered alongside it.
+		{http.MethodGet, "/api/flags/expectations", s.handleExpectationsList},
+		{http.MethodDelete, "/api/flags/expectations/{id}", s.handleExpectationForget},
 
 		// The one definitions surface (issue #407), replacing
 		// /api/detectors and /api/watchlist/entries wholesale. A shipped
@@ -291,6 +532,16 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/definitions/{id}/promote", s.handleDefinitionsPromote},
 		{http.MethodPost, "/api/definitions/{id}/observing", s.handleDefinitionsSetObserving},
 
+		// Retiring a network segment (#460). One GET for the whole
+		// surface, because an offer and a ghost are the same object one
+		// decision apart and the map paints both together.
+		{http.MethodGet, "/api/decommission", s.handleDecommission},
+		{http.MethodPost, "/api/decommission/watches", s.handleDecommissionCreate},
+		{http.MethodPost, "/api/decommission/dismiss", s.handleDecommissionDismiss},
+		{http.MethodPost, "/api/decommission/watches/{id}/force", s.handleDecommissionForce},
+		{http.MethodPost, "/api/decommission/watches/{id}/undo", s.handleDecommissionUndo},
+		{http.MethodDelete, "/api/decommission/watches/{id}", s.handleDecommissionDelete},
+
 		// Where the name shown for one row token comes from, and
 		// whether labelling it here would change anything (issue
 		// #413). Sits beside /api/entities because it is the question
@@ -300,6 +551,25 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/entities", s.handleEntitiesList},
 		{http.MethodPost, "/api/entities", s.handleEntitiesUpsert},
 		{http.MethodDelete, "/api/entities", s.handleEntitiesDelete},
+
+		// Coverage-gap declarations (issue #630/#392) -- see coverage.go.
+		{http.MethodGet, "/api/coverage/declarations", s.handleCoverageList},
+		{http.MethodPut, "/api/coverage/declarations/{key}", s.handleCoveragePut},
+		{http.MethodDelete, "/api/coverage/declarations/{key}", s.handleCoverageDelete},
+
+		// The host presence register (issue #1016) -- see hosts.go.
+		{http.MethodGet, "/api/hosts", s.handleHostsList},
+		{http.MethodPut, "/api/hosts/{key}/mark", s.handleHostMarkPut},
+		{http.MethodDelete, "/api/hosts/{key}/mark", s.handleHostMarkDelete},
+		{http.MethodGet, "/api/hosts/{ip}/dossier", s.handleHostDossier},
+
+		// The baseline line register (issue #1016, round 49). Only
+		// today's off-baseline lines are reachable -- there is
+		// deliberately no endpoint serving the established ones, see
+		// handleBaselineOff.
+		{http.MethodGet, "/api/baseline/off", s.handleBaselineOff},
+		{http.MethodPut, "/api/baseline/{key}/expected", s.handleBaselineExpectedPut},
+		{http.MethodDelete, "/api/baseline/{key}/expected", s.handleBaselineExpectedDelete},
 
 		// The match log query -- a read over evidence already collected,
 		// and the one thing on the retired /api/watchlist prefix the
@@ -322,16 +592,39 @@ func (s *Server) routes() []route {
 		// The guided setup wizard's view of what has actually landed
 		// (#320) -- open to any signed-in user, see handleSetupStatus.
 		{http.MethodGet, "/api/setup/status", s.handleSetupStatus},
+		// Renders the wizard's RouterOS commands for a router or an
+		// operator-picked version (#436) -- same tier as the status GET
+		// beside it, see handleSetupCommands.
+		{http.MethodPost, "/api/setup/commands", s.handleSetupCommands},
 		// The claim ledger's own marks (#487): a step skipped or forced
 		// past. Admin-only, matching the modal it is written from.
 		{http.MethodPost, "/api/setup/mark", s.handleSetupMark},
+
+		// "Tune logging" (#435): upload a RouterOS export, get back the
+		// filter rules that cross a dark boundary with their pushed
+		// counters as the cost of watching them, then render logging
+		// switched on for whichever the operator picks. Same tier as the
+		// operational writes above -- user, not admin -- since this
+		// changes a config file the operator downloads and applies
+		// themselves; mikroview never touches the router (see
+		// tunelogging.go).
+		{http.MethodPost, "/api/tune-logging/analyse", s.handleTuneLoggingAnalyse},
+		{http.MethodPost, "/api/tune-logging/render", s.handleTuneLoggingRender},
+
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
+		{http.MethodGet, "/api/persistence", s.handlePersistence},
+
+		// Router-backup vault (#394): the Settings group's list and the
+		// download an admin uses to actually restore a dead router.
+		{http.MethodGet, "/api/router-backups", s.handleRouterBackupsList},
+		{http.MethodGet, "/api/router-backups/{device}/{generation}/{kind}", s.handleRouterBackupDownload},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
 		{http.MethodPost, "/api/auth/password", s.handleAuthChangePassword},
 		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
+		{http.MethodPost, "/api/auth/logout-all", s.handleAuthLogoutAll},
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
 		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
 		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},

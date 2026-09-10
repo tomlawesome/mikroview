@@ -4,189 +4,289 @@
   // "Behavioral flags" section) -- an interrogation aid, not an IPS: every
   // action here is a human reviewing and clearing a flag, never mikroview
   // acting on traffic itself.
-  import { flagsState, extractSourceIp } from '../lib/flags.svelte'
+  //
+  // The ratified surface (#688, round 29's `#s7`): a table --
+  // flag · where · evidence · count · age -- one row per open flag, each
+  // row opening as a drawer beneath itself holding the story, the
+  // episode's shape, the matched lines and the actions. Every flag type
+  // wears its own family ink as a left stripe and mark ink, one unbroken
+  // line running row into drawer. Ported from the record's own markup and
+  // CSS (`.frow`/`.fmark`/`.openc`/`tr.drawer`/`.dwr-in`/`.story`/`.side`/
+  // `.lines`/`.dwr-acts`), not from an impression of it; the peer
+  // watchlist table (#676) reads as the same surface because it was
+  // ported from the same scene.
+  //
+  // #780 (rounds 34-35) gave two of round 29's recorded gaps a home: the
+  // verdicts live in every row's own `CALL IT` column
+  // (`.vc`/`.vrow`/`.stamp`) rather than a drawer, and a called flag
+  // stays in place, dimmed with its stamp and its undo, until the tab is
+  // left -- the recently-cleared list, in place rather than a separate
+  // page.
+  //
+  // #640 replaced what those chips say. A fresh flag offers
+  // **expected · checked · investigate**; an investigated one offers
+  // **expected · resolved**, since it is already open and being worked
+  // on. All four are user-tier. The plain clear, the noise verdict and
+  // the admin-only `never again` (with the exclusions body that reviewed
+  // it) are gone: nothing is dismissed without a judgement, and expected
+  // is what records an expectation now -- bounded by the size of the
+  // firing being judged, not "never again" outright. A flag that has
+  // been here before says so on its own row (see returningNoteFor).
+  // #988 (round 47) gave three more of those gaps a home: the flags one
+  // source raised inside one 30-minute window fold into a campaign row
+  // that opens to its members (`tr.camp`/`tr.mem`/`tr.crule`), a
+  // detector's confidence sits beside the type as a bare number only
+  // where a detector scored the flag (`.conf`, and the drawer's own
+  // `.scored` line), and a by-type strip above the column heads counts
+  // what the table holds and filters it on a click (`.bytype`). The
+  // density picker and the reputation snapshot stay absent: the
+  // snapshot is one click away through the IP popover (owner,
+  // 2026-09-06), and #691 has what else remains. The ledger of recorded
+  // expectations is #640 part C.
+  import { onMount } from 'svelte'
+  import { flagsState, extractSourceIp, buildCampaigns } from '../lib/flags.svelte'
+  import type { Campaign } from '../lib/flags.svelte'
+  import { anyBaselineWarming } from '../lib/learningShelf'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
-  import { formatHM, countryFlag, isPublicIp } from '../lib/format'
-  import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
-  import { viewportState } from '../lib/viewport.svelte'
-  import { exclusionsState } from '../lib/exclusions.svelte'
-  import ReputationDetails from './ReputationDetails.svelte'
-  import BarList from './BarList.svelte'
-  import IpInvestigateButton from './IpInvestigateButton.svelte'
-  import TabList from './TabList.svelte'
-  import Exclusions from './Exclusions.svelte'
-  import type { Flag, FlagType } from '../lib/types'
+  import { fetchFlagEpisode, fetchExpectations } from '../lib/api'
+  import { familyOf, worstFamilyOf } from '../lib/flagPalette'
+  import { FLAG_TYPE_ORDER } from '../lib/metricsSeries'
+  import { formatHM, formatTime } from '../lib/format'
+  import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
+  import type { SortDir } from '../lib/sortFilter'
+  import { headlineFor, returningNoteFor, storyFor } from '../lib/flagNarrative'
+  import { episodeShapeFor, RECENT_MS } from '../lib/episodeShape'
+  import { groupPairsByHost, pairsTruncated, pairsTruncationLabel } from '../lib/evidencePairs'
+  import { zonesState } from '../lib/zones.svelte'
+  import { parseCidr, addressInCidr } from '../lib/addressMatch'
+  import { topologyNavState } from '../lib/topologyNav.svelte'
+  import { watchDraftForFlag } from '../lib/watchDraft'
+  import type { Flag, FlagType, FirewallEvent, Verdict, Exclusion } from '../lib/types'
 
-  // Same gate the rail uses for the engine room's watchers station.
-  const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
-
-  // Exclusions is a tab of Flags (#547, per the ratified navigation
-  // record) -- admin-only because GET/DELETE /api/flags/exclusions both
-  // 403 a non-admin caller (see Exclusions.svelte's own doc comment), so
-  // the tab itself is absent for a viewer rather than present-and-empty.
-  // With no second tab to switch between, a viewer never sees any tab
-  // chrome at all -- just the flags content, as before #547.
-  type TabId = 'flags' | 'exclusions'
-  let activeTab = $state<TabId>('flags')
-  const tabs = $derived<{ id: string; label: string; count?: number }[]>(
-    isAdminOrOpen
-      ? [
-          { id: 'flags', label: 'Flags' },
-          // Quiet, outlined count -- never the rail's alarm-filled one,
-          // which the record reserves for Flags' own open-count alone.
-          // Omitted rather than shown as a permanent "0", same reasoning
-          // as NavRail's own open-count badge: a count that never has
-          // anything to say shouldn't sit on the tab forever.
-          {
-            id: 'exclusions',
-            label: 'Exclusions',
-            count: exclusionsState.list.length > 0 ? exclusionsState.list.length : undefined,
-          },
-        ]
-      : [{ id: 'flags', label: 'Flags' }],
-  )
-
-  function selectTab(id: string) {
-    activeTab = id as TabId
-    // Exclusions.svelte stays mounted (just hidden) once switched away
-    // from, unlike the standalone page it used to be, which remounted
-    // -- and so refetched -- on every navigation to it. Refreshing on
-    // each switch back keeps that same freshness rather than showing
-    // whatever the list looked like the last time this tab was open.
-    if (activeTab === 'exclusions') exclusionsState.refresh()
+  // "watch this pathway" / "watch this source" (#761 item 3): a flag
+  // writes the watchlist tab's draft for it rather than making the
+  // operator retype what mikroview already knows. Both switch to the
+  // watchlist tab through the same shared handoff Docket's `+ watch` and
+  // #724's dial rows already use (topologyNav.svelte.ts) -- Watchlist's
+  // own draft state is private to that component.
+  //
+  // "watch this source" fences the flag's own source -- an inverted
+  // entry, scoped to that device, learning where it goes before
+  // anything fires. Gated on extractSourceIp actually resolving a
+  // single source IP, which is narrower than isFilterable(): that also
+  // covers rule_spike/stale_rule (target is a rule label),
+  // distributed_brute_force (target is "port N") and device_silence
+  // (target is a device id), none of which name a device to fence.
+  // Falling back to the raw target for those would pre-fill the
+  // draft's identity with a rule name or a bare port number -- a
+  // confident-looking but wrong "who".
+  function canWatchSource(f: Flag): boolean {
+    return extractSourceIp(f.target) !== null
   }
 
-  // Fetched here rather than centrally in App.svelte (unlike flagsState,
-  // which every role needs): only an admin ever sees this tab, so only
-  // an admin session should ever ask the admin-only endpoint for it.
-  $effect(() => {
-    if (isAdminOrOpen) exclusionsState.refresh()
-  })
+  // "watch this pathway" only ever fires for critical_port: it is the
+  // one detector whose Evidence carries a real host:port destination
+  // (evidence.pairs, #654) rather than a free-text sentence. Every other
+  // type's `target`/`detail` is prose or a list with no single named
+  // destination to expect -- guessing one from text would be inventing
+  // evidence this page did not actually see, so those flags offer
+  // `watch this source` only (and only when canWatchSource agrees).
+  function canWatchPathway(f: Flag): boolean {
+    return f.type === 'critical_port' && (f.evidence?.pairs?.length ?? 0) > 0
+  }
 
-  // lib/flags.svelte.ts's clear/clearAll/clearPermanent optimistically
-  // update, then roll back and *rethrow* on failure. None of the call
-  // sites below caught that, so a transient 500 or an expired session
-  // became an unhandled rejection: the flag reappeared with no
-  // explanation, which reads as the button not having worked rather
-  // than as an error. Reported the same way Watchlist and Entities
-  // report theirs.
+  // The pathway's `toward`: the first evidence pair's host, and every
+  // port evidence recorded against that same host -- the shape the
+  // record's own draft `toward` field takes ("nas · :445, :139").
+  function pathwayToward(f: Flag): string {
+    const pairs = f.evidence?.pairs ?? []
+    const host = pairs[0]?.host ?? ''
+    const ports = pairs.filter((p) => p.host === host).map((p) => `:${p.port}`)
+    return ports.length > 0 ? `${host} · ${ports.join(', ')}` : host
+  }
+
+  // Both are only ever wired to a button gated on canWatchSource/
+  // canWatchPathway, so the source IP this reads has already been
+  // confirmed to exist -- never falls back to the raw target.
+  function watchThisSource(f: Flag) {
+    const who = extractSourceIp(f.target)
+    if (!who) return
+    topologyNavState.requestWatchDraft({ who, mode: 'fence' })
+    appState.view = 'watchlist'
+  }
+
+  function watchThisPathway(f: Flag) {
+    const who = extractSourceIp(f.target)
+    if (!who) return
+    topologyNavState.requestWatchDraft({ who, toward: pathwayToward(f), mode: 'expect' })
+    appState.view = 'watchlist'
+  }
+
+  // "watch for this" (#641): the offer that stays behind on a resolved
+  // flag's undo line. A watcher is a tripwire finer than the detector --
+  // the detector brings a resolved flag back only when the host
+  // re-crosses its threshold, while a watch fires on the first line that
+  // reappears, which is when you want to hear the block did not hold.
+  //
+  // Same handoff as the two above, with two additions the draft carries
+  // back: the provenance of what was prefilled, and the fact that the
+  // operator came from here, so saving *or* cancelling returns them to
+  // the inbox rather than leaving them on the watchlist.
+  //
+  // Offered only where watchDraftForFlag can fill it honestly -- a flag
+  // whose detector recorded no pairs has nothing to watch for, and the
+  // drawer's own `watch this source` is still the way to watch the host
+  // at large. Same gate-rather-than-empty-form grammar as
+  // canWatchPathway above.
+  function canWatchForThis(f: Flag): boolean {
+    return watchDraftForFlag(f) !== null
+  }
+
+  function watchForThis(f: Flag) {
+    const fill = watchDraftForFlag(f)
+    if (!fill) return
+    topologyNavState.requestWatchDraft(fill)
+    appState.view = 'watchlist'
+  }
+
+  // Same gate the rail uses for the engine room's watchers station --
+  // here it decides only whether the empty state offers the audit log,
+  // which is admin-only. Every control on this page is user tier: #640
+  // left no admin-gated flag action behind.
+  const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
+  // #653: judging a flag is a user-tier action -- a viewer may watch
+  // what mikroview is seeing but not change what it shows. Absent rather
+  // than disabled, the same grammar the rest of the app uses.
+  const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
+
+  // lib/flags.svelte.ts's judge/clearAll calls optimistically update,
+  // then roll back and *rethrow* on failure. Caught here so a transient 500 or an
+  // expired session reads as an error rather than as a button that did
+  // nothing. Reported the same way Watchlist and Entities report theirs.
   let error = $state<string | null>(null)
 
   function reportFailure(action: string, err: unknown) {
     error = err instanceof Error ? `${action}: ${err.message}` : `${action} failed`
   }
 
-  // The stored preference collapses to 1 below the shared mobile
-  // breakpoint regardless of what's selected (issue #199's responsive
-  // floor) -- computed here in JS rather than as a CSS media query, so
-  // it reuses viewportState's one 700px breakpoint (the same value
-  // Toolbar/ThemeMenu already switch on) instead of a second
-  // hardcoded copy of it, and so the *card* content also reverts to its
-  // full, non-compact detail at exactly the width the grid itself
-  // renders as one column. A CSS-only floor would narrow the grid but
-  // leave the compact card styling active, which is the "unusably
-  // narrow card" the floor exists to prevent, just moved one level down.
-  const effectiveColumns = $derived<FlagColumns>(viewportState.isMobile ? 1 : flagLayoutState.columns)
-  const compact = $derived(effectiveColumns > 1)
+  let expandedId: string | null = $state(null)
 
-  // Which flag's split-Clear dropdown is open, if any -- one shared id
-  // rather than per-card state, since at most one can be open at a time
-  // and this list can be long. Closed on an outside click, Escape, or
-  // picking the menu item (issue #198).
-  let openClearMenuFor: string | null = $state(null)
+  // toggleExpanded is defined further down (#780), once verdictKind
+  // exists for it to consult -- a judged-and-cleared row no longer opens
+  // a drawer (see its own doc comment there).
 
-  function toggleClearMenu(id: string) {
-    openClearMenuFor = openClearMenuFor === id ? null : id
+  // The drawer's episode (#633, rounds 18-19/29): the flag's own events,
+  // fetched once per flag on first open via the #29 around+window
+  // lookback centred on lastSeen. Cached for the component's lifetime
+  // rather than refetched per open -- a drawer that redraws its episode
+  // differently each time it opens reads as noise, not evidence.
+  let episodes = $state<Record<string, FirewallEvent[] | 'loading' | 'error'>>({})
+
+  // The same target mapping filterToTarget uses, as query params: which
+  // server-side filter this flag's target actually is (see that
+  // function's own comment). Empty for global_spike (the surge is the
+  // whole window) and new_device (a MAC has no server-side match).
+  function episodeParams(f: Flag): { ip?: string; port?: string; rule?: string; device?: string } {
+    switch (f.type) {
+      case 'port_scan':
+      case 'activity_spike':
+      case 'critical_port':
+      case 'outbound_anomaly':
+      case 'internal_recon':
+      case 'low_slow_scan':
+      case 'off_hours_activity':
+      case 'unexpected_mail_sender':
+      case 'known_bad_ip':
+        return { ip: f.target }
+      case 'distributed_brute_force':
+        return { port: f.target.replace(/^port /, '') }
+      case 'rule_spike':
+      case 'stale_rule':
+        return { rule: f.target }
+      case 'repeated_drops':
+        return { ip: f.target.split(' -> ')[0] }
+      case 'device_silence':
+        return { device: f.target }
+      case 'global_spike':
+      case 'new_device':
+        return {}
+    }
   }
 
-  function onDocClickCloseClearMenu(e: MouseEvent) {
-    if (!(e.target as HTMLElement).closest('.split-clear')) openClearMenuFor = null
+  async function loadEpisode(f: Flag) {
+    if (episodes[f.id]) return
+    episodes[f.id] = 'loading'
+    try {
+      const res = await fetchFlagEpisode({ ...episodeParams(f), around: f.lastSeen, window: '30m', limit: 120 })
+      episodes[f.id] = res.events
+    } catch {
+      episodes[f.id] = 'error'
+    }
   }
 
-  function onKeydownCloseClearMenu(e: KeyboardEvent) {
-    if (e.key === 'Escape') openClearMenuFor = null
-  }
-
+  // #724's second click: a dial panel row's own destination, not just the
+  // right tab. Consumed (cleared) the instant it's read -- same idiom as
+  // topologyNavState.pendingDescend's own consumer in Topography.svelte --
+  // so a later manual visit to this tab doesn't silently reopen a stale
+  // drawer. Opens through loadEpisode directly, not a bare expandedId
+  // assignment, since the row's drawer needs the same episode fetch a
+  // click on the row itself triggers (Care, #724). Matched against
+  // `active` (every open flag, not the filtered/sorted view) so a filter
+  // box left over from an earlier visit can't hide the very row the dial
+  // just promised to open; a flag cleared between the click and landing
+  // here has nothing to match, so nothing opens -- never an error, never
+  // a blank drawer.
   $effect(() => {
-    if (!openClearMenuFor) return
-    document.addEventListener('click', onDocClickCloseClearMenu)
-    document.addEventListener('keydown', onKeydownCloseClearMenu)
-    return () => {
-      document.removeEventListener('click', onDocClickCloseClearMenu)
-      document.removeEventListener('keydown', onKeydownCloseClearMenu)
+    const id = topologyNavState.pendingFlagId
+    if (id === null) return
+    topologyNavState.pendingFlagId = null
+    // Either table can hold the promised row (#642): a dial can point
+    // at a provisional flag as readily as a settled one.
+    const f = active.find((x) => x.id === id) ?? provisionalActive.find((x) => x.id === id)
+    expandedId = f?.id ?? null
+    if (f) {
+      // A member's drawer sits inside its campaign (#988), so the
+      // campaign opens with it; nothing to do for a flag on its own.
+      const c = grouped.campaigns.find((x) => x.flags.some((m) => m.id === f.id))
+      if (c && !openCampaigns.includes(c.id)) openCampaigns = [...openCampaigns, c.id]
+      loadEpisode(f)
     }
   })
 
-  // "Clear all" (issue #198): first click arms it (red, "Confirm"); the
-  // second click on that same now-red button is the confirmation -- no
-  // modal, because the second click *is* the deliberate second action.
-  // Disarms itself after CLEAR_ALL_ARM_MS or when the pointer/focus
-  // leaves, so an armed-but-abandoned state can't be triggered later by
-  // an unrelated click landing back on the button.
-  const CLEAR_ALL_ARM_MS = 4000
-  let clearAllArmed = $state(false)
-  let clearAllArmTimer: ReturnType<typeof setTimeout> | null = null
-  let clearAllBusy = $state(false)
-
-  function disarmClearAll() {
-    clearAllArmed = false
-    if (clearAllArmTimer) {
-      clearTimeout(clearAllArmTimer)
-      clearAllArmTimer = null
-    }
+  // Tick positions for the episode strip, one per event, normalised
+  // across the fetched span (the record's own geometry: 260-wide
+  // viewBox, ticks inset 8px each side). A single event centres.
+  function episodeTicks(events: FirewallEvent[]): number[] {
+    const times = events
+      .map((e) => new Date(e.time).getTime())
+      .filter((t) => !Number.isNaN(t))
+      .sort((a, b) => a - b)
+    if (times.length === 0) return []
+    const t0 = times[0]
+    const span = times[times.length - 1] - t0
+    return times.map((t) => (span === 0 ? 130 : 8 + ((t - t0) / span) * 244))
   }
 
-  async function onClearAllClick() {
-    if (!clearAllArmed) {
-      clearAllArmed = true
-      clearAllArmTimer = setTimeout(disarmClearAll, CLEAR_ALL_ARM_MS)
-      return
-    }
-    disarmClearAll()
-    clearAllBusy = true
-    error = null
-    try {
-      await flagsState.clearAll()
-    } catch (err) {
-      reportFailure('Could not clear all flags', err)
-    } finally {
-      clearAllBusy = false
-    }
-  }
-
-  let expandedId: string | null = $state(null)
-
-  function toggleExpanded(id: string) {
-    expandedId = expandedId === id ? null : id
-  }
-
-  // Which source IP's campaign card (see below) is currently expanded to
-  // show its individual member flags -- null means every campaign card
-  // is collapsed to just its summary row.
-  let expandedGroup: string | null = $state(null)
-
-  function toggleGroup(sourceIp: string) {
-    expandedGroup = expandedGroup === sourceIp ? null : sourceIp
-  }
-
-  // Only true when there's actually something beyond `detail` to show --
-  // avoids a dead "Details" button on flags with nothing extra (most
-  // global_spike/rule_spike flags, or any flag when no reputation key is
-  // configured).
-  function hasExpandableDetail(f: Flag): boolean {
-    return (
-      !!f.country ||
-      !!f.reputation ||
-      !!f.evidence?.ports?.length ||
-      !!f.evidence?.hosts?.length ||
-      !!f.evidence?.nat
-    )
+  // One matched line, composed from the structured event the same way
+  // the stream renders it -- raw lines are not retained, and composing
+  // beats showing nothing.
+  function eventLine(e: FirewallEvent): string {
+    const io = [e.inInterface ? `in:${e.inInterface}` : '', e.outInterface ? `out:${e.outInterface}` : '']
+      .filter(Boolean)
+      .join(' ')
+    const proto = e.protocol ? ` proto ${e.protocol.toUpperCase()}` : ''
+    const src = e.srcIp ? `${e.srcIp}${e.srcPort ? `:${e.srcPort}` : ''}` : ''
+    const dst = e.dstIp ? `${e.dstIp}${e.dstPort ? `:${e.dstPort}` : ''}` : ''
+    const flow = src && dst ? `, ${src}->${dst}` : ''
+    return `${formatTime(e.time)} ${e.action}|${e.ruleLabel}| ${e.chain}: ${io}${proto}${flow}`
   }
 
   // Same labels Exclusions.svelte and lib/metricsSeries.ts use --
   // duplicated rather than shared, which is the long-standing convention
-  // for these two tables in this codebase.
+  // for these two tables in this codebase. The record sets the flag
+  // column in caps; that is done in CSS, so the label a filter matches
+  // on stays the label everything else in the app uses.
   const TYPE_LABELS: Record<FlagType, string> = {
     port_scan: 'Port scan',
     activity_spike: 'Activity spike',
@@ -206,78 +306,467 @@
     known_bad_ip: 'Known-bad IP (blocklist match)',
   }
 
+  // A custom detection's type is its author's own name for it -- the
+  // honest label, not a key the sixteen-entry table above could know.
+  const labelFor = (t: FlagType) => TYPE_LABELS[t] ?? t
+
+  // Ids this visit judged, kept in the settled or shelf table -- dimmed,
+  // carrying their stamp -- rather than dropped the instant the server
+  // marks them cleared (#780 item 2: "the recently-cleared list, in
+  // place", staying until the tab is left). An investigate verdict needs
+  // no entry here: it never sets `cleared`, so that row stays in
+  // `active`/`provisionalActive` on its own.
+  //
+  // The list itself lives in flagsState (#961), not as this component's
+  // own $state -- see flagsState.pinnedIds' doc comment for why a
+  // component-local list does not survive the "watch for this" round
+  // trip through the watchlist tab. onMount below clears it on a
+  // genuinely fresh visit to this tab and leaves it alone on a return
+  // from that detour, so a plain tab switch away and back still starts
+  // the list over, same as #780 always meant.
+  onMount(() => {
+    if (topologyNavState.pendingFlagsReturn) {
+      topologyNavState.pendingFlagsReturn = false
+    } else {
+      flagsState.clearPins()
+    }
+  })
+
   // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
   // see internal/flags.Store.List()) so a flag's position is fixed the
   // moment it first appears. lastSeen updates on every re-fire, not just
-  // creation, so sorting by it made an already-visible flag you're
+  // creation, so sorting by it made an already-visible row you're
   // reading jump to the top of the list the instant it (or anything
-  // else) re-fired on the next 5s poll -- jarring for something you're
-  // mid-read on. Only a genuinely new flag entering the active set now
-  // changes the ordering, which is the expected kind of layout change.
+  // else) re-fired on the next 5s poll. `flagsState.pinnedIds` keeps a
+  // just-called row exactly here rather than letting `!f.cleared` drop
+  // it (#780).
   const active = $derived(
     flagsState.list
-      .filter((f) => !f.cleared)
+      .filter((f) => !f.provisional && (!f.cleared || flagsState.pinnedIds.includes(f.id)))
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
-  const cleared = $derived(flagsState.list.filter((f) => f.cleared).slice(0, 20))
+  const cleared = $derived(flagsState.list.filter((f) => f.cleared))
 
-  // "One actor, several signals" (issue #106): active flags sharing a
-  // normalized source IP (flagsState.groupedBySource -- see that
-  // derived's own doc comment for exactly which target shapes qualify)
-  // collapse into a single campaign card instead of N separate cards,
-  // in the same firstSeen-desc order `active` already uses. Each source
-  // IP is represented once, at the position of its most-recent flag;
-  // everything ungroupable (a lone flag from that source, or a target
-  // with no single source IP to correlate on at all) renders exactly as
-  // before.
-  type ActiveItem = { kind: 'single'; flag: Flag } | { kind: 'group'; sourceIp: string; flags: Flag[] }
+  // The learning shelf's rows (#642): open *provisional* flags -- raised
+  // while their judgement's baseline was still below its history floor,
+  // so mikroview does not yet trust them. Kept out of `active` (and out
+  // of flagsState.activeCount) so trusted and untrusted judgements are
+  // never interleaved in one time-ordered list -- the issue's ruling.
+  // Same fixed firstSeen order as the settled table, for the same
+  // reason: a row must not jump mid-read when it re-fires. Same pinning
+  // as `active` above once a shelf row is judged/cleared.
+  const provisionalActive = $derived(
+    flagsState.list
+      .filter((f) => f.provisional && (!f.cleared || flagsState.pinnedIds.includes(f.id)))
+      .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
+  )
 
-  const activeItems = $derived.by((): ActiveItem[] => {
-    const seen = new Set<string>()
-    const items: ActiveItem[] = []
-    for (const f of active) {
-      const ip = extractSourceIp(f.target)
-      const group = ip ? flagsState.groupedBySource.get(ip) : undefined
-      if (ip && group) {
-        if (seen.has(ip)) continue
-        seen.add(ip)
-        items.push({ kind: 'group', sourceIp: ip, flags: group })
-      } else {
-        items.push({ kind: 'single', flag: f })
-      }
-    }
-    return items
+  // "Any baseline warming" (#642, ruling amendment 1), read from the
+  // flags poll itself since #768: GET /api/flags carries the answer, so
+  // the shelf and the flags beside it come from one response and cannot
+  // disagree while two polls are out of step. No second fetch, and no
+  // role gate -- the field is viewer-readable like the rest of that
+  // route (#653), so a viewer now gets the same explanation of the
+  // silence anyone else does. Where the server does not answer at all
+  // (no live engine) the signal is simply absent and the shelf makes no
+  // claim, the app's grammar as before.
+  const warming = $derived(anyBaselineWarming(flagsState))
+
+  // The expectations ledger's own thinness (#640, the honesty line):
+  // fetched once per mount, viewer-readable with no role gate. A failed
+  // fetch is swallowed: absence of a claim, not a false one.
+  let expectations = $state<Exclusion[] | null>(null)
+
+  $effect(() => {
+    fetchExpectations()
+      .then((list) => {
+        expectations = list
+      })
+      .catch(() => {})
   })
 
-  function groupTypeLabels(flags: Flag[]): string {
-    return [...new Set(flags.map((f) => TYPE_LABELS[f.type]))].join(' · ')
+  // Fewer than five recorded expectations counts as "thin" -- the
+  // early-noise line shows until then.
+  const THIN_LEDGER = 5
+  const ledgerThin = $derived(expectations !== null && expectations.length < THIN_LEDGER)
+
+  const showShelf = $derived(provisionalActive.length > 0 || warming || ledgerThin)
+
+  // The verdicts (#640, in #780's row column): offered on every open
+  // row, settled or shelf -- the backend takes a verdict on any flag, so
+  // this is not gated on `provisional` the way the old drawer-only
+  // buttons were (#688's own recorded gap). A row's `CALL IT` cell shows
+  // the flag's own verdict, or null while it is still unjudged. Every
+  // judged state is now a real verdict on the flag, so there is nothing
+  // to track client-side to know what a stamped row was called.
+  function verdictKind(f: Flag): Verdict | null {
+    return f.verdict ?? null
   }
 
-  function groupFirstSeen(flags: Flag[]): string {
-    return flags.reduce((min, f) => (new Date(f.firstSeen) < new Date(min) ? f.firstSeen : min), flags[0].firstSeen)
+  // A judged flag that was cleared by its verdict is done with: it wears
+  // its stamp and its undo. An investigated one is not -- it is open and
+  // being worked on, so its cell keeps offering chips (expected ·
+  // resolved) instead.
+  function isDone(kind: Verdict | null): boolean {
+    return kind !== null && kind !== 'investigate'
   }
 
-  function groupLastSeen(flags: Flag[]): string {
-    return flags.reduce((max, f) => (new Date(f.lastSeen) > new Date(max) ? f.lastSeen : max), flags[0].lastSeen)
+  // A cleared, judged row is inert (round 35's `close(r)`): its caret is
+  // gone from the CALL IT cell (see the flagRows snippet below), so a
+  // click elsewhere on the row must not still open a drawer nothing
+  // points back to. An investigated row keeps both.
+  function toggleExpanded(f: Flag) {
+    if (isDone(verdictKind(f))) return
+    expandedId = expandedId === f.id ? null : f.id
+    if (expandedId === f.id) loadEpisode(f)
   }
 
-  function filterToSource(sourceIp: string) {
-    appState.setFilter('srcQuery', sourceIp)
-    appState.view = 'live'
+  async function callVerdict(f: Flag, verdict: 'expected' | 'checked' | 'resolved') {
+    error = null
+    // Pinned *before* the call, not after: flagsState.judgeAndClear
+    // flips `cleared` optimistically the instant it runs, synchronously,
+    // well before its own network request resolves. Pinning only on
+    // success left a window where `!f.cleared` alone decided whether the
+    // row stayed in `active`/`provisionalActive` -- it did not, so the
+    // row (and the whole shelf section, if this was its last one)
+    // vanished for the round trip and reappeared as a fresh element
+    // once the response landed, rather than staying put for the flash.
+    flagsState.pin(f.id)
+    if (expandedId === f.id) expandedId = null
+    try {
+      await flagsState.judgeAndClear(f.id, verdict)
+    } catch (err) {
+      flagsState.unpin(f.id)
+      reportFailure('Could not record the verdict', err)
+    }
   }
 
-  // "Active flags by type" summary panel -- only types with at least one
-  // active flag, ranked by count like every other BarList panel.
-  const typeBreakdown = $derived(
-    Object.entries(
-      active.reduce<Partial<Record<FlagType, number>>>((counts, f) => {
-        counts[f.type] = (counts[f.type] ?? 0) + 1
-        return counts
-      }, {}),
+  async function callInvestigate(f: Flag) {
+    error = null
+    try {
+      await flagsState.judgeInvestigate(f.id, authState.username ?? '')
+    } catch (err) {
+      reportFailure('Could not record the verdict', err)
+    }
+  }
+
+  async function undoCall(f: Flag) {
+    error = null
+    try {
+      await flagsState.undoVerdict(f.id)
+      flagsState.unpin(f.id)
+    } catch (err) {
+      // Left pinned: flagsState.undoVerdict reverts its own optimistic
+      // reopen on failure, so the flag is still exactly as done as it
+      // was before this click -- unpinning it here would drop the row
+      // from the table out from under a stamp that is still true.
+      reportFailure('Could not undo the verdict', err)
+    }
+  }
+
+  // The honest cleared state (round 26, drawn as `.caempty` in round
+  // 29): when nothing is open, say when the last clear happened rather
+  // than pretending nothing ever fired. Null when no flag has ever been
+  // cleared -- then "nothing open" is the whole truth and carries no
+  // timestamp.
+  const lastClearedAt = $derived.by((): string | null => {
+    let latest: string | null = null
+    for (const f of cleared) {
+      if (f.clearedAt && (!latest || new Date(f.clearedAt) > new Date(latest))) latest = f.clearedAt
+    }
+    return latest
+  })
+
+  // The age column (#688, round 29/30's `#s7`): the record writes a bare
+  // "<number> <unit>" -- no "ago" suffix, and no seconds unit ever
+  // appears there (its youngest flag is `6 m`). That is the same
+  // spaced-letter idiom the record uses for every other duration on the
+  // scene (the scene-bar's own `15 m`/`1 h`/`24 h`/`14 d` span picker),
+  // so seconds gets the same "N s" shape rather than "just now" or a
+  // borrowed "Xs ago" -- sub-minute is still a number, not a phrase.
+  // Local rather than a shared lib/format.ts helper: formatRelative is
+  // the "ago" phrasing other views (Fleet's last-seen) still want.
+  function formatFlagAge(iso: string, nowMs: number): string {
+    const t = new Date(iso).getTime()
+    if (Number.isNaN(t)) return iso
+    const deltaMs = Math.max(0, nowMs - t)
+    const s = Math.floor(deltaMs / 1000)
+    if (s < 60) return `${s} s`
+    const m = Math.floor(s / 60)
+    if (m < 60) return `${m} m`
+    const h = Math.floor(m / 60)
+    if (h < 24) return `${h} h`
+    const d = Math.floor(h / 24)
+    return `${d} d`
+  }
+
+  function clearedWhen(iso: string): string {
+    const d = new Date(iso)
+    const now = new Date()
+    const sameDay =
+      d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+    return sameDay ? `today at ${formatHM(iso)}` : formatTime(iso)
+  }
+
+  // Every column sorts and filters (#649) -- the record's own table does
+  // both from the column heads themselves: clicking a head sorts by it,
+  // again to reverse, and the quiet dashed row inside the head group
+  // narrows the list. Age defaults to newest-first, reproducing the
+  // fixed order `active` used to be stuck with.
+  type FlagSortKey = 'type' | 'where' | 'evidence' | 'count' | 'age'
+  let sortKey = $state<FlagSortKey>('age')
+  let sortDir = $state<SortDir>('asc')
+  let filters = $state({ type: '', where: '', evidence: '', count: '', age: '' })
+
+  // The by-type strip (#988, round 47): one cell per type with something
+  // open, its count, and a bar of that count against the largest. It
+  // counts what the table holds -- open, settled flags, not the engine
+  // room's hourly episodes -- because a click on a cell filters this
+  // table, and the two must agree. A judged row leaves the count the
+  // moment its stamp lands; the strip is gone at zero.
+  const byType = $derived.by(() => {
+    const counts = new Map<FlagType, number>()
+    for (const f of active) if (!isDone(verdictKind(f))) counts.set(f.type, (counts.get(f.type) ?? 0) + 1)
+    const rank = (t: FlagType) => {
+      const i = FLAG_TYPE_ORDER.indexOf(t)
+      return i === -1 ? FLAG_TYPE_ORDER.length : i
+    }
+    const cells = [...counts].map(([type, n]) => ({ type, n }))
+    cells.sort((a, b) => b.n - a.n || rank(a.type) - rank(b.type))
+    return {
+      cells,
+      total: cells.reduce((n, c) => n + c.n, 0),
+      max: Math.max(1, ...cells.map((c) => c.n)),
+    }
+  })
+
+  // The picked cell: the FLAG filter reads the type's label so the
+  // filter row says what the table is narrowed to, and typing anything
+  // else there unpicks the cell (the effect below). A pick matches the
+  // type exactly rather than by the label's substring, so "Port scan"
+  // never also keeps "Low-and-slow port scan".
+  let pickedType = $state<FlagType | null>(null)
+
+  function pickType(t: FlagType) {
+    pickedType = pickedType === t ? null : t
+    filters.type = pickedType ? labelFor(pickedType) : ''
+  }
+
+  $effect(() => {
+    if (pickedType && filters.type !== labelFor(pickedType)) pickedType = null
+  })
+
+  // The last of a picked type judged away: nothing left to show, so the
+  // pick clears rather than leaving an empty table under a dimmed strip.
+  $effect(() => {
+    if (pickedType && !byType.cells.some((c) => c.type === pickedType)) {
+      pickedType = null
+      filters.type = ''
+    }
+  })
+
+  function toggleSort(key: FlagSortKey) {
+    if (sortKey === key) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
+    } else {
+      sortKey = key
+      sortDir = 'asc'
+    }
+  }
+
+  function dirGlyph(key: FlagSortKey): string {
+    if (sortKey !== key) return ''
+    return sortDir === 'asc' ? '▲' : '▼'
+  }
+
+  function flagMatches(f: Flag): boolean {
+    return (
+      (pickedType ? f.type === pickedType : matchesFilter(labelFor(f.type), filters.type)) &&
+      matchesFilter(f.target, filters.where) &&
+      matchesFilter(f.detail, filters.evidence) &&
+      matchesFilter(String(f.count), filters.count) &&
+      matchesFilter(formatFlagAge(f.lastSeen, appState.now), filters.age)
     )
-      .map(([type, count]) => ({ label: TYPE_LABELS[type as FlagType], count: count ?? 0 }))
-      .sort((a, b) => b.count - a.count),
-  )
+  }
+
+  // Campaigns (#988, round 47): the flags one source IP raised inside one
+  // 30-minute window, whatever their types, fold into one row -- see
+  // buildCampaigns for the rule. Built from `active` rather than the
+  // filtered list so a filter can find a member inside a campaign whose
+  // own row says nothing matching.
+  const grouped = $derived(buildCampaigns(active))
+
+  // The campaign row's own cells, as the filters and sorts read them: the
+  // FLAG cell says campaign and how many, WHERE is the source, EVIDENCE
+  // is one word per type inside then the span, COUNT the sum, AGE from
+  // the oldest flag.
+  const campaignTypes = (c: Campaign): FlagType[] => [...new Set(c.flags.map((f) => f.type))]
+  const campaignLabel = (c: Campaign) => `campaign ${c.flags.length} flags`
+  const campaignEvidence = (c: Campaign) =>
+    `${campaignTypes(c)
+      .map((t) => labelFor(t))
+      .join(' ')} ${campaignSpan(c)}`
+
+  // "13:28 → still arriving", or "13:28 → 13:50" once the last flag has
+  // been quiet for RECENT_MS -- the same ten-minute clock the drawer's
+  // episode shape keeps.
+  function campaignSpan(c: Campaign): string {
+    const end = new Date(c.lastSeen).getTime()
+    const arriving = appState.now - end < RECENT_MS
+    return `${formatHM(c.firstSeen)} → ${arriving ? 'still arriving' : formatHM(c.lastSeen)}`
+  }
+
+  function campaignMatches(c: Campaign): boolean {
+    return (
+      (pickedType ? false : matchesFilter(campaignLabel(c), filters.type)) &&
+      matchesFilter(c.ip, filters.where) &&
+      matchesFilter(campaignEvidence(c), filters.evidence) &&
+      matchesFilter(String(c.count), filters.count) &&
+      matchesFilter(formatFlagAge(c.firstSeen, appState.now), filters.age)
+    )
+  }
+
+  // Which campaigns the operator has opened to their members. A click
+  // toggles; a filter that matches only members opens the campaign to
+  // just those regardless (see `rows`), and closing it again is the
+  // filter's to clear.
+  let openCampaigns = $state<string[]>([])
+
+  function toggleCampaign(c: Campaign) {
+    openCampaigns = openCampaigns.includes(c.id) ? openCampaigns.filter((id) => id !== c.id) : [...openCampaigns, c.id]
+  }
+
+  type Row = { kind: 'flag'; flag: Flag } | { kind: 'campaign'; campaign: Campaign; members: Flag[]; open: boolean }
+
+  // The sort reads a campaign by its own cells, except age: a campaign
+  // sits where its newest flag would, so it is as current as its last
+  // flag even though the AGE column counts from its first.
+  function compareFlags(a: Flag, b: Flag): number {
+    switch (sortKey) {
+      case 'type':
+        return compareText(labelFor(a.type), labelFor(b.type), sortDir)
+      case 'where':
+        return compareText(a.target, b.target, sortDir)
+      case 'evidence':
+        return compareText(a.detail, b.detail, sortDir)
+      case 'count':
+        return compareNumeric(a.count, b.count, sortDir)
+      case 'age':
+        return compareAge(new Date(a.firstSeen).getTime(), new Date(b.firstSeen).getTime())
+    }
+  }
+
+  // Elapsed time since firstSeen -- ascending means smallest elapsed
+  // (newest) first, the default that reproduces the fixed order `active`
+  // used to be stuck with.
+  function compareAge(aMs: number, bMs: number): number {
+    return compareNumeric(appState.now - aMs, appState.now - bMs, sortDir)
+  }
+
+  const newestMs = (c: Campaign) => Math.max(...c.flags.map((f) => new Date(f.firstSeen).getTime()))
+
+  function rowSortText(r: Row): string {
+    if (r.kind === 'flag') {
+      const f = r.flag
+      return sortKey === 'type' ? labelFor(f.type) : sortKey === 'where' ? f.target : f.detail
+    }
+    const c = r.campaign
+    return sortKey === 'type' ? campaignLabel(c) : sortKey === 'where' ? c.ip : campaignEvidence(c)
+  }
+
+  function compareRows(a: Row, b: Row): number {
+    switch (sortKey) {
+      case 'count':
+        return compareNumeric(a.kind === 'flag' ? a.flag.count : a.campaign.count, b.kind === 'flag' ? b.flag.count : b.campaign.count, sortDir)
+      case 'age':
+        return compareAge(
+          a.kind === 'flag' ? new Date(a.flag.firstSeen).getTime() : newestMs(a.campaign),
+          b.kind === 'flag' ? new Date(b.flag.firstSeen).getTime() : newestMs(b.campaign),
+        )
+      default:
+        return compareText(rowSortText(a), rowSortText(b), sortDir)
+    }
+  }
+
+  // A campaign shows when its own row matches, or when any flag inside
+  // it does -- and when only members match, it opens to just those. A
+  // flag on its own shows when it matches, as before.
+  const rows = $derived.by((): Row[] => {
+    const out: Row[] = []
+    for (const f of grouped.singles) if (flagMatches(f)) out.push({ kind: 'flag', flag: f })
+    for (const c of grouped.campaigns) {
+      const own = campaignMatches(c)
+      const hits = c.flags.filter(flagMatches)
+      if (!own && hits.length === 0) continue
+      const members = own ? [...c.flags] : hits
+      members.sort(compareFlags)
+      out.push({ kind: 'campaign', campaign: c, members, open: own ? openCampaigns.includes(c.id) : true })
+    }
+    out.sort(compareRows)
+    return out
+  })
+
+  // The number of flags the filters leave, campaign members included --
+  // what "no flags match" is deciding on.
+  const shownCount = $derived(rows.reduce((n, r) => n + (r.kind === 'flag' ? 1 : r.members.length), 0))
+
+  // Why these are one campaign, in a sentence under the row: the rule,
+  // then -- when the same source has a flag outside the window -- the
+  // nearest such flag and how far off it sits, so the other half of the
+  // rule is visible on the same screen.
+  function campaignRule(c: Campaign): { rule: string; outsider: string | null } {
+    const n = c.flags.length
+    const rule = `one source, ${spellCount(n)} ${n === 1 ? 'flag' : 'flags'}, each inside 30 minutes of the last`
+    const start = new Date(c.firstSeen).getTime()
+    const end = new Date(c.lastSeen).getTime()
+    let nearest: { flag: Flag; gapMs: number } | null = null
+    for (const f of active) {
+      if (extractSourceIp(f.target) !== c.ip || c.flags.includes(f)) continue
+      const fs = new Date(f.firstSeen).getTime()
+      const fe = new Date(f.lastSeen).getTime()
+      const gapMs = fs > end ? fs - end : start - fe
+      if (!nearest || gapMs < nearest.gapMs) nearest = { flag: f, gapMs }
+    }
+    if (!nearest) return { rule, outsider: null }
+    const f = nearest.flag
+    return {
+      rule,
+      outsider: `${c.ip}'s ${labelFor(f.type).toUpperCase()} at ${formatHM(f.firstSeen)} is ${formatFlagAge(new Date(appState.now - nearest.gapMs).toISOString(), appState.now)} from these, so it keeps its own row.`,
+    }
+  }
+
+  // Small counts in words, the way the rule line reads ("three flags").
+  function spellCount(n: number): string {
+    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
+    return words[n] ?? String(n)
+  }
+
+  // The campaign's CALL IT (#988): a call on the row calls every flag
+  // inside it, each through its own path, so each dims or stamps exactly
+  // as it would alone. The row reads for the set only while every member
+  // says the same thing -- undo one member on its own and the campaign
+  // is back to offering chips for what is still open.
+  function campaignKind(members: Flag[]): Verdict | null {
+    const first = verdictKind(members[0])
+    return first !== null && members.every((m) => verdictKind(m) === first) ? first : null
+  }
+
+  function campaignDone(members: Flag[]): boolean {
+    return members.every((m) => isDone(verdictKind(m)))
+  }
+
+  async function callCampaign(c: Campaign, verdict: 'expected' | 'checked' | 'resolved') {
+    for (const m of c.flags) if (!isDone(verdictKind(m))) await callVerdict(m, verdict)
+    openCampaigns = openCampaigns.filter((id) => id !== c.id)
+  }
+
+  async function investigateCampaign(c: Campaign) {
+    for (const m of c.flags) if (verdictKind(m) === null) await callInvestigate(m)
+  }
+
+  async function undoCampaign(c: Campaign) {
+    for (const m of c.flags) if (isDone(verdictKind(m))) await undoCall(m)
+  }
 
   // What a flag's target actually *is* varies by detector -- most are a
   // plain source IP, but distributed_brute_force is keyed by port,
@@ -285,30 +774,9 @@
   // "ip -> port N", device_silence by a device ID, and global_spike has
   // no filterable target at all. new_device's target is a MAC address
   // (see internal/flags.TypeNewDevice) -- the live view's Filters has no
-  // MAC field to filter on, so it's not filterable either, same as
-  // global_spike. Filtering on the right field (rather than always
-  // assuming "ip") is what makes this click-through actually land on a
-  // sensible pre-filtered view.
+  // MAC field to filter on, so it's not filterable either.
   function isFilterable(f: Flag): boolean {
     return f.type !== 'global_spike' && f.type !== 'new_device'
-  }
-
-  // The IP for a live abuse-check button on this card (issue #213), or
-  // null if there is none worth checking. extractSourceIp already
-  // screens out every target shape that isn't a bare IP (a rule label,
-  // "port N", "global", a MAC) -- see its own doc comment -- so most
-  // exclusions fall out of that for free rather than needing a second
-  // type-by-type list to keep in step with filterToTarget's.
-  //
-  // device_silence is the one type that needs an explicit exclusion on
-  // top of the shape check: an auto-discovered device's ID defaults to
-  // its source IP (internal/device.Registry.Resolve), so its target can
-  // be IP-shaped too -- but it identifies the device that went quiet,
-  // not a source worth threat-checking, and #213 excludes it by name.
-  function investigateIp(f: Flag): string | null {
-    if (f.type === 'device_silence') return null
-    const ip = extractSourceIp(f.target)
-    return ip && isPublicIp(ip) ? ip : null
   }
 
   function filterToTarget(f: Flag) {
@@ -344,328 +812,675 @@
     appState.view = 'live'
   }
 
-  async function clear(id: string) {
-    error = null
-    try {
-      await flagsState.clear(id)
-    } catch (err) {
-      reportFailure('Could not clear this flag', err)
-    }
+  // "where" (#678): every named where is a link into the topography at
+  // its sensible level, not the stream -- filterToTarget above is what
+  // the drawer's "open in stream" still uses. extractSourceIp already
+  // knows which target shapes are a single IP (see its own doc comment);
+  // when one resolves to a zone mikroview has actually observed, this
+  // hands that zone/host off to Topography.svelte's own reach (see
+  // topologyNav.svelte.ts) so the map opens straight into it. A target
+  // with no resolvable IP (a rule label, "global", a MAC, a port) or one
+  // outside every known zone still lands on the map itself -- the map's
+  // own "degrades honestly" stance, never a wrong guess.
+  function openWhere(f: Flag) {
+    openWhereIp(extractSourceIp(f.target))
   }
 
-  // "Clear and never flag this again" -- permanently excludes this
-  // flag's exact (Type, Target) going forward (see internal/flags.
-  // Store.Exclude's doc comment for why this is a deliberate permanent
-  // suppression, not a timed snooze). Reviewing/undoing an exclusion
-  // made by mistake is the admin-only Exclusions tab, not a confirmation
-  // dialog here.
-  async function clearPermanent(id: string) {
-    error = null
-    try {
-      await flagsState.clearPermanent(id)
-      // This is what creates the exclusion the tab's own count and list
-      // are reading -- before #547, that tab was a separate view that
-      // remounted (and so refetched) every time you navigated to it.
-      // Mounted-but-hidden doesn't get that for free, so it is refreshed
-      // explicitly on the one action that changes it. selectTab below
-      // covers the rest (switching to the tab, or a change made
-      // elsewhere in the meantime).
-      exclusionsState.refresh()
-    } catch (err) {
-      reportFailure('Could not permanently clear this flag', err)
-    }
+  // Whose usual the scored line measures against: the host for a
+  // per-source flag, the rule for a rule spike, the whole network for a
+  // global one.
+  function scoredSubject(f: Flag): string {
+    if (f.type === 'global_spike') return "the network's"
+    if (f.type === 'rule_spike' || f.type === 'stale_rule') return `rule ${f.target}'s`
+    return `${extractSourceIp(f.target) ?? f.target}'s`
   }
 
-  // Graded rather than a single color for every value -- a 12% confidence
-  // score and a 95% one shouldn't read as equally worth attention at a
-  // glance, mirroring the severity coloring ActionBadge already uses
-  // elsewhere.
-  function confidenceTier(c: number): 'low' | 'medium' | 'high' {
-    if (c >= 70) return 'high'
-    if (c >= 40) return 'medium'
-    return 'low'
+  function openWhereIp(ip: string | null) {
+    if (ip) {
+      const zone = zonesState.zones.find((z) => {
+        if (!z.cidr) return false
+        const cidr = parseCidr(z.cidr)
+        return cidr ? addressInCidr(ip, cidr) : false
+      })
+      if (zone) {
+        const host = zone.hosts.find((h) => h.ip === ip)?.label ?? ip
+        topologyNavState.requestHost(zone.id, host, ip)
+      }
+    }
+    appState.view = 'topography'
   }
+
 </script>
 
 <div class="flags-page">
-  {#if tabs.length > 1}
-    <TabList {tabs} selected={activeTab} onselect={selectTab} label="Flags views" />
-  {/if}
-  <div
-    class="flags scrollbar"
-    role="tabpanel"
-    id="panel-flags"
-    aria-labelledby="tab-flags"
-    tabindex="0"
-    hidden={activeTab !== 'flags'}
-  >
-  {#if error}
-    <p class="mutation-error" role="alert">{error}</p>
-  {/if}
+  <div class="flags scrollbar">
+    {#if error}
+      <p class="mutation-error" role="alert">{error}</p>
+    {/if}
 
-  <BarList title="Active flags by type" rows={typeBreakdown} emptyMessage="Nothing flagged right now." />
-
-  {#snippet flagCard(f: Flag, compactCard: boolean = false)}
-    {@const investigate = investigateIp(f)}
-    <li class="card" class:compact={compactCard}>
-      <div class="card-main">
-        <span class="type">{TYPE_LABELS[f.type]}</span>
-        {#if f.confidence != null}
-          <span
-            class="confidence confidence-{confidenceTier(f.confidence)}"
-            title="How confident this specific flag is, based on how much history backs it and how far it deviates from normal -- not how confident mikroview is overall"
-          >
-            {f.confidence}% confidence
-          </span>
-        {/if}
-        {#if isFilterable(f)}
-          <button class="target" onclick={() => filterToTarget(f)} title="Filter the live view to {f.target}">
-            {f.target}
-          </button>
-        {:else}
-          <span class="target target-global">network-wide</span>
-        {/if}
-        {#if investigate}
-          <!-- A fresh check, not the frozen raise-time snapshot below
-               (issue #213): raw events aren't persisted, so an old or
-               cleared flag often has nothing left in the live view to
-               click into -- this is what makes "what does it look like
-               now" reachable without leaving the page. Reuses the exact
-               component/lookup path EventRow/EventDetailSheet already
-               use; the snapshot in Details stays as-is and answers a
-               different question ("what did it look like when it
-               fired"). -->
-          <IpInvestigateButton ip={investigate} />
-        {/if}
-        {#if f.country}
-          <span class="country" title={f.country}>{countryFlag(f.country)}</span>
-        {/if}
-      </div>
-      <!-- Compact (2/3 columns, issue #199): the detail line truncates to
-           one line rather than wrapping and pushing the card taller than
-           its neighbours in the same grid row -- the type/target above
-           and the expand affordance below stay fully visible either way,
-           so nothing identifying is lost, only the free-text summary. -->
-      <p class="detail" title={compactCard ? f.detail : undefined}>{f.detail}</p>
-      <div class="meta">
-        {#if !compactCard}
-          <span>first seen {formatHM(f.firstSeen)}</span>
-        {/if}
-        <span>last seen {formatHM(f.lastSeen)}</span>
-        <span>fired {f.count}×</span>
-        {#if hasExpandableDetail(f)}
-          <button class="details-toggle" onclick={() => toggleExpanded(f.id)}>
-            {expandedId === f.id ? 'Hide details' : 'Details'}
-          </button>
-        {/if}
-      </div>
-      {#if expandedId === f.id}
-        <div class="expanded">
-          {#if f.evidence?.ports?.length}
-            <div class="ev-row">
-              <span class="ev-label">Ports touched</span>
-              <span class="ev-value">{f.evidence.ports.join(', ')}</span>
-            </div>
-          {/if}
-          {#if f.evidence?.hosts?.length}
-            <div class="ev-row">
-              <span class="ev-label">Hosts involved</span>
-              <span class="ev-value">{f.evidence.hosts.join(', ')}</span>
-            </div>
-          {/if}
-          {#if f.evidence?.nat}
-            <div class="ev-row">
-              <span class="ev-label">NAT</span>
-              <span class="ev-value">
-                {f.evidence.nat.ip}{f.evidence.nat.port ? `:${f.evidence.nat.port}` : ''}
-                {#if f.evidence.nat.raw}<br /><span class="ev-raw">{f.evidence.nat.raw}</span>{/if}
-              </span>
-            </div>
-          {/if}
-          {#if f.reputation}
-            <ReputationDetails result={f.reputation} />
-          {/if}
-        </div>
-      {/if}
-      <div class="actions">
-        {#if isAdminOrOpen}
-          <!-- Split button: the main segment is exactly today's Clear.
-               The arrow segment is admin-only, matching the backend's
-               own gate on POST /api/flags/{id}/clear-permanent -- a
-               permanent exclusion suppresses detection until someone
-               undoes it, unlike the plain Clear beside it. A non-admin
-               gets a plain Clear button with no arrow at all (below),
-               rather than a disabled one that would just advertise an
-               action they can't take (issue #198). -->
-          <div class="split-clear" class:menu-open={openClearMenuFor === f.id}>
-            <button class="clear split-main" onclick={() => clear(f.id)}>Clear</button>
-            <button
-              class="clear split-arrow"
-              aria-haspopup="true"
-              aria-expanded={openClearMenuFor === f.id}
-              aria-label="More clear options for this flag"
-              onclick={() => toggleClearMenu(f.id)}
-            >
-              ▾
-            </button>
-            {#if openClearMenuFor === f.id}
-              <div class="split-menu" role="menu">
-                <button
-                  class="split-menu-item"
-                  role="menuitem"
-                  title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
-                  onclick={() => {
-                    openClearMenuFor = null
-                    clearPermanent(f.id)
-                  }}
-                >
-                  Permanently clear
-                </button>
-              </div>
+    <!-- No heading over the table (#697/#700): round 30 draws the flags
+         panel as a bare table under the bar, and the count already
+         lives in the bar's own ⚑ mark. The name survives for screen
+         readers, where it is not competing for space. -->
+    <section aria-label="Active flags ({active.length})">
+      {#if active.length === 0}
+        <!-- The honest cleared state (round 26, drawn as `.caempty` in
+             round 29's scene): zero open is a fact with a history, not a
+             blank. When something was cleared, say when, and stand by
+             the audit-log promise the clear-all bubble makes. -->
+        <div class="caempty">
+          <span class="cae-mark">✓</span>
+          <div>
+            <b>Nothing open.</b>
+            {#if lastClearedAt}
+              Cleared {clearedWhen(lastClearedAt)} — they keep their place{#if isAdminOrOpen}&nbsp;in the
+                <button class="olink" onclick={() => (appState.view = 'audit')}>audit log</button>{/if}.
+            {:else if provisionalActive.length > 0}
+              <!-- "Nothing has been flagged yet" cannot sit above an
+                   occupied shelf (#642, ruling amendment 3): something
+                   plainly fired, it just is not trusted yet. -->
+              What has fired so far is not yet trusted — it sits on the learning shelf below.
+            {:else}
+              Nothing has been flagged yet.
             {/if}
           </div>
-        {:else}
-          <button class="clear" onclick={() => clear(f.id)}>Clear</button>
-        {/if}
-      </div>
-    </li>
-  {/snippet}
-
-  <section aria-labelledby="active-heading">
-    <div class="active-header">
-      <h2 id="active-heading">Active ({active.length})</h2>
-      <div class="header-controls">
-        <!-- 1/2/3-column density (issue #199), persisted per browser.
-             Below the shared mobile breakpoint this stays selectable but
-             stops changing the render -- see effectiveColumns' own
-             comment for why the floor lives there rather than only in a
-             media query. -->
-        <div class="layout-select" role="radiogroup" aria-label="Card layout columns">
-          {#each [1, 2, 3] as const as n (n)}
-            <button
-              class="layout-option"
-              class:active={flagLayoutState.columns === n}
-              role="radio"
-              aria-checked={flagLayoutState.columns === n}
-              onclick={() => flagLayoutState.set(n)}
-              title="{n} column{n > 1 ? 's' : ''}"
-            >
-              {n}
-            </button>
-          {/each}
         </div>
-        {#if active.length > 0}
-          <!-- Click-again confirm, not a modal: the second click on this
-               same now-red button is the confirmation, which is what
-               makes a single accidental click harmless while still
-               asserting real intent for the second one (issue #198).
-               Regular clears only -- see flagsState.clearAll's doc
-               comment for why there is no permanent variant. -->
-          <button
-            class="clear-all"
-            class:armed={clearAllArmed}
-            disabled={clearAllBusy}
-            onclick={onClearAllClick}
-            onblur={disarmClearAll}
-            onpointerleave={disarmClearAll}
-            title={clearAllArmed
-              ? 'Click again to clear every active flag'
-              : 'Clear every active flag -- regular clears only, click again to confirm'}
-          >
-            {clearAllArmed ? 'Confirm' : 'Clear all'}
-          </button>
+      {:else}
+        <!-- Flags by type (#988, round 47): a strip across the table's
+             width, above the column heads -- one labelled cell per type
+             with something open, its count, and a single-hue bar of that
+             count against the largest. Identity is the label, never the
+             ink: the six family inks are a warm family that only the
+             label tells apart (the round's validator failed a stacked
+             bar on exactly that), so nothing here is decoded by colour
+             alone. Click a cell and the table narrows to that type;
+             again, and it clears. -->
+        {#if byType.total > 0}
+          <div class="bytype" aria-label="Open flags by type — click a type to filter the table to it">
+            <span class="btl">by type · <b>{byType.total}</b> open</span>
+            <div class="btcells" class:picked={pickedType !== null}>
+              {#each byType.cells as cell (cell.type)}
+                {@const fam = familyOf(cell.type)}
+                <button
+                  class="btc"
+                  class:on={pickedType === cell.type}
+                  style="--ti: {fam.ink}"
+                  aria-pressed={pickedType === cell.type}
+                  onclick={() => pickType(cell.type)}
+                >
+                  <span class="btn"><span><i>{fam.mark}</i>{labelFor(cell.type)}</span><b>{cell.n}</b></span>
+                  <span class="btbar"><span style="width: {Math.round((100 * cell.n) / byType.max)}%"></span></span>
+                </button>
+              {/each}
+            </div>
+          </div>
         {/if}
-      </div>
-    </div>
-    {#if active.length === 0}
-      <p class="empty">Nothing flagged right now.</p>
-    {:else}
-      <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
-        {#each activeItems as item (item.kind === 'group' ? `group:${item.sourceIp}` : item.flag.id)}
-          {#if item.kind === 'single'}
-            {@render flagCard(item.flag, compact)}
-          {:else}
-            <li class="card campaign-card">
-              <div class="campaign-header">
-                <button
-                  class="campaign-toggle"
-                  onclick={() => toggleGroup(item.sourceIp)}
-                  aria-expanded={expandedGroup === item.sourceIp}
-                >
-                  <span class="campaign-caret">{expandedGroup === item.sourceIp ? '▾' : '▸'}</span>
-                  <span class="campaign-count">{item.flags.length} related flags from this source</span>
+        <!-- The ratified table (#688, round 29's `#s7`): flag · where ·
+             evidence · count · age, then the disclosure. Both the sort
+             (the head) and the filter (the quiet dashed row beneath it)
+             live in the head group, as the record's own table has
+             them. -->
+        <table class="ftable">
+          <thead>
+            <tr>
+              <th>
+                <button class="sorth" class:on={sortKey === 'type'} onclick={() => toggleSort('type')}>
+                  flag <span class="dir">{dirGlyph('type')}</span>
                 </button>
-                <button
-                  class="target campaign-source"
-                  onclick={() => filterToSource(item.sourceIp)}
-                  title="Filter the live view to {item.sourceIp}"
-                >
-                  {item.sourceIp}
+              </th>
+              <th>
+                <button class="sorth" class:on={sortKey === 'where'} onclick={() => toggleSort('where')}>
+                  where <span class="dir">{dirGlyph('where')}</span>
                 </button>
-              </div>
-              <div class="campaign-summary">
-                <span class="campaign-types">{groupTypeLabels(item.flags)}</span>
-                <span>first seen {formatHM(groupFirstSeen(item.flags))}</span>
-                <span>last seen {formatHM(groupLastSeen(item.flags))}</span>
-              </div>
-              {#if expandedGroup === item.sourceIp}
-                <ul class="list campaign-members">
-                  {#each item.flags as f (f.id)}
-                    {@render flagCard(f, compact)}
-                  {/each}
-                </ul>
+              </th>
+              <th>
+                <button class="sorth" class:on={sortKey === 'evidence'} onclick={() => toggleSort('evidence')}>
+                  evidence <span class="dir">{dirGlyph('evidence')}</span>
+                </button>
+              </th>
+              <th class="num">
+                <button class="sorth" class:on={sortKey === 'count'} onclick={() => toggleSort('count')}>
+                  count <span class="dir">{dirGlyph('count')}</span>
+                </button>
+              </th>
+              <th>
+                <button class="sorth" class:on={sortKey === 'age'} onclick={() => toggleSort('age')}>
+                  age <span class="dir">{dirGlyph('age')}</span>
+                </button>
+              </th>
+              <!-- CALL IT (#780 item 1): no filter input under this head --
+                   verdicts are given, not searched. Blank for a viewer,
+                   who gets no chips to call anything with. -->
+              <th class="vc">{canEdit ? 'call it' : ''}</th>
+            </tr>
+            <tr class="filters">
+              <td><input bind:value={filters.type} placeholder="filter" aria-label="Filter by flag type" /></td>
+              <td><input bind:value={filters.where} placeholder="filter" aria-label="Filter by where" /></td>
+              <td><input bind:value={filters.evidence} placeholder="filter" aria-label="Filter by evidence" /></td>
+              <td><input bind:value={filters.count} placeholder="filter" aria-label="Filter by count" /></td>
+              <td><input bind:value={filters.age} placeholder="filter" aria-label="Filter by age" /></td>
+              <td></td>
+            </tr>
+          </thead>
+          {#if active.length > 0}
+            <tbody>
+              {#if shownCount === 0}
+                <tr>
+                  <td class="empty" colspan="6">No flags match these filters.</td>
+                </tr>
               {/if}
-            </li>
+              {#each rows as r (r.kind === 'flag' ? r.flag.id : r.campaign.id)}
+                {#if r.kind === 'flag'}
+                  {@render flagRows(r.flag, false)}
+                {:else}
+                  {@render campaignRow(r.campaign, r.members, r.open)}
+                  {#if r.open}
+                    {#each r.members as m (m.id)}
+                      {@render flagRows(m, false, true)}
+                    {/each}
+                  {/if}
+                {/if}
+              {/each}
+            </tbody>
           {/if}
-        {/each}
-      </ul>
-    {/if}
-  </section>
+        </table>
+      {/if}
+    </section>
 
-  <section aria-labelledby="cleared-heading">
-    <h2 id="cleared-heading">Recently cleared</h2>
-    {#if cleared.length === 0}
-      <p class="empty">No cleared flags yet.</p>
-    {:else}
-      <!-- Same column setting as the active list above (issue #199's
-           "secondary" note) -- no independent control here, one
-           preference for the whole page reads simpler than two. -->
-      <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
-        {#each cleared as f (f.id)}
-          <li class="card cleared-card" class:compact>
-            <div class="card-main">
-              <span class="type">{TYPE_LABELS[f.type]}</span>
-              <span class="target">{f.target === 'global' ? 'network-wide' : f.target}</span>
-            </div>
-            <p class="detail">{f.detail}</p>
-            <div class="meta">
-              <span>cleared {f.clearedAt ? formatHM(f.clearedAt) : ''}</span>
-            </div>
-          </li>
-        {/each}
-      </ul>
+    <!-- The learning shelf (#642): the bounded region for provisional
+         flags, below the settled table -- an untrusted item never
+         outranks a trusted one -- and never a fourth docket tab, which
+         would hide the learning state from the very person reviewing
+         flags. Present when it has contents or while any baseline is
+         warming (#768: the flags response says so, and says it to a
+         viewer too); absent otherwise, as everywhere else in the app
+         (#653). -->
+    {#if showShelf}
+      <section class="shelf" aria-label="Learning shelf ({provisionalActive.length} provisional)">
+        <h2 class="shelf-head">
+          learning
+          {#if provisionalActive.length > 0}
+            <span class="shelf-count">— {provisionalActive.length} provisional</span>
+          {/if}
+        </h2>
+        <!-- "Honesty at the start" (#640): while the ledger is thin,
+             the inbox says so, rather than leaving a noisy start
+             unexplained until the operator has taught it enough to
+             quiet down. -->
+        {#if ledgerThin && expectations}
+          <p class="shelf-honest">
+            Flags will be noisy until mikroview has learned what is normal here — {expectations.length}
+            {expectations.length === 1 ? 'expectation' : 'expectations'} recorded so far. Judge each flag and the inbox
+            settles.
+          </p>
+        {/if}
+        {#if provisionalActive.length > 0}
+          <!-- The same five ratified columns as the settled table, so
+               the two read as one surface; no sort or filter row -- a
+               shelf is a holding area, not a second ledger. -->
+          <table class="ftable">
+            <thead>
+              <tr class="shelf-heads">
+                <th>flag</th>
+                <th>where</th>
+                <th>evidence</th>
+                <th class="num">count</th>
+                <th>age</th>
+                <th class="vc">{canEdit ? 'call it' : ''}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each provisionalActive as f (f.id)}
+                {@render flagRows(f, true)}
+              {/each}
+            </tbody>
+          </table>
+        {:else if warming}
+          <!-- The warming case with nothing on the shelf yet: the
+               answer to "why is it silent", in words -- the point of
+               the issue, not decoration. -->
+          <p class="shelf-warm">
+            Baselines are still warming. A spike seen now is not thrown away — it appears here as a provisional flag,
+            marked as one mikroview does not yet trust. Nothing has fired during warm-up yet.
+          </p>
+        {/if}
+      </section>
     {/if}
-  </section>
-
   </div>
-
-  {#if isAdminOrOpen}
-    <!-- The Exclusions tab (#547): permanently-excluded (detector,
-         target) pairs, reviewed and undone here rather than from a
-         pointer to a separate page -- see Exclusions.svelte's own doc
-         comment for why this is admin-only. -->
-    <div
-      class="exclusions-panel"
-      role="tabpanel"
-      id="panel-exclusions"
-      aria-labelledby="tab-exclusions"
-      tabindex="0"
-      hidden={activeTab !== 'exclusions'}
-    >
-      <Exclusions />
-    </div>
-  {/if}
 </div>
+
+{#snippet flagRows(f: Flag, provisional: boolean, member: boolean = false)}
+  {@const family = familyOf(f.type)}
+  {@const open = expandedId === f.id}
+  {@const ep = episodes[f.id]}
+  {@const kind = verdictKind(f)}
+  {@const returning = returningNoteFor(f)}
+  <!-- A campaign's member (#988) is this same row, one step in, with a
+       dash where the step is; its drawer is the round 29 drawer
+       verbatim. -->
+  <tr
+    class="frow"
+    class:mem={member}
+    class:open
+    class:provisional
+    class:struck={kind !== null}
+    class:fdone={isDone(kind)}
+    class:investigating={kind === 'investigate'}
+    class:expected={kind === 'expected'}
+    class:checked={kind === 'checked'}
+    class:investigate={kind === 'investigate'}
+    class:resolved={kind === 'resolved'}
+    style="--ft: {family.ink}"
+    onclick={() => toggleExpanded(f)}
+  >
+    <td class="fmark"
+      >{family.mark} {labelFor(f.type)}{#if f.confidence != null}<!-- The scored number (#988, round
+          47): the detector's own 0-100, beside the type, only where a
+          detector scored the flag -- the baseline family
+          (internal/engine/baseline.go's emaConfidence). The other
+          types carry nothing here: no dash, no word. --><span
+          class="conf"
+          title="scored {f.confidence} of 100 by the detector">{f.confidence}</span
+        >{/if}{#if provisional}<span class="ptag">provisional</span>{/if}</td
+    >
+    <td class="k">
+      {#if isFilterable(f)}
+        <button
+          class="wl"
+          title="Open {f.target} in the topography"
+          onclick={(ev) => {
+            ev.stopPropagation()
+            openWhere(f)
+          }}
+        >
+          {f.target}
+        </button>
+      {:else}
+        <span class="wl-plain">network-wide</span>
+      {/if}
+    </td>
+    <td>
+      {f.detail}
+      {#if returning}
+        <!-- A flag that has been here before says so where its evidence
+             is (#640): the numbers an expectation recorded against what
+             this firing actually did, or the date the last look reached
+             a conclusion. See returningNoteFor for the wording, which is
+             the issue's own. -->
+        <span class="returned">{returning}</span>
+      {/if}
+    </td>
+    <td class="num">{f.count}×</td>
+    <td class="t">{formatFlagAge(f.lastSeen, appState.now)}</td>
+    <td class="vc">
+      <!-- CALL IT (#780, #640): a stamp and its undo once the flag has
+           been judged and cleared, chips while it is still open. A fresh
+           flag offers expected · checked · investigate; one already
+           being investigated offers expected · resolved, the two ways
+           that story can end. A chip/undo click never toggles the
+           drawer, same stopPropagation guard the "where" link and caret
+           already use above. -->
+      {#if isDone(kind)}
+        <span class="vdone">
+          <span class="stamp {kind}">{kind}</span>
+          <button
+            class="olink"
+            onclick={(ev) => {
+              ev.stopPropagation()
+              undoCall(f)
+            }}>undo</button
+          >
+          {#if kind === 'resolved' && canEdit && canWatchForThis(f)}
+            <!-- "Resolved — undo · watch for this" (#641): the offer
+                 rides on the line that already stays behind, so
+                 resolving and setting a tripwire are one gesture rather
+                 than two errands. Offered, never automatic -- the
+                 operator can resolve and decline, and the flag stays
+                 resolved either way. -->
+            <span class="vsep" aria-hidden="true">·</span>
+            <button
+              class="olink"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                watchForThis(f)
+              }}>watch for this</button
+            >
+          {/if}
+        </span>
+      {:else if canEdit}
+        <span class="vrow">
+          <button
+            class="v expected"
+            title="Normal for this host, at this size — clears the flag and stops it firing again below 1.5× this size"
+            onclick={(ev) => {
+              ev.stopPropagation()
+              callVerdict(f, 'expected')
+            }}><i>✓</i>expected</button
+          >
+          {#if kind === 'investigate'}
+            <button
+              class="v resolved"
+              title="Dealt with — clears the flag; if the same circumstances recur it comes back"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                callVerdict(f, 'resolved')
+              }}><i>✦</i>resolved</button
+            >
+          {:else}
+            <button
+              class="v checked"
+              title="Looked at, fine this time — clears the flag, and a re-fire will say when you checked"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                callVerdict(f, 'checked')
+              }}><i>~</i>checked</button
+            >
+            <button
+              class="v investigate"
+              title="Of concern — records the verdict; the flag stays open while you look"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                callInvestigate(f)
+              }}><i>✱</i>investigate</button
+            >
+          {/if}
+        </span>
+      {/if}
+      {#if !isDone(kind)}
+        <!-- The row's one affordance (rounds 18-19/29): the
+             chevron rotates rather than swapping glyphs, so the
+             open state reads at a glance down a striped list.
+             Dropped once a verdict clears the flag (#780 item 2,
+             round 35's `close(r)`): a dimmed row is inert, beyond
+             its stamp and undo. An investigated row keeps it -- the
+             evidence is what someone is looking at. -->
+        <button
+          class="openc"
+          aria-expanded={open}
+          aria-label="{open ? 'Close' : 'Open'} the drawer for this flag"
+          onclick={(ev) => {
+            ev.stopPropagation()
+            toggleExpanded(f)
+          }}
+        >
+          ▸
+        </button>
+      {/if}
+    </td>
+  </tr>
+  {#if open}
+    <!-- The drawer (round 29): the story and the matched
+         lines down the left, the episode's shape on the
+         right, the actions across the foot. The type's
+         stripe runs on through it unbroken. -->
+    <tr class="drawer" class:provisional class:inc={member} style="--ft: {family.ink}">
+      <td colspan="6">
+        <div class="dwr-in">
+          {#if provisional}
+            <!-- The label's meaning, in a sentence (#616:
+                 worded, never shape alone). -->
+            <p class="pwhy">
+              provisional — its baseline was still warming when this fired, so mikroview does not yet trust
+              the comparison behind it. Not counted as an open flag.
+            </p>
+          {/if}
+          <!-- The headline and story (#678): plain-English
+               writing generated per flag type from the
+               evidence the flag already carries, not the raw
+               evidence itself -- the headline stands alone
+               as the drawer's first words, the story running
+               on from it in sentences. See flagNarrative.ts. -->
+          <p class="story">
+            {#if f.verdict === 'investigate' && f.verdictAt}
+              <!-- #780 item 3: the story leads with this rather
+                   than only the row's chips carrying the news --
+                   a flag arriving already under investigation
+                   (from another session) reads the same way. -->
+              <span class="called"
+                >Being investigated since {formatHM(f.verdictAt)} by {f.verdictBy}. It stays open until it is called
+                expected or resolved.</span
+              >
+            {/if}
+            <b class="headline">{headlineFor(f)}</b> {storyFor(f)}
+            {#if f.confidence != null}
+              <!-- Where the number came from (#988): one line under the
+                   story. Deviation from the subject's own usual, scaled
+                   by how much history backs the baseline -- and named
+                   as the detector's number, not a verdict, because the
+                   trio beside the row is where verdicts live. -->
+              <span class="scored"
+                ><b>Scored {f.confidence}.</b> How far this sits from {scoredSubject(f)} usual, and how much history
+                backs that. The detector's number, not a verdict.</span
+              >
+            {/if}
+          </p>
+          <div class="side">
+            <span class="lab">the episode</span>
+            {#if Array.isArray(ep) && ep.length > 0}
+              <svg
+                viewBox="0 0 260 34"
+                preserveAspectRatio="none"
+                role="img"
+                aria-label="{ep.length} events, drawn on a strip of the half hour around last seen"
+              >
+                {#each episodeTicks(ep) as x, i (i)}
+                  <line
+                    x1={x}
+                    y1="6"
+                    x2={x}
+                    y2="28"
+                    stroke="var(--ft)"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                  />
+                {/each}
+              </svg>
+            {/if}
+            <!-- The episode's shape (#678): still arriving,
+                 stopped, or intermittent -- derived from the
+                 flag's own timestamps (the richer per-event
+                 episode once it's fetched, the flag's
+                 firstSeen/lastSeen before then). See
+                 episodeShape.ts. -->
+            <span class="span"
+              >{episodeShapeFor(f, ep, appState.now)}{#if f.confidence != null}
+                · scored {f.confidence}{/if}</span
+            >
+            {#if ep === 'loading'}
+              <p class="ep-note">fetching the events…</p>
+            {:else if ep === 'error'}
+              <p class="ep-note">could not fetch the events</p>
+            {:else if Array.isArray(ep) && ep.length === 0}
+              <!-- Raw events are only retained in the
+                   buffer; an old flag honestly says the
+                   window has moved on rather than drawing an
+                   empty strip. -->
+              <p class="ep-note">no matching events still buffered</p>
+            {/if}
+          </div>
+          {#if Array.isArray(ep) && ep.length > 0}
+            <div class="lines">
+              {#each ep.slice(0, 3) as e (e.id)}
+                <div>{eventLine(e)}</div>
+              {/each}
+            </div>
+          {/if}
+          <!-- The per-host pairs (#654, restored by #791): the (host,
+               port) combinations actually observed together, grouped
+               one row per host -- never a flat host:port list, never
+               two independent lists implying combinations that were
+               never seen (#654's ruling; groupPairsByHost is its pure
+               piece). 68fd460 dropped the panel in the round-29
+               rebuild; #791 ruled it back in and placed it here,
+               closing the left column: the story says what happened,
+               the matched lines show it raw, and this list is the
+               structured middle -- which doors were asked of which
+               hosts. The label wears the record's own .lab idiom,
+               same as "the episode" across the aisle. -->
+          {#if f.evidence?.pairs?.length}
+            {@const pairs = f.evidence?.pairs ?? []}
+            {@const pairsTotal = f.evidence?.pairsTotal}
+            <div class="evpairs">
+              <span class="lab">the pairs, by host</span>
+              {#each groupPairsByHost(pairs) as g (g.host)}
+                <div class="ev-pair-row">
+                  <span class="ev-host">{g.host}</span>
+                  <span class="ev-ports">{g.ports.join(', ')}</span>
+                </div>
+              {/each}
+              <!-- #750 group B item 3, the evidence-truncation line:
+                   one foot closing the pairs list -- "12 of 340
+                   pairs", or "12 of at least 340 pairs" when the
+                   total is a floor, and no line at all when nothing
+                   is cut. A foot above no pairs would disclose a
+                   truncation of nothing, so it lands with the list
+                   it closes. -->
+              {#if pairsTruncated(pairs, pairsTotal)}
+                <p class="ev-foot">{pairsTruncationLabel(pairs.length, pairsTotal ?? 0, f.evidence?.pairsTotalIsFloor)}</p>
+              {/if}
+            </div>
+          {/if}
+
+          <div class="dwr-acts">
+            {#if isFilterable(f)}
+              <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
+            {/if}
+            {#if canEdit && canWatchPathway(f)}
+              <button class="act" onclick={() => watchThisPathway(f)}>watch this pathway</button>
+            {:else if canEdit && canWatchSource(f)}
+              <button class="act" onclick={() => watchThisSource(f)}>watch this source</button>
+            {/if}
+          </div>
+        </div>
+      </td>
+    </tr>
+  {/if}
+{/snippet}
+
+<!-- A campaign (#988, round 47): the flags one source raised inside one
+     30-minute window, as one row wearing the worst flag's ink. FLAG names
+     it and counts; WHERE is the source; EVIDENCE is one word per type
+     inside, each in its own ink, then the span; COUNT is the sum; AGE is
+     from the oldest flag. It has no drawer of its own -- a click opens it
+     to its members, under a quiet line saying why they are one. -->
+{#snippet campaignRow(c: Campaign, members: Flag[], open: boolean)}
+  {@const types = campaignTypes(c)}
+  {@const family = worstFamilyOf(types)}
+  {@const kind = campaignKind(c.flags)}
+  {@const done = campaignDone(c.flags)}
+  {@const why = campaignRule(c)}
+  <tr
+    class="frow camp"
+    class:open
+    class:fdone={done}
+    class:investigating={kind === 'investigate'}
+    style="--ft: {family.ink}"
+    aria-label="Campaign: {c.flags.length} flags from {c.ip} inside one 30-minute window"
+    onclick={() => toggleCampaign(c)}
+  >
+    <td class="fmark"><i class="cm">⁂</i> campaign<span class="cn">{c.flags.length} flags</span></td>
+    <td class="k">
+      <button
+        class="wl"
+        title="Open {c.ip} in the topography"
+        onclick={(ev) => {
+          ev.stopPropagation()
+          openWhereIp(c.ip)
+        }}
+      >
+        {c.ip}
+      </button>
+    </td>
+    <td class="ev">
+      {#each types as t (t)}
+        <span class="tchip" style="color: {familyOf(t).ink}">{labelFor(t)}</span>
+      {/each}
+      <span class="cspan">{campaignSpan(c)}</span>
+    </td>
+    <td class="num">{c.count}×</td>
+    <td class="t">{formatFlagAge(c.firstSeen, appState.now)}</td>
+    <td class="vc">
+      <!-- The trio on a campaign row calls every flag inside it; the
+           stamp then reads for the set (`all N`), and undo undoes them
+           all. Opened, each member still carries its own trio, so one
+           flag can be called differently -- and then the campaign's
+           stamp no longer speaks for it. -->
+      {#if done}
+        <span class="vdone">
+          {#if kind}<span class="stamp {kind}">{kind}</span>{/if}
+          <span class="by">{kind ? `all ${c.flags.length}` : 'each called'}</span>
+          <button
+            class="olink"
+            onclick={(ev) => {
+              ev.stopPropagation()
+              undoCampaign(c)
+            }}>undo</button
+          >
+        </span>
+      {:else if canEdit}
+        <span class="vrow">
+          <button
+            class="v expected"
+            title="Normal for this host, at this size — clears every flag in the campaign"
+            onclick={(ev) => {
+              ev.stopPropagation()
+              callCampaign(c, 'expected')
+            }}><i>✓</i>expected</button
+          >
+          {#if kind === 'investigate'}
+            <button
+              class="v resolved"
+              title="Dealt with — clears every flag in the campaign; if the same circumstances recur they come back"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                callCampaign(c, 'resolved')
+              }}><i>✦</i>resolved</button
+            >
+          {:else}
+            <button
+              class="v checked"
+              title="Looked at, fine this time — clears every flag in the campaign"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                callCampaign(c, 'checked')
+              }}><i>~</i>checked</button
+            >
+            <button
+              class="v investigate"
+              title="Of concern — records the verdict on every flag in the campaign; they stay open while you look"
+              onclick={(ev) => {
+                ev.stopPropagation()
+                investigateCampaign(c)
+              }}><i>✱</i>investigate</button
+            >
+          {/if}
+        </span>
+      {/if}
+      <button
+        class="openc"
+        aria-expanded={open}
+        aria-label="{open ? 'Close' : 'Open'} the campaign to its {c.flags.length} flags"
+        onclick={(ev) => {
+          ev.stopPropagation()
+          toggleCampaign(c)
+        }}
+      >
+        ▸
+      </button>
+    </td>
+  </tr>
+  {#if open}
+    <tr class="crule" style="--ft: {family.ink}">
+      <td colspan="6"
+        >{why.rule} — <b>one campaign</b>.{#if members.length < c.flags.length}
+          Showing the {members.length === 1 ? 'one' : spellCount(members.length)} that {members.length === 1
+            ? 'matches'
+            : 'match'} the filters.{/if}{#if why.outsider}
+          {why.outsider}{/if}</td
+      >
+    </tr>
+  {/if}
+{/snippet}
 
 <style>
   .flags-page {
@@ -673,13 +1488,15 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-  }
-
-  .exclusions-panel {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
+    /* #616's dark-not-quiet grammar, as the fall already draws it (its
+       45-degree hatch pattern): the same claim -- absence of a trusted
+       signal, not absence of traffic -- so the same shape, quiet enough
+       to sit under the row's own inks. */
+    --shelf-hatch: repeating-linear-gradient(
+      45deg,
+      transparent 0 5px,
+      color-mix(in srgb, var(--fg-dim) 14%, transparent) 5px 6px
+    );
   }
 
   .flags {
@@ -700,448 +1517,1028 @@
     font-size: 12px;
   }
 
-  h2 {
-    margin: 0 0 10px;
-    font-size: 13px;
+
+  /* The ratified table (round 29, `#s7`'s `.panel table`): the record's
+     own geometry and inks, with this app's theme variables standing in
+     for the mockup's --ink/--hair/--mono names. The peer watchlist table
+     (#676) was ported from the same scene, so the two read as one
+     surface. */
+  .ftable {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .ftable th,
+  .ftable td {
+    padding: 8px 12px;
+    text-align: left;
+  }
+
+  .ftable thead th {
+    padding: 0 12px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ftable thead th.num {
+    text-align: right;
+  }
+
+  /* `.panel thead th` in the record: the head *is* the sort control. A
+     button rather than a click handler on the th, so it is reachable
+     from the keyboard. */
+  .sorth {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
     font-weight: 600;
-    color: var(--fg-muted);
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    color: var(--fg-dim);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .sorth:hover {
+    color: var(--fg-muted);
+  }
+
+  .sorth.on {
+    color: var(--fg);
+  }
+
+  .sorth .dir {
+    display: inline-block;
+    min-width: 8px;
+    margin-left: 5px;
+    color: var(--accent);
+    font-size: 9px;
+  }
+
+  /* Every column doubles as a filter: the record's quiet dashed inline
+     row under the heads (`.panel tr.filters`). */
+  .ftable tr.filters td {
+    padding: 2px 12px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ftable tr.filters input {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-muted);
+    padding: 2px 0;
+    outline: none;
+  }
+
+  .ftable tr.filters input::placeholder {
+    color: var(--fg-dim);
+    opacity: 0.6;
+  }
+
+  .ftable tr.filters input:focus {
+    border-bottom-color: var(--accent);
+  }
+
+  .ftable tbody td {
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ftable tbody td.k {
+    color: var(--fg);
+  }
+
+  .ftable tbody td.t {
+    color: var(--fg-dim);
+  }
+
+  .ftable tbody td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* CALL IT (#780): right-aligned like the record's `.panel td.vc` --
+     the trio/stamp and caret hug the row's own right edge. */
+  .ftable thead th.vc,
+  .shelf-heads th.vc {
+    text-align: right;
+  }
+
+  .ftable tbody td.vc {
+    width: 1%;
+    white-space: nowrap;
+    text-align: right;
+  }
+
+  .frow {
+    cursor: pointer;
+  }
+
+  /* background-color, not the background shorthand: a provisional
+     row's hatch rides in background-image and must survive hover and
+     open (#642). */
+  .frow:hover td {
+    background-color: var(--bg-hover);
+  }
+
+  /* An open row hands its bottom edge to the drawer, so the two read as
+     one block rather than as two stacked rows. */
+  .frow.open td {
+    background-color: var(--bg-hover);
+    border-bottom-color: transparent;
+  }
+
+  /* The shelf's rows and drawers are hatched -- shape -- and every one
+     also wears the worded .ptag/.pwhy -- label -- per #616: never
+     meaning by colour (or texture) alone. */
+  .frow.provisional td,
+  tr.drawer.provisional > td {
+    background-image: var(--shelf-hatch);
+  }
+
+  /* One unbroken line: row and drawer share the type's stripe, and the
+     mark wears the same ink (`.ft-*` in the record -- six fixed hexes,
+     carried here by lib/flagPalette.ts as --ft so a custom detector's
+     accent ink works the same way). */
+  .frow td:first-child,
+  tr.drawer > td {
+    box-shadow: inset 3px 0 0 var(--ft);
+  }
+
+  .fmark {
+    font-weight: 700;
+    white-space: nowrap;
+    text-transform: uppercase;
+  }
+
+  /* The FLAG column is pinned (#988), so opening a campaign -- whose
+     members step in 32px -- never moves WHERE or EVIDENCE. Must fit the
+     longest built-in label stepped in, plus a 3-digit scored number and
+     its 10px gap, plus 1ch slack. In `ch` rather than a flat px (#1010:
+     248px was tuned against one host's guess at what `monospace`
+     resolves to, and a different host's guess overflowed it by 10px) --
+     `ch` scales with the actual font, `--font-mono`'s own pinned
+     Liberation Mono, on every host alike. 32px step + 12px right padding
+     + 10px badge gap = 54px; mark + space + "Known-bad IP (blocklist
+     match)" + "100" + 1ch slack = 36ch. */
+  .ftable thead th:first-child,
+  .ftable tbody td.fmark {
+    width: calc(54px + 36ch);
+    min-width: calc(54px + 36ch);
+  }
+
+  /* The scored number (#988, round 47): bold, pure white, a size up
+     from the type, nothing round it -- the owner's "just the number".
+     Fixed white rather than --fg because it must read against the
+     family ink beside it in every theme; a judged row lets it dim with
+     the rest. */
+  .fmark .conf {
+    font-size: 13px;
+    color: #ffffff;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    margin-left: 10px;
+  }
+
+  .frow.fdone .fmark .conf {
+    color: inherit;
+  }
+
+  /* ============================================================
+     Campaigns (#988, round 47), ported from docs/design/concepts/
+     round-47/build.py's tr.camp/.tchip/.cspan/tr.mem/tr.crule onto
+     this app's tokens (--ink-3 -> --fg-dim, --hair -> --border).
+     ============================================================ */
+  tr.camp .fmark .cn {
+    font-weight: 400;
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    margin-left: 9px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  /* ⁂ is small in this face, so it gets its own size. */
+  tr.camp .fmark .cm {
+    font-style: normal;
+    font-size: 16px;
+    line-height: 0;
+    vertical-align: -2px;
+    margin-right: 2px;
+  }
+
+  tr.camp td.ev {
+    white-space: nowrap;
+  }
+
+  /* One word per type inside, in that type's ink (decorative: the label
+     is the identity), then the span. */
+  .tchip {
+    font-weight: 600;
+  }
+
+  .tchip + .tchip::before,
+  .cspan::before {
+    content: ' · ';
+    color: var(--fg-dim);
+    font-weight: 400;
+  }
+
+  .cspan {
+    color: var(--fg-dim);
+  }
+
+  tr.camp .openc {
+    transform: none;
+  }
+
+  tr.camp.open .openc {
+    transform: rotate(90deg);
+  }
+
+  tr.camp.open td {
+    border-bottom-color: transparent;
+  }
+
+  /* The members: the same flag rows, one step in, a dash where the step
+     is. ::after, because ::before on the first cell is the investigate
+     lens. */
+  tr.mem td:first-child {
+    padding-left: 32px;
+  }
+
+  tr.mem td:first-child::after {
+    content: '';
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    width: 8px;
+    height: 1px;
+    background: var(--fg-dim);
+    opacity: 0.6;
+  }
+
+  tr.mem td,
+  tr.crule td,
+  tr.drawer.inc > td {
+    background-color: color-mix(in srgb, var(--fg) 3%, transparent);
+  }
+
+  tr.mem.open td {
+    background-color: color-mix(in srgb, var(--fg) 5%, transparent);
+  }
+
+  /* Why these are one campaign: one quiet line under the campaign row,
+     the ink line running on through it as it does through a drawer. */
+  tr.crule td {
+    padding: 6px 12px 6px 32px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 400;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+    box-shadow: inset 3px 0 0 var(--ft);
+  }
+
+  tr.crule td b {
+    color: var(--fg-muted);
+    font-weight: 600;
+  }
+
+  /* A campaign called from its own row: the stamp reads for the set. */
+  tr.camp .vdone .by {
+    color: var(--fg-dim);
+  }
+
+  /* `.ftable tbody td` above sets the muted body ink at higher CSS
+     specificity (class+type+type) than a bare `.fmark` (class alone)
+     can beat, which is why the label text was landing on --fg-muted
+     instead of its family ink even though --ft was already wired
+     through onto the row. Round 30's label wears the flag's own
+     severity colour (the record's `.ft-* .fmark` rule), matching the
+     ratified six-hex palette in lib/flagPalette.ts -- only the
+     selector's specificity needed fixing, not the colour source. */
+  .ftable tbody td.fmark {
+    color: var(--ft);
+  }
+
+  /* `.wl` in the record: a named where is a link, dotted underneath, and
+     it goes into the topography rather than the stream (#678). */
+  .wl {
+    background: none;
+    border: none;
+    border-bottom: 1px dotted var(--border);
+    padding: 0;
+    font: inherit;
+    color: var(--fg);
+    cursor: pointer;
+  }
+
+  .wl:hover {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .wl-plain {
+    color: var(--fg-dim);
+  }
+
+  .openc {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    font-size: 13px;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: transform 0.2s;
+  }
+
+  .openc[aria-expanded='true'] {
+    transform: rotate(90deg);
+  }
+
+  /* ============================================================
+     CALL IT (#780, rounds 34-35): the verdict trio moves from the
+     drawer into the row itself. Ported from docs/design/concepts/
+     round-35/verdicts-in-row.html's .vrow/.stamp/tr.frow.struck/
+     .vdone/the lens bar, mapped onto this app's own tokens the way
+     EngineRoom.svelte's settings-doors port already does (--ok ->
+     --accept); --now/--alarm/--hair-2 are this app's own names
+     verbatim, so they carry over unchanged.
+     ============================================================ */
+  .vrow {
+    display: inline-flex;
+    gap: 6px;
+    vertical-align: middle;
+    margin-right: 12px;
+  }
+
+  .vrow button.v {
+    --vc: var(--fg-muted);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 1px 9px 1px 7px;
+    cursor: pointer;
+    line-height: 16px;
+    transition:
+      color 0.15s,
+      border-color 0.15s,
+      background 0.15s,
+      transform 0.15s;
+  }
+
+  .vrow button.v i {
+    font-style: normal;
+    color: var(--vc);
+    margin-right: 5px;
+    font-weight: 700;
+  }
+
+  .vrow button.v.expected {
+    --vc: var(--accept);
+  }
+
+  .vrow button.v.checked {
+    --vc: var(--now);
+  }
+
+  .vrow button.v.investigate {
+    --vc: var(--alarm);
+  }
+
+  /* Resolved shares expected's settled ink: both are a flag ending
+     well, one by teaching mikroview what is normal and one by the
+     firewall change that stopped the traffic. */
+  .vrow button.v.resolved {
+    --vc: var(--accept);
+  }
+
+  .vrow button.v:hover {
+    color: var(--vc);
+    border-color: var(--vc);
+    background: color-mix(in srgb, var(--vc) 12%, transparent);
+    transform: translateY(-1px);
+  }
+
+  /* The stamp: a verdict pressed onto the row in its own ink. */
+  .stamp {
+    --vc: var(--fg-dim);
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--vc);
+    border: 1.5px solid var(--vc);
+    border-radius: 3px;
+    padding: 1px 7px 1px 8px;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vc) 35%, transparent);
+    animation: stamp-in 0.28s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+    vertical-align: middle;
+  }
+
+  .stamp.expected {
+    --vc: var(--accept);
+  }
+
+  .stamp.checked {
+    --vc: var(--now);
+  }
+
+  .stamp.investigate {
+    --vc: var(--alarm);
+  }
+
+  .stamp.resolved {
+    --vc: var(--accept);
+  }
+
+  @keyframes stamp-in {
+    from {
+      transform: scale(1.9);
+      opacity: 0;
+    }
+    60% {
+      opacity: 1;
+    }
+    to {
+      transform: scale(1);
+    }
+  }
+
+  /* The row takes the ink for a moment as the stamp lands. */
+  .frow.struck td {
+    animation: struck 0.7s ease-out both;
+  }
+
+  @keyframes struck {
+    from {
+      background: color-mix(in srgb, var(--sc, var(--fg-dim)) 16%, transparent);
+    }
+  }
+
+  .frow.struck.expected {
+    --sc: var(--accept);
+  }
+
+  .frow.struck.checked {
+    --sc: var(--now);
+  }
+
+  .frow.struck.investigate {
+    --sc: var(--alarm);
+  }
+
+  .frow.struck.resolved {
+    --sc: var(--accept);
+  }
+
+  /* Takes the trio's place in the same cell, so the column never
+     moves. */
+  .vdone {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    vertical-align: middle;
+  }
+
+  .vdone + .openc {
+    margin-left: 16px;
+  }
+
+  /* Where the scored number came from (#988): under the story, quieter
+     than it. */
+  .story .scored {
+    display: block;
+    color: var(--fg-dim);
+    font-size: 11px;
+    margin-top: 6px;
+  }
+
+  .story .scored b {
+    color: var(--fg-muted);
+    font-weight: 600;
+  }
+
+  /* Under investigation: leads the story (see the drawer's .story
+     above). */
+  .story .called {
+    display: block;
+    color: var(--fg-dim);
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+
+  /* Under investigation: the row's own bar swells -- a lens over the
+     3px family stripe, its ends arcing back into it rather than
+     stepping against the rows around it. Always alarm ink, regardless
+     of the flag's own family colour: something being looked at is the
+     one state every family shares the same urgency for. */
+  .frow td:first-child {
+    position: relative;
+  }
+
+  .frow td:first-child::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--alarm);
+    opacity: 0;
+    border-radius: 0 4px 4px 0 / 0 10px 10px 0;
+    transition:
+      width 0.35s ease,
+      opacity 0.35s ease;
+  }
+
+  .frow.investigating td:first-child::before {
+    width: 7px;
+    opacity: 1;
+  }
+
+  /* A flag whose verdict cleared it: dims in place, keeps its row,
+     until the tab is left (#780 item 2 -- the recently-cleared list, in
+     place). Its CALL IT cell stays at full opacity so the stamp and
+     undo stay legible. */
+  .frow.fdone td {
+    opacity: 0.45;
+  }
+
+  .frow.fdone td:first-child {
+    box-shadow: none !important;
+  }
+
+  .frow.fdone td:last-child {
+    opacity: 1;
+  }
+
+  /* What a returning flag says, under the evidence it is returning
+     with (#640). Quieter than the evidence itself and on its own line:
+     it is the history, not the finding. */
+  .returned {
+    display: block;
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--now);
   }
 
   .empty {
-    margin: 0;
     color: var(--fg-dim);
-    font-size: 13px;
+    font-size: 12px;
   }
 
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+  /* The drawer's grid, straight from the record's `.dwr-in`: story over
+     matched lines down the left, the episode spanning both rows on the
+     right, the actions across the foot. */
+  tr.drawer > td {
+    padding: 0 12px 14px;
+    border-bottom: 1px solid var(--border);
   }
 
-  /* 1/2/3-column density (issue #199). Only the two top-level lists
-     (active, cleared) get this -- .campaign-members (a campaign's
-     expanded member list, nested one level inside a single grid cell)
-     stays the plain flex column above regardless of the page's column
-     setting, since it's already-indented content, not another row of
-     the same grid. minmax(0, 1fr), not 1fr alone, so a long unbroken
-     target/detail string can't force a column wider than its share and
-     blow out the grid -- a bare 1fr lets content overflow its track. */
-  .card-grid {
+  .dwr-in {
     display: grid;
-    grid-template-columns: repeat(var(--flag-columns, 1), minmax(0, 1fr));
+    grid-template-columns: 1.3fr 1fr;
+    gap: 10px 32px;
+    padding: 6px 8px 4px;
   }
 
-  .card {
-    position: relative;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 150px 10px 12px;
+  .dwr-in .story {
+    grid-column: 1;
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    line-height: 1.55;
   }
 
-  /* Compact (2/3 columns, issue #199). The 150px right-reserve above
-     exists only to make room for .actions floating in the corner --
-     narrower cards don't have that much spare width to give up, so
-     .actions moves into normal flow at the bottom instead (see below)
-     and the reserve is dropped along with it. */
-  .card.compact {
-    padding: 8px 10px;
-  }
-
-  .cleared-card {
-    opacity: 0.7;
-    padding-right: 12px;
-  }
-
-  /* No single Clear action at the campaign level (clearing happens per
-     member flag, inside the expanded list below), so unlike a plain
-     .card it doesn't need to reserve .clear's right-hand padding. */
-  .campaign-card {
-    padding: 10px 12px;
-  }
-
-  .campaign-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .campaign-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: transparent;
-    border: none;
-    padding: 0;
+  .dwr-in .story .headline {
     color: var(--fg);
-    font-size: 13px;
     font-weight: 600;
+  }
+
+  .dwr-in .lines {
+    grid-column: 1;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* The per-host pairs (#654 via #791): the left column's structured
+     middle, in the same mono idiom as .lines. The label is the
+     record's .lab, as the episode wears across the aisle. */
+  .dwr-in .evpairs {
+    grid-column: 1;
+  }
+
+  .dwr-in .evpairs .lab {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin-bottom: 4px;
+  }
+
+  /* The host carries the row; its ports read on from it, dimmer, so
+     a glance answers "who" before "which doors". */
+  .dwr-in .ev-pair-row {
+    display: flex;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.6;
+  }
+
+  .dwr-in .ev-pair-row .ev-host {
+    color: var(--fg-muted);
+  }
+
+  .dwr-in .ev-pair-row .ev-ports {
+    color: var(--fg-dim);
+  }
+
+  .dwr-in .ev-foot {
+    margin: 4px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  .dwr-in .side {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    min-width: 0;
+  }
+
+  .dwr-in .side .lab {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .dwr-in .side svg {
+    display: block;
+    width: 100%;
+    height: 34px;
+    margin: 6px 0 2px;
+  }
+
+  .dwr-in .side .span {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  .dwr-in .ep-note {
+    margin: 4px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  .dwr-acts {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 2px;
+  }
+
+  .act {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 16px;
     cursor: pointer;
   }
 
-  .campaign-caret {
-    color: var(--fg-muted);
-    font-size: 11px;
-    width: 10px;
-    display: inline-block;
+  .act:hover {
+    border-color: var(--accent);
   }
 
-  .campaign-count {
-    color: var(--fg);
-  }
-
-  .campaign-source.target {
-    font-weight: 600;
-  }
-
-  .campaign-summary {
-    margin-top: 6px;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-    font-size: 12px;
+  .act.quiet {
     color: var(--fg-dim);
   }
 
-  .campaign-types {
-    color: var(--fg-muted);
-  }
-
-  .campaign-members {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-  }
-
-  .card-main {
+  .clear-note {
     display: flex;
     align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1;
+    min-width: 180px;
   }
 
-  .type {
+  .clear-note-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
     font-size: 12px;
-    font-weight: 600;
-    color: var(--accent);
-    background: var(--accent-bg);
-    border-radius: 4px;
-    padding: 2px 7px;
+    color: var(--fg);
+    outline: none;
   }
 
-  .confidence {
-    font-size: 11px;
-    font-weight: 600;
-    border-radius: 4px;
-    padding: 2px 7px;
+  .clear-note-input:focus {
+    border-color: var(--accent);
   }
 
-  .confidence-low {
-    color: var(--fg-muted);
-    background: var(--bg-hover);
-  }
-
-  .confidence-medium {
-    color: var(--drop);
-    background: var(--drop-bg);
-  }
-
-  .confidence-high {
-    color: var(--reject);
-    background: var(--reject-bg);
-  }
-
-  .target {
-    font-family: var(--font-mono);
+  /* The honest cleared state (round 26, `.caempty` in round 29). */
+  .caempty {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
     font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .caempty b {
     color: var(--fg);
   }
 
-  button.target {
+  .cae-mark {
+    color: var(--accept);
+    font-weight: 700;
+  }
+
+  .olink {
     background: none;
     border: none;
     padding: 0;
-    cursor: pointer;
-    text-decoration: underline;
-    text-decoration-color: transparent;
-  }
-
-  button.target:hover {
-    text-decoration-color: currentColor;
-  }
-
-  .target-global {
-    color: var(--fg-muted);
-  }
-
-  .detail {
-    margin: 6px 0 0;
-    font-size: 13px;
-    color: var(--fg-muted);
-  }
-
-  .country {
-    font-size: 14px;
-  }
-
-  .meta {
-    margin-top: 6px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 12px;
-    color: var(--fg-dim);
-  }
-
-  .details-toggle {
-    background: transparent;
-    border: none;
+    font-size: inherit;
     color: var(--accent);
-    padding: 0;
-    font-size: 12px;
+    cursor: pointer;
     text-decoration: underline;
     text-decoration-color: transparent;
   }
 
-  .details-toggle:hover {
+  .olink:hover {
     text-decoration-color: currentColor;
   }
 
-  .expanded {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  /* ============================================================
+     Flags by type (#988, round 47): .bytype/.btcells/.btc/.btbar from
+     round 47's build.py, --ti being the cell's family ink.
+     ============================================================ */
+  .bytype {
+    padding: 0 12px;
+    margin-bottom: 14px;
   }
 
-  .ev-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 10px;
-    font-size: 13px;
-  }
-
-  .ev-label {
-    color: var(--fg-muted);
-    flex: none;
-  }
-
-  .ev-value {
-    color: var(--fg);
-    text-align: right;
-    overflow-wrap: anywhere;
-    font-family: var(--font-mono);
-  }
-
-  .ev-raw {
-    font-size: 11px;
-    color: var(--fg-dim);
-  }
-
-  .actions {
-    position: absolute;
-    top: 10px;
-    right: 12px;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-    width: 138px;
-  }
-
-  /* Flows below the card content instead of floating in the corner --
-     a fixed-width floating box is what the 150px reserve above was
-     for, and a compact card doesn't have that to spare. Full-width
-     here also means the split button (see .split-clear) always has
-     room regardless of how narrow the column gets, rather than needing
-     its own per-density size math. */
-  .card.compact .actions {
-    position: static;
-    width: auto;
-    flex-direction: row;
-    margin-top: 8px;
-  }
-
-  .card.compact .actions .split-clear,
-  .card.compact .actions > .clear {
-    flex: 1;
-  }
-
-  .clear {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
-    border-radius: 5px;
-    padding: 5px 10px;
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .clear:hover {
-    color: var(--fg);
-    border-color: var(--fg-muted);
-  }
-
-  .clear:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  /* Split button: .split-main is today's plain Clear, unchanged in
-     behaviour and appearance. .split-arrow opens the dropdown holding
-     the one permanent action -- kept visually distinct (the drop tint)
-     so its warning colour, not just its position, marks it as the more
-     deliberate one. */
-  .split-clear {
-    position: relative;
-    display: flex;
-  }
-
-  .split-main {
-    flex: 1;
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-    border-right: none;
-  }
-
-  .split-arrow {
-    flex: none;
-    width: 26px;
-    padding: 5px 0;
-    font-size: 10px;
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
-    color: var(--drop);
-    border-color: var(--drop);
-  }
-
-  .split-arrow:hover,
-  .split-clear.menu-open .split-arrow {
-    background: var(--drop-bg);
-  }
-
-  .split-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    min-width: 160px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 4px;
-    box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.4);
-    z-index: 5;
-  }
-
-  .split-menu-item {
+  .bytype .btl {
     display: block;
-    width: 100%;
-    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin-bottom: 8px;
+  }
+
+  .bytype .btl b {
+    color: var(--fg-muted);
+    font-weight: 600;
+  }
+
+  .btcells {
+    display: flex;
+    gap: 14px;
+  }
+
+  .btc {
+    --ti: var(--fg-muted);
+    flex: 1 1 0;
+    min-width: 0;
     background: transparent;
-    border: none;
-    color: var(--drop);
-    padding: 7px 9px;
-    border-radius: 5px;
-    font-size: 12px;
-    white-space: nowrap;
+    border: 0;
+    padding: 0;
+    text-align: left;
     cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition: opacity 0.18s;
   }
 
-  .split-menu-item:hover {
-    background: var(--drop-bg);
-  }
-
-  .active-header {
+  .btc .btn {
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 10px;
-    flex-wrap: wrap;
-  }
-
-  .active-header h2 {
-    margin: 0;
-  }
-
-  .header-controls {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .layout-select {
-    display: flex;
-    border: 1px solid var(--border);
-    border-radius: 5px;
+    align-items: baseline;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ti);
+    white-space: nowrap;
     overflow: hidden;
   }
 
-  .layout-option {
-    background: transparent;
-    border: none;
-    border-left: 1px solid var(--border);
-    color: var(--fg-muted);
-    padding: 5px 11px;
+  .btc .btn i {
+    font-style: normal;
+    margin-right: 5px;
+  }
+
+  .btc .btn b {
+    font-family: var(--font-mono);
     font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    cursor: pointer;
-  }
-
-  .layout-option:first-child {
-    border-left: none;
-  }
-
-  .layout-option:hover {
-    color: var(--fg);
-    background: var(--bg-hover);
-  }
-
-  .layout-option.active {
-    color: var(--accent);
-    background: var(--accent-bg);
     font-weight: 600;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
   }
 
-  .clear-all {
-    background: transparent;
+  /* A single-hue bar of the count against the largest -- magnitude,
+     never identity. */
+  .btc .btbar {
+    display: block;
+    height: 3px;
+    margin-top: 6px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--ti) 16%, transparent);
+  }
+
+  .btc .btbar span {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--ti);
+    transition: width 0.3s ease;
+  }
+
+  .btc:hover .btn,
+  .btc.on .btn {
+    color: var(--fg);
+  }
+
+  .btc:hover .btn i,
+  .btc.on .btn i {
+    color: var(--ti);
+  }
+
+  .btc.on .btbar {
+    background: color-mix(in srgb, var(--ti) 30%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--ti) 40%, transparent);
+  }
+
+  .btcells.picked .btc:not(.on) {
+    opacity: 0.38;
+  }
+
+  .btc:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 2px;
+  }
+
+  /* The learning shelf (#642). Its heading is the section's own label
+     -- the docket switcher carries no counts (round 30), so the shelf's
+     number lives here -- wearing a small hatch swatch so the section
+     and its rows share one grammar. */
+  .shelf-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .shelf-head::before {
+    content: '';
+    display: inline-block;
+    width: 18px;
+    height: 9px;
     border: 1px solid var(--border);
-    color: var(--fg-muted);
-    border-radius: 5px;
-    padding: 6px 12px;
-    font-size: 12px;
+    background-image: var(--shelf-hatch);
+  }
+
+  .shelf-count {
+    color: var(--fg);
+  }
+
+  .shelf .ftable {
+    margin-top: 8px;
+  }
+
+  /* The shelf's column heads: the settled table's head typography
+     without its sort/filter machinery -- a shelf is a holding area,
+     not a second ledger. */
+  .shelf-heads th {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
     white-space: nowrap;
   }
 
-  .clear-all:hover {
-    color: var(--fg);
-    border-color: var(--fg-muted);
+  .shelf-warm {
+    margin: 8px 0 0;
+    max-width: 62ch;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--fg-muted);
   }
 
-  /* Armed state: the button itself turns into the confirmation -- no
-     modal, because this red/"Confirm" state IS the second, deliberate
-     step (issue #198). */
-  .clear-all.armed {
-    background: var(--drop-bg);
-    color: var(--drop);
-    border-color: var(--drop);
+  /* The early-noise honesty line (#640): same shape as .shelf-warm --
+     it sits in the same spot for the same reason, just while the
+     ledger rather than the baseline is what is still thin. */
+  .shelf-honest {
+    margin: 8px 0 0;
+    max-width: 62ch;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--fg-muted);
+  }
+
+  /* The worded half of the provisional marking (#616). Inside .fmark it
+     must not inherit the family ink -- it is a trust status, not a
+     family. */
+  .ptag {
+    margin-left: 8px;
+    padding: 1px 5px;
+    border: 1px dashed var(--fg-dim);
+    border-radius: 3px;
+    font-size: 9px;
     font-weight: 600;
+    letter-spacing: 0.1em;
+    color: var(--fg-muted);
   }
 
-  .clear-all:disabled {
-    opacity: 0.6;
-    cursor: default;
+  .pwhy {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
   }
 
+  @media (prefers-reduced-motion: reduce) {
+    .openc {
+      transition: none;
+    }
+
+    /* #780: the stamp's thump, the row's flash and the chip's hover
+       lift all turn off -- the lens bar's width/opacity transition
+       already shares .frow td:first-child::before's own declaration,
+       so it is covered by the blanket rule below rather than repeated. */
+    .stamp,
+    .frow.struck td,
+    .frow td:first-child::before {
+      animation: none;
+      transition: none;
+    }
+
+    .vrow button.v:hover {
+      transform: none;
+    }
+
+    /* #988: the strip's cell fade and bar growth. */
+    .btc,
+    .btc .btbar span {
+      transition: none;
+    }
+  }
 </style>

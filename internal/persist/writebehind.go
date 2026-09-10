@@ -99,6 +99,7 @@ type WriteBehind struct {
 	backend  Backend
 	timeout  time.Duration
 	interval time.Duration
+	clock    Clock
 
 	onSaveError func(msg string)
 	onConflict  func(msg string)
@@ -133,7 +134,49 @@ type WriteBehindOptions struct {
 	MinInterval time.Duration
 	OnSaveError func(msg string)
 	OnConflict  func(msg string)
+	// Clock overrides the wall clock run's own back-off wait reads and
+	// waits on -- nil (every production caller) means the real one. The
+	// seam exists for a test that needs the back-off window property
+	// ("one attempt per window, no more") to hold exactly rather than
+	// approximately: measuring real elapsed time around a real sleep and
+	// inferring how many windows "must" have passed is itself a
+	// scheduling-dependent assertion, which is what flaked under a loaded
+	// runner (#941). A test overriding this drives the window forward
+	// itself instead. See Clock's own doc comment.
+	Clock Clock
 }
+
+// Clock abstracts the two wall-clock operations run's own back-off wait
+// uses: reading the current time, and waiting for a duration to pass.
+// The real implementation (realClock, used whenever WriteBehindOptions
+// leaves Clock nil) is exactly time.Now and time.NewTimer; a test
+// implementation can instead advance a fake time and fire the returned
+// ClockTimer on demand, so the back-off property under test doesn't
+// depend on the runner's actual speed at all.
+type Clock interface {
+	Now() time.Time
+	NewTimer(d time.Duration) ClockTimer
+}
+
+// ClockTimer is the subset of *time.Timer run's own wait needs: a
+// channel that fires once, and Stop to cancel it early when something
+// else (a wake, a shutdown) makes the wait moot.
+type ClockTimer interface {
+	C() <-chan time.Time
+	Stop() bool
+}
+
+// realClock is time.Now/time.NewTimer, unchanged from what this package
+// called directly before Clock existed.
+type realClock struct{}
+
+func (realClock) Now() time.Time                      { return time.Now() }
+func (realClock) NewTimer(d time.Duration) ClockTimer { return realTimer{time.NewTimer(d)} }
+
+type realTimer struct{ t *time.Timer }
+
+func (r realTimer) C() <-chan time.Time { return r.t.C }
+func (r realTimer) Stop() bool          { return r.t.Stop() }
 
 // OpenWriteBehind loads b's document under the same fail-closed contract
 // Open documents (#378) and, on success, returns a *WriteBehind wired to
@@ -160,11 +203,16 @@ func OpenWriteBehind(ctx context.Context, b Backend, name string, opts WriteBehi
 		return nil, existed, nil
 	}
 
+	clk := opts.Clock
+	if clk == nil {
+		clk = realClock{}
+	}
 	w := &WriteBehind{
 		name:        name,
 		backend:     b,
 		timeout:     SaveTimeout,
 		interval:    opts.MinInterval,
+		clock:       clk,
 		onSaveError: opts.OnSaveError,
 		onConflict:  opts.OnConflict,
 		version:     version,
@@ -306,10 +354,10 @@ func (w *WriteBehind) run() {
 		w.mu.Unlock()
 
 		if !force && !lastAttempt.IsZero() {
-			if wait := w.interval - time.Since(lastAttempt); wait > 0 {
-				timer := time.NewTimer(wait)
+			if wait := w.interval - w.clock.Now().Sub(lastAttempt); wait > 0 {
+				timer := w.clock.NewTimer(wait)
 				select {
-				case <-timer.C:
+				case <-timer.C():
 				case <-w.wake:
 					// A Flush call armed forceNow and nudged wake to cut
 					// this wait short -- loop back around to pick up
@@ -326,7 +374,7 @@ func (w *WriteBehind) run() {
 		}
 
 		w.attempt(context.Background())
-		lastAttempt = time.Now()
+		lastAttempt = w.clock.Now()
 	}
 }
 
@@ -364,6 +412,12 @@ func (w *WriteBehind) attempt(parent context.Context) {
 	w.version = version
 	if w.generation == gen {
 		w.dirty = false
+		// A Flush that arrived while this attempt was in flight is
+		// satisfied by it: nothing newer is dirty, so Flush returns as
+		// soon as it sees dirty clear. Disarm forceNow here too --
+		// otherwise it stays armed for the next unrelated MarkDirty,
+		// which then skips MinInterval (#941).
+		w.forceNow = false
 	}
 	w.mu.Unlock()
 }

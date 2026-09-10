@@ -10,29 +10,50 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	// Jitter only -- spreading instances' daily blocklist fetches so they
+	// do not all arrive at 00:00 UTC. Nothing drawn from this is a
+	// secret, a token or an identifier, and an observer who predicts when
+	// an instance fetches a public list learns nothing worth having.
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	// The IANA zone database, compiled in as a fallback (#680). A watch
+	// window is stored as a zone name, and Go only falls back to this copy
+	// when the host has no zoneinfo of its own -- so where tzdata exists
+	// (including the distroless image this ships in) nothing changes.
+	//
+	// It is here because of what the alternative failure looks like: a
+	// window whose zone will not load records no nights at all, silently.
+	// The watch would keep saying "watching" while its nightly memory
+	// quietly stopped filling, which is precisely the shape of failure
+	// this project refuses -- an absence of ours that reads as calm.
+	_ "time/tzdata"
 
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/coverage"
+	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
+	"github.com/tomlawesome/mikroview/internal/hosts"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
@@ -40,12 +61,14 @@ import (
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
+	"github.com/tomlawesome/mikroview/internal/oui"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/setup"
+	"github.com/tomlawesome/mikroview/internal/snapshot"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -442,6 +465,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-restore" {
 		os.Exit(runRestore(os.Args[2:]))
 	}
+	// -migrate-data: move the data directory between a bind mount and a
+	// named volume, in either direction (#537). Run from inside the
+	// container with both mounted, so every file is created by the uid
+	// mikroview runs as and the ownership cannot come out wrong.
+	if len(os.Args) > 1 && os.Args[1] == "-migrate-data" {
+		os.Exit(runMigrateData(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "-transfer-admin" {
 		os.Exit(runTransferAdmin(os.Args[2:]))
 	}
@@ -486,11 +516,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	storeCapacity := cfg.Store.Capacity()
-	logging.New("store").Info(fmt.Sprintf(
-		"event buffer: %s reserved for up to %d events (store.maxMemory) -- once traffic arrives, GET /api/stats reports how full it is and how far back it actually reaches",
-		cfg.Store.MaxMemory, storeCapacity))
-	st := store.New(storeCapacity, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
 	// Tell the syslog listener which sources are the operator's declared
 	// routers, so a flood of undeclared ones cannot take every
@@ -527,6 +552,17 @@ func main() {
 		os.Exit(1)
 	}
 	defer persistence.Close()
+
+	// The event buffer is built here rather than before openStorage
+	// because its size is not the config file's to decide on its own
+	// (#796): if an admin has set a figure from inside the app, that one
+	// applies, and reading it needs the storage backend. Allocating the
+	// file's ring first and resizing afterwards would defeat the point
+	// -- an operator whose file asks for more memory than the host has,
+	// and who lowered it in the UI precisely because of that, would find
+	// the instance still failing to start on the figure they replaced.
+	storeMaxMemory, storeCapacity, settingsStore := openStoreSettings(bootCtx, persistence, cfg)
+	st := store.New(storeCapacity, cfg.Store.Retention)
 
 	flagsBackend, err := persistence.backendFor(bootCtx, "flags", cfg.Flags.StorePath)
 	if err != nil {
@@ -614,6 +650,57 @@ func main() {
 		entitiesLog.Info(fmt.Sprintf("imported %d entries from config.yaml's ruleNames/hostNames (now UI-editable)", n))
 	}
 
+	// Coverage-gap declarations (issue #630/#392): an admin's on-record
+	// statement that a given boundary-direction pair is intentionally,
+	// not accidentally, quiet -- backing GET/PUT/DELETE
+	// /api/coverage/declarations. Same optional-persistence contract as
+	// entities above.
+	coverageLog := logging.New("coverage")
+	coverageBackend, err := persistence.backendFor(bootCtx, "coverage", cfg.Coverage.StorePath)
+	if err != nil {
+		coverageLog.Warn(err.Error())
+	}
+	coverageStore, err := coverage.OpenWithBackend(coverageBackend)
+	mustOpenStore(coverageLog, err)
+
+	// The host presence register (issue #1016): every host the feed has
+	// shown, so a host that stops talking goes quiet on the map instead
+	// of silently disappearing, plus whatever an operator has said about
+	// a quiet one -- backing GET /api/hosts and the mark endpoints.
+	// Same optional-persistence contract as coverage above, but written
+	// behind rather than synchronously: this is updated on every
+	// ingested event (see ingestOneRecovered).
+	hostsLog := logging.New("hosts")
+	hostsBackend, err := persistence.backendFor(bootCtx, "hosts", cfg.Hosts.StorePath)
+	if err != nil {
+		hostsLog.Warn(err.Error())
+	}
+	hostRegister, err := hosts.OpenWithBackend(hostsBackend)
+	mustOpenStore(hostsLog, err)
+
+	// The baseline line register (issue #1016, round 49): which
+	// source/destination/port/protocol lines the feed has shown and on
+	// which of the last few days, so the map can draw a line off the
+	// established pattern brightly and let every settled one recede --
+	// backing GET /api/baseline/off and the expected endpoints. Sits
+	// beside the host register above because it is fed from the same
+	// place, on the same terms: one map update per ingested event, a
+	// rate-limited encode, never a disk write on that path.
+	//
+	// Unlike the host register, an unpersisted one is genuinely lossy:
+	// recurrence is time rather than volume, so a register that starts
+	// empty reads every established line as new. See config.Baseline.
+	baselineLog := logging.New("baseline")
+	baselineBackend, err := persistence.backendFor(bootCtx, "baseline", cfg.Baseline.StorePath)
+	if err != nil {
+		baselineLog.Warn(err.Error())
+	}
+	baselineRegister, err := baseline.OpenWithBackend(baselineBackend, baseline.Config{
+		Days: cfg.Baseline.Days,
+		Of:   cfg.Baseline.Of,
+	})
+	mustOpenStore(baselineLog, err)
+
 	// Tokens (issue #101): read-only API bearer tokens for service-to-
 	// service access. Persistence itself is optional -- a missing/
 	// unconfigured path just means token creation refuses with
@@ -628,6 +715,13 @@ func main() {
 	tokenStore, err := auth.OpenTokenStoreWithBackend(tokensBackend)
 	mustOpenStore(tokensLog, err)
 
+	// Router-backup vault (#394): the SFTP drop box (started further
+	// below, once the listen address is finalised) writes into this,
+	// and the admin API reads it back. Needs tokenStore above (a login's
+	// password is checked against it) so it is opened here, not
+	// earlier.
+	routerBackupVault := openRouterBackupVault(logging.New("backupvault"), cfg)
+
 	// Audit (issue #112): the persisted admin-action accountability log.
 	// Persistence itself is optional -- a missing/unconfigured path just
 	// means entries don't survive a restart -- but a document that
@@ -639,21 +733,6 @@ func main() {
 	}
 	auditStore, err := audit.OpenWithBackend(auditBackend)
 	mustOpenStore(auditLog, err)
-
-	// The watchlist document (#243). A migration *source* only since
-	// issue #407: the store that owned it (internal/watchlist.Store) is
-	// deleted, and an operator's entries live in the definitions document
-	// with every other definition. Its bytes are still read on every boot
-	// -- by MigrateDefinitions on a deployment that predates the
-	// definitions document, and by AdoptWatchlistEntries on one that
-	// created entries after that document already existed -- so an
-	// upgrade across this change keeps every entry, every observation and
-	// every promoted destination.
-	watchlistLog := logging.New("watchlist")
-	watchlistBackend, err := persistence.backendFor(bootCtx, "watchlist", cfg.Watchlist.StorePath)
-	if err != nil {
-		watchlistLog.Warn(err.Error())
-	}
 
 	// The suggestion candidate pool (#243 slice 5): watchlist entries
 	// suggested from data RouterOS has already pushed. Persistence
@@ -744,51 +823,29 @@ func main() {
 
 	// definitions (#404) is the one document holding every definition --
 	// shipped detectors, watchlist expectations, and eventually
-	// builder-authored custom ones. On a not-yet-existing document, it is
-	// seeded once from the pre-#405 detector-settings document and
-	// internal/watchlist's entries store (engine.MigrateDefinitions),
-	// fail-closed and non-destructive: neither source document is
-	// touched.
-	//
-	// The detector-settings document is now a *source only*. The store
-	// that owned it (internal/detect.SettingsStore) is deleted (issue
-	// #405), and nothing writes to it any more: an operator's detector
-	// toggle lands on the definition itself. Its bytes are still read on
-	// every boot, both here and as a seed layer below, so a deployment
-	// upgrading across this change keeps whatever it had switched off.
-	// persistence.backendFor is safe to call more than once for the same
-	// store name (its one-time Postgres adoption step is itself
-	// idempotent -- see storage.backendFor's own doc comment).
+	// builder-authored custom ones. Anything it does not already hold is
+	// seeded below, from this binary's own shipped catalogue.
 	definitionsLog := logging.New("definitions")
 	definitionsBackend, err := persistence.backendFor(bootCtx, "definitions", cfg.Engine.DefinitionsStorePath)
 	if err != nil {
 		definitionsLog.Warn(err.Error())
 	}
-	migrationDetectorBackend, err := persistence.backendFor(bootCtx, "detector_settings", cfg.Flags.DetectorSettingsStorePath)
-	if err != nil {
-		definitionsLog.Warn(err.Error())
-	}
-	if _, err := engine.MigrateDefinitions(bootCtx, definitionsBackend, migrationDetectorBackend, watchlistBackend); err != nil {
-		if errors.Is(err, engine.ErrMigrationWriteFailed) {
-			// Nothing was lost -- see ErrMigrationWriteFailed's own doc
-			// comment: neither source was touched, and the definitions
-			// document still does not exist either way, so this is
-			// retried automatically on the next restart once whatever
-			// blocked the write (a missing/unwritable data directory, a
-			// momentarily unreachable Postgres) is fixed. Same
-			// log-and-continue severity every other store here gives an
-			// ordinary "can't currently reach my backend" failure.
-			definitionsLog.Warn(err.Error() + " -- continuing without a migrated definitions store; this is retried automatically on the next restart")
-		} else {
-			// An unreadable/corrupt source, or a conversion that could
-			// not be trusted to be complete -- issue #404's fail-closed
-			// contract: refuse to start rather than risk ever writing a
-			// partial or wrong definitions document.
-			mustOpenStore(definitionsLog, err)
-		}
-	}
 	definitions, err := engine.OpenDefinitionsStoreWithBackend(definitionsBackend)
 	mustOpenStore(definitionsLog, err)
+
+	// decommissions (#460) holds every retiring network segment: the
+	// range, its clean-window clock, and the names the router last knew
+	// inside it. Its own document rather than a corner of the definitions
+	// one, because a decommission watch is not a stored Definition --
+	// provenance=custom implies kind=declarative, and this state machine
+	// is Go (see engine.DecommissionWatches).
+	decommissionLog := logging.New("decommission")
+	decommissionBackend, err := persistence.backendFor(bootCtx, "decommission", cfg.Engine.DecommissionStorePath)
+	if err != nil {
+		decommissionLog.Warn(err.Error())
+	}
+	decommissions, err := decommission.OpenWithBackend(decommissionBackend)
+	mustOpenStore(decommissionLog, err)
 
 	detectorDefaults := engine.DetectorDefaults{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
@@ -842,16 +899,12 @@ func main() {
 	// detectorSeed is the enabled/scope a shipped definition is seeded
 	// with when it does not yet exist in the definitions store: the
 	// catalogue's own defaults (everything on, unscoped), then
-	// config.yaml's flags.detectors entries, then whatever the pre-#405
-	// detector-settings document holds -- the same three-layer order
-	// internal/detect's settings store applied before it was deleted, so
-	// a detector switched off in either place stays off.
+	// config.yaml's flags.detectors entries over the top.
 	//
-	// The old document is read as a seed source only. Nothing writes to
-	// it any more: an operator's toggle now lands on the definition
-	// itself (see internal/api's detector handlers), which is what
-	// removes the two-sources-of-truth problem rather than merely moving
-	// it.
+	// Only a definition the store does not already hold reads this. An
+	// operator's toggle lands on the definition itself (see internal/api's
+	// detector handlers), which is what keeps config.yaml from being a
+	// second source of truth for something the UI also writes.
 	detectorsLog := logging.New("detectors")
 	detectorSeed := engine.DefaultDetectorSettings()
 	for name, ds := range cfg.Flags.Detectors {
@@ -868,19 +921,11 @@ func main() {
 			},
 		}
 	}
-	persisted, err := engine.ReadDetectorSettingsDocument(bootCtx, migrationDetectorBackend)
-	mustOpenStore(detectorsLog, err)
-	for name, ds := range persisted {
-		detectorSeed[name] = ds
-	}
-
 	// Every shipped definition this binary evaluates has to actually
 	// exist, whatever the persistence situation -- see
-	// engine.SeedShippedDefinitions' own doc comment for why this runs
-	// every boot and is not the same thing as MigrateDefinitions running
-	// once. Anything already in the store (a migration's output, an
-	// operator's edits) is left untouched; only genuinely missing
-	// definitions are added.
+	// engine.SeedShippedDefinitions' own doc comment for why this runs on
+	// every boot. Anything already in the store (an operator's edits) is
+	// left untouched; only genuinely missing definitions are added.
 	shippedDefaults := engine.ShippedDefaults{
 		DetectorDefaults:       detectorDefaults,
 		StaleRuleMaxAge:        time.Duration(cfg.Flags.StaleRuleDays) * 24 * time.Hour,
@@ -888,20 +933,6 @@ func main() {
 	}
 	if err := engine.SeedShippedDefinitions(definitions, detectorSeed, shippedDefaults); err != nil {
 		definitionsLog.Warn(err.Error())
-	}
-	// Every watchlist entry the definitions document does not already
-	// hold (issue #407). Runs on every boot, for the reason
-	// AdoptWatchlistEntries' own doc comment gives: a deployment that
-	// upgraded during #404-#406 has a definitions document *and* went on
-	// creating entries in internal/watchlist's own store afterwards,
-	// because that store was still the operator-facing entry set until
-	// this issue deleted it. A failure to read the source document is
-	// fatal (#378's fail-closed contract): starting with a silently
-	// smaller entry set is the outcome that refusal exists to prevent.
-	adopted, err := engine.AdoptWatchlistEntries(bootCtx, definitions, watchlistBackend)
-	mustOpenStore(watchlistLog, err)
-	if adopted > 0 {
-		watchlistLog.Info(fmt.Sprintf("adopted %d watchlist entr(ies) into the definitions store -- the watchlist document is a migration source only now (issue #407)", adopted))
 	}
 	// bl (issue #113 Part B): always constructed, even with zero enabled
 	// sources (cfg.Blocklist.Sources == []) -- Match/Refresh are both
@@ -926,6 +957,19 @@ func main() {
 	// as bl.
 	netclassLog := logging.New("netclass")
 	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
+
+	// oui (issue #410): the IEEE MA-L registry behind MAC vendor
+	// lookups in the device dossier. Same runtime-fetch contract as the
+	// two feeds above -- no registry data ships in the binary -- with an
+	// on-disk cache, so an operator opening a dossier straight after a
+	// restart sees vendor names rather than waiting on a 4MB download.
+	// Nil-safe throughout: a disabled feed answers every lookup with
+	// "no vendor data", never with a wrong name.
+	ouiLog := logging.New("oui")
+	var ouiRegistry *oui.Registry
+	if cfg.OUI.Enabled {
+		ouiRegistry = oui.New(cfg.OUI.CachePath, ouiLog)
+	}
 
 	// routerState (issue #186 step 4): each device's most recent pushed
 	// state, in-memory only by that package's design. Constructed here,
@@ -953,9 +997,8 @@ func main() {
 	// other definition's half-full window; see engine.Registry's own doc
 	// comment.
 	//
-	// An empty/not-yet-migrated definitions store is a valid, common
-	// state -- see MigrateDefinitions's own doc comment -- and simply
-	// means the sets start out evaluating nothing.
+	// An empty definitions store is a valid state and simply means the
+	// sets start out evaluating nothing.
 	//
 	// Each shipped definition's sink raises into fs and, for a
 	// newly-raised episode, kicks off the same best-effort async
@@ -986,12 +1029,16 @@ func main() {
 			State:    engineState,
 		},
 		Expectations: engine.ExpectationDeps{
-			Members:      routerState,
-			Sink:         engine.MatchlogSink(matchLog),
+			Members: routerState,
+			// The night recorder is the definitions store itself: a
+			// match that reaches the log marks the watch night it landed
+			// in as kept, on the entry (#680).
+			Sink:         engine.MatchlogSinkWithNights(matchLog, definitions),
 			Observations: definitions,
 		},
-		Flags:      fs,
-		Reputation: rep,
+		Flags:        fs,
+		Reputation:   rep,
+		Decommission: decommissions,
 	})
 	syncDefinitions := func() {
 		for _, problem := range registry.Sync() {
@@ -1005,7 +1052,20 @@ func main() {
 		}
 	}
 	syncDefinitions()
-	definitions.SetOnChange(syncDefinitions)
+	// SetOnChange rather than a call in each API write handler: this is
+	// the one funnel every definition change already goes through,
+	// whichever door it came in by, so a future door cannot forget to
+	// tell the screens. The notice itself only says "definitions", never
+	// what they now are -- the client refetches (see hub.Change).
+	definitions.SetOnChange(func() {
+		syncDefinitions()
+		h.Notify(hub.ChangeDefinitions)
+	})
+	// A watch accepted, force-removed or retired has to reach the engine
+	// on the next event, not the next restart -- the same next-event
+	// contract #407 gave definition edits. Sync rebuilds the whole
+	// decommission set from the store, so one hook covers all three.
+	decommissions.SetOnChange(syncDefinitions)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1085,9 +1145,65 @@ func main() {
 	setupStore, err := setup.OpenWithBackend(setupBackend)
 	mustOpenStore(setupLog, err)
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
-	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
+	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Devices: device.ConfigNames(cfg.Devices), Entities: entityStore, RouterHosts: routerState}
+	// #600: the registry answers device display names through the same
+	// resolver, so a rename stored by one operator is what every
+	// /api/devices reader sees. Wired here rather than at NewRegistry
+	// because the resolver needs the entity store, which opens later.
+	devices.SetNames(names)
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore)
+	// Warm restart (#795): put back the derived state a restart would
+	// otherwise throw away -- the hourline's per-minute counters, each
+	// device's first and last seen, and every detector's rolling window.
+	//
+	// This is the last thing that happens before ingest and evaluation
+	// start, and it has to be. store.Import refuses a store that has
+	// already counted an event, and engine.ImportState refuses an engine
+	// that has already evaluated one: restoring over live state adds a
+	// snapshot's tallies to traffic this process has already counted,
+	// and nothing downstream could tell that had happened. It is also
+	// the earliest it can be, since the engine routes a snapshot by
+	// definition ID and the definitions are only registered above.
+	//
+	// The event ring is deliberately not among the parts. It holds raw
+	// log lines and addresses, and #795 settled that writing those to
+	// disk would change the data-custody promise in SECURITY.md -- so a
+	// warm-started store has its counters back and holds no events, and
+	// says so (see store.Stats' RestoredTo/LiveSince).
+	snapshotLog := logging.New("snapshot")
+	snapshotDir := usableSnapshotDir(snapshotLog, snapshotDirectory(cfg))
+	snapshotParts := []snapshot.Part{st.SnapshotPart(), devices.SnapshotPart(), engineSnapshotPart{eng: eng}}
+	// #853: same key as the state store and the event history. No key
+	// means no warm restart, exactly like no key means no state store --
+	// see storage.go's backendFor and docs/decisions/event-retention.md's
+	// amendment. usableSnapshotDir above already explains an unusable
+	// directory; this is the parallel explanation for the other way
+	// snapshots can be off.
+	switch {
+	case snapshotDir == "":
+		// Already explained above.
+	case persistence.key == nil:
+		snapshotLog.Info("warm-restart snapshots are off: no history.keyFile configured -- counters, detector windows and device first-seen dates all start cold after every restart")
+	default:
+		restoreSnapshot(snapshotLog, snapshotDir, persistence.key, time.Now(), snapshotParts...)
+	}
+	var snapshotWriter *snapshot.Writer
+	if snapshotDir != "" && persistence.key != nil {
+		snapshotWriter = snapshot.New(snapshotDir, cfg.Snapshot.Keep, persistence.key, snapshotParts...)
+	}
+
+	// On-disk event history (#856). Unlike a snapshot this holds custody
+	// data -- the log lines and addresses the note above says a snapshot
+	// deliberately excludes -- which is why it is encrypted, why it needs
+	// a key the operator mounts, and why it is off unless they ask for
+	// it. See docs/decisions/event-retention.md.
+	// The runtime owner rather than the store itself (#910): the switch
+	// and its two caps are settings an admin moves from inside the app,
+	// so something has to own opening, purging and re-capping while the
+	// process runs. See history_runtime.go.
+	hist := newHistoryRuntime(logging.New("history"), cfg, settingsStore, st)
+
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister)
 	go eng.Run(ctx)
 	// One driver for every Ticked definition (issue #405). Deliberately
 	// one goroutine at the finest cadence any shipped definition
@@ -1108,6 +1224,12 @@ func main() {
 			}
 		}
 	}()
+	// The snapshot writer's own driver (#795), same ticker/select/recover
+	// shape as the engine tick driver above and the blocklist refresher
+	// below. Started after ingest deliberately: until events are
+	// arriving there is nothing new to write, and the first tick is a
+	// whole interval away in any case.
+	go runSnapshotWriter(ctx, snapshotLog, snapshotWriter, cfg.Snapshot.Interval)
 	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
 	if matchLogPostgres != nil {
 		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
@@ -1188,6 +1310,40 @@ func main() {
 					func() {
 						defer logging.Recover(netclassLog)
 						nc.Refresh(ctx)
+					}()
+				}
+			}
+		}()
+	}
+
+	// OUI registry refresh (issue #410): same shape as the two sweeps
+	// above, jittered for the same thundering-herd reason netclass
+	// gives -- IEEE serves this file to everyone who asks, and it
+	// should not be asked by every instance at once. The first fetch
+	// runs after the jitter rather than at start, because a cached
+	// registry is already serving lookups by then; a cold start with no
+	// cache reports "no vendor data yet" until it lands, which is the
+	// honest state and not an error.
+	if ouiRegistry.Enabled() {
+		go func() {
+			defer logging.Recover(ouiLog)
+			jitter := time.Duration(rand.Int64N(int64(time.Hour)))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitter):
+			}
+			ouiRegistry.Refresh(ctx)
+			ticker := time.NewTicker(oui.RefreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					func() {
+						defer logging.Recover(ouiLog)
+						ouiRegistry.Refresh(ctx)
 					}()
 				}
 			}
@@ -1292,36 +1448,82 @@ func main() {
 		})
 	}
 
+	// persistenceInfo (issue #677's settings persistence row) states
+	// which backend the storage decision above (persistence.pool) actually
+	// resolved to, rather than re-deriving a guess from cfg.Postgres.DSNFile
+	// independently. Dir is internal/auth's own configured StorePath's
+	// directory, used only in the "file" case.
+	//
+	// #853 adds a third state: on the JSON path with no history.keyFile
+	// configured, backendFor refuses most stores rather than handing back
+	// a working file backend (see storage.go), so "file" would overclaim
+	// what is actually happening for those -- nothing is being written
+	// anywhere. Accounts and tokens are the exception (rule 6): they
+	// persist in every one of these three states, encrypted or plain, so
+	// api.PersistenceInfo's own doc comment carries that caveat rather
+	// than this switch, which still only describes the stores "memory"
+	// can truthfully apply to.
+	persistenceInfo := api.PersistenceInfo{Backend: "postgres"}
+	switch {
+	case persistence.pool != nil:
+		// Backend stays "postgres" -- #853 leaves that backend as-is; see
+		// docs/decisions/event-retention.md's amendment for why.
+	case persistence.key != nil:
+		persistenceInfo.Backend = "file"
+		if cfg.Auth.StorePath != "" {
+			persistenceInfo.Dir = filepath.Dir(cfg.Auth.StorePath)
+		}
+	default:
+		persistenceInfo.Backend = "memory"
+		if cfg.Auth.StorePath != "" {
+			persistenceInfo.Dir = filepath.Dir(cfg.Auth.StorePath)
+		}
+	}
+
 	srv := &api.Server{
-		Store:             st,
-		Devices:           devices,
-		Setup:             setupStore,
-		Hub:               h,
-		Reputation:        rep,
-		NetClass:          nc,
-		Flags:             fs,
-		Definitions:       definitions,
-		Entities:          entityStore,
-		Naming:            names,
-		Rules:             ru,
-		Audit:             auditStore,
-		Suggest:           suggestStore,
-		DefaultWatchPorts: cfg.Flags.CriticalPorts,
-		MatchLog:          matchLog,
-		DeviceStaleAfter:  cfg.Flags.DeviceStaleAfter,
-		Auth:              authStore,
-		Sessions:          auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
-		LoginLimiter:      auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
-		SecureCookie:      cfg.Auth.SecureCookie,
-		TrustedProxies:    trustedProxies,
-		ClientIPHeader:    cfg.Listen.ClientIPHeader,
-		Tokens:            tokenStore,
-		IngestLimiter:     auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
-		RouterState:       routerState,
+		Store:                   st,
+		History:                 hist,
+		HistoryControl:          hist,
+		Devices:                 devices,
+		MACRegistry:             macRegistry,
+		Setup:                   setupStore,
+		Settings:                settingsStore,
+		Hub:                     h,
+		Reputation:              rep,
+		NetClass:                nc,
+		OUI:                     ouiRegistry,
+		Flags:                   fs,
+		Definitions:             definitions,
+		Decommissions:           decommissions,
+		DecommissionCleanWindow: cfg.Engine.DecommissionCleanWindow,
+		Entities:                entityStore,
+		Coverage:                coverageStore,
+		Hosts:                   hostRegister,
+		Baseline:                baselineRegister,
+		HostQuietAfter:          cfg.Baseline.HostQuietAfter,
+		Naming:                  names,
+		Rules:                   ru,
+		Audit:                   auditStore,
+		Suggest:                 suggestStore,
+		DefaultWatchPorts:       cfg.Flags.CriticalPorts,
+		MatchLog:                matchLog,
+		Learning:                eng,
+		DeviceStaleAfter:        cfg.Flags.DeviceStaleAfter,
+		Auth:                    authStore,
+		Sessions:                auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
+		LoginLimiter:            auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
+		SecureCookie:            cfg.Auth.SecureCookie,
+		TrustedProxies:          trustedProxies,
+		ClientIPHeader:          cfg.Listen.ClientIPHeader,
+		Tokens:                  tokenStore,
+		IngestLimiter:           auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:             routerState,
+		Vault:                   routerBackupVault,
 		SetupInstance: api.SetupInstance{
 			TLSEnabled: cfg.TLS.Enabled,
 			Hosts:      cfg.TLS.Hosts,
 			SyslogPort: cfg.Listen.SyslogTLS,
+			BackupPort: routerBackupPort(cfg),
 		},
 		OIDC:              oidcClient,
 		OIDCState:         oidcState,
@@ -1330,7 +1532,42 @@ func main() {
 		Version:           version,
 		ThirdPartyNotices: thirdPartyNotices,
 		ConfigProblems:    configProblems,
+		Persistence:       persistenceInfo,
 	}
+
+	// The live-check harness's two test hooks (#1063, #1064): a watch
+	// clock it can move forward, and a reset that puts the instance back
+	// to having seen nothing between scenarios.
+	//
+	// Read straight from the environment rather than through
+	// internal/config, and so absent from docs/configuration.md, because
+	// this is not an operator setting: a documented option is one somebody
+	// eventually turns on. With it unset the routes are never registered
+	// at all -- see internal/api/testhooks.go for the rest of the
+	// reasoning.
+	if os.Getenv("MV_TEST_HOOKS") == "1" {
+		srv.TestHooks = true
+		// The reset empties the definitions store outright, shipped rows
+		// included, so the catalogue has to be laid down again -- the same
+		// call every boot makes above, with the same settings and
+		// defaults.
+		srv.Reseed = func() error {
+			return engine.SeedShippedDefinitions(definitions, detectorSeed, shippedDefaults)
+		}
+		logging.New("test-hooks").Warn("MV_TEST_HOOKS=1: the test-only routes POST /api/test/clock and POST /api/test/reset are registered. An admin can move this instance's watch clock forward and erase every event, flag, match, pushed router table and definition it holds. This exists for the live-check harness -- never set it on a real deployment.")
+	}
+
+	// The range the memory control may move within, read from this
+	// host's cgroup or RAM once, here, and never again while the process
+	// runs -- see config.MaxMemoryCeiling for the headroom rule. The
+	// figure in effect is passed alongside it so a deployment already
+	// running a deliberately large budget (#244) is never told its own
+	// current value is out of range.
+	memoryBounds := config.MaxMemoryCeiling(storeMaxMemory)
+	logging.New("store").Info(fmt.Sprintf(
+		"event buffer: adjustable from %s to %s from Settings (%s)",
+		memoryBounds.Min, memoryBounds.Max, memoryBoundsBasis(memoryBounds)))
+	srv.InitMemory(storeMaxMemory, memoryBounds)
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())
@@ -1441,7 +1678,21 @@ func main() {
 				// Recorded so the wizard can confirm the router reached
 				// mikroview and took the CA -- the first step whose
 				// success is otherwise invisible from this side (#320).
-				setupStore.NoteCAFetch(srv.ClientIP(r), time.Now())
+				clientIP := srv.ClientIP(r)
+				setupStore.NoteCAFetch(clientIP, time.Now())
+				// #436 step 3: the router's push script already fetches
+				// this URL with `?ros=$[/system/resource get version]`
+				// appended, so mikroview can learn the version at the
+				// wizard's very first step rather than waiting for the
+				// first authenticated push. Untrusted, unauthenticated
+				// text -- /ca.crt is deliberately public -- so it is
+				// validated before being kept anywhere, and used for
+				// nothing but a fallback hint keyed on the request's
+				// source address (routerState.VersionHint); a real push
+				// always overrides it.
+				if hint, ok := validRouterOSHint(r.URL.Query().Get("ros")); ok {
+					routerState.NoteVersionHint(clientIP, hint, time.Now())
+				}
 				w.Header().Set("Content-Type", "application/x-pem-file")
 				w.Write(caCertPEM)
 			})
@@ -1509,6 +1760,12 @@ func main() {
 		}()
 	}
 
+	// Router-backup SFTP drop box (#394): its own listener, its own
+	// generated host key, started independently of the TLS block above
+	// -- it is not an HTTPS/syslog concern, and off entirely unless
+	// backup.enabled is true.
+	startRouterBackupServer(ctx, cfg, routerBackupVault, tokenStore)
+
 	joinOnShutdown(&shutdownWG, ctx, httpServer.Shutdown)
 
 	syslogSummary := "syslog disabled (listen.syslogTls is empty)"
@@ -1558,7 +1815,22 @@ func main() {
 	// Best-effort: each store already logs its own save failures, so a
 	// Close error here is just the shutdown-budget case, worth one
 	// line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions)
+	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, decommissions, hostRegister, baselineRegister)
+
+	// One last snapshot, for the same reason and under the same budget
+	// (#795). Ingest and evaluation have both stopped by now, so this
+	// captures the state as it actually was at shutdown rather than as
+	// it was at the last tick -- which is what makes a planned restart
+	// lose nothing at all instead of up to snapshot.interval.
+	writeFinalSnapshot(snapshotLog, snapshotWriter, snapshotShutdownBudget)
+
+	// The retained history's last batch, for the same reason: ingest has
+	// stopped, so this is everything that arrived since the last flush.
+	// Losing it would cost a few minutes of the copy on disk, never the
+	// events themselves -- but a planned restart should lose nothing.
+	if err := hist.Close(); err != nil {
+		logging.New("history").Warn("could not flush the retained event history at shutdown", "err", err)
+	}
 }
 
 // closeStoreOnShutdown flushes every write-behind-backed store passed to
@@ -1692,6 +1964,17 @@ func openRecoveryStoreForCLI() (*auth.RecoveryStore, func(), error) {
 	if err != nil {
 		st.Close()
 		return nil, nil, err
+	}
+	// #853 rule 6: recovery_keys is one of the hashed stores backendFor
+	// keeps persisting to a plain JSON file even with no history.keyFile
+	// configured, so a nil backend here only means the path itself is
+	// unset (already checked above) or Postgres rejected it. Checked
+	// anyway, loudly, because silently proceeding would hand this
+	// recovery command an empty in-memory store, which looks like a
+	// successful recovery while touching nothing on disk.
+	if backend == nil && cfg.Auth.RecoveryKeysPath != "" {
+		st.Close()
+		return nil, nil, fmt.Errorf("the recovery-key store has no working backend -- check auth.recoveryKeysPath and the Postgres configuration")
 	}
 	store, err := auth.OpenRecoveryWithBackend(backend, cfg.Auth.RecoveryPepperPath)
 	if err != nil {
@@ -1970,7 +2253,14 @@ func runHealthcheck() int {
 		// Checking itself, from inside the same container -- there's no
 		// trust boundary being crossed by skipping verification of its
 		// own (possibly self-signed) certificate here.
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		//
+		// Trusting the certificate properly instead was considered and
+		// rejected: it would make the container's health depend on the
+		// cert naming the loopback address it is reached on, and a
+		// mismatch would fail the healthcheck and have Docker restart a
+		// process that is actually fine.
+		// #nosec G402 -- loopback to this same process, over a certificate it generated itself.
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}
 	}
 	resp, err := client.Get(scheme + "://" + addr + "/api/healthz")
 	if err != nil {
@@ -2015,6 +2305,18 @@ func openAuthStoreForCLI(cmd string) (*auth.Store, func(), error) {
 	if err != nil {
 		st.Close()
 		return nil, nil, err
+	}
+	// #853 rule 6: auth is one of the hashed stores backendFor keeps
+	// persisting to a plain JSON file even with no history.keyFile
+	// configured, so a nil backend here means auth.storePath is empty
+	// (already checked above) or Postgres rejected it. Checked anyway,
+	// loudly, matters more for this command than almost any other: silent
+	// proceeding would hand it an empty in-memory accounts store, which
+	// looks like a working recovery/transfer while touching nothing that
+	// survives the next restart.
+	if backend == nil {
+		st.Close()
+		return nil, nil, fmt.Errorf("the accounts store has no working backend -- check auth.storePath and the Postgres configuration for %s", cmd)
 	}
 	store, err := auth.OpenWithBackend(backend)
 	if err != nil {
@@ -2201,14 +2503,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister)
 		}
 	}
 }
@@ -2219,7 +2521,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -2257,12 +2559,20 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	// scored" contract as Flag.Confidence's nil case. The target is a
 	// MAC, not an IP, so -- same as TypeRuleSpike's rule-label target --
 	// there's no meaningful Country to attach either.
-	if parsed.SrcMAC != "" && macRegistry.Seen(parsed.SrcMAC, rm.RecvTime) {
-		detail := fmt.Sprintf("first traffic seen from MAC %s", parsed.SrcMAC)
-		if parsed.SrcIP != "" {
-			detail = fmt.Sprintf("first traffic seen from MAC %s (source IP %s)", parsed.SrcMAC, parsed.SrcIP)
+	if parsed.SrcMAC != "" {
+		if macRegistry.Seen(parsed.SrcMAC, rm.RecvTime) {
+			detail := fmt.Sprintf("first traffic seen from MAC %s", parsed.SrcMAC)
+			if parsed.SrcIP != "" {
+				detail = fmt.Sprintf("first traffic seen from MAC %s (source IP %s)", parsed.SrcMAC, parsed.SrcIP)
+			}
+			fs.Add(flags.TypeNewDevice, parsed.SrcMAC, detail, rm.RecvTime)
 		}
-		fs.Add(flags.TypeNewDevice, parsed.SrcMAC, detail, rm.RecvTime)
+		// Pairs this MAC with the IP it's currently answering to (issue
+		// #675) -- orthogonal to the new-device check above, so it runs
+		// on every event carrying a MAC, not just the first one ever seen.
+		if parsed.SrcIP != "" {
+			macRegistry.NoteIP(parsed.SrcMAC, parsed.SrcIP)
+		}
 	}
 
 	e := store.Event{
@@ -2300,6 +2610,11 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	e.Raw, e.RawTruncated = store.ClampRaw(parsed.Raw)
 
 	stored := st.Insert(e)
+	// Retention takes the event as stored, so the copy on disk carries
+	// the same ID and ReceivedAt the ring assigned -- a replay reading
+	// disk then memory is then reading one series, not two. A nil hist
+	// is the ordinary memory-only default and costs a nil check.
+	hist.Append(stored)
 	h.Broadcast(stored)
 	// Every definition, of either intent, evaluates off this one hand-off
 	// (issues #405 and #406): internal/detect's queue, worker and
@@ -2314,6 +2629,31 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	// what the store itself just counted (see internal/rules.Store.Touch's
 	// doc comment for why this lives here rather than as a separate pass).
 	ru.Touch(stored.RuleLabel, stored.ReceivedAt)
+	// The host presence register (issue #1016): the map used to derive
+	// its hosts from the browser's own event buffer alone, so a host
+	// that stopped talking scrolled out of the buffer and vanished. This
+	// is the record that it was there, kept off the hot path the same
+	// way ru.Touch above is -- one mutex-protected map update, and a
+	// rate-limited encode handed to a write-behind writer, never a disk
+	// write here. hosts.Registers decides what counts as a host, and
+	// mirrors the browser's own rule exactly.
+	hostRegister.Observe(stored.InInterface, stored.SrcIP, stored.SrcHostName, stored.ReceivedAt)
+	// The baseline line register (issue #1016 round 49), fed from this
+	// same hand-off and on the same terms as the host register above:
+	// one mutex-protected map update and a rate-limited encode, never a
+	// disk write here. baseline.Registers decides what counts as a line,
+	// and defers to hosts.Registers for the source half so the two
+	// cannot disagree about what a host is.
+	//
+	// Only accept and drop are verdicts, so everything that is not a
+	// refusal is recorded as an accept -- see baseline.Outcome. Reject
+	// counts as a drop: the traffic was refused, and which way the
+	// router said no is the rule's business, not the baseline's.
+	outcome := baseline.OutcomeAccept
+	if stored.Action == store.ActionDrop || stored.Action == store.ActionReject {
+		outcome = baseline.OutcomeDrop
+	}
+	baselineRegister.Observe(stored.InInterface, stored.SrcIP, stored.DstIP, stored.DstPort, stored.Protocol, outcome, stored.ReceivedAt)
 }
 
 // resolveTransferTarget works out which account admin is moving to,
@@ -2442,6 +2782,29 @@ func readRecoveryKey() (string, error) {
 		return "", fmt.Errorf("no recovery key supplied")
 	}
 	return string(raw), nil
+}
+
+// validRouterOSHint reports whether v is safe to remember as a
+// RouterOS-version hint from the public, unauthenticated /ca.crt?ros=
+// query parameter (#436 step 3): capped at 32 bytes and printable ASCII
+// only, the same shape internal/ingest.validateFieldText holds a pushed
+// routerosVersion to, tightened for a value that should only ever be a
+// handful of characters like "7.23.3".
+//
+// A value outside that shape is dropped silently rather than truncated
+// or sanitised -- there is nothing worth keeping in a malformed hint,
+// and this handler has nothing to report failure to anyway (the router
+// is fetching a certificate, not submitting a form).
+func validRouterOSHint(v string) (string, bool) {
+	if v == "" || len(v) > 32 {
+		return "", false
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < 0x20 || v[i] > 0x7e {
+			return "", false
+		}
+	}
+	return v, true
 }
 
 // watchForCertificateReload swaps in a renewed certificate on SIGHUP,

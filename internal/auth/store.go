@@ -39,7 +39,41 @@ type Role string
 const (
 	RoleAdmin Role = "admin"
 	RoleUser  Role = "user"
+	// RoleViewer is the third, lowest tier (#653): read access to
+	// everything an operator sees, but nothing that changes the
+	// instance. Stacks below RoleUser, which stacks below RoleAdmin --
+	// see Role.AtLeast.
+	RoleViewer Role = "viewer"
 )
+
+// rank orders roles from lowest privilege to highest, backing
+// Role.AtLeast. An unrecognized Role -- including the zero value -- ranks
+// below RoleViewer, so it is refused everything AtLeast ever gates for a
+// legitimate min. Every path inside this package produces one of the
+// three named constants, so the only way one reaches a live User.Role is
+// a document written outside this package -- a hand-edited accounts
+// file. That account then fails closed, denied by every role gate, which
+// is the right direction for a role nobody legitimately assigned.
+func (r Role) rank() int {
+	switch r {
+	case RoleAdmin:
+		return 3
+	case RoleUser:
+		return 2
+	case RoleViewer:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// AtLeast reports whether r's tier is at or above min, per mikroview's
+// stacked access tiers: admin ⊇ user ⊇ viewer. internal/api's gates are
+// all built on this rather than comparing Role values directly, so
+// there is exactly one place "who outranks whom" is decided.
+func (r Role) AtLeast(min Role) bool {
+	return r.rank() >= min.rank()
+}
 
 // User is one local account. PasswordHash is never exposed outside this
 // package/its JSON persistence -- internal/api must never serialize a
@@ -128,6 +162,11 @@ var (
 	// mikroview holds exactly one admin; handover is TransferAdmin, not
 	// creating a second one.
 	ErrSingleAdmin = errors.New("auth: mikroview has a single admin account -- transfer the role instead of creating another admin")
+	// ErrInvalidRole is returned by CreateUser for any role other than
+	// RoleUser or RoleViewer. RoleAdmin is refused separately, as
+	// ErrSingleAdmin above -- that failure means something different to a
+	// caller (a deployment invariant) than an unrecognized value does.
+	ErrInvalidRole = errors.New(`auth: role must be "user" or "viewer"`)
 	// ErrCannotDeleteAdmin is returned by DeleteUser for the admin
 	// account. Transfer the role first if the intent is to remove the
 	// person currently holding it.
@@ -476,6 +515,12 @@ func registrationOpenGuard(s *Store) error {
 // recovery tooling. No guard: unlike Register, this is deliberately
 // callable at any time, and its "who may call this" question is
 // answered a layer up.
+//
+// role must be RoleUser or RoleViewer (#653). Anything else is refused:
+// RoleAdmin specifically as ErrSingleAdmin (see below), any other value
+// as ErrInvalidRole -- neither is silently coerced to a lesser role,
+// since that would create an account under the name the caller chose
+// with a privilege they did not ask for.
 func (s *Store) CreateUser(username, password string, role Role, now time.Time) (*User, error) {
 	if !s.Persisted() {
 		return nil, ErrNotPersisted
@@ -485,6 +530,9 @@ func (s *Store) CreateUser(username, password string, role Role, now time.Time) 
 	// inherit the invariant instead of each remembering it.
 	if role == RoleAdmin {
 		return nil, ErrSingleAdmin
+	}
+	if role != RoleUser && role != RoleViewer {
+		return nil, ErrInvalidRole
 	}
 	return s.createLocked(username, password, role, now, nil)
 }

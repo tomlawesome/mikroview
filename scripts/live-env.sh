@@ -24,6 +24,13 @@
 # the LAN -- which is the exact property MV_BIND gives up.
 set -euo pipefail
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/live-stores.sh"
+# The slot and every port derived from it live in one place since #660.
+# They used to be computed here and hardcoded, differently, in the four
+# standalone scripts -- two allocators handing out overlapping ranges,
+# which collided by construction rather than by luck.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/live-slot.sh"
+
 # Defaults are derived per checkout, not fixed, because two live checks
 # running at once used to destroy each other rather than merely clash.
 # `up` calls `down` and then `rm -rf "$MV_DIR"`, so a second run on the
@@ -41,16 +48,16 @@ set -euo pipefail
 # 64 slots is not a guarantee: two checkouts can hash to the same one.
 # That is what the bind check in `up` is for -- it turns a residual
 # collision into a named error instead of a silent trampling.
-MV_SLOT="$(printf '%s' "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)" | cksum | awk '{print $1 % 64}')"
+#
+# MV_SLOT and the port bands come from live-slot.sh, sourced above.
 
-MV_DIR="${MV_DIR:-/tmp/mikroview-live-$MV_SLOT}"
+# A shard (#1004) is one more instance of the same checkout, so it gets
+# its own directory beside the slot's -- the ports come from live-slot.sh.
+MV_DIR="${MV_DIR:-/tmp/mikroview-live-$MV_SLOT${MV_SHARD_INDEX:+-shard$MV_SHARD_INDEX}}"
 MV_BIND="${MV_BIND:-127.0.0.1}"
-# Distinct bands so the three never overlap across slots: HTTP occupies
-# 19800-19863, syslog the even ports 16800-16926, syslog-TLS the odd
-# ports 16801-16927.
-HTTP_PORT="${MV_HTTP_PORT:-$((19800 + MV_SLOT))}"
-SYSLOG_PORT="${MV_SYSLOG_PORT:-$((16800 + MV_SLOT * 2))}"
-SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-$((16801 + MV_SLOT * 2))}"
+HTTP_PORT="${MV_HTTP_PORT:-$MV_SLOT_HTTP_PORT}"
+SYSLOG_PORT="${MV_SYSLOG_PORT:-$MV_SLOT_SYSLOG_PORT}"
+SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-$MV_SLOT_SYSLOG_TLS_PORT}"
 MV_USER="live-admin"
 MV_PASS="live-password-123"
 
@@ -76,8 +83,10 @@ if [ "$MV_BIND" = "127.0.0.1" ]; then
   # -- which is what the token dialog's device pick-list (#326) and
   # every devices[0]-reading scenario get to rely on. NOT set in
   # $MV_BIND mode: the CHR's traffic arrives from a different address
-  # there, and a second device would make devices[0] nondeterministic
-  # (internal/device.Registry.List is map-ordered).
+  # there, so a second device would appear that no scenario declared.
+  # devices[0] itself is no longer at risk from that: Registry.List
+  # sorts configured devices first, then by id (#600), where it used to
+  # return whatever order the map iterated in.
   DEVICES_BLOCK='devices: [{id: live-router, name: Live Router, sourceIp: 127.0.0.1}]'
 else
   MV_SCHEME=https
@@ -93,18 +102,59 @@ else
   DEVICES_BLOCK=''
 fi
 
+# MV_DEMO_DEVICES=1 declares the estate scripts/seed-demo.py feeds, which
+# is the only way its pushed tables can ever be read back (#709).
+#
+# A pushed rule/NAT/address table is keyed by *device id*. seed-demo.py
+# mints its ingest tokens against the router names below and then streams
+# syslog from one loopback address per router, so unless those addresses
+# are declared here the registry invents a discovered device per source
+# IP -- "127.0.0.1" and friends -- and the pushed tables sit under ids no
+# device has. Both halves report success and never meet: the topography
+# draws an unnamed waist card and boundary-derived zones, and the fall's
+# bands read "not in a pushed rule table". seed-demo.py was written
+# expecting this block to exist; its own comment calls guest-ap
+# "declared in cfg.yaml", and nothing declared it.
+#
+# Opt-in, and set after both branches above deliberately: the gate's
+# scenarios read devices[0], and internal/device.Registry.List is
+# map-ordered, so declaring six devices unconditionally would make that
+# nondeterministic. Unset, every existing caller behaves exactly as
+# before.
+#
+# guest-ap is declared and never fed on purpose -- a router that has
+# said nothing is part of the story the demo tells (#687).
+#
+# rb5009 and hap-ax3 are the city's own two boroughs (#870), added
+# alongside the first four rather than replacing them. hap-ax3's uplink
+# address is 10.0.10.9, inside rb5009's LAN -- but sourceIp here is where
+# its *syslog* arrives from, which is a loopback address like every other
+# router's, so the two are unrelated and 127.0.0.6 is not a typo.
+if [ "${MV_DEMO_DEVICES:-}" = "1" ]; then
+  DEVICES_BLOCK='devices: [{id: border-rb5009, name: border-rb5009, sourceIp: 127.0.0.1}, {id: office-hex, name: office-hex, sourceIp: 127.0.0.2}, {id: lab-crs, name: lab-crs, sourceIp: 127.0.0.3}, {id: guest-ap, name: guest-ap, sourceIp: 127.0.0.4}, {id: rb5009, name: rb5009, sourceIp: 127.0.0.5}, {id: hap-ax3, name: hap-ax3, sourceIp: 127.0.0.6}]'
+fi
+
 # The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
 SYSLOG_TLS_HOST="${SYSLOG_TLS_ADDR%:*}"
 
-# send_tls -- read complete syslog lines on stdin and deliver them over
-# the TLS listener, mikroview's only syslog ingest since #189. Lines are
-# newline-delimited: the listener splits a read on newlines when they are
-# present and takes it whole when they are not, so this shape and
+# send_tls [source-ip] -- read complete syslog lines on stdin and deliver
+# them over the TLS listener, mikroview's only syslog ingest since #189.
+# Lines are newline-delimited: the listener splits a read on newlines when
+# they are present and takes it whole when they are not, so this shape and
 # RouterOS's unterminated one both land as one event per message.
+#
+# source-ip binds the client end of the connection, so the events arrive
+# stamped with that address and internal/device.Registry files them under
+# a different device (#600 needs a router config.yaml has *not* declared,
+# and the harness declares the only loopback source it feeds from).
+# Anything in 127.0.0.0/8 is local, so no interface has to be configured
+# for it. Empty (the default) lets the kernel choose, which is 127.0.0.1
+# and the declared router.
 send_tls() {
   python3 -c '
 import socket, ssl, sys, time
 host, port = sys.argv[1], int(sys.argv[2])
+src = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
 lines = [l for l in sys.stdin.buffer.read().split(b"\n") if l]
 # The certificate is self-signed and was generated seconds ago by the
 # server under test. There is no chain to verify against, and verifying
@@ -113,7 +163,7 @@ lines = [l for l in sys.stdin.buffer.read().split(b"\n") if l]
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
-with socket.create_connection((host, port), timeout=10) as sock:
+with socket.create_connection((host, port), timeout=10, source_address=(src, 0) if src else None) as sock:
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     with ctx.wrap_socket(sock, server_hostname=host) as tls:
         # One message per write, paced. The listener hands each parsed
@@ -127,35 +177,148 @@ with socket.create_connection((host, port), timeout=10) as sock:
             tls.sendall(line + b"\n")
             if i % 25 == 24:
                 time.sleep(0.01)
-' "$SYSLOG_TLS_HOST" "$SYSLOG_TLS_PORT"
+        # Close cleanly, and only once the server has acknowledged the
+        # shutdown. Without this the last write is followed straight by
+        # the socket close and the tail of the burst is lost -- measured
+        # at 9 of 20, 11 of 24 and 46 of 49, with the listener reporting
+        # dropped=0 throughout, because the lines never reached it at
+        # all. It was intermittent rather than constant, and invisible
+        # for any burst that happened to be a multiple of 25: those got
+        # a pause from the pacing above after their final line, and
+        # delivered 100 percent every time. That is what made this look
+        # like detector flakiness for so long (issue #450) -- scenarios
+        # send a 20-port scan, port_scan needs 15 distinct ports, and
+        # the tail going missing put it either side of the threshold
+        # from one run to the next.
+        #
+        # unwrap() sends TLS close_notify and waits for the reply, so
+        # the server has read to EOF before the socket goes away. The
+        # sleep covers the parse the listener still has to do after
+        # that read.
+        time.sleep(0.05)
+        try:
+            tls.unwrap()
+        except OSError:
+            pass
+' "$SYSLOG_TLS_HOST" "$SYSLOG_TLS_PORT" "${1:-}"
 }
 
 build() {
-  ( cd frontend && npm run build >/dev/null 2>&1 )
+  # No /dev/null here, and the exit code is checked explicitly. `set -e`
+  # alone already aborted `up` here on a fresh checkout (no
+  # frontend/node_modules) -- but silently, because npm's own error was
+  # being thrown away with it, and because `up` is meant to be run as
+  # `eval "$(scripts/live-env.sh up)"` (the Makefile's live-check target):
+  # `eval "$(cmd)"` only ever sees cmd's captured *stdout*, so a cmd that
+  # dies before printing any `export ...` line leaves eval nothing to run
+  # but an empty string -- which eval treats as success, whatever cmd's
+  # real exit code was. The Makefile's own live-routeros-container comment
+  # names this same trap (#613); this was its second bite (#617). A
+  # message on stderr, printed here before returning control to a caller
+  # that can no longer see the exit code, is what survives it.
+  #
+  # 1>&2 on the subshell, not a bare call: npm's own build banner and
+  # vite's asset listing print to stdout, and stdout is exactly the
+  # stream `eval "$(scripts/live-env.sh up)"` captures and executes. Left
+  # unredirected that output becomes shell input the moment a build
+  # succeeds too -- "> vite build" read as a redirection into a command
+  # named "build" is how this was actually caught, as "eval: build: not
+  # found" once npm's own text stopped going to /dev/null with the error.
+  # MV_DEMO_BUILD=1 ships a self-destroying service worker, so a browser
+  # holding an earlier build's precached shell drops it instead of
+  # serving it back (#713). Without it a fix can be in the tree, in the
+  # bundle and served correctly, and still be invisible to whoever is
+  # reviewing the demo.
+  #
+  # Not set here: the live-check gate needs a real worker so
+  # live-sw-navigation.mjs can prove a typed /api/* navigation reaches the
+  # server (#753); a demo sets MV_DEMO_BUILD=1 itself (AGENTS.md, "Demos
+  # the owner reviews").
+  if ! ( cd frontend && npm run build ) 1>&2; then
+    echo "live-env: npm run build failed in frontend/ -- see the output above." >&2
+    if [ ! -d frontend/node_modules ]; then
+      echo "live-env: frontend/node_modules is missing -- run 'npm ci' in frontend/ first." >&2
+    fi
+    exit 1
+  fi
   # touch .gitkeep for the same reason the Makefile's frontend target
   # does: rm -rf takes the only tracked file in here with it, and a live
   # check should not leave the tree dirty (#353).
-  rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/ && touch web/dist/.gitkeep
+  #
+  # Each step says which one failed rather than being chained with `&&`.
+  # As one chain this was silent: on the `big` runner `rm` was refused
+  # ("cannot remove 'web/dist/.gitkeep': Permission denied", #1003), the
+  # rest of the chain never ran, and the build below still succeeded --
+  # an empty dist/ is a legal build, because API-only is a supported
+  # product and web/embed.go's .gitkeep exists precisely so `go build`
+  # works without a UI. The failure only surfaced 30 seconds later as a
+  # probe timing out looking for a login field, and three perf runs were
+  # measured against a binary with no app in it before anyone noticed.
+  if ! rm -rf web/dist; then
+    echo "live-env: could not clear web/dist -- the checkout is not writable by $(id -un) (uid $(id -u))." >&2
+    echo "live-env: $(ls -ld web/dist 2>/dev/null || echo 'web/dist is missing')" >&2
+    exit 1
+  fi
+  mkdir -p web/dist || { echo "live-env: could not create web/dist." >&2; exit 1; }
+  cp -r frontend/dist/. web/dist/ || { echo "live-env: could not copy frontend/dist into web/dist." >&2; exit 1; }
+  touch web/dist/.gitkeep || { echo "live-env: could not touch web/dist/.gitkeep." >&2; exit 1; }
+
+  # And then prove it, rather than trusting that the four steps above
+  # did what they said. This is what makes a UI-less live binary
+  # impossible rather than merely unlikely: every live check, every
+  # scenario and the perf probe alike is built through this function, so
+  # one assertion here covers all of them. web/embed.go's HasUI() answers
+  # the same question at runtime, but by then the binary exists and the
+  # answer arrives as a page of prose in a browser 30 seconds later.
+  scripts/assert-ui-built.sh web/dist || exit 1
+
   # -buildvcs=false: this binary is a throwaway built into a temp dir,
   # run by the scenarios and deleted, so nothing ever reads its VCS
   # stamp. Stamping it also fails outright in a linked git worktree --
   # "error obtaining VCS status: exit status 128" -- which took the whole
   # live check down for anyone not working in a plain clone (#348).
-  go build -buildvcs=false -o "$MV_DIR/mikroview" .
+  # Stamp the binary so the running instance can say which build it is.
+  # Without this every demo called itself "dev:local" (main.go's no-ldflags
+  # fallback), so an instance built before a fix was indistinguishable in
+  # the browser from one built after it -- which is how round 30 lost a
+  # day to the owner reviewing a stale build and finding faults that were
+  # already fixed in the tree. AGENTS.md carries the rule; this is what
+  # makes it true. -buildvcs=false stays: it is what stops `go build`
+  # dying in a linked worktree (#348), and the sha below is read from git
+  # explicitly instead.
+  mv_sha="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
+  mv_dirty=""
+  git diff --quiet HEAD 2>/dev/null || mv_dirty="-dirty"
+  mv_stamp="$(cat VERSION 2>/dev/null || echo 0.0.0)+g${mv_sha}${mv_dirty}.$(date -u +%Y%m%dT%H%M%SZ)"
+  go build -buildvcs=false -ldflags "-X main.version=$mv_stamp" -o "${1:-$MV_DIR/mikroview}" .
+  echo "live-env: built $mv_stamp" >&2
+}
+
+# stage_binary -- put the binary the instance will run at $MV_DIR/mikroview.
+#
+# Normally that is a build. With MV_BINARY set it is a copy of a binary
+# built once already: a sharded run (#1004) brings up several instances of
+# the same checkout at once, and N concurrent build()s would all write
+# web/dist and frontend/dist under each other. `make live-check-sharded`
+# builds once with `live-env.sh build <path>` and hands every shard the
+# result, so the shards run the same bytes and none of them races the
+# tree. A CI shard is its own checkout and just builds.
+stage_binary() {
+  if [ -n "${MV_BINARY:-}" ]; then
+    if [ ! -x "$MV_BINARY" ]; then
+      echo "live-env: MV_BINARY=$MV_BINARY is not an executable file" >&2
+      exit 1
+    fi
+    cp "$MV_BINARY" "$MV_DIR/mikroview"
+    echo "live-env: using prebuilt $MV_BINARY" >&2
+    return
+  fi
+  build
 }
 
 # True if anything is listening on the given TCP port on this host.
 # Prefers ss; falls back to a bash /dev/tcp connect probe where it is
 # absent (the container images used by live-container have no iproute2).
-port_in_use() {
-  if command -v ss >/dev/null 2>&1; then
-    ss -ltnH "sport = :$1" 2>/dev/null | grep -q .
-  else
-    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3>&- && return 0
-    return 1
-  fi
-}
-
 up() {
   # Always start from nothing. Without this an earlier instance keeps the
   # port, the new binary fails to bind, and the admin registration lands
@@ -178,7 +341,7 @@ up() {
   # slot, or an unrelated process. Both cases need a human choice, and
   # the destructive step is the very next line.
   for port in "$HTTP_PORT" "$SYSLOG_TLS_PORT"; do
-    if port_in_use "$port"; then
+    if mv_port_in_use "$port"; then
       echo "live-env: port $port is still in use after teardown." >&2
       echo "live-env: another live check is probably running from a different checkout." >&2
       echo "live-env: set MV_DIR and MV_HTTP_PORT/MV_SYSLOG_PORT/MV_SYSLOG_TLS_PORT to run alongside it." >&2
@@ -186,7 +349,7 @@ up() {
     fi
   done
   rm -rf "$MV_DIR"; mkdir -p "$MV_DIR/data"
-  build
+  stage_binary
   # ADDING A PERSISTED STORE TO MIKROVIEW? IT NEEDS A LINE IN THE CONFIG
   # BELOW. Every store gets an explicit path under $MV_DIR/data, because
   # a store left at its /var/lib/mikroview default cannot be written by
@@ -201,39 +364,32 @@ up() {
   # ..." -- because up() never got far enough to export MV_URL. #487's
   # setup store landed exactly that way. When up() times out, read
   # $MV_DIR/server.log first: the refusal names the store and the path.
+  # The on-disk event history (#856) is on here, and its key sits beside
+  # the data directory rather than inside it -- which is the rule the
+  # feature exists to keep, so the harness has to model it rather than
+  # take the shortcut. Retention is off by default everywhere else; the
+  # gate turns it on so the write path is exercised on every run rather
+  # than only by unit tests. live-history.mjs reads $MV_DIR to check it.
+  head -c 32 /dev/urandom | base64 > "$MV_DIR/history.key"
+  chmod 600 "$MV_DIR/history.key"
+
   cat > "$MV_DIR/cfg.yaml" <<EOF
 listen: {syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
 $TLS_BLOCK
-auth:
-  storePath: $MV_DIR/data/users.json
-  recoveryKeysPath: $MV_DIR/data/recovery.json
-  recoveryPepperPath: $MV_DIR/data/pepper
-  tokensStorePath: $MV_DIR/data/tokens.json
-  secureCookie: $SECURE_COOKIE
-flags:
-  storePath: $MV_DIR/data/flags.json
-  ruleUsageStorePath: $MV_DIR/data/rule-usage.json
-  detectorSettingsStorePath: $MV_DIR/data/detector-settings.json
-entities: {storePath: $MV_DIR/data/entities.json}
-audit: {storePath: $MV_DIR/data/audit.json}
-setup: {storePath: $MV_DIR/data/setup.json}
-watchlist:
-  storePath: $MV_DIR/data/watchlist.json
-  matchLogPath: $MV_DIR/data/matchlog.jsonl
-  suggestionsStorePath: $MV_DIR/data/suggestions.json
-# Every store, not most of them -- see scripts/live-env.sh's own comment
-# above this heredoc before adding one. The ones below used to be left
-# at their /var/lib/mikroview defaults, which no developer machine can
-# write -- so the live check was exercising a deployment that silently
-# failed to persist half its state, which is precisely the condition
-# #536 stops mikroview booting in.
-deviceMac: {storePath: $MV_DIR/data/mac-registry.json}
-engine:
-  storePath: $MV_DIR/data/engine-state.json
-  definitionsStorePath: $MV_DIR/data/definitions.json
+$(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
+history: {enabled: true, keyFile: "$MV_DIR/history.key", dir: "$MV_DIR/data/history"}
 $DEVICES_BLOCK
 EOF
-  MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
+  # MV_TEST_HOOKS=1 registers POST /api/test/clock and POST /api/test/reset
+  # (#1063, #1064) -- the clock a watch-window scenario moves forward
+  # instead of waiting real minutes for a window to close, and the reset
+  # session() calls so each scenario starts on an instance that has seen
+  # nothing. Deliberately an environment variable rather than a config
+  # key: it is not an operator setting and does not appear in
+  # docs/configuration.md. It is set here and only here, so the routes
+  # exist on a harness instance and nowhere else. The server logs a
+  # warning naming both routes when it sees it.
+  MV_TEST_HOOKS=1 MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"
 
   for _ in $(seq 1 40); do
@@ -268,18 +424,27 @@ PY
   echo "sent ${1:-100} events labelled ${2:-live-test-rule}" >&2
 }
 
-# raw LINE -- deliver one exact syslog line, for scenarios needing a
-# specific shape (a control-port hit, say) rather than the bulk
-# generators. Scenarios must use this rather than opening their own
-# socket: there is no plaintext listener left for them to talk to.
+# raw LINE... -- deliver exact syslog lines over one connection, for
+# scenarios needing a specific shape (a control-port hit, say) rather
+# than the bulk generators. Scenarios must use this rather than opening
+# their own socket: there is no plaintext listener left for them to
+# talk to.
 raw() {
-  printf '%s\n' "$1" | send_tls
+  printf '%s\n' "$@" | send_tls
+}
+
+# rawfrom SOURCE-IP LINE... -- the same, appearing to come from
+# source-ip, and so landing under that device -- see send_tls. Use raw
+# for the declared router.
+rawfrom() {
+  local src="$1"; shift
+  printf '%s\n' "$@" | send_tls "$src"
 }
 
 # portscan N [source-ip] -- N distinct destination ports from one source
 # IP, inside the default port-scan window, so a real port_scan flag gets
-# raised rather than synthesized -- for scenarios (live-exclusions.mjs,
-# live-flags-clearing.mjs) that need an actual flag to clear/exclude, not
+# raised rather than synthesized -- for scenarios (live-verdicts.mjs,
+# live-flags-expectations.mjs) that need an actual flag to judge, not
 # just events in the table. source-ip defaults to 198.51.100.77;
 # pass a different one to raise a second, independent flag.
 portscan() {
@@ -294,6 +459,24 @@ PY
   echo "sent a ${1:-20}-port scan from ${2:-198.51.100.77}" >&2
 }
 
+# recon N [source-ip] [dest-port] -- N distinct *internal* destinations
+# from one LAN source inside internal_recon's default 60s window, each
+# reached on a stated port, so a real internal_recon flag is raised
+# carrying evidence pairs (#641) rather than the test synthesizing them.
+# source-ip defaults to 192.168.1.60 and the port to 445; pass a
+# different source to raise a second, independent flag.
+recon() {
+  python3 - "${1:-12}" "${2:-192.168.1.60}" "${3:-445}" <<'PY' | send_tls
+import sys
+n, src, port = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+for i in range(n):
+    print(f"firewall,info D|recon-src| forward: in:ether1 out:bridge1, "
+          f"connection-state:new, proto TCP (SYN), "
+          f"{src}:{40000+i}->192.168.1.{100+i}:{port}, len 60")
+PY
+  echo "sent a ${1:-12}-destination internal sweep from ${2:-192.168.1.60} on port ${3:-445}" >&2
+}
+
 down() {
   if [ -f "$MV_DIR/pid" ]; then kill "$(cat "$MV_DIR/pid")" 2>/dev/null || true; fi
   # Belt and braces: a run killed mid-way leaves no pid file but may leave
@@ -305,9 +488,14 @@ down() {
 
 case "${1:-}" in
   up) up ;;
+  # build PATH -- build the binary (and the UI it embeds) to PATH without
+  # standing anything up, for MV_BINARY above.
+  build) shift; [ -n "${1:-}" ] || { echo "usage: $0 build PATH" >&2; exit 2; }; mkdir -p "$(dirname "$1")"; build "$1" ;;
   syslog) shift; syslog "$@" ;;
   raw) shift; raw "$@" ;;
+  rawfrom) shift; rawfrom "$@" ;;
   portscan) shift; portscan "$@" ;;
+  recon) shift; recon "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|syslog N [label]|raw LINE|portscan N [src-ip]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|build PATH|syslog N [label]|raw LINE...|rawfrom SRC-IP LINE...|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
 esac

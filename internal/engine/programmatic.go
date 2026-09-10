@@ -440,6 +440,55 @@ func (s *baselineSet) snapshot(key string, now time.Time) (Snapshot, bool) {
 	return kb.b.Snapshot(now), true
 }
 
+// resume materializes key's baseline from the StateStore if there is
+// persisted state for it, without folding any reading in, and reports
+// whether it did. For warm restart (#795): a definition that consults a
+// baseline through snapshot rather than reading -- activity_spike does,
+// for a source it has frozen -- would otherwise never resume the key at
+// all, because nothing on that path ever calls get. Restoring that
+// source's window from a snapshot and then judging it against a baseline
+// that reads as absent is worse than not restoring it, so the import
+// path resumes the keys it restored.
+//
+// Deliberately does not create a cold baseline for a key with nothing
+// persisted: that entry costs a slot in this set's own Keyed cap, and
+// the first event for the key creates it anyway.
+func (s *baselineSet) resume(key string, now time.Time) bool {
+	if s.state == nil {
+		return false
+	}
+	if _, ok := s.state.Get(s.defID, key); !ok {
+		return false
+	}
+	s.get(key, now)
+	return true
+}
+
+// learning reports this set's per-key progress toward its floor, as of
+// now -- iterate keyed.Snapshot, then Baseline.Snapshot(now) per key,
+// both already documented safe to call from any goroutine (see
+// Keyed.Snapshot, Baseline.Snapshot). The one aggregate method backing
+// every baseline-backed definition's LearningReporter (issue #639), so
+// that reduction logic lives once rather than five times -- see
+// learningStateFrom.
+func (s *baselineSet) learning(now time.Time) map[string]baselineLearning {
+	kbs := s.keyed.Snapshot(func(kb *keyedBaseline) *keyedBaseline {
+		// Only the *Baseline pointer is read here, never lastPersisted --
+		// see keyedBaseline's own field, and maybePersist's unlocked
+		// write to it from the evaluation goroutine. Cloning just the
+		// pointer (itself set once, before the key is ever visible in
+		// the map, and never reassigned) is what keeps this copy-on-read
+		// boundary honest without taking a lock this read path has no
+		// business needing.
+		return &keyedBaseline{b: kb.b}
+	})
+	out := make(map[string]baselineLearning, len(kbs))
+	for key, kb := range kbs {
+		out[key] = newBaselineLearning(now, kb.b.Snapshot(now))
+	}
+	return out
+}
+
 func (s *baselineSet) maybePersist(key string, kb *keyedBaseline, now time.Time) {
 	if s.state == nil {
 		return

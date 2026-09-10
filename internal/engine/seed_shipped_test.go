@@ -10,10 +10,9 @@ import (
 // regression this function exists for, found by #405's live-check run:
 // with no definitions backend configured -- which nothing in the config
 // file requires, and which the live-check environment genuinely has --
-// the definitions store opens empty, MigrateDefinitions correctly no-ops
-// (there is nothing to migrate into), and every detector already ported
-// onto this chassis silently stops running. No error, no warning, just
-// flags that never appear.
+// the definitions store opens empty and every detector ported onto this
+// chassis silently stops running. No error, no warning, just flags that
+// never appear.
 func TestSeedShippedDefinitionsPopulatesAnUnpersistedStore(t *testing.T) {
 	s, err := OpenDefinitionsStoreWithBackend(nil) // no persistence at all
 	if err != nil {
@@ -128,5 +127,39 @@ func TestSeedShippedDefinitionsCarriesLiveDetectorSettings(t *testing.T) {
 	}
 	if len(sd.Definition.Scope.Hosts) != 1 || sd.Definition.Scope.HostsMode != ListModeDeny {
 		t.Errorf("scope did not carry over: %+v", sd.Definition.Scope)
+	}
+}
+
+// TestSeedShippedDefinitionsIgnoresUnrecognizedDetectorNames pins #887:
+// a settingsDoc entry keyed by a name outside the shipped catalogue (an
+// operator's config.yaml typo, or a detector retired since) seeds nothing
+// of its own -- only the 12 shipped definitions ever land in the store.
+// Before #887 this same input built a "legacy-detector:"-prefixed
+// placeholder, but SeedShippedDefinitions never read it back out, so it
+// was constructed and discarded without ever reaching the store; this
+// test would have passed before #887 too, and continues to pin the
+// observable behaviour now that the dead construction is gone.
+func TestSeedShippedDefinitionsIgnoresUnrecognizedDetectorNames(t *testing.T) {
+	s, err := OpenDefinitionsStoreWithBackend(nil)
+	if err != nil {
+		t.Fatalf("OpenDefinitionsStoreWithBackend(nil): %v", err)
+	}
+	settings := DefaultDetectorSettings()
+	settings["not_a_real_detector"] = DetectorSettings{Enabled: true}
+	if err := SeedShippedDefinitions(s, settings, DefaultShippedDefaults()); err != nil {
+		t.Fatalf("SeedShippedDefinitions: %v", err)
+	}
+
+	got := s.List()
+	if len(got) != len(ShippedDefinitionIDs()) {
+		t.Fatalf("expected exactly the %d shipped definitions, got %d", len(ShippedDefinitionIDs()), len(got))
+	}
+	for _, sd := range got {
+		if !IsShippedDefinitionID(sd.Definition.ID) {
+			t.Errorf("unexpected definition seeded for an unrecognized detector name: %q", sd.Definition.ID)
+		}
+	}
+	if _, ok := s.Get("legacy-detector:not_a_real_detector"); ok {
+		t.Error("a legacy-detector placeholder was seeded; it should no longer be built at all")
 	}
 }

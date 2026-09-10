@@ -7,6 +7,25 @@ export default defineConfig({
   plugins: [
     svelte(),
     VitePWA({
+      // MV_DEMO_BUILD=1 turns the service worker into one that
+      // unregisters itself and drops its caches on first load (#713).
+      // Set by whoever brings an instance up for a demo, not by
+      // scripts/live-env.sh itself -- the live-check gate needs a real
+      // worker (frontend/scripts/live-sw-navigation.mjs, #753).
+      //
+      // A demo instance is rebuilt many times at one origin, and a
+      // browser that has seen any earlier build keeps being served that
+      // build's precached shell -- so a fix present in the tree, present
+      // in the bundle and served correctly is still invisible to the
+      // person reviewing it. That has repeatedly been read as the work
+      // having been lost. Switching the plugin off would not help: a
+      // worker already registered in someone's browser keeps controlling
+      // the page whether or not the new build ships one. selfDestroying
+      // ships a worker whose only job is to remove its predecessor.
+      //
+      // A throwaway demo has no offline story worth protecting, so
+      // nothing is lost by this. Real builds are unaffected.
+      selfDestroying: process.env.MV_DEMO_BUILD === '1',
       // Installability only -- deliberately not caching any live data.
       // mikroview is fundamentally a live WebSocket tail; there's
       // nothing meaningful to show "offline," so the generated service

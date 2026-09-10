@@ -35,17 +35,23 @@
 // means. Do not "fix" a hidden line by widening the timeout: it will
 // never become visible.
 
-import { session, feedSyslog, feedPortScan, waitForFlag, check, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, feedPortScan, waitForFlag, check, responsive, done, goTo, waitForStreamRows } from './live-browser.mjs'
 
 // Enough traffic for several minutes of the hour to carry a rate, and a
 // scan so at least one flag type has an episode to draw a tick for.
+const { page, consoleErrors } = await session()
+
 feedSyslog(240, 'metrics-views')
 feedPortScan(20, '203.0.113.44')
-
-const { page, consoleErrors } = await session({ waitForEvents: 100 })
+await waitForStreamRows(page, 100)
 await waitForFlag(page, '203.0.113.44')
 
-const VIEW_BUTTON = (name) => `.views button:text-is("${name}")`
+// #700 moved the view switcher off Metrics.svelte's own `.views` and onto the scene bar (SceneBar.svelte:62-72):
+// `.switch[role="group"][aria-label="Metrics view"]`, holding `button.sw[aria-pressed]` rows. The switch also
+// dropped title case for its labels -- METRICS_VIEWS in lib/metrics.svelte.ts:33-37 renders 'seismograph',
+// 'register', 'table', lowercase throughout.
+const VIEW_SWITCH = '.switch[aria-label="Metrics view"]'
+const VIEW_BUTTON = (name) => `${VIEW_SWITCH} button.sw:text-is("${name}")`
 const SEISMOGRAPH = '.drum svg'
 const REGISTER = '.register .paper svg'
 const TABLE = '.table-view table'
@@ -90,20 +96,76 @@ async function cursorLine(page, root) {
   })
 }
 
-await page.click('.rail .item .label:text-is("Metrics")')
+/** apiUrl resolves a path against the page's own origin, for page.request. */
+function apiUrl(page, path) {
+  return new URL(path, page.url()).toString()
+}
+
+// Mirrors lib/format.ts's formatHM exactly, so a minute label read from
+// GET /api/stats/tops (a bare ISO string) can be matched against the
+// same HH:MM the table itself prints -- Node and the browser share one
+// OS clock/timezone in this harness, which is what makes the two agree.
+function hmLabel(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+/**
+ * tableAgreesWithTops polls GET /api/stats/tops and the rendered table
+ * together until every row's top-port/top-talker cell matches a fresh
+ * answer, or the deadline passes.
+ *
+ * Polled rather than checked once: Metrics.svelte's own tops poll
+ * (TOPS_POLL_MS) runs on a 5s cadence independent of this fetch, so a
+ * single fresh read can legitimately be a few seconds ahead of what the
+ * page has painted. That is a timing gap, not a defect, and the two
+ * should converge well inside the deadline.
+ */
+async function tableAgreesWithTops(page, deadlineMs) {
+  const deadline = Date.now() + deadlineMs
+  let detail = 'never sampled'
+  while (Date.now() < deadline) {
+    const res = await page.request.get(apiUrl(page, '/api/stats/tops'))
+    if (res.ok()) {
+      const body = await res.json()
+      const byLabel = new Map((body.tops ?? []).map((t) => [hmLabel(t.time), t]))
+      const rows = await page.$$eval('.table-view tbody tr', (trs) =>
+        trs.map((tr) => ({
+          minute: tr.querySelector('th button.minute')?.textContent.trim(),
+          port: tr.querySelectorAll('td.top')[0]?.textContent.trim(),
+          talker: tr.querySelectorAll('td.top')[1]?.textContent.trim(),
+        })),
+      )
+      const mismatches = []
+      for (const row of rows) {
+        const t = byLabel.get(row.minute)
+        const wantPort = t && t.complete && t.port ? t.port : '—'
+        const wantTalker = t && t.complete && t.talker ? t.talker : '—'
+        if (row.port !== wantPort || row.talker !== wantTalker) mismatches.push({ ...row, wantPort, wantTalker })
+      }
+      if (rows.length > 0 && mismatches.length === 0) return { ok: true, rows: rows.length }
+      detail = JSON.stringify(mismatches.slice(0, 3))
+    }
+    await page.waitForTimeout(500)
+  }
+  return { ok: false, detail }
+}
+
+await goTo(page, 'Metrics')
 
 // --- The default view, actually drawn -----------------------------------
 await page.locator(SEISMOGRAPH).waitFor({ state: 'visible', timeout: 10000 })
 check(true, 'Metrics opens on the seismograph and draws it')
 
-const buttons = await page.$$eval('.views button', (els) => els.map((e) => e.textContent.trim()))
+const buttons = await page.$$eval(`${VIEW_SWITCH} button.sw`, (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(buttons) === JSON.stringify(['Seismograph', 'Register', 'Table']),
-  `all three views are offered in the page header -- got ${JSON.stringify(buttons)}`,
+  JSON.stringify(buttons) === JSON.stringify(['seismograph', 'register', 'table']),
+  `all three views are offered on the scene bar -- got ${JSON.stringify(buttons)}`,
 )
 
-const pressed = await page.$eval('.views button[aria-pressed="true"]', (e) => e.textContent.trim())
-check(pressed === 'Seismograph', `the seismograph is the default -- got "${pressed}"`)
+const pressed = await page.$eval(`${VIEW_SWITCH} button.sw[aria-pressed="true"]`, (e) => e.textContent.trim())
+check(pressed === 'seismograph', `the seismograph is the default -- got "${pressed}"`)
 
 // The SVG is sized from the measured box, not stretched from a viewBox:
 // a width attribute that matches the element's own client width is what
@@ -125,10 +187,77 @@ check(
 )
 
 // Two chart inks only: no per-series hue cycling survived the rewrite.
-const inks = await page.$$eval('.drum svg path', (els) =>
-  [...new Set(els.map((e) => getComputedStyle(e).fill))].sort(),
+//
+// The drum draws its data as mirrored strokes, not filled shapes
+// (MetricsSeismograph.svelte:177-178 -- `<line class="stroke outer">` and
+// `.inner`), so the ink to count is their stroke: --chart-traffic and
+// --chart-refused, the two the CSS sets at lines 233-240. The previous
+// query asked for `fill` on `path`, and the component has never rendered
+// a path -- it collected nothing and reported an empty list as a failure.
+// The amber time marks (midline, brink, cursor) are deliberately out of
+// scope: amber is time, not a series ink.
+const inks = await page.$$eval('.drum svg line.stroke', (els) =>
+  [...new Set(els.map((e) => getComputedStyle(e).stroke))].sort(),
 )
 check(inks.length > 0 && inks.length <= 2, `two chart inks only -- got ${JSON.stringify(inks)}`)
+
+// --- The drum: one outer+inner stroke pair per minute on the axis --------
+//
+// MetricsSeismograph's own MIN_HALF floor means every minute draws
+// something, even a silent one -- so the stroke count is checked against
+// the server's own axis length (GET /api/stats) rather than a guessed
+// number: the suite's shared instance has arbitrary history by the time
+// this scenario runs.
+const statsForAxis = await (await page.request.get(apiUrl(page, '/api/stats'))).json()
+const axisLen = statsForAxis.timeSeries?.length ?? 0
+check(axisLen > 0, `the server reports a non-empty axis -- ${axisLen} minutes`)
+
+const outerCount = await page.locator(`${SEISMOGRAPH} line.stroke.outer`).count()
+const innerCount = await page.locator(`${SEISMOGRAPH} line.stroke.inner`).count()
+check(
+  outerCount === axisLen && innerCount === axisLen,
+  `one outer+inner stroke pair per minute on the axis -- outer ${outerCount}, inner ${innerCount}, axis ${axisLen}`,
+)
+
+// Geometry, not visibility -- see this file's own header note on SVG
+// <line> visibility. Each minute's refused (inner) half must never reach
+// further from the midline than its own total (outer) half, and the two
+// halves of one pair must share the same x.
+const strokeGeometry = await page.$eval(SEISMOGRAPH, (svg) => {
+  const read = (sel) =>
+    [...svg.querySelectorAll(sel)].map((l) => ({
+      x: Number(l.getAttribute('x1')),
+      half: Math.abs(Number(l.getAttribute('y2')) - Number(l.getAttribute('y1'))) / 2,
+    }))
+  return { outers: read('line.stroke.outer'), inners: read('line.stroke.inner') }
+})
+const geometryHolds = strokeGeometry.outers.every((o, i) => {
+  const inner = strokeGeometry.inners[i]
+  return inner !== undefined && inner.x === o.x && inner.half <= o.half + 0.01
+})
+check(geometryHolds, "every minute's refused half never exceeds its own total half, at the same x")
+
+// A direct pointer click on the paper itself selects a minute -- distinct
+// from the cursor-survives-a-view-switch test below, which only ever
+// selects through the table's own buttons.
+const drumBox = await page.locator(SEISMOGRAPH).boundingBox()
+await page
+  .locator(SEISMOGRAPH)
+  .click({ position: { x: Math.round(drumBox.width * 0.4), y: Math.round(drumBox.height * 0.3) } })
+await page.locator(cursorBand(SEISMOGRAPH)).waitFor({ state: 'visible', timeout: 5000 })
+const pointerMinute = (await page.locator(`${SEISMOGRAPH} text.cursor-label`).textContent()).trim()
+check(/^\d\d:\d\d$/.test(pointerMinute), `clicking the drum's paper selects a minute -- got "${pointerMinute}"`)
+// .hourline holds two .big spans (Metrics.svelte:146-167): the reading's own time
+// (formatHM(reading.time), a zero-padded HH:MM -- Metrics.svelte:148) and the rate
+// summary's events/s-now figure (formatEps(...), no colon -- Metrics.svelte:156,
+// lib/format.ts:56-65). This assertion is about the minute the drum's click landed
+// on, so it means the first one -- selected here by what it renders (a clock-shaped
+// string), not by DOM position, which is not what distinguishes the two.
+const hourlineBig = (await page.locator('.metrics .hourline .big', { hasText: /^\d\d:\d\d/ }).textContent()).trim()
+check(
+  hourlineBig.startsWith(pointerMinute),
+  `the hourline reflects the minute clicked on the drum -- got "${hourlineBig}" for "${pointerMinute}"`,
+)
 
 // --- The old surfaces are gone, not hidden -------------------------------
 for (const gone of ['Event volume — last hour', 'Flags raised — last hour']) {
@@ -137,19 +266,86 @@ for (const gone of ['Event volume — last hour', 'Flags raised — last hour'])
 }
 
 // --- The cursor, and its survival across a view switch -------------------
-await page.click(VIEW_BUTTON('Table'))
+await page.click(VIEW_BUTTON('table'))
 await page.locator(TABLE).waitFor({ state: 'visible', timeout: 10000 })
+
+// --- The table's top port/top talker agree with the API, never a guess ---
+//
+// #644 round 21: store.Store.HourTops is the one server-side answer for
+// "who/what led this minute" -- the table's own columns have to print
+// exactly that answer (or an honest em dash for an incomplete minute),
+// not a number reconstructed from the client's own capped buffer. This
+// checks agreement with a fresh fetch of the same endpoint rather than
+// any hardcoded value, since the suite's shared instance has arbitrary
+// history by the time this scenario runs.
+const toposRes = await page.request.get(apiUrl(page, '/api/stats/tops'))
+check(toposRes.ok(), `GET /api/stats/tops responds -- status ${toposRes.status()}`)
+const toposBody = await toposRes.json()
+const toposAxis = toposBody.tops ?? []
+check(toposAxis.length > 0, `GET /api/stats/tops returns the axis -- ${toposAxis.length} minutes`)
+const toposTimesMs = toposAxis.map((t) => new Date(t.time).getTime())
+const oneMinuteApart = toposTimesMs.every((t, i) => i === 0 || t - toposTimesMs[i - 1] === 60_000)
+check(oneMinuteApart, 'the tops axis is one-minute buckets, oldest first')
+
+const tableTops = await tableAgreesWithTops(page, 15000)
+check(
+  tableTops.ok,
+  tableTops.ok
+    ? `the table's top port/talker cells agree with GET /api/stats/tops -- ${tableTops.rows} minutes checked`
+    : `the table's top port/talker cells disagree with GET /api/stats/tops -- ${tableTops.detail}`,
+)
+
+// --- The ledger sits above the minutes, as a band (#803, rounds 36-37) ---
+//
+// Owner verdict on round 36: "Love the ledger but put them at the top not
+// beneath." Round 37 redraws it as the head of the table view, its rule
+// closing it off from the table below. This is geometry, so only a real
+// browser can prove it -- jsdom computes no layout, and the DOM order was
+// already ledger-first under #732's two-column grid, where the ledger
+// rendered *beside* the table rather than above it. Both halves matter:
+// above (not beneath, not beside) and a full-width band (not a sidebar).
+await page.locator('.table-view .totals .ledger-strip').waitFor({ state: 'visible', timeout: 10000 })
+const ledgerBox = await page.locator('.table-view .totals').boundingBox()
+const tableBox = await page.locator(TABLE).boundingBox()
+check(
+  ledgerBox.y + ledgerBox.height <= tableBox.y + 1,
+  `the ledger sits above the minutes -- ledger ends at ${Math.round(ledgerBox.y + ledgerBox.height)}, table starts at ${Math.round(tableBox.y)}`,
+)
+check(
+  ledgerBox.width >= tableBox.width * 0.9,
+  `the ledger is a band across the view, not a sidebar column -- ledger ${Math.round(ledgerBox.width)}px against a ${Math.round(tableBox.width)}px table`,
+)
+
+// Six ranked answers, and "bars, no boxes" -- #716's bordered card is gone.
+const ledgerColumns = await page.locator('.table-view .totals .ledger-strip .column').count()
+check(ledgerColumns === 6, `the ledger draws its six columns -- got ${ledgerColumns}`)
+const columnBorders = await page.$$eval('.table-view .totals .ledger-strip .column', (els) =>
+  els.map((e) => getComputedStyle(e).borderTopWidth),
+)
+check(
+  columnBorders.every((w) => parseFloat(w) === 0),
+  `bars, no boxes: no ledger column draws a border -- got ${JSON.stringify(columnBorders)}`,
+)
 
 const minuteButtons = page.locator('.table-view tbody th button.minute')
 await minuteButtons.first().waitFor({ state: 'visible', timeout: 10000 })
-const chosenMinute = (await minuteButtons.nth(1).textContent()).trim()
+// Click first, read the minute afterwards (#1045). The table is
+// newest-first, so a minute turning over between a pre-click read and the
+// click shifts every row down one and the click lands on a newer minute
+// than the label just read -- the scenario failed, not the app. The
+// selected row's own label is what the drum and hourline claims are about
+// anyway: the page reading one minute the same way everywhere.
 await minuteButtons.nth(1).click()
 
 await page.locator('.table-view tbody tr.selected').waitFor({ state: 'visible', timeout: 5000 })
-const selectedInTable = (await page.locator('.table-view tbody tr.selected th button.minute').textContent()).trim()
-check(selectedInTable === chosenMinute, `the table highlights the minute clicked -- got "${selectedInTable}"`)
+const chosenMinute = (await page.locator('.table-view tbody tr.selected th button.minute').textContent()).trim()
+const axisMinutes = (await minuteButtons.allTextContents()).map((t) => t.trim())
+check(
+  axisMinutes.includes(chosenMinute),
+  `the table highlights the minute clicked -- got "${chosenMinute}" against ${axisMinutes.length} minutes on the axis`,
+)
 
-await page.click(VIEW_BUTTON('Seismograph'))
+await page.click(VIEW_BUTTON('seismograph'))
 await page.locator(cursorBand(SEISMOGRAPH)).waitFor({ state: 'visible', timeout: 10000 })
 const drumCursor = await cursorLine(page, SEISMOGRAPH)
 check(
@@ -159,7 +355,7 @@ check(
 const drumMinute = (await page.locator('.drum svg text.cursor-label').textContent()).trim()
 check(drumMinute === chosenMinute, `the drum's cursor is on the same minute -- got "${drumMinute}" for "${chosenMinute}"`)
 
-await page.click(VIEW_BUTTON('Register'))
+await page.click(VIEW_BUTTON('register'))
 await page.locator(cursorBand(REGISTER)).waitFor({ state: 'visible', timeout: 10000 })
 const registerCursor = await cursorLine(page, REGISTER)
 check(
@@ -169,32 +365,49 @@ check(
 // Amber is time. A cursor drawn in a series ink would be the record's
 // one colour rule broken on the most prominent mark on the page.
 check(registerCursor?.timeColour === true, `the cursor wears the time colour -- got ${registerCursor?.stroke}`)
-const crossSection = (await page.locator('.cross-section h3').textContent()).trim()
+// Rounds 36-37 (#803) moved these two claims off the register's aside and
+// onto the hourline, which is where #s4 draws the reading -- the aside is
+// gone, not hidden. The claims themselves are unchanged: the page reads the
+// same minute the register's cursor is on, and it reads *every* series at
+// once rather than one of them.
+const hourlineMinute = (await page.locator('.metrics .hourline .big', { hasText: /^\d\d:\d\d/ }).textContent()).trim()
 check(
-  crossSection === `The minute ${chosenMinute}`,
-  `the register reads the same minute across the page -- got "${crossSection}"`,
+  hourlineMinute.startsWith(chosenMinute),
+  `the register reads the same minute across the page -- got "${hourlineMinute}" for "${chosenMinute}"`,
 )
 
-// The cursor reads the whole minute, not one series: every traffic
-// series plus the episode count is in the cross-section.
-const crossRows = await page.$$eval('.cross-section .xs-row dt', (els) => els.map((e) => e.textContent.trim()))
 check(
-  crossRows.length === 8 && crossRows[crossRows.length - 1] === 'flag episodes',
-  `the cursor reads every series at once -- got ${JSON.stringify(crossRows)}`,
+  (await page.locator('.cross-section').count()) === 0,
+  'no cross-section panel is drawn beside the register',
+)
+
+// The cursor reads the whole minute, not one series. The cursor's facts are
+// `.hourline`'s own direct `.fact` children; the hour's rate facts sit inside
+// `.rate`, so `> .fact` is what separates the two groups.
+const cursorFacts = await page.$$eval('.metrics .hourline > .fact', (els) =>
+  els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()),
+)
+check(
+  cursorFacts.length === 8 && /^\d+ flag episodes?\b/.test(cursorFacts[cursorFacts.length - 1]),
+  `the cursor reads every series at once -- got ${JSON.stringify(cursorFacts)}`,
 )
 
 // --- The preference is persisted, and applied before first paint ---------
 const stored = await page.evaluate(() => localStorage.getItem('mikroview-metrics-view'))
 check(stored === 'register', `the chosen view is persisted -- got ${JSON.stringify(stored)}`)
 
+// Load-only, kept deliberately: the claim under test is that the stored
+// view is read synchronously at module load, before first paint -- a
+// claim about a reload, not about a live update, so there is no push path
+// that could stand in for navigating away and back.
 await page.reload({ waitUntil: 'networkidle' })
-await page.click('.rail .item .label:text-is("Metrics")')
+await goTo(page, 'Metrics')
 // No click on a view button between the reload and this wait: if the
 // preference were applied after first paint, the seismograph would be
 // on screen here instead.
 await page.locator(REGISTER).waitFor({ state: 'visible', timeout: 10000 })
-const pressedAfterReload = await page.$eval('.views button[aria-pressed="true"]', (e) => e.textContent.trim())
-check(pressedAfterReload === 'Register', `the stored view survives a reload -- got "${pressedAfterReload}"`)
+const pressedAfterReload = await page.$eval(`${VIEW_SWITCH} button.sw[aria-pressed="true"]`, (e) => e.textContent.trim())
+check(pressedAfterReload === 'register', `the stored view survives a reload -- got "${pressedAfterReload}"`)
 check(
   (await page.locator(SEISMOGRAPH).count()) === 0,
   'the default view is not mounted first and then replaced',

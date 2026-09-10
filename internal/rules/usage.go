@@ -38,6 +38,27 @@ type Usage struct {
 	Count     uint64    `json:"count"`
 }
 
+// persistedState is the on-disk JSON shape persistLocked writes and
+// OpenWithBackend reads back: an object holding recordingSince (see
+// Store.RecordingSince) alongside every rule's usage record. This is the
+// only shape read -- see decodePersisted.
+type persistedState struct {
+	RecordingSince time.Time `json:"recordingSince"`
+	Rules          []*Usage  `json:"rules"`
+}
+
+// decodePersisted parses data as persistedState and returns the stamp
+// and records it carries. Anything that is not that object shape is a
+// parse error, which OpenWithBackend's caller gets as a hard startup
+// failure (issue #378) rather than an empty store.
+func decodePersisted(data []byte) (time.Time, []*Usage, error) {
+	var state persistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return time.Time{}, nil, err
+	}
+	return state.RecordingSince, state.Rules, nil
+}
+
 // Store holds every known rule label's Usage record, keyed by rule
 // label, safe for concurrent use. The zero value is not usable;
 // construct with Open.
@@ -50,6 +71,11 @@ type Store struct {
 	// no-op on a nil receiver.
 	wb     *persist.WriteBehind
 	byRule map[string]*Usage
+	// recordingSince is when this store started recording rule usage --
+	// see RecordingSince's doc comment. Set once, during construction in
+	// OpenWithBackend, and never modified afterward, so reading it needs
+	// no lock.
+	recordingSince time.Time
 }
 
 // Open loads path if it exists (a missing file is the expected
@@ -72,13 +98,13 @@ func Open(path string) (*Store, error) {
 func OpenWithBackend(b persist.Backend) (*Store, error) {
 	s := &Store{byRule: make(map[string]*Usage)}
 
-	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the rule-usage store", persist.WriteBehindOptions{
+	wb, existed, err := persist.OpenWriteBehind(context.Background(), b, "the rule-usage store", persist.WriteBehindOptions{
 		MinInterval: persistMinInterval,
 		OnSaveError: func(msg string) { persistLog.Error(msg) },
 		OnConflict:  func(msg string) { persistLog.Warn(msg) },
 	}, func(data []byte) error {
-		var list []*Usage
-		if err := json.Unmarshal(data, &list); err != nil {
+		since, list, err := decodePersisted(data)
+		if err != nil {
 			return err
 		}
 		for _, u := range list {
@@ -89,13 +115,35 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			}
 			s.byRule[u.Rule] = u
 		}
+		s.recordingSince = since
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	// A document that parsed has already supplied its own stamp above.
+	// No document at all is the fresh-store case: recording starts now,
+	// because it cannot have started before this moment.
+	if !existed {
+		s.recordingSince = time.Now()
+	}
 	s.wb = wb
 	return s, nil
+}
+
+// RecordingSince reports when this store started recording rule usage.
+// Set once and preserved across every subsequent Open/reopen, so it
+// never moves forward the way a per-process "when did I start" would --
+// see OpenWithBackend for how it is established when there is no
+// document yet.
+//
+// This is the honesty bound issue #701's owner decision requires: a
+// client can already derive "how many distinct rules have fired" from
+// List(), but must not present that count against a fixed seven-day
+// window wider than what this store actually covered. Immutable after
+// construction, so safe for concurrent use without a lock.
+func (s *Store) RecordingSince() time.Time {
+	return s.recordingSince
 }
 
 // Flush forces this store's write-behind writer to persist whatever is
@@ -252,7 +300,12 @@ func (s *Store) persistLocked() {
 		return
 	}
 
-	data, err := json.MarshalIndent(s.listLocked(), "", "  ")
+	list := s.listLocked()
+	rules := make([]*Usage, len(list))
+	for i := range list {
+		rules[i] = &list[i]
+	}
+	data, err := json.MarshalIndent(persistedState{RecordingSince: s.recordingSince, Rules: rules}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding rule usage for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return

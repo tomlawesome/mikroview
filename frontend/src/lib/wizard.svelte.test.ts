@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./api', () => ({
   fetchSetupStatus: vi.fn(),
+  fetchSetupCommands: vi.fn(),
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
 }))
@@ -70,5 +71,26 @@ describe('relaunch is the same door', () => {
     })
     expect(wizardState.silence).toContain('step 2')
     expect(wizardState.silence).toContain('forced past')
+  })
+})
+
+describe('openLostRouter (#394)', () => {
+  it('jumps to step 6 for the named router, not the first step still waiting', () => {
+    wizardState.close()
+    wizardState.openLostRouter('hap-ax2')
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.pane).toBe(6)
+    expect(wizardState.lostRouterDevice).toBe('hap-ax2')
+  })
+
+  it('is cleared by an ordinary close or relaunch, so it never leaks into the next visit', () => {
+    wizardState.openLostRouter('hap-ax2')
+    wizardState.close()
+    expect(wizardState.lostRouterDevice).toBeNull()
+
+    wizardState.status = status()
+    wizardState.openLostRouter('hap-ax2')
+    wizardState.launch()
+    expect(wizardState.lostRouterDevice).toBeNull()
   })
 })

@@ -319,6 +319,18 @@ type Store interface {
 	Recent(ctx context.Context, q RecentQuery, yield func(Record) bool) error
 
 	Stats() Stats
+
+	// Reset deletes every match held. It exists for the test-only
+	// POST /api/test/reset (#1064), which gives a live-check scenario an
+	// instance carrying none of its siblings' evidence.
+	//
+	// On the interface rather than behind a type assertion in the caller
+	// deliberately: an optional method that a backend quietly does not
+	// implement is exactly how a reset ends up clearing three stores out
+	// of four and reporting success, and the compiler is the only thing
+	// that reliably notices a new backend forgetting it.
+	Reset() error
+
 	Close() error
 }
 

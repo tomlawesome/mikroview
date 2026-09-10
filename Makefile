@@ -51,14 +51,125 @@ clean:
 # Add a scenario per change: frontend/scripts/live-<thing>.mjs, importing
 # the helpers from live-browser.mjs. live-smoke.mjs is the baseline every
 # change runs.
+# Two phases, because the checks come in two shapes. The browser
+# scenarios drive one shared instance; the standalone scripts each stand
+# up and tear down their own server on fixed ports, so they cannot share
+# that instance and run after it is down.
+#
+# Both phases find their checks by glob. That is the point: adding
+# frontend/scripts/live-<thing>.mjs or scripts/live-<thing>.sh is
+# sufficient, and there is no second edit to forget. Three standalone
+# scripts had no runner at all and rotted into being unable to start a
+# server, silently, for months (#595, #624).
+#
+# The trap is load-bearing (#660). `live-env.sh up` detaches its instance
+# deliberately, and `down` is the only thing that stops it -- so without
+# a trap, a run interrupted before the `down` line (Ctrl-C, a killed
+# agent, a session ending mid-scenario) leaves that server holding its
+# slot's HTTP port for good. One such leak walled the standalone phase
+# for every checkout on the host until it was found by hand, because the
+# standalone scripts bind ports from the same range.
+#
+# EXIT alone is not enough: bash runs an EXIT trap on a normal exit, but
+# a SIGINT reaching this shell terminates it without one unless INT is
+# trapped too. Trapping both, then calling `down` explicitly between the
+# phases, means the instance goes away whether the run finishes, fails or
+# is killed. `down` is idempotent, so running it twice costs nothing.
+#
+# The INT/TERM handler ends in `exit`, and that is not decoration: bash
+# resumes the script where it left off once a signal handler returns, so
+# a handler that only cleans up leaves Ctrl-C aborting the browser phase
+# and then running the whole standalone phase anyway -- minutes of work
+# after the operator asked it to stop, observed while verifying #660.
+#
+# Armed AFTER `up`, never before, and that ordering matters. `down` ends
+# with `rm -rf "$$MV_DIR"`, and two checkouts that hash to the same slot
+# share that directory. `up` refuses to start when something already
+# holds the port precisely so it does not trample a stranger's instance
+# -- arming the trap first would have this recipe do exactly that on the
+# way out of the refusal it just respected.
+#
+# The INT/TERM trap here only ever ran when a signal reached *this*
+# shell -- a terminal Ctrl-C, which goes to the whole foreground process
+# group. A kill aimed at one process further up (an agent's own wrapper,
+# or `make` itself) sends nothing to this shell at all, so the trap above
+# never fired, and scripts/run-scenarios.sh -- called as a plain
+# foreground command, not `wait` -- kept driving Chromium against an
+# instance whose owner was long gone (#671). `scripts/run-scenarios.sh`
+# is backgrounded and `wait`-ed on for the same reason node is inside
+# it: `wait` is the one blocking construct a trapped signal interrupts
+# immediately rather than deferring until the foreground command
+# finishes, and the trap forwards the same signal to it, which is what
+# actually stops the scenario in front of it and lets `down` below run
+# straight away instead of waiting out the rest of the browser phase.
+# The same gate, on the second host, so it does not hold this machine for
+# the better part of an hour. scripts/gate-remote.sh has the reasoning;
+# AGENTS.md's "The second host live-check runs on" has the account.
+live-check-remote:
+	@scripts/gate-remote.sh $(if $(MV_BROWSER),--browser $(MV_BROWSER),) $(if $(MV_SHARDS),--shards $(MV_SHARDS),)
+
+# With MV_SHARD=i/N set, this is one slice of the browser phase (#1004):
+# its own instance on its own ports (scripts/live-slot.sh), the i-th of N
+# runs of scenarios (scripts/run-scenarios.sh), and no standalone-script
+# phase -- those four scripts are one unit, run once by live-check-scripts,
+# not once per slice. live-check-sharded below drives N of these at once;
+# CI's gate:scenarios job runs one per parallel job. Unset, it is the whole
+# gate, exactly as before.
 live-check:
-	@eval "$$(scripts/live-env.sh up)"; \
+	@mv_env="$$(scripts/live-env.sh up)" || exit 1; eval "$$mv_env"; \
+	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT; \
+	  runner_pid=""; \
+	  trap '[ -n "$$runner_pid" ] && kill "$$runner_pid" 2>/dev/null; scripts/live-env.sh down >/dev/null 2>&1 || true; exit 130' INT TERM; \
 	  status=0; \
-	  scripts/run-scenarios.sh || status=1; \
+	  scripts/run-scenarios.sh & runner_pid=$$!; \
+	  wait "$$runner_pid" || status=1; \
+	  runner_pid=""; \
 	  scripts/live-env.sh down; \
+	  $(if $(MV_SHARD),:,scripts/run-live-scripts.sh || status=1); \
 	  exit $$status
 
-.PHONY: live-check
+# The four standalone shell checks on their own (scripts/run-live-scripts.sh):
+# the second half of live-check, split out so a sharded run can do it once.
+live-check-scripts:
+	@scripts/run-live-scripts.sh
+
+# live-check-sharded: the same gate in a fraction of the wall time (#1004).
+#
+# The whole suite runs its 85 scenarios one at a time against one instance
+# and takes about 36 minutes on about three cores. This target builds the
+# binary once, brings up MV_SHARDS instances, gives each a contiguous
+# slice of the scenario list (the split rule is in run-scenarios.sh), and
+# runs the standalone scripts once afterwards. What that buys is a shorter
+# *window*, not more capacity: the core-minutes are the same, but the host
+# is shared with CI (#831), and a nine-minute run collides with a pipeline
+# far less often than a thirty-six-minute one.
+#
+# Each slice writes to its own log and the logs are printed afterwards in
+# slice order, so the output reads as one run and gate-remote.sh's count of
+# `== ` against `RESULT:` lines still holds. Ctrl-C reaches every slice,
+# since the terminal signals the whole foreground group; a kill aimed at
+# this shell alone reaches only what it can see, which is the sub-makes.
+MV_SHARDS ?= 4
+live-check-sharded:
+	@bin=$$(mktemp -d /tmp/mikroview-live-bin.XXXXXX); \
+	  logs=$$(mktemp -d /tmp/mikroview-live-logs.XXXXXX); \
+	  pids=""; \
+	  trap 'rm -rf "$$bin" "$$logs"' EXIT; \
+	  trap 'for p in $$pids; do kill "$$p" 2>/dev/null; done; exit 130' INT TERM; \
+	  scripts/live-env.sh build "$$bin/mikroview" || exit 1; \
+	  status=0; i=1; \
+	  while [ "$$i" -le "$(MV_SHARDS)" ]; do \
+	    echo "--> shard $$i/$(MV_SHARDS) started" >&2; \
+	    MV_SHARD=$$i/$(MV_SHARDS) MV_BINARY="$$bin/mikroview" $(MAKE) --no-print-directory live-check >"$$logs/shard-$$i.log" 2>&1 & pids="$$pids $$!"; \
+	    i=$$((i + 1)); \
+	  done; \
+	  for p in $$pids; do wait "$$p" || status=1; done; \
+	  i=1; \
+	  while [ "$$i" -le "$(MV_SHARDS)" ]; do cat "$$logs/shard-$$i.log"; i=$$((i + 1)); done; \
+	  scripts/run-live-scripts.sh || status=1; \
+	  exit $$status
+
+.PHONY: live-check live-check-scripts live-check-sharded
 
 # live-routeros: boot a real RouterOS CHR and point it at a real
 # mikroview. Opt-in rather than part of live-check, because it boots a VM
@@ -149,12 +260,28 @@ live-container-postgres:
 #
 # Slow by the standards of the other targets: a CHR boots under TCG here
 # (no usable /dev/kvm), and setup completes a real DHCP handshake.
+#
+# Each `up` is captured and then eval'd, rather than eval'd directly from
+# a command substitution. `eval "$(cmd)"` throws the exit status away --
+# a failing cmd produces no output and `eval ""` succeeds -- so a router
+# that never booted read as a router that booted fine, and the recipe
+# went on to drive its serial console. The operator then saw a Python
+# traceback and "connection refused" as the top of the log, four errors
+# below the line that actually mattered (#613). This target runs rarely,
+# by someone without recent context, so it misreporting its own failure
+# costs more than it would on a common one.
 live-routeros-container:
 	@MV_ENV_SCRIPT=scripts/live-container.sh; export MV_ENV_SCRIPT; \
 	  MV_BIND=$$(scripts/live-routeros.sh host-addr); export MV_BIND; \
-	  eval "$$(scripts/live-container.sh up)" || exit 1; \
+	  env_out=$$(scripts/live-container.sh up) || exit 1; \
+	  eval "$$env_out"; \
 	  test -n "$$MV_URL" || { echo "live-container.sh up produced no MV_URL" >&2; exit 1; }; \
-	  eval "$$(scripts/live-routeros.sh up)" || exit 1; \
+	  chr_out=$$(scripts/live-routeros.sh up) || { \
+	    echo "live-routeros.sh up failed -- stopping here rather than driving a router that never booted" >&2; \
+	    scripts/live-container.sh down >/dev/null 2>&1 || true; \
+	    exit 1; \
+	  }; \
+	  eval "$$chr_out"; \
 	  status=0; \
 	  scripts/live-routeros.sh setup "$$MV_URL" "$$MV_BIND" "$$MV_SYSLOG_TLS_PORT" || status=1; \
 	  if [ $$status -eq 0 ]; then \
@@ -167,3 +294,31 @@ live-routeros-container:
 	  exit $$status
 
 .PHONY: live-routeros-container
+
+# The door's geometry in the engines the harness doesn't drive.
+# The Playwright container ships Firefox and WebKit with their system
+# libraries, which the host lacks and cannot install without root --
+# run against an already-standing instance: make engines-check
+# MV_URL=https://<host-lan>:<port>. The repo mounts read-only so a
+# stray install inside the container can never rewrite the host's
+# node_modules (see the environment notes' Orbit incident).
+engines-check:
+	test -n "$(MV_URL)" || { echo "MV_URL required -- an already-standing instance, reachable from a container (host LAN address, not 127.0.0.1)" >&2; exit 1; }
+	docker run --rm -v $(CURDIR):/repo:ro -w /repo/frontend -e MV_URL=$(MV_URL) \
+	  mcr.microsoft.com/playwright:v1.62.0-noble node scripts/live-door-engines.mjs
+
+.PHONY: engines-check
+
+# fidelity: photograph the built app and its ratified mockup at the same
+# viewport and compare per pixel (#658, ported from Orbit). Catches the
+# thing neither the suite nor live-check can see -- a surface that works
+# but is not the one that was ratified.
+#
+# Needs a running instance and the design host. Both are required, because
+# the defaults used to be one developer's own machine (#1044):
+#   FIDELITY_APP=https://<host>:19892/ FIDELITY_MOCKUPS=http://<host>:8311/ make fidelity
+# Baselines move only deliberately: UPDATE_BASELINE=1 make fidelity
+fidelity:
+	@cd frontend && node tests/fidelity/screens.mjs
+
+.PHONY: fidelity

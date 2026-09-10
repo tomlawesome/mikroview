@@ -26,10 +26,10 @@ import (
 // and its params lived on the definition, while the entry itself lived
 // somewhere else, and nothing structurally stopped the two disagreeing.
 //
-// The conversion is not new. MigrateDefinitions already writes every
-// entry into this store (definitions_migrate.go's convertWatchlistEntry),
-// and #406's ExpectationDefinitionFor calls the same function so a live
-// entry and a migrated one are the same value. What this file adds is
+// The conversion is not new. Every entry becomes a definition through
+// definitions_convert.go's convertWatchlistEntry, which #406's
+// ExpectationDefinitionFor calls, so one function produces every stored
+// expectation. What this file adds is
 // the other direction -- EntryFromDefinition -- plus the operator-facing
 // entry-set API (list, get, upsert, update, delete, reset) and the
 // observation recorder, all against the one document.
@@ -79,7 +79,7 @@ var ErrNotAnExpectation = errors.New("engine: that definition is not an expectat
 // watchlist.Match all still speak.
 //
 // Kind is what tells the two shapes apart, exactly as
-// convertWatchlistEntry writes them (definitions_migrate.go): a
+// convertWatchlistEntry writes them (definitions_convert.go): a
 // non-inverted entry converts to KindDeclarative (its matching is
 // conditions over an event), an inverted one to KindProgrammatic (its
 // matching is the observed/permitted state machine, which is Go). Nothing
@@ -116,6 +116,29 @@ func EntryFromDefinition(d Definition) (watchlist.Entry, error) {
 			return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: param \"createdAt\": %w", d.ID, err)
 		}
 		e.CreatedAt = t
+	}
+
+	// The watch window and its nightly history (#680) ride on both
+	// shapes: an inverted entry is watched on a schedule the same way a
+	// non-inverted one is, so this is read before the split rather than
+	// twice after it.
+	if err := decodeJSONParam(params, "windowJSON", &e.Window); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
+	}
+	if err := decodeJSONParam(params, "nightsJSON", &e.Nights); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
+	}
+	if err := decodeJSONParam(params, "ringJSON", &e.Ring); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
+	}
+	if err := decodeJSONParam(params, "silentJSON", &e.SilentOccurrences); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
+	}
+	// #806: the boundary this entry is scoped to, if any -- read before
+	// the Kind split, same as the watch history above, since both
+	// non-inverted and inverted entries can carry one.
+	if err := decodeJSONParam(params, "boundaryJSON", &e.Boundary); err != nil {
+		return watchlist.Entry{}, fmt.Errorf("engine: expectation %q: %w", d.ID, err)
 	}
 
 	if d.Kind == KindProgrammatic {
@@ -156,7 +179,7 @@ func EntryFromDefinition(d Definition) (watchlist.Entry, error) {
 // value. An absent param is false rather than an error: every bool an
 // expectation carries is an opt-in whose absence means "not opted in",
 // the same "zero means absent" convention optionalStringList follows on
-// the way in (definitions_migrate.go).
+// the way in (definitions_convert.go).
 func paramBool(params Params, name string) (bool, error) {
 	raw, ok := params[name]
 	if !ok {
@@ -292,7 +315,7 @@ func (s *DefinitionsStore) GetExpectation(id string) (watchlist.Entry, bool, err
 // "shipped definitions are disabled-never-deleted" invariant (#401) holds
 // exactly where it was written to hold.
 //
-// Enabled, Scope, Suppressions and Description are carried over from the
+// Enabled, Scope and Description are carried over from the
 // existing definition when one exists: they are envelope properties an
 // operator sets through the definitions API, not properties of the entry,
 // and an entry edit must not silently reset them.
@@ -354,7 +377,6 @@ func (s *DefinitionsStore) writeExpectationLocked(e watchlist.Entry, countAsNew 
 		// UpsertExpectation's own doc comment.
 		def.Enabled = previous.Enabled
 		def.Scope = previous.Scope
-		def.Suppressions = previous.Suppressions
 		if previous.Description != "" {
 			def.Description = previous.Description
 		}

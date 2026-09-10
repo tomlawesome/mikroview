@@ -1,6 +1,6 @@
 ---
 name: live-check
-description: Stand up a real mikroview and drive it in a real browser. Use before opening any PR that touches the server, the UI, or the CLI.
+description: Stand up a real mikroview and drive it in a real browser. Runs continuously on dev after merges, and once clean before dev -> preview; on a branch by choice, not by rule.
 ---
 
 # Live check
@@ -10,6 +10,42 @@ it with real syslog listeners and a real admin account, feeds synthetic
 firewall events, and drives it in Chromium via Playwright.
 
 Not the test suite. Run it in addition, not instead.
+
+**It is not a step before a merge.** Since 2026-09-02 a PR merges on green
+CI plus review; the gate runs on `dev` in a loop on the second host, and a
+new failure against the previous run is filed against that merge window and
+fixed forward. It blocks only `dev -> preview`. AGENTS.md, "The gate runs
+on `dev`, after the merge", has the rule and the reasoning.
+
+**It does not have to run here.** `make live-check-remote` runs the same gate
+on the second host, so this machine stays free for the 35-50 minutes it takes.
+Same suite, and `MV_BROWSER=firefox` or `webkit` drives an engine the local
+run never does -- which is how #659 shipped a static style attribute Chromium
+tolerates and Firefox refuses. Peer sessions share this workstation, so prefer
+the remote form when someone else may want the machine.
+
+**The remote gate serializes: one run on the second host at a time.**
+`scripts/gate-remote.sh` takes a lock on the host before it pushes and
+refuses (exit 75) if another run already holds it, naming that run's host,
+ref and start time (#809, #811). Pass `--wait` to poll until it frees
+instead of refusing. Do not start a second `make live-check-remote` against
+the same host expecting it to queue on its own -- without `--wait` it exits
+immediately.
+
+**It can be sharded (#1004).** `MV_SHARDS=4 make live-check-sharded` builds
+once, brings up four instances on their own ports, gives each a contiguous
+slice of the scenario list, prints the four logs in order, then runs the
+standalone scripts once. Same scenarios, same core-minutes, about a
+quarter of the wall time -- a shorter window on a host CI shares, not more
+capacity. `MV_SHARDS=4 make live-check-remote` does it on the second host,
+and CI's `gate` stage runs the same slices as `gate:scenarios 1/4`..`4/4`
+plus `gate:scripts`, `allow_failure` until it has proven itself. Slices
+are cut only between scenario *families* (the word after `live-`), so a
+scenario that needs what a sibling left behind must share its family;
+`MV_SHARD=2/4 scripts/run-scenarios.sh --list` shows a slice. Every run,
+sharded or not, now feeds 300 `live-baseline` events before the first
+scenario, so a slice that starts mid-suite is not starting on an empty
+instance. Each scenario's wall time is printed as `-- <scenario> Ns`.
 
 ## Why this exists
 
@@ -41,12 +77,98 @@ cd frontend && node scripts/live-smoke.mjs
 scripts/live-env.sh down
 ```
 
+### Which browser it drives
+
+`MV_BROWSER` selects the engine: `chromium` (the default), `firefox` or
+`webkit`. It applies to the whole suite, including the handful of
+scenarios that open a second browser for a second signed-in session.
+
+```sh
+MV_BROWSER=firefox make live-check
+```
+
+Run it under Firefox before believing a UI change is safe. The gate has
+only ever driven Chromium, and that is how #659 shipped: a static
+`style="..."` attribute Chromium tolerates and Firefox refuses under this
+app's CSP passed live-check, vitest and every screenshot, and was found
+by the owner opening the app. An unrecognised value refuses to start
+rather than falling back, because a run that reports PASS believing it
+exercised Firefox is worse than no run. Locally the engine must be
+installed (`npx playwright install firefox`); the CI image carries all
+three.
+
+## Reading a run
+
+Do not judge a run by counting `RESULT: PASS` against `RESULT: FAIL`. The
+RESULT line is printed by the scenario itself, so one that *throws* --
+a stale selector, an import error -- dies before printing anything, and
+the log shows a header, some passing checks, a stack trace, and no
+verdict. Counting verdicts cannot see it. That is #661, and it was read
+as a clean browser phase across two full runs.
+
+The check that cannot lie about it:
+
+```
+grep -c '^== ' run.log                      # scenarios started
+grep -cE '^RESULT: |^PASS: ' run.log        # scenarios that reported
+```
+
+Equal means every scenario reported. A shortfall is scenarios that died
+silently, and the difference is how many. `run-scenarios.sh` now also
+writes a `RESULT: FAIL (... without printing a result)` line for those,
+but the count comparison is what to reach for on any log, including older
+ones and other people's.
+
+The opposite error is as bad: an earlier version of that fix printed a
+synthesised failure on *every* non-zero exit, duplicating the verdict a
+scenario had already written for itself and denying it had written one.
+Over-reporting and under-reporting are the same defect -- a log that is
+not a faithful record of what happened.
+
+To tell a regression from a pre-existing failure, run the whole thing on
+both trees, a worktree at `origin/dev` and the branch, and take the set
+difference. Failures present on both are not yours. Never run the one
+scenario twice instead: scenarios share an instance and run in filename
+order, so most depend on state an earlier one left.
+
 ## Running two live checks at once
 
-Safe by default. `MV_DIR` and the three ports are derived from a hash of
-the checkout path, so each `git worktree` gets its own data directory and
-its own port block, and repeated runs in the same tree stay on the same
-slot.
+Safe by default. `MV_DIR` and every port are derived from a hash of the
+checkout path, so each `git worktree` gets its own data directory and its
+own port block, and repeated runs in the same tree stay on the same slot.
+
+It was not safe until #660, and the way it failed is worth knowing. This
+said "safe by default" while it was only true of the browser phase: the
+standalone scripts hardcoded ports that sat inside the band `live-env.sh`
+hands out, so whichever checkout hashed to slot 21 owned a port two of
+them also claimed. `scripts/live-slot.sh` is now the single allocator for
+both phases, and this claim is true of the whole gate.
+
+**A new check that binds a port takes it from `live-slot.sh`.** Source it
+and use one of its variables, or add a band there with a comment. Never
+write a number into the script -- that is precisely how the two-allocator
+bug happened, and nothing but this line stops it happening again.
+
+### Ports are safe; the CPU is not
+
+Two runs no longer collide, but they still share one machine, and a
+loaded host breaks a specific class of assertion: **the ones waiting for
+something to disappear.** An empty state, a cleared list, a count
+returning to zero -- a feeder that keeps arriving refills what the
+assertion is waiting to stop seeing, so it times out while the app is
+behaving correctly. Assertions waiting for something to *appear* mostly
+just get slower.
+
+Observed 2026-08-31: `live-flags-clearing.mjs` failed its post-reload
+check ("the cleared state survived a reload") on a host running two
+gates, and passed the same check on an idle one. The re-run to establish
+that cost 35 minutes.
+
+So: one gate at a time per host, and a browser-phase failure on a shared
+host is not evidence until it is reproduced alone. `live-inline-editing`
+is the standing counter-example in the other direction -- it fails
+intermittently on an idle host too (#611), so a single clean run does not
+clear it either.
 
 This matters because the collision used to be destructive, not noisy:
 `up` runs `down` and then `rm -rf "$MV_DIR"`, so a second live check on
@@ -56,10 +178,55 @@ scenario timeout and nothing in its own log to account for it.
 
 Two checkouts can still hash to the same slot. `up` therefore refuses to
 start if either port is held after its own teardown, naming the ports and
-telling you to override, rather than proceeding into the `rm -rf`. To run
-alongside another check deliberately, set `MV_DIR`, `MV_HTTP_PORT`,
-`MV_SYSLOG_PORT` and `MV_SYSLOG_TLS_PORT` — explicit values always win
-over the derived ones.
+telling you to override, rather than proceeding into the `rm -rf`. The
+standalone scripts now refuse the same way, naming the port and the
+process holding it; before #660 they said only "server never came up",
+and one collision surfaced as five failures across two scripts that
+mentioned no port at all. To run alongside another check deliberately,
+set `MV_DIR`, `MV_HTTP_PORT`, `MV_SYSLOG_PORT` and `MV_SYSLOG_TLS_PORT` —
+explicit values always win over the derived ones.
+
+An interrupted run used to leave its instance behind for good: `up`
+detaches deliberately and `down` is the only thing that stops it, so a
+run killed mid-scenario held its slot's port until someone found the
+process by hand. The `live-check` recipe now traps INT and TERM. If you
+drive `live-env.sh up` yourself rather than through `make live-check`,
+that trap is yours to set.
+
+That trap alone only covered a terminal Ctrl-C, which the kernel delivers
+to the whole foreground process group. Killing `make live-check` from
+outside a terminal — an agent's own wrapper, a session ending — used to
+reach nothing at all: the recipe was blocked in a plain foreground call
+to `scripts/run-scenarios.sh`, not the interruptible `wait`, so its trap
+sat deferred while the scenario's node process, several process
+generations down, kept driving Chromium against an instance whose owner
+was gone (#671). A `kill` on the run returned success immediately, so it
+looked stopped; only checking the port afterwards showed otherwise.
+
+Fixed the same way, one layer at a time: the recipe backgrounds
+`run-scenarios.sh` and `wait`s on it, and its trap now forwards the
+signal to it; `run-scenarios.sh` itself backgrounds each scenario's node
+process and `wait`s on that, forwarding in turn. So killing `make
+live-check`'s own process now stops the scenario in front of it and lets
+`down` run straight away, at whichever of the three levels you actually
+target.
+
+### The standing lanes (owner, 2026-08-30)
+
+Use up to three lanes, one worktree each, and never share a worktree
+between concurrent agents — they share one git index, so one agent's
+commit sweeps another's staged files:
+
+1. **Suite lane** — the branch worktree, running `make live-check`.
+2. **Driving lane** — a detached worktree at the same commit, for
+   hand-driving and screenshots while the suite runs.
+3. **Baseline lane** — a worktree at `origin/dev`, for telling a
+   regression from a pre-existing failure.
+
+The server embeds the frontend at build time: rebuilding `frontend/dist`
+changes nothing a running server serves. To see a frontend change,
+`scripts/live-env.sh down` then `up` (it rebuilds), or you will verify
+against a stale bundle without noticing.
 
 ## Driving a real router
 

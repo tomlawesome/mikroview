@@ -1,9 +1,11 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState, applyFilters } from '../lib/state.svelte'
+  import { whisperState } from '../lib/whisper.svelte'
   import { authState } from '../lib/auth.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
-  import { COLUMNS, columnState } from '../lib/columns.svelte'
+  import { formatTime } from '../lib/format'
+  import { columnState } from '../lib/columns.svelte'
   import { groupModeState } from '../lib/groupMode.svelte'
   import { flaggedSources, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
   import { flagsState } from '../lib/flags.svelte'
@@ -41,8 +43,12 @@
 
   let bodyEl: HTMLDivElement | undefined = $state()
   let gridEl: HTMLDivElement | undefined = $state()
-  // Which event's EventDetailSheet.svelte is open (issue #85's mobile
-  // card layout) -- null means none. Desktop never sets this. Typed as
+  // Which event's EventDetailSheet.svelte is open -- null means none.
+  // Originally issue #85's mobile card layout only; #644's squared
+  // columns made it every row's detail surface, since the sheet is the
+  // one place a row's full detail lives -- raw line, MAC/NAT lookups,
+  // and (#717 restored these as columns too, but the sheet still has
+  // them) device, chain, interfaces, src port, NAT, MAC. Typed as
   // FirewallEvent, not ClientEvent, to match EventRow/EventCardMobile's
   // own prop type -- applyFilters's declared return type is
   // FirewallEvent[] even though the real objects flowing through it are
@@ -50,7 +56,22 @@
   // FirewallEvent[] too.
   let selectedEvent: FirewallEvent | null = $state(null)
   let headerEls: (HTMLDivElement | undefined)[] = $state([])
+
+  // Column resize, mounted again by round 36 and drawing nothing at
+  // rest: "the boundary reveals itself under the hand -- a hair on the
+  // header's edge and a col-resize cursor -- and is otherwise
+  // invisible." Round 30 had unmounted it because its own shots showed
+  // no handle; what they showed no handle of was the *resting* header,
+  // and the answer drawn here is a hover state, not an absent feature.
+  // The visible half is entirely CSS (.header-cell::after and
+  // .resizer's own hover/active rules below); the drag itself is
+  // measureOffsets/handleOffsets/startResize/onResizeMove/endResize.
+  // Which boundary is being dragged, twice over: the position (so the
+  // handle under the pointer keeps its own `.active` look) and the
+  // column's key (so the width lands on the right column whatever the
+  // reader has hidden -- see columnState.setWidthForKey).
   let dragIndex = $state<number | null>(null)
+  let dragKey: string | null = null
   let dragStartX = 0
   let dragStartWidth = 0
 
@@ -203,6 +224,18 @@
     // of both so a narrow filter on a healthy, populated buffer never
     // reads as either.
     if (appState.events.length > 0) return { kind: 'text', text: 'No events match the current filters.' }
+    // Empty because the reader emptied it (round 36's `wipe`). Said
+    // before every other empty reading below, all of which would be
+    // wrong here -- ghost rows promise lines that are not coming, and
+    // "waiting for events" blames the estate for a silence the operator
+    // caused. The second half is the half that is not on screen: the
+    // wipe took this browser's copy and nothing else.
+    if (appState.wipedAt !== null) {
+      return {
+        kind: 'text',
+        text: `Nothing since ${formatTime(new Date(appState.wipedAt).toISOString())} — wiped here, by you · the server's ring still holds every line`,
+      }
+    }
     // The buffer is empty and nothing has failed -- either the app's one
     // loadInitial() call (App.svelte's mount effect) hasn't come back
     // yet, or it has and the server genuinely has nothing. Ghost rows,
@@ -220,7 +253,7 @@
     if (appState.devices.length === 0) {
       const base =
         authState.role === 'admin'
-          ? 'No devices have sent anything yet — Admin ▸ Run setup… to point a RouterOS device at mikroview.'
+          ? 'No devices have sent anything yet — your account menu ▸ Run setup… to point a RouterOS device at mikroview.'
           : 'No devices have sent anything yet. Ask an administrator to run setup.'
       // #487's "the record is the feature": where a setup step was
       // skipped or forced past, this silence has a recorded cause, and
@@ -238,6 +271,19 @@
   // the flag list rather than per row, so this is one pass rather than
   // one lookup per rendered row.
   const flagged = $derived(flaggedSources(flagsState.list))
+
+  // The stream's foot band is gone (owner, round 36: "oh that thing, I
+  // don't want that at all", closing #717's earlier "I hate it, remove
+  // it"), and gone wholesale rather than gated off: round 37 removed it
+  // from the drawing, so there is no round for it to come back in. Of
+  // its three facts, a repeating refusal is already a flag and a dark
+  // boundary is already on the fall and the topography; the `▲3.1×`
+  // drops trend had no other home and is dropped with it -- if a rise
+  // matters it is a watch that flags, not a strip. lib/footLine.ts and
+  // its tests went with the band, and so did the on-mount read of
+  // fallState's pushed rule tables that only the dark-boundary fact
+  // needed -- this table never asked the server for a boundary for any
+  // other reason.
 
   // Which groups are open. Keyed by the group key rather than by index,
   // so an open drawer stays with its group as new events arrive.
@@ -267,8 +313,17 @@
     return deviceNames.get(id) ?? id
   }
 
-  function startResize(index: number, e: PointerEvent) {
+  // applyFilters is declared FirewallEvent[] even though the objects
+  // flowing through it are always ClientEvents (see state.svelte.ts's
+  // own comment on filteredEvents) -- this reads the receivedAt every
+  // one of them actually carries, for the whisper's fence (#644).
+  function isDimmed(event: FirewallEvent): boolean {
+    return whisperState.dimmed((event as ClientEvent).receivedAt)
+  }
+
+  function startResize(index: number, key: string, e: PointerEvent) {
     dragIndex = index
+    dragKey = key
     dragStartX = e.clientX
     dragStartWidth = headerEls[index]?.getBoundingClientRect().width ?? 120
     window.addEventListener('pointermove', onResizeMove)
@@ -277,12 +332,13 @@
   }
 
   function onResizeMove(e: PointerEvent) {
-    if (dragIndex === null) return
-    columnState.setWidth(dragIndex, dragStartWidth + (e.clientX - dragStartX))
+    if (dragKey === null) return
+    columnState.setWidthForKey(dragKey, dragStartWidth + (e.clientX - dragStartX))
   }
 
   function endResize() {
     dragIndex = null
+    dragKey = null
     window.removeEventListener('pointermove', onResizeMove)
   }
 
@@ -320,7 +376,12 @@
   {#if viewportState.isMobile}
     <div class="body scrollbar">
       {#each displayRendered as event (event.id)}
-        <EventCardMobile {event} deviceName={deviceName(event.deviceId)} onOpen={() => (selectedEvent = event)} />
+        <EventCardMobile
+          {event}
+          deviceName={deviceName(event.deviceId)}
+          dimmed={isDimmed(event)}
+          onOpen={() => (selectedEvent = event)}
+        />
       {/each}
       {#if rendered.length === 0}
         {#if emptyState.kind === 'ghost'}
@@ -333,7 +394,13 @@
   {:else}
     <div class="body scrollbar" bind:this={bodyEl}>
       <div class="grid" bind:this={gridEl} style="grid-template-columns: {columnState.gridTemplate}">
-        {#each COLUMNS as col, i (col.key)}
+        <!-- #729: the reader's chosen subset, not the fixed fifteen --
+             columnState.visibleColumns already carries Time and Rule
+             (pinned, always in it) plus whatever else the chooser in
+             FilterBar left on. EventRow's own cells are gated on the same
+             columnState.isColumnVisible(key) calls, column by column, so
+             the two can never disagree about which columns are showing. -->
+        {#each columnState.visibleColumns as col, i (col.key)}
           <div
             class="header-cell"
             class:sticky-col={col.key === 'time'}
@@ -344,13 +411,20 @@
           </div>
         {/each}
 
+        <!-- The drag targets, one per column boundary. Over
+             columnState.visibleColumns, not the fixed COLUMNS list:
+             handleOffsets is measured from the header cells that are
+             actually rendered (#729's chooser can leave any of them
+             off), and startResize/setWidth index by the same position,
+             so anything else silently drags the wrong column's edge.
+             Invisible at rest -- see .resizer's own comment below. -->
         <div class="resize-overlay" style="height: {headerHeight}px">
-          {#each COLUMNS.slice(0, -1) as col, i (col.key)}
+          {#each columnState.visibleColumns.slice(0, -1) as col, i (col.key)}
             <span
               class="resizer"
               class:active={dragIndex === i}
               style="left: {(handleOffsets[i] ?? 0) - 5}px"
-              onpointerdown={(e) => startResize(i, e)}
+              onpointerdown={(e) => startResize(i, col.key, e)}
               ondblclick={() => columnState.reset()}
               role="separator"
               aria-orientation="vertical"
@@ -360,15 +434,18 @@
         </div>
 
         {#if groupModeState.enabled}
-          {#each displayGroups as group (group.key)}
+          {#each displayGroups as group, gi (group.key)}
             <EventRow
               event={group.head}
               deviceName={deviceName(group.head.deviceId)}
               count={group.count}
               flagged={flagged.has(group.head.srcIp ?? '')}
+              dimmed={isDimmed(group.head)}
+              banded={gi % 2 === 1}
               expandable={group.count > 1}
               expanded={openGroups.has(group.key)}
               onToggle={() => toggleGroup(group.key)}
+              onOpen={() => (selectedEvent = group.head)}
             />
             <!-- Gated on group.count > 1 as well as the open flag, matching
                  the `expandable` predicate on the toggle above. The two used
@@ -386,7 +463,9 @@
                   event={member}
                   deviceName={deviceName(member.deviceId)}
                   flagged={flagged.has(member.srcIp ?? '')}
+                  dimmed={isDimmed(member)}
                   member
+                  onOpen={() => (selectedEvent = member)}
                 />
               {/each}
               {#if hiddenInDrawer(group) > 0}
@@ -404,11 +483,14 @@
             {/if}
           {/each}
         {:else}
-          {#each displayRendered as event (event.id)}
+          {#each displayRendered as event, i (event.id)}
             <EventRow
               {event}
               deviceName={deviceName(event.deviceId)}
               flagged={flagged.has(event.srcIp ?? '')}
+              dimmed={isDimmed(event)}
+              banded={i % 2 === 1}
+              onOpen={() => (selectedEvent = event)}
             />
           {/each}
         {/if}
@@ -422,6 +504,7 @@
       {/if}
     </div>
   {/if}
+
 </div>
 
 {#if selectedEvent}
@@ -443,15 +526,26 @@
     border-bottom: 1px solid var(--border);
   }
 
+  /* #733: the stream is the scene, not a card dropped on it -- no
+     border, no corner radius, and the ground is the page's own
+     (var(--bg)), not the elevated panel tint. The shared deck padding
+     (Deck.svelte) already runs this flush to the scene's margins, so
+     nothing here needs its own inset.
+
+     No `overflow` here, deliberately, matching MetricsTable.svelte's
+     own .table-wrap comment: .body below is the real, intentional
+     scroll container (it needs its own scrollbar for the 1622px of
+     fixed columns, #729), and .header-cell's `position: sticky` holds
+     against .body's scrollport regardless of what this wrapper does --
+     but giving this wrapper any overflow other than visible has no
+     upside now that there's no border-radius left to clip, and it's
+     one fewer ancestor to reason about if sticky ever moves. */
   .table-wrap {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
+    background: var(--bg);
   }
 
   .body {
@@ -470,7 +564,12 @@
     position: sticky;
     top: 0;
     z-index: 2;
-    background: var(--bg-elevated);
+    /* For the boundary hairline below, which hangs on this cell's own
+       right edge. */
+    /* Opaque so rows scrolling underneath don't show through, but the
+       scene's own ground (#733) now that .table-wrap carries no
+       separate panel tint for this to stand apart from. */
+    background: var(--bg);
     padding: 10px;
     font-size: 12px;
     text-transform: uppercase;
@@ -485,6 +584,45 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Round 36's column boundary, ported from the drawing's own
+     `table.stream th::after`: nothing at rest, and under the hand a
+     hairline on the header's edge with the cursor saying what it does.
+     Drawn from the header cell rather than only from the drag handle so
+     hovering anywhere in a column shows that column's edge -- the
+     boundary should be findable without first landing on the six pixels
+     it occupies.
+
+     Inset to `right: 0` rather than the drawing's `-3px`: these header
+     cells are opaque (they sit over scrolling rows), so a line
+     overhanging into the next cell would be painted over by it. */
+  .header-cell::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 5px;
+    bottom: 5px;
+    width: 6px;
+    cursor: col-resize;
+    border-right: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+
+  .header-cell:last-child::after {
+    /* No boundary past the last column: there is nothing on the other
+       side of it to resize against. */
+    display: none;
+  }
+
+  .header-cell:hover::after {
+    border-right-color: var(--hair-2);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .header-cell::after {
+      transition: none;
+    }
   }
 
   /* Mirrors EventRow's .time sticky positioning so the header stays
@@ -523,23 +661,38 @@
     touch-action: none;
     display: flex;
     justify-content: center;
+    /* #685: missing on purpose nowhere -- without it, a flex item with an
+       explicit cross-size (::after's height: 60% below) does not stretch
+       and falls back to flex-start (top), so the tick pinned itself to
+       the header's top edge instead of centering in it. That read as an
+       unexplained stroke hovering over the column label rather than a
+       column-boundary divider, which is what it actually is: the drag
+       handle for this column's resize. */
+    align-items: center;
   }
 
-  /* A clearly-visible divider line at rest, so the resize affordance is
-     discoverable without having to hover the exact pixel boundary first
-     -- brightens and widens further on hover/drag. */
+  /* Nothing at rest (round 36). The handle used to draw a permanent
+     tick so it could be found without hovering; the drawn answer to
+     that is the header cell's own hover hairline above, which covers
+     the whole column rather than the six pixels of the edge, so the
+     handle itself now only marks the boundary while the hand is
+     actually on it or dragging it.
+
+     Matching the header's hairline exactly -- same width, same ink, same
+     place -- so moving from the middle of a column onto its edge is one
+     continuous line, not one mark replacing another. */
   .resizer::after {
     content: '';
-    width: 2px;
-    height: 60%;
-    border-radius: 1px;
-    background: var(--fg-dim);
+    width: 1px;
+    height: calc(100% - 10px);
+    background: transparent;
   }
 
-  .resizer:hover::after,
+  .resizer:hover::after {
+    background: var(--hair-2);
+  }
+
   .resizer.active::after {
-    width: 3px;
-    height: 100%;
     background: var(--accent);
   }
 

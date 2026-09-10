@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// The mockup's estate as CityInput, for the city tests: two routers,
+// six zones, the WAN and two tunnels, roads of every verdict.
+import type { CityInput } from './input'
+import { bufferHost } from './presence'
+
+const hosts = (n: number, prefix: string, base: string) =>
+  Array.from({ length: n }, (_, i) => bufferHost(prefix + '-' + (i + 1), base + (10 + i)))
+
+export function mockupEstate(): CityInput {
+  return {
+    routers: [
+      { id: 'rb5009', name: 'rb5009', primary: true, sourceIp: '10.10.0.1' },
+      { id: 'hapax3', name: 'hAP ax3', primary: false, sourceIp: '10.10.0.40' },
+    ],
+    zones: [
+      { id: 'bridge-lan', name: 'LAN', cidr: '10.10.0.0/24', hosts: hosts(6, 'lan', '10.10.0.'), hostCount: 9, eventCount: 900, routerId: 'rb5009', coverage: 'logged', dark: false },
+      { id: 'vlan-srv', name: 'Servers', cidr: '10.20.0.0/24', hosts: hosts(4, 'srv', '10.20.0.'), hostCount: 4, eventCount: 600, routerId: 'rb5009', coverage: 'logged', dark: false },
+      { id: 'vlan-iot', name: 'IoT', cidr: '10.30.0.0/24', hosts: hosts(5, 'iot', '10.30.0.'), hostCount: 5, eventCount: 300, routerId: 'rb5009', coverage: 'logged', dark: false },
+      { id: 'vlan-guest', name: 'Guest', cidr: '10.40.0.0/24', hosts: hosts(1, 'guest', '10.40.0.'), hostCount: 1, eventCount: 40, routerId: 'rb5009', coverage: 'dark', dark: true },
+      { id: 'wlan-wsh', name: 'Workshop', cidr: '10.50.0.0/24', hosts: hosts(3, 'wsh', '10.50.0.'), hostCount: 3, eventCount: 60, routerId: 'hapax3', coverage: 'logged', dark: false },
+      { id: 'wlan-cams', name: 'Cameras', cidr: '10.60.0.0/24', hosts: hosts(2, 'cam', '10.60.0.'), hostCount: 2, eventCount: 20, routerId: 'hapax3', coverage: 'logged', dark: false },
+    ],
+    edges: [
+      { key: 'bridge-lan|ether1', from: 'bridge-lan', to: 'ether1', events: 500, verdict: 'planned' },
+      { key: 'vlan-srv|ether1', from: 'vlan-srv', to: 'ether1', events: 200, verdict: 'planned' },
+      { key: 'vlan-iot|ether1', from: 'vlan-iot', to: 'ether1', events: 80, verdict: 'planned' },
+      { key: 'vlan-guest|ether1', from: 'vlan-guest', to: 'ether1', events: 30, verdict: 'planned' },
+      { key: 'bridge-lan|vlan-srv', from: 'bridge-lan', to: 'vlan-srv', events: 400, verdict: 'planned' },
+      { key: 'vlan-srv|bridge-lan', from: 'vlan-srv', to: 'bridge-lan', events: 100, verdict: 'planned' },
+      { key: 'vlan-iot|vlan-srv', from: 'vlan-iot', to: 'vlan-srv', events: 60, verdict: 'planned' },
+      { key: 'vlan-iot|bridge-lan', from: 'vlan-iot', to: 'bridge-lan', events: 12, verdict: 'unplanned', drops: 12, refusedBy: 'iot-egress-drop' },
+      { key: 'vlan-guest|bridge-lan', from: 'vlan-guest', to: 'bridge-lan', events: 5, verdict: 'holding', drops: 5, refusedBy: 'guest-isolation' },
+      { key: 'bridge-lan|wg0', from: 'bridge-lan', to: 'wg0', events: 3, verdict: 'unjudged' },
+      { key: 'wlan-wsh|bridge-lan', from: 'wlan-wsh', to: 'bridge-lan', events: 20, verdict: 'planned' },
+    ],
+    wan: 'ether1',
+    wanLogged: true,
+    wanCoverage: 'logged',
+    // The WireGuard boundary was declared quiet on purpose, so nothing
+    // logs it and no road runs to wg0 (round 49) -- a road there would
+    // claim a log line that was never written. The bridge still stands,
+    // white and unlamped; the deck is what says so.
+    unloggedBoundaries: ['bridge-lan|wg0'],
+    rulesPushed: true,
+    gates: [
+      // lan -> srv logs; srv -> lan is a real gate too but logs nothing
+      // and nobody declared it. Round 49 (#1016) folds the two into one
+      // break in the wall, wearing the worse of them: the edge is dark
+      // and the gate unlit, and the card lists both directions.
+      { key: 'forward|bridge-lan|vlan-srv', chain: 'forward', inInterface: 'bridge-lan', outInterface: 'vlan-srv', logged: true, ruleCount: 3, ordinal: 4, comment: 'nas access', edgeKey: 'bridge-lan|vlan-srv', reverseEdgeKey: 'vlan-srv|bridge-lan', coverage: 'logged', reverseCoverage: 'dark' },
+      { key: 'forward|vlan-srv|bridge-lan', chain: 'forward', inInterface: 'vlan-srv', outInterface: 'bridge-lan', logged: false, ruleCount: 1, ordinal: 9, comment: '', edgeKey: 'vlan-srv|bridge-lan', reverseEdgeKey: 'bridge-lan|vlan-srv', coverage: 'dark', reverseCoverage: 'logged' },
+      // The second router's workshop opens onto the primary LAN too.
+      { key: 'forward|wlan-wsh|bridge-lan', chain: 'forward', inInterface: 'wlan-wsh', outInterface: 'bridge-lan', logged: true, ruleCount: 2, ordinal: 12, comment: 'workshop to lan', edgeKey: 'wlan-wsh|bridge-lan', reverseEdgeKey: 'bridge-lan|wlan-wsh', coverage: 'logged', reverseCoverage: 'logged' },
+      // Nothing accepts vlan-iot -> bridge-lan or vlan-guest -> bridge-lan
+      // at all: those walls stand with no gate, matching the unplanned
+      // and holding verdicts above -- no rule anticipated the first, and
+      // only a drop rule (never an accept) answers the second.
+    ],
+    tunnels: [
+      {
+        iface: 'l2tp-out1',
+        routerId: 'rb5009',
+        apiState: 'up',
+        events: 3,
+        peers: [{ id: 'l2tp-out1/ppp/branch', name: 'branch-office', address: '10.90.0.2', kind: 'ppp' }],
+        coverage: 'logged',
+      },
+      // wg0 was declared quiet on purpose: a white deck, no lamps, no road.
+      { iface: 'wg0', routerId: 'rb5009', apiState: 'down', events: 0, peers: [], coverage: 'quiet' },
+    ],
+  }
+}

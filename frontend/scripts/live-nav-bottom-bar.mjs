@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #550: the small-screen counterpart to live-nav-rail.mjs. Three things
+// #550: the small-screen counterpart to live-roll-rail.mjs. Three things
 // here cannot be proved by a jsdom unit test.
 //
 // The breakpoint itself: viewportState (lib/viewport.svelte.ts) reads a
@@ -15,7 +15,7 @@
 //
 // The broken ring on the bar (#583) is deliberately not here: making
 // coverage 'no-logging' needs a pushed filter table, and
-// live-router-lookup.mjs -- which the scenario runner reaches before
+// live-before-router-lookup.mjs -- which the scenario runner reaches before
 // every live-nav-* file -- asserts that nothing has pushed one yet. It is
 // driven from live-watchlist-broken-ring.mjs instead, which already owns
 // that push and sorts after.
@@ -26,10 +26,11 @@
 // -- jsdom's back()/forward() are documented no-ops, which is why
 // BottomBar.svelte.test.ts stubs them out rather than asserting on them.
 
-import { session, feedSyslog, feedPortScan, check, waitForFlag, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, feedPortScan, check, waitForFlag, responsive, done, waitForStreamRows } from './live-browser.mjs'
 
+const { page, consoleErrors } = await session()
 feedSyslog(60, 'nav-bottom-bar')
-const { page, consoleErrors } = await session({ waitForEvents: 30 })
+await waitForStreamRows(page, 30)
 
 // --- Resize down to a small viewport --------------------------------------
 // viewportState's matchMedia listener is live, so no reload is needed --

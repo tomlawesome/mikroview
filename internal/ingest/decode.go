@@ -111,6 +111,8 @@ type Payload struct {
 	ARP                 []ARPEntry
 	WireguardInterfaces []WireguardInterface
 	WireguardPeers      []WireguardPeer
+	IPAddresses         []IPAddressEntry
+	PPPActive           []PPPActiveSession
 }
 
 // RecordCount returns how many records are in whichever slice matches
@@ -135,6 +137,10 @@ func (p Payload) RecordCount() int {
 		return len(p.WireguardInterfaces)
 	case KindWireguardPeer:
 		return len(p.WireguardPeers)
+	case KindIPAddress:
+		return len(p.IPAddresses)
+	case KindPPPActive:
+		return len(p.PPPActive)
 	default:
 		return 0
 	}
@@ -195,6 +201,10 @@ func DecodePayload(r io.Reader) (Payload, error) {
 		out.WireguardInterfaces, err = decodeRecords[WireguardInterface](wire.Records)
 	case KindWireguardPeer:
 		out.WireguardPeers, err = decodeRecords[WireguardPeer](wire.Records)
+	case KindIPAddress:
+		out.IPAddresses, err = decodeRecords[IPAddressEntry](wire.Records)
+	case KindPPPActive:
+		out.PPPActive, err = decodeRecords[PPPActiveSession](wire.Records)
 	default:
 		return Payload{}, ErrUnknownKind
 	}
@@ -407,5 +417,43 @@ func (p WireguardPeer) validate() error {
 	if err := validateFieldText("endpointAddress", p.EndpointAddress); err != nil {
 		return err
 	}
-	return validateFieldText("comment", p.Comment)
+	if err := validateFieldText("comment", p.Comment); err != nil {
+		return err
+	}
+	if err := validateFieldText("lastHandshake", p.LastHandshake); err != nil {
+		return err
+	}
+	if err := validateFieldText("currentEndpointAddress", p.CurrentEndpointAddress); err != nil {
+		return err
+	}
+	return validateFieldText("interface", p.Interface)
+}
+
+func (a PPPActiveSession) validate() error {
+	if err := validateFieldText("name", a.Name); err != nil {
+		return err
+	}
+	if err := validateFieldText("service", a.Service); err != nil {
+		return err
+	}
+	if err := validateFieldText("address", a.Address); err != nil {
+		return err
+	}
+	if err := validateFieldText("callerId", a.CallerID); err != nil {
+		return err
+	}
+	return validateFieldText("uptime", a.Uptime)
+}
+
+func (a IPAddressEntry) validate() error {
+	if err := validateFieldText("address", a.Address); err != nil {
+		return err
+	}
+	if err := validateFieldText("network", a.Network); err != nil {
+		return err
+	}
+	if err := validateFieldText("interface", a.Interface); err != nil {
+		return err
+	}
+	return validateFieldText("comment", a.Comment)
 }

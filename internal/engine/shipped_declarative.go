@@ -156,11 +156,21 @@ func buildPortScanDefinition(def Definition) (*DeclarativeDefinition, error) {
 		// AddWithDetail; its emission is about one source, so the country
 		// badge is about that source.
 		CarrySourceCountry: true,
-		// Ports only: internal/detect's old port_scan raised
-		// flags.Evidence{Ports: ...} and nothing else. Declaring the
-		// category explicitly is what keeps that true -- see
-		// DeclarativeSpec.Evidence.
-		Evidence: []EvidenceField{EvidencePorts},
+		// Ports, and now MAC (#654): internal/detect's old port_scan
+		// raised flags.Evidence{Ports: ...} and nothing else, and that's
+		// unchanged for Pairs -- a port scan is about port *breadth* from
+		// one source, and there is no single meaningful destination host
+		// to pair each port with (the scan is against whichever hosts it
+		// happened to touch, not one), so EvidencePairs is deliberately
+		// absent, same as dest_spread's own exclusion. EvidenceMAC is
+		// new: this definition has no source-classification condition,
+		// so the source is just as often a local device (recon from an
+		// already-compromised LAN host, or an overzealous internal
+		// scanner) as an external one -- recordEvidence's own locality
+		// gate is what keeps an external source's MAC from ever being
+		// recorded, so declaring it here costs nothing when it doesn't
+		// apply.
+		Evidence: []EvidenceField{EvidencePorts, EvidenceMAC},
 	})
 }
 
@@ -253,7 +263,26 @@ func buildCriticalPortDefinition(def Definition) (*DeclarativeDefinition, error)
 		// flags.Evidence{} (empty) while naming a single port in its
 		// Detail; the accumulated port set is what both the sentence and
 		// the Evidence now carry.
-		Evidence: []EvidenceField{EvidencePorts},
+		//
+		// Pairs (#654): this is the definition the issue's own watchlist
+		// example is about. One external source can legitimately touch
+		// several critical ports across several different internal
+		// hosts within one window (a scan of a NAT'd network exposing
+		// more than one device), so Ports and an *unaccumulated* Hosts
+		// set would let a future consumer (#641's permitted-dest drafts)
+		// cross N hosts against M ports and offer to permit combinations
+		// that were never actually seen. EvidencePairs records exactly
+		// what was touched instead. Deliberately not also declaring
+		// EvidenceHosts: nothing here needs the standalone host set,
+		// only the pairing, and adding it would just be an unused
+		// category to maintain.
+		//
+		// No EvidenceMAC: the sourceAddress matchesClassification
+		// "external" condition above means this definition's source is
+		// never local, so recordEvidence's locality gate would never let
+		// a MAC through -- declaring it would be dead weight, not a
+		// safety net.
+		Evidence: []EvidenceField{EvidencePorts, EvidencePairs},
 	})
 }
 
@@ -333,7 +362,22 @@ func buildRepeatedDropsDefinition(def Definition) (*DeclarativeDefinition, error
 		// internal/detect's repeated_drops passed e.SrcCountry: the
 		// window is keyed on one source, so the badge is about it.
 		CarrySourceCountry: true,
-		Evidence:           []EvidenceField{EvidenceHosts, EvidenceNAT},
+		// No EvidencePairs (#654): KeyPerSourcePort already fixes the
+		// destination port for this key's whole window (it's the key
+		// itself, restated in every Target), so a pair here would just
+		// be {each host in Evidence.Hosts, the one constant port} --
+		// strictly less information than Hosts plus the Target already
+		// give a reader, not more. Pairs earns its keep only where the
+		// port genuinely varies alongside the host, which for this
+		// definition it structurally cannot.
+		//
+		// EvidenceMAC: this definition has no source-classification
+		// condition (only destinationAddress internal + action
+		// drop/reject), so the source triggering a repeated local drop
+		// is at least as plausibly a local device probing another local
+		// host's closed port as an external one -- recordEvidence's
+		// locality gate decides per event which it actually was.
+		Evidence: []EvidenceField{EvidenceHosts, EvidenceNAT, EvidenceMAC},
 	})
 }
 
@@ -367,6 +411,14 @@ func buildRepeatedDropsDefinition(def Definition) (*DeclarativeDefinition, error
 //     The emission aggregates many sources, so badging it with whichever
 //     one happened to cross the threshold would be the same
 //     single-event-stands-for-the-window claim #379 found elsewhere.
+//   - #654 leaves Evidence unchanged: no EvidencePairs, because the side
+//     evidenced here is *sources* (the attackers), not destinations --
+//     there is no destination-host set to pair the key's (fixed) port
+//     against, only many hosts on the wrong side of the relationship
+//     for a "device touched this host:port" pair to mean anything. No
+//     EvidenceMAC either, for the same reason critical_port has none:
+//     sourceAddress matchesClassification "external" means the source
+//     is never local.
 func buildDistributedBruteForceDefinition(def Definition) (*DeclarativeDefinition, error) {
 	params, err := ValidateParams(def.ParamSchema, def.Params)
 	if err != nil {

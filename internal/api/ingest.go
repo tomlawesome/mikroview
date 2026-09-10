@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/ingest"
 )
 
@@ -167,6 +168,26 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tell every open screen the pushed tables moved, so an answer
+	// derived from them refetches now instead of on its own poll. The
+	// visible one is watchlist coverage: before this, an operator who
+	// switched logging on for a rule and let the router push watched the
+	// ring sit there claiming nothing could feed the watch, for up to a
+	// minute, with no way to tell a slow poll from a change that had not
+	// registered. Nil-guarded like every other optional store here -- a
+	// Server built without a hub simply has nobody to tell.
+	if s.Hub != nil {
+		s.Hub.Notify(hub.ChangeRouterState)
+	}
+	// A filter table is the only push that can change whether a retiring
+	// segment could be seen at all, so a decommission watch's broken/
+	// holding answer is re-derived here rather than on a timer (#460):
+	// switching logging on for a rule clears a broken ghost on the next
+	// push, not at some arbitrary later moment.
+	if payload.Kind == ingest.KindFilterRule {
+		s.refreshDecommissionCoverage()
+	}
+
 	// #186 step 5: never persist a raw payload wholesale. RouterState
 	// above is in-memory only by design, and nothing here logs the
 	// decoded records themselves either -- only their shape -- for the
@@ -229,6 +250,23 @@ func (s *Server) handleRouterOSNAT(w http.ResponseWriter, r *http.Request) {
 	}
 	if rules == nil {
 		resp.Rules = []ingest.NATRule{}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleRouterOSAddresses is handleRouterOSRules for the pushed
+// /ip/address table (issue #627) -- an interface's own configured
+// address, distinct from the ARP/DHCP tables' observed-elsewhere
+// addresses.
+func (s *Server) handleRouterOSAddresses(w http.ResponseWriter, r *http.Request) {
+	device := r.PathValue("device")
+	addrs, updatedAt, ok := s.RouterState.IPAddresses(device)
+	resp := routerTableResponse{Available: ok, Rules: addrs}
+	if ok {
+		resp.UpdatedAt = &updatedAt
+	}
+	if addrs == nil {
+		resp.Rules = []ingest.IPAddressEntry{}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

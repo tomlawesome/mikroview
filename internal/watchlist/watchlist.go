@@ -135,7 +135,83 @@ type Entry struct {
 	// full. Unused for a non-inverted entry.
 	Observed []ObservedDest `json:"observed,omitempty"`
 
+	// Window is when this entry is expected to see traffic: a daily
+	// clock range, days of the week, and the IANA zone those clock times
+	// are read in (#680). Zero means no window -- the entry is watched at
+	// every hour, which is what a row renders as "always". See Window,
+	// and window.go's file comment for why the zone exists at all when
+	// every other timestamp in this codebase is UTC.
+	Window Window `json:"window,omitzero"`
+	// Nights is the last MaxNights occurrences of Window and what
+	// happened in each: kept, empty, or not observed. Recorded, not
+	// derived -- matchlog keeps 48 hours by default, so deriving seven
+	// nights from it would report a healthy watch as five empty nights
+	// and look like it had worked. Bounded, so it rides inside the
+	// existing definitions blob without growing. See Night.
+	Nights []Night `json:"nights,omitempty"`
+	// Ring is the recorded break in this entry's run of kept nights,
+	// written at the moment it breaks. The coverage-derived break (no
+	// rule is logging this pathway) is a different kind of broken and
+	// stays computed on read from router state -- see Ring.
+	Ring Ring `json:"ring,omitzero"`
+	// Boundary scopes this entry to one (chain, inInterface, outInterface)
+	// triple, keyed exactly as the fall's own boundaryKeyOf (#806).
+	// Empty (the zero value, every field unset) means unscoped -- today's
+	// behaviour for every entry that predates this field: matching is not
+	// restricted to one boundary, coverage stays estate-wide, and the fall
+	// makes no per-band claim about this entry's ring. See Boundary's own
+	// doc comment for why this, not a join by observed traffic, is the
+	// ratified model.
+	Boundary Boundary `json:"boundary,omitzero"`
+	// SilentOccurrences is the sticky liveness mark MarkSilent writes and
+	// FillNights consults, via Observation.Silent (issue #730): the Open
+	// instant of every occurrence of Window found, at some tick, to have
+	// the device behind this entry's pathway gone stale. Persisted
+	// alongside Nights/Ring rather than held only in memory, for the same
+	// reason those are: it must survive a restart, and it must still be
+	// there whenever FillNights eventually gets around to closing the
+	// occurrence it names.
+	SilentOccurrences []time.Time `json:"silentOccurrences,omitempty"`
+
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// Boundary names the (chain, inInterface, outInterface) triple a watcher
+// is scoped to (#806, decided on that issue by Fable 5, 2026-09-03).
+//
+// This is what lets a broken watch attribute to one of the fall's bands
+// rather than to the whole estate: without it, WATCH BROKEN would put an
+// estate-wide "nothing anywhere logs this" fact on one band that might be
+// logging perfectly well. A watcher reaches a boundary by carrying one
+// explicitly rather than by the fall joining on observed traffic (the IP
+// a subject actually appeared with) -- that alternative cannot place a
+// MAC-only or address-list watcher, and fails exactly when needed: a ring
+// breaks because the subject sent nothing, so its IP is not in the
+// window being drawn.
+//
+// Empty (every field unset) means unscoped, which is every entry stored
+// before this field existed: definitions are the only source and the
+// field is omitzero, so a stored entry with no boundary loads unscoped
+// rather than being rewritten.
+type Boundary struct {
+	Chain        string `json:"chain,omitempty"`
+	InInterface  string `json:"inInterface,omitempty"`
+	OutInterface string `json:"outInterface,omitempty"`
+}
+
+// Empty reports whether b names no boundary at all.
+func (b Boundary) Empty() bool {
+	return b.Chain == "" && b.InInterface == "" && b.OutInterface == ""
+}
+
+// Matches reports whether an event carrying this exact (chain,
+// inInterface, outInterface) triple belongs to b. An empty (unscoped) b
+// matches everything -- see Boundary's own doc comment.
+func (b Boundary) Matches(chain, inInterface, outInterface string) bool {
+	if b.Empty() {
+		return true
+	}
+	return b.Chain == chain && b.InInterface == inInterface && b.OutInterface == outInterface
 }
 
 // PermittedDest is one destination/port pair an inverted entry's device
@@ -167,6 +243,13 @@ var ErrNoPorts = errors.New("watchlist: a non-inverted entry must watch at least
 // to scope it would mean "nothing in particular should reach anything in
 // particular," which isn't a coherent policy to enforce.
 var ErrInvertedRequiresSource = errors.New("watchlist: an inverted entry must scope a source device")
+
+// ErrBoundaryRequiresChain is returned by ValidateEntry for a Boundary
+// naming an interface with no chain -- a rule's own In/OutInterface has
+// no meaning apart from the chain it was matched on, so a chain-less,
+// interface-bearing Boundary could never be looked up against a pushed
+// rule table at all.
+var ErrBoundaryRequiresChain = errors.New("watchlist: a boundary naming an interface must also name a chain")
 
 // ErrInvalidText is returned by ValidateEntry for a Name, DestIP or Source
 // field containing control or format characters, or one that is too
@@ -214,10 +297,19 @@ func ValidateEntry(e Entry) error {
 	} else if len(e.Ports) == 0 {
 		return ErrNoPorts
 	}
-	for _, text := range []string{e.Name, e.DestIP, e.Source.MAC, e.Source.IP} {
+	for _, text := range []string{e.Name, e.DestIP, e.Source.MAC, e.Source.IP, e.Boundary.Chain, e.Boundary.InInterface, e.Boundary.OutInterface} {
 		if !validText(text) {
 			return ErrInvalidText
 		}
+	}
+	if !validText(e.Window.Zone) {
+		return ErrInvalidText
+	}
+	if err := e.Window.Validate(); err != nil {
+		return err
+	}
+	if e.Boundary.Chain == "" && (e.Boundary.InInterface != "" || e.Boundary.OutInterface != "") {
+		return ErrBoundaryRequiresChain
 	}
 	return nil
 }
@@ -323,6 +415,9 @@ func MatchWithLists(entry Entry, e store.Event, members AddressListMembership) (
 // equal e.DstIP. Only ever returns NoMatch or Violation -- there is no
 // observe state for a non-inverted entry.
 func matchNonInverted(entry Entry, e store.Event, members AddressListMembership) (matchlog.Tuple, Outcome) {
+	if !entry.Boundary.Matches(e.Chain, e.InInterface, e.OutInterface) {
+		return matchlog.Tuple{}, NoMatch
+	}
 	if e.DstPort == 0 || !containsPort(entry.Ports, e.DstPort) {
 		return matchlog.Tuple{}, NoMatch
 	}

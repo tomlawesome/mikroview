@@ -51,6 +51,9 @@ visit until you import that certificate -- expected for a self-hosted
 admin interface with no external CA, same as Proxmox/TrueNAS/pfSense's
 own web UIs.
 
+See [docs/reading-the-fall.md](docs/reading-the-fall.md) for how to
+read the fall, the app's landing view.
+
 ### Prebuilt image
 
 ```sh
@@ -116,7 +119,6 @@ services:
       # Only needed to move a store somewhere other than the default
       # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
-      # - MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH=/var/lib/mikroview/detector-settings.json
       # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json
       # - MIKROVIEW_DEVICE_MAC_STORE_PATH=/var/lib/mikroview/mac-registry.json
       # TLS is on by default and needs no configuration to work -- these
@@ -242,9 +244,9 @@ every restart) but not fatal.
   [docs/configuration.md](docs/configuration.md) for the API and the
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
-  ~92KB of JavaScript over the wire (~307KB before compression). CI
-  gates the bundle at 200KB gzipped — headroom for the v0.4.0
-  interface reshape, re-derived as measured+15% once it ships (see
+  ~201KB of JavaScript over the wire (~667KB before compression). CI
+  gates the bundle at 230KB gzipped — the measured reading plus ~15%,
+  re-derived after the v0.4.0 interface reshape shipped (see
   [docs/decisions/ui-framework.md](docs/decisions/ui-framework.md)).
 - **Logging**: leveled (debug/info/warn/error) and colorized server
   output, auto-plain when piped or `NO_COLOR` is set. See

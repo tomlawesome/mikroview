@@ -15,18 +15,18 @@
 // changing, and the clipboard actually holding the raw IP -- not the
 // "nas-live-check" label the row displays -- after clicking it.
 
-import { session, feedRaw, check, done } from './live-browser.mjs'
+import { session, feedRaw, check, done, unfoldStreamFilter } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const RULE = 'live-token-copy'
 // 203.0.113.0/24 (RFC 5737 TEST-NET-3), not .2 specifically -- that's
-// live-router-lookup.mjs's camera.lan dns-static entry, the only other
+// live-before-router-lookup.mjs's camera.lan dns-static entry, the only other
 // exact claim in this block.
 //
 // Deliberately NOT 198.51.100.0/24 (this scenario's address until this
 // fix) or 192.0.2.0/24: this suite's scenarios all share one device
 // (live-router, loopback mode's only declared device -- every feeder
-// connects from 127.0.0.1), and live-router-lookup.mjs -- which sorts
+// connects from 127.0.0.1), and live-before-router-lookup.mjs -- which sorts
 // before this scenario in run-scenarios.sh's glob and so always runs
 // first -- pushes a wireguard-peer record with
 // allowedAddress: ['192.0.2.0/24', '198.51.100.0/24'] and
@@ -37,7 +37,7 @@ const RULE = 'live-token-copy'
 // the host name across *every* CIDR in AllowedAddress -- so any address
 // in either /24, this scenario's own entity label included, resolved to
 // "branch office" instead, in the full suite (never standalone, where
-// live-router-lookup.mjs hadn't run). Root-caused via
+// live-before-router-lookup.mjs hadn't run). Root-caused via
 // internal/naming/naming.go + internal/routerstate/routerstate.go
 // (rebuildIdentityLocked's WireguardPeer branch), then confirmed with
 // the diagnostic fetch below before this fix landed: it printed
@@ -71,6 +71,18 @@ async function waitForInputValue(selector, expected, timeoutMs = 3000) {
   return last
 }
 
+/** Polls a locator's computed opacity -- the real end of EventRow.svelte's 0.12s CSS transition, not a guessed margin over it. */
+async function waitForOpacity(locator, target, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs
+  let last = null
+  while (Date.now() < deadline) {
+    last = await locator.evaluate((el) => getComputedStyle(el).opacity)
+    if (last === target) return last
+    await page.waitForTimeout(20)
+  }
+  return last
+}
+
 // A friendly label on the source IP -- the row must show HOST_LABEL, but
 // still copy HOST_IP. Without this, "copies the raw value" and "copies
 // whatever text happens to be on screen" are indistinguishable.
@@ -83,7 +95,7 @@ const line =
 feedRaw(line)
 
 // Wait for the event on the *server* before asking the UI about it --
-// #354's pattern, the same reason live-flags-investigate.mjs waits via
+// #354's pattern, the same reason live-flags-expectations.mjs waits via
 // waitForFlag (#450/#465). Under the full suite's load a single fed
 // line can be dropped by a saturated ingest queue or arrive seconds
 // late; waiting on the rendered row alone turned that into an uncaught
@@ -143,7 +155,14 @@ const row = page.locator('.row', { hasText: HOST_LABEL }).first()
 // this one, and a plain `.first()` silently grabbed that instead.
 const addrCell = row.locator('.cell.addr', { hasText: HOST_LABEL })
 check((await addrCell.locator('.addr-btn', { hasText: HOST_LABEL }).count()) > 0, 'the row shows the resolved host label, not the raw IP')
-check(!(await row.textContent())?.includes(HOST_IP), 'the raw IP is not the row\'s visible text')
+// #644 ("columns squared", the ratified nine-column table) gave Source
+// its own neighbouring Address column (EventRow.svelte's `.cell.ip`),
+// which shows the raw IP in plain text specifically whenever the name
+// column is showing a resolved name -- exactly this row's case. So the
+// raw IP is legitimately part of the row's visible text now, in its own
+// cell; what still has to hold is that the *name* cell itself never
+// shows it, which is what the copy/drag/click checks below are about.
+check(!(await addrCell.textContent())?.includes(HOST_IP), 'the resolved name cell does not itself carry the raw IP as its shown text')
 
 // --- Native selection: a real drag actually selects the row's text ------
 const addrBtn = addrCell.locator('.addr-btn').first()
@@ -162,6 +181,10 @@ if (box) {
   // #438 split the old single "IP or CIDR" box into side-scoped Source/
   // Destination boxes; this is the source address token, so it's the
   // Source box now.
+  // The drag's mouseup fires a native click too, and that lands outside
+  // both the filter box and its strip (#697's `.fbox`), which closes the
+  // drawer the Source field lives in -- reopen before reading it.
+  await unfoldStreamFilter(page)
   const ipDuringSelection = await page.inputValue('input[aria-label="Source — name, IP or CIDR"]')
   check(
     ipDuringSelection === '',
@@ -179,18 +202,15 @@ if (box) {
 // reveals the glyph -- deliberately, for keyboard users tabbing to it
 // directly). Undo both before "starts hidden" below, or it would be
 // checking a test artifact rather than the real resting state.
+const copyBtn = addrCell.locator('.copy-btn').first()
 await page.mouse.move(2, 2)
 await page.evaluate(() => (document.activeElement instanceof HTMLElement) && document.activeElement.blur())
-await page.waitForTimeout(200) // let the opacity transition settle back to 0
-
-// --- Hover-revealed copy glyph -------------------------------------------
-const copyBtn = addrCell.locator('.copy-btn').first()
-const opacityBeforeHover = await copyBtn.evaluate((el) => getComputedStyle(el).opacity)
+const opacityBeforeHover = await waitForOpacity(copyBtn, '0')
 check(opacityBeforeHover === '0', `the copy glyph starts hidden (opacity ${opacityBeforeHover})`)
 
+// --- Hover-revealed copy glyph -------------------------------------------
 await row.hover()
-await page.waitForTimeout(200) // the opacity transition
-const opacityOnHover = await copyBtn.evaluate((el) => getComputedStyle(el).opacity)
+const opacityOnHover = await waitForOpacity(copyBtn, '1')
 check(opacityOnHover === '1', `hovering the row reveals the copy glyph (opacity ${opacityOnHover})`)
 
 // Clipboard permissions, granted explicitly, so the read-back below can
@@ -215,11 +235,15 @@ await page.waitForSelector('.toast', { state: 'detached', timeout: 4000 })
 check(true, 'the "copied" toast auto-dismisses')
 
 // Clicking the copy glyph must not also have applied the filter.
+await unfoldStreamFilter(page)
 const ipAfterCopy = await page.inputValue('input[aria-label="Source — name, IP or CIDR"]')
 check(ipAfterCopy === '', `clicking the copy glyph does not apply the IP filter (got "${ipAfterCopy}")`)
 
 // --- A plain click (no drag) still filters, unchanged from before -------
 await addrBtn.click()
+// Same as the drag above: this click's own native-click bubble closes
+// the drawer, so reopen before reading the field it just set.
+await unfoldStreamFilter(page)
 const ipAfterClick = await waitForInputValue('input[aria-label="Source — name, IP or CIDR"]', HOST_IP)
 check(ipAfterClick === HOST_IP, `a plain click still applies the IP filter (got "${ipAfterClick}")`)
 

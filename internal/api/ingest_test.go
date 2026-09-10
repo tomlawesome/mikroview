@@ -14,6 +14,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/hub"
 )
 
 // ingestTestServer registers an admin and issues one ingest token scoped
@@ -339,6 +340,55 @@ func TestIngestPushIsReadableFromTheTableEndpoints(t *testing.T) {
 	if nat.Available {
 		t.Errorf("NAT table = %+v, want available=false when only filter rules were pushed", nat)
 	}
+
+	addresses := get(t, "/api/routeros/router-7/addresses")
+	if addresses.Available {
+		t.Errorf("addresses table = %+v, want available=false when only filter rules were pushed", addresses)
+	}
+}
+
+// TestIngestPushedIPAddressesAreReadableFromTheTableEndpoint is #627's
+// own acceptance case: a pushed /ip/address table lands in RouterState
+// and is readable back through the addresses endpoint, in RouterOS
+// display order... except this table has no ordinal, so ARPEntries'
+// address-sort contract is the one that applies (see
+// TestDHCPLeasesARPAddressListsSortedAndAccessible).
+func TestIngestPushedIPAddressesAreReadableFromTheTableEndpoint(t *testing.T) {
+	ts, _, raw := ingestTestServer(t, "router-7")
+
+	push := `{"kind":"ip-address","page":1,"pages":1,"records":[` +
+		`{"address":"192.168.1.9/24","network":"192.168.1.0","interface":"ether1","comment":""},` +
+		`{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"gateway"}]}`
+	resp := postIngest(t, ts, raw, push)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("push: status = %d, want 200", resp.StatusCode)
+	}
+
+	adminClient := loggedInClient(t, ts.URL, "admin", "password123")
+	res, err := adminClient.Get(ts.URL + "/api/routeros/router-7/addresses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET addresses: status = %d, want 200", res.StatusCode)
+	}
+	var got routerTableResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Available || got.UpdatedAt == nil {
+		t.Fatalf("addresses table = %+v, want available with an updatedAt", got)
+	}
+	addrs, ok := got.Rules.([]any)
+	if !ok || len(addrs) != 2 {
+		t.Fatalf("addresses = %#v, want 2 entries", got.Rules)
+	}
+	first, _ := addrs[0].(map[string]any)
+	if first["address"] != "192.168.1.1/24" {
+		t.Errorf("first address = %+v, want the lower address first (sorted)", first)
+	}
 }
 
 // TestIngestOversizedStateIsRefused drives internal/routerstate's
@@ -436,5 +486,63 @@ func TestRepeatedIngestRefusalsDoNotFloodTheAuditLog(t *testing.T) {
 		if s.noteIngest("router-a", "", false, now.Add(time.Duration(i)*time.Second)) {
 			t.Fatalf("refusal %d wrote an audit row; a repeat of the same refusal must not", i)
 		}
+	}
+}
+
+// TestIngestNotifiesOpenScreensThatRouterStateMoved pins the wiring
+// behind the operator-visible half of this: switch logging on for a rule,
+// let the router push, and the watch that rule feeds stops claiming
+// nothing can reach it -- now, rather than whenever the screen's own poll
+// next comes round. The notice names only what changed; the client
+// refetches through the ordinary API (see hub.Change).
+func TestIngestNotifiesOpenScreensThatRouterStateMoved(t *testing.T) {
+	ts, s, raw := ingestTestServer(t, "router-1")
+
+	sub, err := s.Hub.Register()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Unregister()
+
+	resp := postIngest(t, ts, raw, validARPPayload)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	select {
+	case got := <-sub.Notices:
+		if got != hub.ChangeRouterState {
+			t.Errorf("change = %q, want %q", got, hub.ChangeRouterState)
+		}
+	case <-time.After(time.Second):
+		t.Error("an accepted push told nobody -- every answer derived from pushed tables stays stale until its own poll")
+	}
+}
+
+// TestRefusedIngestNotifiesNobody: the notice means "the tables moved".
+// A refused push moved nothing, so telling every open screen to refetch
+// would spend a round trip per open tab on an answer that cannot have
+// changed -- and, worse, would make a stream of rejected pushes look
+// from the client side exactly like a stream of accepted ones.
+func TestRefusedIngestNotifiesNobody(t *testing.T) {
+	ts, s, raw := ingestTestServer(t, "router-1")
+
+	sub, err := s.Hub.Register()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Unregister()
+
+	resp := postIngest(t, ts, raw, `{"kind":"routing-table","page":1,"pages":1,"records":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("status = %d; this payload is meant to be refused", resp.StatusCode)
+	}
+
+	select {
+	case got := <-sub.Notices:
+		t.Errorf("a refused push sent change notice %q", got)
+	case <-time.After(100 * time.Millisecond):
 	}
 }

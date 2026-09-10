@@ -1,0 +1,150 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// The reach's composer (#626/#633, round 2 scene 4): a blocked strand's
+// label opens the port panel and the printed command -- drafted from
+// what was observed, pasted by the operator, never run by mikroview.
+// Runs after the other topography scenarios and feeds its own denial.
+
+import { session, check, done, feedRaw, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
+
+const { page, consoleErrors } = await session()
+
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
+
+// A host with an accepted presence (so it stands on the zone card) and
+// a blocked ask toward the internet on a known port. Collected and fed
+// as one call rather than one per line (#1061).
+//
+// The first lines are inbound from public addresses: the map names an
+// interface "the internet" only once it has seen public traffic arrive
+// on it (zonesState.wanInterface), and they go to another host so the
+// composer is not opened on them. A sibling used to supply that; since
+// #1064's reset there is nobody else's traffic to lean on.
+const lines = []
+for (let i = 0; i < 4; i++) {
+  lines.push(`firewall,info D|compose-wan| forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 198.51.100.${20 + i}:4${40 + i}->192.168.1.10:22, len 60`)
+  lines.push(`firewall,info A|compose-web| forward: in:bridge1 out:ether1, connection-state:new, proto TCP (SYN), 192.168.1.77:51${40 + i}->203.0.113.9:443, len 60`)
+  lines.push(`firewall,info D|compose-deny| forward: in:bridge1 out:ether1, connection-state:new, proto TCP (SYN), 192.168.1.77:52${40 + i}->203.0.113.77:445, len 60`)
+}
+const beforeFeed = await eventsTotal(page)
+feedRaw(...lines)
+await waitForEventsTotal(page, beforeFeed + lines.length)
+
+// This session has not yet visited Topography, so its own $effect
+// (zonesState/coverageState/etc, gated on appState.devices) fires fresh
+// on this first navigation -- no reload needed to see the feed above.
+await page.click('.rail-name >> text=Topography')
+// #869: off the city default and onto zones before waiting on anything
+// the 2D map draws -- see the coverage scenario for the full note.
+await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
+await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
+
+// Descend on the host, then open the composer through the blocked
+// strand's own label.
+// Round 49's living hosts (#1016) replaced the `.host-link` list with a
+// row of dots inside each lane card at the `services` stop -- ten dots
+// then `+N`, every dot clickable to its reach (DESIGN.md "Living
+// hosts"). The stop is the same one; the way down to the host is the
+// dot. `.host-link` kept its stylesheet rule but has no markup left, so
+// the old click simply never resolved.
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
+await waitForSettle('[data-card="topography"] .camera')
+await page.waitForSelector('[data-card="topography"] .hostrow .hot', { timeout: 10000 })
+await page.click('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.77"]')
+await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
+
+// Round 49 (#1016) deleted `.strand-door`: nothing is written on a
+// strand any more, so the pill that used to sit on it and open the
+// composer is gone -- only its stylesheet rule survived, and this click
+// resolved against nothing. The words moved onto cards, and the
+// composer's door moved with them: hover the refused strand, and its
+// line card offers `draft the rule ▸` (the city does the same thing
+// from the standing host's card -- live-city-walls.mjs `draftFrom`).
+//
+// Hovering an SVG path needs a point that is actually on it: a curved
+// strand's bounding box is mostly empty, so the middle of the box is
+// usually some other shape. This walks the box for a point the strand
+// really answers at, the same way live-topography-coverage.mjs reaches
+// the dark material.
+async function hoverShape(locator) {
+  const handle = await locator.elementHandle()
+  if (!handle) return null
+  const point = await page.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    if (!(r.width > 0) || !(r.height > 0)) return null
+    for (let i = 1; i <= 15; i++) {
+      for (let j = 1; j <= 15; j++) {
+        const x = r.left + (r.width * i) / 16
+        const y = r.top + (r.height * j) / 16
+        const top = document.elementFromPoint(x, y)
+        if (top !== null && (top === el || el.contains(top))) return { x, y }
+      }
+    }
+    return null
+  }, handle)
+  await handle.dispose()
+  if (!point) return null
+  await page.mouse.move(point.x, point.y)
+  return point
+}
+
+const refusedStrand = page.locator('[data-card="topography"] .strand-g:has(.strand.refused)').first()
+await refusedStrand.waitFor({ timeout: 10000 })
+check((await hoverShape(refusedStrand)) !== null, 'the refused strand can be pointed at')
+await page.waitForSelector('[data-card="topography"] .line-card [data-draft-rule]', { timeout: 5000 })
+await page.click('[data-card="topography"] .line-card [data-draft-rule]')
+await page.waitForSelector('.composer', { timeout: 5000 })
+
+const panelText = await page.textContent('.composer .portpanel')
+check(panelText.includes('What may 192.168.1.77 say to the internet?'), 'the panel asks the strand question in words')
+check(panelText.includes('tcp/445') && panelText.includes('asking'), `the asked-for port leads the chips (${panelText.slice(0, 120)})`)
+
+let cmd = await page.textContent('.composer .cmd')
+check(cmd.includes('src-address=192.168.1.77') && cmd.includes('dst-address=203.0.113.77'), 'the drafted allow runs host → far side')
+check(cmd.includes('dst-port=445') && cmd.includes('action=accept') && cmd.includes('log=yes'), 'allow: right port, logged and named')
+
+await page.click('.composer .ctab >> text=Name the block instead')
+cmd = await page.textContent('.composer .cmd')
+check(cmd.includes('action=drop') && cmd.includes('named block'), 'the named block drafts the explicit logged drop')
+
+const noteText = await page.textContent('.composer .cmdnote')
+check(noteText.includes('mikroview never touches the router'), 'the invariant is said where the command is')
+
+// Esc walks out one level at a time. Round 49 put a card in that stack:
+// the line card is where `draft the rule ▸` lives, and Topography's own
+// onKeydown walks out the open card, then the composer, then the reach.
+// So the first Esc takes the card the composer was opened from and the
+// second takes the composer, with the reach still standing under both.
+await page.keyboard.press('Escape')
+check(!(await page.isVisible('[data-card="topography"] .line-card')), 'Escape closes the open card first')
+check(await page.isVisible('.composer'), 'the composer that card opened is still there')
+await page.keyboard.press('Escape')
+check(!(await page.isVisible('.composer')), 'the next Escape closes the composer')
+check(await page.isVisible('[data-card="topography"] .membrane-layer svg'), 'the reach stays beneath it')
+
+check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
+done()
