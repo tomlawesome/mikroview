@@ -6,11 +6,35 @@ name: CodeQL
 # untrusted-checkout patterns until a change landed on dev) plus a weekly
 # scan so a newly published CodeQL query set still gets applied to
 # existing code, not just new changes.
+# paths-ignore below mirrors the GitLab lane's *docs_only_paths (#1038):
+# prose and the pictures documentation embeds. GitHub's path filter
+# matches at any depth without a leading `/`, so a single `**/*.md` here
+# covers what GitLab needed two entries for (root `*.md` plus
+# `docs/**/*.md`). Scope stops at markdown, LICENSE and docs images on
+# purpose -- widening this list is widening what CodeQL never scans.
 on:
   pull_request:
     branches: [dev, preview, main]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+      - "docs/**/*.png"
+      - "docs/**/*.jpg"
+      - "docs/**/*.jpeg"
+      - "docs/**/*.gif"
+      - "docs/**/*.webp"
+      - "docs/**/*.svg"
   push:
     branches: [dev, preview, main]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+      - "docs/**/*.png"
+      - "docs/**/*.jpg"
+      - "docs/**/*.jpeg"
+      - "docs/**/*.gif"
+      - "docs/**/*.webp"
+      - "docs/**/*.svg"
   schedule:
     - cron: '0 6 * * 1'
   workflow_dispatch: {}
