@@ -43,3 +43,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 
 - 2026-09-09 · 4f17d079 (work/460-ui, local, standalone) · `goTo("Stream") timed out waiting for card "live"`, `offsetFromDeckTop: -105` (card mounted, the roll overshot it — #1011's shape) at `live-browser.mjs:444` from the scenario's own `session()` call, before a single check ran; the same command on the same tree passed immediately after, and three further standalone runs passed. Same family as the `live-rule-regex` and `live-settings-doors` entries above: `goTo` never settles, on a host with other work on it.
+
+## live-learning-window: a detector's rendered line lags its own API count of sources
+
+- 2026-09-10 · 55a84437 (dev) · pipeline 864, gate:scenarios 2/4, job 9998 · three `FAIL`s of the shape `activity_spike's rendered line matches the state its own API data describes -- got "Baselines established (69 sources)", want "... (80 sources)"` (also low_slow_scan 69/80, off_hours_activity 68/80): the page's line was read while the feed was still adding sources, so the API answered later than the render did; pipeline 865, same commit, passed the shard.

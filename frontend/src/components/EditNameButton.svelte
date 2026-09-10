@@ -31,21 +31,23 @@
     label,
   }: { type: EditableTokenType; value: string; device?: string; label: string } = $props()
 
-  let btnEl: HTMLButtonElement | undefined = $state()
-
-  function onClick(e: Event) {
+  // No bind:this / $state for the element: a click handler's own
+  // currentTarget already is the button, so capturing it separately
+  // bought nothing but a signal and a mount effect per instance -- and
+  // a row carries up to four of these (#1070), times MAX_RENDERED_ROWS.
+  // Removed as unnecessary per-instance reactive bookkeeping, alongside
+  // EventRow's own editAvailable hoist -- see that file's comment.
+  function onClick(e: MouseEvent) {
     // Defensive, matching CopyButton: this is always a sibling of the
     // filter target, never nested inside it, so the row's own
     // click-vs-drag handlers are not on this element's ancestors.
     e.stopPropagation()
-    if (!btnEl) return
-    nameEditorState.open(type, value, device, btnEl.getBoundingClientRect())
+    nameEditorState.open(type, value, device, (e.currentTarget as HTMLButtonElement).getBoundingClientRect())
   }
 </script>
 
 {#if nameEditorState.available}
   <button
-    bind:this={btnEl}
     type="button"
     class="edit-btn"
     onclick={onClick}
