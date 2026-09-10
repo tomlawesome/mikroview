@@ -5,6 +5,8 @@ package backupvault
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -245,6 +247,128 @@ func TestReopenLoadsPersistedMeta(t *testing.T) {
 	}
 	if got := v2.Generations("rb5009"); len(got) != 1 {
 		t.Fatalf("reopened vault has %d generations, want 1", len(got))
+	}
+}
+
+// listNames walks dir and returns every regular file's base name, so a
+// test can assert about what's actually on disk rather than what the
+// vault's own index says is there.
+func listNames(t *testing.T, dir string) []string {
+	t.Helper()
+	var names []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			names = append(names, d.Name())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", dir, err)
+	}
+	return names
+}
+
+// TestStoreLeavesNoTempLitterAndArtifactsExist covers #1082: the sealed
+// blob (vault.go's Store) and the vault index (persistMetaLocked) are now
+// written via persist.WriteFileAtomic's temp-then-rename-then-fsync
+// dance instead of a direct os.WriteFile (blob) or a rename with no
+// fsync (index). After a successful Store, no "*.tmp*" artifact from
+// that dance should remain anywhere under the vault directory, and both
+// the blob files and the index must exist and be readable.
+func TestStoreLeavesNoTempLitterAndArtifactsExist(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	v, err := Open(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := v.Store("rb5009", KindBackup, plainBackup(10), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Store("rb5009", KindRsc, []byte("export text"), now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range listNames(t, dir) {
+		if strings.Contains(name, ".tmp") {
+			t.Errorf("leftover temp artifact after Store: %s", name)
+		}
+	}
+
+	gens := v.Generations("rb5009")
+	if len(gens) != 1 {
+		t.Fatalf("got %d generations, want 1", len(gens))
+	}
+	routerDir := v.routerDir("rb5009")
+	for _, kind := range []string{KindBackup, KindRsc} {
+		p := filepath.Join(routerDir, v.fileName(gens[0].ID, kind))
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("blob file missing for kind %s: %v", kind, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, metaFileName)); err != nil {
+		t.Errorf("vault index missing: %v", err)
+	}
+}
+
+// TestLeftoverCrashTempFileNotTreatedAsGeneration seeds a router
+// directory with a stray temp file of the shape persist.WriteFileAtomic
+// would leave behind had a prior write crashed between the temp write
+// and the rename, then drives Store and reopens the vault. Generations
+// are read entirely from the sealed index (never by scanning the
+// directory), so the stray file must never surface as a generation of
+// its own, before or after a reopen.
+func TestLeftoverCrashTempFileNotTreatedAsGeneration(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	v, err := Open(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := v.Store("rb5009", KindBackup, plainBackup(10), now); err != nil {
+		t.Fatal(err)
+	}
+
+	routerDir := v.routerDir("rb5009")
+	if err := os.MkdirAll(routerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	strayName := "deadbeef.backup.enc.tmp-000000001"
+	if err := os.WriteFile(filepath.Join(routerDir, strayName), []byte("partial, never renamed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := v.Store("rb5009", KindBackup, plainBackup(20), now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertTwoRealGenerations := func(v *Vault) {
+		t.Helper()
+		gens := v.Generations("rb5009")
+		if len(gens) != 2 {
+			t.Fatalf("got %d generations, want 2 (stray temp file must not be counted)", len(gens))
+		}
+		for _, g := range gens {
+			if g.ID == strayName {
+				t.Fatalf("stray temp file surfaced as a generation ID: %s", g.ID)
+			}
+		}
+	}
+	assertTwoRealGenerations(v)
+
+	v2, err := Open(dir, key)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	assertTwoRealGenerations(v2)
+
+	if _, err := os.Stat(filepath.Join(routerDir, strayName)); err != nil {
+		t.Errorf("stray temp file should still be untouched on disk: %v", err)
 	}
 }
 
