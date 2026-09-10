@@ -21,7 +21,9 @@
   // Asked once per row (editAvailable below) rather than left to
   // EditNameButton's own guard: a viewer's row would otherwise still
   // build components that render nothing, and the live view renders up
-  // to MAX_RENDERED_ROWS of these rows.
+  // to MAX_RENDERED_ROWS of these rows. Also passed down as the
+  // `available` prop on each EditNameButton, so an admin's row doesn't
+  // have all four pencils independently re-read the same getter (#1070).
   import { nameEditorState } from '../lib/nameEditor.svelte'
 
   let {
@@ -263,7 +265,7 @@
       >{deviceName || event.deviceId}</span>
       <CopyButton value={event.deviceId} label="device id" />
       {#if editAvailable}
-        <EditNameButton type="device" value={event.deviceId} label={deviceName || event.deviceId} />
+        <EditNameButton type="device" value={event.deviceId} label={deviceName || event.deviceId} available={editAvailable} />
       {/if}
     </span>
   {/snippet}
@@ -319,7 +321,7 @@
         </span>
         <CopyButton value={event.srcIp} label="source IP" />
         {#if editAvailable}
-          <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} />
+          <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} available={editAvailable} />
         {/if}
       </span>
     {:else}
@@ -380,7 +382,7 @@
         </span>
         <CopyButton value={event.dstIp} label="destination IP" />
         {#if editAvailable}
-          <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} />
+          <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} available={editAvailable} />
         {/if}
       </span>
     {:else}
@@ -523,7 +525,7 @@
       >{deviceName || event.deviceId}</span>
       <CopyButton value={event.deviceId} label="device id" />
       {#if editAvailable}
-        <EditNameButton type="device" value={event.deviceId} label={deviceName || event.deviceId} />
+        <EditNameButton type="device" value={event.deviceId} label={deviceName || event.deviceId} available={editAvailable} />
       {/if}
     </span>
 
@@ -564,7 +566,7 @@
         </span>
         <CopyButton value={event.srcIp} label="source IP" />
         {#if editAvailable}
-          <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} />
+          <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} available={editAvailable} />
         {/if}
       </span>
     {:else}
@@ -605,7 +607,7 @@
         </span>
         <CopyButton value={event.dstIp} label="destination IP" />
         {#if editAvailable}
-          <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} />
+          <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} available={editAvailable} />
         {/if}
       </span>
     {:else}
@@ -725,7 +727,7 @@
       </span>
       <CopyButton value={event.ruleLabel} label="rule label" />
       {#if editAvailable}
-        <EditNameButton type="rule" value={event.ruleLabel} label={event.ruleLabel} />
+        <EditNameButton type="rule" value={event.ruleLabel} label={event.ruleLabel} available={editAvailable} />
       {/if}
       <!-- A NAT event's log-prefix names a rule in the NAT table, not in
            the filter table, so the rule cell resolves against the same
