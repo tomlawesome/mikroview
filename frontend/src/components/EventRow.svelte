@@ -1133,14 +1133,14 @@
   }
 
   /* #439: hover-revealed per-token copy glyph (CopyButton.svelte).
-     Hidden by opacity (never display/visibility) so it stays in the tab
-     order and reachable by keyboard -- :focus-within covers tabbing to
-     it directly, without first hovering the row. Scoped to `.row` (not
-     each `.cell`) to match hovering *anywhere* in the row revealing
-     every token's glyph at once, not just the one directly under the
-     pointer -- and scoped to *this component's* rows at all, not bare
-     :global, because EventDetailSheet renders the same components
-     always-visible on a surface with no hover concept. */
+     Hidden by transparent paint (never display/visibility) so it stays
+     in the tab order and reachable by keyboard -- :focus-within covers
+     tabbing to it directly, without first hovering the row. Scoped to
+     `.row` (not each `.cell`) to match hovering *anywhere* in the row
+     revealing every token's glyph at once, not just the one directly
+     under the pointer -- and scoped to *this component's* rows at all,
+     not bare :global, because EventDetailSheet renders the same
+     components always-visible on a surface with no hover concept. */
   /* #413's pencil rides in the same reveal, immediately after the copy
      glyph -- the slot #439 reserved for it. #644 adds the rule cell's
      pushed-table lookup trigger: the quiet rows the restyle asks for
@@ -1148,26 +1148,37 @@
      terms rather than sitting on every row. All listed together rather
      than given rules of their own so the three can never drift into
      revealing at different moments. */
-  .row :global(.copy-btn),
-  .row :global(.edit-btn),
-  .row :global(.investigate) {
-    opacity: 0;
-  }
-
-  .row:hover :global(.copy-btn),
-  .row:focus-within :global(.copy-btn),
-  .row:hover :global(.edit-btn),
-  .row:focus-within :global(.edit-btn),
-  .row:hover :global(.investigate),
-  .row:focus-within :global(.investigate) {
-    opacity: 1;
+  /* Transparent paint, not `opacity: 0` (#1102): opacity below 1 gives
+     every hidden button its own paint layer -- three per row, 1500 at
+     500 rows -- and Blink hit-tests layers one by one, so every
+     `elementFromPoint` (which Chrome also runs itself after each
+     re-layout) walked all of them, ~9 ms of a 12.5 ms hit test.
+     Zeroing color/background/border-color hides the same paint without
+     creating any layer. Written as :not(hover, focus-within) so the
+     *hidden* state is the override and the revealed state is simply
+     each button's own stylesheet -- their colors differ (fg-dim
+     glyphs, accent-bordered investigate rings) and are not repeated
+     here, and their :focus-visible rings apply unmodified, since a
+     focused button gives the row :focus-within and lifts the hide
+     entirely. One knowing trade: forced-colors mode overrides
+     transparent ink with system colors, so there the buttons are
+     always visible -- acceptable, arguably clearer. */
+  .row:not(:hover, :focus-within) :global(.copy-btn),
+  .row:not(:hover, :focus-within) :global(.edit-btn),
+  .row:not(:hover, :focus-within) :global(.investigate) {
+    color: transparent;
+    background: none;
+    border-color: transparent;
   }
 
   @media (prefers-reduced-motion: no-preference) {
     .row :global(.copy-btn),
     .row :global(.edit-btn),
     .row :global(.investigate) {
-      transition: opacity 0.12s ease;
+      transition:
+        color 0.12s ease,
+        background-color 0.12s ease,
+        border-color 0.12s ease;
     }
   }
 </style>
