@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "commit": "0.4.0+gb66f65a.20260908T075019Z",
   "decks": {
     "The fall": {
@@ -36,6 +36,6 @@
     }
   },
   "docketScroll": {
-    "frameP95Ms": 16.80000000000291
+    "frameAvgMs": 18.1
   }
 }

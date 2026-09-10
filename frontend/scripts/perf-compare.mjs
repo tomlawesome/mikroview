@@ -9,9 +9,16 @@
 //
 // A metric regresses when it is worse (higher -- every metric here is a
 // duration) than the baseline by more than 30% AND by more than 300ms
-// (frame p95: 30% and 8ms) -- both conditions, so a tiny number's large
-// percentage swing alone doesn't fail the gate, and a large number's
-// small percentage move alone doesn't either. Improvements never fail.
+// (mean scroll frame: 30% and 4ms) -- both conditions, so a tiny number's
+// large percentage swing alone doesn't fail the gate, and a large
+// number's small percentage move alone doesn't either. Improvements
+// never fail.
+//
+// The scroll metric is the mean frame duration, not the p95 it was until
+// #1111: ~165 frames at 60 Hz sit on one or two 16.7 ms periods, so their
+// p95 could only ever read 16.8 or 33.3, and the gate flipped between
+// pass and +98% on a single extra two-period frame. The mean moves
+// smoothly with the same dropped frames (18.0 ms in each of those runs).
 // A metric present in only one file prints as new/missing, not a
 // failure -- comparing across a schema change should not be a false
 // regression.
@@ -25,8 +32,8 @@ import fs from 'node:fs'
 
 const DEFAULT_PCT = 0.3
 const DEFAULT_ABS_MS = 300
-const FRAME_P95_PCT = 0.3
-const FRAME_P95_ABS_MS = 8
+const FRAME_AVG_PCT = 0.3
+const FRAME_AVG_ABS_MS = 4
 
 // schema/commit are metadata, not measurements -- excluded from the
 // metric walk below so a commit-SHA string never lands in a numeric
@@ -34,7 +41,7 @@ const FRAME_P95_ABS_MS = 8
 const NON_METRIC_KEYS = new Set(['schema', 'commit'])
 
 // Flattens the decks/longTasks/docketScroll trees into dotted metric
-// names ("decks.The fall.wallAvgMs", "docketScroll.frameP95Ms"), so a new
+// names ("decks.The fall.wallAvgMs", "docketScroll.frameAvgMs"), so a new
 // metric group added later is picked up with no change here.
 function flattenMetrics(obj) {
   const out = {}
@@ -53,7 +60,7 @@ function flattenMetrics(obj) {
 }
 
 function thresholdsFor(name) {
-  if (name === 'docketScroll.frameP95Ms') return { pct: FRAME_P95_PCT, absMs: FRAME_P95_ABS_MS }
+  if (name === 'docketScroll.frameAvgMs') return { pct: FRAME_AVG_PCT, absMs: FRAME_AVG_ABS_MS }
   return { pct: DEFAULT_PCT, absMs: DEFAULT_ABS_MS }
 }
 
