@@ -19,7 +19,10 @@ import (
 )
 
 // access is the level of caller a route requires once authentication is
-// active (an account exists and auth has not been disabled).
+// active (an account exists and auth has not been disabled). #653
+// introduced the third tier: viewer, sitting below user, replacing what
+// used to be the single "any authenticated session" level of that name.
+// Tiers stack (auth.Role.AtLeast): admin implies user implies viewer.
 type access int
 
 const (
@@ -27,7 +30,15 @@ const (
 	// is a deliberate hole in the authentication wall and should be
 	// scrutinised on sight.
 	accessPublic access = iota
-	// accessUser: any authenticated session, regardless of role.
+	// accessViewer: any authenticated session, regardless of role --
+	// what accessUser used to mean before #653 split the non-admin space
+	// in two. A viewer may see everything at this tier but change
+	// nothing that affects the instance.
+	accessViewer
+	// accessUser: an authenticated session whose role is user or better
+	// (i.e. user or admin) -- the operational tier #653 introduced for
+	// writes that change what mikroview is watching or showing, without
+	// touching the instance itself (accounts, tokens, config).
 	accessUser
 	// accessAdmin: an authenticated session whose role is admin.
 	accessAdmin
@@ -37,10 +48,30 @@ func (a access) String() string {
 	switch a {
 	case accessPublic:
 		return "public"
+	case accessViewer:
+		return "viewer"
 	case accessUser:
 		return "user"
 	default:
 		return "admin"
+	}
+}
+
+// allowsRole reports whether access level a permits a caller holding
+// role, per auth.Role.AtLeast's stacked tiers. accessPublic permits
+// every role including no session at all, which is why the anonymous
+// caller in TestAuthorizationMatrixIsEnforced isn't driven through this
+// method -- there's no auth.Role to hold when there's no session.
+func (a access) allowsRole(role auth.Role) bool {
+	switch a {
+	case accessPublic:
+		return true
+	case accessViewer:
+		return role.AtLeast(auth.RoleViewer)
+	case accessUser:
+		return role.AtLeast(auth.RoleUser)
+	default:
+		return role.AtLeast(auth.RoleAdmin)
 	}
 }
 
@@ -78,11 +109,20 @@ var authzMatrix = []routeExpectation{
 		"the login endpoint itself"},
 	{http.MethodPost, "/api/auth/logout", accessPublic,
 		"calling it without a session is a harmless no-op, not worth a 401"},
-	{http.MethodPost, "/api/auth/password", accessUser,
-		"changes the caller's own password, so any signed-in user may reach it -- not admin-gated, because a " +
+	{http.MethodPost, "/api/auth/password", accessViewer,
+		"changes the caller's own password, so any signed-in caller may reach it -- not admin-gated, because a " +
 			"non-admin unable to change their own credential is the gap this closes (#294 item 4). It acts only on " +
 			"the session's own account: there is no username in the body to point elsewhere, deliberately, the same " +
-			"way /api/auth/oidc/link takes its target from the session rather than the request"},
+			"way /api/auth/oidc/link takes its target from the session rather than the request. #653 introduced the " +
+			"viewer tier below user, and this stays open to it for the same reason -- even the lowest tier must be " +
+			"able to change its own credential"},
+	{http.MethodPost, "/api/auth/logout-all", accessViewer,
+		"ends every session the caller holds, everywhere, then re-establishes the caller's own -- the settings " +
+			"page's 'sign out everywhere' (#677). Same reasoning as /api/auth/password directly above: it acts only " +
+			"on the session's own account (SessionStore.RevokeAllForUser(user.ID), the ID coming from the session, " +
+			"never a request body), so there is nothing an admin-only gate would add, and the viewer tier must be " +
+			"able to end its own stolen or forgotten sessions same as any other tier. Ending someone *else's* " +
+			"sessions stays admin-only, via DELETE /api/auth/users/{id} below"},
 	{http.MethodGet, "/api/auth/oidc/login", accessPublic,
 		"starts the SSO redirect; a login must work before a session exists"},
 	{http.MethodGet, "/api/auth/oidc/callback", accessPublic,
@@ -92,103 +132,239 @@ var authzMatrix = []routeExpectation{
 
 	{http.MethodGet, "/api/config/problems", accessAdmin,
 		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
+	{http.MethodGet, "/api/persistence", accessAdmin,
+		"reports which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses (#677's settings persistence row) -- a filesystem path is the same infrastructure-map disclosure /api/config/problems above is admin-gated for, so this follows it rather than defaulting to viewer the way most of Settings' other reads do"},
 
-	// -- Any authenticated user ----------------------------------------
-	{http.MethodGet, "/api/events", accessUser,
+	{http.MethodGet, "/api/router-backups", accessAdmin,
+		"lists every router's kept generations and missed-push count (#394) -- admin-only like the disk group's " +
+			"own state/key rows beside it in Settings; a viewer never sees this group at all"},
+	{http.MethodGet, "/api/router-backups/{device}/{generation}/{kind}", accessAdmin,
+		"downloads one generation's .backup or .rsc -- a router's whole configuration, credentials included, so " +
+			"this is admin-only and every call writes an audit entry with the admin's name (#394)"},
+
+	{http.MethodPut, "/api/settings/store", accessAdmin,
+		"sets the event buffer's size on the running instance (#796). Admin rather than user tier for two " +
+			"separate reasons, either sufficient: it spends the host's memory, which is an instance-wide cost " +
+			"nobody else can undo from inside the app, and shrinking it destroys held history -- the only route " +
+			"in mikroview by which a caller can discard evidence a viewer or user was relying on. The read half " +
+			"is deliberately not here: the figure and its bounds ride GET /api/stats, so a viewer sees the bar " +
+			"and the number without being able to move it"},
+
+	{http.MethodGet, "/api/settings/history", accessAdmin,
+		"reports the on-disk event history's switch, caps and the window actually held (#910). Admin for the read " +
+			"as well, unlike the memory group directly above: the answer names how much custody data this " +
+			"deployment keeps and how far back it reaches, which is the same infrastructure disclosure " +
+			"/api/persistence is gated for, and the group is drawn on an admin surface so no other tier has " +
+			"anywhere to put it"},
+	{http.MethodPut, "/api/settings/history", accessAdmin,
+		"turns the on-disk event history on or off and sets its two caps (#910). Admin for the memory slider's " +
+			"reasons and one of its own: turning it off deletes every retained event before the call returns, " +
+			"which is the largest single act of evidence destruction available anywhere in mikroview"},
+
+	// -- Any authenticated session (viewer tier) ------------------------
+	{http.MethodGet, "/api/events", accessViewer,
 		"core read: the live firewall event feed"},
-	{http.MethodGet, "/api/devices", accessUser, "core read"},
-	{http.MethodGet, "/api/matches", accessUser,
+	{http.MethodGet, "/api/devices", accessViewer, "core read"},
+	{http.MethodGet, "/api/devices/macs", accessViewer,
+		"core read, same tier as /api/devices which it complements -- the persisted MAC-registry history " +
+			"(first/last-seen, last-paired IP) backing the Entities page's named-things table (#675). No more " +
+			"sensitive than the source IPs a viewer already reads off /api/events; it's a LAN client's MAC, not " +
+			"credentials or config"},
+	{http.MethodGet, "/api/matches", accessViewer,
 		"a read over already-collected evidence, same tier as events/flags/stats/devices above -- also reachable via a read-only API token (readOnlyRoutes), since birdcage-style external correlation by source is the reason internal/matchlog exists. Renamed from /api/watchlist/matches by #407 when the watchlist noun was retired; the access decision is unchanged. " +
 			"WIDENED by #586, and the widening is the part to scrutinise: entries=all serves the most recent matches across every entry, so a caller no longer needs to know a mac or ip to read from this log, and that includes a read-only token holder. Kept on this tier deliberately rather than promoted to admin, for three reasons. " +
 			"The gate the issue asks for is the same gate the existing query carries. The mode learns nothing new in kind: a token that already reaches GET /api/events reads the live feed for every device, and a bounded page of matches is a strictly smaller view of the same traffic. And it is bounded by construction, not by the caller -- matchlog.RecentQuery clamps the limit to 5000 (100 by default) before either backend runs, which is the property that stops an all-entries read on an unrate-limited route being an arbitrarily large response. " +
 			"What did NOT change: the per-identity path still refuses an empty identity (matchlog.ErrEmptyIdentity), and entries=all refuses to be combined with mac/ip, so 'no identity' can never silently mean 'every device'"},
-	{http.MethodGet, "/api/rules", accessUser, "core read"},
-	{http.MethodGet, "/api/third-party-notices", accessUser,
+	{http.MethodGet, "/api/rules", accessViewer, "core read"},
+	{http.MethodGet, "/api/third-party-notices", accessViewer,
 		"licence compliance: the copyright/licence texts of everything statically linked into this binary, which MIT/BSD/ISC/Apache-2.0 all require to accompany a binary distribution. Session-gated rather than public only because it is also a precise dependency-and-version inventory -- it withholds nothing, since the same file is in the public repo and the image"},
-	{http.MethodGet, "/api/stats", accessUser, "core read"},
-	{http.MethodGet, "/api/ws", accessUser,
+	{http.MethodGet, "/api/stats", accessViewer, "core read"},
+	{http.MethodGet, "/api/stats/tops", accessViewer,
+		"#644 round 21's per-minute top-port/top-talker columns -- the same tier as /api/stats above, since it is " +
+			"a per-minute breakdown of data that endpoint already exposes in aggregate (byAction), not a new class " +
+			"of read. #653's viewer tier took /api/stats down with it, and this follows for the same reason. " +
+			"Deliberately NOT in readOnlyRoutes: HourTops' backward scan is heavier than anything else a " +
+			"bearer token can already trigger on this tier, and nothing asked for that to be token-reachable"},
+	{http.MethodGet, "/api/ws", accessViewer,
 		"live tail; additionally same-origin checked (see checkOrigin)"},
-	{http.MethodGet, "/api/lookup/ip/{ip}", accessUser,
+	{http.MethodGet, "/api/lookup/ip/{ip}", accessViewer,
 		"on-demand reputation lookup, proxied so no API key reaches the browser"},
-	{http.MethodGet, "/api/routeros/{device}/rules", accessUser,
+	{http.MethodGet, "/api/routeros/{device}/rules", accessViewer,
 		"the pushed firewall rule table (#186 step 4) -- same tier as the event stream it annotates: rule comments/chains are already visible in events, and the lookup button is a user-facing affordance"},
-	{http.MethodGet, "/api/routeros/{device}/nat", accessUser,
+	{http.MethodGet, "/api/routeros/{device}/nat", accessViewer,
 		"the pushed NAT table, same reasoning as the rules row above"},
-	{http.MethodGet, "/api/flags", accessUser, "core read"},
+	{http.MethodGet, "/api/routeros/{device}/addresses", accessViewer,
+		"the pushed /ip/address table (#627), same tier as the rules/NAT rows above"},
+	{http.MethodGet, "/api/routeros/{device}/wireguard", accessViewer,
+		"the pushed WireGuard tables with derived per-tunnel state (#874), same tier as the rules/NAT/addresses rows above -- display data annotating what a viewer already sees on the topography"},
+	{http.MethodGet, "/api/routeros/{device}/ppp-active", accessViewer,
+		"the pushed /ppp/active table (#874), same tier and reasoning as the wireguard row above"},
+	{http.MethodGet, "/api/flags", accessViewer, "core read"},
+	{http.MethodGet, "/api/flags/expectations", accessViewer,
+		"core read (#640's ledger): an expectation is the reason a firing is absent from the flags card above, so a caller who may read the flags but not the expectations behind them is reading half the story -- and reading the ledger changes nothing. Deliberately NOT in readOnlyRoutes: nothing asked for it to be token-reachable"},
+
+	// -- Operational writes (user tier) ---------------------------------
+	//
+	// #653 introduced this tier below admin: these four flag actions used
+	// to be open to any authenticated session (the old accessUser, now
+	// called accessViewer above). The owner's ruling on #653 is that a
+	// viewer -- who must not change anything that affects the instance --
+	// may not make even a reversible change to what mikroview is
+	// currently showing, so these tightened to require at least the user
+	// role.
 	{http.MethodPost, "/api/flags/clear-all", accessUser,
-		"same reversibility as the per-flag clear below, at bulk -- regular clears only, never creates an exclusion"},
-	{http.MethodPost, "/api/flags/{id}/clear", accessUser,
-		"reversible: a cleared flag raises again on the next matching event, so any user may dismiss noise"},
+		"reversible: a cleared flag raises again on the next matching event, and a bulk clear records no expectation. Tightened from viewer to user tier by #653: reversible or not, this changes what mikroview is showing, which a viewer may not do"},
+	{http.MethodPost, "/api/syslog/loss/clear", accessUser,
+		"#1015: zeroes the four ingest-loss counters GET /api/stats' syslog.loss reads. Same reasoning as " +
+			"/api/flags/clear-all directly above -- reversible (a cleared counter starts a fresh episode on the " +
+			"next occurrence), and a viewer may not change what mikroview is currently showing"},
+	{http.MethodPost, "/api/flags/{id}/verdict", accessUser,
+		"#640: the four verdicts, and the only way one flag leaves the inbox now that the plain clear and " +
+			"the admin-only clear-permanent are gone. User tier for all four, per the ratified design: the " +
+			"expectation an expected verdict records is bounded by the firing the operator just looked at " +
+			"and withdrawn by the undo below, where the exclude-forever it replaces was unbounded and " +
+			"admin-only. Audit-logged, so who decided a pair stops being flagged stays answerable. " +
+			"Tightened from viewer to user tier by #653, same reasoning as clear-all above"},
+	{http.MethodDelete, "/api/flags/verdict/{id}", accessUser,
+		"#638's undo affordance for the row above, and #640's withdrawal of the expectation an expected " +
+			"verdict recorded -- same tier as judging in the first place, since reversing a judgement is no " +
+			"more dangerous than making one. Not \"/{id}/verdict\": see the registration comment in " +
+			"server.go for why that shape can't be registered here. Tightened from viewer to user tier by " +
+			"#653, same reasoning as clear-all above"},
+	{http.MethodDelete, "/api/flags/expectations/{id}", accessUser,
+		"#640's Forget control on the ledger -- same tier as the verdict that records an expectation, since " +
+			"the operator who can say \"expected\" can take it back, and an undo must not be harder to reach " +
+			"than the thing it undoes. Forgetting only ever re-arms detection, which is the " +
+			"safe direction"},
 
 	// -- Admin only ----------------------------------------------------
-	{http.MethodPost, "/api/flags/{id}/clear-permanent", accessAdmin,
-		"NOT reversible without an admin: permanently suppresses detection for a (type, target) until someone undoes it"},
-	{http.MethodGet, "/api/flags/exclusions", accessAdmin,
-		"the review surface for permanent exclusions"},
-	{http.MethodDelete, "/api/flags/exclusions/{id}", accessAdmin,
-		"undoes an exclusion, re-arming detection"},
-	// The definitions surface (#407), writes still strictly admin --
-	// exactly matching what /api/detectors and /api/watchlist/entries
-	// each enforced before it replaced them. #385 records the owner
-	// decision that non-admins should eventually see settings surfaces
-	// read-only; #490 is that phase 2's RBAC work, widening the list GET
-	// below one row at a time while leaving every mutation here closed.
-	{http.MethodGet, "/api/definitions", accessUser,
-		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see every definition's on/off state, scope and tuned params, same as an admin -- the design record's authz-matrix clause widens this GET deliberately, one row at a time, while every write below it stays admin-only"},
-	{http.MethodPost, "/api/definitions", accessAdmin,
-		"creates a definition -- a non-admin should not be able to add new server-side traffic surveillance"},
-	{http.MethodGet, "/api/definitions/schema", accessAdmin,
-		"the tunable knobs of every definition this deployment holds; same tier as the definitions themselves, and it enumerates the catalogue"},
-	{http.MethodGet, "/api/definitions/{id}", accessAdmin,
-		"one definition, same reasoning as the list"},
-	{http.MethodPut, "/api/definitions/{id}", accessAdmin,
-		"disabling a definition blinds the tool, and re-tuning one changes what fires; strictly admin"},
-	{http.MethodDelete, "/api/definitions/{id}", accessAdmin,
-		"removes an operator-authored definition entirely; same weight as creating it"},
-	{http.MethodPost, "/api/definitions/{id}/clone", accessAdmin,
-		"creates a definition, same reasoning as POST /api/definitions"},
-	{http.MethodPost, "/api/definitions/{id}/reset", accessAdmin,
-		"discards every param override in one call -- a configuration change, same tier as PUT"},
-	{http.MethodPost, "/api/definitions/{id}/replay", accessAdmin,
-		"re-runs a definition over the stored event corpus with candidate params: it reads every event in the ring and returns matching evidence, so it is at least as revealing as the definition list it belongs to"},
-	{http.MethodPost, "/api/definitions/{id}/promote", accessAdmin,
-		"changes what future traffic counts as expected for a device -- same weight as creating the definition"},
-	{http.MethodPost, "/api/definitions/{id}/observing", accessAdmin,
-		"same reasoning as promote"},
-	{http.MethodGet, "/api/naming/provenance", accessAdmin,
-		"says which layer supplies the name shown for one token, and whether a label saved here would be shadowed by a router-pushed one (#413). Admin for two reasons: the editor it serves gives viewers no pencil at all, so no viewer ever calls it; and the answer is a partial map of which router names which host, the same administrative metadata GET /api/entities is gated for"},
+	// The definitions surface (#407). #385 records the owner decision
+	// that non-admins should eventually see settings surfaces read-only;
+	// #490 was that phase 2's RBAC work, widening the list GET below one
+	// row at a time while leaving every mutation here admin-only. #653
+	// finished the job differently than #490 anticipated: rather than
+	// widening each write to read-only-for-viewer, the owner's ruling
+	// gave the whole surface -- reads and writes alike -- to the user
+	// tier (the "watchers" bench gets full access), leaving only the
+	// admin-only account/token/audit/config surfaces below untouched.
+	{http.MethodGet, "/api/coverage/declarations", accessViewer,
+		"a coverage-gap declaration (#630/#392) explains why a boundary-direction pair is intentionally quiet -- reading that explanation is the same viewer-tier read as GET /api/definitions below, not the user-tier write that authors one"},
+	{http.MethodGet, "/api/definitions", accessViewer,
+		"widened for the viewer-readable settings page (#490): a signed-in caller, even at the lowest tier, can see every definition's on/off state, scope and tuned params, same as an admin -- the design record's authz-matrix clause widens this GET deliberately. #653 went on to widen every write below it too, from admin to user tier, but left this one GET at viewer -- a viewer may see the whole surface, just not touch it"},
+	{http.MethodGet, "/api/decommission", accessViewer,
+		"the retiring segments the map draws, and the offers waiting to be answered (#460). Viewer tier for the same reason GET /api/definitions is: a viewer already sees the zones, the hosts on them and the watches over them, so a zone that is retiring is nothing new to them -- and hiding it would make the map misdescribe the network rather than protect anything"},
+	{http.MethodPost, "/api/decommission/watches", accessUser,
+		"answers a departure offer with yes, creating a watch over the retired range. Same tier and the same reasoning as POST /api/definitions below: this adds server-side traffic surveillance, which a viewer may not do"},
+	{http.MethodPost, "/api/decommission/dismiss", accessUser,
+		"answers a departure offer with no. User tier rather than viewer even though it creates nothing: declining drops the offer, so a viewer could otherwise silently spend the operator's one chance to watch a range that has just been retired"},
+	{http.MethodPost, "/api/decommission/watches/{id}/force", accessUser,
+		"forces a retiring segment off the map while its traffic persists -- a recorded override in the #385 pattern. User tier, not admin: it changes what the map shows and nothing about the instance, and the watch itself survives, so nothing is lost that an admin would need to authorise"},
+	{http.MethodPost, "/api/decommission/watches/{id}/undo", accessUser,
+		"takes a silent retirement back within the hour after it happened. Same tier as creating the watch, because that is what it does -- it puts the range back under surveillance the operator had stopped"},
+	{http.MethodDelete, "/api/decommission/watches/{id}", accessUser,
+		"abandons a decommission watch. Same tier as deleting a definition below -- it stops server-side surveillance the operator asked for"},
+	{http.MethodPost, "/api/definitions", accessUser,
+		"creates a definition. Was accessAdmin; #653's \"watchers\" bench ruling widened this to user tier -- a viewer still may not, since adding server-side traffic surveillance changes the instance"},
+	{http.MethodGet, "/api/definitions/schema", accessUser,
+		"the tunable knobs of every definition this deployment holds; same tier as the definitions themselves, and it enumerates the catalogue. Widened from admin to user tier by #653, same as the rest of this surface"},
+	{http.MethodGet, "/api/definitions/{id}", accessUser,
+		"one definition, same reasoning as the list. Widened from admin to user tier by #653"},
+	{http.MethodPut, "/api/definitions/{id}", accessUser,
+		"disabling a definition blinds the tool, and re-tuning one changes what fires. Was accessAdmin; #653's \"watchers\" bench ruling widened this to user tier"},
+	{http.MethodDelete, "/api/definitions/{id}", accessUser,
+		"removes an operator-authored definition entirely; same weight as creating it. Widened from admin to user tier by #653, same as POST above"},
+	{http.MethodPost, "/api/definitions/{id}/clone", accessUser,
+		"creates a definition, same reasoning as POST /api/definitions. Widened from admin to user tier by #653"},
+	{http.MethodPost, "/api/definitions/{id}/reset", accessUser,
+		"discards every param override in one call -- a configuration change, same tier as PUT. Widened from admin to user tier by #653"},
+	{http.MethodPost, "/api/definitions/{id}/replay", accessUser,
+		"re-runs a definition over the stored event corpus with candidate params: it reads every event in the ring and returns matching evidence, so it is at least as revealing as the definition list it belongs to. Widened from admin to user tier by #653, same as the rest of this surface"},
+	{http.MethodPost, "/api/definitions/{id}/promote", accessUser,
+		"changes what future traffic counts as expected for a device -- same weight as creating the definition. Widened from admin to user tier by #653"},
+	{http.MethodPost, "/api/definitions/{id}/observing", accessUser,
+		"same reasoning as promote. Widened from admin to user tier by #653"},
+	{http.MethodGet, "/api/naming/provenance", accessUser,
+		"says which layer supplies the name shown for one token, and whether a label saved here would be shadowed by a router-pushed one (#413). Was admin for two reasons: the editor it serves gave admins alone a pencil, so no non-admin ever called it; and the answer is a partial map of which router names which host, the same administrative metadata GET /api/entities is gated for. #653 widened both this and /api/entities to user tier together, so the reasoning now matches: a viewer still gets no pencil, but a user does, same as the entities surface it serves"},
 
-	{http.MethodGet, "/api/entities", accessAdmin, "admin-managed labels/tags"},
-	{http.MethodPost, "/api/entities", accessAdmin, "admin-managed labels/tags"},
-	{http.MethodDelete, "/api/entities", accessAdmin, "admin-managed labels/tags"},
+	{http.MethodGet, "/api/entities", accessUser, "admin-managed labels/tags -- widened from admin to user tier by #653's \"watchers\" bench ruling"},
+	{http.MethodPost, "/api/entities", accessUser, "admin-managed labels/tags -- widened from admin to user tier by #653"},
+	{http.MethodDelete, "/api/entities", accessUser, "admin-managed labels/tags -- widened from admin to user tier by #653"},
+	{http.MethodPut, "/api/coverage/declarations/{key}", accessUser,
+		"declaring a boundary intentionally quiet is an on-record explanation, same weight as an entity label -- and #653 moved entity labels to the user tier, so this row followed the reasoning its own justification already rested on rather than staying admin beside a neighbour that moved"},
+	{http.MethodDelete, "/api/coverage/declarations/{key}", accessUser,
+		"undeclares a coverage gap, re-exposing it as unexplained -- same tier as creating it"},
 
-	{http.MethodGet, "/api/suggestions", accessAdmin,
-		"a suggestion's Justification names a specific rule/device -- same tier as the expectation definitions it can become"},
-	{http.MethodPost, "/api/suggestions/{id}/accept", accessAdmin,
-		"creates a real expectation definition -- same reasoning as POST /api/definitions"},
-	{http.MethodPost, "/api/suggestions/{id}/hide", accessAdmin,
-		"same tier as accept: declining a suggestion is the same class of decision"},
-	{http.MethodPost, "/api/suggestions/{id}/unhide", accessAdmin,
-		"same reasoning as hide"},
-	{http.MethodPost, "/api/suggestions/reset", accessAdmin,
-		"destructively wipes every expectation definition -- the most dangerous single endpoint in this feature, strictly admin"},
-	{http.MethodPost, "/api/auth/oidc/link", accessUser,
-		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a user can only ever affect themselves"},
+	{http.MethodGet, "/api/hosts", accessViewer,
+		"the host presence register (#1016): which hosts the feed has shown, when each was last heard from, and which quiet ones somebody has already explained. Same viewer-tier read as GET /api/coverage/declarations directly above, and for the same reason -- a non-admin looking at the map is exactly who needs to know whether a grey host is quiet on purpose. Deliberately not on readOnlyRoutes: it is a partial inventory of the operator's private address space, which no bearer token has ever been able to read"},
+	{http.MethodPut, "/api/hosts/{key}/mark", accessUser,
+		"marking a quiet host intended, or dismissing it, is an on-record statement about a silence -- the same weight as declaring a coverage gap intentionally quiet, so it takes the same user tier and the same audit line"},
+	{http.MethodDelete, "/api/hosts/{key}/mark", accessUser,
+		"withdraws that statement, putting the host back to whatever its own last-seen time says it is -- same tier as making it, exactly as DELETE /api/coverage/declarations/{key} sits at its sibling's tier"},
+
+	{http.MethodGet, "/api/hosts/{ip}/dossier", accessViewer,
+		"the device dossier (#410): everything already known about one address, assembled -- its traffic, MAC and vendor, names and their provenance, lease-versus-fixed, first/last seen, matched rules, and a suggested identity with its evidence. A read of data this instance already holds, at the same viewer tier as GET /api/hosts above and for the same reason: identifying an unknown host is exactly what a non-admin looking at the map needs to do. It changes nothing and it never touches the host it describes -- the probe command it prints is for the operator to run. Deliberately not on readOnlyRoutes, and more sharply than GET /api/hosts: this is one host's traffic, ports, peers and hardware address in a single response, which no bearer token has ever been able to read"},
+
+	{http.MethodGet, "/api/baseline/off", accessViewer,
+		"today's off-baseline lines (#1016 round 49): the source/destination/port/protocol lines seen today that are not on the established pattern, with the threshold that judged them. Same viewer-tier read as GET /api/hosts directly above and for the same reason -- a non-admin looking at the map is exactly who needs to see what is off pattern today. Deliberately not on readOnlyRoutes for the same reason either, and more sharply: this is the operator's private address space with destinations and ports attached, which no bearer token has ever been able to read. Established lines are unreachable through this endpoint by design, not by permission -- see handleBaselineOff"},
+	{http.MethodGet, "/api/ports", accessViewer,
+		"the port filter's answer (#1018 round 53): which boundaries and hosts carried a port in the window, and which pushed filter rules name it. Same viewer-tier read as GET /api/baseline/off directly above and for the same reason -- a non-admin looking at the map is exactly who asks where a port is used. Deliberately not on readOnlyRoutes for the same reason too: it is the operator's private address space with a port attached, which no bearer token has ever been able to read"},
+	{http.MethodGet, "/api/trace", accessViewer,
+		"one logged line's single hop through the router (#1018 round 53): the interfaces it came in and left on, the rule that decided, the NAT if any. Same viewer tier and the same off-readOnlyRoutes reasoning as GET /api/ports above -- it names both ends of one connection on the operator's own network"},
+	{http.MethodPut, "/api/baseline/{key}/expected", accessUser,
+		"saying a line is expected is an on-record statement that traffic belongs, and it is the only way a line leaves the bright state early -- the same weight as marking a quiet host intended, so the same user tier and the same audit line. It also exempts the line from eviction, which is a second reason it is not a viewer's to make"},
+	{http.MethodDelete, "/api/baseline/{key}/expected", accessUser,
+		"withdraws that statement, putting the line back to whatever its own recurrence says it is -- same tier as making it, exactly as DELETE /api/hosts/{key}/mark sits at its sibling's tier"},
+
+	{http.MethodGet, "/api/suggestions", accessUser,
+		"a suggestion's Justification names a specific rule/device -- same tier as the expectation definitions it can become. Widened from admin to user tier by #653, same as the definitions surface"},
+	{http.MethodPost, "/api/suggestions/{id}/accept", accessUser,
+		"creates a real expectation definition -- same reasoning as POST /api/definitions. Widened from admin to user tier by #653"},
+	{http.MethodPost, "/api/suggestions/{id}/hide", accessUser,
+		"same tier as accept: declining a suggestion is the same class of decision. Widened from admin to user tier by #653"},
+	{http.MethodPost, "/api/suggestions/{id}/unhide", accessUser,
+		"same reasoning as hide. Widened from admin to user tier by #653"},
+	{http.MethodPost, "/api/suggestions/reset", accessUser,
+		"destructively wipes every expectation definition -- the most dangerous single endpoint in this feature, and the one row in this whole surface the owner's #653 ruling considered keeping admin-only for that reason. It was widened to user tier anyway, on the view that the confirm:true body this handler requires is the real safeguard against an accidental call, not the role gate -- a safeguard user and admin are equally bound by"},
+	{http.MethodPost, "/api/auth/oidc/link", accessViewer,
+		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a caller can only ever affect themselves, at any tier including viewer"},
 	{http.MethodPost, "/api/auth/users", accessAdmin, "account creation"},
 	{http.MethodGet, "/api/auth/users", accessAdmin,
-		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking. #490 widened the other three settings GETs for the viewer-readable engine room and deliberately left this one closed: the owner's ruling, 2026-08-24, is that the account list stays admin-only, so the room's people door is absent for a viewer rather than read-only"},
+		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking. #490 widened the other three settings GETs for the viewer-readable engine room and deliberately left this one closed: the owner's ruling, 2026-08-24, is that the account list stays admin-only, so the room's people door is absent for a viewer rather than read-only. #653 added a viewer role beneath that non-admin space and left this row exactly where it was -- account creation and the account list are the owner-level items #653's tiers deliberately keep out of user's reach too"},
 	{http.MethodDelete, "/api/auth/users/{id}", accessAdmin,
 		"removes an account and revokes its sessions and API tokens"},
 	{http.MethodPost, "/api/tokens", accessAdmin, "mints a bearer credential"},
-	{http.MethodGet, "/api/tokens", accessUser,
-		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see issued bearer credentials' metadata, same as an admin -- safe because the raw value never appears here, only in the one-time mint response, and minting/revoking below stay admin-only"},
+	{http.MethodGet, "/api/tokens", accessAdmin,
+		"narrowed back from accessViewer (#657). #490 widened it to serve a viewer-readable settings page; #657 removed that page from a viewer's navigation, and ruled the doors station admin-only on the grounds that issuing keys is a setup task rather than using the product -- so the user tier deliberately loses metadata it could see before. The old reasoning (the raw value never appears here, so the read hands out no secret) is still true and no longer the point: the surface it was widened for is gone"},
 	{http.MethodDelete, "/api/tokens/{id}", accessAdmin, "revokes a bearer credential"},
-	{http.MethodGet, "/api/setup/status", accessUser,
-		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see every device, source address and pushed table the setup wizard shows, same as an admin. It now also carries the ledger's marks (#487), for the same reason: an empty stream explains its own silence with the forced-past line that accounts for it, and a viewer looking at that stream needs the explanation as much as an admin does. The write side is a separate, admin-only route (POST /api/setup/mark)"},
+	{http.MethodGet, "/api/setup/status", accessViewer,
+		"widened for the viewer-readable settings page (#490): a signed-in caller at any tier can see every device, source address and pushed table the setup wizard shows, same as an admin. It now also carries the ledger's marks (#487), for the same reason: an empty stream explains its own silence with the forced-past line that accounts for it, and a viewer looking at that stream needs the explanation as much as an admin does. The write side is a separate, admin-only route (POST /api/setup/mark)"},
+	{http.MethodPost, "/api/setup/commands", accessViewer,
+		"renders the wizard's RouterOS commands (#436) -- same tier as GET /api/setup/status beside it, deliberately: a signed-in caller at any tier can already see the routers, versions and pushed tables this endpoint reads, so it only re-renders that same evidence as copy-paste commands, changing nothing on the instance or the router"},
 	{http.MethodPost, "/api/setup/mark", accessAdmin,
 		"writes to the setup wizard's claim ledger and to the audit log (#487) -- #490 keeps \"Run setup…\" absent for viewers and there is no read-only wizard, so a viewer has neither a way to reach this nor any business recording a decision under their own name"},
+	{http.MethodPost, "/api/tune-logging/analyse", accessUser,
+		"reads an uploaded RouterOS export and reports which filter rules cross a dark boundary (#435) -- user tier, same as the operational writes above: it changes nothing on the instance or the router, but a viewer may not act on what mikroview is watching, and choosing which rules to tune logging on is exactly that kind of operational decision, made concrete once the operator actually renders it below"},
+	{http.MethodPost, "/api/tune-logging/render", accessUser,
+		"renders logging switched on for the selected rules from an uploaded export, mechanically checked to differ only in logging (#435) -- same tier as analyse beside it. The output is a file the operator downloads and applies themselves; mikroview never connects to the router, so this is not a write to anything mikroview itself is exposed on -- but it is the same class of change-what-is-watched decision analyse already gates at user tier"},
 	{http.MethodGet, "/api/audit", accessAdmin,
 		"the admin action trail; also the record an attacker would want to read to see whether they were noticed"},
+
+	// -- Test hooks (MV_TEST_HOOKS=1 only) -----------------------------
+	// These two are registered only when the process was started with
+	// that variable set, which no shipped image does -- so on a real
+	// deployment they are not refused, they do not exist. The rows below
+	// pin the tier they enforce on the harness instances where they *do*
+	// exist; TestTestHookRoutesAreAbsentWithoutTheFlag pins the absence.
+	{http.MethodPost, "/api/test/clock", accessAdmin,
+		"moves this process's watch clock forward (#1063), so a scenario that needs a watch window to have closed " +
+			"does not have to wait real minutes for it. Admin, matching the reset beside it: the flag is the real " +
+			"gate, and there is no reason for the second lock to be weaker than the one on PUT /api/settings/store, " +
+			"which changes far less"},
+	{http.MethodPost, "/api/test/reset", accessAdmin,
+		"erases every event, flag, match, pushed router table and definition on the instance (#1064) -- the single " +
+			"most destructive call in this API, and the only one that discards evidence a viewer or user was " +
+			"relying on without so much as a confirm body. Admin for the same reason PUT /api/settings/history is, " +
+			"and gated behind MV_TEST_HOOKS on top of that"},
 }
 
 // TestEveryRouteIsInTheAuthorizationMatrix is the guard that makes the
@@ -227,24 +403,34 @@ func TestEveryRouteIsInTheAuthorizationMatrix(t *testing.T) {
 }
 
 // TestAuthorizationMatrixIsEnforced drives every row against a running
-// server in the state that actually matters -- auth active, with both an
-// admin and a plain user -- and asserts each of the three caller kinds
-// gets what the matrix says.
+// server in the state that actually matters -- auth active, with an
+// admin and one account at each of the other two roles (#653) -- and
+// asserts each of the four caller kinds gets what the matrix says.
 func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 	s := newAuthTestServer(t)
+	// The matrix covers the two MV_TEST_HOOKS routes, so the server it is
+	// driven against has to be one that registers them. Turning the flag
+	// on here rather than in newTestServer keeps every other test running
+	// against the route table a shipped image serves.
+	s.TestHooks = true
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	// Establish the admin via the real first-run path, then add a plain
-	// user through the store (self-registration is closed by then).
+	// Establish the admin via the real first-run path, then add one
+	// account at each of the other two roles through the store
+	// (self-registration is closed by then).
 	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register",
 		credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	if _, err := s.Auth.CreateUser("viewer", "password456", auth.RoleUser, time.Now()); err != nil {
+	if _, err := s.Auth.CreateUser("operator", "password456", auth.RoleUser, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Auth.CreateUser("watcher", "password789", auth.RoleViewer, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
 	anon := &http.Client{}
-	user := loggedInClient(t, ts.URL, "viewer", "password456")
+	viewer := loggedInClient(t, ts.URL, "watcher", "password789")
+	user := loggedInClient(t, ts.URL, "operator", "password456")
 	admin := loggedInClient(t, ts.URL, "admin", "password123")
 
 	for _, r := range authzMatrix {
@@ -259,17 +445,19 @@ func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 
 			// Logout destroys the session it is called with, so it gets
 			// throwaway clients rather than the shared ones -- otherwise
-			// probing it would silently log the shared user and admin
+			// probing it would silently log the shared viewer/user/admin
 			// out and every subsequent row would fail with a misleading
 			// 401. (It did, while this test was being written.)
-			userClient, adminClient := user, admin
+			viewerClient, userClient, adminClient := viewer, user, admin
 			if r.path == "/api/auth/logout" {
-				userClient = loggedInClient(t, ts.URL, "viewer", "password456")
+				viewerClient = loggedInClient(t, ts.URL, "watcher", "password789")
+				userClient = loggedInClient(t, ts.URL, "operator", "password456")
 				adminClient = loggedInClient(t, ts.URL, "admin", "password123")
 			}
 
 			assertAccess(t, anon, ts.URL, r, "anonymous", r.want == accessPublic)
-			assertAccess(t, userClient, ts.URL, r, "user", r.want != accessAdmin)
+			assertAccess(t, viewerClient, ts.URL, r, "viewer", r.want.allowsRole(auth.RoleViewer))
+			assertAccess(t, userClient, ts.URL, r, "user", r.want.allowsRole(auth.RoleUser))
 			assertAccess(t, adminClient, ts.URL, r, "admin", true)
 		})
 	}
@@ -346,6 +534,11 @@ func loggedInClient(t *testing.T, base, username, password string) *http.Client 
 func registeredRoutePatterns(t *testing.T) []string {
 	t.Helper()
 	s, _ := newTestServer(t)
+	// With the test hooks on, so the guard walks every route this binary
+	// can serve rather than only the ones a shipped image does -- a
+	// test-only route still has to state its access level, and a stale
+	// row for one still has to be noticed.
+	s.TestHooks = true
 	out := make([]string, 0, len(s.routes()))
 	for _, r := range s.routes() {
 		out = append(out, r.method+" "+r.path)

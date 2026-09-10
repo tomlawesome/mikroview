@@ -23,6 +23,11 @@ export type NavItem = {
   view?: View
   action?: NavAction
   admin?: boolean
+  // #653: a row the user tier may reach, but a viewer may not. Distinct
+  // from `admin`, which is the owner-level set (accounts, tokens, the
+  // audit trail, re-running setup). A row carrying neither is open to
+  // every signed-in session.
+  edit?: boolean
   title: string
   icon: IconName
   // The record's "one count on the rail": Flags carries it and nothing
@@ -43,12 +48,32 @@ export type NavGroup = { name: string; items: NavItem[] }
 // than in the DOM: Map (v0.5.0) and Lookback (unbuilt) are deliberately
 // absent, not stubbed or disabled.
 //
-// Interim, per #544's body: the Live group carries Stream alone until the
-// fall ships, and Stream is the landing.
+// #616 retires #544's interim (Stream as landing) wholesale: the fall is
+// now the first Live row and the landing page (see state.svelte.ts's
+// AppState.view default); Stream keeps its own row, second.
 export const navGroups: NavGroup[] = [
   {
     name: 'Live',
-    items: [{ label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' }],
+    items: [
+      { label: 'The fall', view: 'fall', icon: 'fall', title: 'The live receiver: a band per boundary, live spectrum, and time pouring down' },
+      // The Map slot un-reserves (#627): topography exists now.
+      { label: 'Topography', view: 'topography', icon: 'map', title: 'The map of the place: internet above, router at the waist, your lanes below' },
+      { label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' },
+      // Tune logging (#435): upload your router's export, get it back
+      // with logging switched on for every rule that crosses a dark
+      // connection. Gated `edit` (the user tier and above), matching the
+      // two endpoints it calls (`callerIsUser`, contract §3-4) -- not
+      // admin-only, per the issue's decision 2. Grouped with Topography
+      // rather than a group of its own: it exists because of what the
+      // coverage lens shows there.
+      {
+        label: 'Tune logging',
+        view: 'tune-logging',
+        edit: true,
+        icon: 'setup',
+        title: "Upload your router's export and get it back with coverage-complete logging attached",
+      },
+    ],
   },
   {
     name: 'Investigate',
@@ -78,7 +103,7 @@ export const navGroups: NavGroup[] = [
       {
         label: 'Watchlist',
         view: 'watchlist',
-        admin: true,
+        edit: true,
         icon: 'watchlist',
         ring: true,
         title: 'Hosts and ports you expect to see',
@@ -94,24 +119,33 @@ export const navGroups: NavGroup[] = [
     // modal instead.
     //
     // Users and Tokens retired wholesale into the engine room (#490) --
-    // see EngineRoomDoors.svelte -- along with Detectors (see the Detect
-    // group's own comment above). The engine room itself carries no
-    // `admin: true`: it is deliberately viewer-readable (the design
-    // record's authz-matrix clause widens the tokens/definitions/setup-
-    // status GETs it reads to any signed-in user), with per-control
-    // verbs gated inside the page instead. GET /api/auth/users is the
-    // one exception -- the owner overrode the record's original "widen
-    // users too" clause mid-build, so the engine room's own "who may
-    // look in" door stays admin-only *within* an otherwise
-    // viewer-readable page (see EngineRoomDoors.svelte).
+    // its people and keys groups (round 32/#767) -- along with Detectors
+    // (see the Detect group's own comment above).
     //
-    // Entities keeps `admin: true` -- the backend still 403s its GET
-    // route for a non-admin, so rendering it for a viewer would be a
-    // page that loads and immediately fails, not a read-only one.
+    // #657 gave the engine room `edit: true`, retiring #490's
+    // viewer-readable settings page. The test the owner ruled on is not
+    // whether a viewer may read a surface but whether it helps them
+    // interrogate the log: a page of settings they cannot change is a
+    // wall of controls, and the one thing in it a viewer genuinely needs
+    // -- why an empty stream is empty -- is rendered by the Stream view
+    // itself (LiveTable.svelte's empty state, from the #487 ledger), not
+    // here. GET /api/setup/status therefore stays viewer-readable while
+    // this page does not.
+    //
+    // The doors went further and are admin-only now, so a `user` sees the
+    // engine room without them. Issuing keys is a setup task rather than
+    // using the product (owner, 2026-08-31), and GET /api/tokens narrowed
+    // back to match -- see internal/api/tokens.go.
+    //
+    // Entities carries `edit: true` since #653: the backend widened its
+    // GET route from admin to the user tier, so a user gets a page that
+    // works, while a viewer would still get one that loads and
+    // immediately fails -- which is why the row is not simply opened.
     items: [
       {
-        label: 'The engine room',
+        label: 'Settings',
         view: 'engineroom',
+        edit: true,
         icon: 'engineroom',
         title: "Mikroview's own signal path, live, with every setting on the station it governs",
       },
@@ -121,18 +155,26 @@ export const navGroups: NavGroup[] = [
         icon: 'fleet',
         title: 'Every known RouterOS device: live/stale/never-seen status, last-seen, and event counts',
       },
-      { label: 'Entities', view: 'entities', admin: true, icon: 'entities', title: 'Named hosts, ports and services' },
+      { label: 'Entities', view: 'entities', edit: true, icon: 'entities', title: 'Named hosts, ports and services' },
       { label: 'Run setup…', action: 'run-setup', admin: true, icon: 'setup', title: 'Re-run the setup wizard' },
     ],
   },
 ]
 
-// #490's grammar: admin-only rows are absent for viewers, never disabled.
-// A group whose every item is admin-only disappears with them rather
+// #490's grammar: rows a caller cannot use are absent, never disabled.
+// A group whose every item is gated away disappears with them rather
 // than rendering an empty heading. Shared by both nav surfaces so a
 // viewer sees the same geography on a phone as on a desk.
-export function visibleGroups(isAdmin: boolean): NavGroup[] {
+//
+// #653 made the gate two-level. `admin` rows need the owner-level tier;
+// `edit` rows need the user tier, which admin includes. Callers pass
+// both flags rather than a role string so the tier ordering lives in one
+// place (authState) instead of being re-derived per nav surface.
+export function visibleGroups(isAdmin: boolean, canEdit: boolean = isAdmin): NavGroup[] {
   return navGroups
-    .map((g) => ({ ...g, items: g.items.filter((i) => !i.admin || isAdmin) }))
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((i) => (!i.admin || isAdmin) && (!i.edit || canEdit)),
+    }))
     .filter((g) => g.items.length > 0)
 }

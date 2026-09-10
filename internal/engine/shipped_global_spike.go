@@ -168,6 +168,8 @@ func (d *globalSpikeDefinition) Tick(now time.Time) {
 		samples = d.warmupSamples
 	}
 	confidence := emaConfidence(before.ZScore, samples, d.warmupSamples)
+	// No Size: global_spike declares none -- see ShippedSizeMeasure for
+	// why a rate against a moving baseline has no size to record.
 	d.emit(Emission{
 		Target: "global",
 		Detail: fmt.Sprintf("%.1f events/s vs a baseline of %.1f (based on %d samples, %.1fσ above normal)",
@@ -195,6 +197,25 @@ func (d *globalSpikeDefinition) maybePersistLocked(now time.Time) {
 	}
 	d.lastPersisted = now
 	d.state.Set(d.def.ID, "global", d.baseline.State())
+}
+
+// Learning satisfies LearningReporter. Unlike the other four
+// baseline-backed shipped definitions, this one has no baselineSet --
+// see this type's own doc comment for why one global EMA, not a Keyed
+// set, is right here -- so there is at most one key ("global"), reported
+// only once this definition has ticked at least once since being
+// enabled. Tick discards the baseline entirely on disable, so
+// re-disabling makes this report zero keys again, exactly as an operator
+// would expect from a warm-up that restarts.
+func (d *globalSpikeDefinition) Learning(now time.Time) (LearningState, bool) {
+	d.mu.Lock()
+	b := d.baseline
+	d.mu.Unlock()
+	if b == nil {
+		return LearningState{Floor: d.floor}, true
+	}
+	keys := map[string]baselineLearning{"global": newBaselineLearning(now, b.Snapshot(now))}
+	return learningStateFrom(d.floor, keys), true
 }
 
 // Replay satisfies Replayable, and does so by reconstruction rather than
@@ -249,13 +270,11 @@ func (d *globalSpikeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 			return
 		}
 		emissionCount++
-		if len(sample) < replaySampleBound {
-			sample = append(sample, ReplaySample{
-				At:     now,
-				Target: "global",
-				Detail: fmt.Sprintf("%.1f events/s vs a baseline of %.1f (%.1fσ above normal)", current, before.Value, before.ZScore),
-			})
-		}
+		sample = appendReplaySample(sample, ReplaySample{
+			At:     now,
+			Target: "global",
+			Detail: fmt.Sprintf("%.1f events/s vs a baseline of %.1f (%.1fσ above normal)", current, before.Value, before.ZScore),
+		})
 	}
 
 	corpusWindow := corpus.Replay(func(e store.Event) {

@@ -570,3 +570,40 @@ func TestTornLineIsSkippedNotFatal(t *testing.T) {
 		t.Fatalf("got %+v, want the one good record recovered despite the torn line", got)
 	}
 }
+
+// TestResetTruncatesTheLogAndTheOpenRecordIndex pins that Reset (#1064)
+// clears both halves of this store: the file, and the in-memory index of
+// records still open for collapsing. Missing the second would leave the
+// next Append folding into a record whose line no longer exists, which
+// reads as a match that was never appended.
+func TestResetTruncatesTheLogAndTheOpenRecordIndex(t *testing.T) {
+	s := mustOpen(t, 10)
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	tuple := Tuple{Source: Identity{IP: "10.0.0.5"}, DestIP: "10.0.0.9", Port: 22}
+	if err := s.Append("entry-1", tuple, testEvent("before"), now); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	if err := s.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if got := s.Stats().Count; got != 0 {
+		t.Errorf("Stats().Count = %d after a reset, want 0", got)
+	}
+
+	// The same tuple again: a fresh record, not a collapse into the one
+	// the reset just deleted.
+	if err := s.Append("entry-1", tuple, testEvent("after"), now.Add(time.Minute)); err != nil {
+		t.Fatalf("Append after reset: %v", err)
+	}
+	got := collect(t, s, Query{Source: Identity{IP: "10.0.0.5"}, Since: now, Until: now.Add(time.Hour), Limit: 10})
+	if len(got) != 1 {
+		t.Fatalf("expected exactly the one match appended after the reset, got %d", len(got))
+	}
+	if got[0].Count != 1 {
+		t.Errorf("the new record collapsed into the deleted one: Count = %d, want 1", got[0].Count)
+	}
+	if got[0].Event.Raw != "after" {
+		t.Errorf("record carries %q, want the event appended after the reset", got[0].Event.Raw)
+	}
+}

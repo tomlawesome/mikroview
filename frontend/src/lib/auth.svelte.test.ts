@@ -11,10 +11,15 @@ vi.mock('./api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   register: vi.fn(),
+  signOutEverywhere: vi.fn(),
 }))
 
-import { fetchAuthSession, login, logout, register } from './api'
+import { fetchAuthSession, login, logout, register, signOutEverywhere } from './api'
 import { authState } from './auth.svelte'
+import { appState } from './state.svelte'
+import { flagsState } from './flags.svelte'
+import { watchlistState } from './watchlist.svelte'
+import { emptyFilters, type Device, type Flag, type Stats, type WatchlistEntry } from './types'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
   return {
@@ -36,6 +41,8 @@ beforeEach(() => {
   authState.role = ''
   authState.ssoAvailable = false
   authState.ssoError = null
+  authState.justSignedOut = false
+  authState.signedInSince = ''
   window.history.replaceState(null, '', '/')
 })
 
@@ -53,6 +60,30 @@ describe('AuthState.check', () => {
     expect(authState.ssoAvailable).toBe(true)
   })
 
+  // #677's sessions row ("this device ... signed in 4 d") reads this.
+  it('carries signedInSince through from the session, and clears it once signed out', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'admin', signedInSince: '2026-08-27T00:00:00Z' }),
+    )
+    await authState.check()
+    expect(authState.signedInSince).toBe('2026-08-27T00:00:00Z')
+
+    vi.mocked(fetchAuthSession).mockResolvedValue(session())
+    await authState.check()
+    expect(authState.signedInSince).toBe('')
+  })
+
+
+  it('applies a viewer session (#653s third role)', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'kai', role: 'viewer', ssoAvailable: false }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('authenticated')
+    expect(authState.role).toBe('viewer')
+  })
 
   it('reports setup-required when no accounts exist yet', async () => {
     vi.mocked(fetchAuthSession).mockResolvedValue(session({ setupRequired: true }))
@@ -145,6 +176,53 @@ describe('AuthState.logout', () => {
     expect(authState.username).toBe('')
     expect(authState.role).toBe('')
     expect(fetchAuthSession).not.toHaveBeenCalled()
+    // Set so AuthLogin's next mount plays the door's way-out beat
+    // (#645) -- consumeJustSignedOut() below is how it reads this.
+    expect(authState.justSignedOut).toBe(true)
+  })
+})
+
+describe('AuthState.signOutEverywhere', () => {
+  it('calls the endpoint and re-checks the session, unlike logout it does not drop to unauthenticated', async () => {
+    authState.state = 'authenticated'
+    authState.username = 'tom'
+    authState.role = 'admin'
+    vi.mocked(signOutEverywhere).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'admin', signedInSince: '2026-08-31T00:00:00Z' }),
+    )
+
+    const err = await authState.signOutEverywhere()
+
+    expect(signOutEverywhere).toHaveBeenCalled()
+    expect(fetchAuthSession).toHaveBeenCalled()
+    expect(err).toBeNull()
+    expect(authState.state).toBe('authenticated')
+    expect(authState.signedInSince).toBe('2026-08-31T00:00:00Z')
+  })
+
+  it('returns the error and skips the re-check on failure', async () => {
+    vi.mocked(signOutEverywhere).mockResolvedValue('signOutEverywhere: 500')
+
+    const err = await authState.signOutEverywhere()
+
+    expect(err).toBe('signOutEverywhere: 500')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('AuthState.consumeJustSignedOut', () => {
+  it('reads and clears the flag logout() sets', async () => {
+    vi.mocked(logout).mockResolvedValue(null)
+    await authState.logout()
+
+    expect(authState.consumeJustSignedOut()).toBe(true)
+    expect(authState.justSignedOut).toBe(false)
+    expect(authState.consumeJustSignedOut()).toBe(false)
+  })
+
+  it('is false when nobody signed out (a plain page load)', () => {
+    expect(authState.consumeJustSignedOut()).toBe(false)
   })
 })
 
@@ -170,6 +248,155 @@ describe('AuthState.handleUnauthorized', () => {
   })
 })
 
+// #1083: signing out (or a 401 bounce) must not leave the previous
+// account's app/flags/watchlist state visible to the next person who
+// signs in on this tab. Populates each store, signs out, and asserts
+// every field named in the issue -- events, filters, devices, stats,
+// the flags list/pins and the watchlist -- is back to empty.
+function fixtureDevice(): Device {
+  return {
+    id: 'core',
+    name: 'core',
+    sourceIp: '10.0.0.1',
+    configured: true,
+    firstSeen: '2026-01-01T00:00:00Z',
+    lastSeen: '2026-01-01T00:00:00Z',
+    eventCount: 1,
+    status: 'live',
+  }
+}
+
+function fixtureStats(): Stats {
+  return {
+    total: 1,
+    byAction: {},
+    topRules: [],
+    timeSeries: [],
+    eventsPerSecond: 0,
+    capacity: 100,
+    count: 1,
+    windowSeconds: 60,
+    oldestHeld: null,
+    connectedClients: 1,
+  }
+}
+
+function fixtureFlag(): Flag {
+  return {
+    id: 'f1',
+    type: 'port_scan',
+    target: '10.0.0.5',
+    detail: '',
+    count: 1,
+    firstSeen: '2026-01-01T00:00:00Z',
+    lastSeen: '2026-01-01T00:00:00Z',
+    cleared: false,
+  }
+}
+
+function fixtureWatchlistEntry(): WatchlistEntry {
+  return { id: 'w1', name: 'watch w1', enabled: true, createdAt: '2026-01-01T00:00:00Z' }
+}
+
+describe('AuthState.logout clears the previous session state (#1083)', () => {
+  beforeEach(() => {
+    vi.mocked(logout).mockResolvedValue(null)
+    authState.state = 'authenticated'
+
+    appState.events = [
+      { id: 1, time: '', deviceId: 'core', sourceIp: '10.0.0.1', action: 'accept', ruleLabel: 'r', chain: 'forward', raw: 'raw', receivedAt: 0 },
+    ]
+    appState.filters = { ...emptyFilters(), rule: 'stale-user-query' }
+    appState.devices = [fixtureDevice()]
+    appState.stats = fixtureStats()
+    appState.initialLoadDone = true
+    appState.fetchFailed = true
+    appState.paused = true
+    appState.pausedAt = 111
+    appState.wipedAt = 222
+    appState.autoscroll = false
+    appState.pendingCount = 3
+
+    flagsState.list = [fixtureFlag()]
+    flagsState.timeSeries = [{ time: '2026-01-01T00:00:00Z', byType: {} }]
+    flagsState.loaded = true
+    flagsState.baselinesWarming = true
+    flagsState.pin('f1')
+
+    watchlistState.entries = [fixtureWatchlistEntry()]
+    watchlistState.coverage = { w1: 'no-logging' }
+    watchlistState.loaded = true
+  })
+
+  it('resets appState to its initial values', async () => {
+    await authState.logout()
+
+    expect(appState.events).toEqual([])
+    expect(appState.filters).toEqual(emptyFilters())
+    expect(appState.devices).toEqual([])
+    expect(appState.stats).toBeNull()
+    expect(appState.initialLoadDone).toBe(false)
+    expect(appState.fetchFailed).toBe(false)
+    expect(appState.paused).toBe(false)
+    expect(appState.pausedAt).toBeNull()
+    expect(appState.wipedAt).toBeNull()
+    expect(appState.autoscroll).toBe(true)
+    expect(appState.pendingCount).toBe(0)
+  })
+
+  it('clears flagsState via its existing public API (no reset() of its own)', async () => {
+    await authState.logout()
+
+    expect(flagsState.list).toEqual([])
+    expect(flagsState.timeSeries).toEqual([])
+    expect(flagsState.loaded).toBe(false)
+    expect(flagsState.baselinesWarming).toBeUndefined()
+    expect(flagsState.pinnedIds).toEqual([])
+  })
+
+  it('resets watchlistState to its initial values', async () => {
+    await authState.logout()
+
+    expect(watchlistState.entries).toEqual([])
+    expect(watchlistState.coverage).toEqual({})
+    expect(watchlistState.loaded).toBe(false)
+  })
+})
+
+describe('AuthState.handleUnauthorized clears the previous session state (#1083)', () => {
+  it('resets every store when it bounces an authenticated session', () => {
+    authState.state = 'authenticated'
+    appState.devices = [fixtureDevice()]
+    appState.stats = fixtureStats()
+    flagsState.list = [fixtureFlag()]
+    flagsState.loaded = true
+    watchlistState.entries = [fixtureWatchlistEntry()]
+    watchlistState.loaded = true
+
+    authState.handleUnauthorized()
+
+    expect(appState.devices).toEqual([])
+    expect(appState.stats).toBeNull()
+    expect(flagsState.list).toEqual([])
+    expect(flagsState.loaded).toBe(false)
+    expect(watchlistState.entries).toEqual([])
+    expect(watchlistState.loaded).toBe(false)
+  })
+
+  it('leaves every store untouched when the session was not authenticated', () => {
+    authState.state = 'setup-required'
+    appState.devices = [fixtureDevice()]
+    flagsState.list = [fixtureFlag()]
+    watchlistState.entries = [fixtureWatchlistEntry()]
+
+    authState.handleUnauthorized()
+
+    expect(appState.devices).toEqual([fixtureDevice()])
+    expect(flagsState.list).toEqual([fixtureFlag()])
+    expect(watchlistState.entries).toEqual([fixtureWatchlistEntry()])
+  })
+})
+
 describe('AuthState.consumeSSOErrorFromURL', () => {
   it('sets a generic error message and strips ssoError from the URL', () => {
     window.history.replaceState(null, '', '/?ssoError=provider_denied&foo=bar')
@@ -187,5 +414,34 @@ describe('AuthState.consumeSSOErrorFromURL', () => {
 
     expect(authState.ssoError).toBeNull()
     expect(location.search).toBe('?foo=bar')
+  })
+})
+
+// #653's three tiers (admin ⊇ user ⊇ viewer): isAdmin/canEdit are the
+// two derived checks every control-gating call site reads instead of
+// comparing authState.role directly.
+describe('AuthState.isAdmin / canEdit', () => {
+  it('admin is both', () => {
+    authState.role = 'admin'
+    expect(authState.isAdmin).toBe(true)
+    expect(authState.canEdit).toBe(true)
+  })
+
+  it('user can edit but is not admin', () => {
+    authState.role = 'user'
+    expect(authState.isAdmin).toBe(false)
+    expect(authState.canEdit).toBe(true)
+  })
+
+  it('viewer is neither', () => {
+    authState.role = 'viewer'
+    expect(authState.isAdmin).toBe(false)
+    expect(authState.canEdit).toBe(false)
+  })
+
+  it('an empty (unknown/signed-out) role is treated as the lowest tier', () => {
+    authState.role = ''
+    expect(authState.isAdmin).toBe(false)
+    expect(authState.canEdit).toBe(false)
   })
 })

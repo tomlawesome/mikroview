@@ -67,7 +67,7 @@ func TestIngestRaisesNewDeviceFlagOnceForFirstSighting(t *testing.T) {
 	logger := slog.Default()
 
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil)
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil, nil, nil, nil)
 
 	list := fs.List()
 	var found *flags.Flag
@@ -99,7 +99,7 @@ func TestIngestDoesNotReRaiseNewDeviceFlagOnSubsequentEvents(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: now.Add(time.Duration(i) * time.Minute)}
-		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil)
+		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil, nil, nil, nil)
 	}
 
 	var newDeviceFlags []flags.Flag
@@ -125,7 +125,7 @@ func TestIngestSkipsNewDeviceFlagForEmptySrcMAC(t *testing.T) {
 
 	const lineWithoutMAC = "A|wan-in|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 203.0.113.5:51234->192.168.1.10:443, len 60"
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(lineWithoutMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil)
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil, nil, nil, nil)
 
 	for _, f := range fs.List() {
 		if f.Type == flags.TypeNewDevice {
@@ -186,6 +186,37 @@ func TestHTTPSRedirectTargetHostWithNoPort(t *testing.T) {
 	want := "https://192.168.1.50/"
 	if got != want {
 		t.Errorf("httpsRedirectTarget = %q, want %q", got, want)
+	}
+}
+
+// TestValidRouterOSHint covers #436 step 3's validation of the
+// unauthenticated /ca.crt?ros= query parameter: capped at 32 bytes,
+// printable ASCII only, everything else refused rather than truncated
+// or sanitised.
+func TestValidRouterOSHint(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{"a real router's version string", "7.23.3 (stable)", "7.23.3 (stable)", true},
+		{"empty", "", "", false},
+		{"exactly 32 bytes", strings.Repeat("7", 32), strings.Repeat("7", 32), true},
+		{"33 bytes, over the cap", strings.Repeat("7", 33), "", false},
+		{"a control character", "7.23.3\n", "", false},
+		{"a NUL byte", "7.23.3\x00", "", false},
+		{"non-ASCII", "7.23.3\xc2\xa0", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := validRouterOSHint(tc.in)
+			if ok != tc.ok {
+				t.Fatalf("validRouterOSHint(%q) ok = %v, want %v", tc.in, ok, tc.ok)
+			}
+			if ok && got != tc.want {
+				t.Errorf("validRouterOSHint(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 

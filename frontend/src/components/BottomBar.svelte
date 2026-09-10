@@ -10,9 +10,17 @@
   // affordances -- they do not exist on the bottom bar."
   //
   // The five groups, their order, each page's home and the reserved-slot
-  // rule all come from lib/navGroups.ts, the same table NavRail.svelte
-  // renders -- carried forward rather than redefined here, so the two
-  // surfaces cannot disagree about the geography.
+  // rule all come from lib/navGroups.ts, carried forward rather than
+  // redefined here, so no two surfaces can disagree about the geography.
+  //
+  // That table used to have a desktop counterpart in NavRail.svelte, and
+  // this comment named it until #657. #633 deleted the retired navigation
+  // chrome wholesale (0bd2598), so the group *names* now render nowhere
+  // but here: on a viewport of 700px or less. The account menu reads the
+  // same table but renders a flat list with no group headings.
+  //
+  // Worth knowing before changing a group name: it is a bottom-bar button
+  // label and nothing else, so it is read by nobody on a wider screen.
   //
   // #583 added the broken ring here, per its ratified design: the ring
   // goes on the *group* in the bar and again on the *page row* inside the
@@ -34,7 +42,11 @@
   import RailIcon from './RailIcon.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
-  const groups = $derived(visibleGroups(isAdmin))
+  // #653: the user tier reaches Watchlist and Entities; the owner-level
+  // rows still need isAdmin. Both flags go to visibleGroups so the tier
+  // ordering stays in authState.
+  const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
+  const groups = $derived(visibleGroups(isAdmin, canEdit))
 
   // Same store, same wording as NavRail's Flags row -- see that
   // component's comment for why activeCount is already "open
@@ -242,8 +254,7 @@
 
 <style>
   /* Pointer-width chrome (dock, density) is a rail-only affordance --
-     nothing here reads railPref or renders anything with an equivalent
-     job, per the record. */
+     the rail is gone, and nothing here renders an equivalent job. */
   .bottom-bar {
     position: fixed;
     left: 0;

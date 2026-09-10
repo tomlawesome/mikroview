@@ -134,6 +134,122 @@ func TestBaselineFireTrueOnceReadyAndZScoreClearsMinZ(t *testing.T) {
 	}
 }
 
+// ---- #642: ProvisionalFire, Fire's primed-but-below-floor counterpart ----
+
+// TestSnapshotProvisionalFireTrueWhenPrimedBelowFloor reproduces #642's
+// central case directly against Snapshot: a z-score exists (the EMA is
+// primed) but the definition's own BaselineFloor has not cleared yet, so
+// Ready is false -- exactly the state Fire refuses and ProvisionalFire
+// exists to allow.
+func TestSnapshotProvisionalFireTrueWhenPrimedBelowFloor(t *testing.T) {
+	const window = time.Second
+	// A floor that never clears during this short test, so every
+	// snapshot stays Primed-but-not-Ready throughout.
+	b := NewBaseline(window, BaselineFloor{MinSamples: 1000}, UpdatePerEvent)
+	now := time.Now()
+
+	b.Reading(now, 10)
+	for i := 1; i <= 4; i++ {
+		b.Reading(now.Add(time.Duration(i)*window), 10)
+	}
+	snap := b.Reading(now.Add(5*window), 500)
+	if !snap.Primed {
+		t.Fatal("snapshot not Primed after 5 readings -- the window has long since fully observed")
+	}
+	if snap.Ready {
+		t.Fatal("snapshot reports Ready despite MinSamples: 1000 being nowhere close to cleared")
+	}
+	if snap.Fire(emaMinZ) {
+		t.Fatal("Fire reported true for a not-Ready snapshot -- Fire must stay Ready-gated")
+	}
+	if !snap.ProvisionalFire(emaMinZ) {
+		t.Fatalf("ProvisionalFire reported false for primed-but-below-floor snapshot %+v, want true", snap)
+	}
+}
+
+// TestSnapshotProvisionalFireFalseWhenColdOrUnprimed is #642's "cold and
+// unprimed must stay silent" requirement: a Snapshot that has never
+// primed (no EMA seed yet, so ZScore is meaningless -- Baseline.Reading
+// only ever sets it when before.Primed was already true) must never
+// report a provisional fire, no matter what value happens to sit in
+// ZScore.
+func TestSnapshotProvisionalFireFalseWhenColdOrUnprimed(t *testing.T) {
+	cold := Snapshot{}
+	if cold.ProvisionalFire(emaMinZ) {
+		t.Fatal("ProvisionalFire reported true for the zero-value (cold) Snapshot")
+	}
+
+	unprimedWithStrayZScore := Snapshot{Primed: false, ZScore: 100}
+	if unprimedWithStrayZScore.ProvisionalFire(emaMinZ) {
+		t.Fatal("ProvisionalFire reported true for an unprimed snapshot despite Primed being false -- cold must stay silent regardless of ZScore")
+	}
+
+	const window = time.Minute
+	b := NewBaseline(window, BaselineFloor{}, UpdatePerEvent)
+	now := time.Now()
+	// Still inside the first window -- Baseline.Reading deliberately
+	// does not prime here (see its own doc comment reproducing #368).
+	snap := b.Reading(now.Add(30*time.Second), 500)
+	if snap.Primed {
+		t.Fatal("test setup: snapshot primed before a full window elapsed")
+	}
+	if snap.ProvisionalFire(emaMinZ) {
+		t.Fatal("ProvisionalFire reported true for a genuinely unprimed live Baseline snapshot")
+	}
+}
+
+// TestSnapshotProvisionalFireFalseOnceReady proves Fire and
+// ProvisionalFire are mutually exclusive: once a snapshot clears its
+// floor (Ready), a settled crossing is Fire's job, not ProvisionalFire's
+// -- a caller must not get "true" from both for the same emission.
+func TestSnapshotProvisionalFireFalseOnceReady(t *testing.T) {
+	const window = time.Second
+	b := NewBaseline(window, BaselineFloor{MinSamples: 3}, UpdatePerEvent)
+	now := time.Now()
+
+	b.Reading(now, 10)
+	for i := 1; i <= 4; i++ {
+		b.Reading(now.Add(time.Duration(i)*window), 10)
+	}
+	snap := b.Reading(now.Add(5*window), 500)
+	if !snap.Ready {
+		t.Fatal("test setup: snapshot not Ready after 5 readings against MinSamples: 3")
+	}
+	if !snap.Fire(emaMinZ) {
+		t.Fatal("test setup: expected Fire true for this Ready, high-z snapshot")
+	}
+	if snap.ProvisionalFire(emaMinZ) {
+		t.Fatal("ProvisionalFire reported true for a Ready snapshot -- that is Fire's case, not ProvisionalFire's")
+	}
+}
+
+// TestSnapshotProvisionalFireFalseBelowMinZ proves the floor's z
+// threshold still applies to a provisional fire -- "primed but below
+// floor" alone is not enough; the reading itself must still be
+// statistically unusual against this baseline's own volatility.
+func TestSnapshotProvisionalFireFalseBelowMinZ(t *testing.T) {
+	const window = time.Second
+	b := NewBaseline(window, BaselineFloor{MinSamples: 1000}, UpdatePerEvent)
+	now := time.Now()
+
+	b.Reading(now, 10)
+	for i := 1; i <= 4; i++ {
+		b.Reading(now.Add(time.Duration(i)*window), 10)
+	}
+	// A perfectly ordinary reading, same as the steady baseline --
+	// ZScore stays 0, nowhere near emaMinZ.
+	snap := b.Reading(now.Add(5*window), 10)
+	if snap.Ready {
+		t.Fatal("test setup: snapshot unexpectedly Ready")
+	}
+	if !snap.Primed {
+		t.Fatal("test setup: snapshot not Primed")
+	}
+	if snap.ProvisionalFire(emaMinZ) {
+		t.Fatalf("ProvisionalFire reported true for an ordinary reading (z=%.2f) -- minZ must still gate a provisional fire", snap.ZScore)
+	}
+}
+
 // ---- #368 reproduction ----
 
 // TestBaselineDoesNotFalselyFireInsideFirstWindowFromColdStart reproduces

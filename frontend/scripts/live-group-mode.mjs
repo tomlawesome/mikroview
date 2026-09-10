@@ -10,9 +10,14 @@
 // children; a wrapper element would silently destroy the column
 // alignment while every test still passed.
 
-import { session, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, waitForStreamRows } from './live-browser.mjs'
 
-const { page, consoleErrors } = await session({ waitForEvents: 200 })
+const { page, consoleErrors } = await session()
+
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(200, 'live-group-mode')
+await waitForStreamRows(page, 200)
 
 const rowCount = () => page.$$eval('.grid .row', (els) => els.length)
 // Not `.row:first-of-type` -- the first div child of .grid is a header
@@ -28,8 +33,8 @@ check(normalRows > 0, `the live view renders rows (${normalRows})`)
 check(await page.isVisible('.grid .cell.time'), 'rows show a time')
 
 // --- Turning it on collapses repeats ------------------------------------
-await page.click('button:text-is("Group")')
-await page.waitForTimeout(500)
+await page.click('.whisper .hand-btn:text-is("group")')
+await page.waitForSelector('.whisper .hand-btn:text-is("group")[aria-pressed="true"]', { timeout: 5000 })
 
 const groupedRows = await rowCount()
 check(
@@ -67,7 +72,7 @@ if (counts.length > 0) {
 
   // --- The drawer ------------------------------------------------------
   await page.click('.grid .count-cell')
-  await page.waitForTimeout(300)
+  await page.waitForSelector('.grid .row.member', { timeout: 5000 })
   const afterOpen = await rowCount()
   check(afterOpen > groupedRows, `opening a group reveals its events (${groupedRows} -> ${afterOpen})`)
   check(await page.isVisible('.grid .row.member'), 'the revealed events are marked as members')
@@ -76,7 +81,7 @@ if (counts.length > 0) {
   check(revealed <= 20, `the drawer renders at most 20 events (${revealed})`)
 
   await page.click('.grid .count-cell')
-  await page.waitForTimeout(300)
+  await page.waitForSelector('.grid .row.member', { state: 'detached', timeout: 5000 })
   check((await rowCount()) === groupedRows, 'closing the group hides them again')
 } else {
   // Honest rather than silently passing: with no repeats in the feed
@@ -85,8 +90,8 @@ if (counts.length > 0) {
 }
 
 // --- Off again ----------------------------------------------------------
-await page.click('button:text-is("Group")')
-await page.waitForTimeout(500)
+await page.click('.whisper .hand-btn:text-is("group")')
+await page.waitForSelector('.whisper .hand-btn:text-is("group")[aria-pressed="false"]', { timeout: 5000 })
 check((await rowCount()) === normalRows, 'turning it off restores every row')
 
 // --- The control does not exist where it cannot work (#381) -------------
@@ -101,21 +106,27 @@ check((await rowCount()) === normalRows, 'turning it off restores every row')
 // implement (LiveTable's unit tests stub it to a permanent `false`), so
 // no unit test in this repo can tell these two layouts apart.
 await page.setViewportSize({ width: 480, height: 900 })
-await page.waitForTimeout(400)
+// viewportState's matchMedia listener flips isMobile synchronously on
+// resize (lib/viewport.svelte.ts), so the card layout is the thing to
+// wait for rather than a guessed settle time.
+await page.waitForSelector('button.card', { timeout: 5000 })
 
-const mobileCards = await page.$$eval('.card', (els) => els.length)
+// button.card, not .card: the deck's own snap sections carry class
+// "card" too (#616), and counting those would let this pass with no
+// event cards at all.
+const mobileCards = await page.$$eval('button.card', (els) => els.length)
 check(mobileCards > 0, `phone width renders the card layout (${mobileCards} cards)`)
 check(
-  !(await page.isVisible('button:text-is("Group")')),
-  'the Group button is absent at phone width, where grouping has no effect',
+  !(await page.isVisible('.whisper .hand-btn:text-is("group")')),
+  'the group toggle is absent at phone width, where grouping has no effect',
 )
 
 // Back to desktop width: the control returns, and returns usable.
 await page.setViewportSize({ width: 1280, height: 720 })
-await page.waitForTimeout(400)
+await page.waitForSelector('.whisper .hand-btn:text-is("group")', { timeout: 5000 })
 check(
-  await page.isVisible('button:text-is("Group")'),
-  'the Group button comes back at desktop width',
+  await page.isVisible('.whisper .hand-btn:text-is("group")'),
+  'the group toggle comes back at desktop width',
 )
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)

@@ -1,0 +1,1493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 35 · Verdicts in the row</title>
+<style>
+  /* ============================================================
+     ROUND 5 — THE GLUE. Direction R: the deck.
+
+     The owner's own read of this round, promoted to the design: the
+     scenes are full-viewport cards in a vertical deck with scroll
+     snap. There is no "which scene is home" — the deck plays in the
+     operator's own order, and sign-in lands on whatever card they
+     put first. The atlas stays the jump navigator, and gains the
+     deck-order editor. P and Q are superseded by this one file,
+     which carries every scene once.
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --glass: rgba(15, 20, 34, 0.66);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e; --drop: #f5a623; --nat: #2dd4bf;
+    --fall-accept: #5aa7f0; --fall-drop: #e05252;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; }
+
+  /* ---- the scene bar: every scene's own chrome, no rail, no toolbar ---- */
+  /* Free-floating chrome (owner, 2026-08-30: "I still don't like the
+     rigid top bar"): the same information, loose on the void — no
+     strip, no border, no glass. Each element floats where it reads. */
+  .scenebar { position: absolute; top: 0; left: 0; right: 0; z-index: 10; pointer-events: none; }
+  .scenebar > * { pointer-events: auto; }
+  .wordmark { position: absolute; top: 18px; left: 24px; font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); cursor: pointer; }
+  .wordmark em { font-style: normal; color: var(--accent); }
+  .wordmark .hintkey { font-size: 9px; color: var(--ink-3); font-weight: 400; margin-left: 6px; letter-spacing: 0.08em; }
+  /* NO PAGE HEADING, NO STRAP (owner, 2026-08-31). The scene bar drew
+     a page name and an epithet; he struck them on metrics, the docket,
+     the fall and the topography in turn, so they are gone outright
+     rather than kept as a shrinking list of exceptions. The roll rail
+     already says which card you are on. Rounds up to 29 drew `.scname`
+     and `.scname .epi`; this is a change to the record, and the rule
+     is deleted here so nobody restores it from the stylesheet. */
+  .scstatus { position: absolute; top: 20px; right: 24px; display: flex; gap: 16px; align-items: center; font-size: 11px; color: var(--ink-2); }
+  .scstatus .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: 1px; }
+  .scstatus .flagchip { color: var(--void); background: var(--alarm); border-radius: 9px; padding: 0 7px; font-weight: 700; font-size: 10.5px; }
+  .scstatus .who { color: var(--ink-3); }
+
+  /* ---- scene 1: the door — one beat, then in ---- */
+  .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; }
+  .door .beat { flex: 1; display: grid; place-items: center; position: relative; }
+  .door .stack { text-align: center; width: 300px; position: relative; z-index: 2; }
+  .door .wm {
+    display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px;
+    box-shadow: 0 0 14px rgba(232, 176, 90, 0.22), inset 0 0 10px rgba(232, 176, 90, 0.06);
+    animation: kindle 0.5s ease-out;
+  }
+  .door .wm em { font-style: normal; color: var(--accent); }
+  @keyframes kindle { from { box-shadow: none; border-color: rgba(232, 176, 90, 0); } }
+  .fullfall {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+    /* The rain lives behind the door's elements, never across them: a
+       radial mask carves the centre out of the layer entirely. */
+    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+  }
+  .fullfall i {
+    position: absolute; top: -20px; width: 2.5px; height: 13px; border-radius: 2px;
+    background: var(--fall-accept); animation: fall 5.5s linear infinite;
+  }
+  .fullfall i.r { background: var(--fall-drop); }
+  .fullfall i.v { background: #a78bfa; }
+  @keyframes fall { to { transform: translateY(106vh); } }
+  .cred input {
+    display: block; width: 240px; margin: 10px auto 0; padding: 7px 4px;
+    background: transparent; border: 0; border-bottom: 1px solid var(--hair-2);
+    color: var(--ink); font: 13.5px var(--sans); text-align: center; outline: none;
+  }
+  .cred input::placeholder { color: var(--ink-3); }
+  .cred input:focus { border-bottom-color: var(--accent); }
+  .enter {
+    margin-top: 20px; padding: 7px 30px; font: 600 13px var(--sans); letter-spacing: 0.04em;
+    color: var(--accent); background: transparent; border: 1px solid var(--hair-2);
+    border-radius: 999px; cursor: pointer;
+  }
+  .enter:hover { border-color: var(--accent); }
+
+  /* ---- scene 2: the map (Atlas II refined, carried forward) ---- */
+  .lenses { display: flex; gap: 6px; padding: 88px 24px 0; position: relative; z-index: 4; }
+  .lens { font-size: 11px; color: var(--ink-3); border: 1px solid var(--hair); border-radius: 14px; padding: 3px 12px; }
+  .lens.on { color: var(--ink); border-color: var(--hair-2); background: var(--raised); }
+  .lens .ct { color: var(--void); background: var(--alarm); border-radius: 8px; padding: 0 6px; margin-left: 6px; font-weight: 700; font-size: 10px; }
+  .stage { position: absolute; inset: 132px 0 90px; }
+  .stage svg { width: 100%; height: 100%; }
+  .isl { fill: rgba(15, 20, 34, 0.72); stroke: var(--hair-2); }
+  .n-name { font: 650 15px var(--sans); fill: var(--ink); }
+  .n-cidr { font: 11px var(--mono); fill: var(--ink-3); }
+  .n-sub { font: 11px var(--sans); fill: var(--ink-3); }
+  .cov { font: 700 9px var(--mono); letter-spacing: 0.1em; }
+  .cov-l { fill: var(--ok); } .cov-q { fill: var(--ink-3); } .cov-d { fill: var(--alarm); }
+  .rib { fill: none; opacity: 0.5; }
+  .rib-ghost { fill: none; stroke: var(--ink-3); stroke-width: 1.2; stroke-dasharray: 3 6; opacity: 0.45; }
+  .rib-alarm { fill: none; stroke: var(--alarm); stroke-width: 2; filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.45)); }
+  .alarm-t { font: 700 10.5px var(--mono); fill: var(--alarm); }
+  .chip-t { font: 10.5px var(--mono); fill: var(--ink-2); }
+  .halo { animation: halo 2s ease-out infinite; }
+  @keyframes halo { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2.6); } }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+  .scrub {
+    position: absolute; left: 20px; bottom: 118px; width: 300px; z-index: 4;
+    background: var(--glass); border: 1px solid var(--hair); border-radius: 10px; padding: 8px 12px 6px;
+  }
+  .scrub .row { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; }
+  .scrub .live { color: var(--ok); }
+  .scrub svg { width: 100%; height: 26px; }
+  .scrub polyline { fill: none; stroke: var(--accent); stroke-width: 1.4; opacity: 0.7; }
+  .scrub line { stroke: var(--now); stroke-width: 2; }
+  .ticker {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 4;
+    background: rgba(4, 6, 11, 0.92); border-top: 1px solid var(--hair-2); padding: 8px 20px 10px;
+  }
+  .ticker .head { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .ticker .head i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  .ticker .lift { color: var(--accent); }
+  .trow { display: flex; gap: 12px; font: 11.5px var(--mono); color: var(--ink-2); padding: 2px 0; }
+  .trow .t { color: var(--ink-3); }
+  .badge { font: 700 10px var(--mono); border-radius: 4px; padding: 0 6px; letter-spacing: 0.06em; }
+  .b-drop { color: var(--drop); background: rgba(245, 166, 35, 0.12); }
+  .b-accept { color: var(--accept); background: rgba(62, 207, 126, 0.12); }
+  .b-nat { color: var(--nat); background: rgba(45, 212, 191, 0.12); }
+
+  /* ---- scene 2 (Q): the fall — the accepted live build, restated ---- */
+  .fallwrap { position: absolute; inset: 78px 0 0; display: flex; flex-direction: column; }
+  .fall-head { display: flex; gap: 10px; align-items: center; padding: 10px 20px 4px; }
+  .fall-chip { font: 600 10.5px var(--mono); letter-spacing: 0.05em; border-radius: 12px; padding: 3px 12px; border: 1px solid; }
+  .fc-alarm { color: var(--alarm); border-color: rgba(255, 84, 112, 0.5); }
+  .fc-dim { color: var(--ink-2); border-color: var(--hair-2); }
+  .fall-info { position: absolute; bottom: 10px; left: 14px; z-index: 6; }
+  .ibtn {
+    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--hair-2);
+    background: transparent; color: var(--ink-3); font: italic 600 11px Georgia, serif;
+    cursor: pointer; line-height: 1;
+  }
+  .ibtn:hover { color: var(--accent); border-color: var(--accent); }
+  .fallcanvas { flex: 1; position: relative; }
+  .fallcanvas svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .bh-name { font: 650 11px var(--mono); fill: var(--ink); }
+  .bh-epi { font: 9.5px var(--sans); fill: var(--ink-3); }
+  .bh-watch { font: 700 8px var(--mono); fill: var(--ok); letter-spacing: 0.08em; }
+  .bh-watch.bad { fill: var(--alarm); }
+  .bh-watch.dim { fill: var(--ink-3); }
+  .spec { fill: rgba(90, 167, 240, 0.18); stroke: var(--fall-accept); stroke-width: 1.2; }
+  .spec.r { fill: rgba(224, 82, 82, 0.16); stroke: var(--fall-drop); }
+  .peak-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .nowline { stroke: var(--now); stroke-width: 1.6; }
+  .now-t { font: 10px var(--mono); fill: var(--now); }
+  .gut { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .carrier { stroke-linecap: round; }
+  .flagline { stroke: var(--alarm); stroke-width: 0.7; stroke-dasharray: 2 5; opacity: 0.7; }
+  .flag-t { font: 700 9.5px var(--mono); fill: var(--alarm); }
+  .dark-t { font: 9.5px var(--mono); fill: var(--fall-drop); }
+  .port-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .fall-legend { display: flex; gap: 24px; justify-content: center; padding: 8px 12px 12px; font-size: 11px; color: var(--ink-3); border-top: 1px solid var(--hair); flex-wrap: wrap; }
+  .fall-legend .b { color: var(--fall-accept); }
+  .fall-legend .r { color: var(--fall-drop); }
+  .fall-legend .v { color: #a78bfa; }
+
+  /* ---- the topography card: one place, two viewpoints, three depths ---- */
+  .modechip {
+    margin-left: 18px; font: 600 10.5px var(--mono); letter-spacing: 0.08em;
+    color: var(--accent); background: var(--raised); border: 1px solid var(--hair-2);
+    border-radius: 14px; padding: 3px 14px; cursor: pointer;
+  }
+  #topo { perspective: 1400px; }
+  #topo svg { transition: transform 0.8s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 42%; }
+  #topo.survey svg { transform: rotateX(32deg) scale(0.88) translateY(-24px); }
+  #topo .isl-card, #topo .g-dot, #topo .detail, #topo .svc, #topo .cli { transition: opacity 0.55s ease; }
+  #topo .g-dot { opacity: 0; pointer-events: none; }
+  #topo.survey .g-dot { opacity: 1; }
+  #topo.survey .isl-card, #topo.survey .detail { opacity: 0; pointer-events: none; }
+  #topo[data-lvl="0"] .svc, #topo[data-lvl="0"] .cli { opacity: 0; }
+  #topo[data-lvl="1"] .cli { opacity: 0; }
+  .cli .c-dot { stroke: none; }
+  .cli .c-label { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .cli .spoke { stroke-width: 0.8; opacity: 0.3; }
+  @media (prefers-reduced-motion: reduce) { #topo svg { transition: none; } }
+
+  /* ---- the deck: snap + the rail ---- */
+  html { scroll-snap-type: y mandatory; }
+  .scene { scroll-snap-align: start; scroll-snap-stop: always; }
+  /* The roll rail (owner, round 11): the deck's names as vertical text
+     hugging the right edge, letter-tops outward. Click one: the card
+     rolls to centre while the name gently grows, in the same beat. */
+  .deckrail {
+    position: fixed; right: 8px; top: 50%; transform: translateY(-50%); z-index: 60;
+    display: flex; flex-direction: column; gap: 30px; align-items: center;
+  }
+  .deckrail a {
+    writing-mode: sideways-lr; text-decoration: none; color: var(--ink-3);
+    font: 500 9.5px var(--mono); letter-spacing: 0.22em;
+    transition: font-size 0.45s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s, letter-spacing 0.45s;
+  }
+  .deckrail a:hover { color: var(--ink-2); }
+  .deckrail a.on { color: var(--ink); font-size: 12px; letter-spacing: 0.26em; }
+  /* ---- the atlas's deck-order editor ---- */
+  .heartdeck {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; color: var(--ink-2);
+    text-align: left; min-width: 240px;
+  }
+  .heartdeck .lab { font-size: 9.5px; letter-spacing: 0.16em; color: var(--ink-3); margin-bottom: 2px; text-align: center; }
+  .heartdeck .card { display: flex; gap: 8px; align-items: center; border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 14px; background: var(--raised); cursor: grab; }
+  .heartdeck .card .n { color: var(--ink-3); font-size: 10px; }
+  .heartdeck .card .grip { color: var(--ink-3); letter-spacing: -1px; }
+  .heartdeck .first { border-color: var(--accent); }
+  .heartdeck .first .tag { font-size: 8.5px; color: var(--accent); letter-spacing: 0.12em; margin-left: 4px; }
+  .heartdeck .hint { font-size: 9.5px; color: var(--ink-3); text-align: center; margin-top: 2px; }
+  .faro-orbit { stroke: var(--hair); }
+  .dest .dg { fill: var(--raised); stroke: var(--ink-3); stroke-width: 1.5; transform: rotate(45deg); }
+  .dest .dest-l { font: 600 12px var(--sans); fill: var(--ink-2); }
+  .dest .dest-b { font: 700 10px var(--mono); fill: var(--void); }
+  .dest:hover .dg { stroke: var(--accent); }
+  .dest:hover .dest-l { fill: var(--ink); }
+
+  /* ---- scene 3: the atlas overlay ---- */
+  .atlas { min-height: 100vh; display: flex; flex-direction: column; background: radial-gradient(900px 540px at 50% 30%, rgba(80, 115, 205, 0.08), transparent 65%), var(--void); }
+  .atlas .chart { flex: 1; position: relative; }
+  .atlas .chart svg { width: 100%; height: 100%; position: absolute; inset: 0; }
+  .orbit { fill: none; stroke: var(--hair-2); stroke-dasharray: 2 7; }
+  .zrib { stroke: var(--hair); stroke-width: 1; }
+  .station-ring { fill: none; stroke: var(--accent); stroke-opacity: 0.5; }
+  .station-core { fill: var(--accent); }
+  .station-label { font: 10.5px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-dot { fill: var(--raised); stroke-width: 2.5; }
+  .zone-label { font: 650 13.5px var(--sans); fill: var(--ink); }
+  .zone-epithet { font: 11px var(--sans); fill: var(--ink-3); }
+  .zone-state { font: 700 9px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-state.bad { fill: var(--alarm); }
+  .atlas .hint { text-align: center; font-size: 11px; color: var(--ink-3); padding: 6px 0 14px; }
+  .ports { display: flex; gap: 34px; justify-content: center; flex-wrap: wrap; padding: 16px 20px 10px; border-top: 1px solid var(--hair); }
+  .pgroup { min-width: 110px; }
+  .pname { display: block; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+  .port { display: block; font-size: 12.5px; color: var(--ink-2); padding: 2px 0; cursor: pointer; }
+  .port.on { color: var(--accent); font-weight: 650; }
+  .port .home { font-size: 9px; color: var(--ink-3); letter-spacing: 0.1em; margin-left: 6px; }
+  .port .badge { margin-left: 6px; }
+  .atlas .account { display: flex; gap: 22px; justify-content: center; font-size: 11px; color: var(--ink-3); padding: 8px 0 22px; }
+  .atlas .account b { color: var(--ink-2); font-weight: 600; }
+
+  /* ---- scene 4: the stream, columns squared ---- */
+  .controls { position: absolute; top: 50px; right: 24px; display: flex; gap: 10px; align-items: center; }
+  .controls .search {
+    width: 320px; padding: 5px 12px; font: 12px var(--mono); color: var(--ink-2);
+    background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair); border-radius: 7px;
+  }
+  .controls .search em { font-style: normal; color: var(--accent); }
+  .spans { display: flex; gap: 2px; font: 10.5px var(--mono); color: var(--ink-3); }
+  .spans span { padding: 3px 9px; border-radius: 6px; }
+  .spans .on { color: var(--ink); background: var(--raised); border: 1px solid var(--hair); }
+  table.stream { width: calc(100% - 40px); margin: 100px 20px 14px; border-collapse: collapse; font: 12px var(--mono); }
+  table.stream th {
+    text-align: left; font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-3); padding: 6px 10px; border-bottom: 1px solid var(--hair-2);
+  }
+  table.stream td { padding: 5px 10px; border-bottom: 1px solid var(--hair); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  table.stream .num { text-align: right; }
+  table.stream .host { color: var(--ink); }
+  table.stream .geo { color: var(--ink-3); font-size: 10.5px; }
+  table.stream tr.hl td { background: rgba(255, 84, 112, 0.05); }
+
+  /* The three facts of the day, and the reason you would look at the
+     stream at all -- they were set at the same weight as a caption.
+     Lifted to the ticker's own footing: a real band, ink-2 body, the
+     salient token in full ink. */
+  .foot-legend {
+    position: absolute; bottom: 0; left: 0; right: 0; display: flex; gap: 44px; justify-content: center;
+    padding: 12px 20px 13px; font-size: 12.5px; color: var(--ink-2);
+    background: rgba(4, 6, 11, 0.92); border-top: 1px solid var(--hair-2);
+  }
+  .foot-legend .k { color: var(--ink); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+<style>
+  .alt { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; gap: 14px; align-items: center; font: 500 9px var(--mono); letter-spacing: 0.12em; color: var(--ink-3); opacity: 0.6; }
+  .alt:hover { opacity: 1; }
+  .alt input { width: 210px; height: 2px; accent-color: var(--accent); }
+  .wlens2 { position: absolute; bottom: 12px; left: 26px; z-index: 6; display: flex; gap: 14px; font: 500 10.5px var(--sans); color: var(--ink-3); opacity: 0.8; }
+  .wlens2 .on { color: var(--ink); }
+  .flag-t { font: 700 10px var(--mono); fill: var(--alarm); }
+  .whisper { position: absolute; top: 92px; left: 24px; right: 24px; z-index: 8; display: flex; gap: 26px; align-items: center; font: 11px var(--mono); color: var(--ink-3); }
+  .whisper svg { height: 22px; width: 190px; }
+  .whisper polyline { fill: none; stroke: var(--accent); stroke-width: 1.2; opacity: 0.7; }
+  .whisper .k { color: var(--ink-2); }
+  .whisper .r { color: var(--fall-drop); }
+
+  .wtab-r { fill: rgba(232, 176, 90, 0.13); stroke: rgba(232, 176, 90, 0.45); }
+  .wtab { font: 600 9.5px var(--mono); fill: var(--now); }
+  .ftab-r { fill: rgba(255, 84, 112, 0.12); stroke: rgba(255, 84, 112, 0.45); }
+  .ftab { font: 600 9.5px var(--mono); fill: var(--alarm); }
+  .alt input { -webkit-appearance: none; appearance: none; height: 2px; background: var(--hair-2); border-radius: 1px; }
+  .alt input::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 9px; height: 9px;
+    background: var(--void); border: 1.5px solid var(--accent); border-radius: 2px;
+    transform: rotate(45deg); cursor: pointer;
+  }
+  .alt input::-moz-range-thumb {
+    width: 9px; height: 9px; background: var(--void); border: 1.5px solid var(--accent);
+    border-radius: 2px; transform: rotate(45deg); cursor: pointer;
+  }
+</style>
+<style>
+  .mx { position: absolute; inset: 110px 24px 40px; display: grid; grid-template-columns: 2fr 1fr; gap: 48px; }
+  .mx-t { font: 600 9.5px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); margin-bottom: 12px; }
+  .mx-chart svg { width: 100%; height: 60%; }
+  .mx-legend { display: flex; gap: 22px; font: 10.5px var(--mono); color: var(--ink-3); margin-top: 10px; }
+  .mx-bar { display: flex; align-items: center; gap: 10px; margin: 7px 0; font: 11.5px var(--mono); color: var(--ink-2); }
+  .mx-bar .h { width: 120px; color: var(--ink); }
+  .mx-bar i { display: block; height: 5px; border-radius: 3px; background: var(--fall-accept); opacity: 0.75; }
+  .mx-bar b { color: var(--ink-3); font-weight: 500; }
+</style>
+<style>
+  /* Aggregates are part of their entity (owner, round 12): drawn inside
+     the card, matching the house chip style — rounded, hairline — in
+     their colours only, riding the camera with everything else. */
+  .wchip-r { fill: rgba(232, 176, 90, 0.10); stroke: rgba(232, 176, 90, 0.40); stroke-width: 0.9; }
+  .wchip { font: 600 9.5px var(--mono); fill: var(--now); }
+  .fchip-r { fill: rgba(255, 84, 112, 0.10); stroke: rgba(255, 84, 112, 0.40); stroke-width: 0.9; }
+  .fchip { font: 600 9.5px var(--mono); fill: var(--alarm); }
+  .gd-agg { font: 600 9px var(--mono); }
+</style>
+<style>
+  .mviews { position: absolute; top: 20px; left: 148px; z-index: 12; display: flex; gap: 16px; font: 500 11px var(--sans); color: var(--ink-3); }
+  .mviews span { cursor: pointer; }
+  .mviews .on { color: var(--ink); border-bottom: 1px solid var(--accent); padding-bottom: 2px; }
+  .hourline { position: absolute; top: 62px; left: 26px; right: 26px; display: flex; gap: 10px; align-items: baseline; font: 11px var(--mono); color: var(--ink-3); flex-wrap: wrap; }
+  .hourline .big { font-size: 17px; color: var(--ink); }
+  .hourline .unit { font-size: 9px; color: var(--ink-3); margin-left: 6px; letter-spacing: 0.06em; }
+  .hourline .fact b { color: var(--ink-2); font-weight: 600; }
+  .hourline .sep { opacity: 0.5; }
+  .hourline .gap { flex: 1; }
+  .hourline .brinkmark { color: var(--now); }
+  .drumwrap { position: absolute; inset: 108px 24px 30px; }
+  .drumwrap svg { width: 100%; height: 100%; }
+</style>
+<style>
+  /* C corrected (owner, round-14 verdict): the boxes go UNDERNEATH the
+     card they belong to, full width of it, both equally sized, stacked;
+     flags the foot. Watchers purple — ratified this round. */
+  .wp-r { fill: rgba(167, 139, 250, 0.10); stroke: rgba(167, 139, 250, 0.40); stroke-width: 0.9; }
+  .wp { font: 600 9.5px var(--mono); fill: #a78bfa; }
+  .stage { perspective: 1400px; }
+  .stage svg { transition: transform 0.8s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 42%; }
+  .stage.survey svg { transform: rotateX(32deg) scale(0.88) translateY(-24px); }
+  .stage .isl-card, .stage .g-dot, .stage .detail, .stage .svc, .stage .cli { transition: opacity 0.55s ease; }
+  .stage .g-dot { opacity: 0; pointer-events: none; }
+  .stage.survey .g-dot { opacity: 1; }
+  .stage.survey .isl-card, .stage.survey .detail { opacity: 0; pointer-events: none; }
+  .stage[data-lvl="0"] .svc, .stage[data-lvl="0"] .cli { opacity: 0; }
+  .stage[data-lvl="1"] .cli { opacity: 0; }
+  /* The slider's stops, marked on the line itself: a tiny symbol each,
+     no text (owner, this round). Clicking anywhere on the line jumps to
+     the nearest stop — the input already snaps, the ticks just show
+     where the stops live. The survey stop wears the atlas diamond. */
+  .altwrap { position: relative; display: inline-flex; align-items: center; }
+  .altwrap .tick {
+    position: absolute; top: 50%; width: 3px; height: 3px; border-radius: 50%;
+    background: var(--ink-3); transform: translate(-50%, -50%); pointer-events: none;
+  }
+  .altwrap .tick.survey {
+    width: 5px; height: 5px; border-radius: 0; background: transparent;
+    border: 1px solid var(--ink-3); transform: translate(-50%, -50%) rotate(45deg);
+  }
+</style>
+<style>
+  .dtabs { position: absolute; top: 20px; left: 148px; z-index: 12; display: flex; gap: 16px; font: 500 11px var(--sans); color: var(--ink-3); }
+  .dtabs span { cursor: pointer; }
+  .dtabs .on { color: var(--ink); border-bottom: 1px solid var(--accent); padding-bottom: 2px; }
+  /* NO COUNTS ON THE DOCKET'S TABS (owner, 2026-08-31). Rounds 17-19
+     tried them inline, then beneath the names; both were called clumsy
+     and the tab row now carries the names alone. The counts still live
+     where they are read — the chrome's ⚑ and eye marks, on every scene.
+     Round 29 still carried `.dtabs .under` and its inks in the sheet
+     with nothing using them; they are deleted so no later build can
+     restore counts from the stylesheet. */
+  .panel { position: absolute; inset: 96px 36px 40px; display: flex; justify-content: center; align-items: flex-start; overflow: auto; }
+  .panel:not(.on) { display: none; }
+  .panel table { border-collapse: collapse; font: 12px var(--mono); width: 100%; max-width: 1520px; }
+  .panel th, .panel td { padding: 8px 18px; text-align: left; }
+  .panel thead th { font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--hair-2); cursor: pointer; user-select: none; white-space: nowrap; }
+  .panel thead th:hover { color: var(--ink-2); }
+  .panel thead th .dir { color: var(--accent); margin-left: 5px; }
+  /* every column doubles as a filter: a quiet inline row under the heads */
+  .panel tr.filters td { padding: 2px 18px 8px; border-bottom: 1px solid var(--hair); }
+  .panel tr.filters input {
+    width: 100%; background: transparent; border: 0; border-bottom: 1px dashed var(--hair);
+    font: 10.5px var(--mono); color: var(--ink-2); padding: 2px 0; outline: none;
+  }
+  .panel tr.filters input::placeholder { color: var(--ink-3); opacity: 0.6; }
+  .panel tr.filters input:focus { border-bottom-color: var(--accent); }
+  .panel td { color: var(--ink-2); border-bottom: 1px solid var(--hair); }
+  .panel tr.frow { cursor: pointer; }
+  .panel tr.frow:hover td { background: rgba(160, 185, 230, 0.04); }
+  .panel tr.frow.open td { border-bottom-color: transparent; background: rgba(160, 185, 230, 0.04); }
+  .panel td.t { color: var(--ink-3); }
+  .panel td.k { color: var(--ink); }
+  .panel td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .panel .openc { color: var(--accent); white-space: nowrap; transition: transform 0.2s; display: inline-block; }
+  .frow.open .openc { transform: rotate(90deg); }
+  .fmark { font-weight: 700; white-space: nowrap; }
+  .ft-unplanned .fmark { color: #ff5470; } .ft-unplanned td:first-child { box-shadow: inset 3px 0 0 #ff5470; }
+  .ft-portscan .fmark { color: #ff9e64; } .ft-portscan td:first-child { box-shadow: inset 3px 0 0 #ff9e64; }
+  .ft-outbound .fmark { color: #f072c8; } .ft-outbound td:first-child { box-shadow: inset 3px 0 0 #f072c8; }
+  .ft-repeat .fmark { color: #e0765a; } .ft-repeat td:first-child { box-shadow: inset 3px 0 0 #e0765a; }
+  .ft-surge .fmark { color: #e8b05a; } .ft-surge td:first-child { box-shadow: inset 3px 0 0 #e8b05a; }
+  .ft-talker .fmark { color: #b8c56a; } .ft-talker td:first-child { box-shadow: inset 3px 0 0 #b8c56a; }
+  .wl { color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--hair-2); }
+  .wl:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .wchip2 { font: 600 10.5px var(--mono); color: #a78bfa; border: 1px solid rgba(167, 139, 250, 0.40); background: rgba(167, 139, 250, 0.10); border-radius: 9px; padding: 1px 10px; white-space: nowrap; }
+  .wchip2.broken { color: var(--alarm); border-color: rgba(255, 84, 112, 0.45); background: rgba(255, 84, 112, 0.10); }
+  /* the drawer: the row opens downward and presents the info */
+  tr.drawer > td { padding: 0 18px; border-bottom: 0; }
+  tr.drawer .dwr { overflow: hidden; max-height: 0; transition: max-height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  tr.drawer.open > td { border-bottom: 1px solid var(--hair); }
+  tr.drawer.open .dwr { max-height: 300px; }
+  .dwr-in { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px 36px; padding: 6px 2px 16px; border-left: 3px solid var(--hair-2); padding-left: 20px; margin-bottom: 10px; }
+  .dwr-in .story { font: 12.5px var(--sans); color: var(--ink-2); line-height: 1.55; }
+  .dwr-in .story b { color: var(--ink); font-weight: 600; }
+  .dwr-in .lines { grid-column: 1; font: 10.5px var(--mono); color: var(--ink-3); white-space: pre; overflow: hidden; }
+  .dwr-in .side { grid-column: 2; grid-row: 1 / span 2; }
+  .dwr-in .side .lab { font: 600 9px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); text-transform: uppercase; }
+  .dwr-in .side svg { width: 100%; height: 34px; margin: 6px 0 2px; }
+  .dwr-in .side .span { font: 10.5px var(--mono); color: var(--ink-3); }
+  .dwr-acts { grid-column: 1 / -1; display: flex; gap: 10px; margin-top: 2px; }
+  .dwr-acts button { font: 600 11px var(--sans); color: var(--accent); background: transparent; border: 1px solid var(--hair-2); border-radius: 999px; padding: 4px 16px; cursor: pointer; }
+  .dwr-acts button:hover { border-color: var(--accent); }
+  .dwr-acts button.quiet { color: var(--ink-3); }
+  /* the reach scene */
+  .reach-stage { position: absolute; inset: 110px 0 60px; }
+  .reach-stage svg { width: 100%; height: 100%; }
+  /* two scenes in this file: the rail anchors to its scene, not the viewport */
+  
+  .crumb { position: absolute; top: 62px; left: 26px; z-index: 6; font: 500 11px var(--sans); color: var(--ink-3); }
+  .crumb a { color: var(--accent); text-decoration: none; cursor: pointer; }
+</style>
+<style>
+  /* counts beneath the tab names (owner: the inline numbers read clumsy) */
+  .dtabs { top: 20px; }
+  .dtabs > span { display: inline-flex; align-items: center; }
+  .dtabs .on { border-bottom: 0; position: relative; }
+  .dtabs .on::after { content: ''; position: absolute; left: 0; right: 0; bottom: -3px; height: 1px; background: var(--accent); }
+  .panel { inset: 100px 36px 40px; }
+  /* one unbroken line: row and drawer share the stripe, no drawer indent */
+  tr.drawer.ft-unplanned > td { box-shadow: inset 3px 0 0 #ff5470; }
+  tr.drawer.ft-portscan > td { box-shadow: inset 3px 0 0 #ff9e64; }
+  tr.drawer.ft-outbound > td { box-shadow: inset 3px 0 0 #f072c8; }
+  tr.drawer.ft-repeat > td { box-shadow: inset 3px 0 0 #e0765a; }
+  tr.drawer.ft-surge > td { box-shadow: inset 3px 0 0 #e8b05a; }
+  tr.drawer.ft-talker > td { box-shadow: inset 3px 0 0 #b8c56a; }
+  tr.frow.wt-broken td:first-child, tr.drawer.wt-broken > td { box-shadow: inset 3px 0 0 var(--alarm); }
+  tr.frow.wt-ok td:first-child, tr.drawer.wt-ok > td { box-shadow: inset 3px 0 0 #a78bfa; }
+  .dwr-in { border-left: 0; padding-left: 20px; }
+  
+  .dials { position: absolute; top: 108px; right: 26px; z-index: 6; display: flex; gap: 12px; }
+  .dial { color: var(--ink-3); }
+  .dial .dnum { font: 700 13px var(--mono); fill: var(--ink); }
+  .dial .dsym { font: 10px var(--sans); fill: currentColor; }
+
+</style>
+<style>
+  /* ============================================================
+     ROUND 30 — the stream's top, ordered; and the filter's home.
+
+     Round 29's stream stacked four absolutely-positioned strips at
+     hand-picked offsets. The whisper sat at 88px and stood 46px tall
+     (a 30px line with its two time labels hanging 32px beneath it);
+     the table began at 100px. They overlapped by most of the whisper.
+     Coordinates cannot hold an order — so the top is a flow column
+     now, and each band simply follows the one above it.
+
+     The filter is the same object in two hands (rounds 6-8): the box
+     carries the typed grammar and is ALWAYS on screen, so there is
+     always a way in; `◂ bar` slides round 8's thin strip out of the
+     box's own left edge, and the strip is that filter as named
+     fields. Round 7's glass panel is not restored — it was rejected.
+     ============================================================ */
+  .streamtop {
+    position: relative; z-index: 8;
+    padding: 54px 24px 0; display: flex; flex-direction: column; gap: 14px;
+  }
+  .filterline { display: flex; gap: 18px; align-items: center; }
+
+  /* the handle is welded to the box's left edge, so the bar visibly
+     comes OUT of the box rather than appearing beside it */
+  .fb-open {
+    flex: none; font: 600 10.5px var(--mono); letter-spacing: 0.06em;
+    color: var(--accent); background: transparent;
+    border: 1px solid var(--hair); border-right: 0; border-radius: 7px 0 0 7px;
+    padding: 6px 11px; cursor: pointer; white-space: nowrap;
+  }
+  .fb-open:hover { border-color: var(--hair-2); color: var(--ink); }
+  .fb-open.on { color: var(--ink); background: var(--raised); }
+  .fbox {
+    flex: 1; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    min-height: 28px; padding: 4px 12px;
+    background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair);
+    border-radius: 0 7px 7px 0; font: 12px var(--mono); color: var(--ink-2);
+  }
+  .fbox .fchips { display: flex; gap: 12px; flex-wrap: wrap; }
+  .fbox .chip { display: inline-flex; gap: 5px; align-items: baseline; white-space: nowrap; }
+  .fbox .chip em { font-style: normal; color: var(--accent); }
+  .fbox .chip b { color: var(--ink-3); font-weight: 400; cursor: pointer; }
+  .fbox .chip b:hover { color: var(--alarm); }
+  /* the empty box still says what it is — round 29's box rendered only
+     when a filter existed, which is exactly why the app kept a second
+     "Filters ▸" control alive beside it */
+  .fbox .fbtype { color: var(--ink-3); }
+  .fbox.empty .fbtype { color: var(--ink-3); }
+
+  /* round 8's thin bar, unchanged in substance: dim micro-labels over
+     hairline-underlined values, one quiet row, no boxes */
+  .filterbar {
+    display: flex; gap: 22px; align-items: flex-end; flex-wrap: wrap;
+    padding: 8px 14px 10px;
+    background: rgba(10, 14, 24, 0.55); backdrop-filter: blur(6px);
+    border: 1px solid var(--hair); border-radius: 8px;
+    animation: unfurl 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform-origin: right center;
+  }
+  .filterbar[hidden] { display: none; }
+  @keyframes unfurl { from { transform: scaleX(0.04); opacity: 0; } }
+  .fb-f { display: flex; flex-direction: column; gap: 2px; min-width: 60px; }
+  .fb-f .l { font: 500 8px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); text-transform: uppercase; }
+  .fb-f .v { font: 12px var(--mono); color: var(--ink); border-bottom: 1px solid var(--hair-2); padding: 1px 2px 3px; min-width: 56px; }
+  .fb-f .v.dim { color: var(--ink-3); }
+  .fb-f .v em { font-style: normal; color: var(--ink-3); font-size: 10px; }
+  .fb-f .v.hot { border-bottom-color: var(--drop); }
+  .fb-swap { align-self: center; color: var(--ink-3); font-size: 13px; cursor: pointer; padding: 0 2px; }
+  .fb-swap:hover { color: var(--accent); }
+  .fb-clear { align-self: center; color: var(--ink-3); font-size: 12px; cursor: pointer; margin-left: auto; }
+  .fb-clear:hover { color: var(--alarm); }
+  .fb-fold { align-self: center; color: var(--accent); font: 10.5px var(--mono); background: transparent; border: 0; cursor: pointer; white-space: nowrap; }
+
+  /* the whisper joins the column; its time labels hang 32px below the
+     line, so the band reserves the room rather than borrowing the
+     table's */
+  #s5 .whisper { position: static; left: auto; right: auto; top: auto; margin-bottom: 22px; }
+  #s5 table.stream { width: 100%; margin: 0; padding: 0 24px 14px; }
+  #s5 table.stream th:first-child, #s5 table.stream td:first-child { padding-left: 0; }
+  #s5 table.stream th:last-child, #s5 table.stream td:last-child { padding-right: 0; }
+
+  /* the flag mark rides AFTER the time, so the tabular figures keep one
+     left edge to line up on; the row wash stays — the mark annotates it */
+  table.stream .rmk { font-style: normal; color: var(--alarm); margin-left: 8px; font-size: 11px; }
+  /* the country glyph never carries the meaning alone: the two-letter
+     code stays beside it, and a row with no country gets neither */
+  table.stream .cf { margin-right: 6px; font-size: 11px; }
+</style>
+<style>
+  /* ROUND 30 — "your deck" is a column of Settings, not a shelf above it
+     (owner, 2026-08-31). Same seven cards, same signature marks, same
+     drag-to-reorder; they simply stand in their own column beside the
+     settings proper instead of pushing them down the page. */
+  /* Two columns and no more: the deck on the left, everything else
+     stacked down the right at full width (owner, 2026-08-31). The
+     settings groups were paired into a 1fr 1fr sub-grid, which made
+     four narrow boxes out of a screen that had room for wide ones. */
+  #set .stgrid { grid-template-columns: 1fr; gap: 12px; }
+  #set .stcol { gap: 12px; }
+  /* the two drawings inside are viewBox-scaled, so a full-width column
+     would blow them up to a few hundred pixels tall — they keep their
+     own reading size and sit left */
+  #set .stpath, #set .stmem { max-width: 100%; }
+  /* Stacked full-width groups would just be wide whitespace with the
+     rows hugging the right edge, and the two viewBox drawings would
+     blow up to a few hundred pixels tall. So a group with a drawing
+     splits: the drawing and its caption on the left, its rows on the
+     right. The width buys a shorter page instead of a longer one. */
+  #set .og.wide { display: grid; grid-template-columns: 560px 1fr; column-gap: 40px; align-items: start; }
+  #set .og.wide > h3 { grid-column: 1 / -1; }
+  #set .og.wide > .wleft { grid-column: 1; }
+  #set .og.wide > .wrows { grid-column: 2; }
+  #set .og.wide .orow:first-child { border-top: 0; }
+  #set .og.wide .stflags { padding: 4px 0 0; }
+  #set .og.wide .oghint { margin-bottom: 0; }
+  #set .setlay { display: grid; grid-template-columns: 224px 1fr; gap: 22px; align-items: start; }
+  #set .deckcol { margin-bottom: 0; }
+  #set .deckcol .stshelf { flex-direction: column; flex-wrap: nowrap; gap: 6px; padding: 4px 0 0; }
+  #set .deckcol .stcard { width: 100%; padding: 8px 12px 7px; }
+  #set .deckcol .stcard svg { height: 22px; margin-bottom: 5px; }
+  #set .deckcol .stcard .lv { margin-top: 4px; }
+<style>
+  /* ============================================================
+     ROUND 33 — SUGGESTIONS AND MATCHES. Additive to round 31's docket;
+     the one thing that grows is round 30's single last-match line,
+     which becomes the first line of a list.
+     ============================================================ */
+  /* what a watch matched: the drawer's log, where the last-match line was */
+  .matches { grid-column: 1; }
+  .matches .lab { font: 600 9px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); text-transform: uppercase; }
+  .mlist { list-style: none; margin: 4px 0 0; padding: 0; }
+  .mlist li { display: grid; grid-template-columns: 74px 1fr auto; align-items: center; gap: 12px; padding: 3px 0; border-bottom: 1px solid var(--hair); font: 11px var(--mono); }
+  .mlist .w, .mlist .t { color: var(--ink-3); } .mlist .k { color: var(--ink); } .mlist .k i { color: var(--ink-3); font-style: normal; }
+  .slink { font: 10.5px var(--mono); color: var(--accent); cursor: pointer; text-decoration: none; }
+  .slink:hover { text-decoration: underline; }
+  .slink.quiet { color: var(--ink-3); }
+  .slink.armed { color: var(--alarm); text-decoration: none; }
+  .matches .older { display: inline-block; margin-top: 6px; }
+  tr.drawer.has-m.open .dwr { max-height: 380px; }
+  tr.drawer.wt-learn.has-m.open .dwr { max-height: 520px; }
+  /* suggestions: a second body, its own quiet heading, dashed ink until said yes to */
+  #sugg .sdiv td { padding: 22px 10px 6px; border-bottom: 1px solid var(--hair); }
+  #excl .sdiv td { padding: 22px 10px 6px; border-bottom: 1px solid var(--hair); }
+  #sugg .sdiv .sdl { font: 600 9px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+  #excl .sdiv .sdl { font: 600 9px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+  #sugg .sdiv .sdl b { color: var(--ink-2); font-weight: 600; }
+  #excl .sdiv .sdl b { color: var(--ink-2); font-weight: 600; }
+  #sugg .sdiv .sdr { float: right; display: inline-flex; gap: 18px; }
+  #excl .sdiv .sdr { float: right; display: inline-flex; gap: 18px; }
+  #sugg .sdiv .sdr b { font-weight: 600; }
+  #excl .sdiv .sdr b { font-weight: 600; }
+  /* the heading's two verbs wear the drawer's pill, so they read as things to do, not notes */
+  #sugg .sdiv .sdr .slink { font: 600 11px var(--sans); border: 1px solid var(--hair-2); border-radius: 999px; padding: 3px 12px; }
+  #excl .sdiv .sdr .slink { font: 600 11px var(--sans); border: 1px solid var(--hair-2); border-radius: 999px; padding: 3px 12px; }
+  #sugg .sdiv .sdr .slink:hover { border-color: var(--accent); text-decoration: none; }
+  #excl .sdiv .sdr .slink:hover { border-color: var(--accent); text-decoration: none; }
+  #sugg .sdiv .sdr .slink.quiet:hover { border-color: var(--ink-3); }
+  #excl .sdiv .sdr .slink.quiet:hover { border-color: var(--ink-3); }
+  #sugg .sdiv .sdr .slink.armed { border-color: var(--alarm); }
+  #excl .sdiv .sdr .slink.armed { border-color: var(--alarm); }
+  #sugg .sdiv .sdr .slink:empty { display: none; }
+  #excl .sdiv .sdr .slink:empty { display: none; }
+
+  /* ============================================================
+     round 34: verdicts and exclusions — a verdict is how a flag is
+     cleared; an exclusion is a verdict that outlives the flag
+     ============================================================ */
+  /* round 35: the verdict trio lives in the row, before the caret — one click, no drawer.
+     Three glyph chips in the verdict's own ink; a call lands as a stamp on the row */
+  .panel td.vc { text-align: right; white-space: nowrap; }
+  .panel th.vc { text-align: right; }
+  .vrow { display: inline-flex; gap: 6px; vertical-align: middle; margin-right: 16px; }
+  .vrow button.v { --vc: var(--ink-2); font: 10.5px var(--mono); color: var(--ink-2); background: transparent; border: 1px solid var(--hair-2); border-radius: 999px; padding: 1px 9px 1px 7px; cursor: pointer; line-height: 16px; transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.15s; }
+  .vrow button.v i { font-style: normal; color: var(--vc); margin-right: 5px; font-weight: 700; }
+  .vrow button.v.expected { --vc: var(--ok); }
+  .vrow button.v.noise { --vc: var(--now); }
+  .vrow button.v.real { --vc: var(--alarm); }
+  .vrow button.v:hover { color: var(--vc); border-color: var(--vc); background: color-mix(in srgb, var(--vc) 12%, transparent); transform: translateY(-1px); }
+  .vrow button.v.on { color: var(--vc); border-color: var(--vc); background: color-mix(in srgb, var(--vc) 18%, transparent); }
+  /* the stamp: a verdict pressed onto the docket in its own ink */
+  .stamp { --vc: var(--ink-3); display: inline-block; font: 800 9.5px var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--vc); border: 1.5px solid var(--vc); border-radius: 3px; padding: 1px 7px 1px 8px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vc) 35%, transparent); animation: stamp-in 0.28s cubic-bezier(0.2, 1.6, 0.4, 1) both; vertical-align: middle; }
+  .stamp.expected { --vc: var(--ok); } .stamp.noise { --vc: var(--now); } .stamp.real { --vc: var(--alarm); }
+  @keyframes stamp-in { from { transform: scale(1.9); opacity: 0; } 60% { opacity: 1; } to { transform: scale(1); } }
+  /* the row takes the ink for a moment as the stamp lands */
+  tr.frow.struck td { animation: struck 0.7s ease-out both; }
+  @keyframes struck { from { background: color-mix(in srgb, var(--sc, var(--ink-3)) 16%, transparent); } }
+  tr.frow.struck.expected { --sc: var(--ok); } tr.frow.struck.noise { --sc: var(--now); } tr.frow.struck.real { --sc: var(--alarm); }
+  .vdone .by { color: var(--ink-3); margin-left: 8px; }
+  /* called real: the stamp takes the chips' place and the row's own bar swells */
+  /* the bar swells, it does not step: a lens over the 3 px bar, its ends arcing back to it */
+  tr.frow td:first-child { position: relative; }
+  tr.frow td:first-child::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--alarm); opacity: 0; border-radius: 0 4px 4px 0 / 0 10px 10px 0; transition: width 0.35s ease, opacity 0.35s ease; }
+  tr.frow.isreal td:first-child::before { width: 7px; opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .stamp, tr.frow.struck td { animation: none; } .vrow button.v:hover { transform: none; } }
+  .dwr-acts .never { margin-left: auto; }
+  .dwr-acts .never.armed { color: var(--alarm); border-color: var(--alarm); }
+  /* a flag that has been called: dims in place, keeps its row, offers undo until you leave the tab */
+  tr.frow.fdone td { opacity: 0.45; }
+  tr.frow.fdone td:first-child { box-shadow: none !important; }
+  tr.frow.fdone td:last-child { opacity: 1; }
+  /* takes the trio's place in the same cell, so the columns never move for it */
+  .vdone { font: 10.5px var(--mono); color: var(--ink-3); white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
+  .vdone + .openc { margin-left: 16px; }
+  .vdone a { color: var(--accent); cursor: pointer; margin-left: 8px; }
+  .vdone a:hover { text-decoration: underline; }
+  /* called real: stays open, and says so where the type is */
+  .story .called { display: block; color: var(--ink-3); font-size: 11px; margin-bottom: 6px; }
+  /* the exclusions body: the type's ink is off — mikroview does not look at these */
+  tr.fx .fmark { color: var(--ink-3) !important; }
+  tr.fx td:first-child { box-shadow: none !important; }
+  tr.frow.fx td { opacity: 0.7; }
+  tr.frow.fx.open td { opacity: 1; }
+  .wchip2.sugg { color: var(--ink-3); border-style: dashed; border-color: var(--hair-2); background: transparent; }
+  tr.frow.wt-sugg td.k, tr.frow.wt-aside td.k { color: var(--ink-2); }
+  tr.frow.wt-sugg td:first-child, tr.drawer.wt-sugg > td { box-shadow: inset 3px 0 0 var(--hair); }
+  tr.frow.wt-aside td:first-child, tr.drawer.wt-aside > td { box-shadow: inset 3px 0 0 transparent; }
+  tr.frow.wt-aside td { opacity: 0.6; }
+  tr.drawer.wt-sugg.open .dwr, tr.drawer.wt-aside.open .dwr { max-height: 300px; }
+  .seen.facts li { grid-template-columns: 84px 1fr; }
+  tr.wempty td { text-align: center; padding: 48px 0 40px; font: 13px var(--sans); color: var(--ink-2); line-height: 1.7; }
+  tr.wempty b { color: var(--ink); }
+  .seen.facts .t { text-transform: uppercase; letter-spacing: 0.08em; font-size: 9.5px; }
+</style>
+</head>
+<body>
+<section class="scene" id="s7" aria-label="The docket: flags, watchlist and the audit log on one card">
+  <div class="scenebar">
+    <span class="wordmark" title="home — whichever card you keep first">MIKRO<em>VIEW</em></span>
+    <span class="scstatus"><span><span class="dot"></span>LIVE · 34/s</span><a class="fmk" href="#s7" title="6 open flags — 4 alarms, 2 advisories">⚑ 6</a><a class="wmk" href="#s7" title="9 watchers — 6 healthy, 1 learning, 1 paused, 1 broken"><svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 9 <b title="one watch broken">○1</b></a><button class="who" style="background:transparent;border:1px solid var(--hair);border-radius:999px;padding:2px 10px;font:inherit;color:var(--ink-3);cursor:pointer">tom (admin)</button></span>
+  </div>
+  <div class="dtabs" id="dtabs">
+    <span data-p="flags">flags</span>
+    <span class="on" data-p="watch">watchlist</span>
+    <span data-p="audit">audit log</span>
+  </div>
+
+  <div class="clearall" id="clearall" style="display:none">
+    <button class="cabtn" id="cabtn" title="they keep their place in the audit log">clear all</button>
+  </div>
+  <!-- ROUND 31: the watchlist tab's one panel-level action, in the slot the
+       flags tab already uses for `clear all`. Same pill, the watch's own ink. -->
+  <div class="clearall" id="addwatch">
+    <button class="cabtn wbtn" id="wbtn" title="a new watch — written in place, at the top of the table">+ watch</button>
+  </div>
+  <div class="panel" id="p-flags" aria-label="Open flags, newest first">
+    <table>
+      <thead><tr><th>flag</th><th>where</th><th>evidence</th><th>count</th><th>age</th><th class="vc">call it</th></tr></thead>
+      <tbody>
+        <tr class="frow ft-unplanned open" data-d="d1"><td class="fmark">✱ UNPLANNED</td><td class="k"><a class="wl" href="#s3" onclick="descend()">iot</a> → <a class="wl" href="#s3" onclick="descend()">lan</a> · tcp/445</td><td>caught by default drop — no rule planned this pathway</td><td class="num">14×</td><td class="t">6 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="drawer open ft-unplanned" id="d1"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>14 asks in six minutes</b>, all tcp/445, all from <a class="wl" href="#s3" onclick="descend()">cam-porch</a> (10.0.20.14) toward <b>nas</b> (10.0.40.2). Nothing planned an iot → lan pathway, so the <b>default drop</b> caught every one. The camera has never asked for this before today.</div>
+          <div class="side"><span class="lab">the episode</span>
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none" aria-label="Fourteen events between 13:46 and 13:52, bunched toward the end">
+              <line x1="8" y1="6" x2="8" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="26" y1="6" x2="26" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="31" y1="6" x2="31" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="58" y1="6" x2="58" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="92" y1="6" x2="92" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="118" y1="6" x2="118" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="121" y1="6" x2="121" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="6" x2="158" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="170" y1="6" x2="170" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="196" y1="6" x2="196" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="208" y1="6" x2="208" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="224" y1="6" x2="224" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="236" y1="6" x2="236" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="248" y1="6" x2="248" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/>
+            </svg>
+            <span class="span">first 13:46 · last 13:52 · still arriving</span></div>
+          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 10.0.20.14:49812->10.0.40.2:445, len 60
+13:52:07 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 10.0.20.14:49688->10.0.40.2:445, len 60</div>
+          <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
+        </div></div></td></tr>
+
+        <tr class="frow ft-portscan" data-d="d2"><td class="fmark">✱ PORT SCAN</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a> · 198.51.100.77</td><td>20 distinct ports in 40 s</td><td class="num">20</td><td class="t">11 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="drawer ft-portscan" id="d2"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>One source, twenty doors.</b> 198.51.100.77 walked ports 1000–1019 in forty seconds, every knock refused at the wan boundary. Known scanner ranges say nothing about this address; the blocklist does not carry it.</div>
+          <div class="side"><span class="lab">the episode</span>
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none" aria-label="Twenty events, evenly walked over forty seconds">
+              <line x1="12" y1="8" x2="12" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="24.6" y1="8" x2="24.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="37.2" y1="8" x2="37.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="49.8" y1="8" x2="49.8" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="62.4" y1="8" x2="62.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="75" y1="8" x2="75" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="87.6" y1="8" x2="87.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="100.2" y1="8" x2="100.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="112.8" y1="8" x2="112.8" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="125.39999999999999" y1="8" x2="125.39999999999999" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="138" y1="8" x2="138" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="150.6" y1="8" x2="150.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="163.2" y1="8" x2="163.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="175.79999999999998" y1="8" x2="175.79999999999998" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="188.4" y1="8" x2="188.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="201" y1="8" x2="201" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="213.6" y1="8" x2="213.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="226.2" y1="8" x2="226.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="238.79999999999998" y1="8" x2="238.79999999999998" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="251.4" y1="8" x2="251.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/>
+            </svg>
+            <span class="span">13:41:02 → 13:41:42 · stopped</span></div>
+          <div class="lines">13:41:42 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 198.51.100.77:40019->203.0.113.7:1019, len 60
+13:41:40 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 198.51.100.77:40018->203.0.113.7:1018, len 60</div>
+          <div class="dwr-acts"><button>open in stream ▸</button><button>watch this source</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
+        </div></div></td></tr>
+
+        <tr class="frow ft-outbound" data-d="d3"><td class="fmark">✱ OUTBOUND</td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> → wan · tcp/25</td><td>a camera asking for a mail server</td><td class="num">3×</td><td class="t">18 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="drawer ft-outbound" id="d3"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>A camera asking for a mail server.</b> Three connection attempts to port 25 on three different external hosts. Cameras do not send mail; things that have been taken over do. Refused each time by the iot egress rule.</div>
+          <div class="side"><span class="lab">the episode</span>
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="30" y1="8" x2="30" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/><line x1="128" y1="8" x2="128" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/><line x1="228" y1="8" x2="228" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/></svg>
+            <span class="span">13:34 · 13:36 · 13:39 · quiet since</span></div>
+          <div class="lines">13:39:12 firewall,info D|iot-egress| forward: in:bridge-iot out:ether1, proto TCP (SYN), 10.0.20.14:51230->198.51.100.9:25, len 60</div>
+          <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
+        </div></div></td></tr>
+
+        <tr class="frow ft-repeat" data-d="d4"><td class="fmark">✱ REPEATED DROPS</td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · tcp/445</td><td>same ask, same refusal, still asking</td><td class="num">9×</td><td class="t">24 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="drawer ft-repeat" id="d4"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Same ask, same refusal, still asking.</b> Nine identical attempts, one every couple of minutes — machine-regular, not a person retrying. This is the older sibling of the UNPLANNED flag above; opening either shows the same pathway.</div>
+          <div class="side"><span class="lab">the episode</span>
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="16" y1="8" x2="16" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="44" y1="8" x2="44" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="72" y1="8" x2="72" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="100" y1="8" x2="100" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="128" y1="8" x2="128" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="156" y1="8" x2="156" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="184" y1="8" x2="184" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="212" y1="8" x2="212" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="240" y1="8" x2="240" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/></svg>
+            <span class="span">every ~2 m since 13:28</span></div>
+          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 10.0.20.14:49812->10.0.40.2:445, len 60</div>
+          <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
+        </div></div></td></tr>
+
+        <tr class="frow ft-surge" data-d="d5"><td class="fmark">▲ DROP SURGE</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a></td><td>3.1× the hour's baseline</td><td class="num">—</td><td class="t">31 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="drawer ft-surge" id="d5"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>The wan boundary is refusing 3.1× more than usual for this hour.</b> No single source dominates — it is a broad rise, the shape background scanning takes. Nothing inside answered anything.</div>
+          <div class="side"><span class="lab">the hour against its baseline</span>
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none"><polyline points="0,26 30,25 60,26 90,24 120,20 150,15 180,12 210,10 240,8 260,8" fill="none" stroke="#e8b05a" stroke-width="1.6"/><polyline points="0,27 260,25" fill="none" stroke="rgba(160,185,230,0.35)" stroke-width="1" stroke-dasharray="3 4"/></svg>
+            <span class="span">baseline dashed · climbing since 13:20</span></div>
+          <div class="lines">rate: 9/min → 28/min · top port :445 · 41 distinct sources</div>
+          <div class="dwr-acts"><button>open in metrics ▸</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
+        </div></div></td></tr>
+
+        <tr class="frow ft-talker" data-d="d6"><td class="fmark">▲ NEW TALKER</td><td class="k"><a class="wl" href="#s3" onclick="descend()">lan</a> · laptop-anna</td><td>first traffic on this boundary in 14 d</td><td class="num">—</td><td class="t">55 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="drawer ft-talker" id="d6"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>laptop-anna spoke for the first time in fourteen days.</b> Ordinary browsing shape, all accepted. New-talker flags exist so a quiet name reappearing is a thing you saw, not a thing that slipped by.</div>
+          <div class="side"><span class="lab">first minutes</span>
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none"><polyline points="0,28 40,26 80,18 120,14 160,15 200,13 240,14 260,13" fill="none" stroke="#b8c56a" stroke-width="1.6"/></svg>
+            <span class="span">since 12:57 · all accepted</span></div>
+          <div class="lines">12:57:03 firewall,info A|lan-wan| forward: in:bridge1 out:ether1, proto TCP (SYN), 10.0.10.31:52114->203.0.113.88:443, len 60</div>
+          <div class="dwr-acts"><button>open in stream ▸</button><button class="quiet">clear</button><button class="quiet never">never again</button></div>
+        </div></div></td></tr>
+      </tbody>
+      <tbody id="excl">
+        <tr class="sdiv"><td colspan="6"><span class="sdl">never again · <b id="excn">2</b> pairs mikroview no longer flags</span><span class="sdr"><a class="slink" id="exclshow">show them</a></span></td></tr>
+        <tr class="frow fx ft-talker" data-d="x1" hidden><td class="fmark">▲ NEW TALKER</td><td class="k"><a class="wl" href="#s3" onclick="descend()">lan</a> · printer-hall</td><td>never again — since Mon, tom</td><td class="num">—</td><td class="t">Mon</td><td class="vc"><span class="openc">▸</span></td></tr>
+        <tr class="drawer fx ft-talker" id="x1" hidden><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Told never to flag this again</b> on Monday, by tom. printer-hall wakes for its weekly report and has for a year; the new-talker flag fired every Monday until it was told not to. Nothing about the pair is counted or held now — mikroview simply does not look.</div>
+          <div class="side"><span class="lab">the pair</span><ul class="seen facts"><li><span>flag</span><b>NEW TALKER</b></li><li><span>target</span><b>printer-hall on lan</b></li><li><span>since</span><b>Mon 09:12</b></li><li><span>by</span><b>tom</b></li></ul></div>
+          <div class="dwr-acts"><button class="again">let it fire again</button></div>
+        </div></div></td></tr>
+        <tr class="frow fx ft-repeat" data-d="x2" hidden><td class="fmark">✱ REPEATED DROPS</td><td class="k"><a class="wl" href="#s3" onclick="descend()">guest</a> · tv-lounge · tcp/8009</td><td>never again — since Sat, tom</td><td class="num">—</td><td class="t">Sat</td><td class="vc"><span class="openc">▸</span></td></tr>
+        <tr class="drawer fx ft-repeat" id="x2" hidden><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Told never to flag this again</b> on Saturday, by tom. The lounge chromecast asks lan for its discovery port every few seconds and is refused by design; it flagged all Saturday until it was told not to. The <b>guest tv casting</b> watch on the watchlist is the other half of that decision.</div>
+          <div class="side"><span class="lab">the pair</span><ul class="seen facts"><li><span>flag</span><b>REPEATED DROPS</b></li><li><span>target</span><b>tv-lounge on guest · tcp/8009</b></li><li><span>since</span><b>Sat 19:04</b></li><li><span>by</span><b>tom</b></li></ul></div>
+          <div class="dwr-acts"><button class="again">let it fire again</button></div>
+        </div></div></td></tr>
+      </tbody>
+    </table>
+    <div class="caempty" id="caempty"><div class="cae-in"><span class="cae-mark">✓</span><b>Nothing open.</b><br>Cleared today at 13:58 — all six keep their place in the <a class="olink">audit log</a>.</div></div>
+  </div>
+
+  <div class="panel on" id="p-watch" aria-label="The watchlist">
+    <table>
+      <thead><tr><th>watch</th><th>boundary</th><th>window</th><th>state</th><th>last event</th><th></th></tr></thead>
+      <tbody>
+        <!-- THE DRAFT (round 31). A watch is written where it will live: a row
+             at the top of the table, open as a drawer, gone the moment it is
+             started or discarded. `+ watch` in the tab's action slot makes
+             it blank; `watch this pathway` / `watch this source` on a flag
+             make it filled in. One editing surface for the docket — the drawer. -->
+        <tr class="frow wt-draft open" id="draftrow" data-d="wd" hidden><td class="k" id="draftname">new watch</td><td class="t" id="draftbound">—</td><td class="t" id="draftwin">always</td><td><span class="wchip2 draft">✎ not watching yet</span></td><td class="t">—</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-draft open" id="wd" hidden><td colspan="6"><div class="dwr"><div class="dwr-in wform" id="wform">
+          <div class="story wf">
+            <label><span class="lab">watch</span><input id="f-name" placeholder="a name — or leave it, and it takes its boundary's"></label>
+            <label><span class="lab">who</span><input id="f-who" placeholder="a host — its name, MAC or address"></label>
+            <label id="f-toward-row"><span class="lab">toward</span><input id="f-toward" placeholder="a host, and ports — nas · :445, :139"></label>
+            <div class="wf-row"><span class="lab">window</span>
+              <span class="seg" id="f-seg"><b class="on" data-w="always">always</b><b data-w="between">between</b></span>
+              <span class="when" id="f-when" hidden><input class="tm" id="f-from" value="00:00"> – <input class="tm" id="f-to" value="06:00">
+                <span class="days" id="f-days"><b class="on">M</b><b class="on">T</b><b class="on">W</b><b class="on">T</b><b class="on">F</b><b class="on">S</b><b class="on">S</b></span></span>
+            </div>
+          </div>
+          <div class="side wf-mode" id="f-mode">
+            <span class="lab">and it means</span>
+            <div class="mode on" data-m="expect"><b>expect it</b><i>this pathway should happen. The ring breaks when a kept window passes and it does not.</i></div>
+            <div class="mode" data-m="fence"><b>fence it</b><i>this host may go only where you permit. It learns first — every place it reaches is listed, nothing fires — and the fence starts when you say so.</i>
+              <label class="sub"><input type="checkbox" id="f-noise"> count broadcast, multicast and link-local too</label></div>
+          </div>
+          <div class="dwr-acts"><button id="f-start">start watching</button><button class="quiet" id="f-discard">discard</button></div>
+        </div></div></td></tr>
+
+        <tr class="frow wt-broken" data-d="w1"><td class="k">cam-porch quiet hours</td><td><a class="wl" href="#s3" onclick="descend()">iot</a> → wan</td><td class="t">00:00–06:00</td><td><span class="wchip2 broken">○ ring broken — no events for 2 d</span></td><td class="t">2 d ago</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-broken" id="w1"><td colspan="6"><div class="dwr"><div class="dwr-in" id="w1-read">
+          <div class="story"><b>The ring broke because the silence did not fit.</b> This watch expects <a class="wl" href="#s3" onclick="descend()">cam-porch</a> to check in nightly inside 00:00–06:00; two nights have passed with nothing. A camera that stopped calling home is off, unplugged — or someone else's now.</div>
+          <div class="side"><span class="lab">the window, last 7 nights</span>
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="14" y1="8" x2="14" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="50" y1="8" x2="50" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="86" y1="8" x2="86" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="122" y1="8" x2="122" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="8" x2="158" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="194" y1="8" x2="194" y2="26" stroke="var(--alarm)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/><line x1="230" y1="8" x2="230" y2="26" stroke="var(--alarm)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/></svg>
+            <span class="span">five kept nights · two empty</span></div>
+          <div class="matches"><span class="lab">what it matched · last 3 of 61</span>
+            <ul class="mlist">
+              <li><span class="w">Thu 02:12</span><span class="k">cam-porch → 162.159.200.1<i>:123</i></span><span class="t">1× · A|iot-ntp|</span></li>
+              <li><span class="w">Wed 02:09</span><span class="k">cam-porch → 162.159.200.1<i>:123</i></span><span class="t">1× · A|iot-ntp|</span></li>
+              <li><span class="w">Tue 02:14</span><span class="k">cam-porch → 162.159.200.1<i>:123</i></span><span class="t">1× · A|iot-ntp|</span></li></ul><a class="slink older">older ▸</a></div>
+          <div class="dwr-acts"><button class="mend" data-edit="w1">mend — widen window</button><button>pause watch</button><button class="quiet">open in stream ▸</button><button class="quiet edit" data-edit="w1">edit</button><button class="quiet remove">remove</button></div>
+        </div>
+        <!-- MEND / EDIT (round 31): the same drawer, its story swapped for the
+             form, pre-filled. `mend` is `edit` with the fix already typed in. -->
+        <div class="dwr-in wform" id="w1-edit" hidden>
+          <div class="story wf">
+            <label><span class="lab">watch</span><input value="cam-porch quiet hours"></label>
+            <label><span class="lab">who</span><input value="cam-porch"></label>
+            <label><span class="lab">toward</span><input value="wan"></label>
+            <div class="wf-row"><span class="lab">window</span>
+              <span class="seg"><b data-w="always">always</b><b class="on" data-w="between">between</b></span>
+              <span class="when"><input class="tm changed" value="23:30" title="was 00:00"> – <input class="tm" value="06:00">
+                <span class="days"><b class="on">M</b><b class="on">T</b><b class="on">W</b><b class="on">T</b><b class="on">F</b><b class="on">S</b><b class="on">S</b></span></span>
+            </div>
+          </div>
+          <div class="side wf-mode">
+            <span class="lab">why this mend</span>
+            <div class="mendnote">Both empty nights, cam-porch did call home — at <b>23:41</b> and <b>23:38</b>, just before the window opened. Starting it at 23:30 covers what was seen. Nothing else changes.</div>
+          </div>
+          <div class="dwr-acts"><button data-save="w1">save — ring mends on the next night</button><button class="quiet" data-cancel="w1">cancel</button></div>
+        </div></div></td></tr>
+
+        <!-- THE LEARNING WATCH (round 31): a fenced host, still learning.
+             Its places-seen list is where `promote` lives: per place, or all.
+             `fence now` is the observe-only toggle, named for what it does. -->
+        <tr class="frow wt-learn" data-d="w3"><td class="k">tv-lounge fenced</td><td><a class="wl" href="#s3" onclick="descend()">iot</a> → wherever it goes</td><td class="t">always</td><td><span class="wchip2 learn">◌ learning — 4 places seen · 2 permitted</span></td><td class="t">13:50</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-learn" id="w3"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Learning, not fencing yet.</b> Since Sunday <a class="wl" href="#s3" onclick="descend()">tv-lounge</a> has reached four places. Nothing fires while it learns. Permit the ones you recognise; when you say <b>fence now</b>, anything it reaches that is not on the list becomes a flag.</div>
+          <div class="side"><span class="lab">where it has reached · since Sunday</span>
+            <ul class="seen">
+              <li><span class="k">time.cloudflare.com</span><span class="t">udp/123 · 412×</span><span class="ok">✓ permitted</span></li>
+              <li><span class="k">cdn.samsungcloudsolution.com</span><span class="t">tcp/443 · 96×</span><span class="ok">✓ permitted</span></li>
+              <li><span class="k">nas</span><span class="t">tcp/8096 · 31×</span><button class="permit">permit</button></li>
+              <li><span class="k">185.199.108.4</span><span class="t">tcp/443 · 2× · unnamed</span><button class="permit">permit</button></li>
+            </ul></div>
+          <div class="matches"><span class="lab">what it matched · last 3 of 541</span>
+            <ul class="mlist">
+              <li><span class="w">13:50</span><span class="k">tv-lounge → time.cloudflare.com<i>:123</i></span><span class="t">412× since Sun · A|iot-out|</span></li>
+              <li><span class="w">13:44</span><span class="k">tv-lounge → cdn.samsungcloudsolution.com<i>:443</i></span><span class="t">96× since Sun · A|iot-out|</span></li>
+              <li><span class="w">12:31</span><span class="k">tv-lounge → nas<i>:8096</i></span><span class="t">31× since Mon · A|iot-lan|</span></li></ul><a class="slink older">older ▸</a></div>
+          <div class="dwr-acts"><button id="permitall">permit all four</button><button id="fencenow">fence now · 2 permitted</button><button class="quiet">open in stream ▸</button><button class="quiet edit">edit</button><button class="quiet remove">remove</button></div>
+        </div></div></td></tr>
+
+        <tr class="frow wt-ok" data-d="w2"><td class="k">nas backup window</td><td><a class="wl" href="#s3" onclick="descend()">servers</a> → wan</td><td class="t">02:00–03:00</td><td><span class="wchip2">◉ watching</span></td><td class="t">02:14</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-ok" id="w2"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Held.</b> The nas reached its offsite peer at 02:14 tonight, inside the window, usual size. Nothing else used the pathway.</div>
+          <div class="side"><span class="lab">the window, last 7 nights</span>
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="14" y1="8" x2="14" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="50" y1="8" x2="50" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="86" y1="8" x2="86" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="122" y1="8" x2="122" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="8" x2="158" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="194" y1="8" x2="194" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="230" y1="8" x2="230" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/></svg>
+            <span class="span">seven kept nights</span></div>
+          <div class="matches"><span class="lab">what it matched · last 3 of 214</span>
+            <ul class="mlist">
+              <li><span class="w">02:14</span><span class="k">nas → 198.51.100.40<i>:443</i></span><span class="t">1× · A|srv-backup|</span></li>
+              <li><span class="w">Sat 02:13</span><span class="k">nas → 198.51.100.40<i>:443</i></span><span class="t">1× · A|srv-backup|</span></li>
+              <li><span class="w">Fri 02:14</span><span class="k">nas → 198.51.100.40<i>:443</i></span><span class="t">1× · A|srv-backup|</span></li></ul><a class="slink older">older ▸</a></div>
+          <div class="dwr-acts"><button>pause watch</button><button class="quiet">open in stream ▸</button><button class="quiet edit">edit</button><button class="quiet remove">remove</button></div>
+        </div></div></td></tr>
+        <tr class="frow wt-ok"><td class="k">pihole upstream only</td><td><a class="wl" href="#s3" onclick="descend()">servers</a> → wan · :53</td><td class="t">always</td><td><span class="wchip2">◉ watching</span></td><td class="t">13:51</td><td><span class="openc">▸</span></td></tr>
+        <tr class="frow wt-ok"><td class="k">wg0 peer phone-tom</td><td><a class="wl" href="#s3" onclick="descend()">wireguard</a></td><td class="t">always</td><td><span class="wchip2">◉ watching</span></td><td class="t">13:22</td><td><span class="openc">▸</span></td></tr>
+        <tr class="frow wt-ok"><td class="k">tom-desktop wake traffic</td><td><a class="wl" href="#s3" onclick="descend()">lan</a> → wan</td><td class="t">08:00–23:00</td><td><span class="wchip2">◉ watching</span></td><td class="t">13:52</td><td><span class="openc">▸</span></td></tr>
+        <tr class="frow wt-ok"><td class="k">laptop-anna school hours</td><td><a class="wl" href="#s3" onclick="descend()">lan</a> → wan</td><td class="t">09:00–15:00</td><td><span class="wchip2">◉ watching</span></td><td class="t">12:47</td><td><span class="openc">▸</span></td></tr>
+        <!-- THE PAUSED WATCH (round 31): the state pause leaves behind. The
+             drawn `pause watch` is the same button, reading `resume watch`. -->
+        <tr class="frow wt-paused" data-d="w4"><td class="k">guest tv casting</td><td><a class="wl" href="#s3" onclick="descend()">guest</a> → lan · :8009</td><td class="t">always</td><td><span class="wchip2 paused">‖ paused</span></td><td class="t">Sat 19:02</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-paused" id="w4"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Paused on Saturday.</b> Not watching, not counting. Everything it matched before then is kept, and the audit log has who paused it and when.</div>
+          <div class="side"><span class="lab">the window, last 7 days</span>
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="14" y1="8" x2="14" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="50" y1="8" x2="50" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="86" y1="8" x2="86" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="122" y1="8" x2="122" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="8" x2="158" y2="26" stroke="var(--ink-3)" stroke-width="2.5" stroke-linecap="round" opacity="0.3"/><line x1="194" y1="8" x2="194" y2="26" stroke="var(--ink-3)" stroke-width="2.5" stroke-linecap="round" opacity="0.3"/><line x1="230" y1="8" x2="230" y2="26" stroke="var(--ink-3)" stroke-width="2.5" stroke-linecap="round" opacity="0.3"/></svg>
+            <span class="span">four kept days · three not watched</span></div>
+          <div class="matches"><span class="lab">what it matched · last 3 of 88</span>
+            <ul class="mlist">
+              <li><span class="w">Sat 19:02</span><span class="k">10.0.30.7 → tv-lounge<i>:8009</i></span><span class="t">3× · A|guest-cast|</span></li>
+              <li><span class="w">Sat 18:40</span><span class="k">10.0.30.7 → tv-lounge<i>:8009</i></span><span class="t">1× · A|guest-cast|</span></li>
+              <li><span class="w">Fri 21:12</span><span class="k">10.0.30.12 → tv-lounge<i>:8009</i></span><span class="t">7× · A|guest-cast|</span></li></ul><a class="slink older">older ▸</a></div>
+          <div class="dwr-acts"><button>resume watch</button><button class="quiet">open in stream ▸</button><button class="quiet edit">edit</button><button class="quiet remove">remove</button></div>
+        </div></div></td></tr>
+        <tr class="frow wt-ok"><td class="k">wan dark-boundary sentinel</td><td><a class="wl" href="#s3" onclick="descend()">internet</a></td><td class="t">always</td><td><span class="wchip2">◉ watching</span></td><td class="t">13:49</td><td><span class="openc">▸</span></td></tr>
+      </tbody>
+
+      <!-- ROUND 33: SUGGESTIONS. What mikroview would watch, from what the
+           routers pushed — DHCP leases, drop rules with ports, address lists.
+           Its own body, under the watches, in the same row grammar: a
+           suggestion is a watch that has not been said yes to. `watch it`
+           is accept; `not this` sets it aside; `start over` is the reset. -->
+      <tbody id="sugg">
+        <tr class="sdiv"><td colspan="6"><span class="sdl">mikroview suggests · from what rb5009 and hap-ax2 pushed · <b id="sugn">3</b></span><span class="sdr"><a class="slink" id="sugshow"><b id="asiden">2</b> set aside · show them</a><a class="slink quiet" id="sugreset">start over — wipe every watch</a></span></td></tr>
+
+        <tr class="frow wt-sugg" data-d="g1" data-kind="device"><td class="k">doorbell fenced</td><td><a class="wl" href="#s3" onclick="descend()">iot</a> → wherever it goes</td><td class="t">always</td><td><span class="wchip2 sugg">◇ suggested — a new lease on iot</span></td><td class="t">—</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-sugg" id="g1"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>A new host, not yet watched.</b> On Sunday rb5009 gave <a class="wl" href="#s3" onclick="descend()">doorbell</a> a lease on iot; nothing on the watchlist covers it. Fencing it learns first — every place it reaches is listed, nothing fires — and the fence starts when you say so.</div>
+          <div class="side"><span class="lab">the lease, as pushed</span>
+            <ul class="seen facts">
+              <li><span class="t">host</span><span class="k">doorbell</span></li>
+              <li><span class="t">mac</span><span class="k">B8:27:EB:4F:12:9C</span></li>
+              <li><span class="t">address</span><span class="k">10.0.20.44 · iot</span></li>
+              <li><span class="t">first seen</span><span class="k">Sun 18:12 · rb5009</span></li>
+            </ul></div>
+          <div class="dwr-acts"><button class="accept">watch it — it learns first</button><button class="quiet aside">not this</button></div>
+        </div></div></td></tr>
+
+        <tr class="frow wt-sugg" data-d="g2" data-kind="port"><td class="k">iot smb attempts</td><td><a class="wl" href="#s3" onclick="descend()">iot</a> → lan · :445, :139</td><td class="t">always</td><td><span class="wchip2 sugg">◇ suggested — from drop rule iot-no-smb</span></td><td class="t">—</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-sugg" id="g2"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Your router already refuses this.</b> rb5009's rule <b>iot-no-smb</b> drops iot → lan on :445 and :139 — 1,204 times this week. Watching the same pathway keeps who tried, and when: every attempt is a match here, with its source named.</div>
+          <div class="side"><span class="lab">the rule, as pushed</span>
+            <ul class="seen facts">
+              <li><span class="t">chain</span><span class="k">forward · in bridge-iot</span></li>
+              <li><span class="t">dst-port</span><span class="k">445, 139 · tcp</span></li>
+              <li><span class="t">action</span><span class="k">drop · log prefix iot-no-smb</span></li>
+              <li><span class="t">hits</span><span class="k">1,204 this week · rb5009</span></li>
+            </ul></div>
+          <div class="dwr-acts"><button class="accept">watch it — every attempt is a match</button><button class="quiet aside">not this</button></div>
+        </div></div></td></tr>
+
+        <tr class="frow wt-sugg" data-d="g3" data-kind="addressList"><td class="k">bogons on wan</td><td><a class="wl" href="#s3" onclick="descend()">internet</a> → address list bogons</td><td class="t">always</td><td><span class="wchip2 sugg">◇ suggested · stale — the list is gone</span></td><td class="t">—</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-sugg" id="g3"><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Was on the router; is not now.</b> hap-ax2 kept an address list <b>bogons</b> — 312 addresses — until nine days ago; its latest push has no such list. Watch it anyway and it watches nothing. Better to let it go.</div>
+          <div class="side"><span class="lab">the list, as last pushed</span>
+            <ul class="seen facts">
+              <li><span class="t">name</span><span class="k">bogons</span></li>
+              <li><span class="t">addresses</span><span class="k">312</span></li>
+              <li><span class="t">last pushed</span><span class="k">23 Aug · hap-ax2</span></li>
+              <li><span class="t">now</span><span class="k">absent from the push of 13:41</span></li>
+            </ul></div>
+          <div class="dwr-acts"><button class="aside">let it go</button><button class="quiet accept">watch it anyway</button></div>
+        </div></div></td></tr>
+
+        <!-- set aside: hidden until `show them`; `bring it back` is unhide -->
+        <tr class="frow wt-aside" data-d="h1" data-kind="device" hidden><td class="k">hue-bridge fenced</td><td><a class="wl" href="#s3" onclick="descend()">iot</a> → wherever it goes</td><td class="t">always</td><td><span class="wchip2 sugg">◇ set aside — Monday</span></td><td class="t">—</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-aside" id="h1" hidden><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Set aside on Monday.</b> Kept here, quiet, until you bring it back; if the lease goes, it goes with it.</div>
+          <div class="side"><span class="lab">the lease, as pushed</span>
+            <ul class="seen facts">
+              <li><span class="t">mac</span><span class="k">00:17:88:6A:C2:1E</span></li>
+              <li><span class="t">address</span><span class="k">10.0.20.9 · iot</span></li>
+            </ul></div>
+          <div class="dwr-acts"><button class="quiet back">bring it back</button></div>
+        </div></div></td></tr>
+        <tr class="frow wt-aside" data-d="h2" data-kind="device" hidden><td class="k">plug-kettle fenced</td><td><a class="wl" href="#s3" onclick="descend()">iot</a> → wherever it goes</td><td class="t">always</td><td><span class="wchip2 sugg">◇ set aside — Tuesday</span></td><td class="t">—</td><td><span class="openc">▸</span></td></tr>
+        <tr class="drawer wt-aside" id="h2" hidden><td colspan="6"><div class="dwr"><div class="dwr-in">
+          <div class="story"><b>Set aside on Tuesday.</b> Kept here, quiet, until you bring it back; if the lease goes, it goes with it.</div>
+          <div class="side"><span class="lab">the lease, as pushed</span>
+            <ul class="seen facts">
+              <li><span class="t">mac</span><span class="k">70:4F:57:11:0B:C3</span></li>
+              <li><span class="t">address</span><span class="k">10.0.20.27 · iot</span></li>
+            </ul></div>
+          <div class="dwr-acts"><button class="quiet back">bring it back</button></div>
+        </div></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel" id="p-audit" aria-label="The audit log">
+    <table>
+      <thead><tr><th>when</th><th>who</th><th>what</th></tr></thead>
+      <tbody>
+        <tr><td class="t">13:47</td><td>tom</td><td>opened flag <span class="k">UNPLANNED · iot → lan</span></td></tr>
+        <tr><td class="t">13:31</td><td>tom</td><td>added watch <span class="k">laptop-anna school hours</span></td></tr>
+        <tr><td class="t">13:12</td><td>tom</td><td>permitted <span class="k">cdn.samsungcloudsolution.com</span> for <span class="k">tv-lounge fenced</span></td></tr>
+        <tr><td class="t">12:58</td><td class="t">router</td><td>pushed <span class="k">/ip address</span> table · 5 zones unchanged</td></tr>
+        <tr><td class="t">11:02</td><td>tom</td><td>changed theme to <span class="k">dark</span></td></tr>
+        <tr><td class="t">09:14</td><td>tom</td><td>signed in from <span class="k">tom-desktop</span></td></tr>
+        <tr><td class="t">Sat 19:04</td><td>tom</td><td>paused watch <span class="k">guest tv casting</span></td></tr>
+        <tr><td class="t">yesterday</td><td>tom</td><td>cleared flag <span class="k">DROP SURGE · guest</span> — “expected, speed test”</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  
+</section>
+<style>
+  .clearall { position: absolute; top: 62px; right: 44px; z-index: 6; }
+  .cabtn { font: 600 10.5px var(--mono); letter-spacing: 0.06em; color: var(--now); background: transparent; border: 1px solid var(--now); border-radius: 999px; padding: 4px 15px; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
+  .cabtn:hover { background: rgba(232, 176, 90, 0.08); }
+  .cabtn.armed { color: var(--alarm); border-color: var(--alarm); }
+  .cabtn.armed:hover { background: rgba(255, 84, 112, 0.08); }
+  @media (prefers-reduced-motion: reduce) { .cabtn { transition: none; } }
+  .caempty { display: none; width: 100%; justify-content: center; padding-top: 90px; }
+  .caempty.on { display: flex; }
+  .cae-in { text-align: center; font: 13px var(--sans); color: var(--ink-2); line-height: 1.7; }
+  .cae-mark { display: block; font-size: 20px; color: var(--ok); margin-bottom: 6px; }
+</style>
+<style>
+  /* the chrome marks, as round 30 styles them (its later sheet) */
+  .scstatus .fmk { color: var(--alarm); font: 600 11px var(--mono); text-decoration: none; }
+  .scstatus .wmk { color: #a78bfa; font: 600 11px var(--mono); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; margin-left: 14px; }
+  .scstatus .wmk b { color: var(--alarm); font-size: 9px; font-weight: 600; }
+  .scstatus .who:hover { color: var(--ink-2); border-color: var(--hair); }
+  .scstatus .who { background: transparent; border: 1px solid transparent; border-radius: 999px; padding: 2px 10px; font: inherit; color: var(--ink-3); cursor: pointer; margin-left: 14px; }
+  /* ============================================================
+     ROUND 31 — THE WATCHLIST, MANAGED. Everything below is additive
+     to round 30's docket; nothing above it is redrawn.
+     ============================================================ */
+  .cabtn.wbtn { color: #a78bfa; border-color: rgba(167, 139, 250, 0.55); }
+  .cabtn.wbtn:hover { background: rgba(167, 139, 250, 0.08); }
+  /* two more states the app has and round 30 did not draw */
+  .wchip2.learn { border-style: dashed; }
+  .wchip2.paused { color: var(--ink-3); border-color: var(--hair-2); background: transparent; }
+  .wchip2.draft { color: var(--ink-3); border-style: dashed; border-color: var(--hair-2); background: transparent; }
+  tr.frow.wt-learn td:first-child, tr.drawer.wt-learn > td { box-shadow: inset 3px 0 0 rgba(167, 139, 250, 0.5); }
+  tr.frow.wt-paused td:first-child, tr.drawer.wt-paused > td { box-shadow: inset 3px 0 0 var(--hair-2); }
+  tr.frow.wt-draft td:first-child, tr.drawer.wt-draft > td { box-shadow: inset 3px 0 0 var(--accent); }
+  tr.drawer.wt-draft.open .dwr, tr.drawer.editing.open .dwr, tr.drawer.wt-learn.open .dwr { max-height: 420px; }
+  /* edit and remove: every watch's drawer ends with them, quiet, at the far right */
+  .dwr-in[hidden], tr[hidden] { display: none; }
+  .dwr-acts .edit { margin-left: auto; }
+  .dwr-acts .remove.armed { color: var(--alarm); border-color: var(--alarm); }
+  /* the form — the drawer's story column, as fields */
+  .wf label { display: grid; grid-template-columns: 64px 1fr; align-items: baseline; gap: 12px; margin: 3px 0; }
+  .wf .wf-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+  .wf .wf-row .lab { width: 64px; flex: none; }
+  .wf .lab { font: 600 9px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+  .wf input { width: 100%; background: transparent; border: 0; border-bottom: 1px dashed var(--hair-2); font: 12px var(--mono); color: var(--ink); padding: 3px 0; outline: none; }
+  .wf input:focus { border-bottom-color: var(--accent); }
+  .wf input::placeholder { color: var(--ink-3); opacity: 0.7; }
+  .wf input:disabled { color: var(--ink-3); border-bottom-style: dotted; }
+  .wf input.changed { color: var(--accent); border-bottom: 1px solid var(--accent); }
+  .wf .seg { justify-self: start; display: inline-flex; border: 1px solid var(--hair-2); border-radius: 999px; overflow: hidden; }
+  .wf .seg b { font: 600 10.5px var(--mono); color: var(--ink-3); padding: 2px 12px; cursor: pointer; }
+  .wf .seg b.on { color: var(--ink); background: rgba(160, 185, 230, 0.10); }
+  .wf .when { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font: 11px var(--mono); color: var(--ink-3); }
+  .wf .when[hidden] { display: none; }
+  .wf input.tm { width: 46px; text-align: center; }
+  .wf .days { display: inline-flex; gap: 2px; margin-left: 8px; }
+  .wf .days b { font: 600 9.5px var(--mono); color: var(--ink-3); width: 16px; text-align: center; padding: 1px 0; border-radius: 3px; cursor: pointer; }
+  .wf .days b.on { color: var(--ink); background: rgba(167, 139, 250, 0.18); }
+  .wf-mode .mode { display: block; border: 1px solid var(--hair); border-radius: 8px; padding: 8px 12px; margin-top: 6px; cursor: pointer; }
+  .wf-mode .mode.on { border-color: rgba(167, 139, 250, 0.55); background: rgba(167, 139, 250, 0.06); }
+  .wf-mode .mode b { display: block; font: 600 11px var(--sans); color: var(--ink); }
+  .wf-mode .mode b::before { content: '○ '; color: var(--ink-3); }
+  .wf-mode .mode.on b::before { content: '◉ '; color: #a78bfa; }
+  .wf-mode .mode i { display: block; font: 11px var(--sans); font-style: normal; color: var(--ink-3); line-height: 1.5; margin-top: 2px; }
+  .wf-mode .mode .sub { display: none; font: 10.5px var(--mono); color: var(--ink-3); margin-top: 6px; align-items: center; gap: 6px; }
+  .wf-mode .mode.on .sub { display: flex; }
+  .mendnote { font: 12px var(--sans); color: var(--ink-2); line-height: 1.55; margin-top: 6px; }
+  .mendnote b { color: var(--ink); font-weight: 600; }
+  /* where a learning watch has reached: the list `permit` lives on */
+  .seen { list-style: none; margin: 6px 0 0; padding: 0; }
+  .seen li { display: grid; grid-template-columns: 1fr auto 72px; align-items: center; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--hair); font: 11px var(--mono); }
+  .seen .k { color: var(--ink); } .seen .t { color: var(--ink-3); }
+  .seen .ok { font: 600 10px var(--mono); color: #a78bfa; text-align: right; }
+  .seen .permit { font: 600 10px var(--sans); color: var(--accent); background: transparent; border: 1px solid var(--hair-2); border-radius: 999px; padding: 1px 10px; cursor: pointer; justify-self: end; }
+  .seen .permit:hover { border-color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { tr.drawer .dwr, .panel .openc { transition: none; } }
+</style>
+<script>
+  function descend() {} // the map is not in this file; its links are inert here
+  // tabs, as round 30 — plus the watchlist's own action in the same slot
+  document.querySelectorAll('#dtabs span[data-p]').forEach(function (s) {
+    s.addEventListener('click', function () {
+      document.querySelectorAll('#dtabs span[data-p]').forEach(function (x) { x.classList.toggle('on', x === s); });
+      ['flags', 'watch', 'audit'].forEach(function (k) {
+        document.getElementById('p-' + k).classList.toggle('on', k === s.dataset.p);
+      });
+      var ca = document.getElementById('clearall');
+      if (ca) ca.style.display = s.dataset.p === 'flags' && !document.getElementById('caempty').classList.contains('on') ? '' : 'none';
+      document.getElementById('addwatch').style.display = s.dataset.p === 'watch' ? '' : 'none';
+    });
+  });
+  document.querySelectorAll('tr.frow[data-d]').forEach(function (r) {
+    r.addEventListener('click', function (e) {
+      if (e.target.closest('a, button')) return; // where-links navigate and pills act; neither toggles
+      var d = document.getElementById(r.dataset.d);
+      var open = !r.classList.contains('open');
+      r.classList.toggle('open', open);
+      d.classList.toggle('open', open);
+    });
+  });
+  // clicks inside a drawer never close it
+  document.querySelectorAll('tr.drawer').forEach(function (d) { d.addEventListener('click', function (e) { e.stopPropagation(); }); });
+  // Every column is a sort (click the head) and a filter (the quiet row
+  // beneath it) — across all three tabs. Drawers travel with their row.
+  document.querySelectorAll('.panel table').forEach(function (table) {
+    var heads = Array.from(table.tHead.rows[0].cells);
+    function groups() {
+      var out = [], rows = Array.from(table.tBodies[0].rows);
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].classList.contains('drawer')) continue;
+        var g = [rows[i]];
+        if (rows[i + 1] && rows[i + 1].classList.contains('drawer')) g.push(rows[i + 1]);
+        out.push(g);
+      }
+      return out;
+    }
+    var fr = table.tHead.insertRow();
+    fr.className = 'filters';
+    heads.forEach(function (h) {
+      var td = fr.insertCell();
+      if (!h.textContent.trim() || h.classList.contains('vc')) return;
+      var inp = document.createElement('input');
+      inp.placeholder = 'filter';
+      inp.setAttribute('aria-label', 'Filter by ' + h.textContent.trim());
+      inp.addEventListener('input', function () {
+        var terms = Array.from(fr.cells).map(function (c) {
+          var x = c.querySelector('input');
+          return x ? x.value.toLowerCase() : '';
+        });
+        groups().forEach(function (g) {
+          var cells = g[0].cells;
+          var show = terms.every(function (t, j) {
+            return !t || (cells[j] && cells[j].textContent.toLowerCase().indexOf(t) !== -1);
+          });
+          g.forEach(function (r) { r.style.display = show ? '' : 'none'; });
+        });
+      });
+      td.appendChild(inp);
+    });
+    heads.forEach(function (h, i) {
+      if (!h.textContent.trim()) return;
+      h.addEventListener('click', function () {
+        var dir = h.dataset.dir === 'asc' ? 'desc' : 'asc';
+        heads.forEach(function (x) { delete x.dataset.dir; var d = x.querySelector('.dir'); if (d) d.remove(); });
+        h.dataset.dir = dir;
+        var m = document.createElement('span'); m.className = 'dir'; m.textContent = dir === 'asc' ? '▲' : '▼';
+        h.appendChild(m);
+        var gs = groups();
+        gs.sort(function (a, b) {
+          var ta = a[0].cells[i].textContent.trim(), tb = b[0].cells[i].textContent.trim();
+          var na = parseFloat(ta.replace(/[^0-9.]/g, '')), nb = parseFloat(tb.replace(/[^0-9.]/g, ''));
+          var c = (!isNaN(na) && !isNaN(nb)) ? na - nb : ta.localeCompare(tb);
+          return dir === 'asc' ? c : -c;
+        });
+        gs.forEach(function (g) { g.forEach(function (r) { table.tBodies[0].appendChild(r); }); });
+      });
+    });
+  });
+  // ---- round 31: the draft ----
+  (function () {
+    var row = document.getElementById('draftrow'), dr = document.getElementById('wd');
+    var name = document.getElementById('f-name'), who = document.getElementById('f-who'), toward = document.getElementById('f-toward');
+    var seg = document.getElementById('f-seg'), when = document.getElementById('f-when');
+    var modes = Array.from(document.querySelectorAll('#f-mode .mode'));
+    function mode() { return document.querySelector('#f-mode .mode.on').dataset.m; }
+    function reflect() {
+      var w = who.value.trim(), t = toward.value.trim();
+      var bound = w ? (w + (mode() === 'fence' ? ' → wherever it goes' : (t ? ' → ' + t : ''))) : '—';
+      document.getElementById('draftname').textContent = name.value.trim() || (w ? (w + (mode() === 'fence' ? ' fenced' : '')) : 'new watch');
+      document.getElementById('draftbound').textContent = bound;
+      var on = seg.querySelector('.on').dataset.w;
+      document.getElementById('draftwin').textContent = on === 'always' ? 'always' : (document.getElementById('f-from').value + '–' + document.getElementById('f-to').value);
+      toward.disabled = mode() === 'fence';
+      toward.placeholder = mode() === 'fence' ? 'wherever it goes — it learns, you permit' : 'a host, and ports — nas · :445, :139';
+    }
+    function show(fill) {
+      name.value = fill.name || ''; who.value = fill.who || ''; toward.value = fill.toward || '';
+      modes.forEach(function (m) { m.classList.toggle('on', m.dataset.m === (fill.mode || 'expect')); });
+      seg.querySelectorAll('b').forEach(function (b) { b.classList.toggle('on', b.dataset.w === 'always'); });
+      when.hidden = true;
+      row.hidden = false; dr.hidden = false;
+      reflect();
+      (fill.who ? (fill.mode === 'fence' ? name : toward) : who).focus();
+    }
+    function hide() { row.hidden = true; dr.hidden = true; }
+    document.getElementById('wbtn').addEventListener('click', function (e) { e.stopPropagation(); show({}); });
+    document.getElementById('f-discard').addEventListener('click', hide);
+    document.getElementById('f-start').addEventListener('click', hide);
+    [name, who, toward].forEach(function (i) { i.addEventListener('input', reflect); });
+    seg.querySelectorAll('b').forEach(function (b) {
+      b.addEventListener('click', function () {
+        seg.querySelectorAll('b').forEach(function (x) { x.classList.toggle('on', x === b); });
+        when.hidden = b.dataset.w === 'always'; reflect();
+      });
+    });
+    ['f-from', 'f-to'].forEach(function (id) { document.getElementById(id).addEventListener('input', reflect); });
+    document.querySelectorAll('.wf .days b').forEach(function (b) { b.addEventListener('click', function () { b.classList.toggle('on'); }); });
+    modes.forEach(function (m) {
+      m.addEventListener('click', function () { modes.forEach(function (x) { x.classList.toggle('on', x === m); }); reflect(); });
+    });
+    // a flag's `watch this pathway` / `watch this source` writes the draft for you
+    document.querySelectorAll('#p-flags .dwr-acts button').forEach(function (b) {
+      var t = b.textContent.trim();
+      if (t.indexOf('watch this') !== 0) return;
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var where = b.closest('tr.drawer').previousElementSibling.cells[1].textContent.trim();
+        var story = b.closest('.dwr-in').querySelector('.story');
+        var host = (story.querySelector('a.wl') || {}).textContent || where.split(' ')[0];
+        document.querySelector('#dtabs span[data-p="watch"]').click();
+        if (t === 'watch this source') show({ who: host, mode: 'fence' });
+        else {
+          var port = (where.match(/\/(\d+)/) || [])[1];
+          var dest = (story.querySelector('b + b, .story b:nth-of-type(2)') || {}).textContent || where.split('→').pop().replace(/·.*$/, '').trim();
+          show({ who: host, toward: dest + (port ? ' · :' + port : ''), mode: 'expect' });
+        }
+      });
+    });
+    window.showDraft = show;
+  })();
+  // ---- round 31: mend and edit ----
+  document.querySelectorAll('[data-edit]').forEach(function (b) {
+    b.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var id = b.dataset.edit, dr = document.getElementById(id);
+      document.getElementById(id + '-read').hidden = true;
+      document.getElementById(id + '-edit').hidden = false;
+      dr.classList.add('editing');
+    });
+  });
+  function unedit(id, saved) {
+    var dr = document.getElementById(id);
+    document.getElementById(id + '-read').hidden = false;
+    document.getElementById(id + '-edit').hidden = true;
+    dr.classList.remove('editing');
+    if (saved) {
+      var row = document.querySelector('tr.frow[data-d="' + id + '"]');
+      row.cells[2].textContent = '23:30–06:00';
+      row.cells[3].innerHTML = '<span class="wchip2">◉ watching — ring mends tonight</span>';
+      row.classList.remove('wt-broken'); row.classList.add('wt-ok');
+      dr.classList.remove('wt-broken'); dr.classList.add('wt-ok');
+      document.querySelectorAll('.wmk').forEach(function (m) { m.innerHTML = m.innerHTML.replace(/ <b[^]*<\/b>/, ''); m.title = '9 watchers — 7 healthy, 1 learning, 1 paused'; });
+    }
+  }
+  document.querySelectorAll('[data-save]').forEach(function (b) { b.addEventListener('click', function () { unedit(b.dataset.save, true); }); });
+  document.querySelectorAll('[data-cancel]').forEach(function (b) { b.addEventListener('click', function () { unedit(b.dataset.cancel, false); }); });
+  // ---- round 31: remove — armed on the first click, done on the second, disarmed by any other (round 28's `clear all`) ----
+  (function () {
+    var armed = null;
+    function disarm() { if (armed) { armed.classList.remove('armed'); armed.textContent = 'remove'; armed = null; } }
+    document.querySelectorAll('.dwr-acts .remove').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (armed !== b) { disarm(); armed = b; b.classList.add('armed'); b.textContent = 'confirm — its matches stay'; return; }
+        var dr = b.closest('tr.drawer'), row = dr.previousElementSibling;
+        armed = null; dr.remove(); row.remove();
+      });
+    });
+    document.addEventListener('click', disarm);
+  })();
+  // ---- round 31: permit, and fence now ----
+  (function () {
+    var list = document.querySelector('#w3 .seen'), chip = document.querySelector('tr[data-d="w3"] .wchip2');
+    var all = document.getElementById('permitall'), fence = document.getElementById('fencenow');
+    function count() { return list.querySelectorAll('.ok').length; }
+    function reflect() {
+      var n = count(), total = list.children.length;
+      chip.textContent = '◌ learning — ' + total + ' places seen · ' + n + ' permitted';
+      fence.textContent = 'fence now · ' + n + ' permitted';
+      all.style.display = n === total ? 'none' : '';
+    }
+    function permit(btn) { var s = document.createElement('span'); s.className = 'ok'; s.textContent = '✓ permitted'; btn.replaceWith(s); }
+    list.addEventListener('click', function (e) { var b = e.target.closest('.permit'); if (b) { permit(b); reflect(); } });
+    all.addEventListener('click', function () { list.querySelectorAll('.permit').forEach(permit); reflect(); });
+    fence.addEventListener('click', function () {
+      var n = count(), row = document.querySelector('tr[data-d="w3"]');
+      chip.className = 'wchip2'; chip.textContent = '◉ fencing — ' + n + ' places permitted';
+      row.cells[1].innerHTML = '<a class="wl" href="#s3" onclick="descend()">iot</a> → ' + n + ' permitted places';
+      row.classList.remove('wt-learn'); row.classList.add('wt-ok');
+      document.getElementById('w3').classList.remove('wt-learn'); document.getElementById('w3').classList.add('wt-ok');
+      document.querySelector('#w3 .story').innerHTML = '<b>Fenced.</b> tv-lounge may reach its ' + n + ' permitted places. Anything else it reaches from now on is a flag; permit it here and the flag clears.';
+      fence.textContent = 'learn again'; all.style.display = 'none';
+    });
+  })();
+  // ---- round 33: suggestions — watch it, not this, bring it back, start over ----
+  (function () {
+    var body = document.getElementById('sugg'), showing = false;
+    var show = document.getElementById('sugshow'), reset = document.getElementById('sugreset');
+    function row(el) { return el.closest('tr.drawer').previousElementSibling; }
+    function counts() {
+      var n = body.querySelectorAll('tr.frow.wt-sugg').length, a = body.querySelectorAll('tr.frow.wt-aside').length;
+      document.getElementById('sugn').textContent = n;
+      show.innerHTML = a ? '<b id="asiden">' + a + '</b> set aside · ' + (showing ? 'hide them' : 'show them') : '';
+      body.querySelectorAll('tr.wt-aside').forEach(function (r) { r.hidden = !showing; });
+    }
+    show.addEventListener('click', function () { showing = !showing; counts(); });
+    // on the drawers themselves: round 30 stops a drawer's clicks at the drawer
+    body.querySelectorAll('tr.drawer').forEach(function (d) { d.addEventListener('click', acts); });
+    function acts(e) {
+      var b = e.target.closest('button'); if (!b) return;
+      e.stopPropagation();
+      var dr = b.closest('tr.drawer'), r = row(b), chip = r.querySelector('.wchip2');
+      if (b.classList.contains('accept')) {
+        // the suggestion becomes a watch: same row, moved up among the watches
+        var dev = r.dataset.kind === 'device';
+        r.className = 'frow ' + (dev ? 'wt-learn' : 'wt-ok'); dr.className = 'drawer ' + (dev ? 'wt-learn' : 'wt-ok');
+        chip.className = 'wchip2' + (dev ? ' learn' : ''); chip.textContent = dev ? '◌ learning — nothing seen yet' : '◉ watching';
+        r.cells[4].textContent = '—';
+        dr.querySelector('.dwr-in').innerHTML = '<div class="story"><b>Watching from now.</b> ' + (dev ? 'Every place it reaches is listed here as it goes; nothing fires until you say <b>fence now</b>.' : 'Each attempt is a match here, with its source named. Nothing fires.') + '</div>'
+          + '<div class="side"><span class="lab">' + (dev ? 'where it has reached' : 'what it matched') + '</span><ul class="seen"></ul><span class="span">nothing yet</span></div>'
+          + '<div class="dwr-acts">' + (dev ? '<button>fence now · 0 permitted</button>' : '<button>pause watch</button>') + '<button class="quiet">open in stream ▸</button><button class="quiet edit">edit</button><button class="quiet remove">remove</button></div>';
+        var watches = document.querySelector('#p-watch tbody');
+        watches.appendChild(r); watches.appendChild(dr);
+        document.querySelectorAll('.wmk').forEach(function (m) { m.title = '10 watchers'; });
+      } else if (b.classList.contains('aside')) {
+        r.className = 'frow wt-aside'; dr.className = 'drawer wt-aside';
+        r.classList.remove('open'); dr.classList.remove('open');
+        r.dataset.was = chip.textContent; chip.textContent = '◇ set aside — just now';
+        dr.querySelector('.story').innerHTML = '<b>Set aside just now.</b> Kept here, quiet, until you bring it back; if what suggested it goes, it goes with it.';
+        dr.querySelector('.dwr-acts').innerHTML = '<button class="quiet back">bring it back</button>';
+        body.appendChild(r); body.appendChild(dr);
+      } else if (b.classList.contains('back')) {
+        r.className = 'frow wt-sugg'; dr.className = 'drawer wt-sugg';
+        r.classList.remove('open'); dr.classList.remove('open');
+        chip.textContent = r.dataset.was || ('◇ suggested — a lease on iot');
+        dr.querySelector('.story').innerHTML = '<b>Back among the suggestions.</b> Nothing on the watchlist covers this host; fencing it learns first, and the fence starts when you say so.';
+        dr.querySelector('.dwr-acts').innerHTML = '<button class="accept">watch it — it learns first</button><button class="quiet aside">not this</button>';
+        var first = body.querySelector('tr.wt-aside'); body.insertBefore(dr, first); body.insertBefore(r, dr);
+      }
+      counts();
+    }
+    // start over: armed on the first click, done on the second, disarmed by any other (round 28's `clear all`)
+    var armed = false;
+    function disarm() { if (armed) { armed = false; reset.classList.remove('armed'); reset.textContent = 'start over — wipe every watch'; } }
+    reset.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (!armed) { armed = true; reset.classList.add('armed'); reset.textContent = 'confirm — every watch goes, and it suggests afresh'; return; }
+      disarm();
+      var tb = document.querySelector('#p-watch tbody');
+      tb.querySelectorAll('tr:not([hidden])').forEach(function (r) { r.remove(); });
+      tb.insertAdjacentHTML('beforeend', '<tr class="wempty"><td colspan="6"><span class="cae-mark">↺</span><b>Started over.</b><br>Every watch is gone as of 13:58; the suggestions below are being rebuilt from the next push. The audit log has who did it.</td></tr>');
+      document.querySelectorAll('.wmk').forEach(function (m) { m.innerHTML = m.innerHTML.replace(/ 9 <b[^]*<\/b>/, ' 0'); m.title = 'no watchers'; });
+    });
+    document.addEventListener('click', disarm);
+    counts();
+  })();
+  // a drawer with a match list needs the room
+  document.querySelectorAll('tr.drawer').forEach(function (d) { if (d.querySelector('.matches')) d.classList.add('has-m'); });
+
+  // ---- round 34 → 35: verdicts on the row, exclusions below ----
+  (function () {
+    var flags = document.querySelector('#p-flags tbody'), fmk = document.querySelector('.fmk');
+    function fcount() { var n = flags.querySelectorAll('tr.frow:not(.fdone)').length; fmk.textContent = '⚑ ' + n; }
+    function typeOf(r) { return r.querySelector('.fmark').firstChild.textContent.trim().replace(/^[✱▲] /, ''); }
+    function close(r) { r.classList.remove('open'); document.getElementById(r.dataset.d).classList.remove('open'); }
+    // a called flag dims where it is; undo puts it back exactly
+    var TRIO = '<span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span>';
+    function strike(r, kind) {
+      r.classList.remove('struck', 'expected', 'noise', 'real'); void r.offsetWidth;
+      r.classList.add('struck', kind);
+    }
+    function done(r, kind, text, after, undo) {
+      close(r); r.classList.add('fdone'); strike(r, kind);
+      var c = r.cells[5];
+      c.innerHTML = '<span class="vdone"><span class="stamp ' + kind + '">' + text + '</span>' + (after ? '<span class="by">' + after + '</span>' : '') + (undo ? '<a>undo</a>' : '') + '</span>';
+      if (undo) c.querySelector('a').addEventListener('click', function (e) {
+        e.stopPropagation();
+        r.classList.remove('fdone', 'struck', kind); c.innerHTML = TRIO;
+        fcount();
+      });
+      fcount();
+    }
+    // the trio, on the row: expected and noise clear it where it stands; real marks it and keeps it open
+    flags.querySelectorAll('tr.frow[data-d^="d"]').forEach(function (r) {
+      r.addEventListener('click', function (e) {
+        var b = e.target.closest('button.v'); if (!b) return;
+        e.stopPropagation();
+        var v = b.dataset.v, d = document.getElementById(r.dataset.d);
+        if (v === 'real') {
+          // real keeps the flag open: the stamp takes the chips' place, with undo, and the bar swells
+          r.classList.add('isreal'); strike(r, 'real');
+          var c = r.cells[5];
+          c.innerHTML = '<span class="vdone"><span class="stamp real">real</span><a>undo</a></span><span class="openc">▸</span>';
+          var st = d.querySelector('.story');
+          st.insertAdjacentHTML('afterbegin', '<span class="called">Called real at 13:58 by you. It stays open until it is cleared; a fresh episode asks again.</span>');
+          c.querySelector('a').addEventListener('click', function (e) {
+            e.stopPropagation();
+            r.classList.remove('isreal', 'struck', 'real'); c.innerHTML = TRIO;
+            var cl = st.querySelector('.called'); if (cl) cl.remove();
+          });
+          return;
+        }
+        done(r, v, v, '', true);
+      });
+    });
+    function disarmAll() {
+      document.querySelectorAll('.never.armed').forEach(function (b) { b.classList.remove('armed'); b.textContent = 'never again'; });
+    }
+    flags.querySelectorAll('tr.drawer').forEach(function (d) {
+      d.addEventListener('click', function (e) {
+        var b = e.target.closest('button'); if (!b) return;
+        var r = d.previousElementSibling;
+        if (b.classList.contains('never')) {
+          if (!b.classList.contains('armed')) {
+            disarmAll(); b.classList.add('armed');
+            b.textContent = 'confirm — ' + typeOf(r) + ' never fires again for ' + r.cells[1].textContent.trim();
+            return;
+          }
+          b.classList.remove('armed'); b.textContent = 'never again';
+          done(r, 'never', 'never again', '', false);
+          addExcl(r);
+          return;
+        }
+        if (b.classList.contains('quiet') && /^clear/.test(b.textContent)) done(r, 'cleared', 'cleared', '', true);
+      });
+    });
+    document.addEventListener('click', function (e) { if (!e.target.closest('.never')) disarmAll(); }, true);
+
+    // the exclusions body: hidden until asked for, like round 33's set-aside rows
+    var ex = document.getElementById('excl'), showing = false, show = document.getElementById('exclshow');
+    function excount() {
+      document.getElementById('excn').textContent = ex.querySelectorAll('tr.frow').length;
+      show.textContent = showing ? 'hide them' : 'show them';
+      ex.querySelectorAll('tr.frow, tr.drawer').forEach(function (t) { t.hidden = !showing; });
+    }
+    show.addEventListener('click', function () { showing = !showing; excount(); });
+    function bindRow(r) {
+      r.addEventListener('click', function (e) {
+        if (e.target.closest('a')) return;
+        var open = !r.classList.contains('open');
+        r.classList.toggle('open', open); document.getElementById(r.dataset.d).classList.toggle('open', open);
+      });
+    }
+    function bindAgain(d) {
+      d.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (!e.target.closest('button.again')) return;
+        d.previousElementSibling.remove(); d.remove(); excount();
+      });
+    }
+    function addExcl(r) {
+      var type = r.querySelector('.fmark').firstChild.textContent.trim(), where = r.cells[1].innerHTML, id = 'x' + (ex.querySelectorAll('tr.frow').length + 1);
+      var nr = document.createElement('tr'), nd = document.createElement('tr');
+      nr.className = 'frow fx ' + Array.prototype.filter.call(r.classList, function (c) { return /^ft-/.test(c); }).join(' ');
+      nr.dataset.d = id;
+      nr.innerHTML = '<td class="fmark"></td><td class="k">' + where + '</td><td>never again — just now, you</td><td class="num">—</td><td class="t">now</td><td class="vc"><span class="openc">▸</span></td>';
+      nd.className = 'drawer fx'; nd.id = id;
+      nd.innerHTML = '<td colspan="6"><div class="dwr"><div class="dwr-in"><div class="story"><b>Told never to flag this again</b> just now, by you. Nothing about the pair is counted or held now — mikroview simply does not look. The audit log has this line.</div>'
+        + '<div class="side"><span class="lab">the pair</span><ul class="seen facts"><li><span>flag</span><b class="ftype"></b></li><li><span>target</span><b class="tgt"></b></li><li><span>since</span><b>13:58</b></li><li><span>by</span><b>you</b></li></ul></div>'
+        + '<div class="dwr-acts"><button class="again">let it fire again</button></div></div></div></td>';
+      // text lands as text, not markup: fixture data here, but the scanner cannot tell
+      nr.cells[0].textContent = type; nd.querySelector('.ftype').textContent = typeOf(r); nd.querySelector('.tgt').textContent = r.cells[1].textContent.trim();
+      ex.appendChild(nr); ex.appendChild(nd); bindRow(nr); bindAgain(nd);
+      showing = true; excount();
+    }
+    ex.querySelectorAll('tr.drawer').forEach(bindAgain);
+    excount();
+  })();
+</script>
+</body>
+</html>

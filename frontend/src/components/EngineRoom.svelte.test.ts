@@ -1,14 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #490: the engine room absorbs Users.svelte, Tokens.svelte and
-// Detectors.svelte wholesale -- see git history for their own retired
-// test files. This covers the room's own new behaviour: the five
-// stations, the zoom (opening one collapses the rest), and the
-// viewer/admin split the design record asks for (chip once, verbs
-// gated, facts identical).
+// #633 (rounds 23-25): Settings is the shelf -- groups reporting live
+// truth, the deck's cards in the kept order with sign-in landing on the
+// first, and the watcher bench behind detection's tune row. #490's
+// absorbed pages (Users/Tokens/Detectors) live on behind keys/people and
+// the bench; the viewer/admin split those tests carried is unchanged
+// (chip once, verbs gated, facts identical).
+//
+// Round 32 (#767): keys (under ingest) and people (under account) are
+// mounted directly in the card, in its own row grammar, replacing the
+// retired EngineRoomDoors.svelte and its USERS_DOOR_ENABLED/
+// TOKENS_DOOR_ENABLED flags outright -- no shim, per AGENTS.md's
+// "removals are wholesale". Both groups are gated on isAdmin: GET
+// /api/tokens and GET /api/auth/users are both admin-only server-side
+// (#657), so a `user` or `viewer` session gets neither group at all, not
+// a read-only rendering of one.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { cleanup, render, screen, fireEvent, within } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
@@ -27,6 +36,7 @@ vi.mock('../lib/api', () => ({
         kind: 'declarative',
         enabled: true,
         scope: { hosts: ['203.0.113.9'], hostsMode: 'deny' },
+        params: { threshold: 15, window: '1m0s' },
         provenance: { origin: 'shipped' },
         available: true,
         replay: { known: true, capable: true },
@@ -57,6 +67,46 @@ vi.mock('../lib/api', () => ({
   createToken: vi.fn(),
   revokeToken: vi.fn(),
   fetchDevices: vi.fn(async () => []),
+  fetchSetupCommands: vi.fn(async () => ({
+    routeros: { minimum: '7.18', newest: '7.24.1', rows: [] },
+    picked: null,
+    routers: [],
+    steps: {
+      caTrust: { commands: '', note: '' },
+      syslog: { commands: '', note: '' },
+      ruleTagging: { commands: '', note: '' },
+      push: { commands: '', note: '' },
+      schedule: { commands: '', note: '' },
+    },
+  })),
+  signOutEverywhere: vi.fn(async () => null),
+  fetchPersistence: vi.fn(async () => ({ backend: 'file', dir: '/var/lib/mikroview' })),
+  fetchHistorySettings: vi.fn(async () => ({
+    keyed: true,
+    enabled: true,
+    days: 30,
+    maxBytes: 1024 * 1024 * 1024,
+    held: { days: 27, oldest: '2026-08-07', newest: '2026-09-02', bytes: 812 * 1024 * 1024 },
+    capped: false,
+    bytesPerDay: 30 * 1024 * 1024,
+  })),
+  setHistorySettings: vi.fn(),
+  fetchRouterBackups: vi.fn(async () => ({
+    enabled: false,
+    routers: [],
+    totalGenerations: 0,
+    totalRouters: 0,
+    totalBytes: 0,
+  })),
+  routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
+  fetchAuthSession: vi.fn(async () => ({
+    setupRequired: false,
+    authenticated: true,
+    username: 'admin',
+    role: 'admin',
+    ssoAvailable: false,
+    signedInSince: new Date().toISOString(),
+  })),
 }))
 
 import { appState } from '../lib/state.svelte'
@@ -65,8 +115,13 @@ import { flagsState } from '../lib/flags.svelte'
 import { detectorSettingsState } from '../lib/detectorSettings.svelte'
 import { usersState } from '../lib/users.svelte'
 import { tokensState } from '../lib/tokens.svelte'
+import { deckOrderState } from '../lib/deckOrder.svelte'
+import { persistenceState } from '../lib/persistence.svelte'
+import { fetchHistorySettings as fetchHistorySettingsReal } from '../lib/api'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
+
+const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
 
 function stats(overrides: Partial<Stats> = {}): Stats {
   return {
@@ -77,6 +132,7 @@ function stats(overrides: Partial<Stats> = {}): Stats {
     eventsPerSecond: 7.4,
     capacity: 100000,
     count: 41208,
+    oldestHeld: null,
     windowSeconds: 72 * 3600,
     connectedClients: 1,
     ...overrides,
@@ -98,82 +154,351 @@ beforeEach(() => {
   usersState.list = []
   tokensState.list = []
   tokensState.justCreated = null
+  authState.signedInSince = ''
+  // persistenceState.ensureLoaded() only ever fetches once (see its own
+  // doc comment), so across a whole test file its cache would otherwise
+  // leak from whichever test rendered EngineRoom first -- reset the
+  // seeded value directly instead of relying on the mocked fetch, same
+  // as detectorSettingsState.list/flagsState.list above.
+  persistenceState.info = null
+  deckOrderState.set(['fall', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
 })
 
-describe('The engine room (#490)', () => {
-  it('renders its five stations', async () => {
+describe('The settings shelf (#633)', () => {
+  it('renders the five groups and the deck -- seven cards for an admin (#647) -- in the kept order', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
     await settle()
 
-    for (const name of ['The door', 'The store', 'The watchers', 'The flags desk', 'The heralds']) {
+    for (const name of ['your deck', 'ingest', 'keys', 'detection', 'memory', 'account', 'people']) {
       expect(screen.getByText(name)).toBeTruthy()
     }
+    const shelf = document.querySelector<HTMLElement>('.stshelf')!
+    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
+      expect(within(shelf).getByText(card)).toBeTruthy()
+    }
+    // #735: the "seven cards, in the order you keep them" caption is
+    // gone -- its purpose (the owner: "obvious") was redundant with the
+    // cards' own drag handle and position aria-label. Seven cards for
+    // an admin is now checked by counting them directly.
+    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    // Sign-in lands on the first card, and the shelf says so exactly once.
+    expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
   })
 
-  it('opening a station collapses the others', async () => {
-    authState.state = 'authenticated'
-    authState.role = 'admin'
-    render(EngineRoom)
-    await settle()
-
-    // At rest, the store's subtitle is visible.
-    expect(screen.getByText('what is kept')).toBeTruthy()
-
-    await fireEvent.click(screen.getByRole('button', { name: /The door/ }))
-    flushSync()
-
-    // Opening the door collapses the store to a slim title+number bar --
-    // its subtitle (only shown outside the collapsed state) disappears.
-    expect(screen.queryByText('what is kept')).toBeNull()
-    expect(screen.getByRole('button', { name: /The door/ }).getAttribute('aria-expanded')).toBe('true')
-
-    // Closing it again (same toggle) returns the room to rest.
-    await fireEvent.click(screen.getByRole('button', { name: /The door/ }))
-    flushSync()
-    expect(screen.getByText('what is kept')).toBeTruthy()
-  })
-
-  it('a viewer sees the chip, no verbs, and no admin-only users door', async () => {
+  // #657: Entities carries `edit: true` (#653's widening to the user
+  // tier), and this page is itself gated to the same tier -- so a
+  // `user` who reaches Settings at all sees the same seven cards an
+  // admin does. Named for the role it actually renders, unlike the
+  // pre-#657 version of this test, which called that tier "viewer"
+  // when only `user` and `admin` can ever reach this page.
+  it("a user's shelf carries all seven cards, same as an admin's", async () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(EngineRoom)
     await settle()
 
-    expect(screen.getByText('READ-ONLY — ADMINS EDIT')).toBeTruthy()
-
-    // Tokens door is viewer-readable but its verbs are gated.
-    expect(screen.getByText('rb5009-ingest')).toBeTruthy()
-
-    // An ingest key names the device it speaks for, not just its kind:
-    // with two routers pushing, "ingest" alone does not say which key
-    // belongs to which, and that is the fact an admin revokes on. The
-    // old Tokens page carried it and the door has to as well.
-    expect(screen.getByText(/ingest: rb5009/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '+ Mint a key' })).toBeNull()
-
-    // The users door stayed admin-only (mid-build owner override) --
-    // absent entirely for a viewer, not shown empty or explained.
-    expect(screen.queryByText('Who may look in')).toBeNull()
-    expect(screen.queryByRole('button', { name: '+ Let someone in' })).toBeNull()
+    const shelf = document.querySelector<HTMLElement>('.stshelf')!
+    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    expect(within(shelf).getByText('Entities')).toBeTruthy()
+    expect(within(shelf).getByText('Settings')).toBeTruthy()
   })
 
-  it('an admin sees the verbs', async () => {
+  it('reordering a card moves the landing with it', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
     await settle()
 
-    expect(screen.queryByText('READ-ONLY — ADMINS EDIT')).toBeNull()
-    expect(screen.getByText('Who may look in')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '+ Let someone in' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '+ Mint a key' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+    // Arrow keys mirror what a drag does: pushing the first card right
+    // makes the second card first, and the landing marker follows.
+    const fall = screen.getByRole('button', { name: /The fall, position 1/ })
+    await fireEvent.keyDown(fall, { key: 'ArrowRight' })
+    flushSync()
+
+    expect(deckOrderState.order[0]).toBe('metrics')
+    expect(screen.getByRole('button', { name: /Metrics, position 1/ })).toBeTruthy()
+
+    // Back again, so the kept order is the ratified default for the
+    // other tests.
+    const metrics = screen.getByRole('button', { name: /The fall, position 2/ })
+    await fireEvent.keyDown(metrics, { key: 'ArrowLeft' })
+    flushSync()
+    expect(deckOrderState.order[0]).toBe('fall')
   })
 
-  it('the mint banner appears once', async () => {
+  it("detection's tune row unfolds the watcher bench in place", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    // The bench (EngineRoomWatchers) is not mounted until asked for.
+    expect(screen.queryByText('Port scan')).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'tune…' }))
+    await settle()
+
+    expect(screen.getByText('Port scan')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'close the bench' })).toBeTruthy()
+  })
+
+  it('a viewer sees the chip, no verbs, and neither keys nor people', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    // The READ-ONLY chip is gone with the page heading it lived in
+    // (#700): round 30 draws no heading on any deck and no replacement
+    // chip anywhere, so #548's grammar -- read-only declared once, in
+    // words -- currently has nowhere to be said. That is recorded as a
+    // gap on #691, not a decision that viewers stop being told; the
+    // component and its own test are untouched and still pass. This
+    // pins the present truth so the gap cannot be mistaken for done.
+    expect(screen.queryByText('READ-ONLY')).toBeNull()
+
+    // Both groups are gated on isAdmin (see EngineRoom.svelte's own doc
+    // comment): GET /api/tokens and GET /api/auth/users 403 for a
+    // viewer, so neither group renders at all -- absent, not a
+    // read-only view of one.
+    expect(screen.queryByText('keys')).toBeNull()
+    expect(screen.queryByText('people')).toBeNull()
+    expect(screen.queryByText('rb5009-ingest')).toBeNull()
+    expect(screen.queryByText(/ingest · speaks for rb5009/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'revoke' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '+ mint a key' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '+ let someone in' })).toBeNull()
+  })
+
+  it('an admin sees keys and people, populated from the state modules', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.username = 'tom'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByText('READ-ONLY')).toBeNull()
+    expect(screen.getByText('keys')).toBeTruthy()
+    expect(screen.getByText('people')).toBeTruthy()
+
+    // The seeded ingest token, chipped with the device it speaks for.
+    expect(screen.getByText('rb5009-ingest')).toBeTruthy()
+    expect(screen.getByText('ingest · speaks for rb5009')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'revoke' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '+ mint a key' })).toBeTruthy()
+
+    // The seeded accounts: tom is the caller ("this is you"), and the
+    // admin row ends console-only rather than a remove verb.
+    expect(screen.getByText('tom')).toBeTruthy()
+    expect(screen.getByText(/this is you/)).toBeTruthy()
+    expect(screen.getByText('console-only')).toBeTruthy()
+    expect(screen.getByText('kai')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '+ let someone in' })).toBeTruthy()
+  })
+
+  it('minting a key shows the once-only reveal, and done lets the form close', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const { createToken } = await import('../lib/api')
+    vi.mocked(createToken).mockResolvedValueOnce({
+      id: 't9',
+      name: 'nas-read',
+      kind: 'api',
+      createdAt: '2026-09-01T00:00:00Z',
+      value: 'mv1_4c21secret9b0d',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
+    await settle()
+    await fireEvent.input(screen.getByLabelText('key name'), { target: { value: 'nas-read' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
+    await settle()
+
+    expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined)
+    expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
+    expect(screen.getByText(/shown once — mikroview keeps only its fingerprint/)).toBeTruthy()
+    // A read-only key gets no RouterOS lines.
+    expect(screen.queryByText(/copy for RouterOS/)).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'done' }))
+    await settle()
+
+    expect(screen.queryByText('mv1_4c21secret9b0d')).toBeNull()
+    expect(screen.getByRole('button', { name: '+ mint a key' })).toBeTruthy()
+  })
+
+  it('an ingest key reveal offers copy for RouterOS', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchDevices } = await import('../lib/api')
+    vi.mocked(fetchDevices).mockResolvedValueOnce([
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        sourceIp: '203.0.113.5',
+        configured: true,
+        firstSeen: '2026-08-01T00:00:00Z',
+        lastSeen: '2026-09-01T00:00:00Z',
+        eventCount: 10,
+        status: 'live',
+        routerosVersion: '',
+      },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    const { createToken } = await import('../lib/api')
+    vi.mocked(createToken).mockResolvedValueOnce({
+      id: 't10',
+      name: 'rb5009-b',
+      kind: 'ingest',
+      device: 'rb5009',
+      createdAt: '2026-09-01T00:00:00Z',
+      value: 'mv1_ingestsecret',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
+    await settle()
+
+    expect(createToken).toHaveBeenCalledWith('', 'ingest', 'rb5009')
+    expect(screen.getByText('mv1_ingestsecret')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'copy for RouterOS' })).toBeTruthy()
+  })
+
+  it("revoke arms before it acts, and any other click disarms it", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const { revokeToken } = await import('../lib/api')
+    const revoke = screen.getByRole('button', { name: 'revoke' })
+
+    await fireEvent.click(revoke)
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — it stops speaking now' })).toBeTruthy()
+    expect(revokeToken).not.toHaveBeenCalled()
+
+    // Clicking elsewhere disarms it rather than revoking.
+    await fireEvent.click(document.body)
+    await settle()
+    expect(screen.getByRole('button', { name: 'revoke' })).toBeTruthy()
+    expect(revokeToken).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'revoke' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — it stops speaking now' }))
+    await settle()
+    expect(revokeToken).toHaveBeenCalledWith('t1')
+  })
+
+  it('letting someone in calls the create endpoint with the picked role', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const { createUser } = await import('../lib/api')
+    await fireEvent.click(screen.getByRole('button', { name: '+ let someone in' }))
+    await settle()
+    await fireEvent.input(screen.getByLabelText('username'), { target: { value: 'mia' } })
+    await fireEvent.input(screen.getByLabelText('password'), { target: { value: 'first-password' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'can only look' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'let them in' }))
+    await settle()
+
+    expect(createUser).toHaveBeenCalledWith('mia', 'first-password', 'viewer')
+  })
+
+  it("remove arms before it acts, same gesture as revoke", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const { deleteUser } = await import('../lib/api')
+    const remove = screen.getByRole('button', { name: 'remove' })
+
+    await fireEvent.click(remove)
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' }))
+    await settle()
+    expect(deleteUser).toHaveBeenCalledWith('u2')
+  })
+
+  it('only one verb is armed at a time: arming remove disarms an armed revoke', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'revoke' }))
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — it stops speaking now' })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    await settle()
+    expect(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'confirm — it stops speaking now' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'revoke' })).toBeTruthy()
+  })
+
+  it('shows a user no read-only chip, and neither keys nor people: they edit the watchers station here', async () => {
+    // #653: the chip follows canEdit, not isAdmin. Telling a user this
+    // page is read-only was wrong -- keys and people are gated, the
+    // page is not.
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByText('READ-ONLY')).toBeNull()
+    expect(screen.queryByText('keys')).toBeNull()
+    expect(screen.queryByText('people')).toBeNull()
+  })
+
+  // #653's three tiers: running the detector bench (enable/pause, edit
+  // scope) is a normal operational action, open to user and admin --
+  // unlike the tokens/users doors above, which stay admin-only.
+  it('a viewer opening the watchers station sees no run checkbox and no row expander', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    // #633 moved the bench behind the detection group's "tune…" link.
+    await fireEvent.click(screen.getByRole('button', { name: 'tune…' }))
+    await settle()
+
+    expect(screen.queryByRole('checkbox', { name: 'Port scan runs' })).toBeNull()
+    expect(document.querySelector('.row-knob')).toBeNull()
+  })
+
+  it('a user opening the watchers station sees the run checkbox and the row expander', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'tune…' }))
+    await settle()
+
+    expect(screen.getByRole('checkbox', { name: 'Port scan runs' })).toBeTruthy()
+    expect(document.querySelector('.row-knob')).toBeTruthy()
+  })
+
+  it('a reveal already in state (e.g. a remount mid-session) still renders, not just a freshly-minted one', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     tokensState.justCreated = {
@@ -186,7 +511,193 @@ describe('The engine room (#490)', () => {
     render(EngineRoom)
     await settle()
 
-    expect(screen.getAllByText('mv1_4c21secret9b0d')).toHaveLength(1)
-    expect(screen.getAllByText(/Copy it now/)).toHaveLength(1)
+    expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
+    expect(screen.getByText(/shown once — mikroview keeps only its fingerprint/)).toBeTruthy()
+    // The revealed token does not also render as an ordinary row.
+    expect(screen.queryAllByText('nas-read')).toHaveLength(1)
+  })
+
+  // #677: the three previously-unbuilt rows.
+  it("detection's port-scan window states the live threshold, editable for a user", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    const knob = screen.getByRole('button', { name: '15 ports / 60 s' })
+    await fireEvent.click(knob)
+    await settle()
+
+    const portsInput = screen.getByLabelText('distinct ports') as HTMLInputElement
+    const windowInput = screen.getByLabelText('window in seconds') as HTMLInputElement
+    expect(portsInput.value).toBe('15')
+    expect(windowInput.value).toBe('60')
+
+    await fireEvent.input(portsInput, { target: { value: '25' } })
+    await fireEvent.input(windowInput, { target: { value: '90' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
+    await settle()
+
+    const { updateDefinition } = await import('../lib/api')
+    expect(updateDefinition).toHaveBeenCalledWith('port_scan', { params: { threshold: 25, window: '90s' } })
+  })
+
+  it('a viewer sees the port-scan window as a fact, not a knob', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('15 ports / 60 s')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '15 ports / 60 s' })).toBeNull()
+  })
+
+  it('memory states what outlives a restart, and the disk group carries the state store (#921)', async () => {
+    // Round 43: the buffer always clears; with history on, the days on
+    // disk stay and a watcher's try reads them. The state store is the
+    // disk group's `state` row now, not memory's.
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    persistenceState.info = { backend: 'file', dir: '/var/lib/mikroview' }
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    expect(screen.getByText('on restart')).toBeTruthy()
+    expect(screen.getByText('the buffer clears — the 27 days on disk stay; trying a watcher reads them')).toBeTruthy()
+    expect(screen.queryByText('persistence')).toBeNull()
+    expect(screen.queryByText(/memory-only/)).toBeNull()
+
+    const disk = document.getElementById('diskg') as HTMLElement
+    expect(within(disk).getByText('state')).toBeTruthy()
+    expect(
+      within(disk).getByText(
+        'encrypted file store · /var/lib/mikroview — flags, definitions, watchlist, entities, tokens',
+      ),
+    ).toBeTruthy()
+    // beside the key: the row after it
+    const labels = [...disk.querySelectorAll('.orow > span:first-child')].map((el) => el.textContent)
+    expect(labels).toEqual(['on disk', 'allowed', 'key', 'state'])
+  })
+
+  it('on restart reads per the disk state: off with a key, and no key (#921)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchHistorySettings.mockResolvedValueOnce({
+      keyed: true,
+      enabled: false,
+      days: 30,
+      maxBytes: 1024 * 1024 * 1024,
+      held: null,
+      capped: false,
+      bytesPerDay: 0,
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+    expect(screen.getByText('the buffer clears — nothing outlives it; days can be kept on disk below')).toBeTruthy()
+    cleanup()
+
+    fetchHistorySettings.mockResolvedValueOnce({
+      keyed: false,
+      enabled: false,
+      days: 30,
+      maxBytes: 1024 * 1024 * 1024,
+      held: null,
+      capped: false,
+      bytesPerDay: 0,
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+    expect(screen.getByText('the buffer clears — nothing outlives it')).toBeTruthy()
+  })
+
+  it('when the history GET fails for a reason other than role, the disk group stays and asks again (#921)', async () => {
+    // Round 42's gap 9, round 43's `dfail`: an older server or an error
+    // leaves one row saying so, with a link that asks again -- not an
+    // absent group and not a switch nothing stands behind.
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchHistorySettings.mockRejectedValueOnce(Object.assign(new Error('503'), { status: 503 }))
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const disk = document.getElementById('diskg') as HTMLElement
+    expect(disk).toBeTruthy()
+    expect(disk.classList.contains('dfail')).toBe(true)
+    expect(within(disk).getByText(/unknown — the server did not answer/)).toBeTruthy()
+    expect(within(disk).queryByRole('slider')).toBeNull()
+    // memory claims the least meanwhile
+    expect(screen.getByText('the buffer clears')).toBeTruthy()
+
+    await fireEvent.click(within(disk).getByRole('button', { name: 'ask again' }))
+    await settle()
+    await settle()
+    expect(fetchHistorySettings).toHaveBeenCalledTimes(2)
+    expect(document.getElementById('diskg')?.classList.contains('dfail')).toBe(false)
+    expect(screen.getByRole('slider', { name: 'Days kept on disk' })).toBeTruthy()
+  })
+
+  it('the disk group sits directly after memory, with its statements (#910)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const disk = document.getElementById('diskg')
+    expect(disk).toBeTruthy()
+    expect(disk?.previousElementSibling?.id).toBe('memg')
+    expect(disk?.querySelector('h3')?.textContent).toBe('disk')
+    expect(screen.getByRole('slider', { name: 'Days kept on disk' })).toBeTruthy()
+    expect(screen.getByText(/^27 days · since .* · 812 MiB — filling$/)).toBeTruthy()
+  })
+
+  it('states Postgres, not a file path, when that backend is live', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    persistenceState.info = { backend: 'postgres' }
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText(/^Postgres —/)).toBeTruthy()
+    expect(screen.queryByText(/file store/)).toBeNull()
+  })
+
+  it('a viewer sees no disk group and no state store, and on restart claims only that the buffer clears', async () => {
+    // Both GETs are admin-gated (a directory is infrastructure detail,
+    // the reasoning /api/config/problems already applies), so a viewer
+    // gets absent-not-disabled: no group, no backend, and the memory
+    // row's least claim.
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    fetchHistorySettings.mockRejectedValueOnce(Object.assign(new Error('403'), { status: 403 }))
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    expect(screen.getByText('the buffer clears')).toBeTruthy()
+    expect(document.getElementById('diskg')).toBeNull()
+    expect(screen.queryByText(/file store/)).toBeNull()
+    expect(screen.queryByText(/Postgres/)).toBeNull()
+  })
+
+  it('the sessions row states this device and can sign out everywhere', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.signedInSince = new Date(Date.now() - 4.5 * 86_400_000).toISOString()
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText(/this device, signed in 4 d/)).toBeTruthy()
+
+    const { signOutEverywhere } = await import('../lib/api')
+    await fireEvent.click(screen.getByRole('button', { name: 'sign out everywhere' }))
+    await settle()
+
+    expect(signOutEverywhere).toHaveBeenCalled()
+    expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
   })
 })

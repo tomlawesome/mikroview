@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Round 4 — the conditions editor on the watchers bench (#829)</title>
+<style>
+  /* ============================================================
+     ROUND 4 — THE CONDITIONS EDITOR (#829, under #490's engine room).
+     Round 3's room stands; this round draws one thing inside it:
+     what an expanded custom-detector row looks like once it can
+     write its own conditions, and what "Clone" means on a shipped
+     row. Tokens and bench grammar are round 3's, carried verbatim.
+     No charts, no data palette: colour stays meaning-only (accent
+     = the admin's ink; amber = time; alarm nowhere on this bench).
+     ============================================================ */
+  :root {
+    --canvas: #1b2340; --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66); --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --ok: #37b364; --alarm: #ff5470; --now: #e8b05a;
+    --tile: #0d1220;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  body.light {
+    --canvas: #c3c9d4; --void: #eef1f7;
+    --glass: rgba(252, 253, 255, 0.72); --glass-2: rgba(244, 247, 252, 0.92);
+    --hair: rgba(28, 44, 84, 0.12); --hair-2: rgba(28, 44, 84, 0.26);
+    --ink: #17223c; --ink-2: #46536f; --ink-3: #7d89a6;
+    --accent: #3f66b0; --ok: #1e7f43; --alarm: #d63c5e; --now: #9a6b10;
+    --tile: #f7f9fd;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--canvas); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept { position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline; padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair); font-size: 11px; color: var(--ink-3); }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  body.light .concept, body.light .scene-tag { background: rgba(244, 247, 252, 0.95); }
+  .scene { position: relative; border-bottom: 1px solid var(--hair-2); padding: 0 0 26px; }
+  .scene-tag { position: sticky; top: 33px; z-index: 80; font-size: 11px; color: var(--ink-2); padding: 6px 20px; background: rgba(2,3,7,0.9); border-bottom: 1px solid var(--hair); }
+  .frame { width: min(1180px, 96%); margin: 18px auto 0; background: var(--void); border: 1px solid var(--hair-2); border-radius: 14px; padding: 18px 22px 20px; }
+  .frame.phone { width: 400px; padding: 14px 12px; }
+  .notes { display: flex; gap: 14px; margin: 14px auto 0; width: min(1180px, 96%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+
+  /* the station, as round 3 drew it */
+  .crumb { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .crumb b { color: var(--ink-2); }
+  .station { background: var(--tile); border: 1px solid var(--hair); border-radius: 12px; padding: 11px 16px; }
+  .shead { display: flex; align-items: baseline; gap: 10px; }
+  .shead .nm { font-size: 12.5px; font-weight: 650; }
+  .shead .what { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+  .shead .live { margin-left: auto; font-size: 10.5px; color: var(--ink-2); font-family: var(--mono); white-space: nowrap; }
+  .shead .live i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--now); margin-right: 5px; }
+  .bench { border-top: 1px solid var(--hair); margin-top: 8px; padding-top: 7px; display: flex; align-items: baseline; gap: 9px; font-size: 11.5px; }
+  .bench.dim { opacity: 0.5; }
+  .bench .cbx { width: 13px; height: 13px; border: 1px solid var(--accent); border-radius: 4px; display: inline-grid; place-items: center; color: var(--accent); font-size: 9px; flex: none; align-self: center; }
+  .bench .cbx.off { border-color: var(--ink-3); color: transparent; }
+  .bench .dn { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  .bench .k { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+  .bench .scope { color: var(--ink-2); min-width: 0; }
+  .bench .state { margin-left: auto; font-size: 10.5px; color: var(--ink-2); white-space: nowrap; }
+  .bench .state i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 5px; }
+  .bench .state.pausd { color: var(--ink-3); }
+  .bench .state.pausd i { background: none; border: 1px solid var(--ink-3); }
+  .bench .open { border-bottom: 1px dashed var(--accent); }
+
+  /* the expanded row's panel, as built (EngineRoomWatchers.svelte) */
+  .panel { margin: 8px 0 4px 22px; padding: 10px 14px 12px; border: 1px solid var(--hair-2); border-radius: 10px; background: var(--glass); font-size: 11.5px; }
+  .panel .note { color: var(--ink-2); margin-bottom: 8px; }
+  .panel .note b { color: var(--ink); font-weight: 600; }
+  .panel h4 { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin: 12px 0 6px; font-weight: 650; }
+  .field { display: grid; grid-template-columns: 130px 1fr; gap: 8px; align-items: center; margin: 5px 0; }
+  .field > span { color: var(--ink-2); }
+  .in { display: inline-block; border: 1px solid var(--hair-2); border-radius: 6px; background: var(--void); color: var(--ink); padding: 3px 8px; font: inherit; min-width: 70px; }
+  .in.num { width: 84px; text-align: right; font-family: var(--mono); }
+  .in.wide { width: 100%; }
+  .sel { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--hair-2); border-radius: 6px; background: var(--void); color: var(--ink); padding: 3px 8px; white-space: nowrap; }
+  .sel::after { content: "▾"; color: var(--ink-3); font-size: 10px; }
+  .chipbox { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; border: 1px solid var(--hair-2); border-radius: 6px; background: var(--void); padding: 3px 6px; min-height: 26px; flex: 1; }
+  .chip { border: 1px solid var(--hair-2); border-radius: 999px; padding: 0 7px; font-family: var(--mono); font-size: 10.5px; color: var(--ink); }
+  .chip .x { color: var(--ink-3); margin-left: 5px; }
+  .chip-add { color: var(--ink-3); font-style: italic; }
+  .actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  .actions .sp { flex: 1; }
+  .btn { border: 1px solid var(--hair-2); border-radius: 7px; background: var(--void); color: var(--ink); padding: 4px 11px; font: inherit; font-size: 11.5px; }
+  .btn.quiet { color: var(--ink-2); }
+  .btn.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .btn.off { opacity: 0.45; }
+  .aside { font-size: 10.5px; color: var(--ink-3); }
+
+  /* --- the conditions editor: the new thing --- */
+  .conds { border: 1px solid var(--hair-2); border-radius: 8px; background: var(--void); padding: 4px 0; }
+  .cond { display: grid; grid-template-columns: 34px 168px 128px 1fr 30px; gap: 8px; align-items: center; padding: 4px 8px; }
+  .cond + .cond { border-top: 1px solid var(--hair); }
+  .cond .and { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); text-align: right; }
+  .cond .and.first { color: transparent; }
+  .cond .rm { color: var(--ink-3); text-align: center; }
+  .cond .range { display: flex; gap: 6px; align-items: center; color: var(--ink-3); }
+  .cond.bad { background: rgba(232, 176, 90, 0.07); }
+  .cond.bad .in { border-color: var(--now); }
+  .cond-err { grid-column: 3 / span 3; font-size: 10.5px; color: var(--now); padding: 0 0 4px; }
+  .cond.invite { color: var(--ink-3); font-style: italic; }
+  .cond.invite .sel { color: var(--ink-3); border-style: dashed; }
+  .addcond { display: inline-flex; gap: 6px; align-items: center; color: var(--accent); margin: 6px 0 0 42px; font-size: 11.5px; }
+  .addcond i { font-style: normal; border: 1px solid var(--accent); border-radius: 50%; width: 15px; height: 15px; display: inline-grid; place-items: center; font-size: 11px; }
+  .sentence { display: flex; flex-wrap: wrap; gap: 6px 7px; align-items: center; line-height: 2; color: var(--ink-2); }
+  .sentence .sel, .sentence .in { line-height: 1.4; }
+  .readsas { margin-top: 10px; padding: 8px 12px; border-left: 2px solid var(--accent); background: var(--glass-2); border-radius: 0 8px 8px 0; color: var(--ink-2); }
+  .readsas b { color: var(--ink); font-weight: 600; }
+  .readsas .lbl { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-right: 8px; }
+  .tokens { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+  .tokens .t { font-family: var(--mono); font-size: 10.5px; color: var(--accent); border: 1px dashed var(--hair-2); border-radius: 5px; padding: 0 6px; }
+  .tokens .lbl { font-size: 10.5px; color: var(--ink-3); }
+  .tried { margin-top: 10px; padding: 8px 12px; border: 1px solid var(--hair-2); border-radius: 8px; background: var(--glass-2); }
+  .tried .cnt b { color: var(--ink); font-weight: 650; }
+  .tried .cur { margin-left: 10px; color: var(--ink-3); }
+  .tried ul { margin: 4px 0 0 16px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); }
+  .why { color: var(--ink-2); margin: 6px 0 2px; }
+  .why b { color: var(--ink); font-weight: 600; }
+  .stamp { display: inline-block; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 4px; padding: 0 5px; margin-left: 6px; }
+
+  /* the phone */
+  .phone .cond { grid-template-columns: 1fr; gap: 5px; padding: 8px 10px; }
+  .phone .cond .and { text-align: left; }
+  .phone .cond .rm { text-align: left; }
+  .phone .cond-err { grid-column: 1; }
+  .phone .field { grid-template-columns: 1fr; gap: 3px; }
+  .phone .panel { margin-left: 0; }
+  .phone .bench .scope { display: none; }
+  .phone .addcond { margin-left: 10px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="concept"><b>ROUND 4 — THE CONDITIONS EDITOR</b> #829 on the watchers bench (#490's room) · <a href="?theme=light" style="margin-left:0">light</a> · <a href="?" style="margin-left:4px">dark</a>
+  <span style="margin-left:auto"><a href="../round-3/direction-ae-engineroom-developed.html">round 3: the room</a></span></div>
+
+<!-- ============ SCENE 1: Clone on a shipped row ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — Clone on a shipped row: the bench says beforehand what a copy will and will not carry.</div>
+  <div class="frame">
+    <div class="crumb">The engine room · <b>the watchers</b></div>
+    <div class="station">
+      <div class="shead"><span class="nm">The watchers</span><span class="what">detectors</span><span class="live"><i></i>11 of 12 running</span></div>
+
+      <div class="bench dim"><span class="cbx">✓</span><span class="dn">Internal reconnaissance</span><span class="k">internal_recon</span><span class="scope">— every host, every port</span><span class="state"><i></i>running</span></div>
+
+      <div class="bench"><span class="cbx">✓</span><span class="dn open">Port scan</span><span class="k">port_scan</span><span class="scope">— every host · ports 1–1024</span><span class="state"><i></i>running</span></div>
+      <div class="panel">
+        <p class="note"><b>What this restricts:</b> which hosts and ports the detector reads. Nothing outside its scope can raise its flag.</p>
+        <h4>When it fires</h4>
+        <div class="field"><span>Distinct ports</span><span class="in num">20</span></div>
+        <div class="field"><span>Window (seconds)</span><span class="in num">60</span></div>
+        <h4>Scope</h4>
+        <div class="field"><span>Ports</span><div style="display:flex;gap:8px;align-items:center"><span class="sel">allow only</span><div class="chipbox"><span class="chip">1-1024<span class="x">×</span></span><span class="chip-add">22, or a range like 8000-8010</span></div></div></div>
+        <div class="actions">
+          <span class="btn quiet">Reset to stock</span>
+          <span class="btn">Clone into a custom detector</span>
+          <span class="aside">copies its conditions, scope and numbers; the copy starts paused</span>
+          <span class="sp"></span>
+          <span class="btn quiet">Try</span>
+          <span class="btn primary off">Save</span>
+          <span class="btn quiet">Cancel</span>
+        </div>
+      </div>
+
+      <div class="bench dim"><span class="cbx">✓</span><span class="dn">Repeated drops</span><span class="k">repeated_drops</span><span class="scope">— every host</span><span class="state"><i></i>running</span></div>
+      <div class="bench dim"><span class="cbx off">✓</span><span class="dn">Distributed brute force</span><span class="k">distributed_brute_force</span><span class="scope">— ports 22, 3389</span><span class="state pausd"><i></i>paused</span></div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>One verb, two truths.</b> Four shipped detectors (port scan, critical port, repeated drops, distributed brute force) are themselves written in the conditions language, so their copy opens with the conditions <i>already written</i>. The others (internal reconnaissance and the rest) are code: their copy carries name, scope and numbers only, and the sentence beside the button says so before it is pressed — "copies its scope and numbers; its conditions are built in and cannot be copied, so the copy opens with none".</div>
+    <div class="anno"><b>Consequences beside the button</b> is round 3's rule for every act in the room; Clone follows it. The copy always starts paused: nothing an operator has not yet read can raise a flag.</div>
+  </div>
+</section>
+
+<!-- ============ SCENE 2: the copy, just made ============ -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — the copy, just made: a paused custom row expanded with its conditions written and editable.</div>
+  <div class="frame">
+    <div class="crumb">The engine room · <b>the watchers</b></div>
+    <div class="station">
+      <div class="shead"><span class="nm">The watchers</span><span class="what">detectors</span><span class="live"><i></i>11 of 13 running</span></div>
+      <div class="bench dim"><span class="cbx">✓</span><span class="dn">Port scan</span><span class="k">port_scan</span><span class="scope">— every host · ports 1–1024</span><span class="state"><i></i>running</span></div>
+
+      <div class="bench"><span class="cbx off">✓</span><span class="dn open">Port scan (copy)</span><span class="k">custom</span><span class="scope">— every host · ports 1–1024</span><span class="state pausd"><i></i>paused</span></div>
+      <div class="panel">
+        <p class="why"><b>Copied from Port scan</b> just now — its conditions, scope and numbers. Change what you like; it stays paused until you run it.</p>
+        <div class="field"><span>Name</span><span class="in wide">Port scan (copy)</span></div>
+
+        <h4>Matches when every line holds</h4>
+        <div class="conds">
+          <div class="cond"><span class="and first">and</span><span class="sel">connection state</span><span class="sel">is one of</span><div class="chipbox"><span class="chip">new<span class="x">×</span></span><span class="chip">(none)<span class="x">×</span></span><span class="chip-add">add…</span></div><span class="rm">×</span></div>
+          <div class="cond invite"><span class="and">and</span><span class="sel">choose a field</span><span></span><span></span><span></span></div>
+        </div>
+        <div class="addcond"><i>+</i> add a line</div>
+
+        <h4>Counts</h4>
+        <div class="sentence">count <span class="sel">distinct destination ports</span> per <span class="sel">source address</span>, and flag a source at <span class="in num">20</span> within <span class="in num">60</span> s.</div>
+
+        <h4>What the flag says</h4>
+        <div class="field"><span>Detail</span><span class="in wide">{Count} distinct destination ports in {Window}</span></div>
+        <div class="field"><span></span><div class="tokens"><span class="lbl">can use</span><span class="t">{Count}</span><span class="t">{SourceAddress}</span><span class="t">{Window}</span></div></div>
+
+        <div class="readsas"><span class="lbl">Reads as</span>flag a <b>source address</b> that reaches <b>20 distinct destination ports</b> within <b>60 s</b>, counting only events whose <b>connection state is new or absent</b>, on ports <b>1–1024</b>.</div>
+
+        <div class="actions">
+          <span class="btn quiet">Remove</span>
+          <span class="sp"></span>
+          <span class="btn quiet">Try</span>
+          <span class="btn primary">Save</span>
+          <span class="btn quiet">Cancel</span>
+        </div>
+      </div>
+      <div class="bench dim"><span class="cbx">✓</span><span class="dn">Repeated drops</span><span class="k">repeated_drops</span><span class="scope">— every host</span><span class="state"><i></i>running</span></div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>A condition is a sentence</b>, one per line: <i>field · verb · value</i>. The verbs are worded per field (<i>is · is not · is one of · is not one of · is within · is between · is classed as</i>), and the value control follows the verb — one box for <i>is</i>, chips for <i>one of</i>, a CIDR box for <i>within</i>, two boxes for <i>between</i>. Every line must hold; the gutter says "and" so nobody wonders about "or" (the engine has none).</div>
+    <div class="anno"><b>Counting is one sentence too</b>, built from the engine's real axes (per source · per source and port · per target · per destination port · everywhere; each event or distinct values of a field), with the threshold and window — the numbers Try already knows how to replay — inline where they are read.</div>
+    <div class="anno"><b>Reads as</b> is the honesty line: the whole definition read back as prose, from the exact spec that will be saved, so an operator checks a sentence rather than a form. It updates as the form changes and is what a viewer sees in place of the editor.</div>
+  </div>
+</section>
+
+<!-- ============ SCENE 3: written from nothing, and corrected ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — a copy of a code detector, written from nothing; one line wrong, said in words; then tried.</div>
+  <div class="frame">
+    <div class="crumb">The engine room · <b>the watchers</b></div>
+    <div class="station">
+      <div class="shead"><span class="nm">The watchers</span><span class="what">detectors</span><span class="live"><i></i>11 of 13 running</span></div>
+      <div class="bench dim"><span class="cbx">✓</span><span class="dn">Internal reconnaissance</span><span class="k">internal_recon</span><span class="scope">— every host, every port</span><span class="state"><i></i>running</span></div>
+
+      <div class="bench"><span class="cbx off">✓</span><span class="dn open">Garage probes</span><span class="k">custom</span><span class="scope">— every host, every port</span><span class="state pausd"><i></i>paused</span></div>
+      <div class="panel">
+        <p class="why"><b>Copied from Internal reconnaissance</b> — its scope and numbers. Its conditions are built in and could not be copied, so these were written here.</p>
+        <div class="field"><span>Name</span><span class="in wide">Garage probes</span></div>
+
+        <h4>Matches when every line holds</h4>
+        <div class="conds">
+          <div class="cond"><span class="and first">and</span><span class="sel">source address</span><span class="sel">is within</span><span class="in" style="font-family:var(--mono)">10.0.70.0/24</span><span class="rm">×</span></div>
+          <div class="cond"><span class="and">and</span><span class="sel">action</span><span class="sel">is</span><span class="sel">drop</span><span class="rm">×</span></div>
+          <div class="cond bad"><span class="and">and</span><span class="sel">destination port</span><span class="sel">is between</span><div class="range"><span class="in num">1</span>and<span class="in num" style="color:var(--ink-3);font-family:var(--sans);text-align:left;font-style:italic">port</span></div><span class="rm">×</span><span class="cond-err">between needs both ends — the high port is missing</span></div>
+          <div class="cond"><span class="and">and</span><span class="sel">destination address</span><span class="sel">is classed as</span><span class="sel">internal</span><span class="rm">×</span></div>
+        </div>
+        <div class="addcond"><i>+</i> add a line</div>
+
+        <h4>Counts</h4>
+        <div class="sentence">count <span class="sel">distinct destination addresses</span> per <span class="sel">source address</span>, and flag a source at <span class="in num">8</span> within <span class="in num">300</span> s.</div>
+
+        <h4>What the flag says</h4>
+        <div class="field"><span>Detail</span><span class="in wide">{SourceAddress} in the garage range was dropped reaching {Count} internal hosts</span></div>
+        <div class="field"><span></span><div class="tokens"><span class="lbl">can use</span><span class="t">{Count}</span><span class="t">{SourceAddress}</span><span class="t">{Window}</span></div></div>
+
+        <div class="readsas"><span class="lbl">Reads as</span>flag a <b>source address</b> that is dropped reaching <b>8 distinct internal destination addresses</b> within <b>300 s</b>, counting only events from <b>10.0.70.0/24</b> with action <b>drop</b> — once the port line is finished.</div>
+
+        <div class="tried">
+          <div class="cnt">Would have fired <b>3 times</b> in the last 24 h<span class="cur">currently: not saved yet</span></div>
+          <ul><li>10.0.70.14 garage-cam</li><li>10.0.70.31 ev-charger</li><li>10.0.70.14 garage-cam</li></ul>
+        </div>
+
+        <div class="actions">
+          <span class="btn quiet">Remove</span>
+          <span class="sp"></span>
+          <span class="btn quiet">Try</span>
+          <span class="btn primary off">Save</span>
+          <span class="aside">finish the port line first</span>
+          <span class="btn quiet">Cancel</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Wrong is said in words, on the line</b>, in amber — time's ink, borrowed here for "not yet"; alarm stays off the bench. Save waits and says why beside itself; Try does not wait, because trying the lines that do hold against the stored traffic is exactly how an operator finds out whether the idea is worth finishing.</div>
+    <div class="anno"><b>The Try receipt is the built one</b> (#786): count, window, the hosts it would have named — now for a detector that did not exist a minute ago. The data story is round 55's garage: the retired range's stragglers, watched a second way.</div>
+  </div>
+</section>
+
+<!-- ============ SCENE 4: the viewer, and the phone ============ -->
+<section class="scene" id="s4">
+  <div class="scene-tag">Scene 4 — a viewer reads the same row as prose; on a phone the lines stack, one sentence per card.</div>
+  <div style="display:flex;gap:18px;align-items:flex-start;width:min(1180px,96%);margin:18px auto 0">
+    <div class="frame" style="width:auto;flex:1;margin:0">
+      <div class="crumb">The engine room · <b>the watchers</b> · viewer</div>
+      <div class="station">
+        <div class="shead"><span class="nm">The watchers</span><span class="what">detectors</span><span class="live"><i></i>11 of 13 running</span></div>
+        <div class="bench"><span class="cbx off">✓</span><span class="dn open">Port scan (copy)</span><span class="k">custom</span><span class="scope">— every host · ports 1–1024</span><span class="state pausd"><i></i>paused</span></div>
+        <div class="panel">
+          <div class="readsas"><span class="lbl">Reads as</span>flag a <b>source address</b> that reaches <b>20 distinct destination ports</b> within <b>60 s</b>, counting only events whose <b>connection state is new or absent</b>, on ports <b>1–1024</b>. Copied from Port scan; paused.</div>
+          <p class="why" style="margin-top:8px">Its lines: connection state is one of <b>new, (none)</b>.</p>
+        </div>
+      </div>
+    </div>
+    <div class="frame phone" style="margin:0">
+      <div class="crumb">The watchers</div>
+      <div class="station">
+        <div class="bench"><span class="cbx off">✓</span><span class="dn open">Garage probes</span><span class="state pausd"><i></i>paused</span></div>
+        <div class="panel">
+          <h4>Matches when every line holds</h4>
+          <div class="conds">
+            <div class="cond"><span class="and first"></span><span class="sel">source address</span><span class="sel">is within</span><span class="in" style="font-family:var(--mono)">10.0.70.0/24</span><span class="rm">remove line</span></div>
+            <div class="cond"><span class="and">and</span><span class="sel">action</span><span class="sel">is</span><span class="sel">drop</span><span class="rm">remove line</span></div>
+          </div>
+          <div class="addcond"><i>+</i> add a line</div>
+          <h4>Counts</h4>
+          <div class="sentence">count <span class="sel">distinct destination addresses</span> per <span class="sel">source address</span>, flag at <span class="in num">8</span> in <span class="in num">300</span> s.</div>
+          <div class="readsas"><span class="lbl">Reads as</span>flag a <b>source address</b> dropped reaching <b>8 internal hosts</b> in <b>300 s</b>, from <b>10.0.70.0/24</b>.</div>
+          <div class="actions"><span class="btn quiet">Try</span><span class="sp"></span><span class="btn primary">Save</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>A viewer's row is the sentence.</b> The verbs are absent, as everywhere in the room; the lines are listed as facts beneath the prose. Nothing focusable pretends to be pressable.</div>
+    <div class="anno"><b>The pocket bench</b> stacks each line's three parts; "remove line" is written out because there is no gutter to put a × in. Same type size — the floor holds; the panel scrolls.</div>
+  </div>
+</section>
+
+<script>
+  if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+</script>
+</body>
+</html>

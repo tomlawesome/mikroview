@@ -280,7 +280,7 @@ func TestShippedOutboundAnomaly_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(26*time.Second)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", t0.Add(26*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	d.Evaluate(store.Event{SrcIP: src, DstIP: pub3(26), DstPort: 443, ReceivedAt: t0.Add(27 * time.Second)})
@@ -442,6 +442,60 @@ func TestShippedOutboundAnomalyReplayProducesReceipt(t *testing.T) {
 	}
 	if d.dests.Len() != 0 {
 		t.Errorf("Replay mutated the live definition's state (%d keys) -- call-local only", d.dests.Len())
+	}
+}
+
+// TestShippedOutboundAnomalyReplaySampleKeepsMostRecent pins issue #860
+// for the dest-spread replay path: once emissions exceed
+// replaySampleBound, the receipt's Sample must hold the most recent ones
+// (chronological order preserved), not whichever fifty fired first. This
+// would fail under the old first-N behaviour, which kept the earliest
+// fifty crossings instead of the latest.
+func TestShippedOutboundAnomalyReplaySampleKeepsMostRecent(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedDestSpreadDefinition(t, "outbound_anomaly", FlagsSink(fs),
+		Params{"threshold": 5, "window": time.Minute.String()}, Scope{}, true)
+
+	t0 := time.Now().Add(-time.Hour)
+	n := replaySampleBound + 20
+	var events []store.Event
+	for i := 0; i < n; i++ {
+		events = append(events, lanEvt("192.168.1.50", pub3(i), t0.Add(time.Duration(i)*time.Second)))
+	}
+
+	res, err := d.Replay(fakeCorpus{events: events}, nil)
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if res.Receipt == nil {
+		t.Fatalf("Replay declined unexpectedly: %+v", res.Decline)
+	}
+	sample := res.Receipt.Sample()
+	if len(sample) != replaySampleBound {
+		t.Fatalf("len(Sample()) = %d, want exactly replaySampleBound=%d", len(sample), replaySampleBound)
+	}
+	// threshold=5: the distinct-destination count first clears the
+	// threshold at event index 4 (the 5th distinct destination), and every
+	// event from there on keeps it cleared (destinations are always
+	// distinct, never expiring within this window), so events
+	// threshold-1..n-1 are each their own emission. The sample must be
+	// exactly the last replaySampleBound of those, oldest of those kept
+	// first.
+	firstFireIdx := 4
+	totalFires := n - firstFireIdx
+	if totalFires <= replaySampleBound {
+		t.Fatalf("test setup produces only %d fires, want more than replaySampleBound=%d", totalFires, replaySampleBound)
+	}
+	for i, s := range sample {
+		wantIdx := n - replaySampleBound + i
+		want := events[wantIdx].ReceivedAt
+		if !s.At.Equal(want) {
+			t.Fatalf("sample[%d].At = %s, want %s (event %d) -- sample must hold the most recent %d emissions in chronological order, not the first",
+				i, s.At, want, wantIdx, replaySampleBound)
+		}
+		if s.Target != "192.168.1.50" {
+			t.Errorf("sample[%d].Target = %q, want the LAN source", i, s.Target)
+		}
 	}
 }
 
@@ -701,7 +755,7 @@ func TestShippedInternalRecon_FieldsRefireClearRevive(t *testing.T) {
 		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
 	}
 
-	if !fs.Clear(f2.ID, t0.Add(11*time.Second)) {
+	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", t0.Add(11*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	d.Evaluate(store.Event{SrcIP: src, DstIP: lan3(11), DstPort: 445, ReceivedAt: t0.Add(12 * time.Second)})
@@ -725,5 +779,106 @@ func TestShippedInternalRecon_FieldsRefireClearRevive(t *testing.T) {
 func TestShippedInternalReconIsNotAGroupReputationCandidate(t *testing.T) {
 	if shippedGroupReputationIDs["internal_recon"] {
 		t.Error("internal_recon must not use the group reputation sink -- its destinations are never public")
+	}
+}
+
+// TestShippedOutboundAnomalyRecordsEvidencePairs is #641's first piece:
+// the destinations these two definitions count are recorded with the
+// port each was reached on, so an expected verdict can permit exactly
+// what the device was seen doing (watchlist.PermittedDest) instead of
+// crossing a host list against a port list.
+func TestShippedOutboundAnomalyRecordsEvidencePairs(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedDestSpreadDefinition(t, "outbound_anomaly", FlagsSink(fs),
+		Params{"threshold": 2, "window": time.Minute.String()}, Scope{}, true)
+
+	now := time.Now()
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.1", DstPort: 443, ReceivedAt: now})
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.1", DstPort: 8443, ReceivedAt: now.Add(time.Second)})
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.2", DstPort: 443, ReceivedAt: now.Add(2 * time.Second)})
+
+	f := dsFlag(fs, flags.TypeOutboundAnomaly)
+	if f == nil {
+		t.Fatalf("expected an outbound_anomaly flag, got %+v", fs.List())
+	}
+	want := []flags.HostPort{
+		{Host: "203.0.113.1", Port: 443},
+		{Host: "203.0.113.1", Port: 8443},
+		{Host: "203.0.113.2", Port: 443},
+	}
+	if len(f.Evidence.Pairs) != len(want) {
+		t.Fatalf("Pairs = %+v, want %+v", f.Evidence.Pairs, want)
+	}
+	for i, p := range want {
+		if f.Evidence.Pairs[i] != p {
+			t.Errorf("Pairs[%d] = %+v, want %+v (host then port, as EvidenceSet.Pairs orders)", i, f.Evidence.Pairs[i], p)
+		}
+	}
+	if f.Evidence.PairsTotal != len(want) {
+		t.Errorf("PairsTotal = %d, want %d", f.Evidence.PairsTotal, len(want))
+	}
+	// Two ports to one host is two pairs but one destination -- the
+	// threshold is counted on destinations, and this pins that the
+	// second ring did not change that.
+	if f.Size == nil || *f.Size != 2 {
+		t.Errorf("Size = %v, want 2 distinct destinations", f.Size)
+	}
+}
+
+// TestShippedInternalReconRecordsEvidencePairs is the same claim for the
+// internal half -- both definitions this file builds are turned on
+// together by #641, so both are pinned rather than one standing for the
+// other.
+func TestShippedInternalReconRecordsEvidencePairs(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedDestSpreadDefinition(t, "internal_recon", FlagsSink(fs),
+		Params{"threshold": 3, "window": time.Minute.String()}, Scope{}, true)
+
+	now := time.Now()
+	for i := 1; i <= 3; i++ {
+		d.Evaluate(store.Event{
+			SrcIP: "192.168.1.50", DstIP: fmt.Sprintf("192.168.1.%d", 100+i), DstPort: 445,
+			ReceivedAt: now.Add(time.Duration(i) * time.Second),
+		})
+	}
+	f := dsFlag(fs, flags.TypeInternalRecon)
+	if f == nil {
+		t.Fatalf("expected an internal_recon flag, got %+v", fs.List())
+	}
+	if len(f.Evidence.Pairs) != 3 {
+		t.Fatalf("Pairs = %+v, want three (destination, 445) pairs", f.Evidence.Pairs)
+	}
+	for _, p := range f.Evidence.Pairs {
+		if p.Port != 445 {
+			t.Errorf("pair %+v: port must be the one the destination was reached on", p)
+		}
+	}
+}
+
+// TestShippedDestSpreadPairsSkipUntrackedAndPortlessEvents pins the two
+// gates on recording a pair: a destination this direction does not count
+// is not this definition's evidence whichever port it used, and a line
+// with no destination port yields no pair at all -- {host, 0} is a pair
+// nothing could permit or match (watchlist.matchNonInverted refuses a
+// zero port outright).
+func TestShippedDestSpreadPairsSkipUntrackedAndPortlessEvents(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedDestSpreadDefinition(t, "outbound_anomaly", FlagsSink(fs),
+		Params{"threshold": 2, "window": time.Minute.String()}, Scope{}, true)
+
+	now := time.Now()
+	// An internal destination: counted by the other direction, not this one.
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "192.168.1.9", DstPort: 445, ReceivedAt: now})
+	// A public destination with no port on the line.
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.7", ReceivedAt: now.Add(time.Second)})
+	d.Evaluate(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.8", DstPort: 443, ReceivedAt: now.Add(2 * time.Second)})
+
+	f := dsFlag(fs, flags.TypeOutboundAnomaly)
+	if f == nil {
+		t.Fatalf("expected an outbound_anomaly flag, got %+v", fs.List())
+	}
+	want := flags.HostPort{Host: "203.0.113.8", Port: 443}
+	if len(f.Evidence.Pairs) != 1 || f.Evidence.Pairs[0] != want {
+		t.Errorf("Pairs = %+v, want exactly [%+v]", f.Evidence.Pairs, want)
 	}
 }

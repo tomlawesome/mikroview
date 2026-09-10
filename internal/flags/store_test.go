@@ -77,6 +77,28 @@ func flushForTest(t *testing.T, s *Store) {
 	}
 }
 
+// closeForTest stops s's write-behind persister via t.Cleanup, flushing
+// whatever is still dirty first -- see Store.Close. Any test that opens
+// two stores against the same path (a reopen-and-verify round trip) must
+// register this for both, not just the first: with persistMinInterval
+// forced to 0 for the debounce-timing tests, a store's writer goroutine
+// can still be attempting a save on the shared path when t.TempDir()
+// tries to remove it, which fails cleanup with "directory not empty"
+// (issue #836) and can also make one store's persister observe the
+// other's write as a concurrent modification. flushForTest alone only
+// proves a write has landed; it does not stop the goroutine that could
+// start another one.
+func closeForTest(t *testing.T, s *Store) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := s.Close(ctx); err != nil {
+			t.Errorf("closeForTest: %v", err)
+		}
+	})
+}
+
 func TestOpenEmptyPathIsUsable(t *testing.T) {
 	s, err := Open("")
 	if err != nil {
@@ -236,7 +258,7 @@ func TestAddRevivesClearedFlagAsFreshEpisode(t *testing.T) {
 
 	s.Add(TypePortScan, "1.2.3.4", "first episode", t0)
 	id := s.List()[0].ID
-	if !s.Clear(id, t1) {
+	if _, ok := s.SetVerdict(id, VerdictChecked, "operator", t1); !ok {
 		t.Fatal("Clear() on a freshly-added flag should succeed")
 	}
 
@@ -257,19 +279,33 @@ func TestAddRevivesClearedFlagAsFreshEpisode(t *testing.T) {
 	}
 }
 
-func TestClearUnknownOrAlreadyClearedReturnsFalse(t *testing.T) {
+// TestVerdictOnUnknownOrAlreadyClearedFlag is what replaced the plain
+// clear's own contract test when #640 removed Store.Clear: judging is
+// now the only way one flag leaves the inbox, so its no-op cases are the
+// ones that matter. An unknown ID is the single failure (the handler
+// maps it to 404); re-judging an already-cleared flag succeeds and
+// records the newer judgement, since an operator is allowed to change
+// their mind about a flag they already dealt with.
+func TestVerdictOnUnknownOrAlreadyClearedFlag(t *testing.T) {
 	s, _ := Open("")
-	if s.Clear("nonexistent", time.Now()) {
-		t.Error("Clear() on an unknown ID should return false")
+	if _, ok := s.SetVerdict("nonexistent", VerdictChecked, "operator", time.Now()); ok {
+		t.Error("a verdict on an unknown ID should report not-found")
 	}
 
 	s.Add(TypePortScan, "1.2.3.4", "x", time.Now())
 	id := s.List()[0].ID
-	if !s.Clear(id, time.Now()) {
-		t.Fatal("first Clear() should succeed")
+	if _, ok := s.SetVerdict(id, VerdictChecked, "operator", time.Now()); !ok {
+		t.Fatal("the first verdict should succeed")
 	}
-	if s.Clear(id, time.Now()) {
-		t.Error("second Clear() on an already-cleared flag should return false")
+	f, ok := s.SetVerdict(id, VerdictResolved, "operator", time.Now())
+	if !ok {
+		t.Fatal("a second verdict on an already-cleared flag should still succeed")
+	}
+	if f.Verdict != VerdictResolved {
+		t.Errorf("Verdict = %q, want %q", f.Verdict, VerdictResolved)
+	}
+	if !f.Cleared {
+		t.Error("the flag should still be cleared after the second verdict")
 	}
 }
 
@@ -299,6 +335,27 @@ func TestListOrdersMostRecentlyActiveFirst(t *testing.T) {
 // through a fake persist.Backend instead, which is a claim about
 // behaviour rather than about timing either way.
 func TestPersistLockedRateLimitsWrites(t *testing.T) {
+	// #837: writebehind.go's run() only waits out the remainder of
+	// MinInterval -- see its own doc comment, "stamped after an attempt
+	// completes" -- so it correctly attempts immediately once that much
+	// *wall-clock* time has already passed, coalescing or not. This test's
+	// own goroutine getting scheduled out for over a second between the
+	// baseline flush below and the two Adds that follow (observed under
+	// `-race -count=300`, ~10% of runs) is exactly that: real time no
+	// human would notice, but enough to blow through the real 1s
+	// persistMinInterval default and make the second Add fire its own
+	// uncoalesced save before the third arrives. That is the writer
+	// honouring its documented contract, not breaking it -- confirmed by
+	// forcing the same gap deliberately (a fixed sleep past a shortened
+	// interval reproduces the extra save every time). So the fix widens
+	// the window rather than the assertion: persistMinInterval set far
+	// past any scheduling delay this test could plausibly hit, so only a
+	// genuine coalescing failure -- never machine load -- can still
+	// produce a third save.
+	orig := persistMinInterval
+	persistMinInterval = time.Hour
+	defer func() { persistMinInterval = orig }()
+
 	b := newCountingSaveBackend()
 	s, err := OpenWithBackend(b)
 	if err != nil {
@@ -335,11 +392,12 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	s1.Add(TypeCriticalPort, "5.6.7.8", "6 attempts on port 22 in 5m", now)
 	s1.AddWithConfidence(TypeActivitySpike, "9.9.9.9", "5x baseline", 82, now)
 	id := s1.List()[0].ID
-	s1.Clear(id, now.Add(time.Minute))
+	s1.SetVerdict(id, VerdictChecked, "operator", now.Add(time.Minute))
 	// #400: persistence is now write-behind (persist.WriteBehind), so a
 	// reopen immediately after these calls would otherwise race the
 	// writer goroutine -- flush explicitly first, the synchronous
@@ -350,6 +408,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-opening the persisted store failed: %v", err)
 	}
+	closeForTest(t, s2)
 	list := s2.List()
 	if len(list) != 2 {
 		t.Fatalf("expected 2 persisted flags after reopening, got %d: %+v", len(list), list)
@@ -385,10 +444,10 @@ func TestPruneEvictsOldestClearedFlagsOverCap(t *testing.T) {
 	// Two cleared flags (oldest first) plus one active one -- adding a
 	// fourth should evict the oldest cleared entry, never the active one.
 	s.Add(TypePortScan, "1.1.1.1", "x", now)
-	s.Clear(flagID(TypePortScan, "1.1.1.1"), now.Add(time.Minute))
+	s.SetVerdict(flagID(TypePortScan, "1.1.1.1"), VerdictChecked, "operator", now.Add(time.Minute))
 
 	s.Add(TypePortScan, "2.2.2.2", "x", now.Add(2*time.Minute))
-	s.Clear(flagID(TypePortScan, "2.2.2.2"), now.Add(3*time.Minute))
+	s.SetVerdict(flagID(TypePortScan, "2.2.2.2"), VerdictChecked, "operator", now.Add(3*time.Minute))
 
 	s.Add(TypePortScan, "3.3.3.3", "active, never cleared", now.Add(4*time.Minute))
 
@@ -420,7 +479,7 @@ func TestAddReportsNewEpisode(t *testing.T) {
 	}
 
 	id := flagID(TypePortScan, "1.1.1.1")
-	s.Clear(id, now.Add(2*time.Second))
+	s.SetVerdict(id, VerdictChecked, "operator", now.Add(2*time.Second))
 	if isNew := s.Add(TypePortScan, "1.1.1.1", "revived", now.Add(3*time.Second)); !isNew {
 		t.Error("expected a revival from cleared to report a new episode")
 	}
@@ -465,7 +524,7 @@ func TestTimeSeriesCountsOnlyNewEpisodes(t *testing.T) {
 
 	// A revival from Cleared is a new episode and must bump it again.
 	id := flagID(TypePortScan, "1.1.1.1")
-	s.Clear(id, now.Add(3*time.Second))
+	s.SetVerdict(id, VerdictChecked, "operator", now.Add(3*time.Second))
 	s.Add(TypePortScan, "1.1.1.1", "revived", now.Add(4*time.Second))
 	series = s.TimeSeries()
 	last = series[len(series)-1]
@@ -591,7 +650,7 @@ func TestRaiseConfidenceFloorResetOnRevival(t *testing.T) {
 
 	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 20, now)
 	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 90)
-	s.Clear(flagID(TypeCriticalPort, "203.0.113.9"), now.Add(time.Second))
+	s.SetVerdict(flagID(TypeCriticalPort, "203.0.113.9"), VerdictChecked, "operator", now.Add(time.Second))
 
 	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "revived episode", 15, now.Add(2*time.Second))
 	if c := *s.List()[0].Confidence; c != 15 {
@@ -604,9 +663,13 @@ func TestAddWithDetailPersistsEvidenceAndCountry(t *testing.T) {
 	now := time.Now()
 
 	evidence := Evidence{
-		Ports: []int{22, 3389},
-		Hosts: []string{"192.168.1.5"},
-		NAT:   &NATInfo{IP: "10.0.0.5", Port: 8080, Raw: "NAT (10.0.0.5:8080->192.168.1.5:80)"},
+		Ports:             []int{22, 3389},
+		Hosts:             []string{"192.168.1.5"},
+		NAT:               &NATInfo{IP: "10.0.0.5", Port: 8080, Raw: "NAT (10.0.0.5:8080->192.168.1.5:80)"},
+		Pairs:             []HostPort{{Host: "192.168.1.5", Port: 22}},
+		PairsTotal:        214,
+		PairsTotalIsFloor: true,
+		SrcMAC:            "aa:bb:cc:dd:ee:ff",
 	}
 	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 42, evidence, "US", now)
 
@@ -620,12 +683,33 @@ func TestAddWithDetailPersistsEvidenceAndCountry(t *testing.T) {
 	if f.Evidence.NAT.IP != "10.0.0.5" || f.Evidence.NAT.Port != 8080 {
 		t.Errorf("expected NAT detail to round-trip, got %+v", f.Evidence.NAT)
 	}
+	// #654: Pairs/PairsTotal/PairsTotalIsFloor/SrcMAC round-trip the same
+	// way every other Evidence field above already does -- additive
+	// fields, no special handling anywhere in the store.
+	if len(f.Evidence.Pairs) != 1 || f.Evidence.Pairs[0] != (HostPort{Host: "192.168.1.5", Port: 22}) {
+		t.Errorf("expected Pairs to be persisted, got %+v", f.Evidence.Pairs)
+	}
+	if f.Evidence.PairsTotal != 214 {
+		t.Errorf("expected PairsTotal to be persisted, got %d", f.Evidence.PairsTotal)
+	}
+	if !f.Evidence.PairsTotalIsFloor {
+		t.Error("expected PairsTotalIsFloor to be persisted as true")
+	}
+	if f.Evidence.SrcMAC != "aa:bb:cc:dd:ee:ff" {
+		t.Errorf("expected SrcMAC to be persisted, got %q", f.Evidence.SrcMAC)
+	}
 
-	// A plain re-fire recomputes evidence fresh, same as Detail already does.
+	// A plain re-fire recomputes evidence fresh, same as Detail already
+	// does -- #654's own "prospective only" requirement: Pairs/SrcMAC
+	// from the earlier call must not linger once a re-fire's evidence
+	// doesn't carry them.
 	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 42, Evidence{Ports: []int{22}}, "US", now.Add(time.Second))
 	f = s.List()[0]
 	if len(f.Evidence.Ports) != 1 || len(f.Evidence.Hosts) != 0 {
 		t.Errorf("expected evidence to reflect the latest call, got %+v", f.Evidence)
+	}
+	if len(f.Evidence.Pairs) != 0 || f.Evidence.PairsTotal != 0 || f.Evidence.PairsTotalIsFloor || f.Evidence.SrcMAC != "" {
+		t.Errorf("expected Pairs/PairsTotal/PairsTotalIsFloor/SrcMAC to be overwritten (not accumulated) by the re-fire, got %+v", f.Evidence)
 	}
 }
 
@@ -655,6 +739,82 @@ func TestAddProvisionalSetsProvisionalMarker(t *testing.T) {
 	}
 }
 
+// TestAddDoesNotConvertActiveProvisionalFlagInPlace is #642's own
+// requirement: a baseline clearing its floor mid-episode must not
+// silently flip an already-active provisional flag's Provisional field
+// to false in place. An operator who already saw this flag hatched/
+// labelled provisional (#616's honesty vocabulary) must not see it
+// silently turn solid without ever being marked as a new judgement --
+// Provisional is fixed at episode start, the same way FirstSeen already
+// is, not re-derived on every re-fire.
+func TestAddDoesNotConvertActiveProvisionalFlagInPlace(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	isNew := s.AddProvisional(TypeActivitySpike, "203.0.113.9", "warming up", 30, Evidence{}, "US", true, now)
+	if !isNew {
+		t.Fatal("expected the first raise to start a new episode")
+	}
+	first := s.List()[0]
+	if !first.Provisional || first.Cleared {
+		t.Fatalf("expected a fresh active provisional flag, got %+v", first)
+	}
+
+	// The same (type, target) fires again, later, now past its floor --
+	// exactly what a baseline finishing its warm-up mid-episode looks
+	// like. This must not convert the still-active flag in place.
+	isNew = s.AddWithDetail(TypeActivitySpike, "203.0.113.9", "settled now", 80, Evidence{}, "US", now.Add(time.Minute))
+	if isNew {
+		t.Fatal("expected the re-fire to update the existing active episode, not start a new one")
+	}
+
+	list := s.List()
+	if len(list) != 1 {
+		t.Fatalf("expected exactly one flag entry (same episode, updated in place), got %d: %+v", len(list), list)
+	}
+	f := list[0]
+	if !f.Provisional {
+		t.Fatal("expected Provisional to stay true for the rest of this active episode -- a settled re-fire must not silently convert it")
+	}
+	if f.Cleared {
+		t.Fatal("expected the episode to still be active, not cleared, after the settled re-fire")
+	}
+	if f.Detail != "settled now" || f.Count != 2 {
+		t.Fatalf("expected the re-fire to still update Detail/Count in place (Provisional aside), got %+v", f)
+	}
+}
+
+// TestAddProvisionalNewEpisodeAfterClearCanSettle is
+// TestAddDoesNotConvertActiveProvisionalFlagInPlace's other half: once a
+// provisional episode is actually cleared (a human reviewed it, or any
+// other clear path), the condition firing again is a genuinely new
+// episode -- the revival branch add() already uses for any cleared flag
+// -- and that new episode is free to be raised settled (provisional
+// false), proving #642's "the warm baseline raises new settled flags
+// instead" is possible, not merely "provisional never changes ever."
+func TestAddProvisionalNewEpisodeAfterClearCanSettle(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.AddProvisional(TypeActivitySpike, "203.0.113.9", "warming up", 30, Evidence{}, "US", true, now)
+	f := s.List()[0]
+	if _, ok := s.SetVerdict(f.ID, VerdictChecked, "operator", now.Add(time.Second)); !ok {
+		t.Fatal("expected Clear to succeed on the just-raised provisional flag")
+	}
+
+	isNew := s.AddWithDetail(TypeActivitySpike, "203.0.113.9", "settled now", 80, Evidence{}, "US", now.Add(time.Minute))
+	if !isNew {
+		t.Fatal("expected the post-clear re-fire to revive as a new episode")
+	}
+	revived := s.List()[0]
+	if revived.Provisional {
+		t.Fatal("expected the new, post-clear episode to be raised settled (Provisional=false)")
+	}
+	if revived.Cleared {
+		t.Fatal("expected the revived episode to be active, not cleared")
+	}
+}
+
 // TestAddProvisionalPersistsAndSurvivesReload is #399's "verify the
 // store round-trips it" requirement for internal/flags: Flag.Provisional
 // is additive JSON (omitempty), so nothing about persistedState's shape
@@ -673,6 +833,7 @@ func TestAddProvisionalPersistsAndSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	s1.AddProvisional(TypeActivitySpike, "9.9.9.9", "warming up", 40, Evidence{}, "", true, now)
 	// #400: write-behind -- flush before reopening, see flushForTest.
@@ -682,6 +843,7 @@ func TestAddProvisionalPersistsAndSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-opening the persisted store failed: %v", err)
 	}
+	closeForTest(t, s2)
 	list := s2.List()
 	if len(list) != 1 {
 		t.Fatalf("expected 1 persisted flag after reopening, got %d: %+v", len(list), list)
@@ -802,7 +964,7 @@ func TestReputationSnapshotResetOnRevival(t *testing.T) {
 	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
 	score := 90
 	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{IP: "203.0.113.9", AbuseScore: &score})
-	s.Clear(flagID(TypeCriticalPort, "203.0.113.9"), now.Add(time.Second))
+	s.SetVerdict(flagID(TypeCriticalPort, "203.0.113.9"), VerdictChecked, "operator", now.Add(time.Second))
 
 	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "revived episode", 15, now.Add(2*time.Second))
 	if f := s.List()[0]; f.Reputation != nil {
@@ -829,7 +991,7 @@ func TestOnRaiseFiresOnNewEpisodeOnly(t *testing.T) {
 	}
 
 	id := flagID(TypePortScan, "203.0.113.9")
-	s.Clear(id, now.Add(2*time.Second))
+	s.SetVerdict(id, VerdictChecked, "operator", now.Add(2*time.Second))
 	s.Add(TypePortScan, "203.0.113.9", "revived", now.Add(3*time.Second))
 	if len(raised) != 2 || raised[1].Detail != "revived" {
 		t.Fatalf("expected a revival from cleared to trigger onRaise again, got %+v", raised)
@@ -903,15 +1065,20 @@ func TestExcludeIsPermanentNotRaiseThenAutoClear(t *testing.T) {
 	}
 }
 
-func TestClearAndExcludeClearsAndPreventsFutureRaises(t *testing.T) {
+// TestExpectedVerdictClearsAndPreventsFutureRaises is this test's #640
+// form: the expected verdict is what records an expectation now, so the
+// old ClearAndExclude case is asserted through it. The flag here carries
+// no size (Add, not AddEmission), so the expectation is the size-less
+// one -- absorbing outright, exactly as the pre-#640 exclusion did.
+func TestExpectedVerdictClearsAndPreventsFutureRaises(t *testing.T) {
 	s, _ := Open("")
 	now := time.Now()
 
 	s.Add(TypePortScan, "203.0.113.9", "20 ports in 60s", now)
 	id := s.List()[0].ID
 
-	if ok := s.ClearAndExclude(id, now.Add(time.Minute)); !ok {
-		t.Fatal("expected ClearAndExclude on a known ID to succeed")
+	if _, ok := s.SetVerdict(id, VerdictExpected, "operator", now.Add(time.Minute)); !ok {
+		t.Fatal("expected an expected verdict on a known ID to succeed")
 	}
 
 	list := s.List()
@@ -919,10 +1086,11 @@ func TestClearAndExcludeClearsAndPreventsFutureRaises(t *testing.T) {
 		t.Fatalf("expected the flag to be marked cleared, got %+v", list)
 	}
 	if !s.Excluded(TypePortScan, "203.0.113.9") {
-		t.Error("expected ClearAndExclude to record the exclusion")
+		t.Error("expected the expected verdict to record the expectation")
 	}
 
-	// The whole point: it must never raise again after this.
+	// The whole point: a size-less expectation absorbs everything after
+	// this, so the pair never raises again.
 	s.Add(TypePortScan, "203.0.113.9", "re-fire attempt", now.Add(2*time.Minute))
 	list = s.List()
 	if len(list) != 1 || !list[0].Cleared || list[0].Detail != "20 ports in 60s" {
@@ -930,13 +1098,13 @@ func TestClearAndExcludeClearsAndPreventsFutureRaises(t *testing.T) {
 	}
 }
 
-func TestClearAndExcludeUnknownIDReturnsFalse(t *testing.T) {
+func TestExpectedVerdictOnUnknownIDRecordsNothing(t *testing.T) {
 	s, _ := Open("")
-	if s.ClearAndExclude("nonexistent", time.Now()) {
-		t.Error("expected ClearAndExclude on an unknown ID to return false")
+	if _, ok := s.SetVerdict("nonexistent", VerdictExpected, "operator", time.Now()); ok {
+		t.Error("expected an expected verdict on an unknown ID to report not-found")
 	}
 	if len(s.ListExclusions()) != 0 {
-		t.Error("expected no exclusion to be recorded for an unknown ID")
+		t.Error("expected no expectation to be recorded for an unknown ID")
 	}
 }
 
@@ -1031,6 +1199,7 @@ func TestExclusionPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	s1.Exclude(TypePortScan, "203.0.113.9")
 	s1.Exclude(TypeCriticalPort, "198.51.100.4")
 	// Also persist an ordinary active flag alongside the exclusions, to
@@ -1043,6 +1212,11 @@ func TestExclusionPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-opening the persisted store failed: %v", err)
 	}
+	// #836: s2 is mutated below (Add, to prove the reloaded exclusion
+	// still suppresses raises), so its own write-behind persister must
+	// also be stopped before the test returns -- otherwise it can still
+	// be writing this path when t.TempDir() cleans it up.
+	closeForTest(t, s2)
 
 	if !s2.Excluded(TypePortScan, "203.0.113.9") {
 		t.Error("expected the first exclusion to survive reopening")
@@ -1116,7 +1290,7 @@ func TestPruneStillPrefersClearedFlags(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		target := fmt.Sprintf("198.51.100.%d", i)
 		s.Add(TypePortScan, target, "noise", now.Add(time.Duration(i+1)*time.Millisecond))
-		s.Clear(flagID(TypePortScan, target), now.Add(time.Duration(i+1)*time.Second))
+		s.SetVerdict(flagID(TypePortScan, target), VerdictChecked, "operator", now.Add(time.Duration(i+1)*time.Second))
 	}
 
 	var found bool
@@ -1199,11 +1373,12 @@ func TestClearedCountSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s1)
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		target := fmt.Sprintf("203.0.113.%d", i)
 		s1.Add(TypePortScan, target, "d", now)
-		s1.Clear(flagID(TypePortScan, target), now.Add(time.Second))
+		s1.SetVerdict(flagID(TypePortScan, target), VerdictChecked, "operator", now.Add(time.Second))
 	}
 	s1.Add(TypePortScan, "198.51.100.1", "still active", now)
 	// #400: write-behind -- flush before reopening, see flushForTest.
@@ -1213,6 +1388,7 @@ func TestClearedCountSurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeForTest(t, s2)
 	if got := s2.clearedCount; got != 5 {
 		t.Errorf("clearedCount after reload = %d, want 5 -- a stale zero disables cleared-flag eviction entirely", got)
 	}
@@ -1233,7 +1409,7 @@ func TestClearAllClearsEveryActiveFlag(t *testing.T) {
 	// double-counted, and not have its ClearedAt overwritten.
 	s.Add(TypeOutboundAnomaly, "203.0.113.4", "d4", now)
 	preClearedID := flagID(TypeOutboundAnomaly, "203.0.113.4")
-	s.Clear(preClearedID, now.Add(time.Second))
+	s.SetVerdict(preClearedID, VerdictChecked, "operator", now.Add(time.Second))
 	preClearedAt := now.Add(time.Second)
 
 	later := now.Add(time.Minute)
@@ -1326,4 +1502,316 @@ func activeTargets(flags []Flag) []string {
 		}
 	}
 	return out
+}
+
+// -- #638: SetVerdict ------------------------------------------------
+
+// TestSetVerdictUnknownIDReturnsFalse mirrors
+// TestClearUnknownOrAlreadyClearedReturnsFalse's "unknown ID" half --
+// the handler maps this to 404.
+func TestSetVerdictUnknownIDReturnsFalse(t *testing.T) {
+	s, _ := Open("")
+	if _, ok := s.SetVerdict("nonexistent", VerdictInvestigate, "alice", time.Now()); ok {
+		t.Error("SetVerdict() on an unknown ID should return false")
+	}
+}
+
+// TestSetVerdictExpectedClearsFlag and TestSetVerdictCheckedClearsFlag
+// cover #640's contract that every verdict but investigate clears the
+// flag, through the one clearLocked path (see SetVerdict's own doc
+// comment).
+func TestSetVerdictExpectedClearsFlag(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.9", "d", now)
+	id := s.List()[0].ID
+
+	f, ok := s.SetVerdict(id, VerdictExpected, "alice", now)
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if f.Verdict != VerdictExpected {
+		t.Errorf("Verdict = %q, want %q", f.Verdict, VerdictExpected)
+	}
+	if f.VerdictBy != "alice" {
+		t.Errorf("VerdictBy = %q, want alice", f.VerdictBy)
+	}
+	if f.VerdictAt.IsZero() {
+		t.Error("VerdictAt should be set")
+	}
+	if !f.Cleared {
+		t.Error("expected verdict should clear the flag")
+	}
+	if f.ClearedAt.IsZero() {
+		t.Error("expected verdict should set ClearedAt")
+	}
+}
+
+func TestSetVerdictCheckedClearsFlag(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypeActivitySpike, "203.0.113.10", "d", now)
+	id := s.List()[0].ID
+
+	f, ok := s.SetVerdict(id, VerdictChecked, "bob", now)
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if f.Verdict != VerdictChecked {
+		t.Errorf("Verdict = %q, want %q", f.Verdict, VerdictChecked)
+	}
+	if !f.Cleared {
+		t.Error("a checked verdict should clear the flag")
+	}
+	// Checked suppresses nothing -- that is the whole difference between
+	// it and expected.
+	if s.Excluded(TypeActivitySpike, "203.0.113.10") {
+		t.Error("a checked verdict must not record an expectation")
+	}
+}
+
+// TestSetVerdictInvestigateLeavesFlagOpen is the invariant the
+// investigate verdict exists for: it records the judgement and the row
+// switches to expected/resolved, but the flag stays open.
+func TestSetVerdictInvestigateLeavesFlagOpen(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypeCriticalPort, "203.0.113.11", "d", now)
+	id := s.List()[0].ID
+
+	f, ok := s.SetVerdict(id, VerdictInvestigate, "carol", now)
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if f.Verdict != VerdictInvestigate {
+		t.Errorf("Verdict = %q, want %q", f.Verdict, VerdictInvestigate)
+	}
+	if f.VerdictBy != "carol" {
+		t.Errorf("VerdictBy = %q, want carol", f.VerdictBy)
+	}
+	if f.Cleared {
+		t.Error("an investigate verdict must not clear the flag")
+	}
+	if !f.ClearedAt.IsZero() {
+		t.Error("an investigate verdict must not set ClearedAt")
+	}
+}
+
+// TestSetVerdictPersistsAndSurvivesReload is #638's "verify the store
+// round-trips it" requirement, the same shape as
+// TestAddProvisionalPersistsAndSurvivesReload for Flag.Provisional:
+// Verdict/VerdictBy/VerdictAt are additive JSON (omitempty/omitzero),
+// so this proves the round trip in practice, not just by inspection of
+// the struct tags.
+func TestSetVerdictPersistsAndSurvivesReload(t *testing.T) {
+	orig := persistMinInterval
+	persistMinInterval = 0
+	defer func() { persistMinInterval = orig }()
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeForTest(t, s1)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	s1.Add(TypeGlobalSpike, "global", "d", now)
+	id := s1.List()[0].ID
+	if _, ok := s1.SetVerdict(id, VerdictInvestigate, "dana", now); !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	flushForTest(t, s1)
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-opening the persisted store failed: %v", err)
+	}
+	closeForTest(t, s2)
+	list := s2.List()
+	if len(list) != 1 {
+		t.Fatalf("expected 1 persisted flag after reopening, got %d: %+v", len(list), list)
+	}
+	if list[0].Verdict != VerdictInvestigate {
+		t.Errorf("Verdict = %q after reload, want %q", list[0].Verdict, VerdictInvestigate)
+	}
+	if list[0].VerdictBy != "dana" {
+		t.Errorf("VerdictBy = %q after reload, want dana", list[0].VerdictBy)
+	}
+	if !list[0].VerdictAt.Equal(now) {
+		t.Errorf("VerdictAt = %v after reload, want %v", list[0].VerdictAt, now)
+	}
+}
+
+// TestSetVerdictOverwritesPreviousVerdict covers re-judging an
+// already-judged flag: the latest call wins, no history kept -- same
+// in-place-mutation convention as every other store field.
+func TestSetVerdictOverwritesPreviousVerdict(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.12", "d", now)
+	id := s.List()[0].ID
+
+	s.SetVerdict(id, VerdictInvestigate, "alice", now)
+	f, ok := s.SetVerdict(id, VerdictChecked, "bob", now.Add(time.Minute))
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if f.Verdict != VerdictChecked {
+		t.Errorf("Verdict = %q, want %q after re-judging", f.Verdict, VerdictChecked)
+	}
+	if f.VerdictBy != "bob" {
+		t.Errorf("VerdictBy = %q, want bob after re-judging", f.VerdictBy)
+	}
+	if !f.Cleared {
+		t.Error("the checked verdict from re-judging should still clear the flag")
+	}
+}
+
+// TestReviveResetsVerdict covers the store.go add() revival branch: a
+// flag cleared by a verdict that then re-fires as a new episode must not
+// silently carry the old verdict forward onto the new episode -- same
+// reasoning already applied to ReputationFloor/Reputation on revival.
+// What it *does* carry is the memory of a checked or resolved call, on
+// PriorVerdict -- see TestReviveRemembersACheckedVerdict.
+func TestReviveResetsVerdict(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.13", "d", now)
+	id := s.List()[0].ID
+	if _, ok := s.SetVerdict(id, VerdictChecked, "alice", now); !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+
+	s.Add(TypePortScan, "203.0.113.13", "d again", now.Add(time.Hour))
+	f := s.List()[0]
+	if f.Verdict != "" {
+		t.Errorf("Verdict = %q after revival, want empty", f.Verdict)
+	}
+	if f.VerdictBy != "" {
+		t.Errorf("VerdictBy = %q after revival, want empty", f.VerdictBy)
+	}
+	if !f.VerdictAt.IsZero() {
+		t.Error("VerdictAt should be zero after revival")
+	}
+}
+
+// -- #638 follow-on: UndoVerdict --------------------------------------
+
+// TestUndoVerdictUnknownIDReturnsFalse mirrors SetVerdict's own unknown-
+// id case -- the handler maps this to 404.
+func TestUndoVerdictUnknownIDReturnsFalse(t *testing.T) {
+	s, _ := Open("")
+	if _, ok := s.UndoVerdict("nonexistent"); ok {
+		t.Error("UndoVerdict() on an unknown ID should return false")
+	}
+}
+
+// TestUndoVerdictReopensAFlagTheVerdictItselfCleared is the ordinary
+// case: judge an open flag checked (which clears it via
+// clearLocked), then undo -- the flag must re-open, and clearedCount
+// must fall back to what it was before the verdict.
+func TestUndoVerdictReopensAFlagTheVerdictItselfCleared(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.20", "d", now)
+	id := s.List()[0].ID
+	before := s.clearedCount
+
+	f, ok := s.SetVerdict(id, VerdictChecked, "alice", now)
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if !f.Cleared {
+		t.Fatal("setup: expected the checked verdict to clear the flag")
+	}
+	if got := s.clearedCount; got != before+1 {
+		t.Fatalf("clearedCount after judging = %d, want %d", got, before+1)
+	}
+
+	f, ok = s.UndoVerdict(id)
+	if !ok {
+		t.Fatal("expected UndoVerdict to find the flag")
+	}
+	if f.Cleared {
+		t.Error("undo should re-open a flag the verdict itself cleared")
+	}
+	if !f.ClearedAt.IsZero() {
+		t.Error("undo should reset ClearedAt")
+	}
+	if f.Verdict != "" || f.VerdictBy != "" || !f.VerdictAt.IsZero() {
+		t.Errorf("undo should reset every verdict field, got %+v", f)
+	}
+	if got := s.clearedCount; got != before {
+		t.Errorf("clearedCount after undo = %d, want %d (back to pre-verdict)", got, before)
+	}
+}
+
+// TestUndoVerdictLeavesAnAlreadyClearedFlagCleared is the subtlety
+// #638's follow-on exists to cover: judging an already-cleared flag
+// (a second verdict on a flag an earlier one already closed) must not
+// let undo re-open it, because the verdict's own clearLocked call was a
+// no-op -- it wasn't what cleared the flag, so undoing the verdict has
+// no business touching Cleared.
+func TestUndoVerdictLeavesAnAlreadyClearedFlagCleared(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.21", "d", now)
+	id := s.List()[0].ID
+
+	if _, ok := s.SetVerdict(id, VerdictChecked, "operator", now); !ok {
+		t.Fatal("setup: expected the first, clearing verdict to succeed")
+	}
+	before := s.clearedCount
+
+	f, ok := s.SetVerdict(id, VerdictExpected, "bob", now.Add(time.Minute))
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if !f.Cleared {
+		t.Fatal("setup: the flag should still read cleared after judging it")
+	}
+	if got := s.clearedCount; got != before {
+		t.Fatalf("clearedCount after judging an already-cleared flag = %d, want unchanged %d", got, before)
+	}
+
+	f, ok = s.UndoVerdict(id)
+	if !ok {
+		t.Fatal("expected UndoVerdict to find the flag")
+	}
+	if !f.Cleared {
+		t.Error("undo must not re-open a flag that was already cleared before it was judged")
+	}
+	if f.Verdict != "" || f.VerdictBy != "" || !f.VerdictAt.IsZero() {
+		t.Errorf("undo should still reset every verdict field even when it doesn't re-open, got %+v", f)
+	}
+	if got := s.clearedCount; got != before {
+		t.Errorf("clearedCount after undo of an already-cleared flag = %d, want unchanged %d", got, before)
+	}
+}
+
+// TestUndoVerdictOnUnjudgedFlagIsANoOp documents the deliberate choice
+// for undoing a flag with no verdict recorded: succeed as a no-op
+// rather than returning an error, since the caller may be a
+// stale undo affordance racing a page that already moved on and can't
+// always tell the two cases apart either.
+func TestUndoVerdictOnUnjudgedFlagIsANoOp(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.22", "d", now)
+	id := s.List()[0].ID
+	before := s.clearedCount
+
+	f, ok := s.UndoVerdict(id)
+	if !ok {
+		t.Fatal("expected UndoVerdict to find the flag")
+	}
+	if f.Cleared {
+		t.Error("undoing an unjudged, never-cleared flag must not clear it")
+	}
+	if f.Verdict != "" {
+		t.Errorf("Verdict = %q, want still empty", f.Verdict)
+	}
+	if got := s.clearedCount; got != before {
+		t.Errorf("clearedCount changed on a no-op undo: got %d, want unchanged %d", got, before)
+	}
 }

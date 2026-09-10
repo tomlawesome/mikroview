@@ -27,12 +27,13 @@ beforeEach(() => {
   authState.role = ''
   authState.ssoAvailable = false
   authState.ssoError = null
+  authState.justSignedOut = false
 })
 
 async function fillAndSubmit(username: string, password: string) {
-  await fireEvent.input(screen.getByLabelText('Username'), { target: { value: username } })
-  await fireEvent.input(screen.getByLabelText('Password'), { target: { value: password } })
-  await fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+  await fireEvent.input(screen.getByLabelText('account'), { target: { value: username } })
+  await fireEvent.input(screen.getByLabelText('password'), { target: { value: password } })
+  await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
 }
 
 describe('AuthLogin', () => {
@@ -68,7 +69,7 @@ describe('AuthLogin', () => {
     expect(fetchAuthSession).not.toHaveBeenCalled()
     // Still on the login screen -- the form's failure path never flips
     // authState.state, it only surfaces the error string.
-    expect(screen.getByRole('button', { name: /sign in/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /enter/i })).toBeTruthy()
   })
 
   it('shows the SSO link only when the backend reports SSO is configured', async () => {
@@ -86,5 +87,22 @@ describe('AuthLogin', () => {
     render(AuthLogin)
 
     expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
+  })
+
+  it('plays the way-out beat when this mount follows a sign-out, and consumes the flag', () => {
+    authState.justSignedOut = true
+
+    const { container } = render(AuthLogin)
+
+    expect(container.querySelector('.reverse')).toBeTruthy()
+    // One-shot: a second mount (e.g. a plain page refresh) must not
+    // replay it.
+    expect(authState.justSignedOut).toBe(false)
+  })
+
+  it('does not play the way-out beat on a plain page load', () => {
+    const { container } = render(AuthLogin)
+
+    expect(container.querySelector('.reverse')).toBeNull()
   })
 })

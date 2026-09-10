@@ -1,0 +1,41 @@
+# Licence allow-list for what mikroview actually ships: the Go modules
+# statically linked into the binary, and the frontend npm packages bundled
+# into the embedded web assets -- the same inventory
+# tools/licenses/generate-notices.mjs attributes in THIRD-PARTY-NOTICES.md.
+# Deliberately not the whole installed dependency tree: build and test
+# tooling (typescript, vite, vitest, playwright, ...) never reaches the
+# shipped artefact, so a GPL build tool does not affect the licence of what
+# it produces. Read by tools/licenses/licence-policy.mjs (the npm half) and
+# by the security:licence-policy job in .gitlab-ci.yml, which also feeds
+# this same list to `go-licenses --allowed_licenses` (the Go half, `go
+# list -deps` scoped the same way) via `licence-policy.mjs --print-allowed`
+# -- one list for both checks, so they cannot drift apart.
+#
+# Replaces .github/dependency-review-config.yml, which
+# actions/dependency-review-action read on a pull-request diff. That check
+# went with #935 (GitHub became a push-mirror with no pull requests), and an
+# initial replacement here checked the whole installed tree instead of just
+# what ships -- caught by twelve tooling-only packages (typescript's own
+# `glob` chain, browserslist's `caniuse-lite` data) failing a rebuild of the
+# old GitHub scope by mistake. Narrowed to the shipped set per owner
+# decision (#945 item 3, #948).
+#
+# Only the licences a shipped dependency actually uses (THIRD-PARTY-NOTICES.md
+# is the inventory), not a general list of acceptable ones: a dependency
+# arriving under a licence not yet here fails the job, and adding the entry
+# is a reviewed change rather than a silent pass (owner decision, #948).
+allow-licenses:
+  - Apache-2.0
+  - BSD-2-Clause
+  - BSD-3-Clause
+  - ISC
+  - MIT
+# Exact-version exceptions for one npm package, `pkg:npm/<name>@<version>`.
+# Empty until something needs one. A blanket allow-licenses entry above is
+# never the right fix for a single problem package -- it would silently
+# admit every other package under that licence too -- so an exception here
+# is pinned to one exact version, with a comment above it naming the owner,
+# the rationale and a review trigger, the way orbit's
+# supply-chain/licence-policy.yml records its sharp/libvips and font
+# exceptions.
+allow-dependencies-licenses: []

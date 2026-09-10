@@ -6,11 +6,35 @@ name: CodeQL
 # untrusted-checkout patterns until a change landed on dev) plus a weekly
 # scan so a newly published CodeQL query set still gets applied to
 # existing code, not just new changes.
+# paths-ignore below mirrors the GitLab lane's *docs_only_paths (#1038):
+# prose and the pictures documentation embeds. GitHub's path filter
+# matches at any depth without a leading `/`, so a single `**/*.md` here
+# covers what GitLab needed two entries for (root `*.md` plus
+# `docs/**/*.md`). Scope stops at markdown, LICENSE and docs images on
+# purpose -- widening this list is widening what CodeQL never scans.
 on:
   pull_request:
     branches: [dev, preview, main]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+      - "docs/**/*.png"
+      - "docs/**/*.jpg"
+      - "docs/**/*.jpeg"
+      - "docs/**/*.gif"
+      - "docs/**/*.webp"
+      - "docs/**/*.svg"
   push:
     branches: [dev, preview, main]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+      - "docs/**/*.png"
+      - "docs/**/*.jpg"
+      - "docs/**/*.jpeg"
+      - "docs/**/*.gif"
+      - "docs/**/*.webp"
+      - "docs/**/*.svg"
   schedule:
     - cron: '0 6 * * 1'
   workflow_dispatch: {}
@@ -53,12 +77,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended
 
-      - uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           category: '/language:${{ matrix.language }}'

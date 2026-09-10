@@ -13,40 +13,126 @@
   // seismograph (lib/metricsSeries.ts owns all three); what differs is
   // the orientation and the ledger strip below, which carries the
   // magnitude answers the old cards used to hold.
-  import type { MetricsHour, MinuteReading } from '../lib/metricsSeries'
+  //
+  // #634 round 21/22 verdicts: "the register needs to take up far more
+  // of the available screen space" -- ribbons spread across the frame
+  // and fill it, rather than sitting at a flat pixel width regardless of
+  // the card's own size. The column width is measured from the box, not
+  // assumed, the same way the drum measures its own.
+  import { FLAG_TYPE_SHORT_LABELS, type MetricsHour } from '../lib/metricsSeries'
   import { dprState, snapFill, snapLine } from '../lib/pixelGrid.svelte'
   import { formatHM } from '../lib/format'
-  import MetricsTotals from './MetricsTotals.svelte'
 
   let {
     hour,
     cursor,
-    reading,
     onselect,
   }: {
     hour: MetricsHour
     cursor: number
-    reading: MinuteReading | null
     onselect: (index: number) => void
   } = $props()
 
   const GUTTER = 66
-  // Deep enough that a rotated flag-type label (up to ~67px of vertical
-  // reach at -60 degrees) clears the group labels at the very top rather
-  // than crossing them.
-  const HEADER = 118
   const ROW_H = 8
-  const COL_W = 116
-  const HALF = 44
-  const FLAG_COL_W = 30
+  // Floors, not the drawn size: a column never shrinks below these, so a
+  // narrow card scrolls (the paper already does) rather than crushing a
+  // ribbon or a rotated flag label unreadable.
+  const COL_MIN = 90
+
+  // #716 reverses 778203f: the owner ruled the flag-type labels' *rotation*
+  // was never the fault -- they collided with the brink rule because the
+  // anchor sat only 10px above the axis, so a rotated label's tail swept
+  // down across the rule before it, further for a longer name. Restored to
+  // -60deg / text-anchor="end", with the anchor point and header depth now
+  // sized from the geometry instead of guessed -- checked against the
+  // *longest* registered flag-type name, not whichever happens to fire this
+  // hour, so a long name that only starts firing later never collides.
+  const FLAG_ROTATE_DEG = 60
+  // Average advance per character for the app's system-sans stack
+  // (--font-sans) at .f-name's 10px size -- not measured per-glyph,
+  // deliberately generous so the estimate only ever errs toward more
+  // clearance, never less.
+  const FLAG_LABEL_CHAR_W = 6
+  const LONGEST_FLAG_LABEL = Object.values(FLAG_TYPE_SHORT_LABELS).reduce(
+    (longest, name) => (name.length > longest.length ? name : longest),
+    '',
+  )
+  const FLAG_LABEL_RAD = (FLAG_ROTATE_DEG * Math.PI) / 180
+  const FLAG_LABEL_WIDTH = LONGEST_FLAG_LABEL.length * FLAG_LABEL_CHAR_W
+  // How far the rotated label's tail swings below its own anchor (decides
+  // the header's depth) and how far it reaches left of its own column's
+  // centre (decides the flag columns' minimum width).
+  const FLAG_LABEL_DROP = Math.sin(FLAG_LABEL_RAD) * FLAG_LABEL_WIDTH
+  const FLAG_LABEL_REACH = Math.cos(FLAG_LABEL_RAD) * FLAG_LABEL_WIDTH
+  // The anchor -- text-anchor="end", so the label's *last* character --
+  // sits this far below the FLAG EPISODES group label: clear of it, high
+  // enough in the header that the sweep below still clears the axis.
+  const FLAG_LABEL_TOP = 34
+  // The label's tail, its lowest/leftmost point once rotated, stops this
+  // far above the brink/axis line rather than sweeping across it.
+  const FLAG_LABEL_CLEARANCE = 8
+
+  // Deep enough for the stacked traffic column header (group label, name,
+  // value, scale) *and* for the longest rotated flag-type label's full
+  // sweep to clear the axis, whichever needs more room.
+  const HEADER = Math.max(118, Math.ceil(FLAG_LABEL_TOP + FLAG_LABEL_DROP + FLAG_LABEL_CLEARANCE))
+  // Wide enough that one column's rotated label doesn't sweep into its
+  // neighbour's -- the reach above, plus a margin.
+  const FLAG_COL_MIN = Math.ceil(FLAG_LABEL_REACH) + 14
   const GROUP_GAP = 14
   const BOTTOM = 26
 
   const dpr = $derived(dprState.value)
   const n = $derived(hour.axis.length)
 
-  const flagsX0 = $derived(GUTTER + hour.traffic.length * COL_W + GROUP_GAP)
-  const width = $derived(flagsX0 + hour.flags.length * FLAG_COL_W + 12)
+  // Measured, not assumed -- the register fills whatever the card gives
+  // it (#634 round 22), the same technique the drum uses for its own
+  // full-bleed width.
+  let boxWidth = $state(0)
+
+  // Round 30: only the flag types that actually fired this hour get a
+  // column -- the mockup draws a column per fired type, not one for every
+  // registered type (docs/design/concepts/round-30/the-whole.html #s4 draws
+  // two flag columns, "unplanned" and "ring broken", not all sixteen).
+  // hour.flags still carries every registered type (spoke-first, then
+  // silent) so the hourline and the other views keep the full picture;
+  // the register itself just doesn't draw a column for a silent one.
+  const firedFlags = $derived(hour.flags.filter((s) => s.spoke))
+
+  // Rounds 36-37 (#803) settle both of the gates that used to stand here.
+  // The ledger is the table view's head, not the register's foot, so this
+  // file no longer mounts MetricsTotals at all -- MetricsTable does, above
+  // its minutes. And the cross-section aside is gone rather than gated:
+  // reading the minute across every series is the hourline's job now
+  // (Metrics.svelte), which is where #s4 draws it, so an aside repeating
+  // the same figures beside the paper had no work left to do. Its empty
+  // state ("Pick a minute on the register to read it across every
+  // series") went with it -- a printed instruction of exactly the kind
+  // round 30 struck everywhere. Removed wholesale per AGENTS.md rather
+  // than left as a flag nothing can turn on.
+
+  // No flag columns at all -- 0 fired this hour -- means no group gap to
+  // reserve either, so the traffic ribbons get the space back instead of
+  // leaving a blank strip.
+  const flagGap = $derived(firedFlags.length > 0 ? GROUP_GAP : 0)
+  const flagsWidth = $derived(firedFlags.length * FLAG_COL_MIN)
+  const dataMinWidth = $derived(GUTTER + hour.traffic.length * COL_MIN + flagGap + flagsWidth + 12)
+  const width = $derived(Math.max(dataMinWidth, boxWidth || dataMinWidth))
+
+  // Every traffic column grows to fill what the flag columns and gutter
+  // leave behind -- "columns spaced across the frame" (round 21). Flag
+  // columns stay narrow, as ratified; only the traffic ribbons spread.
+  const COL_W = $derived(
+    hour.traffic.length > 0 ? Math.max(COL_MIN, (width - GUTTER - flagGap - flagsWidth - 12) / hour.traffic.length) : COL_MIN,
+  )
+  const FLAG_COL_W = FLAG_COL_MIN
+  // A ribbon at "full breadth" (round 22) fills nearly its whole column
+  // at the series' own peak, with a hairline gutter left between
+  // neighbours so two maxed-out ribbons never touch.
+  const HALF = $derived(Math.max(30, COL_W / 2 - 8))
+
+  const flagsX0 = $derived(GUTTER + hour.traffic.length * COL_W + flagGap)
   const height = $derived(HEADER + Math.max(1, n) * ROW_H + BOTTOM)
 
   const refusedFrom = $derived(hour.traffic.findIndex((s) => s.ink === 'refused'))
@@ -119,13 +205,13 @@
   }
 
   const label = $derived(
-    `Register: ${hour.traffic.length} traffic series and ${hour.flags.length} flag types for the hour to ` +
+    `Register: ${hour.traffic.length} traffic series and ${firedFlags.length} flag types for the hour to ` +
       `${hour.brink ? formatHM(hour.brink) : 'now'}, vertical ribbons on shared minute-rows, newest at the top`,
   )
 </script>
 
 <div class="register">
-  <div class="paper scrollbar">
+  <div class="paper scrollbar" bind:clientWidth={boxWidth}>
     {#if n === 0}
       <p class="empty">No minutes recorded yet — the register starts as soon as events arrive.</p>
     {:else}
@@ -134,7 +220,9 @@
         {#if refusedFrom >= 0}
           <text class="group" x={colX(refusedFrom) - HALF} y="16">REFUSED</text>
         {/if}
-        <text class="group" x={flagsX0} y="16">FLAG EPISODES</text>
+        {#if firedFlags.length > 0}
+          <text class="group" x={flagsX0} y="16">FLAG EPISODES</text>
+        {/if}
 
         {#each timeTicks as i (i)}
           <text class="time" class:brink={i === n - 1} x={GUTTER - 8} y={snapFill(yOf(i), dpr) + 3.5} text-anchor="end"
@@ -156,15 +244,19 @@
           <path class="ribbon ink-{series.ink}" d={ribbon(series.values, cx, series.scale)} />
         {/each}
 
-        {#each hour.flags as series, i (series.key)}
+        {#each firedFlags as series, i (series.key)}
           {@const cx = flagX(i)}
+          <!-- Diagonal, per the owner's #716 reversal of 778203f: the
+               anchor sits near the top of the header (FLAG_LABEL_TOP), and
+               the label sweeps down-left from there, its tail clearing the
+               axis by FLAG_LABEL_CLEARANCE -- see the constants above. -->
           <text
             class="f-name"
             class:quiet={!series.spoke}
             x={cx}
-            y={HEADER - 10}
+            y={FLAG_LABEL_TOP}
             text-anchor="end"
-            transform="rotate(-60 {cx} {HEADER - 10})">{series.short}</text
+            transform="rotate(-{FLAG_ROTATE_DEG} {cx} {FLAG_LABEL_TOP})">{series.short}</text
           >
           <line
             class="axis"
@@ -201,47 +293,17 @@
       </svg>
     {/if}
   </div>
-
-  <aside class="cross-section" aria-label="The selected minute">
-    {#if reading}
-      <h3>The minute {formatHM(reading.time)}</h3>
-      <dl>
-        {#each reading.traffic as row (row.key)}
-          <div class="xs-row">
-            <dt>{row.label}</dt>
-            <dd class:refused={row.ink === 'refused'}>{row.value}</dd>
-          </div>
-        {/each}
-        <div class="xs-row total">
-          <dt>flag episodes</dt>
-          <dd>{reading.episodeTotal}</dd>
-        </div>
-      </dl>
-      {#if reading.episodes.length > 0}
-        <p class="episodes">{reading.episodes.map((e) => `${e.label}${e.value > 1 ? ` ×${e.value}` : ''}`).join(' · ')}</p>
-      {/if}
-    {:else}
-      <h3>The minute</h3>
-      <p class="hint">Pick a minute on the register to read it across every series.</p>
-    {/if}
-  </aside>
-</div>
-
-<div class="ledger">
-  <h3 class="ledger-head">The ledger <span>· the same hour in totals — magnitude, not time</span></h3>
-  <MetricsTotals {hour} />
 </div>
 
 <style>
+  /* The paper is the whole view now that the aside beside it is gone
+     (#803) -- #s4's register draws one thing, the hour hanging from the
+     brink, and nothing next to it. */
   .register {
-    display: flex;
-    gap: 14px;
-    align-items: flex-start;
     min-width: 0;
   }
 
   .paper {
-    flex: 1;
     min-width: 0;
     overflow-x: auto;
   }
@@ -259,85 +321,6 @@
     font-size: 13px;
   }
 
-  .cross-section {
-    flex: none;
-    width: 216px;
-    border-left: 1px solid var(--border);
-    padding-left: 14px;
-  }
-
-  .cross-section h3 {
-    margin: 0 0 8px;
-    font-size: 9px;
-    font-weight: 650;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
-  }
-
-  .cross-section dl {
-    margin: 0;
-  }
-
-  .xs-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 2px 0;
-  }
-
-  .xs-row.total {
-    margin-top: 6px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border);
-  }
-
-  .xs-row dt {
-    font-size: 11px;
-    color: var(--fg-muted);
-  }
-
-  .xs-row dd {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--fg);
-  }
-
-  .xs-row dd.refused {
-    color: var(--chart-refused);
-  }
-
-  .episodes {
-    margin: 8px 0 0;
-    font-size: 10.5px;
-    color: var(--fg-dim);
-  }
-
-  .hint {
-    margin: 0;
-    font-size: 11px;
-    color: var(--fg-dim);
-  }
-
-  .ledger {
-    margin-top: 14px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border);
-  }
-
-  .ledger-head {
-    margin: 0 0 10px;
-    font-size: 11px;
-    font-weight: 650;
-    color: var(--fg-muted);
-  }
-
-  .ledger-head span {
-    font-weight: 400;
-    color: var(--fg-dim);
-  }
 
   .group {
     fill: var(--fg-dim);
@@ -482,17 +465,4 @@
     opacity: 0.09;
   }
 
-  @media (max-width: 900px) {
-    .register {
-      flex-direction: column;
-    }
-
-    .cross-section {
-      width: 100%;
-      border-left: none;
-      border-top: 1px solid var(--border);
-      padding-left: 0;
-      padding-top: 10px;
-    }
-  }
 </style>

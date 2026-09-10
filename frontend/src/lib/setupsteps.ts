@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// The RouterOS commands the setup wizard generates (#320), and the
-// rules for deciding whether each step has landed.
+// The rules for deciding whether each of the setup wizard's steps has
+// landed (#320), plus the small address-handling helpers the wizard and
+// a few other surfaces still need on the client.
 //
-// Kept out of the component so both are testable without a browser:
-// getting a command subtly wrong is the failure this whole feature
+// The RouterOS commands themselves moved server-side with #436 (see
+// internal/routeros): the wizard now renders what POST
+// /api/setup/commands sends back, selected by the row that covers the
+// router's version, rather than generating RouterOS syntax here. Kept
+// out of the component so the step-status rules stay testable without a
+// browser: getting a claim wrong is the failure this whole feature
 // exists to prevent, and "the wizard said step 3 was done when it
 // wasn't" would be worse than no wizard at all.
 
-import type { Device, SetupMark, SetupStatus } from './types'
+import { formatSize } from './memory'
+import type { Device, RouterBackupsResponse, SetupMark, SetupStatus } from './types'
 
 // 'quiet' is #487's fifth reading, and the only one that is not a claim
 // about a router: a step with nothing to wait for (step 5's naming is
@@ -67,138 +73,11 @@ export function certificateCovers(status: SetupStatus, address: string): boolean
   return effective.includes(host)
 }
 
-// --- The commands -------------------------------------------------------
-//
-// Every one is emitted with the operator's real values already in it.
-// The wizard never renders a placeholder: a saved script still
-// containing <mikroview-host> was one of the failures that prompted
-// this feature, and it fails much later, somewhere else.
-
-export function caTrustCommands(address: string): string {
-  return [
-    `/tool fetch url="https://${address}/ca.crt" check-certificate=no dst-path=mikroview-ca.crt`,
-    `/certificate import file-name=mikroview-ca.crt passphrase=""`,
-  ].join('\n')
-}
-
-export function syslogCommands(address: string, syslogPort: string): string {
-  const host = hostname(address)
-  const port = portOf(syslogPort)
-  return [
-    `/system logging action add name=mikroview target=remote remote=${host} remote-port=${port} remote-protocol=tls check-certificate=yes`,
-    `/system logging add topics=firewall,info action=mikroview`,
-  ].join('\n')
-}
-
 // portOf takes the port out of a listen address like ":6514" or
 // "0.0.0.0:6514" -- the router needs the port, not the bind address.
 export function portOf(listenAddr: string): string {
   const colon = listenAddr.lastIndexOf(':')
   return colon === -1 ? listenAddr : listenAddr.slice(colon + 1)
-}
-
-// ruleTaggingCommands bulk-tags existing rules by action, which is the
-// only way one command can set the right letter: MikroView decodes
-// accept/drop/reject from the prefix, so a single generic prefix would
-// label every row the same.
-//
-// Filter rules only, deliberately. The prefix convention also covers
-// mangle (M) and NAT (N) rules -- see docs/routeros-setup.md -- but
-// bulk-enabling log=yes across every mangle rule can turn a router's
-// whole packet throughput into log lines, since mark-packet matches per
-// packet rather than per connection. That is the established/related
-// trap below, one order of magnitude worse, and it is not something to
-// do to someone from a "run this" box. The doc walks it per rule.
-export function ruleTaggingCommands(): string {
-  return [
-    `/ip firewall filter set [find !dynamic action=drop] log=yes log-prefix="D|drop|"`,
-    `/ip firewall filter set [find !dynamic action=reject] log=yes log-prefix="R|reject|"`,
-    `/ip firewall filter set [find !dynamic action=accept] log=yes log-prefix="A|accept|"`,
-    ``,
-    `# The established/related accept rule logs every packet, not every`,
-    `# connection -- that is your whole traffic volume. Turn it back off:`,
-    `/ip firewall filter set [find connection-state=established,related] log=no log-prefix=""`,
-  ].join('\n')
-}
-
-// pushScript builds the whole state-push script with the token and
-// address already embedded. One block per table, each an independent
-// fetch, so one failing does not stop the others.
-export function pushScript(address: string, token: string, kinds: string[]): string {
-  const blocks: string[] = []
-  for (const kind of kinds) {
-    const b = pushBlock(address, token, kind)
-    if (b) blocks.push(b)
-  }
-  return blocks.join('\n\n')
-}
-
-interface BlockSpec {
-  varName: string
-  source: string
-  record: string
-}
-
-// blockSpecs mirrors docs/routeros-setup.md's table, which is itself
-// verified against a real RouterOS 7.23.3 router. The field renaming is
-// the one place a typo silently breaks a feature without RouterOS
-// complaining, so it lives in exactly one place.
-const blockSpecs: Record<string, BlockSpec> = {
-  'filter-rule': {
-    varName: 'rule',
-    source: '/ip/firewall/filter',
-    record:
-      '{"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); ' +
-      '"srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); ' +
-      '"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); ' +
-      '"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface")}',
-  },
-  'address-list': {
-    varName: 'al',
-    source: '/ip/firewall/address-list',
-    record:
-      '{"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=($v->"dynamic")}',
-  },
-  'dhcp-lease': {
-    varName: 'lease',
-    source: '/ip/dhcp-server/lease',
-    record: '{"hostname"=($v->"host-name"); "mac"=($v->"mac-address"); "address"=($v->"address")}',
-  },
-  arp: {
-    varName: 'arp',
-    source: '/ip/arp',
-    record: '{"address"=($v->"address"); "mac"=($v->"mac-address")}',
-  },
-}
-
-export function pushBlock(address: string, token: string, kind: string): string {
-  const spec = blockSpecs[kind]
-  if (!spec) return ''
-  const recs = `${spec.varName}Recs`
-  const payload = `${spec.varName}Payload`
-  return [
-    `:local ${recs} [:toarray ""]`,
-    `:foreach i,v in=[${spec.source} print as-value] do={`,
-    `  :local rec ${spec.record}`,
-    `  :set ${recs} ($${recs}, {$rec})`,
-    `}`,
-    // routerosVersion rides the payload rather than a record: it
-    // describes the router, not a row of any table (#408 carrying
-    // #436's derived version source). Optional server-side, and the
-    // same line in every block.
-    `:local ${payload} [:serialize to=json value={"kind"="${kind}"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$${recs}}]`,
-    `/tool fetch url="https://${address}/api/ingest/routeros" http-method=post http-data=$${payload} ` +
-      `http-header-field=("Content-Type: application/json,Authorization: Bearer ${token}") ` +
-      `check-certificate=yes output=none`,
-  ].join('\n')
-}
-
-export function scheduleCommands(): string {
-  return [
-    `/system script add name=mv-push policy=read,test source="<paste the script above>"`,
-    `/system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"`,
-    `/system script run mv-push`,
-  ].join('\n')
 }
 
 // deviceStanza is what an operator pastes into config.yaml to give a
@@ -229,7 +108,7 @@ export function caStep(status: SetupStatus, address: string): StepStatus {
   return { state: 'waiting', detail: 'Waiting for a router to download /ca.crt.' }
 }
 
-export function syslogStep(status: SetupStatus): StepStatus {
+export function syslogStep(status: SetupStatus, devices: Device[] = []): StepStatus {
   if (!status.instance.syslogEnabled) {
     return {
       state: 'blocked',
@@ -237,6 +116,14 @@ export function syslogStep(status: SetupStatus): StepStatus {
         'Syslog is switched off (listen.syslogTls is empty in config.yaml), so no router-side ' +
         'configuration can work until it is set.',
     }
+  }
+  // The source-address split (#442) reads as partial, in the voice step
+  // 3 uses when events arrive without an action: evidence has arrived,
+  // but composed wrongly. Not blocked -- everything on mikroview's side
+  // works, which is the whole problem.
+  const splits = sourceSplits(devices)
+  if (splits.length > 0) {
+    return { state: 'partial', detail: sourceSplitObservation(splits) }
   }
   if (status.sources.some((s) => s.syslogFirstSeenAt)) {
     return { state: 'done', detail: 'A router has an open syslog connection.' }
@@ -292,11 +179,157 @@ export function pushStep(status: SetupStatus): StepStatus {
   return { state: 'done', detail: 'Every table has been pushed.' }
 }
 
+// backupStep is step 6 (#394, round 45): whether any router's config
+// backup has ever arrived. Aggregate across every router, the same
+// "any evidence at all" reading pushStep gives step 4's tables, rather
+// than tied to whichever single router the operator happens to be
+// minting a token for here -- the step is answering "does this feature
+// work at all", not "has this one router done it yet".
+//
+// backups is null before the first read of GET /api/router-backups (or
+// on a session this modal would not otherwise be open on) -- read the
+// same way as "nothing has arrived", never as a claim about the key,
+// so this never states "no key" without having actually asked.
+export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
+  if (backups && !backups.enabled) {
+    return {
+      state: 'blocked',
+      detail:
+        'Mikroview keeps a backup only under a key it does not hold, and none is mounted. Mount one ' +
+        'and this step prints the script; until then the drop box is closed and a push would be refused.',
+    }
+  }
+  const routers = backups?.routers ?? []
+  if (routers.length === 0) {
+    return { state: 'waiting', detail: 'Waiting for the first push — the script below runs once at the end; give it a minute.' }
+  }
+  const receipt = backupReceipt(backups)
+  return { state: 'done', detail: receipt ? `arrived ${receipt}` : 'A router has pushed a backup.' }
+}
+
+// backupReceipt is the newest pair to have arrived, across every
+// router -- "today 03:00 · rb5009.backup 412 KiB + rb5009.rsc 38 KiB ·
+// kept under the key" (round 45's observation line). Empty when
+// nothing has arrived yet.
+export function backupReceipt(backups: RouterBackupsResponse | null): string {
+  const routers = backups?.routers ?? []
+  let newestAt = ''
+  let newestDevice = ''
+  let newestBackup: number | undefined
+  let newestRsc: number | undefined
+  let newestHasBackup = false
+  let newestHasRsc = false
+  for (const r of routers) {
+    const g = r.generations[r.generations.length - 1]
+    if (!g) continue
+    const at = g.backupArrivedAt && g.rscArrivedAt
+      ? g.backupArrivedAt > g.rscArrivedAt ? g.backupArrivedAt : g.rscArrivedAt
+      : g.backupArrivedAt || g.rscArrivedAt || ''
+    if (!at || at <= newestAt) continue
+    newestAt = at
+    newestDevice = r.device
+    newestBackup = g.backupBytes
+    newestRsc = g.rscBytes
+    newestHasBackup = !!g.backupArrivedAt
+    newestHasRsc = !!g.rscArrivedAt
+  }
+  if (!newestAt) return ''
+  const parts: string[] = []
+  if (newestHasBackup) parts.push(`${newestDevice}.backup ${formatSize(newestBackup ?? 0)}`)
+  if (newestHasRsc) parts.push(`${newestDevice}.rsc ${formatSize(newestRsc ?? 0)}`)
+  return `${when(newestAt)} · ${parts.join(' + ')} · kept under the key`
+}
+
+// backupReceiptForDevice is round 45's lost-router receipt: not the
+// newest across every router, but how much this one router's own
+// history holds -- "10 pairs kept · the newest today 03:00" -- since a
+// replacement's own step is about what it inherits, not the fleet.
+export function backupReceiptForDevice(backups: RouterBackupsResponse | null, device: string): string {
+  const router = backups?.routers.find((r) => r.device === device)
+  if (!router || router.generations.length === 0) return ''
+  const newest = router.generations[router.generations.length - 1]
+  const at = newest.backupArrivedAt || newest.rscArrivedAt
+  const n = router.generations.length
+  return `${n} ${n === 1 ? 'pair' : 'pairs'} kept · the newest ${at ? when(at) : 'unknown'}`
+}
+
 // undeclaredDevices are routers sending syslog that config.yaml does not
 // name. They work as they are; declaring one only swaps its address for
 // a name of the operator's choosing.
 export function undeclaredDevices(devices: Device[]): Device[] {
   return devices.filter((d) => !d.configured)
+}
+
+// --- The source-address split (#442) -----------------------------------
+//
+// A router holds an address on every network it routes, and its logs
+// arrive stamped with whichever one faces this instance -- frequently
+// not the one declared as sourceIp. The declared device then sits
+// silent while the real stream auto-discovers under another address,
+// and a token minted for the declared identity enriches nothing.
+//
+// The server pairs the two (Registry.MultihomedCandidates, #499) and
+// this module only words it. The wording states both facts and hands
+// the operator the one fact only they hold -- whether the two addresses
+// are one box. Nothing here claims they are.
+
+export interface SourceSplit {
+  // The declared identity, as config.yaml names it: sourceIp, or the id
+  // when a declaration carries no address.
+  declared: string
+  // Every undeclared address logs arrive from, in id order. All of them,
+  // never a pick: the server returns candidates, not a diagnosis.
+  arriving: string[]
+}
+
+// sourceSplits is one entry per declared device the server has paired
+// with arriving undeclared addresses.
+export function sourceSplits(devices: Device[]): SourceSplit[] {
+  return devices
+    .filter((d) => d.configured && (d.multihomedCandidates?.length ?? 0) > 0)
+    .map((d) => ({ declared: d.sourceIp || d.id, arriving: d.multihomedCandidates ?? [] }))
+}
+
+// srcAddressCommand is the recommended remedy: the router keeps the
+// address it was declared under, so the token step 4 mints and the
+// tables it pushes need no reissuing. Assumes the logging action is
+// named mikroview -- step 2's own `add` created it under that name, the
+// same assumption every wizard command already makes.
+export function srcAddressCommand(declared: string): string {
+  return `/system logging action set mikroview src-address=${declared}`
+}
+
+// arrivingAddresses is every undeclared address across the splits, in
+// first-seen order and without repeats. The server pairs each silent
+// declared device with the same discovered set, so with two declared
+// devices silent this is the set once, not twice.
+export function arrivingAddresses(splits: SourceSplit[]): string[] {
+  const seen = new Set<string>()
+  for (const s of splits) for (const a of s.arriving) seen.add(a)
+  return [...seen]
+}
+
+// prose joins addresses the way a sentence does: "a", "a and b",
+// "a, b and c". Exported for the wizard body, which words the same
+// addresses in the same voice.
+export function prose(items: string[], joiner: 'and' | 'or' = 'and'): string {
+  if (items.length <= 1) return items.join('')
+  return `${items.slice(0, -1).join(', ')} ${joiner} ${items[items.length - 1]}`
+}
+
+// sourceSplitObservation is step 2's observation line when the split is
+// on: what you told mikroview, what the router shows, no diagnosis.
+export function sourceSplitObservation(splits: SourceSplit[]): string {
+  const arriving = arrivingAddresses(splits)
+  const declared = splits.map((s) => s.declared)
+  const from = `${prose(arriving)}, ${arriving.length === 1 ? 'an address' : 'addresses'} you haven't declared`
+  const silent = `${prose(declared)}, which you declared in config.yaml, ${declared.length === 1 ? 'has' : 'have'} sent nothing`
+  return `Connected — but from ${from}, while ${silent}.`
+}
+
+// sourceSplitReceipt is the step list's sub-line for the same reading.
+export function sourceSplitReceipt(splits: SourceSplit[]): string {
+  return `syslog from ${arrivingAddresses(splits).join(', ')} · declared ${splits.map((s) => s.declared).join(', ')} silent`
 }
 
 // --- The claim ledger ---------------------------------------------------
@@ -349,15 +382,17 @@ export interface LedgerStep {
   hasCheck: boolean
 }
 
-// STEP_TITLES is the ratified five, in order. Exported because the step
-// list, the header and the spoken announcement all name the same step
-// and must not drift.
+// STEP_TITLES is the ratified six, in order -- round 45 (#394) adds the
+// sixth, "Back up the router", after the original five. Exported
+// because the step list, the header and the spoken announcement all
+// name the same step and must not drift.
 export const STEP_TITLES = [
   'Trust the certificate',
   'Send logs',
   'Tag firewall rules',
   'Push router state',
   'Name your router',
+  'Back up the router',
 ] as const
 
 export const STEP_COUNT = STEP_TITLES.length
@@ -396,7 +431,9 @@ export function caReceipt(status: SetupStatus): string {
   return `ca.crt fetched by ${first.source} · ${when(first.caFetchedAt ?? '')}${more}`
 }
 
-export function syslogReceipt(status: SetupStatus): string {
+export function syslogReceipt(status: SetupStatus, devices: Device[] = []): string {
+  const splits = sourceSplits(devices)
+  if (splits.length > 0) return sourceSplitReceipt(splits)
   const seen = status.sources.filter((s) => s.syslogFirstSeenAt)
   if (seen.length === 0) return ''
   const first = seen[0]
@@ -458,6 +495,7 @@ const LEADS = [
   'The letter in the log-prefix is how mikroview knows what a rule did. This tags every existing filter rule by its action, in one pass.',
   'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. The token below is minted for one router and is already in the script.',
   'Mikroview does not edit config.yaml itself: the sourceIp mapping decides who an event stream is attributed to, so it stays under your control.',
+  'Every night the router saves itself twice — the binary backup that restores it whole, and the plain export you can read — and drops both into mikroview. Nothing is sent back, and nothing is left on the router. The token below is minted for this one router and is already in the script.',
 ] as const
 
 // stepMarks indexes marks by step, so building the ledger stays one pass.
@@ -491,25 +529,32 @@ function flavourFor(step: number, state: StepState): Flavour {
 // green and stops explaining anybody's silence, while the audit entry
 // stays as history rather than as a scar the interface keeps pointing
 // at.
-export function buildLedger(status: SetupStatus, devices: Device[], address: string): LedgerStep[] {
+export function buildLedger(
+  status: SetupStatus,
+  devices: Device[],
+  address: string,
+  backups: RouterBackupsResponse | null = null,
+): LedgerStep[] {
   const checks: StepStatus[] = [
     caStep(status, address),
-    syslogStep(status),
+    syslogStep(status, devices),
     rulesStep(status),
     pushStep(status),
     nameStep(devices),
+    backupStep(backups),
   ]
   const receipts = [
     caReceipt(status),
-    syslogReceipt(status),
+    syslogReceipt(status, devices),
     rulesReceipt(status),
     pushReceipt(status),
     '',
+    backupReceipt(backups),
   ]
   // Steps 3 and 5 have no waiting check to force past: step 3 counts
   // upward and step 5 has nothing to wait for, so Next is always free
-  // on both.
-  const checked = [true, true, false, true, false]
+  // on both. Step 6 does have one, the same shape as step 4's.
+  const checked = [true, true, false, true, false, true]
 
   return checks.map((check, i) => {
     const n = i + 1
@@ -568,6 +613,8 @@ export function notObserved(step: LedgerStep): string {
       return 'no events carrying a decoded action have arrived'
     case 4:
       return 'no pushed table has arrived'
+    case 6:
+      return 'no pushed backup has arrived'
     default:
       return 'nothing has arrived'
   }
@@ -600,7 +647,7 @@ export function finishHeadline(ledger: LedgerStep[]): string {
 // count words small numbers, because "Four steps stand on evidence"
 // reads as a sentence and "4 steps" reads as a readout.
 function count(n: number): string {
-  return ['zero', 'one', 'two', 'three', 'four', 'five'][n] ?? String(n)
+  return ['zero', 'one', 'two', 'three', 'four', 'five', 'six'][n] ?? String(n)
 }
 
 // silenceExplanation is what a surface with nothing to show says about
@@ -631,6 +678,7 @@ export const SKIP_CONSEQUENCES = [
   'events arrive without an action, so rows read "unknown"',
   'the stream stays address-only — no names, no rule lookups, nothing to suggest from',
   'routers stay identified by their address rather than a name',
+  'no backups are kept until the script runs',
 ] as const
 
 // announceStep is what a screen reader is told when the step changes:

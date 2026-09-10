@@ -193,3 +193,59 @@ func TestNameProvenanceRejectsAnUnusableQuery(t *testing.T) {
 		t.Errorf("non-numeric port: status = %d, source = %q, want 200/none", status, got.Source)
 	}
 }
+
+// TestNameProvenanceRefusesADeviceConfigYamlNames is #413's refusal one
+// layer along (#600). A device declared in config.yaml keeps that name
+// whatever anybody types here, so the editor must be told before it
+// offers a field -- and there is no router to send the operator to,
+// only the file, so Router stays empty and Source is what says which
+// refusal this is.
+func TestNameProvenanceRefusesADeviceConfigYamlNames(t *testing.T) {
+	s, _ := newTestServer(t)
+	if _, err := s.Entities.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "core", Label: "front door"}); err != nil {
+		t.Fatal(err)
+	}
+	s.Naming = naming.Resolver{Devices: map[string]string{"core": "Core"}, Entities: s.Entities}
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	status, got := getProvenance(t, ts.URL, "device", "core", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if got.Editable {
+		t.Error("Editable = true -- the editor would store a device name config.yaml permanently out-ranks")
+	}
+	if got.Source != naming.SourceConfigDevice {
+		t.Errorf("Source = %q, want %q", got.Source, naming.SourceConfigDevice)
+	}
+	if got.Router != "" {
+		t.Errorf("Router = %q, want empty -- config.yaml holds this name, no router does", got.Router)
+	}
+	if got.Name != "Core" || got.Label != "front door" {
+		t.Errorf("Name/Label = %q/%q, want the config name shown and the losing label still reported", got.Name, got.Label)
+	}
+}
+
+// And the device the file does not name -- an auto-discovered router --
+// is renameable, with the rename served to everyone from the entity
+// store.
+func TestNameProvenanceAllowsRenamingADiscoveredDevice(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Naming = naming.Resolver{Devices: map[string]string{"core": "Core"}, Entities: s.Entities}
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	status, got := getProvenance(t, ts.URL, "device", "10.0.0.9", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if !got.Editable {
+		t.Error("Editable = false -- nothing names this device, so a rename here is displayed")
+	}
+	if got.Name != "" || got.Source != naming.SourceNone {
+		t.Errorf("Name/Source = %q/%q, want an unnamed device", got.Name, got.Source)
+	}
+}

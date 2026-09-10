@@ -54,7 +54,11 @@ fs.mkdirSync(BUILT, { recursive: true })
 const EXTRA_USER = 'jenny'
 const EXTRA_PASS = 'screenshot-only-account-pw'
 
-const PEOPLE = '.door:has-text("Who may look in")'
+// #767 (round 32) moved "who may look in" out of the retired
+// EngineRoomDoors door and into the account group's own row grammar --
+// it is now the account panel's #people section (EngineRoom.svelte),
+// not a .door.
+const PEOPLE = '#people'
 
 const browser = await chromium.launch()
 
@@ -70,10 +74,22 @@ async function signedInPage(scheme) {
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
-  await page.waitForSelector('.rail .item', { timeout: 15000 })
-  await page.click('.rail .item:has-text("The engine room")')
+  await page.waitForSelector('#main-content', { timeout: 15000 })
+  // Settings is one of the deck's own cards since #647 (round 23), reached via the roll rail rather than the
+  // account chip's menu (#616's deck retired the rail, but #647 moved Settings and Entities off the menu and onto
+  // the deck itself -- see live-browser.mjs's SCENES table). Standalone here rather than importing
+  // live-browser.mjs's goTo(): this capture tool deliberately stays outside the scenario contract. Waits for the
+  // engineroom card to actually centre -- .page-header h2 used to be the landing proof, but #700 unmounted
+  // PageHeader from EngineRoom.svelte entirely, so that selector no longer exists anywhere on the page (#667 group
+  // E).
+  await page.click('.roll-rail button.rail-name:text-is("Settings")')
   await page.waitForFunction(
-    () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
+    () => {
+      const deck = document.querySelector('.deck')
+      const el = deck?.querySelector('.card[data-card="engineroom"]')
+      if (!el) return false
+      return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
+    },
     null,
     { timeout: 10000 },
   )
@@ -87,14 +103,14 @@ async function signedInPage(scheme) {
 // --- The extra account, created once through the door itself ------------
 {
   const { context, page } = await signedInPage('dark')
-  const present = await page.locator(`${PEOPLE} .row:has-text("${EXTRA_USER}")`).count()
+  const present = await page.locator(`${PEOPLE} .prow:has-text("${EXTRA_USER}")`).count()
   if (present === 0) {
-    await page.click(`${PEOPLE} .footer-action`)
-    await page.waitForSelector(`${PEOPLE} .inline-form`)
-    await page.fill(`${PEOPLE} .inline-form input[type="text"]`, EXTRA_USER)
-    await page.fill(`${PEOPLE} .inline-form input[type="password"]`, EXTRA_PASS)
-    await page.click(`${PEOPLE} .inline-form .save`)
-    await page.waitForSelector(`${PEOPLE} .row:has-text("${EXTRA_USER}")`)
+    await page.click(`${PEOPLE} .ogfoot button:has-text("let someone in")`)
+    await page.waitForSelector(`${PEOPLE} .pform`)
+    await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, EXTRA_USER)
+    await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, EXTRA_PASS)
+    await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
+    await page.waitForSelector(`${PEOPLE} .prow:has-text("${EXTRA_USER}")`)
     console.log(`created "${EXTRA_USER}" for the capture`)
   }
   await context.close()
@@ -111,11 +127,12 @@ for (const scheme of ['light', 'dark']) {
     console.log('captured engine-room-people-door.png')
   }
 
-  // The watchers station opened, which is the only place the record's
+  // The bench opened, which is the only place the record's
   // dashed-underline knobs are on screen -- worth a shot of its own,
-  // since a station at rest cannot show them.
-  await page.click('.path .station:has-text("The watchers") .shead')
-  await page.waitForSelector('.st-open .bench .row')
+  // since a closed bench cannot show them. Opened from the detection
+  // group's "tune..." link since #633 rewrote this page (#661).
+  await page.click('.olink:has-text("tune")')
+  await page.waitForSelector('.bench .row')
   await page.waitForTimeout(400)
   await page.screenshot({ path: path.join(BUILT, `ac-s2-${scheme}.png`) })
   console.log(`captured built/ac-s2-${scheme}.png`)
@@ -126,10 +143,14 @@ for (const scheme of ['light', 'dark']) {
 // --- Tidy up: the capture account does not outlive the capture ----------
 {
   const { context, page } = await signedInPage('dark')
-  page.on('dialog', (d) => d.accept())
-  if ((await page.locator(`${PEOPLE} .row:has-text("${EXTRA_USER}")`).count()) > 0) {
-    await page.click(`${PEOPLE} .row:has-text("${EXTRA_USER}") .verb`)
-    await page.waitForSelector(`${PEOPLE} .row:has-text("${EXTRA_USER}")`, { state: 'detached' })
+  const row = page.locator(`${PEOPLE} .prow:has-text("${EXTRA_USER}")`)
+  if ((await row.count()) > 0) {
+    // Round 32's arm-then-confirm gesture (EngineRoom.svelte's
+    // onRemoveClick), not a native confirm() dialog -- the first click
+    // arms the button, the second (now reading "confirm...") removes.
+    await row.locator('button.remove').click()
+    await row.locator('button.remove').click()
+    await row.waitFor({ state: 'detached' })
     console.log(`removed "${EXTRA_USER}"`)
   }
   await context.close()

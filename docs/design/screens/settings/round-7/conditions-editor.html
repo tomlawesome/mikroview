@@ -1,0 +1,970 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Round 7 — the builder bar in mikroview's inks (#829)</title>
+<style>
+  /* ============================================================
+     ROUND 7 — THE CONDITIONS EDITOR (#829, under #490's engine room).
+
+     Rounds 4, 5 and 6 were all rejected for one reason: "Generic
+     boxes/cards on the flat blueish background. Zero use of colour
+     anywhere in connection to the entirety of the rest of the UI.
+     Mikroview works hard to break away from this in almost every part
+     of it. The one part it doesn't is the engine room and you've
+     chosen to copy that." Plus: "I explicitly asked for a GitLab style
+     builder/bar. The behaviour should be very similar but the style
+     should be uniquely Mikroview."
+
+     So this round is drawn off the docket (Flags.svelte), which is the
+     screen the owner named as closest, and every ink on it is one the
+     app already owns:
+
+       - the flag-family palette, lib/flagPalette.ts, verbatim -- the
+         detector is FILED AS a family and that family's ink runs the
+         whole drawer (rail, glyph, name, gradient rule, says-tokens,
+         tick strip, pill glyphs);
+       - the docket's .btbar gradient rule under the name;
+       - .lab (600 9px mono, 0.14em, uppercase, --fg-dim) for every
+         label on the surface -- there is no grey group heading;
+       - ActionBadge.svelte's badge, verbatim, as the value segment of
+         an `action is DROP` token;
+       - FilterBar.svelte's .fbox as the bar: --bg-elevated, one
+         hairline, mono placeholder, --accent when it is active;
+       - the docket's .v pills for try/save, .stamp for the wording
+         placeholders, .olink for the text actions, the bench's dashed
+         click-to-edit for the counting numbers.
+
+     No bordered panel anywhere. The one boxed input on the surface is
+     the bar itself. The dropdown is not a card: it is rows of text on
+     --bg-elevated with one --hair-2 bottom edge, hung directly under
+     the bar.
+
+     Dark only: round 30 (#708) removed the theme picker.
+     ============================================================ */
+
+  :root {
+    /* app.css, verbatim */
+    --bg: #06080e;
+    --bg-elevated: #0f1422;
+    --bg-hover: rgba(160, 185, 230, 0.08);
+    --border: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --fg: #e9eefb;
+    --fg-muted: #97a4c4;
+    --fg-dim: #55628a;
+    --accent: #9db8e8;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e;
+    --accept-bg: rgba(62, 207, 126, 0.12);
+    --drop: #f5a623;
+    --drop-bg: rgba(245, 166, 35, 0.12);
+    --reject: #ef4444;
+    --reject-bg: rgba(239, 68, 68, 0.12);
+    --log: #38bdf8;
+    --log-bg: rgba(56, 189, 248, 0.12);
+    --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+    /* lib/flagPalette.ts, verbatim: the six ratified family inks plus
+       the operator-authored accent. Fixed hexes, not theme variables. */
+    --f-hostile: #ff5470;
+    --f-scan: #ff9e64;
+    --f-outbound: #f072c8;
+    --f-repeat: #e0765a;
+    --f-surge: #e8b05a;
+    --f-presence: #b8c56a;
+    --f-custom: #9db8e8;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    color: var(--fg);
+    background:
+      radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%),
+      var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- sheet chrome (not part of the app) ---------- */
+  .concept {
+    position: sticky; top: 0; z-index: 90;
+    display: flex; gap: 14px; align-items: baseline;
+    padding: 8px 22px;
+    background: rgba(6, 8, 14, 0.96);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; color: var(--fg-dim);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.14em; font-weight: 650; }
+  .scene { border-bottom: 1px solid var(--hair-2); padding: 0 0 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80;
+    padding: 7px 22px;
+    background: rgba(6, 8, 14, 0.94);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; color: var(--fg-muted);
+  }
+  .scene-tag b { color: var(--accent); font-family: var(--font-mono); font-weight: 600; margin-right: 4px; }
+  .sheet { width: min(1180px, 94%); margin: 26px auto 0; }
+  .anno {
+    width: min(1180px, 94%); margin: 16px auto 0;
+    font-size: 11.5px; line-height: 1.55; color: var(--fg-muted);
+    border-left: 2px solid var(--accent); padding: 2px 0 2px 12px;
+  }
+  .anno b { color: var(--fg); font-weight: 600; }
+
+  /* ---------- the .lab, Flags.svelte verbatim ---------- */
+  .lab {
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-dim);
+  }
+  .olink {
+    background: none; border: none; padding: 0;
+    font-size: inherit; font-family: inherit;
+    color: var(--accent); cursor: pointer;
+    text-decoration: underline; text-decoration-color: transparent;
+  }
+  .olink:hover { text-decoration-color: currentColor; }
+  .olink.quiet { color: var(--fg-dim); }
+
+  /* ---------- the settings bench (EngineRoom's DETECTION section) ----------
+     A hairline and a .lab, on the void -- the app's own section rule.
+     Deliberately not a rounded --bg-elevated card: that box is what
+     rounds 4-6 were rejected for. */
+  .bench { border-top: 1px solid var(--border); padding-top: 12px; }
+  .benchhead {
+    display: flex; align-items: baseline; gap: 14px;
+    padding-bottom: 10px;
+  }
+  .benchfacts { margin-left: auto; font-size: 12px; color: var(--fg-muted); }
+  .benchfacts b { color: var(--fg); font-weight: 600; }
+
+  .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .row { font-size: 12px; }
+
+  /* The docket's one unbroken line: row and drawer share the family
+     stripe (Flags.svelte, `box-shadow: inset 3px 0 0 var(--ft)`). */
+  .line {
+    display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+    box-shadow: inset 3px 0 0 var(--ft);
+    padding: 6px 10px 6px 13px;
+  }
+  .row.open .line { background: var(--bg-hover); }
+  .cbx { align-self: center; flex: none; accent-color: var(--ft); }
+  .fmark {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg);
+  }
+  .fmark i { font-style: normal; color: var(--ft); margin-right: 6px; }
+  .id { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-dim); }
+  .dash { color: var(--fg-dim); }
+  .scope-fact { color: var(--fg-muted); border-bottom: 1px dashed var(--accent); }
+  .state {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+    color: var(--fg-muted); white-space: nowrap; font-size: 11.5px;
+  }
+  .state .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accept); }
+  .state.paused { color: var(--fg-dim); }
+  .state.paused .dot { background: transparent; border: 1px solid var(--fg-dim); }
+  .pencil { background: none; border: none; padding: 0 2px; color: var(--fg-dim); cursor: pointer; font-size: 11px; }
+  .pencil:hover { color: var(--ft); }
+
+  /* ---------- the drawer ---------- */
+  .drawer {
+    box-shadow: inset 3px 0 0 var(--ft);
+    padding: 4px 10px 16px 13px;
+  }
+  .dwr {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+    gap: 14px 44px;
+    align-items: start;
+  }
+  .dwr > .wide { grid-column: 1 / -1; }
+  .dwr > .left { grid-column: 1; min-width: 0; }
+  .dwr > .side { grid-column: 2; grid-row: 3 / span 2; min-width: 0; }
+
+  /* the clone provenance line */
+  .copied {
+    margin: 0 0 12px;
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-dim);
+  }
+  .copied em { font-style: normal; color: var(--ft); }
+
+  /* ---------- 1. the family line ---------- */
+  .famline { margin-bottom: 16px; }
+  .famtop { display: flex; align-items: baseline; gap: 18px; }
+  .famname {
+    font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--ft);
+    white-space: nowrap;
+  }
+  .famname i { font-style: normal; margin-right: 7px; }
+  /* the seven families, as glyphs in their own inks */
+  .picker { display: flex; gap: 10px; align-items: baseline; }
+  .picker button {
+    background: none; border: none; padding: 0 1px; cursor: pointer;
+    font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+    color: var(--pk); opacity: 0.34; line-height: 1;
+  }
+  .picker button.on { opacity: 1; }
+  .picker button:hover { opacity: 0.8; }
+  /* the docket's BY TYPE bar: a 16% tint of the ink washing up to it */
+  .btbar {
+    display: block; height: 3px; margin: 7px 0 7px; border-radius: 2px;
+    background: linear-gradient(90deg,
+      color-mix(in srgb, var(--ft) 16%, transparent),
+      var(--ft));
+  }
+  .famcap { display: block; }
+  .famcap em { font-style: normal; color: var(--ft); }
+
+  /* ---------- 2. the bar ---------- */
+  /* FilterBar.svelte's .fbox: --bg-elevated, one hairline, 7px radius,
+     mono, --accent while it is the thing you are working in. */
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 7px; align-items: center;
+    min-height: 32px; padding: 5px 11px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    font: 12px var(--font-mono); color: var(--fg-muted);
+    cursor: text;
+  }
+  .bar.on {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
+  }
+  .bar.dd { border-radius: 7px 7px 0 0; border-bottom-color: transparent; }
+  .bar .placeholder { color: var(--fg-dim); font-size: 11.5px; }
+  .and { color: var(--fg-dim); font-size: 10.5px; letter-spacing: 0.06em; }
+
+  /* A token is three joined segments. The value segment wears the ink
+     the app already gives that thing everywhere else; the field and the
+     verb sit quietly on a faint wash of the same ink, so the token
+     reads as one object in one colour. */
+  .tok { display: inline-flex; align-items: stretch; border-radius: 4px; white-space: nowrap; }
+  .tok > * {
+    font: 700 10px var(--font-mono); letter-spacing: 0.06em;
+    padding: 3px 7px; line-height: 13px;
+    display: inline-flex; align-items: center;
+    border: 0; background: color-mix(in srgb, var(--vi) 9%, transparent);
+    color: var(--fg-dim);
+  }
+  .tok > *:first-child { border-radius: 4px 0 0 4px; }
+  .tok > *:last-child { border-radius: 0 4px 4px 0; }
+  .tok .tv {
+    color: var(--vi);
+    background: color-mix(in srgb, var(--vi) 17%, transparent);
+  }
+  /* ActionBadge.svelte, verbatim -- the DROP the stream draws. */
+  .tok .tv.drop { color: var(--drop); background: var(--drop-bg); }
+  .tok .tv.accept { color: var(--accept); background: var(--accept-bg); }
+  .tok .tv.reject { color: var(--reject); background: var(--reject-bg); }
+  .tok .tv.log { color: var(--log); background: var(--log-bg); }
+  .tok .tx { cursor: pointer; color: var(--fg-dim); font-weight: 600; padding: 3px 6px; }
+  .tok .tx:hover { color: var(--fg); }
+  /* Unfinished is --now, the engine room's time colour, never --alarm. */
+  .tok.wait { box-shadow: inset 2px 0 0 var(--now), 0 0 0 1px color-mix(in srgb, var(--now) 45%, transparent); }
+  .tok.wait .tv { color: var(--now); background: color-mix(in srgb, var(--now) 14%, transparent); }
+  .gap { color: var(--now); }
+  .caret {
+    display: inline-block; width: 1px; height: 11px; margin-left: 1px;
+    background: var(--now); vertical-align: -1px;
+  }
+  .caret.acc { background: var(--accent); }
+  .typing { font: 700 10.5px var(--font-mono); letter-spacing: 0.06em; color: var(--fg); }
+  /* the typed value's hint takes its own line inside the bar, right of
+     the caret's row, so a long hint can never run past the bar's edge */
+  .barhint { flex-basis: 100%; text-align: right; color: var(--fg-dim); font-size: 10.5px; padding-top: 1px; }
+
+  /* the dropdown: not a card -- rows of text hung under the bar, with
+     one --hair-2 edge closing it off at the bottom. */
+  .dd {
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--hair-2);
+    border-radius: 0 0 7px 7px;
+    padding: 2px 0 6px;
+  }
+  .crumb { padding: 7px 11px 5px; display: flex; gap: 7px; align-items: baseline; }
+  .crumb .on { color: var(--accent); }
+  .ddrow {
+    display: flex; gap: 10px; align-items: baseline;
+    max-width: 760px;
+    padding: 4px 11px;
+    font: 11.5px var(--font-mono); color: var(--fg-muted);
+    cursor: pointer;
+  }
+  .ddrow i { font-style: normal; color: var(--vi); width: 8px; flex: none; }
+  .ddrow .hint { margin-left: auto; color: var(--fg-dim); font-size: 10.5px; }
+  .ddrow:hover { background: var(--bg-hover); }
+  .ddrow.hl { background: var(--bg-hover); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
+  .ddrow .badge {
+    font: 700 10px var(--font-mono); letter-spacing: 0.06em;
+    padding: 1px 6px; border-radius: 4px;
+    color: var(--vi); background: color-mix(in srgb, var(--vi) 12%, transparent);
+  }
+  .ddnote { padding: 5px 11px 2px; }
+
+  /* ---------- 3. the counting line ---------- */
+  .stat {
+    margin: 16px 0 0; font-size: 13px; line-height: 2.05; color: var(--fg-muted);
+  }
+  .k {
+    font: inherit; color: var(--fg); font-weight: 600;
+    background: transparent; border: none;
+    border-bottom: 1px dashed var(--accent);
+    padding: 0; cursor: pointer; line-height: 1.3;
+  }
+  .k:hover { color: var(--accent); }
+  .k b { font-weight: 700; }
+  .k .u { color: var(--fg-muted); font-weight: 400; }
+  .mid { color: var(--fg-dim); margin: 0 5px; }
+
+  /* ---------- 4. the says line ---------- */
+  .says { margin: 12px 0 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .saying { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-muted); }
+  /* the docket's .stamp, shrunk: 1.5px of the family ink around a word */
+  .ph {
+    display: inline-block;
+    font-family: var(--font-mono); font-size: 9.5px; font-weight: 800;
+    letter-spacing: 0.08em;
+    color: var(--ft); border: 1.5px solid var(--ft); border-radius: 3px;
+    padding: 0 5px;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ft) 30%, transparent);
+    vertical-align: 1px;
+  }
+
+  /* ---------- 5. the receipt, where THE EPISODE sits ---------- */
+  .side .fired { margin: 6px 0 0; font-size: 12.5px; color: var(--fg-muted); }
+  .side .fired b { color: var(--fg); font-weight: 700; font-size: 14px; }
+  .side svg { display: block; width: 100%; height: 34px; margin: 6px 0 2px; }
+  .side .hosts { margin: 4px 0 0; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.7; }
+  .side .hosts span { color: var(--fg-muted); }
+  .side .hosts em { font-style: normal; color: var(--fg-dim); margin-left: 8px; }
+  .side .none { margin: 6px 0 0; font-size: 12px; color: var(--fg-dim); }
+
+  /* ---------- 6. the actions ---------- */
+  .acts { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+  .p {
+    font-family: var(--font-mono); font-size: 10.5px;
+    color: var(--fg-muted); background: transparent;
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 2px 11px 2px 9px; cursor: pointer; line-height: 16px;
+  }
+  .p i { font-style: normal; color: var(--ft); margin-right: 6px; font-weight: 700; }
+  .p:hover { color: var(--fg); border-color: var(--ft); background: color-mix(in srgb, var(--ft) 12%, transparent); }
+  .p.live { color: var(--fg); border-color: color-mix(in srgb, var(--ft) 55%, transparent); }
+  .p.wait { color: var(--fg-dim); border-color: color-mix(in srgb, var(--now) 30%, transparent); cursor: default; }
+  .p.wait i { color: var(--now); opacity: 0.55; }
+  .waiting { color: var(--now); font-size: 11.5px; }
+
+  /* ---------- s4's read-only and phone renderings ---------- */
+  .cut { width: min(1180px, 94%); margin: 30px auto 0; }
+  .cutlab { display: flex; gap: 10px; align-items: baseline; margin-bottom: 10px; }
+  .ro { box-shadow: inset 3px 0 0 var(--ft); padding: 8px 10px 10px 13px; }
+  .ro .toks { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) 430px; gap: 40px; align-items: start; }
+  /* device outline only -- a phone, not a panel */
+  .phone {
+    width: 390px; border: 1px solid var(--border); border-radius: 22px;
+    padding: 14px 12px; background: var(--bg);
+  }
+  .phone .bar { font-size: 11px; }
+  .phone .stat { font-size: 12px; line-height: 1.95; }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>ROUND 7</b>
+  <span>the builder bar in mikroview's inks — custom detectors on the settings bench (#829, under #490)</span>
+</div>
+
+<!-- ============================ s1 ============================ -->
+<section class="scene" id="s1">
+  <div class="scene-tag"><b>s1</b> just cloned — the copy arrives filed as SCAN, and the whole drawer is already wearing that ink</div>
+  <div class="sheet">
+    <div class="bench">
+      <div class="benchhead">
+        <span class="lab">detection</span>
+        <span class="benchfacts">detectors · <b>17 of 18 on</b> · <button class="olink">close the bench</button></span>
+      </div>
+      <ul class="rows">
+        <li class="row" style="--ft: var(--f-scan)">
+          <div class="line">
+            <input class="cbx" type="checkbox" checked aria-label="Port scan runs">
+            <span class="fmark"><i>✱</i>Port scan</span>
+            <span class="id">port_scan</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching everything in range</span>
+            <span class="state"><span class="dot"></span>running</span>
+          </div>
+        </li>
+        <li class="row" style="--ft: var(--f-surge)">
+          <div class="line">
+            <input class="cbx" type="checkbox" checked aria-label="Rule hit-rate spike runs">
+            <span class="fmark"><i>▲</i>Rule hit-rate spike</span>
+            <span class="id">activity_spike</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching everything in range</span>
+            <span class="state"><span class="dot"></span>running</span>
+          </div>
+        </li>
+
+        <li class="row open" style="--ft: var(--f-scan)">
+          <div class="line">
+            <input class="cbx" type="checkbox" aria-label="Port scan (copy) runs">
+            <span class="fmark"><i>✱</i>Port scan (copy)</span>
+            <button class="pencil" aria-label="rename">✎</button>
+            <span class="id">port_scan_copy</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching everything in range</span>
+            <span class="state paused"><span class="dot"></span>paused</span>
+          </div>
+          <div class="drawer">
+            <div class="dwr">
+              <div class="wide">
+                <p class="copied">copied from <em>Port scan</em> · conditions, scope and numbers · paused</p>
+                <div class="famline">
+                  <div class="famtop">
+                    <span class="famname"><i>✱</i>Port scan (copy)</span>
+                    <div class="picker" role="group" aria-label="file this detector under a flag family">
+                      <button style="--pk: var(--f-hostile)" aria-label="hostile">✱</button>
+                      <button class="on" style="--pk: var(--f-scan)" aria-label="scan">✱</button>
+                      <button style="--pk: var(--f-outbound)" aria-label="outbound">✱</button>
+                      <button style="--pk: var(--f-repeat)" aria-label="repeat">✱</button>
+                      <button style="--pk: var(--f-surge)" aria-label="surge">▲</button>
+                      <button style="--pk: var(--f-presence)" aria-label="presence">▲</button>
+                      <button style="--pk: var(--f-custom)" aria-label="custom">▲</button>
+                    </div>
+                  </div>
+                  <span class="btbar"></span>
+                  <span class="lab famcap">filed as · <em>scan</em> — its flags wear this ink on the docket, the fall and the map</span>
+                </div>
+              </div>
+
+              <div class="wide">
+                <div class="bar">
+                  <span class="tok" style="--vi: var(--fg-muted)">
+                    <span>connection state</span><span>is one of</span><span class="tv">new</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="placeholder">click to add a condition</span>
+                </div>
+              </div>
+
+              <div class="left">
+                <p class="stat">
+                  <button class="k"><b>20</b></button> distinct destination ports
+                  <span class="mid">·</span> per <button class="k">source address</button>
+                  <span class="mid">·</span> within <button class="k"><b>60</b> <span class="u">s</span></button>
+                </p>
+                <p class="says">
+                  <span class="lab">says</span>
+                  <span class="saying"><span class="ph">{Count}</span> distinct destination ports from <span class="ph">{SourceAddress}</span> in 60 s</span>
+                </p>
+              </div>
+
+              <div class="side">
+                <span class="lab">tried · 24 h</span>
+                <p class="none">not tried yet</p>
+              </div>
+
+              <div class="left acts">
+                <button class="p"><i>▸</i>try</button>
+                <button class="p"><i>✓</i>save</button>
+                <button class="olink">clone</button>
+                <span class="mid">·</span>
+                <button class="olink quiet">remove</button>
+              </div>
+            </div>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+  <p class="anno">
+    <b>Clone says nothing beside the button.</b> The copy is the answer: the next row down,
+    paused, drawer already open, one dim mono line saying what came across. Choosing a family
+    is the one thing on this surface that colours everything — the rail, the glyph, the name,
+    the gradient rule, the <b>{Count}</b> stamps, the tick strip and the pill glyphs all read
+    <b>scan</b> at once. The token in the bar carries the app's own ink for its value.
+  </p>
+</section>
+
+<!-- ============================ s2 ============================ -->
+<section class="scene" id="s2">
+  <div class="scene-tag"><b>s2</b> the bar mid-build — four conditions, the port line unfinished, values typed straight into the bar</div>
+  <div class="sheet">
+    <div class="bench">
+      <div class="benchhead">
+        <span class="lab">detection</span>
+        <span class="benchfacts">detectors · <b>17 of 18 on</b> · <button class="olink">close the bench</button></span>
+      </div>
+      <ul class="rows">
+        <li class="row" style="--ft: var(--f-scan)">
+          <div class="line">
+            <input class="cbx" type="checkbox" checked aria-label="Port scan runs">
+            <span class="fmark"><i>✱</i>Port scan</span>
+            <span class="id">port_scan</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching everything in range</span>
+            <span class="state"><span class="dot"></span>running</span>
+          </div>
+        </li>
+        <li class="row" style="--ft: var(--f-presence)">
+          <div class="line">
+            <input class="cbx" type="checkbox" checked aria-label="New device seen runs">
+            <span class="fmark"><i>▲</i>New device seen</span>
+            <span class="id">new_device</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching everything in range</span>
+            <span class="state"><span class="dot"></span>running</span>
+          </div>
+        </li>
+
+        <li class="row open" style="--ft: var(--f-scan)">
+          <div class="line">
+            <input class="cbx" type="checkbox" aria-label="Garage probes runs">
+            <span class="fmark"><i>✱</i>Garage probes</span>
+            <button class="pencil" aria-label="rename">✎</button>
+            <span class="id">garage_probes</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching 10.0.70.0/24</span>
+            <span class="state paused"><span class="dot"></span>paused</span>
+          </div>
+          <div class="drawer">
+            <div class="dwr">
+              <div class="wide">
+                <div class="famline">
+                  <div class="famtop">
+                    <span class="famname"><i>✱</i>Garage probes</span>
+                    <div class="picker" role="group" aria-label="file this detector under a flag family">
+                      <button style="--pk: var(--f-hostile)" aria-label="hostile">✱</button>
+                      <button class="on" style="--pk: var(--f-scan)" aria-label="scan">✱</button>
+                      <button style="--pk: var(--f-outbound)" aria-label="outbound">✱</button>
+                      <button style="--pk: var(--f-repeat)" aria-label="repeat">✱</button>
+                      <button style="--pk: var(--f-surge)" aria-label="surge">▲</button>
+                      <button style="--pk: var(--f-presence)" aria-label="presence">▲</button>
+                      <button style="--pk: var(--f-custom)" aria-label="custom">▲</button>
+                    </div>
+                  </div>
+                  <span class="btbar"></span>
+                  <span class="lab famcap">filed as · <em>scan</em> — its flags wear this ink on the docket, the fall and the map</span>
+                </div>
+              </div>
+
+              <div class="wide">
+                <div class="bar on dd">
+                  <span class="tok" style="--vi: var(--fg)">
+                    <span>source address</span><span>is within</span><span class="tv">10.0.70.0/24</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="and">and</span>
+                  <span class="tok" style="--vi: var(--drop)">
+                    <span>action</span><span>is</span><span class="tv drop">DROP</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="and">and</span>
+                  <span class="tok" style="--vi: var(--accept)">
+                    <span>destination address</span><span>is classed as</span><span class="tv">internal</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="and">and</span>
+                  <span class="tok wait" style="--vi: var(--accent)">
+                    <span>destination port</span><span>is between</span><span class="tv">1-<span class="caret"></span></span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="barhint">low-high · 1-1024 · or 22:00-06:00 for time of day</span>
+                </div>
+                <div class="dd">
+                  <div class="crumb">
+                    <span class="lab">destination port</span><span class="lab">›</span>
+                    <span class="lab">is between</span><span class="lab">›</span>
+                    <span class="lab on">value</span>
+                  </div>
+                  <div class="ddrow" style="--vi: var(--accent)"><i>·</i>1 – 1024<span class="hint">the well-known ports</span></div>
+                  <div class="ddrow" style="--vi: var(--accent)"><i>·</i>1 – 65535<span class="hint">every port</span></div>
+                  <div class="ddrow" style="--vi: var(--now)"><i>·</i>22:00 – 06:00<span class="hint">the same grammar reads a time of day</span></div>
+                  <p class="lab ddnote">type the pair in the bar, or take a line — enter files it</p>
+                </div>
+              </div>
+
+              <div class="left">
+                <p class="stat">
+                  <button class="k"><b>8</b></button> distinct destination addresses
+                  <span class="mid">·</span> per <button class="k">source address</button>
+                  <span class="mid">·</span> within <button class="k"><b>300</b> <span class="u">s</span></button>
+                </p>
+                <p class="says">
+                  <span class="lab">says</span>
+                  <span class="saying"><span class="ph">{Count}</span> hosts in the garage range probed by <span class="ph">{SourceAddress}</span> in 300 s</span>
+                </p>
+              </div>
+
+              <div class="side">
+                <span class="lab">tried · 24 h</span>
+                <p class="none">not tried yet</p>
+              </div>
+
+              <div class="left acts">
+                <button class="p wait"><i>▸</i>try</button>
+                <button class="p wait"><i>✓</i>save</button>
+                <span class="waiting">finish the port line</span>
+                <span class="mid">·</span>
+                <button class="olink">clone</button>
+                <span class="mid">·</span>
+                <button class="olink quiet">remove</button>
+              </div>
+            </div>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+  <p class="anno">
+    <b>GitLab's behaviour, mikroview's clothes.</b> One bar, tokens of three joined segments,
+    a dropdown hung directly under it — rows of text on <b>--bg-elevated</b> with one hairline
+    closing the bottom, never a card. Every value wears the ink the app already gives it:
+    the address is the stream's address ink, <b>DROP</b> is the stream's own badge, <b>internal</b>
+    is the accept green, the port is the accent, a time of day is <b>--now</b>. Unfinished is
+    amber, not red: the token takes an amber edge, its value trails an amber caret, and one
+    amber line beside the waiting pills says which line to finish.
+  </p>
+</section>
+
+<!-- ============================ s3 ============================ -->
+<section class="scene" id="s3">
+  <div class="scene-tag"><b>s3</b> the same bar at step one — <code>dst</code> typed, the field list down to two, each field wearing its own ink</div>
+  <div class="sheet">
+    <div class="bench">
+      <div class="benchhead">
+        <span class="lab">detection</span>
+        <span class="benchfacts">detectors · <b>17 of 18 on</b> · <button class="olink">close the bench</button></span>
+      </div>
+      <ul class="rows">
+        <li class="row" style="--ft: var(--f-scan)">
+          <div class="line">
+            <input class="cbx" type="checkbox" checked aria-label="Port scan runs">
+            <span class="fmark"><i>✱</i>Port scan</span>
+            <span class="id">port_scan</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching everything in range</span>
+            <span class="state"><span class="dot"></span>running</span>
+          </div>
+        </li>
+        <li class="row" style="--ft: var(--f-presence)">
+          <div class="line">
+            <input class="cbx" type="checkbox" checked aria-label="New device seen runs">
+            <span class="fmark"><i>▲</i>New device seen</span>
+            <span class="id">new_device</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching everything in range</span>
+            <span class="state"><span class="dot"></span>running</span>
+          </div>
+        </li>
+
+        <li class="row open" style="--ft: var(--f-scan)">
+          <div class="line">
+            <input class="cbx" type="checkbox" aria-label="Garage probes runs">
+            <span class="fmark"><i>✱</i>Garage probes</span>
+            <button class="pencil" aria-label="rename">✎</button>
+            <span class="id">garage_probes</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching 10.0.70.0/24</span>
+            <span class="state paused"><span class="dot"></span>paused</span>
+          </div>
+          <div class="drawer">
+            <div class="dwr">
+              <div class="wide">
+                <div class="famline">
+                  <div class="famtop">
+                    <span class="famname"><i>✱</i>Garage probes</span>
+                    <div class="picker" role="group" aria-label="file this detector under a flag family">
+                      <button style="--pk: var(--f-hostile)" aria-label="hostile">✱</button>
+                      <button class="on" style="--pk: var(--f-scan)" aria-label="scan">✱</button>
+                      <button style="--pk: var(--f-outbound)" aria-label="outbound">✱</button>
+                      <button style="--pk: var(--f-repeat)" aria-label="repeat">✱</button>
+                      <button style="--pk: var(--f-surge)" aria-label="surge">▲</button>
+                      <button style="--pk: var(--f-presence)" aria-label="presence">▲</button>
+                      <button style="--pk: var(--f-custom)" aria-label="custom">▲</button>
+                    </div>
+                  </div>
+                  <span class="btbar"></span>
+                  <span class="lab famcap">filed as · <em>scan</em> — its flags wear this ink on the docket, the fall and the map</span>
+                </div>
+              </div>
+
+              <div class="wide">
+                <div class="bar on dd">
+                  <span class="tok" style="--vi: var(--fg)">
+                    <span>source address</span><span>is within</span><span class="tv">10.0.70.0/24</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="and">and</span>
+                  <span class="tok" style="--vi: var(--drop)">
+                    <span>action</span><span>is</span><span class="tv drop">DROP</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="and">and</span>
+                  <span class="tok" style="--vi: var(--accept)">
+                    <span>destination address</span><span>is classed as</span><span class="tv">internal</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="and">and</span>
+                  <span class="typing">dst<span class="caret acc"></span></span>
+                  <span class="barhint">field · verb · value — or paste a whole line</span>
+                </div>
+                <div class="dd">
+                  <div class="crumb">
+                    <span class="lab on">field</span><span class="lab">›</span>
+                    <span class="lab">verb</span><span class="lab">›</span>
+                    <span class="lab">value</span>
+                  </div>
+                  <div class="ddrow hl" style="--vi: var(--fg)"><i>·</i>destination address<span class="hint">an address, a range, or internal / external</span></div>
+                  <div class="ddrow" style="--vi: var(--accent)"><i>·</i>destination port<span class="hint">one port, a list, or a range</span></div>
+                  <p class="lab ddnote">two of fourteen fields match “dst” — ↑ ↓ to move, enter to take one</p>
+                </div>
+              </div>
+
+              <div class="left">
+                <p class="stat">
+                  <button class="k"><b>8</b></button> distinct destination addresses
+                  <span class="mid">·</span> per <button class="k">source address</button>
+                  <span class="mid">·</span> within <button class="k"><b>300</b> <span class="u">s</span></button>
+                </p>
+                <p class="says">
+                  <span class="lab">says</span>
+                  <span class="saying"><span class="ph">{Count}</span> hosts in the garage range probed by <span class="ph">{SourceAddress}</span> in 300 s</span>
+                </p>
+              </div>
+
+              <div class="side">
+                <span class="lab">tried · 24 h</span>
+                <p class="none">not tried yet</p>
+              </div>
+
+              <div class="left acts">
+                <button class="p"><i>▸</i>try</button>
+                <button class="p"><i>✓</i>save</button>
+                <button class="olink">clone</button>
+                <span class="mid">·</span>
+                <button class="olink quiet">remove</button>
+              </div>
+            </div>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+  <p class="anno">
+    <b>Typing narrows, and the list is still the app's colour language.</b> The field rows carry
+    the ink their values will wear, so the choice you are about to make is already visible:
+    addresses in the stream's address ink, ports in the accent. The highlighted row is the one
+    enter takes; there is no select, no card and no border around any of it.
+  </p>
+</section>
+
+<!-- ============================ s4 ============================ -->
+<section class="scene" id="s4">
+  <div class="scene-tag"><b>s4</b> complete and tried — the receipt, save live; then the same detector read-only, and at 390 px</div>
+  <div class="sheet">
+    <div class="bench">
+      <div class="benchhead">
+        <span class="lab">detection</span>
+        <span class="benchfacts">detectors · <b>17 of 18 on</b> · <button class="olink">close the bench</button></span>
+      </div>
+      <ul class="rows">
+        <li class="row" style="--ft: var(--f-scan)">
+          <div class="line">
+            <input class="cbx" type="checkbox" checked aria-label="Port scan runs">
+            <span class="fmark"><i>✱</i>Port scan</span>
+            <span class="id">port_scan</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching everything in range</span>
+            <span class="state"><span class="dot"></span>running</span>
+          </div>
+        </li>
+        <li class="row" style="--ft: var(--f-presence)">
+          <div class="line">
+            <input class="cbx" type="checkbox" checked aria-label="New device seen runs">
+            <span class="fmark"><i>▲</i>New device seen</span>
+            <span class="id">new_device</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching everything in range</span>
+            <span class="state"><span class="dot"></span>running</span>
+          </div>
+        </li>
+
+        <li class="row open" style="--ft: var(--f-scan)">
+          <div class="line">
+            <input class="cbx" type="checkbox" aria-label="Garage probes runs">
+            <span class="fmark"><i>✱</i>Garage probes</span>
+            <button class="pencil" aria-label="rename">✎</button>
+            <span class="id">garage_probes</span>
+            <span class="dash">—</span>
+            <span class="scope-fact">watching 10.0.70.0/24</span>
+            <span class="state paused"><span class="dot"></span>paused</span>
+          </div>
+          <div class="drawer">
+            <div class="dwr">
+              <div class="wide">
+                <div class="famline">
+                  <div class="famtop">
+                    <span class="famname"><i>✱</i>Garage probes</span>
+                    <div class="picker" role="group" aria-label="file this detector under a flag family">
+                      <button style="--pk: var(--f-hostile)" aria-label="hostile">✱</button>
+                      <button class="on" style="--pk: var(--f-scan)" aria-label="scan">✱</button>
+                      <button style="--pk: var(--f-outbound)" aria-label="outbound">✱</button>
+                      <button style="--pk: var(--f-repeat)" aria-label="repeat">✱</button>
+                      <button style="--pk: var(--f-surge)" aria-label="surge">▲</button>
+                      <button style="--pk: var(--f-presence)" aria-label="presence">▲</button>
+                      <button style="--pk: var(--f-custom)" aria-label="custom">▲</button>
+                    </div>
+                  </div>
+                  <span class="btbar"></span>
+                  <span class="lab famcap">filed as · <em>scan</em> — its flags wear this ink on the docket, the fall and the map</span>
+                </div>
+              </div>
+
+              <div class="wide">
+                <div class="bar">
+                  <span class="tok" style="--vi: var(--fg)">
+                    <span>source address</span><span>is within</span><span class="tv">10.0.70.0/24</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="and">and</span>
+                  <span class="tok" style="--vi: var(--drop)">
+                    <span>action</span><span>is</span><span class="tv drop">DROP</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="and">and</span>
+                  <span class="tok" style="--vi: var(--accept)">
+                    <span>destination address</span><span>is classed as</span><span class="tv">internal</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="and">and</span>
+                  <span class="tok" style="--vi: var(--accent)">
+                    <span>destination port</span><span>is between</span><span class="tv">1 – 1024</span><span class="tx" role="button" aria-label="remove">×</span>
+                  </span>
+                  <span class="placeholder">click to add a condition</span>
+                </div>
+              </div>
+
+              <div class="left">
+                <p class="stat">
+                  <button class="k"><b>8</b></button> distinct destination addresses
+                  <span class="mid">·</span> per <button class="k">source address</button>
+                  <span class="mid">·</span> within <button class="k"><b>300</b> <span class="u">s</span></button>
+                </p>
+                <p class="says">
+                  <span class="lab">says</span>
+                  <span class="saying"><span class="ph">{Count}</span> hosts in the garage range probed by <span class="ph">{SourceAddress}</span> in 300 s</span>
+                </p>
+              </div>
+
+              <div class="side">
+                <span class="lab">tried · 24 h</span>
+                <p class="fired">would have fired <b>3</b> times</p>
+                <svg viewBox="0 0 260 34" preserveAspectRatio="none" role="img" aria-label="three firings across the last day">
+                  <line x1="46" y1="6" x2="46" y2="28" stroke="var(--ft)" stroke-width="2.5" stroke-linecap="round"/>
+                  <line x1="53" y1="6" x2="53" y2="28" stroke="var(--ft)" stroke-width="2.5" stroke-linecap="round"/>
+                  <line x1="181" y1="6" x2="181" y2="28" stroke="var(--ft)" stroke-width="2.5" stroke-linecap="round"/>
+                </svg>
+                <p class="hosts">
+                  <span>10.0.70.14</span><em>garage-cam</em><br>
+                  <span>10.0.70.31</span><em>ev-charger</em>
+                </p>
+              </div>
+
+              <div class="left acts">
+                <button class="p live"><i>▸</i>try again</button>
+                <button class="p live"><i>✓</i>save</button>
+                <button class="olink">clone</button>
+                <span class="mid">·</span>
+                <button class="olink quiet">remove</button>
+              </div>
+            </div>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="cut">
+    <div class="two">
+      <div>
+        <div class="cutlab"><span class="lab">the same detector to a viewer</span></div>
+        <div class="ro" style="--ft: var(--f-scan)">
+          <div class="famtop"><span class="famname"><i>✱</i>Garage probes</span></div>
+          <span class="btbar"></span>
+          <span class="lab famcap">filed as · <em>scan</em></span>
+          <div class="toks" style="margin-top: 12px">
+            <span class="tok" style="--vi: var(--fg)"><span>source address</span><span>is within</span><span class="tv">10.0.70.0/24</span></span>
+            <span class="and">and</span>
+            <span class="tok" style="--vi: var(--drop)"><span>action</span><span>is</span><span class="tv drop">DROP</span></span>
+            <span class="and">and</span>
+            <span class="tok" style="--vi: var(--accept)"><span>destination address</span><span>is classed as</span><span class="tv">internal</span></span>
+            <span class="and">and</span>
+            <span class="tok" style="--vi: var(--accent)"><span>destination port</span><span>is between</span><span class="tv">1 – 1024</span></span>
+          </div>
+          <p class="stat" style="margin-top: 12px">
+            <b style="color: var(--fg)">8</b> distinct destination addresses
+            <span class="mid">·</span> per <b style="color: var(--fg)">source address</b>
+            <span class="mid">·</span> within <b style="color: var(--fg)">300 s</b>
+          </p>
+        </div>
+      </div>
+
+      <div>
+        <div class="cutlab"><span class="lab">390 px</span></div>
+        <div class="phone">
+          <div class="ro" style="--ft: var(--f-scan); padding-right: 0">
+            <div class="famtop"><span class="famname" style="font-size: 12px"><i>✱</i>Garage probes</span></div>
+            <span class="btbar"></span>
+            <span class="lab famcap">filed as · <em>scan</em></span>
+            <div class="bar on" style="margin-top: 10px">
+              <span class="tok" style="--vi: var(--fg)"><span>source address</span><span>is within</span><span class="tv">10.0.70.0/24</span><span class="tx">×</span></span>
+              <span class="and">and</span>
+              <span class="tok" style="--vi: var(--drop)"><span>action</span><span>is</span><span class="tv drop">DROP</span><span class="tx">×</span></span>
+              <span class="and">and</span>
+              <span class="tok" style="--vi: var(--accept)"><span>destination address</span><span>is classed as</span><span class="tv">internal</span><span class="tx">×</span></span>
+              <span class="and">and</span>
+              <span class="tok" style="--vi: var(--accent)"><span>destination port</span><span>is between</span><span class="tv">1 – 1024</span><span class="tx">×</span></span>
+              <span class="placeholder">click to add a condition</span>
+            </div>
+            <p class="stat">
+              <button class="k"><b>8</b></button> distinct destination addresses
+              <span class="mid">·</span> per <button class="k">source address</button>
+              <span class="mid">·</span> within <button class="k"><b>300</b> <span class="u">s</span></button>
+            </p>
+            <div style="margin-top: 14px">
+              <span class="lab">tried · 24 h</span>
+              <p class="fired" style="margin: 6px 0 0; font-size: 12px; color: var(--fg-muted)">would have fired <b style="color: var(--fg); font-weight: 700">3</b> times</p>
+              <svg viewBox="0 0 260 34" preserveAspectRatio="none" style="display: block; width: 100%; height: 28px; margin: 4px 0 2px" role="img" aria-label="three firings across the last day">
+                <line x1="46" y1="6" x2="46" y2="28" stroke="var(--ft)" stroke-width="2.5" stroke-linecap="round"/>
+                <line x1="53" y1="6" x2="53" y2="28" stroke="var(--ft)" stroke-width="2.5" stroke-linecap="round"/>
+                <line x1="181" y1="6" x2="181" y2="28" stroke="var(--ft)" stroke-width="2.5" stroke-linecap="round"/>
+              </svg>
+              <p class="hosts" style="margin: 4px 0 0; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.7">
+                <span style="color: var(--fg-muted)">10.0.70.14</span><em style="font-style: normal; color: var(--fg-dim); margin-left: 8px">garage-cam</em><br>
+                <span style="color: var(--fg-muted)">10.0.70.31</span><em style="font-style: normal; color: var(--fg-dim); margin-left: 8px">ev-charger</em>
+              </p>
+            </div>
+            <div class="acts" style="margin-top: 14px">
+              <button class="p live"><i>▸</i>try again</button>
+              <button class="p live"><i>✓</i>save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="anno">
+    <b>Trying is a receipt, not a dialog.</b> Where the docket puts THE EPISODE, the drawer puts
+    what this detector would have done: how many times, the same tick strip in the same family
+    ink, and the two hosts it caught. To a viewer the tokens lose their <b>×</b>, the bar loses
+    its edge and ring entirely, and the numbers stop being click-to-edit — the same colour
+    language, read-only. At 390 px the tokens wrap inside the bar and the receipt drops below.
+  </p>
+</section>
+
+</body>
+</html>

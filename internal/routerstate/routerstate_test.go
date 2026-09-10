@@ -71,6 +71,9 @@ func TestNoDataIsDistinctFromEmpty(t *testing.T) {
 	if _, _, ok := s.AddressLists("router-1"); ok {
 		t.Error("AddressLists reported ok for a device that never pushed")
 	}
+	if _, _, ok := s.IPAddresses("router-1"); ok {
+		t.Error("IPAddresses reported ok for a device that never pushed")
+	}
 }
 
 // TestDHCPLeasesARPAddressListsSortedAndAccessible is issue #243 slice
@@ -84,6 +87,7 @@ func TestDHCPLeasesARPAddressListsSortedAndAccessible(t *testing.T) {
 	apply(t, s, "router-1", `{"kind":"dhcp-lease","page":1,"pages":1,"records":[{"hostname":"zeta","mac":"aa:bb:cc:dd:ee:02","address":"192.168.1.2"},{"hostname":"alpha","mac":"aa:bb:cc:dd:ee:01","address":"192.168.1.1"}]}`)
 	apply(t, s, "router-1", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.168.1.9","mac":"aa:bb:cc:dd:ee:09"},{"address":"192.168.1.5","mac":"aa:bb:cc:dd:ee:05"}]}`)
 	apply(t, s, "router-1", `{"kind":"address-list","page":1,"pages":1,"records":[{"list":"blocked","address":"198.51.100.9","comment":"","dynamic":false},{"list":"blocked","address":"198.51.100.1","comment":"","dynamic":false}]}`)
+	apply(t, s, "router-1", `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.9/24","network":"192.168.1.0","interface":"ether1","comment":""},{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":""}]}`)
 
 	leases, updatedAt, ok := s.DHCPLeases("router-1")
 	if !ok || updatedAt.IsZero() {
@@ -107,6 +111,66 @@ func TestDHCPLeasesARPAddressListsSortedAndAccessible(t *testing.T) {
 	}
 	if len(lists) != 2 || lists[0].Address != "198.51.100.1" || lists[1].Address != "198.51.100.9" {
 		t.Errorf("AddressLists = %+v, want sorted by (list, address)", lists)
+	}
+
+	addrs, _, ok := s.IPAddresses("router-1")
+	if !ok {
+		t.Fatal("IPAddresses reported no data after an applied page")
+	}
+	if len(addrs) != 2 || addrs[0].Address != "192.168.1.1/24" || addrs[1].Address != "192.168.1.9/24" {
+		t.Errorf("IPAddresses = %+v, want sorted by address", addrs)
+	}
+}
+
+// TestWireguardAndPPPActiveSortedAndAccessible is issue #874's
+// reproducer for the two new accessors: WireguardInterfaces,
+// WireguardPeers and PPPActive were already accepted and stored
+// generically by Apply, but had no exported getter before this issue
+// needed one -- the same gap #243 slice 5 found for DHCP/ARP/address
+// lists.
+func TestWireguardAndPPPActiveSortedAndAccessible(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"wireguard-interface","page":1,"pages":1,"records":[{"name":"wg1","comment":"","publicKey":"","listenPort":51821},{"name":"wg0","comment":"","publicKey":"","listenPort":51820}]}`)
+	apply(t, s, "router-1", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"zzz","allowedAddress":"10.0.1.0/24","endpointAddress":"","comment":"z"},{"publicKey":"aaa","allowedAddress":"10.0.0.0/24","endpointAddress":"","comment":"a"}]}`)
+	apply(t, s, "router-1", `{"kind":"ppp-active","page":1,"pages":1,"records":[{"name":"zeta","service":"l2tp"},{"name":"alpha","service":"sstp"}]}`)
+
+	ifaces, updatedAt, ok := s.WireguardInterfaces("router-1")
+	if !ok || updatedAt.IsZero() {
+		t.Fatal("WireguardInterfaces reported no data after an applied page")
+	}
+	if len(ifaces) != 2 || ifaces[0].Name != "wg0" || ifaces[1].Name != "wg1" {
+		t.Errorf("WireguardInterfaces = %+v, want sorted by name", ifaces)
+	}
+
+	peers, _, ok := s.WireguardPeers("router-1")
+	if !ok {
+		t.Fatal("WireguardPeers reported no data after an applied page")
+	}
+	if len(peers) != 2 || peers[0].PublicKey != "aaa" || peers[1].PublicKey != "zzz" {
+		t.Errorf("WireguardPeers = %+v, want sorted by public key", peers)
+	}
+
+	sessions, _, ok := s.PPPActive("router-1")
+	if !ok {
+		t.Fatal("PPPActive reported no data after an applied page")
+	}
+	if len(sessions) != 2 || sessions[0].Name != "alpha" || sessions[1].Name != "zeta" {
+		t.Errorf("PPPActive = %+v, want sorted by name", sessions)
+	}
+}
+
+// TestWireguardAndPPPActiveAreDistinctNoData extends
+// TestNoDataIsDistinctFromEmpty to the three new accessors.
+func TestWireguardAndPPPActiveAreDistinctNoData(t *testing.T) {
+	s := New()
+	if _, _, ok := s.WireguardInterfaces("router-1"); ok {
+		t.Error("WireguardInterfaces reported ok for a device that never pushed")
+	}
+	if _, _, ok := s.WireguardPeers("router-1"); ok {
+		t.Error("WireguardPeers reported ok for a device that never pushed")
+	}
+	if _, _, ok := s.PPPActive("router-1"); ok {
+		t.Error("PPPActive reported ok for a device that never pushed")
 	}
 }
 
@@ -245,6 +309,81 @@ func TestRouterOSVersionIsPerDeviceAndSticky(t *testing.T) {
 	apply(t, s, "router-2", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.0.2.60","mac":"aa:bb:cc:dd:ee:04"}]}`)
 	if got, _, ok := s.RouterOSVersion("router-2"); ok || got != "" {
 		t.Errorf("router-2 reported %q from router-1's claim", got)
+	}
+}
+
+// TestVersionHint covers #436 step 3's fallback: an unauthenticated
+// /ca.crt?ros= hint fills in a device's version only until a real push
+// reports one, and a pushed version always wins from then on -- even a
+// push that arrives after the hint, and even one that arrives without a
+// version at all (RouterOSVersion's own "silence doesn't clear it" rule
+// applies here too, since a hint is not a push).
+func TestVersionHint(t *testing.T) {
+	s := New()
+
+	if _, _, ok := s.VersionHint("203.0.113.9"); ok {
+		t.Error("an address that was never hinted reported one")
+	}
+
+	now := time.Now()
+	s.NoteVersionHint("203.0.113.9", "7.20.1", now)
+	got, at, ok := s.VersionHint("203.0.113.9")
+	if !ok || got != "7.20.1" {
+		t.Fatalf("VersionHint = %q/%v, want the noted hint", got, ok)
+	}
+	if !at.Equal(now) {
+		t.Errorf("VersionHint at = %v, want %v", at, now)
+	}
+
+	// A later hint from the same address replaces the earlier one.
+	later := now.Add(time.Minute)
+	s.NoteVersionHint("203.0.113.9", "7.23.3", later)
+	if got, _, _ := s.VersionHint("203.0.113.9"); got != "7.23.3" {
+		t.Errorf("VersionHint = %q, want the newer hint", got)
+	}
+
+	// A hint is device-less by construction: it is keyed on source IP,
+	// which is not the same key RouterOSVersion reads (device id). A
+	// caller has to look a hint up by address and a push up by device --
+	// this only asserts the hint side answers nothing for an
+	// unrelated key.
+	if _, _, ok := s.VersionHint("203.0.113.9-not-a-real-key"); ok {
+		t.Error("an unrelated key reported a hint")
+	}
+
+	// Empty inputs are refused rather than stored, same as every other
+	// Note* method here.
+	s.NoteVersionHint("", "7.24.1", now)
+	s.NoteVersionHint("203.0.113.10", "", now)
+	if _, _, ok := s.VersionHint(""); ok {
+		t.Error("an empty source reported a hint")
+	}
+	if _, _, ok := s.VersionHint("203.0.113.10"); ok {
+		t.Error("noting an empty version stored one anyway")
+	}
+}
+
+// TestVersionHintIsOnlyAFallback is the override half of #436 step 3:
+// this package exposes RouterOSVersion (a real push) and VersionHint (an
+// unauthenticated guess) as two separate reads on purpose -- neither
+// overwrites the other's storage -- and it is the caller's job (the
+// devices handler and POST /api/setup/commands) to prefer the push and
+// fall back to the hint only when no push exists. This test pins that
+// the two stay independent so that contract holds: noting a hint after a
+// real push does not disturb what RouterOSVersion reports, and vice
+// versa.
+func TestVersionHintIsOnlyAFallback(t *testing.T) {
+	s := New()
+	now := time.Now()
+
+	apply(t, s, "router-1", `{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.23.3 (stable)","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`)
+	s.NoteVersionHint("192.0.2.50", "7.18", now)
+
+	if got, _, ok := s.RouterOSVersion("router-1"); !ok || got != "7.23.3 (stable)" {
+		t.Errorf("a hint disturbed the pushed version: %q/%v", got, ok)
+	}
+	if got, _, ok := s.VersionHint("192.0.2.50"); !ok || got != "7.18" {
+		t.Errorf("a pushed version disturbed the hint: %q/%v", got, ok)
 	}
 }
 

@@ -1,56 +1,95 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from './lib/state.svelte'
+  import { subscribe as subscribeVisibility } from './lib/visibility'
   import { liveSocket } from './lib/ws'
-  import { themeState } from './lib/theme.svelte'
   import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
   import { watchlistState } from './lib/watchlist.svelte'
   import { authState } from './lib/auth.svelte'
   import { buildQuery, ApiError } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
-  import Toolbar from './components/Toolbar.svelte'
-  import NavRail from './components/NavRail.svelte'
-  import NavHandle from './components/NavHandle.svelte'
+  import SceneBar from './components/SceneBar.svelte'
+  import Deck from './components/Deck.svelte'
   import BottomBar from './components/BottomBar.svelte'
-  import { railPref } from './lib/rail.svelte'
   import { viewportState } from './lib/viewport.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
+  import IngestLossDrawer from './components/IngestLossDrawer.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
-  import FilterBar from './components/FilterBar.svelte'
-  import LiveTable from './components/LiveTable.svelte'
-  import Metrics from './components/Metrics.svelte'
-  import Watchlist from './components/Watchlist.svelte'
-  import Flags from './components/Flags.svelte'
-  import EngineRoom from './components/EngineRoom.svelte'
-  import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
-  import AuditLog from './components/AuditLog.svelte'
+  import TuneLogging from './components/TuneLogging.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
   import NameEditorPopover from './components/NameEditorPopover.svelte'
+  // The device dossier card (#410), one instance for the whole app --
+  // every surface that opens one calls lib/dossier.svelte.ts.
+  import HostDossier from './components/HostDossier.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
-  // Mounted here, not in the rail that triggers it: the rail is chrome
-  // for authenticated pages, and this overlay outlives any one of them.
+  // The journey (#646): choreography over the shell below, not a page of
+  // its own. journeyState.begin() (AuthSetup.svelte) is the only trigger;
+  // outside it these three never render.
+  import { journeyState } from './lib/journey.svelte'
+  import JourneyAttach from './components/JourneyAttach.svelte'
+  import JourneyGlass from './components/JourneyGlass.svelte'
+  import JourneyTour from './components/JourneyTour.svelte'
+  // Mounted here, not in the account menu that triggers it: the menu is
+  // scoped to whichever scene's own bar renders it, and this overlay
+  // outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
   // The setup wizard is a modal over the shell, not a page (#487) -- so
   // it is mounted here with the other overlays rather than reached
-  // through appState.view. The rail's "Run setup…" opens it.
+  // through appState.view. Its "Run setup…" row lives in the account
+  // menu (desktop) and the bottom bar (mobile), both of which call
+  // wizardState.launch() directly.
   import SetupWizard from './components/SetupWizard.svelte'
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
 
+  // The deck's scenes (#633). Entities and Settings joined the deck in
+  // #647 (round 23), folding Fleet's own table into Entities' leading
+  // section. #657 then ruled Entities and Settings out of a viewer's
+  // navigation and Fleet back in as its own card (deckCards.ts), so
+  // 'fleet' is a deck view too now -- reachable from the deck's roll
+  // rail for a viewer, same as every other card, rather than only from
+  // the phone-width bottom bar.
+  const DECK_VIEWS = new Set([
+    'fall',
+    'topography',
+    'metrics',
+    'live',
+    'flags',
+    'watchlist',
+    'audit',
+    'entities',
+    'engineroom',
+    'fleet',
+  ])
+  const inDeck = $derived(DECK_VIEWS.has(appState.view))
+
   // Any polling call that fails with a 401 (an expired or reset-
   // invalidated session -- see internal/api's sessionUser) bounces to
   // the login view instead of failing silently forever.
-  function handleApiError(err: unknown) {
+  //
+  // #1089: everything else used to be swallowed silently, so a backend
+  // outage or 500 left stale numbers on screen with no indication. Every
+  // non-initial poll now passes a `source` naming what it was refreshing
+  // ("stats", "flags" or "watchlist"), which becomes appState.refreshError
+  // -- cleared back to null by the next successful refresh of any kind
+  // (see pollStats/pollFlags/pollWatchlist below). loadInitial()'s own
+  // failure is left alone here: it already has its own on-screen signal
+  // (appState.fetchFailed), so it calls handleApiError with no source.
+  function handleApiError(err: unknown, source?: string) {
     if (err instanceof ApiError && err.status === 401) {
       authState.handleUnauthorized()
+      return
     }
+    if (!source) return
+    const message = err instanceof Error ? err.message : String(err)
+    appState.refreshError = `${source}: ${message}`
   }
 
   const STATS_REFRESH_MS = 5000
@@ -88,10 +127,6 @@
   authState.consumeSSOLinkedFromURL()
 
   $effect(() => {
-    themeState.apply()
-  })
-
-  $effect(() => {
     colorwayState.apply()
   })
 
@@ -111,37 +146,122 @@
 
     appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
-    flagsState.refresh().catch(handleApiError)
+
+    // #1089: each poll clears appState.refreshError on success (whichever
+    // kind refreshed -- the banner only ever claims "the last background
+    // refresh failed", not which one) and tags its own failure with what
+    // it was fetching so handleApiError's message says what went stale.
+    function pollStats() {
+      return appState
+        .refreshDevicesAndStats()
+        .then(() => {
+          appState.refreshError = null
+        })
+        .catch((err) => handleApiError(err, 'stats'))
+    }
+
+    function pollFlags() {
+      return flagsState
+        .refresh()
+        .then(() => {
+          appState.refreshError = null
+        })
+        .catch((err) => handleApiError(err, 'flags'))
+    }
+
+    function pollWatchlist() {
+      return watchlistState
+        .refresh()
+        .then(() => {
+          appState.refreshError = null
+        })
+        .catch((err) => handleApiError(err, 'watchlist'))
+    }
+
+    pollFlags()
     // #546's broken ring needs a live coverage answer even when Watchlist
     // itself is never opened -- the rail is chrome, not a page, so it
-    // cannot wait on that page's own onMount. Gated to admin because
-    // GET /api/definitions (which the ring's coverage rides on) is
-    // admin-only throughout (internal/api/definitions.go), and the
-    // Watchlist row this feeds is itself admin-only in the rail. The
+    // cannot wait on that page's own onMount. Gated to canEdit because the
+    // Watchlist row this feeds is visible to that tier (navGroups.ts's
+    // `edit: true` on the row), not admin-only, and GET /api/definitions
+    // (which the ring's coverage rides on) is accessViewer -- readable by
+    // canEdit and below (#653; internal/api/authz_matrix_test.go). The
     // immediate call here is what makes the ring correct on first paint;
     // WATCHLIST_COVERAGE_REFRESH_MS above is what keeps it correct after.
-    if (authState.role === 'admin') watchlistState.refresh().catch(handleApiError)
+    if (authState.canEdit) pollWatchlist()
 
-    const statsInterval = setInterval(() => {
-      appState.refreshDevicesAndStats().catch(handleApiError)
-      flagsState.refresh().catch(handleApiError)
-    }, STATS_REFRESH_MS)
+    function refreshStats() {
+      pollStats()
+      pollFlags()
+    }
 
+    function refreshWatchlist() {
+      pollWatchlist()
+    }
+
+    let statsInterval: ReturnType<typeof setInterval> | undefined
     // Its own slower interval rather than riding statsInterval -- see
     // WATCHLIST_COVERAGE_REFRESH_MS's own comment for why the two cadences
     // are deliberately different rather than an oversight.
-    const watchlistInterval =
-      authState.role === 'admin'
-        ? setInterval(() => watchlistState.refresh().catch(handleApiError), WATCHLIST_COVERAGE_REFRESH_MS)
+    let watchlistInterval: ReturnType<typeof setInterval> | undefined
+    let tickInterval: ReturnType<typeof setInterval> | undefined
+
+    function startIntervals() {
+      statsInterval = setInterval(refreshStats, STATS_REFRESH_MS)
+      watchlistInterval = authState.canEdit
+        ? setInterval(refreshWatchlist, WATCHLIST_COVERAGE_REFRESH_MS)
         : undefined
+      tickInterval = setInterval(() => appState.tick(), TICK_MS)
+    }
 
-    const tickInterval = setInterval(() => appState.tick(), TICK_MS)
-
-    return () => {
-      liveSocket.disconnect()
+    function stopIntervals() {
       clearInterval(statsInterval)
       clearInterval(watchlistInterval)
       clearInterval(tickInterval)
+    }
+
+    startIntervals()
+
+    // #1088: a backgrounded tab gains nothing from polling at full rate.
+    // Pause statsInterval/watchlistInterval/tickInterval while hidden, and
+    // on return do one immediate refresh (not just a resumed interval) so
+    // the numbers aren't stale for up to a further full interval on top of
+    // however long the tab was hidden.
+    const stopWatchingVisibility = subscribeVisibility((hidden) => {
+      if (hidden) {
+        stopIntervals()
+        return
+      }
+      refreshStats()
+      if (authState.canEdit) refreshWatchlist()
+      startIntervals()
+    })
+
+    // The interval above is the backstop, not the mechanism. Coverage is
+    // an answer about pushed router tables and the definitions read
+    // against them, so it changes at exactly two moments the server
+    // already knows about -- a router pushing a table, and a definition
+    // being written -- and the socket is already open. Without this, an
+    // operator who switched logging on for a rule and watched it push
+    // sat looking at a ring still claiming nothing could feed the watch,
+    // for up to a minute, with no way to tell a slow poll from a change
+    // that had not registered.
+    //
+    // Same canEdit gate and the same refresh call as the interval, so a
+    // notice can never fetch something the poll would not have.
+    const stopListeningForChanges = authState.canEdit
+      ? liveSocket.onChange((change) => {
+          if (change === 'router-state' || change === 'definitions') {
+            pollWatchlist()
+          }
+        })
+      : undefined
+
+    return () => {
+      stopWatchingVisibility()
+      stopListeningForChanges?.()
+      liveSocket.disconnect()
+      stopIntervals()
     }
   })
 
@@ -189,85 +309,77 @@
 {:else if authState.state === 'unauthenticated'}
   <AuthLogin />
 {:else}
-  <!-- First in tab order, which is why it is here rather than in the rail
-       that owns the rest of the navigation: the toolbar renders ahead of
-       the rail, so a skip-link inside the rail would sit behind every
-       toolbar control and skip nothing worth skipping. -->
+  <!-- First in tab order: rendered ahead of BottomBar and every scene's
+       own bar, so a keyboard user reaches it before any navigation
+       chrome rather than having to tab past it. -->
   <a class="skip-link" href="#main-content">Skip to content</a>
-  <!-- First in tab order after the skip-link, per the record: the handle
-       is the only way back to a docked rail, so it cannot sit behind the
-       page's own controls. -->
-  <!-- Dock and density are pointer-width affordances (DESIGN.md's "Small
-       screens"): at a small viewport the bottom bar is the whole of
-       navigation, and neither NavRail nor NavHandle (which only ever
-       restores a rail state) mounts at all. -->
+  <!-- Pages are the site (owner, 2026-08-29): no persistent chrome.
+       The toolbar and the desktop nav rail are retired wholesale; each
+       scene carries its own bar. Navigation is the deck (#633, #647):
+       the scenes are full-viewport snap cards with the roll rail as the
+       jump control -- Entities and Settings among them since round 23,
+       so Fleet (folded into Entities' own card) is the one page left
+       outside it, reached only from the phone-width bottom bar. The
+       BottomBar itself stays until the deck learns a small-screen
+       shape. -->
   {#if viewportState.isMobile}
     <BottomBar />
-  {:else if railPref.isDocked}
-    <NavHandle onrestore={() => railPref.restore()} />
   {/if}
-  <Toolbar />
   <div class="shell" class:with-bottom-bar={viewportState.isMobile}>
-    {#if !viewportState.isMobile && !railPref.isDocked}
-      <NavRail />
-    {/if}
-    <!-- The banner tops the content column and pushes content rather than
-         overlaying it, per the ratified record; that is why the banners
-         live inside this column and not above the rail. -->
+    <!-- ConnectionBanner's connecting/disconnected line tops the content
+         column and pushes content rather than overlaying it, per the
+         ratified record. IngestLossDrawer sits directly under it and
+         does the same (#1015): it is where the ingest-loss banners
+         always were, and what it adds is folding away to a 3px line
+         rather than holding that space open for good. It overlaid the
+         column in a first cut, which covered each scene's own bar --
+         see the drawer's own header comment. -->
     <div class="content">
       <ConnectionBanner />
+      <IngestLossDrawer />
       <ConfigProblemBanner />
-      <main id="main-content">
-        {#if appState.view === 'live'}
-      <FilterBar />
-      <LiveTable />
-    {:else if appState.view === 'watchlist'}
-      <Watchlist />
-    {:else if appState.view === 'flags'}
-      <Flags />
-    {:else if appState.view === 'entities'}
-      <Entities />
-    {:else if appState.view === 'fleet'}
-      <Fleet />
-    {:else if appState.view === 'audit'}
-      <AuditLog />
-    {:else if appState.view === 'engineroom'}
-      <EngineRoom />
+      <main id="main-content" class:bare={inDeck && journeyState.phase !== 'attach'}>
+        {#if journeyState.phase === 'attach'}
+          <JourneyAttach />
+        {:else if inDeck}
+          <Deck />
+        {:else if appState.view === 'tune-logging'}
+          <!-- Tune logging (#435) is deliberately outside the deck: a
+               workflow stepped into from the wizard's finish screen or
+               the topography's coverage lens, not a dashboard to swipe
+               among. Same operate-page shape this branch has always
+               offered Fleet. -->
+          <SceneBar />
+          <TuneLogging />
         {:else}
-          <Metrics />
+          <SceneBar />
+          <Fleet />
         {/if}
       </main>
     </div>
   </div>
-  <!-- Outside the rail on purpose: docking unmounts the rail, so a region
-       living inside it would vanish in the same tick as the change it is
-       meant to announce. -->
-  <p class="sr-only" role="status">{railPref.announcement}</p>
   <IpLookupPopover />
   <PortLookupPopover />
   <RouterLookupPopover />
   <NameEditorPopover />
+  <HostDossier />
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <SetupWizard />
+  <!-- Beats 4/5 (connecting, then the glass) float over the live fall;
+       beat 6 (the tour) rings the deck's own cards -- both stay mounted
+       alongside the shell above rather than replacing it, since the
+       whole point is that it plays out over the real, filling app. -->
+  {#if journeyState.phase === 'connecting' || journeyState.phase === 'glass'}
+    <JourneyGlass />
+  {/if}
+  {#if journeyState.phase === 'touring'}
+    <JourneyTour />
+  {/if}
   <Toast />
 {/if}
 
 <style>
-  /* Clipped rather than display:none or hidden -- both remove the element
-     from the accessibility tree, which would silence the live region
-     this exists to carry. */
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
   .skip-link {
     position: absolute;
     left: -9999px;
@@ -313,5 +425,12 @@
     gap: 10px;
     padding: 10px 14px 14px;
     min-height: 0;
+  }
+
+  /* The fall bleeds to the edges: no gutter, no card -- its canvas is
+     the page ground. */
+  main.bare {
+    padding: 0;
+    gap: 0;
   }
 </style>

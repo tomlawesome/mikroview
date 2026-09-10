@@ -18,11 +18,11 @@
 // several other scenarios) constantly emits traffic across
 // 203.0.113.0-249, so a CIDR check there would be counting rows other
 // scenarios are also contributing to. 198.51.100.0/24 is otherwise
-// unclaimed here (live-router-lookup.mjs's wireguard peer only overrides
+// unclaimed here (live-before-router-lookup.mjs's wireguard peer only overrides
 // *names* for 192.0.2.0/24 and 198.51.100.0/24, which doesn't matter for
 // this check -- it's about the raw address, not the label).
 
-import { session, feedRaw, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedRaw, feedSyslog, check, done, goTo, unfoldStreamFilter } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -126,11 +126,30 @@ async function waitUntil(fn, timeoutMs = 8000, intervalMs = 250) {
   return last
 }
 
+/**
+ * ensureFiltersOpen re-opens the filter strip.
+ *
+ * Round 30's box closes on any click away from it (FilterBar.svelte:97-100,
+ * the owner's 2026-08-31 ruling), and every token this scenario clicks --
+ * a table row, a detail sheet -- is away from it. So the controls read back
+ * below unmount on the very click under test, and page.inputValue reports
+ * "" for an element that is no longer there.
+ *
+ * The filter itself is applied: measured on a real instance, the box's own
+ * chips and the URL both carry it (#663). Re-opening restores the control
+ * so this scenario can assert exactly what it always asserted -- the value
+ * has to be in the box, not merely in the state behind it.
+ */
+async function ensureFiltersOpen() {
+  await unfoldStreamFilter(page).catch(() => {})
+}
+
 /** waitForInputValue polls an input/select's value, returning what it last saw either way -- so a FAIL message shows the real mismatch, not a stale boolean. */
 async function waitForInputValue(selector, expected, timeoutMs = 8000, intervalMs = 250) {
   const deadline = Date.now() + timeoutMs
   let last = ''
   while (Date.now() < deadline) {
+    await ensureFiltersOpen()
     last = await page.inputValue(selector).catch(() => '')
     if (last === expected) return last
     await page.waitForTimeout(intervalMs)
@@ -151,14 +170,50 @@ if (!ready) {
 }
 
 async function clearFilters() {
-  if (await page.isVisible('.bar .clear').catch(() => false)) {
-    await page.click('.bar .clear').catch(() => {})
-    await page.waitForTimeout(300)
+  // `.bar .clear` never existed on the desktop strip this scenario
+  // drives -- that class is the *mobile drawer's* clear button
+  // (FilterBar.svelte's `.mobile-row .clear`, a sibling of `.bar`, not a
+  // descendant of it). The desktop control #697/round 30 built is
+  // `.tf-clear` inside `.bar.thin` (live-stream-interiors.mjs already
+  // uses this selector). So this silently found nothing on every call,
+  // every check after the first filter-setting one inherited whatever
+  // was still active, and that stale filter is what made the mv438-dstnat
+  // row, the https port search and the Unknown country filter each look
+  // like they excluded a row that should have shown (#663).
+  await ensureFiltersOpen()
+  if (await page.isVisible('.bar.thin .tf-clear').catch(() => false)) {
+    await page.click('.bar.thin .tf-clear').catch(() => {})
+    // Clearing removes the only element the click landed on (the
+    // button's own `{#if hasActiveFilters}` guard unmounts it the
+    // instant the filters it cleared go empty), which the window's
+    // click-away listener reads as a click outside the box -- so the
+    // strip folds itself as a side effect of Clear, not just of Fold.
+    // Wait for that real unmount instead of guessing how long it takes.
+    await page.waitForSelector('.bar.thin .tf-clear', { state: 'detached', timeout: 5000 }).catch(() => {})
+    // Reopen for the same reason every other read in this file does.
+    await ensureFiltersOpen()
   }
 }
 
 function rowFor(rule) {
   return page.locator('.row', { hasText: rule }).first()
+}
+
+// #644's squared columns dropped the chain, interface and NAT cells from
+// the rows -- their click-to-filter tokens live in the detail sheet each
+// row opens (EventDetailSheet, reached through the time cell). The sheet
+// closes itself as a token lands its filter (filterAndClose), so a
+// multi-token check reopens it between clicks.
+async function openSheetFor(rule) {
+  await rowFor(rule).locator('.time-btn').click()
+  await page.waitForSelector('.sheet[role="dialog"]', { timeout: 5000 })
+}
+
+// hasText as a regex, not a string: string matching is case-insensitive
+// substring, so 'NAT' would also match the Chain row reading 'srcnat'.
+// Every sheet row starts with its own label.
+function sheetRow(label) {
+  return page.locator('.sheet .row', { hasText: new RegExp(`^${label}`) })
 }
 
 // --- Direction 2, the issue's own worked example: the chain filter was --
@@ -173,11 +228,12 @@ if (chainRowVisible) {
     `the Chain select includes the custom chain observed in the buffer (saw: ${chainOptionValues.join(', ')})`,
   )
 
-  await rowFor(CHAIN_RULE).locator('.chain.cell-btn').click().catch(() => {})
+  await openSheetFor(CHAIN_RULE)
+  await sheetRow('Chain').locator('button.v').click().catch(() => {})
   const chainSelectValue = await waitForInputValue('select[aria-label="Chain"]', 'customchain')
   check(
     chainSelectValue === 'customchain',
-    `clicking the chain cell is reflected in the (previously nonexistent) Chain select -- the bidirectional-contract bug #438 names as its worked example (got "${chainSelectValue}")`,
+    `clicking the sheet's chain token is reflected in the (previously nonexistent) Chain select -- the bidirectional-contract bug #438 names as its worked example (got "${chainSelectValue}")`,
   )
 
   await page.selectOption('select[aria-label="Chain"]', '').catch(() => {})
@@ -186,12 +242,13 @@ if (chainRowVisible) {
 
   // --- Interface tokens: both in and out are independently click-to-filter
   await clearFilters()
-  const ifaceButtons = rowFor(CHAIN_RULE).locator('.iface-btn')
-  await ifaceButtons.nth(0).click().catch(() => {})
+  await openSheetFor(CHAIN_RULE)
+  await sheetRow('Interfaces').locator('button.v').nth(0).click().catch(() => {})
   const ifaceAfterIn = await waitForInputValue('input[aria-label="Interface"]', 'bridge1')
   check(ifaceAfterIn === 'bridge1', `clicking the "in" interface token filters to it (got "${ifaceAfterIn}")`)
 
-  await ifaceButtons.nth(1).click().catch(() => {})
+  await openSheetFor(CHAIN_RULE)
+  await sheetRow('Interfaces').locator('button.v').nth(1).click().catch(() => {})
   const ifaceAfterOut = await waitForInputValue('input[aria-label="Interface"]', 'ether1')
   check(ifaceAfterOut === 'ether1', `clicking the "out" interface token filters to it (got "${ifaceAfterOut}")`)
 } else {
@@ -202,7 +259,8 @@ if (chainRowVisible) {
 await clearFilters()
 const srcnatRowVisible = await waitUntil(() => rowFor(SRCNAT_RULE).isVisible())
 if (srcnatRowVisible) {
-  await rowFor(SRCNAT_RULE).locator('.nat-value').click().catch(() => {})
+  await openSheetFor(SRCNAT_RULE)
+  await sheetRow('NAT').locator('button.v').click().catch(() => {})
   const srcAfterNatClick = await waitForInputValue('input[aria-label="Source — name, IP or CIDR"]', '203.0.113.230')
   check(
     srcAfterNatClick === '203.0.113.230',
@@ -215,7 +273,8 @@ if (srcnatRowVisible) {
 await clearFilters()
 const dstnatRowVisible = await waitUntil(() => rowFor(DSTNAT_RULE).isVisible())
 if (dstnatRowVisible) {
-  await rowFor(DSTNAT_RULE).locator('.nat-value').click().catch(() => {})
+  await openSheetFor(DSTNAT_RULE)
+  await sheetRow('NAT').locator('button.v').click().catch(() => {})
   const dstAfterNatClick = await waitForInputValue('input[aria-label="Destination — name, IP or CIDR"]', '192.168.50.99')
   check(
     dstAfterNatClick === '192.168.50.99',
@@ -230,7 +289,7 @@ await clearFilters()
 await page.fill('input[aria-label="Source — name, IP or CIDR"]', '198.51.100.240/29')
 const cidrInShown = await waitUntil(() => rowFor(CIDR_IN_RULE).isVisible())
 check(!!cidrInShown, 'a source address inside the typed CIDR is shown')
-await page.waitForTimeout(600) // let a (would-be) refetch/re-render settle before the negative check
+await page.waitForTimeout(600) // 2x FILTER_DEBOUNCE_MS (300ms, App.svelte): let a (would-be) refetch/re-render settle before the negative check
 check(!(await rowFor(CIDR_OUT_RULE).isVisible().catch(() => false)), 'a source address outside the typed CIDR is not shown')
 
 // --- Port box: a well-known service name, not just a bare number ----------
@@ -238,7 +297,7 @@ await clearFilters()
 await page.fill('input[aria-label="Port — number or service"]', 'https')
 const httpsRowShown = await waitUntil(() => rowFor(CHAIN_RULE).isVisible())
 check(!!httpsRowShown, 'typing a well-known service name matches its port (443/https)')
-await page.waitForTimeout(600)
+await page.waitForTimeout(600) // 2x FILTER_DEBOUNCE_MS (300ms, App.svelte): let a (would-be) refetch/re-render settle before the negative check
 check(
   !(await rowFor(SRCNAT_RULE).isVisible().catch(() => false)),
   'a row on an unrelated port (53/DNS) is excluded by the same text search',
@@ -328,6 +387,12 @@ if (oldTrafficArrived) {
   let reloaded = true
   try {
     await page.goto(URL_BASE, { waitUntil: 'networkidle' })
+    // A fresh load lands on the fall (#616's landing default), not
+    // Stream -- this check is specifically about App.svelte's mount
+    // fetch on the live view, so navigate there explicitly rather than
+    // assume what a fresh load opens on.
+    await page.waitForSelector('#main-content', { timeout: 15000 })
+    await goTo(page, 'Stream')
     await page.waitForSelector('input.rule', { timeout: 15000 })
   } catch {
     reloaded = false

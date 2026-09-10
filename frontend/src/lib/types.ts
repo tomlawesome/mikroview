@@ -86,6 +86,44 @@ export interface Device {
   // server-side, read-time, on every GET /api/devices -- always fresh,
   // never a value this client itself has to derive or keep in sync.
   status: 'live' | 'stale' | 'never_seen'
+  // routerosVersion (issue #675's router cards) is what this device last
+  // reported on a routerstate push -- empty until its first push
+  // arrives, same absence-is-not-evidence convention as everything else
+  // routerstate-derived.
+  routerosVersion?: string
+  // routerosStanding (#436) is how that reported version compares to the
+  // dialect table's covered range -- 'below-minimum' or 'ahead-of-review'
+  // are the only two cases the wizard's warning ever speaks to. Omitted
+  // (not 'unknown') until a version has been reported, the same
+  // absence-is-not-evidence convention routerosVersion already uses.
+  routerosStanding?: 'below-minimum' | 'reviewed' | 'ahead-of-review'
+  // multihomedCandidates (#442) is present only on a configured device
+  // that has received nothing while undeclared devices stream: the
+  // source addresses those undeclared devices arrive from, in id order,
+  // from the server's Registry.MultihomedCandidates. Candidates, never
+  // a diagnosis -- the server cannot know which arriving address (if
+  // any) is the same router on another of its interfaces, and neither
+  // can this client. The wizard's step 2 and the fleet cards read it.
+  multihomedCandidates?: string[]
+  // nameSource (#600) is where `name` above came from, in
+  // internal/naming's own vocabulary: 'config-device' for a name
+  // config.yaml decides (which no rename can out-rank), 'entity' for a
+  // stored rename, 'none' when the raw id is what shows. Served with
+  // the name so a reader gets the fact and the reason together, the way
+  // GET /api/naming/provenance reports a host name's origin.
+  nameSource?: NameSource
+}
+
+// Mirrors internal/device.MACEntry's JSON shape (GET /api/devices/macs,
+// issue #675) -- one persisted MAC address' first/last-seen history and
+// the IP it was last paired with. lastIp is what the Entities page's
+// named-things table joins against a host entity's own IP key; absent
+// when this MAC has never been paired with one.
+export interface MACRegistryEntry {
+  mac: string
+  firstSeen: string
+  lastSeen: string
+  lastIp?: string
 }
 
 // Mirrors internal/store/query.go's Result.
@@ -106,6 +144,18 @@ export interface RuleCount {
 export interface TimeBucket {
   time: string
   byAction: Partial<Record<Action, number>>
+}
+
+// Mirrors internal/store/ring.go's HourTop (#644 round 21's top
+// port/top talker table columns, served by GET /api/stats/tops). talker
+// and port are absent exactly when complete is false, or when the
+// minute genuinely held nothing to count -- either way, the table shows
+// an em dash rather than treating an absent field as zero.
+export interface HourTopBucket {
+  time: string
+  talker?: string
+  port?: string
+  complete: boolean
 }
 
 // Mirrors internal/api/rest.go's handleHealthz response. version is the
@@ -131,11 +181,85 @@ export interface Stats {
   capacity: number
   count: number
   windowSeconds: number
+  // How far back the buffer actually reaches, as opposed to how far back
+  // it was configured to: null when it holds nothing. Not the same as a
+  // query's windowStart, which is the configured retention -- capacity
+  // eviction moves this one and leaves that one alone (#703).
+  oldestHeld: string | null
+  // When this process started observing, and when the snapshot its
+  // counters were restored from was taken (#795). Mirrors
+  // internal/store.Stats: `restoredTo` is absent on a cold start rather
+  // than null, so its presence *is* the answer to "was this a warm
+  // restart"; `liveSince` is optional here only so an older server that
+  // does not send it leaves the statement off rather than rendering an
+  // invalid date. See lib/provenance.ts for the one place they are read.
+  liveSince?: string
+  restoredTo?: string
   connectedClients: number
+  // The event buffer's budget, the range it may be moved within, and
+  // what the process is actually costing (#796) -- mirrors
+  // internal/api.StoreSettings. Optional so a test fixture or an older
+  // server that does not send it leaves the memory control absent
+  // rather than drawing a slider over undefined bounds.
+  memory?: StoreMemory
   // Syslog listener saturation -- mirrors internal/syslog.ListenerStats.
   // Optional so an older server (or a test fixture) that does not send
   // it simply shows nothing rather than rendering NaN.
   syslog?: SyslogListenerStats
+}
+
+// Mirrors internal/api.StoreSettings (#796). Every figure is in bytes.
+export interface StoreMemory {
+  // store.maxMemory in effect right now.
+  maxMemory: number
+  // The ends of the slider. See internal/config.MaxMemoryCeiling for the
+  // headroom rule that produced max.
+  min: number
+  max: number
+  // What max is a share of -- the cgroup limit if the server is in one,
+  // otherwise the machine's RAM. Zero when the server could read
+  // neither, in which case the track's right-hand end says the ceiling
+  // is a conservative default rather than naming a total nobody knows.
+  hostTotal: number
+  // internal/config.AssumedBytesPerEvent, so a proposed budget turns
+  // into an event count without a second copy of that constant here.
+  bytesPerEvent: number
+  // What the server process currently holds from the operating system.
+  resident: number
+  // Whether the figure came from the settings store rather than
+  // config.yaml.
+  stored: boolean
+}
+
+// GET/PUT /api/settings/history (#910, round 42's disk group). Every
+// byte figure is in bytes; days are whole days.
+export interface HistorySettings {
+  // Whether a key file is mounted. Without one nothing is kept on disk
+  // whatever `enabled` says, and the group draws no control at all.
+  keyed: boolean
+  enabled: boolean
+  // The days allowed, 1-365.
+  days: number
+  // The byte cap applied alongside days -- whichever is reached first
+  // lets the oldest day go.
+  maxBytes: number
+  // What is actually on disk right now, or null when nothing is.
+  held: HistoryHeld | null
+  // True when the cap, not the days, is what decides the window.
+  capped: boolean
+  // Today's rate on disk, bytes per day once compressed. 0 when there is
+  // no rate to reckon from yet, in which case every "at today's rate"
+  // phrase is left off rather than invented.
+  bytesPerDay: number
+}
+
+export interface HistoryHeld {
+  // How many day files are on disk.
+  days: number
+  // The oldest and newest day files' dates, YYYY-MM-DD.
+  oldest: string
+  newest: string
+  bytes: number
 }
 
 // Mirrors internal/syslog.ListenerStats. The connection pool is finite,
@@ -153,6 +277,72 @@ export interface SyslogListenerStats {
   // Above zero means a *declared* router was turned away, which is the
   // condition worth showing rather than saturation on its own.
   rejectedConfigured: number
+  // Syslog messages discarded because the ingest channel was full --
+  // real router records that were received and then thrown away.
+  dropped: number
+  // Continuation reads discarded from a message over the 64 KiB
+  // per-message limit. Above zero means something is sending log lines
+  // no RouterOS device produces.
+  oversized: number
+  // The most recently rejected declared hosts, most-recent-first,
+  // bounded server-side (see internal/syslog.maxRejectedConfiguredHosts).
+  // #995: this is what lets the orange banner name the locked-out
+  // router instead of only counting it. Empty when nothing declared has
+  // been turned away.
+  rejectedConfiguredHosts: string[]
+  // The source of the most recent oversized message -- what the yellow
+  // "non-RouterOS sender" banner's "received from <ip>" names. Empty
+  // string until the first oversized message.
+  oversizedHost: string
+  // #1015: the freshness signal the totals above cannot give -- a total
+  // that stopped growing is indistinguishable from one that never grew.
+  // Optional so an older server (or a test fixture) that predates this
+  // field leaves every drawer row inactive rather than throwing.
+  loss?: SyslogIngestLoss
+}
+
+// One counter's freshness, as the server computes it against its own
+// per-counter window (5 min for dropped/rejectedConfigured, 60s for
+// rejected/oversized -- internal/syslog/tcp_listener.go). `active` is
+// computed when the request is served (now - lastAt <= window), so the
+// frontend never computes a rate of its own. `lastAt` is null when the
+// counter has never moved.
+export interface IngestLossCounter {
+  recent: number
+  lastAt: string | null
+  active: boolean
+}
+
+// rejectedConfigured's hosts gain a lastAt each server-side, but the
+// top-level list keeps its existing shape and bound of 8 -- only the
+// most-recent-first ordering is sent here, unchanged.
+export interface IngestLossHostsCounter extends IngestLossCounter {
+  hosts: string[]
+}
+
+// oversized's host is present only while its own lastAt is within the
+// window -- absent rather than the empty string SyslogListenerStats.
+// oversizedHost above uses, so a stale host name is never shown as if
+// it were current.
+export interface IngestLossHostCounter extends IngestLossCounter {
+  host?: string
+}
+
+// Mirrors GET /api/stats' new `syslog.loss` block (internal/syslog.
+// ListenerStats.Loss). Nothing here is a rate -- see each field's own
+// comment above.
+export interface SyslogIngestLoss {
+  dropped: IngestLossCounter
+  rejectedConfigured: IngestLossHostsCounter
+  // Freshness of the *total* rejected-connection counter (tcpRejected),
+  // which counts every refusal, declared or not -- the server keeps no
+  // separate "undeclared-only" counter. This is still the right signal
+  // for the drawer's "Undeclared sources" row: rejectedConfigured
+  // already carries its own freshness for the declared-router subset,
+  // so a lockout alone does not hold this row open once the undeclared
+  // traffic that also matters here has stopped.
+  rejected: IngestLossCounter
+  oversized: IngestLossHostCounter
 }
 
 // Mirrors internal/api/auth.go's sessionResponse.
@@ -160,12 +350,16 @@ export interface AuthSession {
   setupRequired: boolean
   authenticated: boolean
   username?: string
-  role?: 'admin' | 'user'
+  role?: 'admin' | 'user' | 'viewer'
   // False once the account signs in only through the identity provider.
   // Gates whether "Connect SSO" is offered -- there is nothing left to
   // convert otherwise.
   hasLocalPassword?: boolean
   ssoAvailable: boolean
+  // This session's own start (#677's sessions row: "signed in 4 d") --
+  // when this login happened, not when the account was created. Absent
+  // while unauthenticated, and on an older server that predates it.
+  signedInSince?: string
 }
 
 // Mirrors internal/api's userSummary. Deliberately not the server's
@@ -174,7 +368,7 @@ export interface AuthSession {
 export interface UserSummary {
   id: string
   username: string
-  role: 'admin' | 'user'
+  role: 'admin' | 'user' | 'viewer'
   createdAt: string
   lastLogin?: string
   hasLocalPassword: boolean
@@ -325,6 +519,40 @@ export interface DetectorSettings {
   description?: string
   enabled: boolean
   scope: DetectorScope
+  // Carried through from Definition.learning (#639) -- see that field's
+  // doc comment.
+  learning?: LearningState
+  // Carried through from Definition.params/paramSchema (#677's
+  // port-scan window row, the detector's own numeric tuning -- distinct
+  // from scope above, which restricts what the detector *watches*
+  // rather than the threshold it fires at).
+  params?: Record<string, unknown>
+  paramSchema?: DefinitionParamSchema[]
+  // Carried through from Definition.provenance.origin (#787). The
+  // editing panel needs it because two of its actions are only offered
+  // where the server can perform them: a shipped definition's name
+  // belongs to the binary that ships the logic and cannot be renamed,
+  // and reset only means something for one that has stock params to go
+  // back to.
+  origin?: DefinitionOrigin
+  // Whether any param currently differs from what the definition shipped
+  // with -- Definition.distance flattened to the one bit the bench shows
+  // (#787), so a row can say it has been tuned without the panel open.
+  overridden?: boolean
+  // Carried through from Definition.detection (#829). The bench's
+  // conditions editor renders it, and its presence is also what tells a
+  // row apart from a shipped detector whose structure is Go.
+  detection?: DefinitionDetection
+  // Carried through from Definition.family (#829) -- what the family
+  // picker shows as chosen, and the ink the whole drawer wears.
+  family?: string
+  // Carried through from Definition.structure (#829): a shipped
+  // declarative detector's own conditions, read off its builder. Present
+  // only on a shipped row, and its presence is what tells the bench which
+  // of the two clones a shipped row offers -- a server-side copy that
+  // arrives carrying the conditions, or a draft that carries the scope
+  // and the numbers and asks for the conditions to be written.
+  structure?: DefinitionDetection
 }
 
 // Mirrors internal/api's definitionView (issue #407) -- one definition
@@ -358,12 +586,6 @@ export interface DefinitionProvenance {
   shippedParams?: Record<string, unknown>
 }
 
-export interface DefinitionSuppression {
-  id: string
-  target: string
-  reason?: string
-}
-
 // A definition either produces a replay receipt or declares why it never
 // can; known is false only when the server could not build it at all.
 // Kept as three fields rather than collapsed into one, because "cannot
@@ -373,6 +595,74 @@ export interface DefinitionReplayability {
   known: boolean
   capable: boolean
   reason?: string
+}
+
+// What one replay covered (internal/api's windowView, engine.Window).
+// Mandatory on a receipt and never omitted: a count without the window it
+// was counted over is the overclaim #403's contract exists to rule out.
+// duration is a Go duration string ("4h12m0s") -- read it with
+// parseGoDurationSeconds, the same way a duration param is read.
+export interface ReplayWindow {
+  start: string
+  end: string
+  duration: string
+  eventCount: number
+}
+
+// One emission a replay would have produced (internal/api's sampleView),
+// bounded server-side -- see ReplayReceipt.sampleTruncated.
+export interface ReplaySample {
+  at: string
+  target: string
+  detail: string
+  ports?: number[]
+  hosts?: string[]
+  labels?: string[]
+  provisional: boolean
+}
+
+// The answer when the corpus was long enough to answer honestly
+// (internal/api's receiptView, engine.Receipt).
+//
+// The two truncation flags are separate facts and not interchangeable:
+// corpusTruncated means the corpus read was cut short, so emissionCount
+// is a floor rather than a total; sampleTruncated means only that the
+// listed sample is bounded, with emissionCount still exact.
+export interface ReplayReceipt {
+  window: ReplayWindow
+  emissionCount: number
+  sample: ReplaySample[]
+  sampleTruncated: boolean
+  corpusTruncated: boolean
+  anyProvisional: boolean
+}
+
+// The answer when it could not be answered honestly (internal/api's
+// declineView, engine.Decline): the corpus held less traffic than the
+// definition's window needs. corpusSpan and definitionWindow are Go
+// duration strings, like ReplayWindow.duration.
+export interface ReplayDecline {
+  reason: string
+  corpusSpan: string
+  definitionWindow: string
+}
+
+// Exactly one of receipt or decline is set, mirroring engine.Result's own
+// structural either/or -- a caller has to handle the decline rather than
+// reading a short corpus as a receipt with a suspiciously small count.
+export interface ReplayResult {
+  receipt?: ReplayReceipt
+  decline?: ReplayDecline
+  // The same replay run again with the definition's live params -- the
+  // number the candidate above is being compared against, "currently: 41"
+  // beside "would have fired 3 times" (#786). Receipt-or-decline exactly
+  // like the outer result, because it is the same kind of answer; it
+  // never carries a `current` of its own.
+  //
+  // Present only where the request carried a candidate. With an empty
+  // candidate the receipt above already *is* the current number, so the
+  // server omits this rather than repeating it.
+  current?: ReplayResult
 }
 
 export interface Definition {
@@ -386,7 +676,6 @@ export interface Definition {
   params?: Record<string, unknown>
   paramSchema?: DefinitionParamSchema[]
   provenance: DefinitionProvenance
-  suppressions?: DefinitionSuppression[]
   available: boolean
   // Present only where a param differs from what the definition shipped
   // with -- an empty object and an absent key both mean "stock".
@@ -397,6 +686,94 @@ export interface Definition {
   // The operator-facing entry an expectation converts back to. Absent
   // for a detection definition.
   expectation?: WatchlistEntry
+  // The structure an operator-authored detector carries: its match
+  // conditions and the aggregation around them (#502). Absent for a
+  // shipped definition, whose structure is Go in the binary, and for an
+  // expectation, whose structure is fixed. Threshold and window are not
+  // here -- they are ordinary params, tuned through the same editor as
+  // every other definition's.
+  detection?: DefinitionDetection
+  // The flag family an operator filed a custom detector under (#829) --
+  // the ink its flags wear on the docket, the fall and the map. Absent
+  // for a shipped definition, whose family the palette already holds by
+  // definition id, and for a custom one nobody has filed yet.
+  family?: string
+  // A shipped declarative detector's own match structure, read back off
+  // the builder that assembled it (#829). Read-only: writing it back
+  // changes nothing. Absent for a custom detection, which carries
+  // `detection` instead, and for a shipped detector whose logic is Go
+  // with no conditions in it to report.
+  structure?: DefinitionDetection
+  // What this definition costs the ingest path. Set only where an
+  // operator chose the conditions that decide it.
+  dispatch?: DefinitionDispatch
+  // Baseline warm-up state (#639) -- absent entirely for a definition
+  // with no warm-up concept (LearningReporter not implemented). See
+  // LearningState's own doc comment for what each field means and
+  // EngineRoomWatchers.svelte for the five states this renders as.
+  learning?: LearningState
+}
+
+// Mirrors internal/api's baselineFloorView JSON shape (#639) -- the
+// minimum history a baseline-backed definition needs before a key can be
+// trusted. Each field carries `omitempty` server-side: a dimension the
+// floor does not bind (BaselineFloor's own Go doc comment) is omitted
+// entirely rather than sent as a meaningless 0, so absent and 0 both
+// mean "no floor on this dimension" and must be treated identically.
+// MinDuration renders as days, MinSamples as samples, both together
+// where both bind (off_hours).
+export interface LearningFloor {
+  minDurationSeconds?: number
+  minSamples?: number
+}
+
+// Mirrors internal/engine.LearningProgress's JSON shape -- how far the
+// single furthest-along not-yet-ready key has gotten.
+export interface LearningProgress {
+  observedForSeconds: number
+  samples: number
+}
+
+// Mirrors internal/engine.LearningState's JSON shape (#639): one
+// definition's baseline warm-up status, aggregated live across every
+// key the running engine currently holds -- not a persisted, possibly
+// stale, view (see the issue's "ask the live engine" architecture
+// decision). floor is always present, including when keys is 0.
+// nearest is omitted both when every observed key is ready and when no
+// key has been observed at all, so a caller must check keys/ready
+// before treating an absent nearest as "everything is ready."
+export interface LearningState {
+  floor: LearningFloor
+  keys: number
+  ready: number
+  nearest?: LearningProgress
+}
+
+// The condition language, unchanged from the one expectations and
+// shipped detectors already use -- there is no second one.
+export interface DefinitionCondition {
+  field: string
+  operator: string
+  values: string[]
+}
+
+export interface DefinitionDetection {
+  conditions: DefinitionCondition[]
+  key: string
+  counting: string
+  distinctField?: string
+  // The sentence a raised flag shows. Its placeholders are a closed set
+  // the server validates when the definition is created.
+  detailTemplate: string
+}
+
+// alwaysConsulted is true when the definition's conditions give the
+// engine's dispatch index nothing to narrow on, so it is evaluated
+// against every event rather than only the ones that could match. Such a
+// detector is accepted rather than refused -- reason says what it costs.
+export interface DefinitionDispatch {
+  alwaysConsulted: boolean
+  reason?: string
 }
 
 // What GET /api/definitions returns alongside the definitions: whether
@@ -415,7 +792,7 @@ export interface CoverageEvidence {
 // entities.Store never validates Type); 'host'/'rule'/'port' below are
 // just the values this UI knows how to label/discover today, not a
 // validation allowlist -- an arbitrary string still round-trips fine.
-export type EntityType = 'host' | 'rule' | 'port' | (string & {})
+export type EntityType = 'host' | 'rule' | 'port' | 'device' | (string & {})
 
 export interface Entity {
   type: EntityType
@@ -441,6 +818,12 @@ export type NameSource =
   | 'none'
   | 'entity'
   | 'config'
+  // config-device is a device display name declared in config.yaml's
+  // devices block (#600). Its own value rather than 'config' because
+  // the editability answer is the opposite one: a config.yaml alias for
+  // a host or rule is a fallback a label out-ranks, a declared device
+  // name wins and the editor refuses the edit.
+  | 'config-device'
   | 'router-dns-static'
   | 'router-dhcp-lease'
   | 'router-wireguard-peer'
@@ -503,6 +886,18 @@ export interface NATInfo {
   raw?: string
 }
 
+// Mirrors internal/flags.HostPort's JSON tags -- one (destination host,
+// destination port) combination actually observed together on a single
+// event (issue #654). Never build this by crossing Evidence.hosts against
+// Evidence.ports: those are independent sets, and pairing every host with
+// every port implies combinations that were never seen (see #654 -- the
+// motivating case is a future watchlist draft that would otherwise offer
+// to permit connections the device never made).
+export interface HostPort {
+  host: string
+  port: number
+}
+
 // Mirrors internal/flags.Evidence's JSON tags -- structured supporting
 // detail beyond a flag's free-text `detail` string. Which fields a given
 // flag actually has depends on its type; see internal/detect.Scope's
@@ -511,17 +906,78 @@ export interface Evidence {
   ports?: number[]
   hosts?: string[]
   nat?: NATInfo
+  // pairs/pairsTotal/pairsTotalIsFloor (#654): critical_port, and since
+  // #641 outbound_anomaly and internal_recon, whose pairs are what an
+  // expected verdict permits and what a "watch for this" draft is built
+  // from. pairs is capped the same way ports/hosts are (see
+  // internal/engine's maxEvidencePairs); pairsTotal is the distinct-pair
+  // count before that display cap, present only when the cap actually
+  // truncated the list -- absent (undefined) means pairs is already the
+  // complete set. A consumer must check pairsTotal, not just
+  // pairs.length, before treating the list as complete (issue #654's
+  // "never silently truncate" requirement).
+  //
+  // pairsTotal is itself bounded (internal/engine's
+  // maxEvidencePairsTracked, a resource-safety cap independent of the
+  // display cap -- see that constant's own doc comment for why an
+  // exact count isn't worth an unbounded map): past that second
+  // ceiling, pairsTotal stops growing and pairsTotalIsFloor is true,
+  // meaning pairsTotal is a lower bound ("at least this many"), not the
+  // real count. A consumer must render that case as "50 of 200+", never
+  // a flat "50 of 200" -- see pairsTruncated/pairsTruncationLabel in
+  // lib/evidencePairs.ts.
+  pairs?: HostPort[]
+  pairsTotal?: number
+  pairsTotalIsFloor?: boolean
+  // srcMac (#654): currently only port_scan and repeated_drops, and only
+  // when the triggering event's source was a local device -- absent for
+  // every other detector and for an external source. Lets a consumer
+  // identify the device by MAC (stable across a DHCP lease change)
+  // instead of by IP.
+  srcMac?: string
 }
 
-// Mirrors internal/flags.Exclusion's JSON tags -- one permanently-
-// excluded (Type, Target) pair (see flags.svelte.ts's clearPermanent and
-// exclusions.svelte.ts). id is the same flagID(Type, Target) key a
+// Mirrors internal/flags.Exclusion's JSON tags -- one recorded
+// expectation for a (Type, Target) pair (#640; read by
+// ExpectationsLedger.svelte). id is the same flagID(Type, Target) key a
 // Flag's own id already uses.
 export interface Exclusion {
   id: string
   type: FlagType
   target: string
+  // #640 turned an exclusion into a sized expectation, and these three
+  // are what the ledger (ExpectationsLedger.svelte) reads. All optional
+  // because the Go side omits them when empty and because an entry
+  // recorded before #640 genuinely has none.
+  //
+  // size is the measure recorded when the expectation was made -- the
+  // firing the operator judged normal. Absent (not zero) means the
+  // detector declares no size, which is the older, blunter "ignore this
+  // host on this detector": the row reads "any size" rather than "up
+  // to 0", which is the opposite meaning.
+  size?: number
+  // How many firings this expectation has suppressed -- the ledger's
+  // evidence that it is earning its place.
+  absorbed?: number
+  // When the expectation was first recorded, RFC 3339.
+  since?: string
 }
+
+// An operator's judgement of a flag (#640), set via
+// POST /api/flags/{id}/verdict. Every flag ends as one of these four --
+// there is no way to dismiss one without a judgement:
+//
+//   - 'expected': normal for this host, at this size. Clears, and
+//     records an expectation that absorbs further firings within 1.5x
+//     the size this one had.
+//   - 'checked': looked at, fine this time. Clears, suppresses nothing,
+//     and is remembered so a re-fire can say when it was checked.
+//   - 'investigate': of concern, being looked at. The one verdict that
+//     leaves the flag open; the row then offers expected or resolved.
+//   - 'resolved': dealt with, normally by a firewall change. Clears, and
+//     deliberately does not suppress -- if it comes back, the fix was
+//     not what was intended.
+export type Verdict = 'expected' | 'checked' | 'investigate' | 'resolved'
 
 export interface Flag {
   id: string
@@ -549,6 +1005,39 @@ export interface Flag {
   // Structured supporting evidence -- see Evidence's own doc comment.
   // Absent/empty for detectors with nothing beyond `detail` to show.
   evidence?: Evidence
+  // Mirrors internal/flags.Flag.Provisional (#642): true for a flag
+  // raised while its judgement's baseline had not yet cleared its
+  // history floor -- a z-score existed but was not yet trusted. Absent
+  // (omitempty on the wire) is the common case and means settled, same
+  // "absence is the default" convention verdict/confidence above
+  // already follow. Fixed at episode start, same as firstSeen -- it does
+  // not flip to false in place if the same episode's baseline later
+  // clears its floor (see internal/flags.Store.add's own doc comment).
+  provisional?: boolean
+  // Verdict/verdictBy/verdictAt (#638, #640): all three present together
+  // or all absent -- absent means never judged, not "judged with no
+  // opinion." verdictBy is the account that judged it; verdictAt is
+  // RFC3339.
+  verdict?: Verdict
+  verdictBy?: string
+  verdictAt?: string
+  // priorVerdict/priorVerdictAt (#640): the checked or resolved
+  // judgement this pair carried the last time it was cleared, kept
+  // across the re-fire that resets `verdict`. Present only on a flag
+  // that has come back after one of those two verdicts -- which is
+  // exactly when the card says "you checked this on 2 Sept and found it
+  // fine" or "resolved on 2 Sept -- it's back".
+  priorVerdict?: Verdict
+  priorVerdictAt?: string
+  // size/expectedSize (#640): this firing's own size (the measure the
+  // detector compares against its threshold -- distinct ports for
+  // port_scan, and so on), and the size an expectation for this pair had
+  // recorded when this firing broke past it. expectedSize is present
+  // only on a firing an expectation refused to absorb, so its presence
+  // is exactly the "expected up to 30, saw 120" case. Both absent for a
+  // detector that declares no size.
+  size?: number
+  expectedSize?: number
 }
 
 // Mirrors internal/flags.FlagTimeBucket's JSON tags -- same shape
@@ -587,6 +1076,81 @@ export interface WatchlistObservedDest {
   count: number
 }
 
+// Mirrors internal/watchlist.Window's JSON tags (#680): when an entry is
+// expected to see traffic.
+//
+// start/end are "HH:MM" clock times, and both carry `omitzero`
+// server-side -- 00:00 is the zero value, so a midnight-to-six window
+// arrives as `{end: "06:00"}` with no start at all. A missing one means
+// 00:00; never read absence as "no window".
+//
+// end <= start means the window runs into the following date, which is
+// the normal case rather than the edge: 22:00-06:00 is one night across
+// two dates. days is empty for "every day", 0 = Sunday, and filters on
+// the date the window *opened*. zone is an IANA name, empty meaning UTC,
+// and is the only local-time concept anywhere in mikroview -- every other
+// timestamp in this file is UTC.
+export interface WatchWindow {
+  start?: string
+  end?: string
+  days?: number[]
+  zone?: string
+}
+
+// Mirrors internal/watchlist.NightState. Three states, and the third is
+// the point: "not observed" is a night mikroview was down for, or one
+// where no rule was logging the pathway. It must never be rendered as
+// "empty" -- that would present an absence of ours as a fact about the
+// network.
+export type WatchNightState = 'kept' | 'empty' | 'not observed'
+
+// Mirrors internal/watchlist.Night's JSON tags -- one occurrence of the
+// window and what happened in it. first/count carry `omitzero`/`omitempty`
+// server-side and are only meaningful on a kept night.
+export interface WatchNight {
+  opened: string
+  state: WatchNightState
+  first?: string
+  count?: number
+}
+
+// Mirrors internal/watchlist.Ring's JSON tags -- the recorded break in a
+// run of kept nights, written at the moment it broke. Absent entirely
+// when the ring is intact. `since` is the close of the first empty window
+// in the current run. The coverage-derived break (no rule logs this
+// pathway) is a different kind of broken and is not this: it comes from
+// live router state and arrives on the definition's own `coverage`.
+export interface WatchRing {
+  broken?: boolean
+  since?: string
+  reason?: string
+}
+
+// Mirrors internal/watchlist.AddressListRef's JSON tags -- the router
+// address list an entry is scoped to, set when it was created by
+// accepting an address-list suggestion (internal/api/suggest.go's
+// KindAddressList branch, #1077). Full-replace on PUT, like source/
+// destIp/ports/boundary below, not a leave-alone pointer like window --
+// see internal/api's expectationRequest.SourceList doc comment. A caller
+// that edits any other field must resend this unchanged or the entry
+// loses its list scope (#1077).
+export interface WatchlistAddressListRef {
+  device?: string
+  list?: string
+}
+
+// Mirrors internal/watchlist.Boundary's JSON tags (#806) -- the boundary
+// a watcher is scoped to, keyed exactly as fall.svelte.ts's own
+// boundaryKeyOf(chain, inInterface, outInterface). Absent (the server's
+// `omitzero` zero value: every field empty) means unscoped -- matching
+// isn't restricted to one band, coverage stays estate-wide, and the fall
+// makes no per-band claim about this entry's ring.
+export interface WatchlistBoundary {
+  chain?: string
+  inInterface?: string
+  outInterface?: string
+}
+
 // Mirrors internal/watchlist.Entry's JSON tags (#243) -- see that type's
 // own doc comment for the full non-inverted/inverted matching rules.
 // ports/invert/includeStructuralNoise/observing/permitted/observed all
@@ -605,6 +1169,10 @@ export interface WatchlistEntry {
   // off is not promising mikroview can see it.
   enabled: boolean
   source?: WatchlistIdentity
+  // The router address list this entry is scoped to, if any -- see
+  // WatchlistAddressListRef's own doc comment (#1077). omitzero
+  // server-side, so absent means unscoped, same as an all-empty value.
+  sourceList?: WatchlistAddressListRef
   destIp?: string
   ports?: number[]
   invert?: boolean
@@ -615,6 +1183,15 @@ export interface WatchlistEntry {
   includeStructuralNoise?: boolean
   permitted?: WatchlistPermittedDest[]
   observed?: WatchlistObservedDest[]
+  // The watch window and its nightly memory (#680). All three carry
+  // `omitzero`/`omitempty` server-side: an entry with no window has none
+  // of them, which is what a row renders as "always".
+  window?: WatchWindow
+  nights?: WatchNight[]
+  ring?: WatchRing
+  // #806: the boundary this entry is scoped to, if any -- see
+  // WatchlistBoundary's own doc comment.
+  boundary?: WatchlistBoundary
   createdAt: string
 }
 
@@ -771,6 +1348,70 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
 // silence.
 export type WatchlistCoverage = 'unknown' | 'covered' | 'no-logging' | 'out-of-scope'
 
+// Mirrors internal/api's PersistenceInfo (#677's settings persistence
+// row) -- which backend this deployment's persisted stores (flags,
+// definitions, watchlist entries, entities, tokens/accounts) actually
+// use right now.
+//
+// 'memory' is #853's third state: on the JSON path with no
+// history.keyFile configured, flags, definitions, watchlist entries and
+// entities don't persist at all -- there is no unencrypted mode to fall
+// back to -- so calling it 'file' would overclaim what is actually
+// happening. Accounts and tokens are the exception (#853 rule 6): they
+// hold only one-way hashes, so they keep persisting to a plain file
+// regardless of 'backend' here.
+export interface PersistenceInfo {
+  backend: 'file' | 'postgres' | 'memory'
+  // The directory the JSON documents live under -- present only for
+  // 'file'. Absent for 'postgres' (no filesystem path to report) and for
+  // 'memory' (nothing but accounts and tokens is actually written there).
+  dir?: string
+}
+
+// GET /api/router-backups (#394, round 44's "router backups" group).
+// Mirrors internal/api's routerBackupsResponse.
+export interface RouterBackupsResponse {
+  // False when no retention key is configured at all -- #394's "no key,
+  // no backups": the drop box refuses every login and routers is always
+  // empty.
+  enabled: boolean
+  routers: RouterBackupRouter[]
+  totalGenerations: number
+  totalRouters: number
+  totalBytes: number
+  // The SFTP drop box's own listening port ("arrive by"), absent when
+  // backup.enabled is false.
+  port?: string
+}
+
+// One router's block (round 44's per-router strip). IntervalSeconds/
+// LastArrival/Missed together carry the owner's 2026-09-05 decision:
+// the interval is learned from arrivals, not the scheduler line the
+// wizard printed, and a router with one push has neither.
+export interface RouterBackupRouter {
+  device: string
+  generations: RouterBackupGeneration[] // oldest first
+  intervalKnown: boolean
+  intervalSeconds?: number
+  lastArrival?: string
+  missed: number
+}
+
+// One kept generation -- the shape round 44's strip and newest-pair
+// line are drawn from. The size/arrival fields are absent for whichever
+// half of the pair has not arrived yet, so "not here" reads differently
+// from "zero bytes".
+export interface RouterBackupGeneration {
+  id: string
+  backupArrivedAt?: string
+  rscArrivedAt?: string
+  backupBytes?: number
+  rscBytes?: number
+  // The .backup's header label ("plain" or "encrypted"), absent until
+  // that half of this generation has arrived.
+  header?: string
+}
+
 // Mirrors internal/api's setupStatus (#320). Everything here is an
 // observation mikroview made on its own side -- it never connects to a
 // router, so "did that step work" is answered by what arrived, not by
@@ -825,4 +1466,500 @@ export interface SetupMark {
   // What had not arrived when the decision was made, as the wizard's own
   // observation line worded it.
   note?: string
+}
+
+// --- RouterOS version-aware commands (#436) --------------------------
+//
+// Mirrors internal/routeros's response to POST /api/setup/commands. The
+// commands themselves moved server-side with #436: the wizard used to
+// generate RouterOS syntax itself (lib/setupsteps.ts before this issue),
+// and now only renders what the server sends, selected by the row that
+// covers the router's (derived or picked) version.
+
+// RouterosStanding is how a version compares to the dialect table's
+// covered range. 'unknown' is a version the table cannot speak to, and
+// never appears for a row, picked or router entry the caller can render
+// a name against without evidence.
+export type RouterosStanding = 'unknown' | 'below-minimum' | 'reviewed' | 'ahead-of-review'
+
+// RouterosRow is one entry of the dialect table -- a version range this
+// dialect's commands are the same across, how that row was verified, and
+// any per-version note (e.g. 7.24.0's find-lookup bug).
+export interface RouterosRow {
+  from: string
+  to: string
+  dialect: string
+  verifiedBy: string
+  note: string
+}
+
+export interface RouterosTable {
+  minimum: string
+  newest: string
+  rows: RouterosRow[]
+}
+
+// PickedVersion is the operator's version pick echoed back with its
+// standing, once the server has matched it against a row -- null when no
+// version was sent (routeros.picked in the contract).
+export interface PickedVersion {
+  version: string
+  standing: RouterosStanding
+  dialect: string
+}
+
+// RouterosWarningRouter is one router the response carries a version for
+// (only those the server knows a version for at all), what it reports,
+// and how that compares to the table.
+export interface RouterosWarningRouter {
+  id: string
+  name: string
+  routerosVersion: string
+  standing: RouterosStanding
+  note: string
+}
+
+// CommandStep is one rendered block: the commands themselves, and any
+// note that goes with this exact step (e.g. the 7.24.0 rule-tagging
+// caveat) -- distinct from the router-standing warning, which is about
+// the router's version generally rather than one step's content.
+export interface CommandStep {
+  commands: string
+  note: string
+}
+
+export interface SetupCommandsResponse {
+  routeros: RouterosTable
+  picked: PickedVersion | null
+  routers: RouterosWarningRouter[]
+  steps: {
+    caTrust: CommandStep
+    syslog: CommandStep
+    ruleTagging: CommandStep
+    push: CommandStep
+    schedule: CommandStep
+    // backup/backupSchedule are step 6's two blocks (#394, round 45),
+    // rendered only once a device, a token, the drop box's port and a
+    // configured retention key are all present -- see
+    // internal/api/setupcommands.go's handleSetupCommands. Blank
+    // (commands: '') is how the wizard reads "cannot be printed yet",
+    // the same convention every other step's blank block already uses.
+    backup: CommandStep
+    backupSchedule: CommandStep
+  }
+}
+
+// SetupCommandsRequest is the POST /api/setup/commands body. Every field
+// but address is optional -- kinds/token are omitted before step 4 has
+// anything to embed, version is omitted until the operator has picked
+// one or a router has reported, and device is omitted until step 4 or
+// 6 has a router chosen (it names step 6's backup script is being
+// rendered for; the push script needs no such field).
+export interface SetupCommandsRequest {
+  address: string
+  syslogPort?: string
+  token?: string
+  kinds?: string[]
+  version?: string
+  device?: string
+}
+
+// --- Tune logging (#435) ----------------------------------------------
+//
+// Mirrors internal/routeros/export and the two /api/tune-logging
+// handlers (the #435 fixed contract). The upload never leaves this
+// request/response pair -- nothing here is persisted, mirrored by the
+// component that renders it (TuneLogging.svelte) never writing the
+// export text anywhere but its own component state.
+
+// TuneLoggingObserving is how long mikroview has been watching this
+// device -- present whether or not that is yet a full day (§2 of the
+// contract: "advise, never lock, compute nothing early").
+export interface TuneLoggingObserving {
+  since: string
+  hours: number
+}
+
+// TuneLoggingRouterInfo is the export header's own version, read the
+// same way #436's dialect table reads a device's reported version --
+// reused RouterosStanding rather than a second enum for the same
+// answer.
+export interface TuneLoggingRouterInfo {
+  version: string
+  standing: RouterosStanding
+  dialect: string
+}
+
+// TuneLoggingRule is one /ip firewall filter `add` line from the
+// uploaded export, with RouterOS's own packet/byte counters (#435
+// decision 4) matched in from the latest push where the ordinal and
+// chain+action agree.
+export interface TuneLoggingRule {
+  id: number
+  chain: string
+  action: string
+  comment: string
+  inInterface: string
+  outInterface: string
+  inInterfaceList: string
+  outInterfaceList: string
+  boundary: string
+  crossesDark: boolean
+  log: boolean
+  logPrefix: string
+  packets: number
+  bytes: number
+  countersKnown: boolean
+  line: number
+}
+
+// TuneLoggingRejection is why the parser would not proceed -- key
+// material detected, meaning the upload was not `export hide-sensitive`
+// (§5 of the contract).
+export interface TuneLoggingRejection {
+  reason: string
+}
+
+export interface TuneLoggingAnalyseRequest {
+  device: string
+  export: string
+  darkBoundaries: string[]
+}
+
+export interface TuneLoggingAnalyseResponse {
+  ready: boolean
+  observing: TuneLoggingObserving
+  routeros: TuneLoggingRouterInfo
+  rules: TuneLoggingRule[]
+  rejected: TuneLoggingRejection | null
+}
+
+export interface TuneLoggingRenderRequest {
+  device: string
+  export: string
+  selected: number[]
+}
+
+export interface TuneLoggingRenderResponse {
+  annotated: string
+  commands: string
+  changed: number
+  routeros: TuneLoggingRouterInfo
+}
+
+// ---- The device dossier (#410) --------------------------------------
+//
+// GET /api/hosts/{ip}/dossier, mirroring internal/dossier's Go types
+// field for field. Two habits of that package survive into these types
+// and matter when reading them: a `known: false` block means mikroview
+// has nothing to say, not that the answer is "no"; and `absent` is the
+// card's honesty list, naming in plain words everything the dossier
+// could not answer.
+
+export interface DossierVendor {
+  known: boolean
+  name?: string
+  oui?: string
+  registry?: string
+  private?: boolean
+  subDelegated?: boolean
+  reason?: string
+}
+
+export interface DossierRegistryStatus {
+  source?: string
+  loaded: boolean
+  entries: number
+  fetchedAt?: string
+  fromCache?: boolean
+  stale?: boolean
+  note?: string
+}
+
+export interface DossierSeen {
+  known: boolean
+  firstSeen?: string
+  firstSeenSource?: string
+  lastSeen?: string
+  events: number
+  windowStart?: string
+  interfaces?: string[]
+  note?: string
+}
+
+export interface DossierNames {
+  known: boolean
+  name?: string
+  source?: string
+  sourceNote?: string
+  ownLabel?: string
+  note?: string
+}
+
+export interface DossierMac {
+  known: boolean
+  address?: string
+  source?: string
+  locallyAdministered: boolean
+  locallyAdministeredNote?: string
+  groupNote?: string
+  vendor: DossierVendor
+  registry: DossierRegistryStatus
+  firstSeen?: string
+  lastSeen?: string
+  note?: string
+}
+
+export interface DossierAddress {
+  assignment: string
+  note: string
+  device?: string
+  hostname?: string
+  leaseMac?: string
+  arpMac?: string
+  consulted?: string[]
+}
+
+export interface DossierPeer {
+  ip: string
+  name?: string
+  country?: string
+  scope: string
+  events: number
+  ports?: number[]
+  lastSeen: string
+}
+
+export interface DossierPortUse {
+  port: number
+  protocol?: string
+  name?: string
+  direction: string
+  events: number
+  peers: number
+  lastSeen: string
+}
+
+export interface DossierCadence {
+  known: boolean
+  spanSeconds?: number
+  meanGapSeconds?: number
+  medianGapSeconds?: number
+  shape?: string
+  note?: string
+}
+
+export interface DossierTraffic {
+  known: boolean
+  destinations?: DossierPeer[]
+  talkers?: DossierPeer[]
+  ports?: DossierPortUse[]
+  moreDestinations?: number
+  moreTalkers?: number
+  morePorts?: number
+  cadence: DossierCadence
+  note?: string
+}
+
+export interface DossierRuleMatch {
+  label: string
+  name?: string
+  chain?: string
+  action?: string
+  device?: string
+  comment?: string
+  commentKnown: boolean
+  events: number
+  lastSeen: string
+}
+
+export interface DossierFirewall {
+  known: boolean
+  rules?: DossierRuleMatch[]
+  more?: number
+  note?: string
+}
+
+export interface DossierEvidence {
+  signal: string
+  detail: string
+}
+
+// Confidence is the backend's own word -- 'weak', 'fair' or 'strong'.
+// It is rendered as that word and never as a number or a colour: the
+// card narrows, it does not score.
+export interface DossierIdentity {
+  suggested: boolean
+  profile?: string
+  label?: string
+  confidence?: string
+  because?: string
+  evidence?: DossierEvidence[]
+  alternatives?: string[]
+  note: string
+}
+
+// A command for the operator to run. mikroview prints it and never
+// runs it -- see internal/dossier.Probe for why that line exists.
+export interface DossierProbe {
+  command?: string
+  url?: string
+  note: string
+}
+
+export interface HostDossier {
+  ip: string
+  generatedAt: string
+  seen: DossierSeen
+  names: DossierNames
+  mac: DossierMac
+  address: DossierAddress
+  traffic: DossierTraffic
+  firewall: DossierFirewall
+  identity: DossierIdentity
+  suggestedProbe?: DossierProbe
+  absent?: string[]
+}
+
+// ---------------------------------------------------------------------
+// Decommission watches (#460), as drawn in design round 55.
+//
+// A segment the router stopped carrying is offered to the operator:
+// "watch the dead range for stragglers?", with a receipt replayed over
+// the event ring. Say yes and the segment stays on both surfaces as a
+// ghost, painted by its watch state, until six quiet hours retire it.
+// These types mirror internal/api/decommission.go's JSON exactly.
+// ---------------------------------------------------------------------
+
+// Mirrors internal/decommission.State -- the watch's own vocabulary.
+// 'draining' is a watch that has seen traffic and is counting its window
+// again from the last line; the map paints it with 'broken', because to
+// the operator both mean "this range is still talking".
+export type DecommissionState = 'holding' | 'draining' | 'broken' | 'retired'
+
+// The ghost's ink is its watch state, and the map needs one state the
+// watch does not have: 'none' is a segment that has left the router and
+// been offered but not yet answered, so nothing is watched and the ghost
+// is drawn in the plain dark ink. Round 55: grey before the watch
+// starts, watch-purple holding, alarm-red broken.
+export type GhostState = 'none' | 'holding' | 'broken'
+
+// Mirrors internal/routerstate.KnownHost -- one address the router had a
+// name for at the moment the range went. Frozen at that instant: the
+// lease and ARP tables for a retired range drain away over the pushes
+// that follow, so a name looked up later would be missing exactly when
+// it is wanted. No entry means no name, never a guessed one.
+export interface DecommissionKnownHost {
+  address: string
+  name?: string
+  source?: string
+  seenAt: string
+}
+
+// Mirrors internal/api's decommissionReceiptView -- the replay behind
+// the offer. Never the count alone: "would have caught 3" means nothing
+// without the period it was counted over, which is why the span travels
+// with it. Fable's 2026-09-09 ruling: the receipt replays whatever the
+// ring holds up to 24 h and says the span it actually covered, and it is
+// not tied to the 6 h clean window.
+export interface DecommissionReceipt {
+  emissionCount: number
+  // Who the replay actually caught, most-seen first. "Would have caught
+  // 3" is an abstraction until the operator sees which device it means,
+  // which is why round 55 draws the addresses inside the sentence. Absent
+  // where the replay retained no addresses, and a name is absent where no
+  // push ever named that address.
+  addresses?: { address: string; name?: string; count: number }[]
+  start: string
+  end: string
+  duration: string
+  eventCount: number
+  truncated: boolean
+}
+
+// Shown instead of a receipt when there is nothing to replay against --
+// an honest refusal rather than a flattering zero.
+export interface DecommissionDecline {
+  reason: string
+}
+
+// Mirrors internal/api's decommissionOfferView -- one segment that has
+// left the router, with the receipt that argues for watching it.
+export interface DecommissionOffer {
+  device: string
+  cidr: string
+  address: string
+  interface: string
+  name: string
+  departedAt: string
+  lastKnown?: DecommissionKnownHost[]
+  coverage: WatchlistCoverage
+  receipt?: DecommissionReceipt
+  decline?: DecommissionDecline
+  suggested: { cleanWindow: string }
+}
+
+// Mirrors internal/decommission.Sighting -- the most recent line that
+// broke the watch, which is what the straggler callout and its card are
+// drawn from. One sighting, not a list: a single straggler is the whole
+// finding, so what the operator needs is the one that just happened.
+export interface DecommissionSighting {
+  address: string
+  name?: string
+  peer?: string
+  protocol?: string
+  port?: number
+  interface?: string
+  rule?: string
+  action?: string
+  at: string
+}
+
+// Mirrors internal/decommission.Watch plus internal/api's
+// decommissionWatchView. cleanWindow and replaySpan are Go durations, so
+// they arrive as nanoseconds; retiresIn is the server's own rendering of
+// the remaining time, taken from the same computation as state so the
+// countdown and the paint can never disagree.
+export interface DecommissionWatch {
+  id: string
+  cidr: string
+  device: string
+  interface: string
+  name: string
+  createdAt: string
+  cleanWindow: number
+  lastTrafficAt?: string
+  trafficCount: number
+  covered: boolean
+  detached: boolean
+  forcedAt?: string
+  forcedBy?: string
+  forcedReason?: string
+  retiredAt?: string
+  // The frozen enrichment, copied from the departure at the moment the
+  // offer was answered (internal/decommission.Straggler, the same shape
+  // routerstate's KnownHost has).
+  lastKnown?: DecommissionKnownHost[]
+  replayCount: number
+  replaySpan: number
+  lastStraggler?: DecommissionSighting
+  state: DecommissionState
+  retiresIn: string
+  coverage: WatchlistCoverage
+  // When set, the retirement can still be taken back -- round 55's
+  // "undo for the hour after". Absent on a watch that has not retired.
+  undoableUntil?: string
+}
+
+// Mirrors internal/api's decommissionResponse. One call for the whole
+// surface: an offer and a ghost are the same object one decision apart,
+// so splitting them would mean two requests that can disagree about a
+// segment mid-answer.
+export interface DecommissionResponse {
+  offers: DecommissionOffer[]
+  watches: DecommissionWatch[]
+  // #367's caveat, carried outward: false means at least one router
+  // feeds events but never pushed its filter table, so "nothing is
+  // logging this" cannot be trusted as a definite negative.
+  evidenceComplete: boolean
 }

@@ -21,8 +21,10 @@
 // owner's decision on #482 (2026-08-23, docs/decisions/ui-framework.md):
 // the gate is a tripwire against drift, not a design ceiling, and the
 // v0.4.0 interface reshape builds against room rather than a number
-// derived from the interface it replaces. Once the reshaped UI ships,
-// re-derive this the original way: the measured gzip reading + ~15%.
+// derived from the interface it replaces. Re-derived the original way on
+// #910 (2026-09-03), the reshape having shipped as v0.4.0 on 2026-08-25:
+// the bundle then measured 201,044 bytes gzipped (666,551 raw), and
+// 201,044 + ~15% is 230,000.
 //
 // Raise this only alongside a stated reason in the commit that does so,
 // and update README.md's "UI" bullet (the shipped-bundle figure) in the
@@ -30,7 +32,7 @@
 // this check exists to close off. Do not "tidy" it down to match
 // whatever the bundle happens to measure today; that would turn the
 // very next legitimate feature PR into a spurious CI failure.
-const BUDGET_BYTES = 200_000
+const BUDGET_BYTES = 230_000
 
 import { readFileSync, existsSync, globSync } from 'node:fs'
 import { gzipSync, constants as zlibConstants } from 'node:zlib'

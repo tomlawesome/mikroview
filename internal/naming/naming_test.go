@@ -364,3 +364,62 @@ func TestRuleAndPortProvenanceNeverLoseToARouter(t *testing.T) {
 		t.Errorf("PortProvenance(0) = %+v, want none", p)
 	}
 }
+
+// TestDeviceProvenanceConfigWins is issue #600's whole precedence in
+// one test: a router named in config.yaml keeps that name, and the
+// operator's own label for it is reported but not shown -- the same
+// shape HostProvenance reports for a router-pushed name, one layer
+// along. Fixed is what the editor reads to refuse the edit rather than
+// storing a name nobody will ever see.
+func TestDeviceProvenanceConfigWins(t *testing.T) {
+	store, _ := entities.Open("")
+	if _, err := store.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "border", Label: "front door"}); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolver{Devices: map[string]string{"border": "Border Router"}, Entities: store}
+
+	if got := r.Device("border"); got != "Border Router" {
+		t.Errorf("Device = %q, want the config.yaml name", got)
+	}
+	p := r.DeviceProvenance("border")
+	if p.Name != "Border Router" || p.Source != SourceConfigDevice {
+		t.Errorf("Provenance = %+v, want the config.yaml name and %q", p, SourceConfigDevice)
+	}
+	if p.Label != "front door" {
+		t.Errorf("Label = %q, want the stored label reported even though it lost", p.Label)
+	}
+	if !p.Fixed() {
+		t.Error("Fixed = false -- the editor would offer a field for a name config.yaml decides")
+	}
+	if p.RouterWins() {
+		t.Error("RouterWins = true -- no router named this; there is nowhere on a router to send the operator")
+	}
+}
+
+// The other half: a device config.yaml does not name -- an
+// auto-discovered router, which arrives named after its own source
+// address -- takes the stored label, and the edit takes effect.
+func TestDeviceProvenanceEntityNamesADiscoveredRouter(t *testing.T) {
+	store, _ := entities.Open("")
+	if _, err := store.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "10.0.0.9", Label: "lab crs"}); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolver{Devices: map[string]string{"border": "Border Router"}, Entities: store}
+
+	if got := r.Device("10.0.0.9"); got != "lab crs" {
+		t.Errorf("Device = %q, want the stored label", got)
+	}
+	p := r.DeviceProvenance("10.0.0.9")
+	if p.Name != "lab crs" || p.Source != SourceEntity {
+		t.Errorf("Provenance = %+v, want the stored label as %q", p, SourceEntity)
+	}
+	if p.Fixed() {
+		t.Error("Fixed = true -- this rename is displayed, so the editor must offer the field")
+	}
+
+	// Nothing names this one at all: the caller shows the raw id.
+	p = r.DeviceProvenance("10.0.0.10")
+	if p.Name != "" || p.Source != SourceNone || p.Fixed() {
+		t.Errorf("Provenance = %+v, want an unnamed, editable device", p)
+	}
+}

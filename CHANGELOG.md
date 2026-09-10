@@ -16,6 +16,1242 @@ rewritten.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-09-10
+
+The ratified concepts, built. Ten capability milestones since 0.4.0:
+the unified evaluation engine's detector authoring and tuning (M4), the
+topography with logging coverage (M5), the city (M6), RouterOS fidelity
+(M7), deployment and data custody (M8), the ratified surfaces including
+the fall as the landing page (M9), demo and gate reliability (M10),
+round-30 fidelity (M11), device identity and network lifecycle (M12) and
+detector authoring II with the conditions editor (M13). The entries
+below are the operator-visible changes, grouped as usual.
+
+### Added
+
+- **"What is this thing?" now has an answer built from evidence you
+  already have** (#410, data only -- the card's own design comes later).
+  `GET /api/hosts/{ip}/dossier` assembles one address's traffic
+  fingerprint (who it reaches, who reaches it, the ports with their
+  known names, and whether it talks on a timer or in bursts), its MAC
+  with the vendor behind it, the names it goes by and which layer
+  supplied each, lease-versus-fixed from what your routers pushed, first
+  and last seen, the firewall rules its traffic matched, and a suggested
+  identity that always carries its evidence and a confidence in words.
+  The suggestion comes from a small readable table -- MQTT plus a clock
+  check plus a couple of fixed endpoints reads IoT-ish, SMB with RDP
+  reads Windows-ish -- and no row may claim more than its ceiling. What
+  is not known is said, block by block: an address is only called
+  *fixed* when a router actually pushed a DHCP table that omits it, and
+  a router that never pushed one leaves the question open rather than
+  guessing. The card may print an `nmap` command or a browser URL for
+  **you** to run; mikroview never connects to a host on your network.
+- **MAC vendor lookups, from IEEE's own registry** (#410, `oui.*`, on by
+  default). The first three octets of a hardware address name the
+  organisation IEEE assigned them to, which is usually the most useful
+  thing you can learn about a host you do not recognise. mikroview
+  fetches the MA-L registry itself, daily and conditionally, and caches
+  it under the data directory -- no vendor data ships in the image, and
+  none is redistributed: IEEE publishes the file for direct download but
+  grants no redistribution, so your instance fetches its own copy. Until
+  the first fetch lands, vendor answers say "no vendor data yet" rather
+  than guessing, and a registry over a month old is labelled stale
+  rather than quietly trusted. Three answers are deliberately not vendor
+  names: a locally-administered address (no vendor exists -- it is a VM,
+  a container or a randomised MAC), a block IEEE sub-delegated, and an
+  assignee who paid to be listed privately.
+- **A host that stops talking is no longer forgotten** (#1016, data
+  model only). The map used to work out its hosts from the last few
+  thousand events in the browser, so a host that went silent scrolled
+  out of that buffer and simply vanished, with nothing left to say it
+  had ever been there. A new server-side **host presence register**
+  (`internal/hosts`, `hosts.storePath`) keeps the record instead: every
+  event arriving on an internal interface from a private address
+  registers that host, with when it was first and last seen and how many
+  events it accounts for. What counts as a host is exactly what the map
+  already drew -- the same rule, ported rather than reinvented, so the
+  two halves cannot disagree. A quiet host can be marked **intended**
+  (quiet on purpose, with a reason that stays said and survives the host
+  reappearing, the same promise a coverage-gap declaration makes) or
+  **dismissed** (taken off the map, and cleared automatically the next
+  time that host appears in the feed -- a host that is back is not
+  dismissed). Nothing is probed to find any of this out: the register
+  records what arrived, never anything elicited. Read it with `GET
+  /api/hosts` (any signed-in user) and write it with `PUT`/`DELETE
+  /api/hosts/{key}/mark` (user tier, audit-logged as `hosts.mark` /
+  `hosts.unmark`). Bounded at 10,000 hosts, evicting the least recently
+  seen entry that carries no mark, because a source address is
+  attacker-forgeable and an unbounded list keyed by it would be a way to
+  grow mikroview's memory from outside; persistence is optional and
+  written behind the ingest path, never on it. **The map does not draw
+  any of this yet** -- the greying-out is a separate, in-flight design
+  round; this release adds the data and the API it will read.
+- **RouterOS config backups pushed over SFTP, kept encrypted and
+  restorable** (#394). The setup wizard's new sixth step prints a
+  script that saves the router's own binary backup (unencrypted --
+  it is the restore copy, and mikroview never holds a second password
+  to open an encrypted one) and a plain-text export (no secrets, safe
+  to read later), and pushes both nightly to a small SFTP drop box
+  mikroview runs (`backup.enabled`, off by default, port `:47022`).
+  The drop box is write-only and per-device: a login can add a pair
+  but never list, read, delete or overwrite anything, and a header
+  check refuses anything that isn't actually a RouterOS backup. Every
+  pair is encrypted under the same retention key #853's state store
+  uses -- no key, no backups -- with 10 generations kept per router,
+  oldest dropped first, and every download by an admin writing an
+  audit-log entry (a download is the router's whole configuration,
+  credentials included). Settings gains a `router backups` group
+  beside `disk`, admin-only, with a ten-slot strip per router and the
+  newest pair's download links; a router that misses its usual push
+  (the interval is learned from its own arrivals, never from the
+  scheduler line printed) shows an amber receipt and an `is it gone?`
+  link that opens the wizard's sixth step in a lost-router shape, for
+  restoring a replacement. `-backup`/`-restore` carry the vault along
+  with everything else. **RouterOS never verifies the drop box's host
+  key** (measured on 7.23.3) -- run the push only over a network path
+  you trust; see `SECURITY.md`.
+- **The same key that encrypts the on-disk event history now also
+  covers most of what else mikroview writes to disk** (#853,
+  `docs/decisions/event-retention.md`'s amendment and addendum): the
+  JSON-file state store (flags, entities, the MAC registry, rule usage,
+  detector settings -- every document `internal/persist`'s file backend
+  writes, other than the three named below) and the warm-restart
+  snapshots (#795) are sealed under `history.keyFile` with the same
+  AES-256-GCM/HKDF scheme the event history already uses. **No key, no
+  storage**: with none configured, every one of these stores is
+  memory-only and is lost on every restart -- there is no unencrypted
+  mode to fall back to, matching the event history's own rule.
+  `history.enabled` still only switches the event *log* on top of this
+  same key; the state store and snapshots follow the key alone.
+
+  **Accounts, API tokens and recovery-key digests are exempt** (rule 6,
+  decided the same day): all three hold only one-way hashes, so they
+  keep persisting to a plain JSON file with no key configured, exactly
+  as every earlier mikroview release -- `docker compose up` alone is
+  still enough to keep your admin login across a restart. With a key,
+  they are encrypted like everything else. Every other store is a
+  severe change from earlier releases, where none of it needed a key at
+  all: with no `history.keyFile` mounted, mikroview now forgets flags,
+  entities and the rest of the list above across a restart, not just
+  the optional ones.
+
+  `-backup`/`-restore` still work with a key mounted: the backup
+  envelope stays plain, readable JSON either way, and `-restore` writes
+  each store back encrypted when a key is configured for the deployment
+  it is restoring into. Postgres is unaffected -- see the ADR amendment
+  for why encrypting there was not judged to add real value over the
+  database's own at-rest custody and required TLS.
+
+  Settings' persistence row now has a third state, `memory only`,
+  alongside `file` and `postgres` -- reported for flags, entities and
+  the rest; accounts, tokens and recovery keys persist regardless.
+
+- **Renovate now proposes dependency updates as merge requests on
+  GitLab, replacing Dependabot** (#945).
+- An on-demand CHR exercise, CHR watch or Renovate run (web UI or API
+  with the job's variable) no longer also runs the full lint, test and
+  security set, as a schedule already did not (#951).
+- GitHub's `branch-policy.yml` is gone: it guarded pull requests on
+  GitHub, which takes none now; `policy:promotion-hop` on GitLab does
+  that job (#935).
+
+- **The on-disk event history is now a setting you change while
+  mikroview is running, not one you restart for** (#910, design round
+  42 under `docs/design/concepts/round-42/`). Settings gains a `disk`
+  group directly under `memory`, the same two things one storey down:
+  a bar of the days actually held on disk (`27 days · since 7 Aug ·
+  812 MiB — filling`, `— full` when the cap is what decides), a track
+  for the days allowed with a dashed mark where the byte cap runs out
+  at today's rate, the cap as a figure that opens a field in place,
+  and `turn off` as a link. Every change that would delete something
+  is a proposal until a link that names the deletion is taken --
+  `delete 13 days · keep all 27` -- and turning on asks nothing, since
+  it deletes nothing. With no key mounted there is no control at all,
+  only two statements and a link to the guide. Below a mebibyte,
+  sizes now read in KiB, so a first day of a few kilobytes is not
+  `0 MiB`.
+
+  Underneath: `history.enabled`,
+  `history.days` and `history.maxBytes` move to the same runtime
+  settings store `store.maxMemory` already uses: the config file gives
+  the figure a fresh instance comes up on, and whatever is set from
+  inside the app wins on every restart after that. `history.keyFile`
+  and `history.dir` stay in the config file and are not editable from a
+  browser -- one names a mounted secret, the other a filesystem path.
+
+  Two admin-only, audit-logged endpoints (`settings.history`):
+  `GET /api/settings/history` reports whether a key is mounted, the two
+  caps, and the window **actually held** on disk -- days, oldest,
+  newest, bytes -- separately from the setting, plus whether the byte
+  cap rather than the day count is what last dropped a day.
+  `PUT /api/settings/history` applies a change and answers with the
+  same shape. Turning it on takes what the event buffer already holds
+  as well as every event after, so the history does not start empty;
+  turning it off deletes every retained file before the response is
+  written. Lowering either cap drops the surplus days at once rather
+  than at the next flush. With no key mounted the feature cannot run at
+  all, so the switch reads off and a request to turn it on is refused
+  with a sentence saying to mount one.
+
+- **Events can be kept on disk, encrypted, so a replay reaches further
+  back than memory does** (#856,
+  `docs/decisions/event-retention.md`). Off unless you mount a key and
+  turn it on: memory-only stays the default and a first-class choice,
+  not a setup step you forgot. With a key, one compressed file per day
+  is written under the data directory, sealed with AES-256-GCM using a
+  key derived per file and bound to its day -- so copying the data
+  directory, or restoring a backup of it, yields nothing readable, and
+  a file renamed to another day stops opening. There is no unencrypted
+  mode: without a key nothing is written at all.
+
+  Two caps, applied together: `history.days` (30) and
+  `history.maxBytes` (1 GiB), oldest day dropped first when either is
+  hit. Turning it off deletes what was retained -- off means the events
+  are gone. `-migrate-data` carries the history to the new directory;
+  the key stays where you mounted it, and neither the key nor the
+  history goes into a `-backup`.
+
+  Replays now read disk then memory, and the receipt states the window
+  actually held rather than the setting. Settings are in
+  `docs/configuration.md`; the key file lives outside the data
+  directory. Turning it on from inside the app came later, in #910 --
+  see the entry above.
+
+- **A weekly job exercises new RouterOS releases against a real CHR,
+  and opens a merge request when they still parse** (#894, follow-on
+  from #436). `scripts/routeroscommands` prints the setup wizard's
+  starting commands (CA trust, syslog, rule tagging) straight from
+  `internal/routeros` -- the same functions `POST /api/setup/commands`
+  renders from -- so this and the wizard can never quietly disagree.
+  A new GitLab CI job (`.gitlab-ci.yml`, `chr-exercise` stage, inert
+  until the owner creates its schedule) boots MikroTik's newest stable
+  CHR release under software-emulated QEMU (no `/dev/kvm` needed) and
+  runs those commands against it: red names the refused command; green
+  appends a `scripts/routerosappendrow`-generated row to
+  `internal/routeros/dialects.go`'s table (`verifiedBy: "exercised on
+  CHR <version>, <date>"`) with the console transcript, and opens a
+  GitLab merge request into `dev` -- never auto-merged, and never a
+  claim that the release notes were read: `ReviewedVersion`
+  (`internal/routeros/versions.go`) is left untouched, which leaves
+  `TestReviewedVersionMatchesNewest` deliberately red until a human
+  reads the release notes and bumps it in the same merge request. See
+  `docs/routeros-chr-exercise.md`.
+- **A restart no longer throws away what mikroview has learned** (#795,
+  Go half). Every five minutes, and once more at shutdown, mikroview
+  writes a small snapshot of its derived state and reads the newest
+  usable one back on the next boot: the hourline's per-minute counters
+  and running totals, each detector's rolling 60-minute windows and
+  per-source day bookkeeping, and every device's first seen, last seen
+  and event count. Before this, a redeploy blanked the metrics register,
+  reset every detector to its full warm-up, and quietly replaced months
+  of "first seen" dates with today's.
+  New settings, all on by default and all documented in
+  `docs/configuration.md`: `snapshot.interval` (5m, 30s minimum),
+  `snapshot.keep` (6 generations) and `snapshot.dir`
+  (`snapshots/` beside the data directory), with `MIKROVIEW_SNAPSHOT_INTERVAL`,
+  `MIKROVIEW_SNAPSHOT_KEEP` and `MIKROVIEW_SNAPSHOT_DIR` overrides. A
+  cadence under the minimum or a retention under one generation is
+  clamped with a named warning (CFG-0070, CFG-0071) rather than
+  refused, and a snapshot directory that cannot be created or written
+  costs one startup log line and no snapshots -- never a refusal to
+  boot.
+  **Events are still never written to disk.** A snapshot holds counts,
+  minute stamps, rule and log-prefix labels, device ids/names with their
+  first and last seen, and per-source window counts keyed by address. It
+  holds no event lines, no payloads and none of the rule/NAT/DHCP tables
+  routers push; SECURITY.md says so beside the "no persistence for
+  events" promise. (Encrypted under `history.keyFile` since #853, below --
+  at the time this landed the files were not yet encrypted.) Snapshots
+  stay files even on a Postgres deployment: they are derived, disposable
+  counters, not custody data, and losing the whole directory costs one
+  cold start.
+  `GET /api/stats` gained `liveSince` (when this process started
+  observing) and, after a warm restart only, `restoredTo` (when the
+  snapshot it loaded was taken) -- absent rather than null on a cold
+  start.
+- **Tune logging** (#435): a new "Tune logging" page turns a dark
+  connection -- one with no rule logging what crosses it -- into a
+  watched one. Upload the router's `/export hide-sensitive`; once
+  mikroview has observed the device for 24 hours, the page lists every
+  filter rule that crosses an operator-chosen dark boundary, ticked by
+  default, each shown with how often it has fired and how many bytes
+  since observation began -- RouterOS's own per-rule packet/byte
+  counters, now carried on the push -- as the cost of turning its
+  logging on. Reached from the wizard's finish screen and from a dark
+  pair on the topography's coverage lens. Rendering gets back the
+  annotated export (download first, copy second) or the equivalent
+  `/ip firewall filter set` commands, with a `beforeunload` guard until
+  either is used. The change is mechanically checked before it is ever
+  returned -- parse the config before and after, strip logging
+  attributes, compare -- so it can only ever be logging, never anything
+  else; a check failure answers 500 rather than shipping an edit nobody
+  asked for. The uploaded export itself is never logged, persisted, or
+  stored anywhere: it lives in memory for the one request and is gone
+  once the page is left.
+- **RouterOS commands are now version-aware, server-rendered, and keyed
+  by dialect rather than by a single reviewed marker** (#436, Go half).
+  `internal/routeros` gained a dialect table (`Rows`): a row is a version
+  range, the dialect it renders, an honest `verifiedBy` ("exercised on
+  CHR 7.23.3" vs. "release notes read 2026-08-29"), and any per-version
+  note -- today one dialect ("a") across three rows, with 7.24.0 split
+  out for its `find`-lookup bug. `ReviewedVersion` is now checked against
+  the table's own newest row rather than carried only in prose.
+  The six RouterOS command templates (CA trust, syslog, rule tagging,
+  push script, schedule) moved out of the frontend into
+  `internal/routeros/commands.go`, byte-identical to what they replace,
+  behind a new `POST /api/setup/commands` (same access tier as
+  `GET /api/setup/status`): it renders the table's bounds, what an
+  operator-picked version resolves to, every router whose version is
+  known and its standing, and the five command blocks themselves.
+  `GET /api/devices` gains `routerosStanding` (`below-minimum` /
+  `reviewed` / `ahead-of-review`, omitted when unknown) beside
+  `routerosVersion`. The wizard's push script already appends
+  `?ros=$[/system/resource get version]` to its `/ca.crt` fetch; mikroview
+  now reads that (validated, capped, and used for nothing else) as a
+  fallback version hint for the fetching address, so a router's version is
+  known from the wizard's first step rather than only after its first
+  push -- a real push always overrides the hint.
+  `scripts/routeros-freshness.sh` now reports a stable release with no
+  covering row, rather than only comparing against a marker.
+- **The setup wizard names a multi-homed router's source-address
+  split** (#442). A router holds an address on every network it routes,
+  and its logs arrive stamped with whichever one faces mikroview --
+  often not the one declared as `sourceIp`. The declared router then
+  sits silent while the real stream auto-discovers under another
+  address, and a token minted for the declared identity enriches
+  nothing: pushes return 200 and the popups still say no data. Step 2
+  (Send logs) now reads this as partial -- "Connected — but from
+  10.0.20.1, an address you haven't declared, while 192.168.88.1, which
+  you declared in config.yaml, has sent nothing" -- states that
+  mikroview cannot tell whether the two are one router, and prints the
+  fix with the operator's values: keep the declared address by setting
+  `src-address` on the router's logging action (recommended, because the
+  token and its pushed tables follow the declared identity), or change
+  `sourceIp` and reissue the token. Two genuinely different routers is
+  not an error; the notice clears itself when the declared one sends its
+  first log. The router cards on Entities and the viewer's Fleet carry a
+  one-line echo pointing at step 2. `GET /api/devices` gains
+  `multihomedCandidates` on a configured device that has received nothing
+  while undeclared devices stream -- every arriving address, never a
+  pick. Detection itself shipped in #499.
+- **The watchers station now lists what it has been told to expect**
+  (#640, part C). An **Expected** verdict teaches mikroview that a
+  certain amount of a certain thing, from a certain host, is normal
+  here. Until now nothing in the interface said what it had learned, so
+  a flag that stopped appearing was indistinguishable from a detector
+  that had quietly stopped working. A new section under the detector
+  bench (**Settings ▸ detection ▸ tune…**) lists every expectation:
+  detector, host, the size recorded when it was made ("up to 30", or
+  "any size" for a detector that declares no size), how many firings it
+  has absorbed since, and when it was made. **Forget** on a row removes
+  it and that pair raises again from its next firing. The absorbed count
+  is the point of the list -- an expectation that has absorbed nothing
+  for months is visibly not earning its place. Two new endpoints back
+  it: `GET /api/flags/expectations` (any signed-in user, the same tier
+  as `GET /api/flags` -- an expectation is the reason a flag you would
+  otherwise see is absent) and `DELETE /api/flags/expectations/{id}`
+  (user tier and audit-logged, matching the verdict that records one:
+  the operator who can call a flag expected can take it back). A viewer
+  reads the ledger and gets no Forget button. Nothing removed here;
+  part B (above) retired the admin-only exclusions API this replaces.
+- **A detector's candidate numbers can be tried before they are saved**
+  (#786). Changing a threshold was a guess with no shown workings: the
+  new value went live, and whether it was right showed up later as flags
+  that did or did not arrive. A **Try** button now sits at the foot of an
+  expanded detector row, beside Save. Pressing it replays the numbers as
+  typed over the traffic mikroview still holds -- the detector's own
+  logic, with the candidate window and threshold substituted for its
+  stored ones -- and puts the answer in one slot under the fields. Either
+  a receipt: *"Would have fired 3 times in the last 4h 12m"*, with the
+  hosts that would have been flagged listed beneath it. Or a decline:
+  *"Can't replay: needs a 6h window, only 4h 12m held"*, in the same
+  slot, in grey rather than red, because a corpus shorter than the
+  detector's own window is an honest limit of the traffic held rather
+  than an error, and reporting "it would have fired zero times" instead
+  would be a claim nothing established. Where the server says its read
+  was cut short, the count reads "at least"; where the listed sample is
+  bounded, the hosts read "at least these". Try writes nothing -- the
+  detector the engine is evaluating is untouched, whether the receipt is
+  encouraging or not -- and it never blocks Save. New `replayDefinition`
+  wrapper over `POST /api/definitions/{id}/replay`, which existed
+  server-side but had no caller anywhere in the client. One known limit,
+  recorded rather than hidden: a candidate carries only the window and
+  the threshold, which is the closed set the engine's replay accepts -- a
+  detector's other tuning fields are saved as normal but are not part of
+  what Try asks.
+- **Try now says what the detector counts as it stands, beside the
+  candidate's count** (#786). *"Would have fired 3 times in the last 4h
+  12m — currently: 41"*: without the second number the first one settles
+  nothing, since a count only means something against the count it would
+  replace. It is measured, not looked up: `POST
+  /api/definitions/{id}/replay` runs the same replay a second time with
+  the detector's live params over the same traffic and returns it as
+  `current`, because nothing already counted asks the same question (the
+  flag time series counts newly-raised episodes over the last sixty
+  minutes, and a flag's own count is re-fires within one episode). Where
+  the live window is longer than the traffic held, the slot says so in
+  the same grey the decline uses rather than showing a number nothing
+  established. No new counter and no new storage; a Try with nothing
+  changed carries no comparison, because its count is the current one
+  already.
+- **A live memory control for the event buffer, not just a config-file
+  setting** (#796). Settings' memory group now carries a slider under
+  the hours bar: dragging it only proposes a figure, and nothing changes
+  until you press apply. Applying it -- from the UI, or directly via the
+  new `PUT /api/settings/store` (admin-only, audit-logged as
+  `settings.store_max_memory`) -- stores the figure and resizes the
+  running ring immediately: growing it keeps everything already held,
+  shrinking it drops the oldest events first. An out-of-range figure is
+  refused with a 400 rather than clamped. Once set, the stored figure
+  wins over `store.maxMemory` in `config.yaml` on every future restart
+  too -- mikroview says so in the startup log, and deleting the new
+  `store.settingsStorePath` document (`/var/lib/mikroview/settings.json`
+  by default) is how you go back to the file's figure. The allowed range
+  is worked out per host at startup: 32MiB at the low end, and at the
+  high end whatever's left of the smaller of the cgroup memory limit or
+  the machine's RAM once a quarter of it (or 256MiB, whichever's larger)
+  is reserved as headroom and the same 1.47x ring-to-resident overhead
+  CFG-0012 already quotes is priced in -- so the slider never offers a
+  figure the host would be OOM-killed for taking, and never reports a
+  deliberately large `config.yaml` budget as out of range. `GET
+  /api/stats` gains a `memory` object (`maxMemory`, `min`, `max`,
+  `hostTotal`, `bytesPerEvent`, `resident`, `stored`) so any reader sees
+  the same numbers the UI does, and the setting is now included in
+  `-backup`/`-restore` alongside every other store. A viewer sees the
+  bar and the figure; only an admin is offered the drag.
+- **A detector's thresholds and windows can be edited in the app**
+  (#787). Until now the only thing the watchers station could change was
+  a detector's *scope* -- which hosts, ports or rules it watches -- and
+  even that was typed as comma-separated text. A detector whose
+  threshold or window was wrong for a particular network could not be
+  corrected anywhere in the interface. A row on the bench now expands
+  downward in place (one open at a time; no side drawer) into its
+  editing panel: typed tuning fields built from `GET
+  /api/definitions/schema`, so every field's type, bounds, unit and
+  description come from the server's own declaration rather than a
+  second copy of every detector's knobs written in the frontend. A
+  duration is edited as a plain second count and written back as the Go
+  duration string the server validates. Each scope axis is now a set of
+  removable chips with an add box that suggests what the app already
+  knows -- hosts from Entities, rule labels from the router-pushed
+  filter tables -- and the ports box takes a range (`8000-8010`) as well
+  as a single port, refusing anything that is not a port with a reason
+  instead of dropping it. The allow/deny/no-restriction select stays,
+  and source classification stays a select because it holds one value,
+  not a list. **Reset to stock** puts a detector's params back to
+  exactly what it shipped with, leaving its scope alone (the server's
+  reset is a params operation, and a button that also cleared an
+  operator's host exclusions would be doing something nobody pressed it
+  for). A viewer sees every row and every fact and no control at all --
+  hidden, never disabled, the same grammar the run/pause tick already
+  used. New `fetchDefinitionSchema` and `getDefinition` wrappers;
+  `resetDefinition` and `cloneDefinition` have callers for the first
+  time. **Clone** copies a detector you wrote -- its match conditions,
+  its aggregation and its tuning -- into a second detector that appears
+  paused, already expanded, with its name selected to be typed over, so
+  authoring a variant is one press and a rename (#810). It is offered
+  only on those rows: a shipped detector's logic is Go compiled into
+  this binary and keyed by its own id, so a copy of it would list, look
+  configurable and evaluate nothing -- the server refuses, and the
+  button is not there to press. Overriding a shipped detector's params
+  is the operation that exists for it; starting a custom detector *from*
+  one needs a conditions editor and is filed as #829.
+- **A demo seeder that exercises the whole interface, not just syslog**
+  (#687). Every UI review this project has run was hampered by a demo
+  that only ever sent syslog: one lane on the fall, no pushed rule/NAT/
+  address tables, every stream row on the unnamed-host fallback,
+  nothing named on Entities, an empty watchlist, a flat metrics
+  hourline -- all read as UI defects when they were data gaps.
+  `scripts/seed-demo.py` is a seeder against a running instance, in the
+  repo rather than rebuilt from memory in `/tmp` each session: it pushes
+  filter/NAT/address tables (with log prefixes, and two rules per
+  router that are pushed but never fire) over `POST /api/ingest/
+  routeros`, names hosts/rules/ports, creates four watchlist entries
+  (two healthy, one paused, one with a genuinely broken ring --
+  `internal/engine/coverage.go`'s `out-of-scope`), a user- and a
+  viewer-tier account alongside the admin, and drives three admin
+  mutations (a cleared flag with a note, an entity rename, a definition
+  edit) so the audit log has rows. Its own `feed` subcommand replaces
+  the ad hoc `/tmp` traffic generator with one that gives every host in
+  its small, consistent estate a single stable MAC for the run --
+  the earlier per-line-random-MAC version read as thousands of
+  first-ever devices (measured: 4,025 `new_device` episodes from about
+  8,000 events), which is what was making the docket, not the traffic,
+  laggy. A fourth router is declared and never touched, so Entities'
+  "quiet is a fact, not a fault" card is real. Country-flag data needs
+  an operator-supplied MaxMind GeoLite2 database (`geoip.dbPath`) that
+  this demo instance does not have configured; the seeder picks real,
+  geolocatable public addresses so that flag is real the moment one is.
+- **The scene bar built to its ratified round-29 design, the stream's
+  retired toolbar folded into it, and the filter row rebuilt as one
+  quiet row** (#683). Every scene's bar now reads MIKROVIEW · page ·
+  strap · LIVE·rate (bare `LIVE` on the stream, whose whisper line
+  already carries the rate) · `⚑ N` (docket) · the mockup's own
+  eye-glyph watch marker, `N ○M` (watchlist) · account, ported field-
+  for-field from `docs/design/concepts/round-29/the-whole.html` rather
+  than approximated -- including on the fall, which hand-rolls its own
+  bar rather than sharing `SceneBar.svelte`. The retired `[0d 0h 3m
+  55s]` uptime counter and the per-router chips (`border (RB5009)` etc)
+  are off every bar; round 29 draws neither. The previously-bare pink
+  flag count (no `⚑`, no title, hidden at zero) now carries the
+  ratified glyph, an accurate title, and shows even at zero
+  ("no open flags", ok-coloured) -- the mockup's own "clear all" demo
+  state, not invented. The stream's active filter now also shows on the
+  bar as one bordered box (`action:drop boundary:iot→lan ⌫`), matching
+  `.controls .search` exactly rather than as separate chip pills.
+  `lib/watchlist.svelte.ts` gained `heldCount` (the same "enabled and
+  not ring-broken" predicate `Watchlist.svelte`'s own `class:watching`
+  already used) so the bar's count can never disagree with the page's.
+
+  The filter row (`FilterBar.svelte`) is one quiet row on desktop --
+  device · action · chain · proto · source ⇄ destination (scope,
+  address and country) · port · interface · rule -- as dim micro-labels
+  over hairline underlines, no boxes, no placeholder prose, a single
+  `×` to clear and `▸` to fold back, fitting one line well inside
+  1600px. `Presets` and `Export to CSV` are off the row: round 29 draws
+  neither, so they are not homed here -- `FilterPresetsMenu.svelte` and
+  `lib/export.ts` are untouched and still work, just unmounted.
+
+  Two ratified pieces are not built, on the owner's explicit
+  instruction not to invent a home for anything round 29 does not
+  draw: the stream bar's own SPAN control (`15 m · 1 h · 24 h · 14 d`,
+  the same pattern as the fall's), since the app has no existing
+  time-window concept matching those four buckets; and the retired
+  toolbar's other controls (`17/s`, `2% of buffer used`, `No limit ▾`,
+  Autoscroll, Pause, Group, Clear) -- round 29's own `#s5` bar markup
+  does not draw any of them, only the filter summary and (unbuilt) SPAN
+  control, so building them onto the bar would have been inventing a
+  home for them. All are recorded on the issue as gaps, each with what
+  it does today and the nearest ratified thing, for the owner to work
+  through one by one.
+
+- **The docket's watchlist tab built to its ratified round-29 design**
+  (#676). A table -- watch · boundary · window · state · last event --
+  sits above the existing add/edit/invert/observe/promote workflow
+  (now headed "Manage entries"), reading the same entries rather than
+  replacing them. Rows open as drawers, matching the flags tab's own
+  grammar: a plain-English story with a standalone headline, the
+  entry's verbatim last matching line (from the persisted match log's
+  own event, not composed), a detail panel, and pause/resume-watch plus
+  open-in-stream actions. Pausing reuses the definition's existing
+  `enabled` flag through the generic definition PUT (`setWatchlistEnabled`)
+  -- no new route. Two ratified pieces are not built: a per-entry
+  time-of-day "window" (every row honestly reads "always," since no
+  entry carries a schedule) and the seven-night strip ("five kept
+  nights · two empty"), which would need a new persisted nightly
+  history and a schedule to call "night" against -- a data-model
+  decision left to the issue, not invented here. "Mend — widen window"
+  is withheld for the same reason: there is no window to widen.
+
+- **Entities, built to round 29's ratified scene** (#675). Router cards
+  lead the page -- one per pushing device, its live/quiet state, RouterOS
+  version, rule/zone counts, and either its current push rate or a plain
+  "quiet is a fact, not a fault" -- followed by a dashed invite card for
+  the next router, carrying the standing promise (mikroview only ever
+  receives, never connects out) behind a disclosure of the real RouterOS
+  lines to paste. Below that, one table of every named and
+  discovered-but-unnamed host -- lane, address, mac (elided; `private`
+  when none is known), first seen, last seen, and the docket's own marks
+  (new talker, watched, flagged, ring broken) -- renamed inline by
+  clicking the name (Enter saves, Esc cancels). Replaces #647's page
+  wholesale: the old add-entity form and the separate discovered-rules/
+  -ports sections are gone, since the ratified scene has exactly one
+  table and no other CRUD surface. mac/first-seen/last-seen had no
+  existing source, so `device.MACRegistry` gained `NoteIP` (pairing a
+  MAC with the IP it last answered to) and a new read route,
+  `GET /api/devices/macs`; `GET /api/devices` gained each device's
+  reported RouterOS version. Lane reuses the topography's own
+  boundary-derived zones unchanged.
+- **Settings' three previously-unbuilt rows** (#677). Detection gains a
+  tunable port-scan window (`20 ports / 60 s`, editable next to "flag
+  types ... tune..."), reading and writing the port_scan definition's
+  own `threshold`/`window` params through the exact PUT
+  `/api/definitions/{id}` the watcher bench already uses -- no second
+  store. Memory gains a persistence row stating live truth on both
+  halves: the ratified copy read `JSON store · 14 d`, but no event
+  store with a day-based retention exists (`internal/persist`'s own
+  package doc calls the live event stream the one deliberate
+  in-memory-only exception) -- `internal/persist` *is* real, though,
+  and backs flags/definitions/watchlist entries/entities/tokens, so the
+  row instead states which backend is actually live (file, with its
+  directory, or Postgres) via a new admin-gated `GET /api/persistence`
+  (admin-tier for the same reason `GET /api/config/problems` already
+  is -- a filesystem path is infrastructure detail), alongside the fact
+  that the event buffer above it stays memory-only regardless. Account
+  gains a sessions row -- "this device, signed in 4 d · sign out
+  everywhere" -- backed by a new self-serve `POST /api/auth/logout-all`
+  (`SessionStore.RevokeAllForUser` against the caller's own account,
+  then a fresh session so the calling tab stays signed in, the same
+  revoke-then-recreate shape `POST /api/auth/password` already uses),
+  and `GET /api/auth/session` now threads the session's own `IssuedAt`
+  through as `signedInSince`. The device name in the ratified copy
+  ("tom-desktop") was mockup placeholder text -- `auth.Session` tracks
+  no device/user-agent -- so the row says "this device" rather than
+  inventing one.
+- **The docket's flag drawer explains itself: a headline, a story, the
+  episode's shape, a note on clear** (#678). Round 29's drawer gains the
+  plain-English headline and prose story the mockup ratified -- "One
+  source, twenty doors.", "A camera asking for a mail server." --
+  generated per flag type from the evidence the flag already carries
+  (`lib/flagNarrative.ts`), and the episode's shape -- still arriving,
+  stopped, or intermittent, e.g. "first 13:46 · last 13:52 · still
+  arriving" or "every ~2 m since 13:28" -- derived purely from the
+  flag's own timestamps (`lib/episodeShape.ts`). Clear now opens an
+  inline note field before clearing; the note travels to
+  `POST /api/flags/{id}/clear` and lands on the same admin-mutation
+  audit entry the clear itself already writes (#679's ruling that a
+  clear's note belongs in the existing log, not a second one). The
+  where value in a flag's collapsed row now opens the topography at the
+  host it resolves to, rather than the live stream -- "watch this
+  pathway"/"watch this source" is deliberately not part of this change;
+  it depends on the watchlist tab #676 is still building.
+- **Entities gets a tab strip back -- hosts, rules and ports** (#681).
+  Naming a rule or a port in context turned out to have nowhere to
+  happen: a rule the router has pushed but that has never fired has no
+  row anywhere to click. The owner ruled naming-in-context out and asked
+  for a tab strip over the one table instead, reusing the docket's own
+  three-tab vocabulary rather than new furniture. hosts is the ratified
+  table exactly as #675 built it, and stays the default. rules lists
+  every rule in a router's pushed filter-rule table -- name, chain,
+  action, last fired -- whether or not it has ever fired; a never-fired
+  rule reads as "has not fired," never as a blank. That join needed a
+  rule's log-prefix decoded into the slug an event from it would carry
+  (`ruleLabelFromLogPrefix`, `lib/routerLookup.svelte.ts`, the inverse of
+  the router-lookup popup's own `prefixMatchesLabel`), since `GET
+  /api/rules` only ever holds a rule once it has fired. ports lists every
+  port seen in traffic plus any already named. Inline rename is one path
+  across all three tabs, same store, same `EntityType`, same
+  Enter-saves/Esc-cancels/blur-saves behaviour #675 built.
+- **Per-hour top talker and top port, answered by the ring itself**
+  (#644). `Store.HourTops` computes each axis minute's winning source
+  and destination port from the events the ring actually holds, under
+  one RLock, walking backward and stopping at the hour's edge. A minute
+  is answered only while the buffer still holds every event it received
+  in that window -- once eviction reaches in, the minute reads as an
+  honest em dash, never a count of the survivors, and ties break on the
+  lower label so map order can't flap the answer. Served by its own
+  route, `GET /api/stats/tops`, fetched only by the Metrics page while
+  open rather than folded into the `/api/stats` poll every open tab
+  makes every five seconds. The metrics table gains the two columns as
+  plain, unsortable headers, with their hour-total footer cells staying
+  em dashes.
+- **The whisper commands the live stream, and the filter box folds to a
+  thin bar** (#644). The whisper is a quiet full-width strip above the
+  live table -- rate curve, drop share, top talker, top port -- that
+  commands the stream: clicking the curve seeks it, turning off
+  autoscroll and moving the stat line to the clicked minute, and a
+  fence toggle plus two clicks dims every row outside the picked range,
+  as a display lens rather than a second filter state beside
+  FilterBar's own. On desktop, the filter box now defaults folded
+  behind a "Filters ▸" trigger and slides out into one quiet row --
+  device, action, chain, proto, source/destination, port, interface,
+  rule -- with dim micro-labels over hairline underlines, a × to clear
+  and a fold back; it still writes only `appState.filters`, the same
+  grammar typing does.
+- **The drum: Metrics' seismograph is one mirrored stroke per minute**
+  (#644). The seismograph is rewritten from per-action horizon lanes
+  into the drum -- one mirrored stroke per minute, clickable paper to
+  select a minute -- where the outer half of each stroke is every event
+  that minute and the inner half its refused share, both on one shared
+  scale so a quiet minute's refused sliver can never draw taller than
+  its own total. Per-action detail lives on in the register and the
+  table, and the cursor's `aria-valuetext` still reads every action's
+  figure.
+- **The drum drops its leftover per-flag-type panel** (#644). The
+  round-13 rewrite replaced the seismograph's per-action lanes with the
+  mirrored stroke but left a FLAG EPISODES row per detector type
+  underneath, inherited unchanged from the pre-drum `#488` build --
+  something no round-13 through round-29 mockup of the seismograph ever
+  drew. Removed; flag detail still reads from the register's flag
+  columns, the table's flag-episodes column, and the cursor's own "N
+  flag episodes" fact. The drum's left margin, which existed only to
+  hold that panel's labels, now matches its right margin.
+- **The topography map grows a floor, two health dials, an aggregate bar
+  per card, and node information cards** (#648). An altitude slider at
+  the foot of the map steps between clients, services, zones and survey.
+  Two health dials sit top-right for flags and watchers, and clicking
+  either one takes you straight to the docket. Each card also carries
+  one aggregate bar, clicking through to the watchlist or to a
+  pre-filtered view of flags depending on which card it belongs to. And
+  a node's information card now opens the same way wherever that node
+  appears on the map, rather than only from one place.
+- **Every column on the docket now sorts and filters, across all three
+  tabs** (#649). Flags, watchlist and audit log all gained the same
+  behaviour: click a column to sort by it, click again to reverse, and a
+  quiet filter sits under the heading. Flags and watchlist are card
+  grids rather than tables, so there the same sorting and filtering
+  appears as a toolbar over the same columns instead of column heads
+  themselves. Filtering the flags list also renders it flat rather than
+  grouped by campaign, so a match is never left hidden inside a
+  collapsed group it happens to belong to.
+- **A brand-new instance now has a first-run journey, choreographed door
+  to wizard** (#646). Where an empty instance used to greet you with the
+  ordinary sign-in form, it now opens on a door that offers Enter instead
+  of a login box. From there the journey walks you through creating the
+  first admin account, an attach step that shows the two commands the
+  router needs, a held beat while that connection comes alive, and then
+  a choice: skip the tour and go straight to the wizard, or take a
+  card-by-card tour of the deck first. Most of what it walks through
+  already existed as its own surface -- the journey is what strings them
+  together into one continuous first hour, rather than adding a page of
+  its own. Either path leads to the same place, the setup wizard, which
+  now finishes by taking you to the fall, its landing page, instead of
+  leaving you somewhere else.
+- **Flags carry an operator's verdict** (#638). Every flag now offers
+  Expected, Noise and Real, and the old Clear demotes to a secondary
+  affordance beside them. Expected means legitimate traffic; Noise means
+  real traffic caught by too sensitive a threshold. Both clear the flag
+  on one press, with about five seconds to undo before anything is sent
+  -- and a verdict still inside that window is committed rather than
+  silently dropped if you navigate away, so the interface never claims a
+  judgement it did not record. Real does not clear, because a confirmed
+  concern is not something you have finished with. A judged flag shows
+  its verdict, who judged it and when, and is never presented as an open
+  question again; a flag that later re-fires as a genuinely new episode
+  starts unjudged rather than carrying the old badge forward. Noise
+  verdicts are recorded against the detector that raised the flag so
+  that receipted threshold suggestions (#640) can later reason from
+  them -- nothing tunes itself yet.
+- **The fall is the landing page** (#616). A band per boundary --
+  interface pair by default, named from the pushed rule's own
+  src-address-list where a router provides one (e.g. "lan"), ordered
+  input-chain/WAN-facing first, observed next, dark last. Since nothing
+  yet names a full network-group taxonomy (LAN/SRV/GUEST/IOT) or a WAN
+  interface, that ordering and naming stay evidence-based rather than
+  invented -- see the #616 PR for the deviation from the ratified
+  "group-pair + direction" design. Above a NOW line, a live spectrum
+  strip positions a peak per carrier by port; below it, time pours
+  downward as a thin dashed carrier per (boundary, port) -- brightness
+  for accepted rate, red only for drops, violet for nat -- capped at the
+  8 most recently active carriers per band with a "+n quieter"
+  affordance, bucketed by span so a real cadence stays visible rather
+  than one mark per event. A dark (unlogged) boundary is drawn hatched
+  and says so in words, never colour alone; clicking a boundary or a
+  carrier opens Stream filtered to it. Retires the interim landing from
+  #544 -- Stream keeps its own row, second in the Live group.
+  Reduced-motion turns off the NOW-line pulse.
+- **A deployment's data can be moved between a bind mount and a named
+  volume**, in both directions (#537). `mikroview -migrate-data
+  <destination>` copies the whole data directory, verifies it by
+  re-hashing what landed, and leaves the source untouched -- so a failed
+  migration costs nothing but the copy. It carries the three things
+  `-backup` deliberately leaves out (the TLS store, the recovery pepper
+  and the Postgres adoption marker), because a backup travels to another
+  host and a migration does not.
+
+- **Custom detection definitions can now be created** (#502). An
+  operator authors match conditions plus an aggregation -- key mode,
+  counting mode, threshold and window -- and a detail sentence, and
+  the detector evaluates on the ingest path and raises flags like any
+  shipped one. Each definition's own view says whether the dispatch
+  index can narrow it to the events it might match, or whether it is
+  evaluated against every event instead. `POST /api/definitions`'s
+  refusal of `intent=detection` is gone, since it is no longer true.
+- **The learning shelf says when the record is still thin** (#640). A
+  freshly-deployed mikroview flags plenty before it has learned what is
+  normal, and until now nothing said why. While fewer than five
+  expectations have been recorded, the shelf now reads *"Flags will be
+  noisy until mikroview has learned what is normal here — N
+  expectation(s) recorded so far. Judge each flag and the inbox
+  settles."* — viewer-readable, since an expectation is not owner-only
+  information.
+
+### Changed
+
+- `CONTRIBUTING.md` now says where to report things: GitHub issues are
+  the public intake again, with the work tracked on GitLab (#953). Its
+  branching, CI and Dependabot passages, all describing the GitHub-first
+  setup that #935 replaced, are gone (#954); `AGENTS.md` carries the
+  current delivery model.
+- **Every CI job names its runner lane** (#949). `default: tags: [big]`
+  puts builds, tests and security scans on the 8-CPU / 18 GB
+  `gitlab-runners-01` runner, two at a time; the policy check, frontend
+  lint, GitHub mirror push and CHR watch override it with `tags: [light]`
+  and run on the 2-CPU / 2 GB `light` runner, three at a time. Once the
+  big runner stops taking untagged jobs (ai/agent-infra#3) a job with no
+  lane will not run at all, which is the point: nothing lands on the big
+  lane by accident.
+- **Development moved to a self-hosted GitLab; GitHub is now its mirror**
+  (#935). Merge requests, CI and the `dev -> preview -> main` promotions
+  happen on GitLab, and `dev`, `preview` and `main` are pushed to GitHub
+  after each merge with a repository-only deploy key. GitHub keeps
+  CodeQL, the container registry and signing, Pages and releases.
+  Issues moved to GitLab as well: the tracker was imported with every
+  issue and merge request number preserved, GitHub's copies are closed
+  and kept as history, and GitLab closes an issue from the merge
+  request itself, so the closing workflow and the job that replaced it
+  (`close-issues-on-dev.yml`, then `sync:close-github-issues`) are both
+  gone. GitHub's `ci.yml` keeps only the two jobs that need Docker on
+  the runner (container smoke test, Postgres integration); everything
+  else it ran now runs on GitLab, including three checks GitLab had
+  been missing (frontend build with the bundle budget, notices and
+  doc-link checks; the fuzz regression gate; npm audit) and a
+  govulncheck run that actually fails on a finding -- the JSON-only run
+  never could. Dependabot no longer opens
+  pull requests (`.github/dependabot.yml` and the dependency-review
+  workflow are removed); its alerts stay on as notifications, and GitHub
+  pull requests into the three mirrored branches are refused by the
+  `branch policy` check with a pointer to GitLab.
+- **The CHR exercise's report and watch moved to GitLab with it** (#943).
+  `scripts/chr-report.sh` now pushes the `chr-reports` branch to this
+  GitLab project instead of the GitHub mirror, whose token is gone; a new
+  daily-scheduled `chr-watch:run` job (`scripts/chr-watch/run.js`, decision
+  logic unchanged) reads it and opens, comments on or closes a GitLab
+  tracking issue labelled `chr-watch`, replacing the GitHub workflow of
+  the same name.
+- **GitHub's `ci.yml` is gone; its last two jobs run on GitLab** (#942).
+  `test:postgres` is the Postgres integration test on the same
+  `postgres:18-alpine` image, with the TLS certificate generated by the
+  service itself instead of a derived image. `test:container` is the
+  container smoke test -- the production image built and run read-only
+  with every capability dropped -- talking to the runner's own rootless
+  Docker daemon over a socket the owner binds into jobs; the health
+  check runs from a throwaway container sharing the app's network
+  namespace, since nothing is published on the runner host.
+- **"Never flag this again" now records how much is normal, and comes
+  back when a host outgrows it** (#640, part A: store and engine). It
+  used to silence a detector on a host outright, forever, whatever the
+  host did next. It now records the size of the firing you judged
+  normal -- the measure that detector compares against its threshold,
+  such as the number of distinct ports for a port scan -- and absorbs
+  later firings up to one and a half times that size. Past that the
+  flag returns, carrying both numbers, so it can say what was expected
+  and what was actually seen rather than repeating a count you already
+  looked at. Saying it is expected again raises the recorded size to
+  the new firing; the size only ever goes up.
+
+- Scheduled pipelines (the weekly CHR exercise, the daily CHR watch) now
+  run only the job they were created for, not the full lint, test and
+  security set as well (#947).
+
+  Every shipped detector now states what its size is, or states that it
+  has none. Detectors with no size -- device silence, known bad IP,
+  unexpected mail sender, stale rule, and the two that judge a rate
+  against a moving baseline (global spike, rule spike) -- keep the old
+  meaning exactly: silencing one of those ignores that host on that
+  detector outright. Silences recorded before this release have no size
+  and keep that same meaning; nothing needs migrating.
+
+- **Every flag now ends with a judgement: expected, checked,
+  investigate or resolved** (#640, part B: API and the verdict row). The
+  flags tab offers **expected · checked · investigate** on a fresh flag,
+  and **expected · resolved** once something is being investigated. All
+  four are available to any signed-in user, not just an admin, through
+  `POST /api/flags/{id}/verdict`.
+
+  - **expected** is what records an expectation now (see part A's entry
+    below): normal for this host, at the size you just looked at.
+  - **checked** means "looked suspicious, checked, fine this time". It
+    clears the flag and suppresses nothing, but it is remembered: if
+    the same detector fires on the same host again, the flag comes back
+    saying *you checked this on 2 Sept and found it fine*.
+  - **investigate** leaves the flag open while you work on it.
+  - **resolved** means dealt with, normally by a firewall change. It
+    clears the flag and deliberately does not suppress anything: a line
+    only reaches mikroview if the firewall let it get that far, so a
+    correct fix makes the lines stop. If the same circumstances recur
+    the flag returns, reading *resolved on 2 Sept -- it's back*, because
+    the fix was not what was intended. Wanting to keep logging those
+    drops is an expected verdict at that rate, not a resolved one.
+
+  A flag that returns past an expectation says so on its own row --
+  "expected up to 30, saw 120", the two real numbers -- and saying
+  expected again raises the recorded size. Undo still sits beside the
+  stamp for as long as the flag carries the verdict, and undoing an
+  expected verdict now withdraws the expectation it recorded rather than
+  leaving a suppression standing behind a re-opened flag.
+
+  Verdicts and their undo are audit-logged, carrying the verdict as the
+  entry's detail. The exclude-forever action they replace was admin-only
+  and logged; these are user-tier, so the record of who decided a pair
+  stops being flagged matters more, not less.
+
+  The expectations themselves are not listed anywhere in the interface
+  yet -- one made by mistake can only be withdrawn by undoing the
+  verdict while the row is still in front of you. The ledger that lists
+  them, with absorbed counts, and lets you prune them is the remaining
+  part of #640.
+
+- **A verdict now writes to the watchlist as well as to the flag**
+  (#641). Recognising traffic as legitimate and recording it as expected
+  used to be two separate errands, so the second rarely happened.
+
+  - **expected** records the destinations the flag actually saw -- each
+    with the port it was reached on -- as permitted on the device's own
+    inverted watchlist entry. If the device has no entry, one is created
+    **observing**: it lists where the device goes and fires nothing, so
+    an automatic step never arms a fence. No form and no extra click,
+    because it is reversible -- undoing the verdict, or changing it to
+    something else, takes the permissions back and removes an entry that
+    existed only to hold them. Only what that verdict added is removed;
+    anything permitted separately stays.
+  - **resolved** offers instead of acting. The line it leaves behind
+    reads *resolved — undo · watch for this*. Taking the offer opens the
+    watchlist's own entry form, prefilled with the host (by MAC where
+    the evidence carries one, otherwise by address) and the pairs the
+    flag saw, and states where those values came from: which firing
+    window, how many of how many pairs, and whether the watch is MAC- or
+    IP-bound. Saving *or* discarding puts you back in the flags inbox,
+    so declining costs nothing. The flag stays resolved either way.
+
+  Why offer a watcher at all: after a block, the first packet that gets
+  through matters more than the detector's threshold being crossed
+  again. The detector brings a resolved flag back only when the host
+  re-crosses its threshold; a watch fires on the first line that
+  reappears.
+
+  **outbound_anomaly and internal_recon now record the port alongside
+  each destination**, which is what makes their evidence precise enough
+  to permit or watch. Nothing is inferred by crossing a host list
+  against a port list -- that would allow combinations the device never
+  made -- so a flag from a detector that records no pairs permits
+  nothing, and offers no watcher.
+- **Metrics: the hourline reads every series, and the ledger sits above
+  the table's minutes** (#803, design rounds 36-37). The line under the
+  scene bar used to answer the minute under the cursor with a ratio that
+  named two series and hid the rest ("9 refused of 61 events"); it now
+  reads the whole minute in one line -- a figure per series, refused in
+  the refused ink, and the flag-episode count followed by the type names
+  behind it. That was already the hourline's job, so the register's
+  cross-section aside is gone rather than duplicating it beside the
+  paper, and the "Pick a minute on the register to read it across every
+  series" instruction it printed when empty went with it.
+
+  On the table view the ledger -- top rules, top talkers, by device, by
+  protocol, the hour by action, episodes by flag type -- moves from a
+  narrow column down the left side to a full-width band across the head
+  of the view, ruled off from the minutes below it, with the table
+  taking the whole width instead of what a 320px sidebar left it. Its
+  six columns are bars without boxes: the bordered cards around each one
+  are gone, since a box inside a ruled band draws the same border twice.
+
+- **The docket's flags tab is the ratified round-29 table, not a card
+  grid** (#688). One row per open flag -- flag · where · evidence ·
+  count · age -- each wearing its flag type's own family ink as a left
+  stripe and mark, and each opening as a drawer directly beneath itself
+  rather than expanding a card. The drawer holds the plain-English
+  headline and story, the episode's shape drawn as a tick strip, the
+  matched log lines, and the two ratified actions: open in stream, and
+  clear with a note. Every column still sorts by its head and filters
+  from the quiet dashed row beneath it, and `where` still opens the
+  topography at its sensible level. Two earlier passes put ratified
+  language inside the old card instead of building the row-and-drawer
+  structure the record draws; this ports the record's own markup and CSS,
+  so the flags and watchlist tabs now read as one surface.
+
+  Things the round-29 scene draws no home for have been taken off this
+  tab rather than squeezed into it, and are recorded on #688 to be
+  placed one at a time: the Expected/Noise/Real verdict row and its
+  undo, per-flag confidence, the Exclusions tab (and the "permanently
+  clear" action that fed it), campaign grouping of flags sharing a
+  source, the 1/2/3-column density picker, the "Recently cleared" list,
+  the "Active flags by type" summary, the per-flag abuse check, the
+  reputation panel and the ports/hosts/NAT evidence rows. None of the
+  code, API or stores behind them changed -- only what this tab shows.
+
+- **The live table now shows the ratified nine columns, and NAT stopped
+  being one of them** (#644). Stream's table is rebuilt around time
+  (with milliseconds), action, source name, source address, destination
+  name, destination address, proto, port and rule -- a name now carries
+  the identity and its address sits dim and right-aligned beside it, and
+  an unnamed external address shows bare, with its country code standing
+  in for a name it doesn't have. NAT is no longer a column of its own; a
+  NAT'd row carries an action badge instead. Rows have gone quiet too --
+  no more full-row colour washes, a subtle band instead -- and the
+  per-cell information buttons are gone, with that same detail now
+  living in the row's own detail sheet, opened from the time cell and
+  reachable by keyboard. The filter bar folds away behind a quiet
+  trigger too, rather than sitting permanently open.
+- **Entities and Settings join the deck, and Fleet's routers move in with
+  them** (#647). The card deck now runs to seven: Entities and Settings
+  take the two final places, and Fleet's routers table folds into
+  Entities rather than staying a page of its own -- Fleet stops being
+  where you go for them. The account menu, now that each of those has a
+  home of its own, slims down to theme, Run setup, Sign out, and About
+  and licence.
+- **The fall's port spectra are stroke-only waves now, not filled
+  triangles** (#650). Each carrier's live-spectrum peak used to draw as
+  a small filled triangle; it now draws as a single stroked wave, with
+  no fill and no baseline, so the spectrum strip reads as a line rather
+  than a row of solid tents.
+
+### Removed
+
+- **The map's Policy lens is gone, from both the flat map and the city**
+  (#1016). Nobody asked for it: it redrew the same pushed rule table the
+  Coverage lens already reads, as one line per rule, and in the city it
+  faded every road so it could light each gate with a rule number. Both
+  map surfaces now carry two base lenses, Traffic and Coverage, and the
+  city draws its roads and gates the same way in each. Nothing is lost
+  that the rest of the app does not already say: the pushed rules
+  themselves are unchanged, and Coverage still paints every
+  boundary-direction by what it logs. A reader who had Policy selected
+  gets Traffic, silently -- the choice was never saved between visits.
+
+- **An account with no `role` in the accounts file no longer defaults to
+  `user`** (#873). The default existed for accounts persisted before
+  roles existed (#653); every account mikroview writes has carried a role
+  since. A roleless account can now only be hand-edited in, so it is
+  loaded as-is and fails closed -- denied by every role gate, admin and
+  user alike. Give the account a role in the file, or set one as an
+  admin.
+
+- **The rule-usage store no longer reads the bare-array
+  `rule-usage.json` it wrote before `recordingSince` existed** (#873).
+  Only the current object shape is read; an array-shaped document is now
+  an unparseable document, which is a hard startup error by design
+  (#378), so an instance still holding one refuses to start until that
+  stale `rule-usage.json` is deleted.
+
+- **A stored definition whose `kind` or `intent` this binary does not
+  recognize is now a hard startup failure** (#873), naming the offending
+  definition and its unrecognized value. It was previously preserved
+  unevaluated rather than dropped -- the case a downgrade, or a shipped
+  definition since retired, could produce. Pre-1.0 with no user base,
+  downgrade is not a supported operation: delete the named definition
+  (its data stays on disk until you do), or restore the binary that
+  wrote it.
+
+- **`watchlist.storePath` and `flags.detectorSettingsStorePath` are
+  gone, with the boot-time migration that read them** (config keys,
+  `MIKROVIEW_WATCHLIST_STORE_PATH` and
+  `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH`). Both documents were
+  migration sources only: the stores that owned them
+  (`internal/watchlist.Store`, `internal/detect.SettingsStore`) were
+  deleted in #405/#407, and nothing has written either since. Watchlist
+  entries and detector toggles both live in the definitions store
+  (`engine.definitionsStorePath`), which is what `-backup` carries. The
+  server no longer opens the two documents at boot, so a read failure on
+  either can no longer stop it starting. Remove the keys from
+  `config.yaml`; unknown keys are ignored, and the files themselves can
+  be deleted once a deployment has upgraded past #407. Upgrading
+  straight from a pre-#407 release skips the one-time entry adoption:
+  upgrade through a release that still had it, or re-create the entries.
+
+- **The Noise verdict, the plain Clear control, "never flag this again"
+  and the exclusions API are gone** (#640), wholesale, with no aliases
+  and no stub endpoints. Each is replaced by a verdict, above:
+
+  - **Noise** existed only to feed a threshold-suggestion generator the
+    owner dropped: raising a detector's threshold hides real events for
+    every host in order to quiet one. Gone from the UI, the API and the
+    store; `POST /api/flags/{id}/verdict` now rejects `"noise"` as an
+    unrecognised verdict rather than accepting it as anything.
+  - **The plain Clear** (`POST /api/flags/{id}/clear`, and the drawer's
+    "clear with a note") dismissed a flag without recording what you
+    concluded. **checked** is that action with the conclusion kept.
+    "Clear all" is unchanged -- it still clears every active flag in one
+    request, records nothing, and suppresses nothing.
+  - **"Clear and never flag this again"**
+    (`POST /api/flags/{id}/clear-permanent`) silenced a (detector,
+    target) pair outright, forever. **expected** does the same job
+    bounded by the size of the firing you judged, so a host that grows
+    past it comes back.
+  - **The admin exclusions API** (`GET /api/flags/exclusions`,
+    `DELETE /api/flags/exclusions/{id}`) and the Exclusions tab that
+    read it are removed. Their replacement -- a ledger of expectations
+    with their sizes and absorbed counts -- is the remaining part of
+    #640; until it lands there is no screen or endpoint that lists
+    recorded expectations.
+
+  Expectations recorded before this release are untouched, and an
+  operator's stored data needs no migration. Anything scripted against
+  the four removed endpoints will now get a 404 or a 400 rather than a
+  quiet no-op.
+- **`Definition.Suppressions` is gone** (#640). The per-definition
+  suppression list was modelled on the definition envelope in #401 and
+  never given matching semantics -- nothing ever consulted it before an
+  emission. #640 settles on one suppression mechanism, so the field is
+  removed rather than left as a second, silent one: from the definition
+  envelope, from `GET /api/definitions`' response, from
+  `PUT /api/definitions/{id}`'s accepted fields (a request that sends
+  `suppressions` now has that field ignored), and from the frontend
+  types. Any value stored in an existing definitions document is simply
+  not read back.
+
+- **The `system` and `light` themes are gone** (#708), wholesale. Round
+  30 -- the ratified design -- is dark throughout, and dark stops being
+  a preference and becomes what the stylesheet simply is. The light/dark
+  auto mode picker is removed from the theme menu; the `mikroview-theme`
+  storage key, the `ThemePref` type, `cycle()` and the `system` fallback
+  in `lib/theme.svelte.ts` are removed outright along with the file
+  itself; and every light-mode CSS variable override and the
+  `prefers-color-scheme` media query are removed from `app.css`. No
+  alias maps `system` or `light` onto dark, and no stored preference is
+  read even to migrate it -- a browser with an old `mikroview-theme`
+  value in local storage now simply has an unread key. The colourway
+  picker (Signal/Pulse/Nebula/Frequency/Mono) is unaffected.
+
+### Security
+
+- **Pre-release audit hardening.** The router-backup drop box rejects
+  out-of-range SFTP write offsets and recovers per connection; the
+  root-side quiet-host script caps a hold at one hour whatever the hold
+  file says; `POST /api/setup/commands` validates its fields and quotes
+  every value it templates into a RouterOS string. The audit's coverage
+  is in `docs/reviews/2026-09-10-v0.5.0.md`.
+
+### Fixed
+
+- **A `Flush` satisfied by a save already in flight no longer leaves the
+  write-behind writer armed to skip the next debounce window.** The next
+  unrelated write went to disk at once instead of waiting
+  `persistMinInterval`; in CI it showed up as `TestPersistenceRateLimited`
+  counting three saves where two were expected, only on a loaded runner.
+  The sustained-failure back-off tests in `rules` and `device` now bound
+  attempts by the windows that actually elapsed, as `flags`' copy already
+  did (#941).
+
+- **`docs/configuration.md`'s API reference table had drifted from the
+  authorization matrix** (#847). Several rows still said `admin-only`
+  for routes #653's "watchers" bench ruling had widened to user tier
+  months earlier (`/api/entities`, `/api/naming/provenance`,
+  `/api/coverage/declarations/{key}`, `/api/suggestions*`), one said the
+  opposite -- `GET /api/tokens` was narrowed back to admin-only by #657
+  after the table was last updated -- and nine registered routes had no
+  row at all. The table now states the tier `internal/api/authz_matrix_test.go`
+  actually pins for every route in it.
+- **The engine room's event-buffer row lost its live count** (#842).
+  #823's memory slider replaced "8,412 of 201,000 events · ~9 h window"
+  with "120 MiB · ~201 000 events · ~9 h at today's rate" -- the
+  configured ceiling and a reckoning from it, with no number anywhere in
+  the row that the server actually publishes as traffic arrives.
+  `bufferRow()` now takes the live held count and prints it ahead of the
+  ceiling ("120 MiB · 8 412 of ~201 000 events · ~9 h at today's rate"),
+  and the engine room passes the buffer's current occupancy in.
+- **Pages could scroll far past their own content into empty space**
+  (#689). Metrics' own sr-only screen-reader region is `position:
+  absolute` with no offset of its own, and none of the deck's wrappers
+  established a positioning context, so the browser fell back to the
+  region's CSS "static position" -- computed from the full, unclipped
+  flow height of everything before it, ignoring every
+  overflow:hidden/auto ancestor on the way. With nothing positioned
+  between it and `<html>`, that became real document coordinates:
+  scrolling far enough down left nothing on screen but the deck's fixed
+  roll rail, on any scene sharing a card with Metrics (it is a snap
+  neighbour of Topography and Stream as well as itself). Deck.svelte's
+  `.card` is now `position: relative`, closing the gap for every scene
+  that sits inside it rather than papering over Metrics' own case.
+- **The stream's table had the ratified nine columns but not the
+  ratified measure** (#685). #644 built the columns; this is the rest of
+  round 29's stream scene, which the branch that built them never
+  touched. Source, destination and rule were three equal flexible
+  columns sharing leftover width evenly regardless of what each held --
+  on a wide viewport that gave source roughly a third of the table for
+  a short IP, while proto/port/rule were pushed toward (and sometimes
+  past) the right edge. Rule is now the only flexible column; the rest
+  hold fixed widths sized to what they actually carry (worked out by
+  hand against the mockup's own rows, since `the-whole.html`'s table
+  sets no widths at all and relies on plain browser auto-layout).
+  Action badges shrink to the mockup's own small-flat numbers (`10px`
+  font, `0 6px` padding, `0.06em` tracking, was `12.5px`/`3px 8px`/
+  `0.03em`) -- the colors already matched. The thin vertical strokes
+  floating over the header turned out to be the column resize handles:
+  their tick mark had an explicit height with no `align-items` to
+  center it, so it pinned to the top of the header instead of centering
+  in it. Persisted column widths from before this change are
+  discarded (`mikroview-column-widths-v4` → `-v5`) since three of the
+  nine columns changed from flexible to fixed. A row on a flagged
+  pathway carried a ⚑ mark in the time cell where the ratified table
+  draws a full-row wash instead (`tr.hl`, `var(--alarm)` at 5%) --
+  built as drawn, glyph removed. The name/address pairing and the row
+  banding were already built to spec and are untouched.
+- **The topography's furniture, landed against its ratified round-29
+  scene** (#682). #648 built the dials, the lens selector, the zone
+  cards, the edge labels, the altitude control and the ascend link; on
+  screen none of it read as designed. The health dials sat on top of a
+  top-right Traffic/Policy/Coverage tab strip that round 29 never
+  draws there -- the strip is now the scene's own bottom-left bar,
+  merged with the same typography the map's other chrome wears, and
+  the dials sit alone, inset clear of the deck's roll rail. The
+  watcher dial's ring wore a "◉" text glyph for its legend; it now
+  draws the scene's own eye (a path and a pupil, ported from the
+  mockup's dial markup). Zone cards' coverage badges (`LOGGED BOTH
+  WAYS`, `DARK TOWARD WAN`) rendered in flat grey, one crammed
+  sentence; they now carry the ratified three-way colour -- green
+  logged, red dark, dim otherwise -- as two lines, badge over detail,
+  with the aggregate bar moved below the card's own edge (as round 29
+  draws it) so the second line never collides with it. Edge labels sat
+  directly across the lines they annotated; they now sit off to the
+  side, with a backdrop-matched halo for the cases still crossing
+  something. The altitude control was a bare browser range input; it
+  now wears a custom thin track and diamond thumb with its two
+  extremes named ("clients" ... "survey", the middle stops staying
+  tick-only). The ascend link floated as a bordered pill over the
+  whole card; it now sits inside the map's own flow, top-left of the
+  stage, as plain text. The boundary-derived note that used to float
+  half off the map's bottom-left corner is now a bounded, backed pill
+  stacked above the relocated lens bar, in the scene's own chrome
+  rather than over the drawing. Degrading honestly when the `/ip`
+  address table hasn't been pushed (#687) was already correct and
+  stays untouched -- these fixes change how the furniture reads, not
+  what it invents when data is missing.
+- **The deck mounted a card's scene a card early and tore it down a
+  card late, worst on the docket** (#690). `Deck.svelte` used to mount
+  any card within one index of the active one, always -- so sitting on
+  Stream paid a full mount of the docket's unvirtualised Flags list,
+  and sitting on Entities or Settings paid its teardown, neither ever
+  seen. A card's scene now mounts once it's the one actually visited,
+  plus whichever neighbour the deck is physically rolling it into or
+  out of view (tracked by a low-threshold `IntersectionObserver` with a
+  lookahead margin, `lib/deckMount.ts`), so the roll still shows real
+  content mid-transit without paying for a neighbour nobody scrolled
+  toward. Measured against the live demo: the stream roll dropped from
+  ~11 s to under 1 s, the docket's own roll from ~50 s to under 2 s,
+  Entities from ~20 s to under 1 s, and Settings from ~14 s to under
+  0.5 s.
+- **Finishing the setup wizard could land you on a dead view** (#646).
+  Its exit still pointed at the stream-as-landing-page arrangement that
+  #616 retired once the fall took over as the real landing page, so
+  every wizard exit -- not only the new journey's -- closed onto a view
+  that no longer served that role. It now closes onto the fall instead,
+  on every path into the wizard.
+- **Watchlist matching against a real router could silently see nothing**
+  (#614). Against a real RouterOS device, several firewall lines logged
+  close together in a burst -- an input line and the forward/NAT line
+  for the same packet, for instance -- arrived on the TCP syslog
+  connection glued together with no delimiter, and got stored as one
+  garbled event whose fields came from whichever embedded line the
+  parser happened to read last. A watchlist entry scoped to a real
+  port or device could go through an entire burst without ever
+  recording a match, with nothing in the interface to explain why.
+  Recommending `remote-log-format=syslog` in the RouterOS setup steps
+  gives every message its own header, which the TCP listener now uses
+  to split a burst into its individual messages eagerly rather than
+  waiting on a quiet gap that a fast enough burst never has. A sender
+  left on the previous default format has no header to split on and
+  keeps the old behaviour.
+- **A second `make live-check-remote` run could force-push over the
+  first's branch and delete the tree it was still standing in** (#809).
+  `scripts/gate-remote.sh` used one fixed branch (`gate-run`) and one
+  fixed work tree (`~/gate-work`) on the host, with nothing to stop two
+  runs overlapping -- the second run's push, reclaim and `rm -rf` landed
+  on top of the first mid-run, and the tell was the bare repo's
+  `gate-run` ref pointing at someone else's commit. The script now takes
+  an atomic `mkdir ~/gate-lock` on the host right before it pushes,
+  writing who holds it (host, user, ref, sha, pid, start time) to
+  `~/gate-lock/owner`; a second run that cannot take the lock prints the
+  owner and refuses rather than racing it. A lock older than 15 minutes
+  with no `mv-gate-run` container running is treated as abandoned and
+  taken over, printing what was found. Released in a `trap ... EXIT` so
+  Ctrl-C, a dropped SSH connection or a normal finish all clear it
+  without disturbing the run's real exit status. Separately, the
+  checkout is now verified after cloning -- `git status --porcelain`
+  and `git ls-files --deleted` must both be empty, or the run refuses
+  before building rather than failing confusingly partway through
+  `live-check` -- and a `RECLAIM` chown failure against an existing tree
+  now prints a warning instead of failing silently.
+- **A caller told to run `make live-check-remote` had no way to ask the
+  lock above to queue rather than refuse** (#811, the same collision as
+  #809 caught mid-`npm ci` on the trampled side). Refusing without
+  `--wait` now exits `75`, distinct from a gate failure, so a script can
+  tell "the host is busy" from "the gate found something" without
+  parsing the message; `scripts/gate-remote.sh --wait` (or
+  `MV_GATE_WAIT=1`) polls the lock every `MV_GATE_WAIT_INTERVAL` seconds
+  (default 30) instead of exiting.
+
 ## [0.4.0] - 2026-08-25
 
 ### Added

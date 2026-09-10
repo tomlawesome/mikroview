@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,6 +95,29 @@ const maxTCPMessageBytes = 64 * 1024
 // that would exist between two genuinely distinct log lines, so two
 // bare messages sent back to back are never coalesced into one.
 const tcpQuiescence = 75 * time.Millisecond
+
+// tcpHeaderCompletionWindow is how much longer the read loop waits once
+// tcpQuiescence has already expired but the bytes at the end of pending
+// are an RFC3164 header that has not finished arriving (see
+// rfc3164HeaderStillArriving).
+//
+// tcpQuiescence guesses "the sender has finished" from silence alone,
+// because a bare RouterOS message offers nothing else to go on. A
+// half-arrived header is the one case where the bytes themselves say
+// otherwise: a sender that has written "<30>Aug 29 20:52:4" is
+// demonstrably in the middle of a message, so treating that silence as
+// the end of the *previous* message glues a fragment of the next
+// message's header onto a real record -- which mikroview then displays
+// as fact (#914). Waiting instead costs nothing when the rest arrives,
+// which on a working connection it does.
+//
+// One second is far above both plausible causes of that gap -- a single
+// TCP retransmission (Linux's TCP_RTO_MIN is 200ms) and a read loop
+// that lost the CPU on a contended host, which is how #914 first showed
+// up -- and far below anything an operator would notice. It is only
+// ever reached after a message has already gone quiet mid-header, so it
+// adds no latency to ordinary traffic at all.
+const tcpHeaderCompletionWindow = time.Second
 
 func init() {
 	maxTCPConnectionsPerSource.Store(8)
@@ -207,6 +231,196 @@ var (
 	tcpRejectedConfigured atomic.Uint64
 )
 
+// lossClockOverride is a test seam for "now" as read by loss-counter
+// freshness tracking below (lastAt, episode, active) -- nil means
+// time.Now. A package-level var rather than a struct field, because the
+// counters it clocks are themselves package-level state (this whole
+// var block), with no per-listener instance to hang a clock on. Same
+// "nil means the real clock" convention as logging.Limiter's own now
+// seam.
+var lossClockOverride atomic.Pointer[func() time.Time]
+
+// lossNow reads the current time for freshness tracking, through
+// lossClockOverride when a test has installed one.
+func lossNow() time.Time {
+	if p := lossClockOverride.Load(); p != nil {
+		return (*p)()
+	}
+	return time.Now()
+}
+
+// setLossClock installs fn as lossNow's source, or restores time.Now
+// when fn is nil. Test-only: production code never calls this.
+func setLossClock(fn func() time.Time) {
+	if fn == nil {
+		lossClockOverride.Store(nil)
+		return
+	}
+	lossClockOverride.Store(&fn)
+}
+
+// Per-counter freshness windows (issue #1015): how long a counter's
+// condition is still considered "happening" after it last moved, before
+// it should stop being surfaced as active. Dropped and rejectedConfigured
+// get the longer 5-minute window -- records were actually lost, or a
+// declared router is locked out, both worth a longer dwell than a
+// stray sender being turned away. Rejected (undeclared source) and
+// oversized get 60 seconds -- ordinary defensive behaviour working as
+// intended, not itself an emergency once it stops recurring.
+const (
+	lossWindowDropped            = 5 * time.Minute
+	lossWindowRejectedConfigured = 5 * time.Minute
+	lossWindowRejected           = 60 * time.Second
+	lossWindowOversized          = 60 * time.Second
+)
+
+// lossFreshness tracks, beside a counter's own monotonic total, when its
+// condition last happened and how many times in the current episode --
+// what lets the frontend ask "is this still happening?" instead of "has
+// this ever happened?" (issue #1015). An episode is a run of hits with
+// no gap wider than its window between consecutive hits; a gap that wide
+// means whatever was happening stopped, so the next hit starts a new
+// episode at 1 rather than adding to a count that would otherwise grow
+// forever, exactly like the monotonic total it sits beside.
+//
+// Guarded by its own mutex, like tcpOversizedHostMu and
+// rejectedConfiguredHostsMu elsewhere in this file: hit's
+// read-then-maybe-reset-then-write is not a single atomic step.
+type lossFreshness struct {
+	mu      sync.Mutex
+	episode uint64
+	lastAt  time.Time // zero means never
+}
+
+// hit records one occurrence against window -- see lossFreshness.
+func (f *lossFreshness) hit(window time.Duration) {
+	now := lossNow()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lastAt.IsZero() || now.Sub(f.lastAt) > window {
+		f.episode = 0
+	}
+	f.episode++
+	f.lastAt = now
+}
+
+// snapshot reports the current episode count, lastAt (the zero value
+// when the counter has never moved) and whether the condition is still
+// active -- lastAt within window of now. now is a parameter rather than
+// read internally so a caller building several fields off one request
+// (lossStats) judges every one of them against the same instant.
+func (f *lossFreshness) snapshot(window time.Duration, now time.Time) (episode uint64, lastAt time.Time, active bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.episode, f.lastAt, !f.lastAt.IsZero() && now.Sub(f.lastAt) <= window
+}
+
+// clear zeroes the episode and lastAt. The monotonic total this sits
+// beside is a separate atomic.Uint64 the caller clears itself -- see
+// ClearLoss.
+func (f *lossFreshness) clear() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.episode = 0
+	f.lastAt = time.Time{}
+}
+
+// Freshness trackers for the four loss counters, one each -- see
+// lossFreshness and ClearLoss.
+var (
+	tcpDroppedFreshness            lossFreshness
+	tcpRejectedFreshness           lossFreshness
+	tcpRejectedConfiguredFreshness lossFreshness
+	tcpOversizedFreshness          lossFreshness
+)
+
+// maxRejectedConfiguredHosts bounds how many distinct locked-out
+// declared hosts rejectedConfiguredHosts remembers. Matches
+// maxTCPConnectionsPerSource (8): both exist to keep a value that is
+// ultimately driven by an unauthenticated remote peer -- host, in this
+// case -- from growing without limit. In practice the *set* of hosts
+// that can ever land here is already bounded by configuredSources (the
+// operator's own devices: list), so this cap is defence in depth rather
+// than the thing doing the bounding: even a deployment that somehow
+// declared thousands of devices, or a future caller of noteRejected
+// that stops checking isConfiguredSource first, still holds only 8
+// entries. Recency, not identity, decides what is worth keeping: the
+// banner and the Settings readout only ever need the most recently
+// locked-out router, so evicting the oldest is the right eviction rule.
+const maxRejectedConfiguredHosts = 8
+
+// rejectedConfiguredHostEntry is one entry in rejectedConfiguredHosts:
+// the host plus when it was last rejected, so issue #1015's
+// loss.rejectedConfigured.hosts can list only the ones still within
+// window while the plain rejectedConfiguredHostsSnapshot below keeps
+// serving the full bounded list unchanged.
+type rejectedConfiguredHostEntry struct {
+	host   string
+	lastAt time.Time
+}
+
+// rejectedConfiguredHosts holds the most recently rejected declared
+// hosts, most-recent-first, deduplicated (a host already present moves
+// to the front rather than appearing twice). Guarded by its own mutex
+// rather than an atomic, since an append-and-truncate isn't a single
+// word.
+var (
+	rejectedConfiguredHostsMu sync.Mutex
+	rejectedConfiguredHosts   []rejectedConfiguredHostEntry
+)
+
+// noteRejectedConfiguredHost records host as the most recently
+// rejected declared source. Call only after isConfiguredSource(host)
+// -- see noteRejected.
+func noteRejectedConfiguredHost(host string) {
+	rejectedConfiguredHostsMu.Lock()
+	defer rejectedConfiguredHostsMu.Unlock()
+
+	for i, e := range rejectedConfiguredHosts {
+		if e.host == host {
+			rejectedConfiguredHosts = append(rejectedConfiguredHosts[:i], rejectedConfiguredHosts[i+1:]...)
+			break
+		}
+	}
+	rejectedConfiguredHosts = append([]rejectedConfiguredHostEntry{{host: host, lastAt: lossNow()}}, rejectedConfiguredHosts...)
+	if len(rejectedConfiguredHosts) > maxRejectedConfiguredHosts {
+		rejectedConfiguredHosts = rejectedConfiguredHosts[:maxRejectedConfiguredHosts]
+	}
+}
+
+// rejectedConfiguredHostsSnapshot returns a copy of the current
+// most-recent-first list of host names, safe for a caller to hold onto.
+// Unchanged shape (a plain string list, bounded at
+// maxRejectedConfiguredHosts) -- see rejectedConfiguredHostEntry's doc
+// comment.
+func rejectedConfiguredHostsSnapshot() []string {
+	rejectedConfiguredHostsMu.Lock()
+	defer rejectedConfiguredHostsMu.Unlock()
+
+	out := make([]string, len(rejectedConfiguredHosts))
+	for i, e := range rejectedConfiguredHosts {
+		out[i] = e.host
+	}
+	return out
+}
+
+// activeRejectedConfiguredHostsSnapshot returns the most-recent-first
+// host names whose own lastAt is within window of now -- issue #1015's
+// loss.rejectedConfigured.hosts, a filtered view of the same bounded
+// list rejectedConfiguredHostsSnapshot serves in full.
+func activeRejectedConfiguredHostsSnapshot(window time.Duration, now time.Time) []string {
+	rejectedConfiguredHostsMu.Lock()
+	defer rejectedConfiguredHostsMu.Unlock()
+
+	var out []string
+	for _, e := range rejectedConfiguredHosts {
+		if now.Sub(e.lastAt) <= window {
+			out = append(out, e.host)
+		}
+	}
+	return out
+}
+
 // ListenerStats is a snapshot of syslog listener saturation.
 type ListenerStats struct {
 	InUse                 int    `json:"inUse"`
@@ -227,25 +441,158 @@ type ListenerStats struct {
 	// larger than the 64 KiB per-message limit. Above zero means
 	// something is sending log lines no RouterOS device produces.
 	Oversized uint64 `json:"oversized"`
+	// RejectedConfiguredHosts names the most recently rejected declared
+	// hosts, most-recent-first -- so the UI can say *which* router was
+	// locked out rather than only how many were. Bounded; see
+	// maxRejectedConfiguredHosts.
+	RejectedConfiguredHosts []string `json:"rejectedConfiguredHosts"`
+	// OversizedHost names the source of the most recent oversized
+	// message, so the "non-RouterOS sender" banner can say which
+	// address to look at rather than leaving that half of its own copy
+	// unfillable. Empty until the first oversized message.
+	OversizedHost string `json:"oversizedHost"`
+	// Loss is issue #1015's freshness signal for the four counters
+	// above: per-counter "is this still happening", not just "has this
+	// ever happened". Nothing existing above changes shape -- this is
+	// the one field added, so #1001's Settings readout and
+	// TestHandleStats keep passing unmodified. See LossStats.
+	Loss LossStats `json:"loss"`
+}
+
+// LossCounterStats is one counter's entry in LossStats -- see LossStats
+// and lossCounterStats.
+type LossCounterStats struct {
+	// Recent is the current episode's count -- how many times this
+	// counter has moved since it last went quiet for longer than its
+	// window, not the all-time total (that stays in ListenerStats'
+	// existing fields, for Settings). Nothing here is a rate.
+	Recent uint64 `json:"recent"`
+	// LastAt is when the counter last moved, RFC3339 UTC, or nil if it
+	// never has.
+	LastAt *string `json:"lastAt"`
+	// Active is computed fresh on every request: now - LastAt <= this
+	// counter's window. It is the one thing the frontend needs to decide
+	// whether to show a row at all.
+	Active bool `json:"active"`
+	// Hosts lists the declared hosts rejected within window,
+	// most-recent-first. Only ever set on the rejectedConfigured entry.
+	Hosts []string `json:"hosts,omitempty"`
+	// Host names the source of the most recent oversized message, but
+	// only while that message's own lastAt is still within window. Only
+	// ever set on the oversized entry.
+	Host string `json:"host,omitempty"`
+}
+
+// LossStats is ListenerStats.Loss's shape -- issue #1015.
+type LossStats struct {
+	Dropped            LossCounterStats `json:"dropped"`
+	RejectedConfigured LossCounterStats `json:"rejectedConfigured"`
+	Rejected           LossCounterStats `json:"rejected"`
+	Oversized          LossCounterStats `json:"oversized"`
+}
+
+// lossCounterStats builds one LossCounterStats entry from a freshness
+// tracker, judged against now.
+func lossCounterStats(f *lossFreshness, window time.Duration, now time.Time) LossCounterStats {
+	episode, lastAt, active := f.snapshot(window, now)
+	stats := LossCounterStats{Recent: episode, Active: active}
+	if !lastAt.IsZero() {
+		s := lastAt.UTC().Format(time.RFC3339)
+		stats.LastAt = &s
+	}
+	return stats
+}
+
+// lossStats builds Stats()'s Loss field -- one instant (lossNow, or a
+// test's injected clock) shared across all four counters, so they never
+// disagree about "now" against each other within the same response.
+func lossStats() LossStats {
+	now := lossNow()
+
+	rejectedConfigured := lossCounterStats(&tcpRejectedConfiguredFreshness, lossWindowRejectedConfigured, now)
+	rejectedConfigured.Hosts = activeRejectedConfiguredHostsSnapshot(lossWindowRejectedConfigured, now)
+
+	oversized := lossCounterStats(&tcpOversizedFreshness, lossWindowOversized, now)
+	if host, active := oversizedHostIfActive(lossWindowOversized, now); active {
+		oversized.Host = host
+	}
+
+	return LossStats{
+		Dropped:            lossCounterStats(&tcpDroppedFreshness, lossWindowDropped, now),
+		RejectedConfigured: rejectedConfigured,
+		Rejected:           lossCounterStats(&tcpRejectedFreshness, lossWindowRejected, now),
+		Oversized:          oversized,
+	}
+}
+
+// ClearLossResult is what ClearLoss hands its caller for an audit entry
+// -- the four totals as they stood immediately before the reset.
+type ClearLossResult struct {
+	Dropped            uint64
+	RejectedConfigured uint64
+	Rejected           uint64
+	Oversized          uint64
+}
+
+// ClearLoss zeroes every ingest-loss counter this package tracks: the
+// four monotonic totals, their episodes and lastAt, and both host
+// records (rejectedConfiguredHosts and tcpOversizedHost) -- issue
+// #1015's "Clear all". It does not affect InUse/Capacity/
+// ReservedForConfigured, which are current listener state, not loss
+// history.
+func ClearLoss() ClearLossResult {
+	result := ClearLossResult{
+		Dropped:            tcpDropped.Load(),
+		RejectedConfigured: tcpRejectedConfigured.Load(),
+		Rejected:           tcpRejected.Load(),
+		Oversized:          tcpOversized.Load(),
+	}
+
+	tcpDropped.Store(0)
+	tcpRejectedConfigured.Store(0)
+	tcpRejected.Store(0)
+	tcpOversized.Store(0)
+
+	tcpDroppedFreshness.clear()
+	tcpRejectedConfiguredFreshness.clear()
+	tcpRejectedFreshness.clear()
+	tcpOversizedFreshness.clear()
+
+	rejectedConfiguredHostsMu.Lock()
+	rejectedConfiguredHosts = nil
+	rejectedConfiguredHostsMu.Unlock()
+
+	tcpOversizedHostMu.Lock()
+	tcpOversizedHost = ""
+	tcpOversizedHostLastAt = time.Time{}
+	tcpOversizedHostMu.Unlock()
+
+	return result
 }
 
 // Stats reports current listener saturation. Safe to call at any time.
 func Stats() ListenerStats {
 	return ListenerStats{
-		InUse:                 int(tcpInUse.Load()),
-		Capacity:              maxTCPConns(),
-		ReservedForConfigured: reservedSlots(),
-		Rejected:              tcpRejected.Load(),
-		RejectedConfigured:    tcpRejectedConfigured.Load(),
-		Dropped:               tcpDropped.Load(),
-		Oversized:             tcpOversized.Load(),
+		InUse:                   int(tcpInUse.Load()),
+		Capacity:                maxTCPConns(),
+		ReservedForConfigured:   reservedSlots(),
+		Rejected:                tcpRejected.Load(),
+		RejectedConfigured:      tcpRejectedConfigured.Load(),
+		Dropped:                 tcpDropped.Load(),
+		Oversized:               tcpOversized.Load(),
+		RejectedConfiguredHosts: rejectedConfiguredHostsSnapshot(),
+		OversizedHost:           oversizedHostSnapshot(),
+		Loss:                    lossStats(),
 	}
 }
 
 func noteRejected(host string) {
 	tcpRejected.Add(1)
+	tcpRejectedFreshness.hit(lossWindowRejected)
 	if isConfiguredSource(host) {
 		tcpRejectedConfigured.Add(1)
+		tcpRejectedConfiguredFreshness.hit(lossWindowRejectedConfigured)
+		noteRejectedConfiguredHost(host)
 	}
 }
 
@@ -358,7 +705,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		if atCap {
 			noteRejected(host)
 			if total, ok := perSourceRejectGate.Allow(); ok {
-				tcpLog.Warn(fmt.Sprintf("per-source connection limit (%d) reached -- rejecting %s (%d such rejections since start)", perSourceLimit(), host, total))
+				tcpLog.Warn(fmt.Sprintf("per-source connection limit (%d) reached -- rejecting %s (%d such rejections since start or last clear)", perSourceLimit(), host, total))
 			}
 			conn.Close()
 			continue
@@ -367,7 +714,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			noteRejected(host)
 			if total, ok := unreservedRejectGate.Allow(); ok {
 				tcpLog.Warn(fmt.Sprintf(
-					"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml) -- rejecting %s (%d such rejections since start)",
+					"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml) -- rejecting %s (%d such rejections since start or last clear)",
 					unreservedCap, reservedSlots(), maxTCPConns(), host, total))
 			}
 			conn.Close()
@@ -401,7 +748,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			// At capacity: reject immediately rather than queuing, so the
 			// accept loop itself never blocks waiting for a slot to free up.
 			if total, ok := globalRejectGate.Allow(); ok {
-				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start)", maxTCPConns(), conn.RemoteAddr(), total))
+				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start or last clear)", maxTCPConns(), conn.RemoteAddr(), total))
 			}
 			conn.Close()
 		}
@@ -430,6 +777,258 @@ func normaliseHost(host string) string {
 		return addr.Unmap().String()
 	}
 	return host
+}
+
+// rfc3164HeaderLen reports how many bytes at the start of data form a
+// valid RFC3164 header -- an optional "<PRI>" (validated 0-191 when
+// present, same range and same off-by-one-tolerant "<=4 chars between
+// the brackets" rule ParseEnvelope uses in envelope.go) followed by a
+// "MMM DD HH:MM:SS" timestamp with a real month name and in-range
+// digits (bsdTimeLayout, also from envelope.go) -- or -1 if data does
+// not begin with one. Deliberately the same shape ParseEnvelope parses,
+// so "is this a header" (here) and "how do we read one" (there) can't
+// drift apart.
+//
+// PRI is optional here for the same reason it's optional in
+// ParseEnvelope: nothing about finding a boundary requires it. In
+// practice every message #614's fix actually splits does carry one --
+// remote-log-format=syslog puts it there -- but a header-shaped split
+// point shouldn't stop working just because some future sender omits
+// it the way ParseEnvelope already tolerates.
+func rfc3164HeaderLen(data []byte) int {
+	if len(data) == 0 {
+		return -1
+	}
+	i := 0
+	if data[0] == '<' {
+		end := bytes.IndexByte(data, '>')
+		if end <= 0 || end > 4 {
+			return -1
+		}
+		pri, err := strconv.Atoi(string(data[1:end]))
+		if err != nil || pri < 0 || pri > 191 {
+			return -1
+		}
+		i = end + 1
+	} else if data[0] < 'A' || data[0] > 'Z' {
+		// Cheap reject before the structural check below: every month
+		// abbreviation bsdTimeLayout can match starts with an uppercase
+		// letter, so anything else here can never be a bare (no-PRI)
+		// header start.
+		return -1
+	}
+	if len(data)-i < len(bsdTimeLayout) {
+		return -1
+	}
+	if !looksLikeBSDTimestamp(data[i : i+len(bsdTimeLayout)]) {
+		return -1
+	}
+	if _, err := time.Parse(bsdTimeLayout, string(data[i:i+len(bsdTimeLayout)])); err != nil {
+		return -1
+	}
+	return i + len(bsdTimeLayout)
+}
+
+// looksLikeBSDTimestamp is a cheap, allocation-free structural
+// pre-check for the "MMM DD HH:MM:SS" shape bsdTimeLayout parses --
+// separator positions and digit-ness only, not real month names or
+// in-range digits (time.Parse still does that; this never rejects
+// anything time.Parse would accept). data must already be at least
+// len(bsdTimeLayout) bytes -- callers check that first.
+//
+// It exists because nextHeaderStart calls rfc3164HeaderLen at nearly
+// every byte offset in pending, and the single-byte "starts with an
+// uppercase letter" check above passes on a long run of any one
+// uppercase letter (a real body can contain one, and the oversized
+// path's own test fixture does) -- without this, every such position
+// paid for a string conversion and a full time.Parse attempt, turning
+// one read's scan into work proportional to pending's length instead
+// of to the read itself. Measured concretely: with only the one-byte
+// check, splitting the accumulation for a 64KB oversized message
+// across several small reads made the read loop fall far enough behind
+// the writer that reads coalesced past the message-size cap, and
+// TestTCPOversizedMessageFragmentedAcrossManyReadsStaysBounded failed.
+func looksLikeBSDTimestamp(data []byte) bool {
+	isDigit := func(b byte) bool { return b >= '0' && b <= '9' }
+	return data[1] >= 'a' && data[1] <= 'z' &&
+		data[2] >= 'a' && data[2] <= 'z' &&
+		data[3] == ' ' &&
+		(data[4] == ' ' || isDigit(data[4])) &&
+		isDigit(data[5]) &&
+		data[6] == ' ' &&
+		isDigit(data[7]) && isDigit(data[8]) &&
+		data[9] == ':' &&
+		isDigit(data[10]) && isDigit(data[11]) &&
+		data[12] == ':' &&
+		isDigit(data[13]) && isDigit(data[14])
+}
+
+// nextHeaderStart returns the offset of the next valid RFC3164 header
+// in data at or after from, or -1 if none is found. Linear in
+// len(data)-from: rfc3164HeaderLen's cheap first-byte reject only skips
+// the expensive time.Parse when the byte in question can't possibly
+// start a header at all (most of an ordinary firewall line), not when
+// it merely fails to -- a long run of uppercase letters, which any
+// legitimate message body can contain, still pays for a time.Parse
+// attempt at every one of them. handleTCPConn's caller is what keeps
+// this bounded overall: it advances `from` across reads instead of
+// rescanning pending's already-checked prefix each time (see
+// headerScanned in its own read loop), so a large message built from
+// many small reads is scanned once in total, not once per read.
+func nextHeaderStart(data []byte, from int) int {
+	for i := from; i < len(data); i++ {
+		if rfc3164HeaderLen(data[i:]) >= 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// rfc3164MaxHeaderBytes bounds how wide a valid RFC3164 header can be:
+// "<191>" (5 bytes, the widest legal PRI) plus bsdTimeLayout's 15-byte
+// timestamp. handleTCPConn's headerScanned watermark holds back this
+// many bytes from the end of what it marks "already scanned" -- a
+// header up to this wide could still be forming right at that edge,
+// waiting on a later read to complete it.
+const rfc3164MaxHeaderBytes = 5 + len(bsdTimeLayout)
+
+// rfc3164HeaderStillArriving reports whether the bytes at the end of
+// data are an RFC3164 header that has not finished arriving -- either a
+// header with no message after it yet, or one that is itself only
+// partly here. Both mean the sender is mid-message, so a silence must
+// not be read as the end of whatever sits in front of it.
+//
+// This is the counterpart to the headerScanned watermark's trailing
+// margin, which already holds back rfc3164MaxHeaderBytes-1 bytes from
+// "already scanned" on exactly the grounds that a header could still be
+// forming there. The eager split loop respected that margin; the
+// quiescence flush did not, and emptied pending wholesale -- delivering
+// a real record with the first bytes of the next message's header stuck
+// on the end of it (#914).
+//
+// Only the tail is examined. A header further back has either already
+// been split on (it was complete) or is not a boundary at all.
+func rfc3164HeaderStillArriving(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	// A complete header and nothing else: the message it introduces has
+	// not started arriving. A header on its own is never a message.
+	if rfc3164HeaderLen(data) == len(data) {
+		return true
+	}
+	// Otherwise a header can only be part-way through arriving if it
+	// runs to the very end of data, and it is at most one byte short of
+	// rfc3164MaxHeaderBytes wide.
+	from := len(data) - (rfc3164MaxHeaderBytes - 1)
+	if from < 0 {
+		from = 0
+	}
+	for i := from; i < len(data); i++ {
+		if rfc3164HeaderPrefix(data[i:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// rfc3164HeaderPrefix reports whether data is a proper prefix of a
+// header rfc3164HeaderLen would accept -- the same shape, with the tail
+// end of it not yet arrived.
+//
+// How much of a prefix counts as evidence differs by whether the PRI is
+// there, and deliberately so, because the cost of being wrong is a
+// delayed message. A leading '<' is decisive on its own: RouterOS log
+// text does not contain one, so "<", "<3", "<30", "<30>" can only be a
+// PRI starting. A bare header has no such marker -- a single capital
+// letter ends real message bodies constantly -- so nothing counts until
+// the month abbreviation is complete enough for time.Parse to rule on.
+func rfc3164HeaderPrefix(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+
+	i := 0
+	hasPRI := false
+	if data[0] == '<' {
+		end := bytes.IndexByte(data, '>')
+		if end < 0 {
+			// The PRI itself is still arriving: '<' plus at most the
+			// three digits of the widest legal value.
+			if len(data) > 4 {
+				return false
+			}
+			for _, b := range data[1:] {
+				if b < '0' || b > '9' {
+					return false
+				}
+			}
+			return true
+		}
+		if end <= 0 || end > 4 {
+			return false
+		}
+		pri, err := strconv.Atoi(string(data[1:end]))
+		if err != nil || pri < 0 || pri > 191 {
+			return false
+		}
+		i = end + 1
+		hasPRI = true
+	}
+
+	ts := data[i:]
+	if len(ts) >= len(bsdTimeLayout) {
+		// Wide enough to hold a whole header. If it were a valid one
+		// rfc3164HeaderLen would have said so, and nothing here is
+		// still on its way.
+		return false
+	}
+	if len(ts) == 0 {
+		// "<PRI>" complete, timestamp not started.
+		return true
+	}
+	if !hasPRI && len(ts) < 3 {
+		return false
+	}
+	return bsdTimestampPrefix(ts)
+}
+
+// bsdTimestampPrefix is looksLikeBSDTimestamp for a timestamp that is
+// still arriving: the same separator-and-digit positions, checked only
+// as far as the bytes present, and shorter than the full layout.
+//
+// Once three letters are here the month is decidable, and deciding it
+// is time.Parse's job rather than this file's -- the same delegation
+// rfc3164HeaderLen makes, so "is this a real month" cannot drift
+// between the two. The day and time fields are filled in with values
+// that always parse, leaving only the month under test.
+func bsdTimestampPrefix(ts []byte) bool {
+	isDigit := func(b byte) bool { return b >= '0' && b <= '9' }
+	for i, b := range ts {
+		ok := false
+		switch i {
+		case 0:
+			ok = b >= 'A' && b <= 'Z'
+		case 1, 2:
+			ok = b >= 'a' && b <= 'z'
+		case 3, 6:
+			ok = b == ' '
+		case 4:
+			ok = b == ' ' || isDigit(b)
+		case 5, 7, 8, 10, 11, 13, 14:
+			ok = isDigit(b)
+		case 9, 12:
+			ok = b == ':'
+		}
+		if !ok {
+			return false
+		}
+	}
+	if len(ts) < 3 {
+		return true
+	}
+	_, err := time.Parse(bsdTimeLayout, string(ts[:3])+"  1 00:00:00")
+	return err == nil
 }
 
 func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
@@ -521,6 +1120,40 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	// behaviour this has to keep working, and tcpQuiescence's own
 	// comment for the window itself.
 	//
+	// tcpQuiescence alone is not enough once several bare messages arrive
+	// close enough together that the gap between them, not just within
+	// one of them, falls inside its window -- a real burst, not
+	// fragmentation of a single message. #614: one traffic() call in the
+	// live CHR fixture logs an input line and a forward/NAT line for the
+	// same packet within the same short window, and on a real router
+	// several such pairs land close enough together that quiescence
+	// never separates them -- ~10 lines flushed as a single message.
+	// Downstream, the parser reads that whole blob as one string and its
+	// field extraction is a left-to-right scan, so whichever embedded
+	// line's fields are read last is what wins: a stored chain=input
+	// event ended up carrying a later forward-chain line's dstPort and
+	// NAT annotation, with its own srcPort not even present in its own
+	// (2KB-truncated) Raw text -- one coalescing cause, not two separate
+	// bugs.
+	//
+	// remote-log-format=syslog (see live-routeros.sh's setup() and
+	// docs/routeros-setup.md) is what makes a real fix possible: RouterOS
+	// then gives every message its own RFC3164 header ("<PRI>MMM DD
+	// HH:MM:SS HOSTNAME ", verified against a real CHR 7.23.3), so the
+	// arrival of the next header inside pending is itself proof the
+	// message before it is complete -- no need to wait on quiescence to
+	// find that boundary. rfc3164HeaderLen/nextHeaderStart below look for
+	// exactly that shape and split eagerly whenever it turns up after the
+	// first byte of pending (the header at position 0, if any, belongs to
+	// the message still accumulating, not to one that just ended).
+	//
+	// A sender left on the default remote-log-format has no header
+	// anywhere in what it sends -- nothing for this to find -- so it gets
+	// no benefit and falls back to exactly what it did before: waiting
+	// out tcpQuiescence to resolve the last message of a burst. That is
+	// the accepted residual (see the issue's decided-fix comment): there
+	// is nothing on that wire to frame on, so nothing here can.
+	//
 	// A message *larger* than the cap is the other case this has always
 	// had to handle: a write bigger than maxTCPMessageBytes with no
 	// newline in reach. The first maxTCPMessageBytes are delivered once,
@@ -551,6 +1184,24 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	// does turn up, per the discard branch below.
 	var pending []byte
 	oversized := false
+	// headerScanned is the #614 split loop's cross-read watermark: how
+	// far into pending it has already searched for a header with none
+	// found, so a message built from many small reads (the oversized
+	// path's own lead-up, or any large ordinary message with no header
+	// in it at all) is scanned once in total rather than once per read
+	// -- see nextHeaderStart's doc comment for why that re-scan cost is
+	// real. Reset to 0 anywhere pending's front moves for any reason: a
+	// boundary just resolved, so nothing learned about the old buffer's
+	// indexing still applies to the new one.
+	headerScanned := 0
+	// awaitingHeader records that the last deadline set was
+	// tcpHeaderCompletionWindow rather than tcpQuiescence, because
+	// pending ended in a header that had not finished arriving. It is
+	// what tells the two timeouts apart: everywhere else the loop
+	// infers which deadline fired from pending being non-empty, and
+	// this is the one state that breaks that inference. Cleared by any
+	// read that returns bytes -- the wait is over, whatever arrived.
+	awaitingHeader := false
 
 	emit := func(data []byte) {
 		data = bytes.TrimRight(data, "\r")
@@ -584,6 +1235,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	for {
 		n, err := conn.Read(buf)
 		if n > 0 {
+			awaitingHeader = false
 			conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 
 			if oversized {
@@ -604,6 +1256,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				// by the network.
 				idx := bytes.IndexByte(buf[:n], '\n')
 				tcpOversized.Add(1)
+				noteOversizedHost(host)
 				if idx < 0 {
 					oversized = true
 					if err != nil {
@@ -617,6 +1270,32 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				pending = append(pending, buf[:n]...)
 			}
 
+			// The cap has to be judged before the newline split, not
+			// only after it (#944). The accumulation check further down
+			// only sees pending once every terminated line has been
+			// emitted, so when a slow reader takes the bytes that cross
+			// the cap *and* the terminator after them in one read, the
+			// split below delivered the whole over-limit line intact --
+			// the cap held only when the reader was quick enough to see
+			// it crossed before the newline landed, which is why the
+			// test for it flaked on a loaded runner rather than failing.
+			// Same outcome as the accumulation path: the first
+			// maxTCPMessageBytes delivered once, the rest of that line
+			// discarded and counted, whatever follows the terminator
+			// kept. No discard state to enter, since the terminator is
+			// already in hand.
+			for {
+				idx := bytes.IndexByte(pending, '\n')
+				if idx <= maxTCPMessageBytes {
+					break
+				}
+				emit(pending[:maxTCPMessageBytes])
+				tcpOversized.Add(1)
+				noteOversizedHost(host)
+				pending = pending[idx+1:]
+				headerScanned = 0
+			}
+
 			for {
 				idx := bytes.IndexByte(pending, '\n')
 				if idx < 0 {
@@ -624,6 +1303,56 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				}
 				emit(pending[:idx])
 				pending = pending[idx+1:]
+				headerScanned = 0
+			}
+
+			// #614: eagerly split at each subsequent RFC3164 header found
+			// in what's left of pending (see the framing comment above
+			// handleTCPConn for why). A header at position 0 belongs to
+			// the message still accumulating -- it is not itself a
+			// boundary -- so only a *second* header turning up later in
+			// pending proves the first message actually ended.
+			//
+			// The search has to skip past that first header's *entire*
+			// span, not merely its first byte: a header's own timestamp
+			// text, taken on its own, independently re-matches as a
+			// valid bare (no-PRI) header a few bytes later -- "Aug 29
+			// 20:52:44" is a legitimate header start whether or not a
+			// "<30>" sits in front of it. Searching from offset 1 alone
+			// found exactly that false boundary inside the header
+			// currently anchoring pending, splitting a real header in
+			// two ("<30>" as one message, its own timestamp as the
+			// next). Skipping to the end of position 0's header, when it
+			// has one, is what keeps that header intact.
+			for {
+				skip := 1
+				if hl := rfc3164HeaderLen(pending); hl > skip {
+					skip = hl
+				}
+				from := skip
+				if headerScanned > from {
+					from = headerScanned
+				}
+				next := nextHeaderStart(pending, from)
+				if next < 0 {
+					// Nothing found from `from` on. Remember that, short
+					// of a trailing margin wide enough to hold a header
+					// that's only partially arrived and could still
+					// complete once more bytes are appended -- so the
+					// next read resumes the search there instead of
+					// re-scanning bytes this one already ruled out. This
+					// is what keeps a large, header-free message (the
+					// oversized path's lead-up, in particular) from being
+					// rescanned in full on every single read.
+					headerScanned = len(pending) - (rfc3164MaxHeaderBytes - 1)
+					if headerScanned < skip {
+						headerScanned = skip
+					}
+					break
+				}
+				emit(pending[:next])
+				pending = pending[next:]
+				headerScanned = 0
 			}
 
 			if len(pending) >= maxTCPMessageBytes {
@@ -637,6 +1366,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				emit(pending[:maxTCPMessageBytes])
 				pending = pending[:0]
 				oversized = true
+				headerScanned = 0
 			}
 		}
 
@@ -646,14 +1376,35 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 			// closes right behind its last bare message, or resets
 			// mid-stream, still gets what it sent rather than nothing.
 			ambiguous := !oversized && len(pending) > 0
+			ne, isNetErr := err.(net.Error)
+			timedOut := isNetErr && ne.Timeout()
+
+			if ambiguous && timedOut && !awaitingHeader && rfc3164HeaderStillArriving(pending) {
+				// tcpQuiescence expired, but pending ends in a header
+				// that is still on its way -- so the sender is
+				// mid-message, and this silence is not the end of the
+				// message in front of it. Flushing here is what glued
+				// a fragment of the next message's header onto a real
+				// record (#914). Wait out one bounded window instead;
+				// if the rest arrives, the ordinary eager split
+				// resolves the boundary exactly, and if it never does
+				// the next timeout falls through to the flush below.
+				awaitingHeader = true
+				conn.SetReadDeadline(time.Now().Add(tcpHeaderCompletionWindow))
+				continue
+			}
+
 			if ambiguous {
 				emit(pending)
 				pending = pending[:0]
+				headerScanned = 0
 			}
-			if ne, ok := err.(net.Error); ok && ne.Timeout() && ambiguous {
-				// This was tcpQuiescence's short deadline, not the
-				// ordinary idle one: the sender simply finished a bare
-				// message rather than going idle. Flushed above; the
+			awaitingHeader = false
+			if timedOut && ambiguous {
+				// This was tcpQuiescence's short deadline (or the
+				// header-completion window above), not the ordinary
+				// idle one: the sender simply finished a bare message
+				// rather than going idle. Flushed above; the
 				// connection stays open.
 				conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 				continue
@@ -688,8 +1439,56 @@ var (
 	dropLogGate  = logging.NewLimiter(ingestDropLogInterval)
 )
 
+// tcpOversizedHost holds the source host of the most recent oversized
+// message, so the UI can say which sender is producing lines no
+// RouterOS device would (#995's yellow "non-RouterOS sender" banner).
+// Deliberately just the latest value, not a bounded set like
+// rejectedConfiguredHosts: overwriting in place is already O(1) memory
+// regardless of how often or from how many hosts it fires, so there is
+// nothing here for an attacker to grow.
+//
+// tcpOversizedHostLastAt is when that host was last seen sending an
+// oversized message (issue #1015) -- it is what lets loss.oversized.host
+// stop being served once the sender has been quiet longer than
+// lossWindowOversized, the same freshness rule every other counter here
+// gets.
+var (
+	tcpOversizedHostMu     sync.Mutex
+	tcpOversizedHost       string
+	tcpOversizedHostLastAt time.Time
+)
+
+func noteOversizedHost(host string) {
+	tcpOversizedHostMu.Lock()
+	tcpOversizedHost = host
+	tcpOversizedHostLastAt = lossNow()
+	tcpOversizedHostMu.Unlock()
+	tcpOversizedFreshness.hit(lossWindowOversized)
+}
+
+func oversizedHostSnapshot() string {
+	tcpOversizedHostMu.Lock()
+	defer tcpOversizedHostMu.Unlock()
+	return tcpOversizedHost
+}
+
+// oversizedHostIfActive reports tcpOversizedHost and whether its own
+// lastAt is within window of now -- issue #1015's loss.oversized.host,
+// which must stay silent once the sender has gone quiet even though
+// oversizedHostSnapshot above keeps answering the last-known host
+// forever (unchanged, for the existing banner/Settings readout).
+func oversizedHostIfActive(window time.Duration, now time.Time) (host string, active bool) {
+	tcpOversizedHostMu.Lock()
+	defer tcpOversizedHostMu.Unlock()
+	if tcpOversizedHost == "" || tcpOversizedHostLastAt.IsZero() {
+		return "", false
+	}
+	return tcpOversizedHost, now.Sub(tcpOversizedHostLastAt) <= window
+}
+
 func noteIngestDrop() {
 	total := tcpDropped.Add(1)
+	tcpDroppedFreshness.hit(lossWindowDropped)
 	if _, ok := dropLogGate.Allow(); ok {
 		tcpLog.Warn(fmt.Sprintf(
 			"ingest queue full -- %d syslog messages discarded since start; events are arriving faster than they can be processed, or something downstream is stalled",

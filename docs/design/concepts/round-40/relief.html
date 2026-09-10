@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 40 · Direction S — relief · the topography as a city</title>
+<style>
+  /* ============================================================
+     ROUND 40 — DIRECTION S: RELIEF.
+
+     One city plan, one camera. The plan is drawn top-down: districts
+     are tinted plates, buildings are footprints, roads run in the
+     avenues between the plates. Height is importance and it is always
+     there — at the lower altitude stops it reads as shade on the roof
+     plus one or two contour rings; at the SURVEY stop the same plan
+     tilts (perspective + rotateX 48deg) and the footprints extrude
+     into a skyline. Nothing is redrawn between stops: the four scenes
+     below are the same markup with a different camera and light.
+
+     Tokens are round 39's verbatim. The chrome — wordmark, LIVE
+     status, lens tabs, altitude axis, coverage badges, the UNPLANNED
+     callout — is round 39's, so this reads as the same app.
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --glass: rgba(15, 20, 34, 0.66);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e; --drop: #f5a623; --nat: #2dd4bf;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @property --h   { syntax: '<length>'; inherits: true; initial-value: 0px; }
+  @property --imp { syntax: '<number>'; inherits: true; initial-value: 0; }
+
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--void); color: var(--ink);
+    font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+    padding: 26px 0 60px;
+  }
+
+  /* ---- page-level captions, one line above each scene ---- */
+  .cap {
+    width: 1400px; margin: 30px auto 8px; padding: 0 2px;
+    font: 500 11px var(--mono); letter-spacing: 0.05em; color: var(--ink-3);
+  }
+  .cap b { color: var(--accent); font-weight: 700; letter-spacing: 0.12em; margin-right: 10px; }
+  .pagehead { width: 1400px; margin: 0 auto 4px; }
+  .pagehead h1 { font: 800 17px var(--sans); letter-spacing: 0.03em; }
+  .pagehead p { font: 11.5px var(--mono); color: var(--ink-3); margin-top: 5px; }
+
+  .scene {
+    position: relative; width: 1400px; height: 860px; margin: 0 auto;
+    background: var(--void);
+    border: 1px solid var(--hair-2); border-radius: 4px; overflow: hidden;
+  }
+
+  /* ---------------- chrome, carried from round 39 ---------------- */
+  .scenebar { position: absolute; top: 0; left: 0; right: 0; z-index: 12; pointer-events: none; }
+  .scenebar > * { pointer-events: auto; }
+  .wordmark { position: absolute; top: 18px; left: 24px; font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); }
+  .wordmark em { font-style: normal; color: var(--accent); }
+  .scstatus { position: absolute; top: 20px; right: 24px; display: flex; gap: 16px; align-items: center; font-size: 11px; color: var(--ink-2); }
+  .scstatus .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: 1px; }
+  .scstatus .fmk { color: var(--alarm); font: 600 11px var(--mono); text-decoration: none; }
+  .scstatus .wmk { color: #a78bfa; font: 600 11px var(--mono); text-decoration: none; display: inline-flex; align-items: center; gap: 5px; }
+  .scstatus .wmk b { color: var(--alarm); font-weight: 600; }
+  .scstatus .who { background: transparent; border: 1px solid var(--hair); border-radius: 999px; padding: 2px 10px; font: inherit; color: var(--ink-3); cursor: pointer; }
+
+  .wlens2 { position: absolute; bottom: 14px; left: 26px; z-index: 12; display: flex; gap: 14px; font: 500 10.5px var(--sans); color: var(--ink-3); opacity: 0.85; }
+  .wlens2 .on { color: var(--ink); }
+  .wlens2 .fl { color: var(--alarm); }
+
+  .alt { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 12; display: flex; gap: 14px; align-items: center; font: 500 9px var(--mono); letter-spacing: 0.12em; color: var(--ink-3); }
+  .altwrap { position: relative; width: 232px; height: 12px; display: inline-flex; align-items: center; }
+  .altwrap .track { position: absolute; left: 0; right: 0; top: 5px; height: 2px; background: var(--hair-2); border-radius: 1px; }
+  .altwrap .tick { position: absolute; top: 4px; width: 4px; height: 4px; border-radius: 50%; background: var(--ink-3); transform: translateX(-50%); }
+  .altwrap .tick.survey { background: var(--accent); }
+  .altwrap .knob { position: absolute; top: 0; width: 11px; height: 11px; border: 1.4px solid var(--accent); background: var(--void); transform: translateX(-50%) rotate(45deg); }
+  .altwrap .stopname { position: absolute; top: 15px; transform: translateX(-50%); font: 500 8px var(--mono); letter-spacing: 0.1em; color: var(--accent); white-space: nowrap; }
+
+  /* legend strip — small, bottom right */
+  .legend { position: absolute; right: 24px; bottom: 14px; z-index: 12; display: flex; gap: 16px; align-items: center; font: 500 9px var(--mono); letter-spacing: 0.06em; color: var(--ink-3); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .lh { display: inline-flex; align-items: flex-end; gap: 2px; }
+  .legend .lh i { display: block; width: 4px; background: var(--accent); border-radius: 1px; }
+  .legend .lh i:nth-child(1) { height: 5px; } .legend .lh i:nth-child(2) { height: 9px; } .legend .lh i:nth-child(3) { height: 14px; }
+  .legend .lw { display: inline-flex; flex-direction: column; gap: 2px; }
+  .legend .lw i { display: block; background: var(--ink-2); border-radius: 2px; width: 13px; }
+  .legend .lw i:nth-child(1) { height: 1.5px; } .legend .lw i:nth-child(2) { height: 3.5px; } .legend .lw i:nth-child(3) { height: 6px; }
+  .legend .sw { width: 13px; height: 4px; border-radius: 2px; display: inline-block; }
+
+  /* importance toggle (survey) */
+  .impctl { position: absolute; top: 92px; left: 26px; z-index: 12; display: flex; gap: 8px; align-items: center; font: 500 9.5px var(--mono); letter-spacing: 0.1em; color: var(--ink-3); }
+  .impctl b { font-weight: 500; letter-spacing: 0.12em; }
+  .impctl button {
+    font: 500 9.5px var(--mono); letter-spacing: 0.06em; color: var(--ink-3);
+    background: transparent; border: 1px solid var(--hair); border-radius: 12px;
+    padding: 3px 11px; cursor: pointer;
+  }
+  .impctl button.on { color: var(--ink); border-color: var(--hair-2); background: var(--raised); }
+
+  .plaque { position: absolute; z-index: 12; font: 10.5px var(--mono); color: var(--ink-2); }
+
+  /* the survey's air: a soft glow behind the far edge of the tilted plan */
+  .sky {
+    position: absolute; left: 0; right: 0; top: 178px; height: 252px; z-index: 1; pointer-events: none;
+    background: radial-gradient(900px 220px at 50% 100%, rgba(118, 150, 218, 0.13), transparent 74%);
+  }
+
+  /* ---------------- the plan ---------------- */
+  .planwrap { position: absolute; left: 62px; top: 138px; width: 1276px; height: 620px; overflow: hidden; z-index: 4; }
+  /* the survey camera is the wide one: it needs the whole frame, so it
+     gets its own window and its own plan origin. The tilted footprint
+     is ~1300px across at the near edge and the skyline is centred in
+     the frame rather than floating in the middle third of it. */
+  .planwrap.surveywrap { left: 50px; top: 116px; width: 1300px; height: 700px; }
+  .surveywrap .plan { left: 25px; top: 192px; }
+  .plan {
+    position: absolute; left: 13px; top: 28px; width: 1250px; height: 560px;
+    transform-origin: 0 0; transform-style: flat;
+    transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .plan.tilt {
+    transform-origin: 50% 50%; transform-style: preserve-3d;
+    transform: perspective(3200px) scale(0.972) rotateX(48deg);
+  }
+  .plan.street { transform: translate(-705px, -324px) scale(1.75); }
+
+  /* roads: one flat svg in plan, and the same paths cut into depth
+     strips for the tilt so the 3D sorter puts each strip of road
+     correctly in front of / behind the buildings standing on it. */
+  .roads { position: absolute; left: 0; top: 0; width: 1250px; height: 560px; overflow: visible; pointer-events: none; }
+  .rstrip { display: none; position: absolute; left: 0; width: 1250px; height: 40px; overflow: hidden; }
+  .rstrip svg { position: absolute; left: 0; width: 1250px; height: 560px; overflow: visible; }
+  .plan.tilt .rstrip { display: block; }
+  .plan.tilt .roads { display: none; }
+
+  /* district plates */
+  .plate { position: absolute; }
+  .plate .face {
+    position: absolute; inset: 0; border-radius: 7px;
+    background: rgba(var(--dk), 0.055);
+    border: 1px solid rgba(var(--dk), 0.34);
+    transition: opacity 0.4s;
+  }
+  .plate .strip { position: absolute; left: 10px; right: 8px; bottom: 8px; }
+  .plate .r1 { display: flex; align-items: baseline; gap: 8px; }
+  .plate .dn { font: 650 12.5px var(--sans); color: var(--ink); letter-spacing: 0.01em; white-space: nowrap; }
+  .plate .dn i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: rgb(var(--dk)); margin-right: 6px; vertical-align: 1px; }
+  .plate .cidr { font: 9.5px var(--mono); color: var(--ink-3); white-space: nowrap; }
+  .plate .r2 { display: flex; align-items: baseline; gap: 10px; margin-top: 4px; }
+  .plate .cov { font: 700 8.5px var(--mono); letter-spacing: 0.1em; }
+  .cov-l { color: var(--ok); } .cov-q { color: var(--ink-3); } .cov-d { color: var(--alarm); }
+  .plate .cnt { font: 600 9px var(--mono); color: var(--ink-3); margin-left: auto; white-space: nowrap; }
+  .plate .cnt .wp { color: #a78bfa; } .plate .cnt .fc { color: var(--alarm); }
+  .plate .covshort { display: none; }
+  .plate .more { position: absolute; font: 9px var(--mono); color: var(--ink-3); white-space: nowrap; }
+
+  .borough {
+    position: absolute; border: 1px dashed rgba(157, 184, 232, 0.28);
+    border-radius: 12px; background: rgba(157, 184, 232, 0.022);
+    transition: border-color 0.4s, background 0.4s;
+  }
+  .boroughtag { position: absolute; font: 600 9px var(--mono); letter-spacing: 0.13em; color: var(--ink-3); white-space: nowrap; }
+  .boroughsub { position: absolute; font: 9px var(--mono); letter-spacing: 0.02em; color: var(--ink-3); white-space: nowrap; }
+  .plan.tilt .boroughsub { display: none; }
+
+  /* buildings */
+  .b {
+    position: absolute; left: var(--bx); top: var(--by); width: var(--bw); height: var(--bd);
+    transform-style: preserve-3d;
+    --h: var(--hd); --imp: var(--id);
+    transition: --h 0.6s cubic-bezier(0.4, 0, 0.2, 1), --imp 0.6s ease, opacity 0.4s;
+  }
+  .plan.imp-watched .b { --h: var(--hw); --imp: var(--iw); }
+  .b .foot {
+    position: absolute; inset: 0; border-radius: 3px;
+    background: rgba(var(--dk), 0.09); border: 1px solid rgba(var(--dk), 0.28);
+  }
+  .b .ring { position: absolute; border-radius: 5px; pointer-events: none; transition: opacity 0.45s; }
+  .b .ring.a { inset: -4px; border: 1px solid rgb(200 218 250 / calc(var(--imp) * 0.52)); }
+  .b .ring.b { inset: -9px; border-radius: 8px; border: 1px solid rgb(200 218 250 / calc(var(--imp) * 0.24)); }
+  .plan.tilt .b .ring { opacity: 0; }
+  .b .roof {
+    position: absolute; inset: 0; border-radius: 3px; overflow: hidden;
+    background: rgba(var(--dk), 0.24);
+    border: 1px solid rgba(var(--dk), 0.62);
+    transform: translateZ(var(--h));
+  }
+  .b .roof .lit { position: absolute; inset: 0; background: #d3e2ff; opacity: calc(var(--imp) * 0.42); }
+  .b .roof .rn {
+    position: absolute; left: 0; right: 0; top: 50%; margin-top: -16px; text-align: center;
+    font: 700 11.5px var(--sans); letter-spacing: 0.02em; color: var(--ink);
+    text-shadow: 0 0 4px rgba(6, 8, 14, 0.9), 0 1px 2px rgba(6, 8, 14, 0.9);
+  }
+  .b .roof .rs {
+    position: absolute; left: 0; right: 0; top: 50%; margin-top: 4px; text-align: center;
+    font: 9px var(--mono); color: var(--ink);
+    text-shadow: 0 0 5px rgba(6, 8, 14, 0.98), 0 1px 2px rgba(6, 8, 14, 0.98);
+  }
+  .wallanchor { position: absolute; left: 0; right: 0; top: 100%; height: 0; transform-style: preserve-3d; }
+  .wall {
+    position: absolute; left: 0; right: 0; bottom: 0; height: var(--h);
+    transform-origin: 50% 100%; transform: rotateX(-90deg);
+    background: linear-gradient(to top, rgba(6, 8, 14, 0.97), rgba(var(--dk), 0.42));
+    border-left: 1px solid rgba(var(--dk), 0.26); border-right: 1px solid rgba(var(--dk), 0.26);
+  }
+  .b .bname {
+    position: absolute; left: 0; right: 0; bottom: 3px; text-align: center;
+    font: 600 8.5px var(--mono); letter-spacing: 0.01em; color: var(--ink-2); white-space: nowrap;
+  }
+  .b .fl { position: absolute; top: 3px; right: 4px; font: 700 8.5px var(--mono); color: var(--alarm); }
+  /* a flagged building is legible as flagged at every stop */
+  .b[data-flagged] .foot, .b[data-flagged] .roof { border-color: rgba(255, 84, 112, 0.55); }
+  .b.ghost .foot, .b.ghost .roof { opacity: 0.42; border-style: dashed; }
+  .b.ghost .bname { color: var(--ink-3); }
+
+  /* SURVEY: only what reads from the air survives the tilt, and the
+     ground-painted text is pre-stretched by 1/cos(48deg) = 1.49 so the
+     squash lands it back at its true proportions. */
+  .plan.tilt .b .bname, .plan.tilt .b .fl, .plan.tilt .plate .cidr,
+  .plan.tilt .plate .cnt, .plan.tilt .plate .more, .plan.tilt .chips { display: none; }
+  .plan.tilt .plate .covlong { display: none; }
+  .plan.tilt .plate .covshort { display: inline; }
+  .plan.tilt .plate .cov { white-space: nowrap; }
+  .plan.tilt .plate .strip { bottom: 6px; display: flex; align-items: baseline; gap: 10px; }
+  .plan.tilt .plate .r1, .plan.tilt .plate .r2 { transform: scaleY(1.49); transform-origin: 50% 100%; margin-top: 0; }
+  .plan.tilt .b .roof .rn { margin-top: -10px; font-size: 10.5px; transform: scaleY(1.49); }
+  .plan.tilt .b .roof .rs { display: none; }
+  .plan.tilt .boroughtag { transform: scaleY(1.49); transform-origin: 0 0; }
+
+  /* only the four civic buildings — the routers and the two gates —
+     keep a name once the camera is in the air */
+  .b .roof .rn, .b .roof .rs { display: none; }
+  .b.civic .roof .rn { display: block; }
+  .b.civic .roof .rs { display: block; }
+  .b.civic .bname { display: none; }
+  /* the gate keeps its name clear of the highway lanes that arrive
+     from off-map on the left of the block */
+  .b.gate .roof .rn { font-size: 10px; margin-top: -6px; text-align: right; padding-right: 8px; }
+  .b.gate .roof .rs { display: none; }
+
+  /* STREET: the camera is 1.75x in, so plan-authored type is divided
+     back down to land at its normal size on screen. */
+  .plan.street .b .bname { font-size: 4.9px; }
+  .plan.street .b .roof .rn { font-size: 6.6px; margin-top: -9.1px; }
+  .plan.street .b .roof .rs { font-size: 5.15px; margin-top: 2.3px; }
+  .plan.street .b.gate .roof .rn { font-size: 5.7px; margin-top: -3.4px; }
+  .plan.street .plate .dn { font-size: 7.15px; }
+  .plan.street .plate .dn i { width: 3.4px; height: 3.4px; margin-right: 3.4px; }
+  .plan.street .plate .cidr { font-size: 5.45px; }
+  .plan.street .plate .cov { font-size: 4.9px; }
+  .plan.street .plate .cnt { font-size: 5.15px; }
+  .plan.street .plate .more { font-size: 5.15px; }
+  .plan.street .plate .strip { left: 5.7px; right: 4.6px; bottom: 4.6px; }
+  .plan.street .plate .r1 { gap: 4.6px; }
+  .plan.street .plate .r2 { gap: 5.7px; margin-top: 2.3px; }
+  .plan.street .b .fl { font-size: 4.9px; top: 1.7px; right: 2.3px; }
+  .plan.street .boroughtag, .plan.street .boroughsub { font-size: 5.15px; }
+  .plan.street .b .ring.a { inset: -2.3px; } .plan.street .b .ring.b { inset: -5.1px; }
+
+  .chips text { font: 10px var(--mono); fill: var(--ink-2); }
+  .chips .k { fill: var(--ink-3); }
+  .chips .warn { fill: var(--drop); font-weight: 700; }
+  .chips .ok { fill: var(--ok); font-weight: 700; letter-spacing: 0.1em; font-size: 9px; }
+  .chips .big { font: 600 11px var(--mono); fill: var(--ink-2); letter-spacing: 0.06em; }
+  .chips .port { display: none; font: 600 10px var(--mono); fill: var(--ink-2); }
+  .plan.street .chips text { font-size: 5.7px; }
+  .plan.street .chips .ok { font-size: 5.15px; }
+  .plan.street .chips .big { font-size: 6.3px; }
+  .plan.street .chips .port { display: block; font-size: 5.7px; }
+
+  /* ---- alarm lighting ---- */
+  .r-alarm { opacity: 0.16; transition: opacity 0.4s, filter 0.4s; }
+  .plan.lit-alarm .r-alarm { opacity: 1; filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.55)); }
+  .plan.lit-alarm .b[data-id="cam-porch"] .foot,
+  .plan.lit-alarm .b[data-id="cam-porch"] .roof {
+    border-color: var(--alarm); background: rgba(255, 84, 112, 0.22);
+    box-shadow: 0 0 15px rgba(255, 84, 112, 0.5);
+  }
+  .plan.lit-alarm .b[data-id="cam-porch"] .bname { color: var(--alarm); }
+  .plan.lit-alarm .b[data-id="tom-desktop"] .foot { border-color: rgba(255, 84, 112, 0.7); }
+  .plan.lit-alarm .b[data-dist="guest"], .plan.lit-alarm .b[data-dist="cams"] { opacity: 0.18; }
+  .plan.lit-alarm .plate[data-id="guest"] .face,
+  .plan.lit-alarm .plate[data-id="cams"] .face { opacity: 0.3; }
+  .plan.lit-alarm .plate[data-id="guest"] .dn,
+  .plan.lit-alarm .plate[data-id="cams"] .dn { color: var(--ink-3); }
+  .plan.lit-alarm .plate[data-id="guest"] .cidr,
+  .plan.lit-alarm .plate[data-id="cams"] .cidr { color: #39415e; }
+
+  .callout {
+    position: absolute; display: none; padding: 8px 13px 9px;
+    background: #170a12; border: 1px solid rgba(255, 84, 112, 0.8); border-radius: 9px;
+    box-shadow: 0 0 22px rgba(255, 84, 112, 0.22);
+  }
+  .plan.lit-alarm .callout { display: block; }
+  .callout .t1 { font: 700 10.5px var(--mono); color: var(--alarm); }
+  .callout .t2 { font: 10.5px var(--mono); color: var(--ink-2); margin-top: 3px; }
+  .callout .pin { position: absolute; left: 30px; top: -5px; width: 9px; height: 9px; background: #170a12; border-left: 1px solid rgba(255, 84, 112, 0.8); border-top: 1px solid rgba(255, 84, 112, 0.8); transform: rotate(45deg); }
+
+  /* ---- estate emphasis ---- */
+  .plan.est .borough { border-color: rgba(157, 184, 232, 0.62); background: rgba(157, 184, 232, 0.05); }
+  .plan.est .boroughtag { color: var(--accent); }
+  .plan.est [data-road="hap"] { filter: drop-shadow(0 0 5px rgba(62, 207, 126, 0.5)); }
+
+  /* ---- street: hover card + the hovered footprint ---- */
+  .plan.street .b[data-id="tom-desktop"] .foot { border-color: var(--accent); background: rgba(57, 135, 229, 0.22); }
+  .hovercard {
+    position: absolute; z-index: 11; width: 264px; padding: 11px 14px 12px;
+    background: var(--raised); border: 1px solid var(--hair-2); border-radius: 10px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.78);
+  }
+  .hovercard .hn { font: 650 13px var(--sans); color: var(--ink); }
+  .hovercard .hn em { font-style: normal; color: var(--ink-3); font-weight: 400; font-family: var(--mono); font-size: 10.5px; margin-left: 8px; }
+  .hovercard .hr { margin-top: 6px; font: 10.5px var(--mono); color: var(--ink-2); }
+  .hovercard .hr b { color: var(--ink-3); font-weight: 400; }
+  .hovercard .hw { color: #a78bfa; }
+  /* the card sits in open sky above the district, so the leader drops
+     out of its underside — down the avenue between tom-desktop and
+     phone-tom, clear of the road from rb5009 — and elbows left onto
+     tom-desktop's roof. It covers no building and still says which
+     building it is talking about. */
+  .hovercard .leader { position: absolute; left: 26px; top: 100%; width: 1px; height: 86px; background: var(--hair-2); }
+  .hovercard .leader::after { content: ''; position: absolute; left: -38px; bottom: 0; width: 38px; height: 1px; background: var(--hair-2); }
+  .hovercard .leader::before { content: ''; position: absolute; left: -41px; bottom: -2.5px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .plan, .b, .b .ring, .plate .face, .r-alarm { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="pagehead">
+  <h1>Round 40 · Direction S — <em style="font-style:normal;color:var(--accent)">relief</em></h1>
+  <p>One city plan, one camera. Height is importance: shade and contour rings in plan, a tilted skyline at the survey stop.</p>
+</div>
+
+<!-- ============================ SURVEY ============================ -->
+<p class="cap"><b>SURVEY</b>Proves the whole estate reads as one skyline from above — height is importance, not traffic, and the toggle swaps the reading without redrawing the map.</p>
+<section class="scene" id="survey" aria-label="Survey altitude: the whole estate as a tilted city plan, buildings extruded by importance">
+  <div class="scenebar">
+    <span class="wordmark">MIKRO<em>VIEW</em></span>
+    <span class="scstatus">
+      <span><span class="dot"></span>LIVE · 34/s</span>
+      <a class="fmk" href="#alarm" title="6 open flags">&#9873; 6</a>
+      <a class="wmk" href="#street" title="7 watchers — 6 healthy, 1 broken"><svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b>&#9675;1</b></a>
+      <button class="who">tom (admin)</button>
+    </span>
+  </div>
+  <div class="impctl" role="group" aria-label="Importance reading">
+    <b>IMPORTANCE</b>
+    <button class="on" data-importance="depended-on" aria-pressed="true" aria-label="Height shows how many distinct hosts depend on each building">depended-on</button>
+    <button data-importance="watched" aria-pressed="false" aria-label="Height shows the watch and flag weight the operator has put on each building">watched</button>
+  </div>
+  <div class="plaque" style="top:96px;right:26px;text-align:right">rb5009 · RouterOS 7.20.1 · 41 rules<br><span style="color:var(--ink-3);font-size:9.5px">2 boroughs · 6 districts · 24 buildings drawn</span></div>
+  <div class="sky" aria-hidden="true"></div>
+  <div class="planwrap surveywrap"><div class="plan tilt" data-scene="survey"></div></div>
+  <div class="wlens2"><span>traffic</span><span>policy</span><span>coverage</span><span class="fl">flags 6</span><span class="on">watch</span></div>
+  <div class="alt"><span>CLIENTS</span><span class="altwrap"><i class="track"></i><i class="tick" style="left:3%"></i><i class="tick" style="left:34.3%"></i><i class="tick" style="left:65.7%"></i><i class="tick survey" style="left:97%"></i><i class="knob" style="left:97%"></i><span class="stopname" style="left:97%">survey</span></span><span>SURVEY</span></div>
+  <div class="legend" aria-label="Legend"><span class="lh"><i></i><i></i><i></i></span><span>height = importance</span><span class="lw"><i></i><i></i><i></i></span><span>width = traffic</span><span><i class="sw" style="background:var(--accept)"></i>accept</span><span><i class="sw" style="background:var(--drop)"></i>drop</span><span><i class="sw" style="background:var(--alarm)"></i>flagged</span></div>
+</section>
+
+<!-- ============================ STREET ============================ -->
+<p class="cap"><b>STREET</b>Proves the same plan carries close-up detail: the camera drops into the LAN district, port labels appear along the avenue, and a building answers with its card.</p>
+<section class="scene" id="street" aria-label="Street level inside the LAN district: four buildings, their roads and port labels, and tom-desktop's card">
+  <div class="scenebar">
+    <span class="wordmark">MIKRO<em>VIEW</em></span>
+    <span class="scstatus">
+      <span><span class="dot"></span>LIVE · 34/s</span>
+      <a class="fmk" href="#alarm" title="6 open flags">&#9873; 6</a>
+      <a class="wmk" href="#street" title="7 watchers — 6 healthy, 1 broken"><svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b>&#9675;1</b></a>
+      <button class="who">tom (admin)</button>
+    </span>
+  </div>
+  <div class="plaque" style="top:94px;left:26px">street level · <span style="color:var(--ink-3)">LAN 10.0.10.0/24 · 4 buildings · rings are the contour of importance</span></div>
+  <div class="planwrap"><div class="plan street" data-scene="street"></div></div>
+  <div class="hovercard" style="left:712px;top:116px" role="note" aria-label="Card for tom-desktop">
+    <i class="leader"></i>
+    <div class="hn">tom-desktop <em>10.0.10.21</em></div>
+    <div class="hr"><b>3 roads</b> · servers :445 :5001 · dns :53 · wan</div>
+    <div class="hr"><span class="hw">watch &#9673;</span> <b>· depended-on 6 · flags 0</b></div>
+  </div>
+  <div class="wlens2"><span class="on">traffic</span><span>policy</span><span>coverage</span><span class="fl">flags 6</span><span>watch</span></div>
+  <div class="alt"><span>CLIENTS</span><span class="altwrap"><i class="track"></i><i class="tick" style="left:3%"></i><i class="tick" style="left:34.3%"></i><i class="tick" style="left:65.7%"></i><i class="tick survey" style="left:97%"></i><i class="knob" style="left:3%"></i><span class="stopname" style="left:3%;transform:none">clients</span></span><span>SURVEY</span></div>
+  <div class="legend" aria-label="Legend"><span class="lh"><i></i><i></i><i></i></span><span>height = importance</span><span class="lw"><i></i><i></i><i></i></span><span>width = traffic</span><span><i class="sw" style="background:var(--accept)"></i>accept</span><span><i class="sw" style="background:var(--drop)"></i>drop</span><span><i class="sw" style="background:var(--alarm)"></i>flagged</span></div>
+</section>
+
+<!-- ============================ ESTATE ============================ -->
+<p class="cap"><b>ESTATE</b>Proves a second router is just another borough on the same map, reached by a road out of LAN — hap-ax3 keeps its own two districts and its own coverage.</p>
+<section class="scene" id="estate" aria-label="The estate: both boroughs on one map and the road from LAN to the second router hap-ax3">
+  <div class="scenebar">
+    <span class="wordmark">MIKRO<em>VIEW</em></span>
+    <span class="scstatus">
+      <span><span class="dot"></span>LIVE · 34/s</span>
+      <a class="fmk" href="#alarm" title="6 open flags">&#9873; 6</a>
+      <a class="wmk" href="#street" title="7 watchers — 6 healthy, 1 broken"><svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b>&#9675;1</b></a>
+      <button class="who">tom (admin)</button>
+    </span>
+  </div>
+  <div class="plaque" style="top:94px;left:26px">2 boroughs · <span style="color:var(--ink-3)">rb5009 · 41 rules &nbsp;&nbsp;|&nbsp;&nbsp; hap-ax3 · 12 rules · its ether1 carries 10.0.10.9, inside LAN</span></div>
+  <div class="planwrap"><div class="plan est" data-scene="estate"></div></div>
+  <div class="wlens2"><span class="on">traffic</span><span>policy</span><span class="on">coverage</span><span class="fl">flags 6</span><span>watch</span></div>
+  <div class="alt"><span>CLIENTS</span><span class="altwrap"><i class="track"></i><i class="tick" style="left:3%"></i><i class="tick" style="left:34.3%"></i><i class="tick" style="left:65.7%"></i><i class="tick survey" style="left:97%"></i><i class="knob" style="left:65.7%"></i><span class="stopname" style="left:65.7%">zones</span></span><span>SURVEY</span></div>
+  <div class="legend" aria-label="Legend"><span class="lh"><i></i><i></i><i></i></span><span>height = importance</span><span class="lw"><i></i><i></i><i></i></span><span>width = traffic</span><span><i class="sw" style="background:var(--accept)"></i>accept</span><span><i class="sw" style="background:var(--drop)"></i>drop</span><span><i class="sw" style="background:var(--alarm)"></i>flagged</span></div>
+</section>
+
+<!-- ============================ ALARM ============================ -->
+<p class="cap"><b>ALARM</b>Proves one lit road carries the whole story: the UNPLANNED route cam-porch → tom-desktop burns, while the two districts with no log rule sit unlit and say so.</p>
+<section class="scene" id="alarm" aria-label="Alarm: the unplanned road from cam-porch to tom-desktop lit, and the two dark districts unlit">
+  <div class="scenebar">
+    <span class="wordmark">MIKRO<em>VIEW</em></span>
+    <span class="scstatus">
+      <span><span class="dot"></span>LIVE · 34/s</span>
+      <a class="fmk" href="#alarm" title="6 open flags">&#9873; 6</a>
+      <a class="wmk" href="#street" title="7 watchers — 6 healthy, 1 broken"><svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b>&#9675;1</b></a>
+      <button class="who">tom (admin)</button>
+    </span>
+  </div>
+  <div class="plaque" style="top:94px;left:26px"><span style="color:var(--alarm);font-weight:700">1 unplanned road</span> <span style="color:var(--ink-3)">· 2 districts unlit — nothing is logged on those boundaries, so nothing can be drawn there</span></div>
+  <div class="planwrap"><div class="plan lit-alarm" data-scene="alarm"></div></div>
+  <div class="wlens2"><span>traffic</span><span>policy</span><span class="on">coverage</span><span class="fl on" style="color:var(--alarm)">flags 6</span><span>watch</span></div>
+  <div class="alt"><span>CLIENTS</span><span class="altwrap"><i class="track"></i><i class="tick" style="left:3%"></i><i class="tick" style="left:34.3%"></i><i class="tick" style="left:65.7%"></i><i class="tick survey" style="left:97%"></i><i class="knob" style="left:65.7%"></i><span class="stopname" style="left:65.7%">zones</span></span><span>SURVEY</span></div>
+  <div class="legend" aria-label="Legend"><span class="lh"><i></i><i></i><i></i></span><span>height = importance</span><span class="lw"><i></i><i></i><i></i></span><span>width = traffic</span><span><i class="sw" style="background:var(--accept)"></i>accept</span><span><i class="sw" style="background:var(--drop)"></i>drop</span><span><i class="sw" style="background:var(--alarm)"></i>flagged</span></div>
+</section>
+
+<script>
+/* ------------------------------------------------------------------
+   ONE drawing. The plan below is built once and stamped into all four
+   scenes; each scene only changes the camera class on .plan. Plan
+   coordinates are a 1250 x 560 sheet: north (y=0) is the town edge
+   where the WAN gates sit and the highway leaves the map, the rb5009
+   borough fills the middle, the hap-ax3 borough is the town at the
+   right. Districts sit in a row with 26px avenues between them; every
+   road runs in an avenue or in open ground.
+   ------------------------------------------------------------------ */
+
+const INK = {
+  lan:   '57,135,229',
+  srv:   '25,158,112',
+  iot:   '201,133,0',
+  guest: '215,106,158',
+  core:  '157,184,232',
+  wsp:   '96,132,176',   /* --lan hue, desaturated: second borough */
+  cams:  '82,142,122'    /* --srv hue, desaturated: second borough */
+};
+
+const PLATES = [
+  { id:'guest', name:'Guest', cidr:'10.0.40.0/24', ink:'guest', x:20,  y:235, w:130, h:198,
+    cov:'DARK — no log rule on this boundary', covShort:'DARK', covCls:'cov-d', cnt:'' },
+  { id:'iot', name:'IoT', cidr:'10.0.30.0/24', ink:'iot', x:176, y:235, w:248, h:198,
+    cov:'DARK TOWARD WAN', covShort:'DARK &#8594; WAN', covCls:'cov-d',
+    cnt:'<span class="wp">&#9673;1</span> <span class="fc">&#10033;3</span>',
+    more:{ t:'+4 more buildings', x:6, y:372 } },
+  { id:'servers', name:'Servers', cidr:'10.0.20.0/24', ink:'srv', x:450, y:235, w:184, h:198,
+    cov:'LOGGED BOTH WAYS', covShort:'LOGGED', covCls:'cov-l', cnt:'<span class="wp">&#9673;2</span>' },
+  { id:'lan', name:'LAN', cidr:'10.0.10.0/24', ink:'lan', x:660, y:235, w:244, h:198,
+    cov:'LOGGED BOTH WAYS', covShort:'LOGGED', covCls:'cov-l',
+    cnt:'<span class="wp">&#9673;2</span> <span class="fc">&#10033;2</span>' },
+  { id:'workshop', name:'Workshop', cidr:'10.0.50.0/24', ink:'wsp', x:976, y:282, w:240, h:100,
+    cov:'LOGGED BOTH WAYS', covShort:'LOGGED', covCls:'cov-l', cnt:'' },
+  { id:'cams', name:'Cams', cidr:'10.0.60.0/24', ink:'cams', x:976, y:392, w:240, h:90,
+    cov:'DARK — no log rule on this boundary', covShort:'DARK', covCls:'cov-d', cnt:'<span class="fc">&#10033;1</span>' }
+];
+
+/* hd/id = depended-on height and shade, hw/iw = watched.
+   Heights are plan-space translateZ: at the survey's 48deg they are
+   what makes rb5009 a tower and steps the hosts apart, so they are
+   written large — a host's block is read against its neighbours, and
+   the civic buildings are meant to stand well clear of them. */
+const B = [
+  /* --- the town edge: WAN gates --- */
+  { id:'ether1', name:'ether1', dist:'wan', ink:'core', x:250, y:58, w:96, h:42,
+    hd:84, hw:22, idp:0.42, iw:0.12, civic:1, gate:1,
+    aria:'WAN gate ether1 to the Internet, 203.0.113.7, coverage logged' },
+  { id:'wg0', name:'wg0', dist:'wan', ink:'core', x:900, y:42, w:68, h:34,
+    hd:50, hw:135, idp:0.24, iw:0.55, civic:1, gate:1,
+    aria:'WireGuard gate wg0, 10.99.0.0/24, quiet, one watcher' },
+  /* --- the civic buildings: the routers --- */
+  { id:'rb5009', name:'rb5009', dist:'core', ink:'core', x:400, y:122, w:300, h:66,
+    hd:230, hw:90, idp:1, iw:0.28, civic:1, sub:'RouterOS 7.20.1 · 41 rules',
+    aria:'rb5009, the primary router and the tallest building: every district depends on it' },
+  { id:'hap-ax3', name:'hap-ax3', dist:'core2', ink:'core', x:992, y:210, w:208, h:52,
+    hd:128, hw:30, idp:0.50, iw:0.14, civic:1, sub:'RouterOS 7.20.1 · 12 rules',
+    aria:'hap-ax3, the second router, its ether1 carries 10.0.10.9 inside the LAN' },
+  /* --- LAN --- */
+  { id:'tom-desktop', name:'tom-desktop', dist:'lan', ink:'lan', x:666, y:241, w:110, h:64, hd:100, hw:78, idp:0.40, iw:0.38, aria:'tom-desktop, 10.0.10.21, in the LAN district, 3 roads, watched' },
+  { id:'phone-tom',   name:'phone-tom',   dist:'lan', ink:'lan', x:788, y:241, w:110, h:64, hd:54, hw:18, idp:0.21, iw:0.10, aria:'phone-tom in the LAN district' },
+  { id:'laptop-anna', name:'laptop-anna', dist:'lan', ink:'lan', x:666, y:313, w:110, h:64, hd:62, hw:22, idp:0.23, iw:0.12, aria:'laptop-anna in the LAN district' },
+  { id:'tv-lounge',   name:'tv-lounge',   dist:'lan', ink:'lan', x:788, y:313, w:110, h:64, hd:38, hw:16, idp:0.15, iw:0.07, aria:'tv-lounge in the LAN district' },
+  /* --- Servers --- */
+  { id:'nas',    name:'nas',    dist:'servers', ink:'srv', x:456, y:241, w:172, h:38, hd:160, hw:112, idp:0.60, iw:0.55, aria:'nas in the Servers district, depended on by many hosts and watched' },
+  { id:'pihole', name:'pihole', dist:'servers', ink:'srv', x:456, y:289, w:172, h:38, hd:172, hw:22,  idp:0.64, iw:0.12, aria:'pihole in the Servers district: every host asks it for DNS' },
+  { id:'unifi',  name:'unifi',  dist:'servers', ink:'srv', x:456, y:337, w:172, h:38, hd:108, hw:20,  idp:0.42, iw:0.10, aria:'unifi in the Servers district' },
+  /* --- IoT --- */
+  { id:'hue-bridge',  name:'hue-bridge',  dist:'iot', ink:'iot', x:182, y:241, w:72, h:58, hd:28, hw:16,  idp:0.11, iw:0.07, aria:'hue-bridge in the IoT district' },
+  { id:'thermostat',  name:'thermostat',  dist:'iot', ink:'iot', x:264, y:241, w:72, h:58, hd:24, hw:16,  idp:0.10, iw:0.07, aria:'thermostat in the IoT district' },
+  { id:'esp-weather', name:'esp-weather', dist:'iot', ink:'iot', x:346, y:241, w:72, h:58, hd:21, hw:16,  idp:0.09, iw:0.07, aria:'esp-weather in the IoT district' },
+  { id:'cam-porch',   name:'cam-porch',   dist:'iot', ink:'iot', x:182, y:309, w:72, h:58, hd:32, hw:330, idp:0.13, iw:0.95, flags:2, aria:'cam-porch in the IoT district, two open flags and a watch: the tallest building when height reads watch weight' },
+  { id:'doorbell',    name:'doorbell',    dist:'iot', ink:'iot', x:264, y:309, w:72, h:58, hd:26, hw:84,  idp:0.11, iw:0.30, flags:1, aria:'doorbell in the IoT district, one open flag' },
+  { id:'plug-kettle', name:'plug-kettle', dist:'iot', ink:'iot', x:346, y:309, w:72, h:58, hd:20, hw:16,  idp:0.09, iw:0.07, aria:'plug-kettle in the IoT district' },
+  /* --- Guest --- */
+  { id:'guest-e8b2', name:'guest-e8b2', dist:'guest', ink:'guest', x:26, y:241, w:118, h:44, hd:20, hw:16, idp:0.09, iw:0.07, aria:'guest-e8b2 in the Guest district' },
+  { id:'guest-more', name:'+2 more',    dist:'guest', ink:'guest', x:26, y:295, w:118, h:44, hd:15, hw:12, idp:0.07, iw:0.06, ghost:1, aria:'two further guest buildings, not individually resolved' },
+  /* --- Workshop, in the hap-ax3 borough --- */
+  { id:'cnc',        name:'cnc',        dist:'workshop', ink:'wsp', x:982,  y:288, w:70, h:40, hd:50, hw:18, idp:0.20, iw:0.09, aria:'cnc in the Workshop district of the hap-ax3 borough' },
+  { id:'printer-3d', name:'printer-3d', dist:'workshop', ink:'wsp', x:1060, y:288, w:70, h:40, hd:38, hw:16, idp:0.16, iw:0.08, aria:'printer-3d in the Workshop district' },
+  { id:'pc-bench',   name:'pc-bench',   dist:'workshop', ink:'wsp', x:1138, y:288, w:70, h:40, hd:44, hw:16, idp:0.18, iw:0.08, aria:'pc-bench in the Workshop district' },
+  /* --- Cams, in the hap-ax3 borough --- */
+  { id:'cam-yard', name:'cam-yard', dist:'cams', ink:'cams', x:982,  y:398, w:110, h:36, hd:24, hw:18, idp:0.10, iw:0.09, aria:'cam-yard in the Cams district, no log rule on that boundary' },
+  { id:'cam-gate', name:'cam-gate', dist:'cams', ink:'cams', x:1104, y:398, w:110, h:36, hd:24, hw:88, idp:0.10, iw:0.32, flags:1, aria:'cam-gate in the Cams district, one open flag' }
+];
+
+/* roads: width is volume, colour is verdict */
+const ROADS = [
+  { d:'M266 -34 V 58',  w:16, c:'var(--accept)', a:'the highway out of town: any to wan, 9 per second, accepted' },
+  { d:'M290 -34 V 58',  w:6,  c:'var(--drop)', dash:'7 6', a:'drops arriving on the wan side, 3.1 times the usual' },
+  { d:'M298 100 C 300 132, 356 150, 402 156', w:16, c:'var(--accept)', a:'ether1 gate to rb5009' },
+  { d:'M900 62 C 838 74, 758 110, 700 140',  w:3,  c:'var(--accept)', dash:'5 6', a:'wireguard gate wg0 to rb5009, quiet' },
+  { d:'M656 188 C 700 208, 726 216, 764 237', w:12, c:'var(--accept)', a:'rb5009 to the LAN district, heaviest local road' },
+  { d:'M576 188 C 572 208, 548 218, 540 237', w:10, c:'var(--accept)', a:'rb5009 to the Servers district' },
+  { d:'M470 188 C 436 202, 340 214, 300 237', w:7,  c:'var(--accept)', a:'rb5009 to the IoT district' },
+  { d:'M412 188 C 316 190, 176 222, 86 237',  w:5,  c:'var(--accept)', a:'rb5009 to the Guest district: wan only, and dark' },
+  { d:'M628 309 H 668', w:11, c:'var(--accept)', a:'LAN to Servers, the heavy local road: dns, smb and time' },
+  { d:'M424 306 C 442 306, 434 342, 450 342', w:5, c:'var(--accept)', a:'IoT to Servers, modest' },
+  { d:'M904 282 C 940 282, 962 244, 992 238', w:9, c:'var(--accept)', road:'hap', a:'LAN to hap-ax3: its ether1 carries 10.0.10.9, inside the LAN' },
+  { d:'M1096 262 V 284', w:4, c:'var(--accept)', a:'hap-ax3 to the Workshop district' },
+  { d:'M1170 262 C 1226 276, 1226 356, 1204 392', w:5, c:'var(--accept)', a:'hap-ax3 to the Cams district' }
+];
+
+/* the one unplanned road, routed through the avenues and the ring road */
+const ALARM_D = 'M182 338 H 168 Q 156 338 156 350 V 474 Q 156 486 168 486 H 644 Q 656 486 656 474 V 288 Q 656 276 668 276';
+
+function esc(s) { return String(s).replace(/&(?![a-z#0-9]+;)/g, '&amp;').replace(/</g, '&lt;'); }
+
+function plateHTML(p) {
+  const more = p.more ? '<span class="more" style="left:' + p.more.x + 'px;top:' + (p.more.y - p.y) + 'px">' + p.more.t + '</span>' : '';
+  return '<div class="plate" data-id="' + p.id + '" role="img" aria-label="' + esc(p.name + ' district, ' + p.cidr + ', coverage: ' + p.cov) + '"' +
+    ' style="left:' + p.x + 'px;top:' + p.y + 'px;width:' + p.w + 'px;height:' + p.h + 'px;--dk:' + INK[p.ink] + '">' +
+    '<span class="face"></span>' + more +
+    '<span class="strip">' +
+      '<span class="r1"><span class="dn"><i></i>' + p.name + '</span><span class="cidr">' + p.cidr + '</span></span>' +
+      '<span class="r2"><span class="cov ' + p.covCls + '"><span class="covlong">' + p.cov + '</span><span class="covshort">' + p.covShort + '</span></span>' +
+      '<span class="cnt">' + (p.cnt || '') + '</span></span>' +
+    '</span></div>';
+}
+
+function bHTML(b) {
+  const cls = 'b' + (b.civic ? ' civic' : '') + (b.gate ? ' gate' : '') + (b.ghost ? ' ghost' : '');
+  return '<div class="' + cls + '" data-id="' + b.id + '" data-dist="' + b.dist + '"' +
+    (b.flags ? ' data-flagged="' + b.flags + '"' : '') +
+    ' role="img" aria-label="' + esc(b.aria) + '"' +
+    ' style="--bx:' + b.x + 'px;--by:' + b.y + 'px;--bw:' + b.w + 'px;--bd:' + b.h + 'px;' +
+    '--hd:' + b.hd + 'px;--hw:' + b.hw + 'px;--id:' + b.idp + ';--iw:' + b.iw + ';--dk:' + INK[b.ink] + '">' +
+    '<span class="foot"></span>' +
+    '<span class="ring a"></span><span class="ring b"></span>' +
+    '<span class="roof"><span class="lit"></span>' +
+      '<span class="rn">' + b.name + '</span>' + (b.sub ? '<span class="rs">' + b.sub + '</span>' : '') +
+    '</span>' +
+    '<span class="wallanchor"><span class="wall"></span></span>' +
+    '<span class="bname">' + b.name + '</span>' +
+    (b.flags ? '<span class="fl">' + '&#10033;'.repeat(b.flags) + '</span>' : '') +
+    '</div>';
+}
+
+function roadPaths() {
+  let s = '';
+  ROADS.forEach(function (r) {
+    const dash = r.dash ? ' stroke-dasharray="' + r.dash + '"' : '';
+    s += '<g><title>' + esc(r.a) + '</title>' +
+      '<path d="' + r.d + '" fill="none" stroke="var(--void)" stroke-width="' + (r.w + 5) + '" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>' +
+      '<path d="' + r.d + '" fill="none" stroke="' + r.c + '" stroke-width="' + r.w + '" stroke-linecap="round" stroke-linejoin="round" opacity="0.62"' + dash +
+      (r.road ? ' data-road="' + r.road + '"' : '') + '/></g>';
+  });
+  /* the alarm road last, so its junctions read as crossings */
+  s += '<g class="r-alarm"><title>UNPLANNED: cam-porch to tom-desktop, tcp/445, caught by the default drop, 14 times</title>' +
+    '<path d="' + ALARM_D + '" fill="none" stroke="var(--void)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>' +
+    '<path d="' + ALARM_D + '" fill="none" stroke="var(--alarm)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></g>';
+  return s;
+}
+
+function planHTML() {
+  const paths = roadPaths();
+  let h = '';
+
+  /* the second borough's ground, drawn before its plates */
+  h += '<div class="borough" style="left:962px;top:192px;width:268px;height:300px" role="img"' +
+       ' aria-label="the hap-ax3 borough: a second router with its own two districts, on the same map"></div>';
+  h += '<span class="boroughtag" style="left:964px;top:498px">HAP-AX3 BOROUGH &#183; 12 RULES</span>';
+  h += '<span class="boroughsub" style="left:964px;top:514px">workshop &#8594; servers :445 &#183; cams &#8594; nas steady</span>';
+
+  /* district plates: the ground */
+  PLATES.forEach(function (p) { h += plateHTML(p); });
+
+  /* roads at plan stops: one flat layer */
+  h += '<svg class="roads" viewBox="0 0 1250 560" aria-hidden="true">' + paths + '</svg>';
+  /* roads at the survey stop: the same paths in 40px depth strips, so
+     each length of road sorts correctly against the buildings on it */
+  for (let k = -40; k < 560; k += 40) {
+    h += '<div class="rstrip" style="top:' + k + 'px" aria-hidden="true">' +
+         '<svg viewBox="0 0 1250 560" style="top:' + (-k) + 'px">' + paths + '</svg></div>';
+  }
+
+  /* chips: open ground only, never over a plate or a road */
+  h += '<svg class="chips" viewBox="0 0 1250 560" aria-hidden="true">' +
+    '<text class="big" x="360" y="20">INTERNET &#183; 203.0.113.7</text>' +
+    '<text class="ok" x="360" y="35">LOGGED</text>' +
+    '<text class="warn" x="360" y="51" font-size="10">&#9650; 3.1&#215; drops &#183; wan-in</text>' +
+    '<text x="382" y="106">any &#8594; wan &#183; 9/s</text>' +
+    '<text class="k" x="978" y="34">wg0 &#183; 10.99.0.0/24 &#183; QUIET &#183; &#9673;1</text>' +
+    '<text class="k" x="46" y="204">wan only &#183; dark</text>' +
+    '<text class="k" x="806" y="222">ether1 &#183; 10.0.10.9</text>' +
+    /* street-only: the port labels that run along the avenue */
+    '<text class="port" transform="rotate(-90 645 428)" x="645" y="428">:53 :123 &#183; :445 :5001</text>' +
+    '<text class="port" x="910" y="318">:445 backups</text>' +
+    '</svg>';
+
+  /* the buildings, standing on the ground plane */
+  B.forEach(function (b) { h += bHTML(b); });
+
+  /* the escalated callout, in open ground below the ring road */
+  h += '<div class="callout" style="left:212px;top:500px" role="note"' +
+       ' aria-label="UNPLANNED, iot to lan, tcp 445, caught by default drop, 14 times">' +
+       '<i class="pin"></i>' +
+       '<div class="t1">UNPLANNED &#183; iot &#8594; lan &#183; tcp/445</div>' +
+       '<div class="t2">caught by default drop &#183; 14&#215; &#183; open &#9656;</div>' +
+       '</div>';
+  return h;
+}
+
+const HTML = planHTML();
+document.querySelectorAll('.plan').forEach(function (p) { p.innerHTML = HTML; });
+
+/* the importance toggle: two readings of the same heights */
+document.querySelectorAll('.impctl').forEach(function (ctl) {
+  const scene = ctl.closest('.scene');
+  const plan = scene.querySelector('.plan');
+  ctl.querySelectorAll('button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      ctl.querySelectorAll('button').forEach(function (o) {
+        o.classList.toggle('on', o === btn);
+        o.setAttribute('aria-pressed', String(o === btn));
+      });
+      plan.classList.toggle('imp-watched', btn.dataset.importance === 'watched');
+    });
+  });
+});
+</script>
+</body>
+</html>

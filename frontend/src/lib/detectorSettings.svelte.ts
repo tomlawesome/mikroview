@@ -1,7 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { fetchDefinitions, updateDefinition } from './api'
-import type { DetectorScope, DetectorSettings } from './types'
+import {
+  cloneDefinition,
+  createCustomDetection,
+  deleteDefinition,
+  fetchDefinitionSchema,
+  fetchDefinitions,
+  replayDefinition,
+  resetDefinition,
+  updateDefinition,
+  type DefinitionUpdate,
+} from './api'
+import { rememberCustomFamilies } from './flagPalette'
+import type {
+  DefinitionParamSchema,
+  DetectorScope,
+  DetectorSettings,
+  ReplayResult,
+} from './types'
 
 // Live per-detector on/off + scope settings -- admin-only, mirrors
 // flags.svelte.ts's shape.
@@ -27,6 +43,13 @@ import type { DetectorScope, DetectorSettings } from './types'
 class DetectorSettingsState {
   list = $state<DetectorSettings[]>([])
 
+  // Every param schema this deployment declares, keyed by definition id
+  // (#787). The editor renders its typed fields from *this*, not from the
+  // paramSchema copy that also rides on each row above: one source, so a
+  // control and the validation behind it cannot come to disagree. The row
+  // copy stays because #677's port-scan window row already reads it.
+  schema = $state<Record<string, DefinitionParamSchema[]>>({})
+
   async refresh() {
     const { definitions } = await fetchDefinitions()
     this.list = definitions
@@ -37,7 +60,38 @@ class DetectorSettingsState {
         description: d.description,
         enabled: d.enabled,
         scope: d.scope ?? {},
+        learning: d.learning,
+        params: d.params,
+        paramSchema: d.paramSchema,
+        origin: d.provenance?.origin ?? 'shipped',
+        overridden: Object.keys(d.distance ?? {}).length > 0,
+        detection: d.detection,
+        structure: d.structure,
+        family: d.family,
       }))
+    // The palette asks familyOf(flag.type) from a dozen places that have
+    // a flag and nothing else, so the answer for an operator-authored
+    // detector has to be put somewhere they can all reach (#829). Done
+    // here, on the one fetch that already reads every definition, rather
+    // than in the bench: the docket and the map need the ink whether or
+    // not anyone has opened the engine room.
+    rememberCustomFamilies(
+      Object.fromEntries(definitions.map((d) => [d.id, d.family])),
+    )
+  }
+
+  // refreshSchema is separate from refresh, and failure is survivable: the
+  // schema endpoint is user-tier while the list is open to a viewer too
+  // (internal/api's handleDefinitionsSchema and handleDefinitionsList), so
+  // a viewer's fetch answers 403. A viewer has no editing panel to render
+  // fields into, so the honest result is an empty schema map rather than
+  // an error thrown across a page that was only ever going to show facts.
+  async refreshSchema() {
+    try {
+      this.schema = await fetchDefinitionSchema()
+    } catch {
+      this.schema = {}
+    }
   }
 
   async update(name: string, enabled: boolean, scope: DetectorScope): Promise<string | null> {
@@ -45,6 +99,105 @@ class DetectorSettingsState {
     if (typeof result === 'string') return result
     await this.refresh()
     return null
+  }
+
+  // updateParams writes a definition's numeric tuning (#677's port-scan
+  // window row: threshold/window) through the same PUT /api/definitions/
+  // {id} the bench's enabled/scope editing above already uses --
+  // deliberately not a second store or endpoint, since these are the
+  // same underlying definition. The server validates against the
+  // definition's own paramSchema (engine.DefinitionsStore.SetParams),
+  // so an out-of-range value comes back as the returned error string
+  // rather than silently clamping.
+  async updateParams(name: string, params: Record<string, unknown>): Promise<string | null> {
+    const result = await updateDefinition(name, { params })
+    if (typeof result === 'string') return result
+    await this.refresh()
+    return null
+  }
+
+  // edit is the editing panel's one write (#787): a definition's name,
+  // tuning params and scope go up in a single PUT, because they are one
+  // Save press and one definition. Sending them as three requests would
+  // let a rejected threshold land after an accepted scope, leaving the
+  // panel showing an edit that half-happened.
+  //
+  // Absent fields mean "leave this alone" server-side (see
+  // DefinitionUpdate), so a panel with no name field never clears a name.
+  async edit(name: string, update: DefinitionUpdate): Promise<string | null> {
+    const result = await updateDefinition(name, update)
+    if (typeof result === 'string') return result
+    await this.refresh()
+    return null
+  }
+
+  // reset discards every param override in one call, putting a shipped
+  // definition back to exactly what it shipped with. Scope is untouched:
+  // the server resets params only (handleDefinitionsReset), and a button
+  // labelled "reset" that silently also cleared an operator's host
+  // exclusions would be doing something nobody asked it to.
+  async reset(name: string): Promise<string | null> {
+    const result = await resetDefinition(name)
+    if (typeof result === 'string') return result
+    await this.refresh()
+    return null
+  }
+
+  // clone asks the server for a copy under a new name and returns the new
+  // definition's id, so the bench can open the copy's panel on it.
+  //
+  // The server refuses this for a definition whose logic is compiled in
+  // rather than stored as data, and says why (handleDefinitionsClone). The
+  // refusal is returned verbatim rather than reworded: it names the
+  // operation that does exist for such a definition, which a generic
+  // "clone failed" would throw away.
+  // replay asks what candidate numbers would have done over the traffic
+  // already held (#786's Try). It refreshes nothing on purpose: a replay
+  // writes nothing, so the list it would re-read has not changed, and
+  // re-reading it would make a trial look like an edit.
+  //
+  // The result is returned untouched, decline included. A decline is the
+  // server's honest "this cannot be asked of the corpus held yet", not a
+  // failure, and collapsing it here into an error string is exactly the
+  // distinction engine.Result is shaped to preserve.
+  async replay(name: string, params: Record<string, unknown>): Promise<ReplayResult | string> {
+    return await replayDefinition(name, params)
+  }
+
+  // create writes a new operator-authored detector and returns its id, so
+  // the bench can swap the local draft for the real row it just made.
+  async create(req: Parameters<typeof createCustomDetection>[0]): Promise<{ id: string } | string> {
+    const result = await createCustomDetection(req)
+    if (typeof result === 'string') return result
+    await this.refresh()
+    // The schema map is keyed by definition id and the new detector has
+    // one nothing has ever asked about -- the same reason clone below
+    // re-reads it (#810).
+    await this.refreshSchema()
+    return { id: result.id }
+  }
+
+  // remove deletes an operator-authored detector. Offered only on a
+  // custom row: a shipped definition is never deleted, only paused, and
+  // the server refuses one -- a button whose only outcome is that refusal
+  // would be worse than no button.
+  async remove(name: string): Promise<string | null> {
+    const err = await deleteDefinition(name)
+    if (err) return err
+    await this.refresh()
+    return null
+  }
+
+  async clone(name: string, cloneAs: string): Promise<{ id: string } | string> {
+    const result = await cloneDefinition(name, cloneAs)
+    if (typeof result === 'string') return result
+    await this.refresh()
+    // The schema map is keyed by definition id, and the copy has an id
+    // nothing has ever asked about (#810). Without this, the panel that
+    // opens on the copy a moment later would render no tuning fields for
+    // a detector that does declare threshold and window.
+    await this.refreshSchema()
+    return { id: result.id }
   }
 }
 

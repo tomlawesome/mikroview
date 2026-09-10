@@ -11,7 +11,7 @@
 
   function onClick() {
     if (!btnEl) return
-    ipLookupState.open(ip, btnEl.getBoundingClientRect())
+    ipLookupState.open(ip, btnEl.getBoundingClientRect(), btnEl)
   }
 </script>
 

@@ -1,0 +1,41 @@
+{
+  "schema": 2,
+  "commit": "0.4.0+gb66f65a.20260908T075019Z",
+  "decks": {
+    "The fall": {
+      "wallAvgMs": 773.3333333333334
+    },
+    "Topography": {
+      "wallAvgMs": 488.3333333333333
+    },
+    "Metrics": {
+      "wallAvgMs": 1470.3333333333333
+    },
+    "Stream": {
+      "wallAvgMs": 615
+    },
+    "Flags": {
+      "wallAvgMs": 923.6666666666666
+    },
+    "Entities": {
+      "wallAvgMs": 572
+    },
+    "Settings": {
+      "wallAvgMs": 493.6666666666667
+    }
+  },
+  "longTasks": {
+    "rolls": {
+      "totalMs": 6052
+    },
+    "scroll": {
+      "totalMs": 1296
+    },
+    "idle": {
+      "totalMs": 318
+    }
+  },
+  "docketScroll": {
+    "frameAvgMs": 18.1
+  }
+}

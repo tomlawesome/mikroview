@@ -336,6 +336,61 @@ func TestDeclarativeDefinitionReplaySampleBound(t *testing.T) {
 	}
 }
 
+// TestDeclarativeDefinitionReplaySampleKeepsMostRecent pins issue #860:
+// once a candidate's emissions exceed replaySampleBound, the receipt's
+// Sample must hold the most recent ones (still oldest-first within the
+// sample), not whichever fifty happened to fire first. An operator
+// pressing Try is judging something that just happened, so the sample
+// needs to be recognisable as "now," not as "hours ago." This would fail
+// under the old first-N behaviour, which kept events n..n+49 instead of
+// the last fifty.
+func TestDeclarativeDefinitionReplaySampleKeepsMostRecent(t *testing.T) {
+	def := declTestDef(IntentDetection)
+	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}}
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         replayTestWindow,
+		Threshold:      1,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "hit",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
+	if err != nil {
+		t.Fatalf("NewDeclarativeDefinition: %v", err)
+	}
+
+	base := time.Now().Add(-2 * time.Minute)
+	n := replaySampleBound + 20
+	events := make([]store.Event, n)
+	for i := range events {
+		events[i] = evtAt("198.51.100.7", "10.0.0.1", 22, base.Add(time.Duration(i)*time.Second))
+	}
+
+	result, err := dd.Replay(fakeCorpus{events: events}, nil)
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if result.Receipt == nil {
+		t.Fatalf("Replay declined unexpectedly: %+v", result.Decline)
+	}
+	r := *result.Receipt
+	sample := r.Sample()
+	if len(sample) != replaySampleBound {
+		t.Fatalf("len(Sample()) = %d, want exactly replaySampleBound=%d", len(sample), replaySampleBound)
+	}
+	// threshold=1 means every one of the n matching events is its own
+	// emission, so the sample must be exactly the last replaySampleBound
+	// events, oldest of those kept first.
+	for i, s := range sample {
+		want := events[n-replaySampleBound+i].ReceivedAt
+		if !s.At.Equal(want) {
+			t.Fatalf("sample[%d].At = %s, want %s (event %d) -- sample must hold the most recent %d emissions in chronological order, not the first",
+				i, s.At, want, n-replaySampleBound+i, replaySampleBound)
+		}
+	}
+}
+
 func TestDeclarativeDefinitionReplayCorpusTruncatedPropagatesToReceipt(t *testing.T) {
 	dd := buildReplayTestDef(t)
 	events := watchedEvents(time.Now().Add(-2*time.Minute), 15)
