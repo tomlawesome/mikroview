@@ -38,6 +38,7 @@
   import { zonesState } from '../lib/zones.svelte'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
+  import { ariaSort as sortAriaSort, nextSort, sortGlyph } from '../lib/tableSort'
   import { formatHM, formatRelative } from '../lib/format'
   import { nightlySummary, windowLabel } from '../lib/watchWindow'
   import { topologyNavState, type PendingWatchDraft } from '../lib/topologyNav.svelte'
@@ -751,6 +752,12 @@
   // '' is the "unscoped" option -- see the boundary picker section above.
   let editBoundaryKey = $state('')
   let editSaving = $state(false)
+  // The address list this entry is scoped to, if it was created by
+  // accepting an address-list suggestion (#1077). There is no control
+  // here to change it -- it just has to survive every other edit, the
+  // same way Boundary/Source/Ports do, so it is read off the entry being
+  // edited and carried straight back in saveEditWatch's request.
+  let editSourceList = $state<WatchlistEntry['sourceList']>(undefined)
 
   function startEditWatch(e: WatchlistEntry) {
     editingId = e.id
@@ -760,6 +767,7 @@
     editMode = e.invert ? 'fence' : 'expect'
     editIncludeStructuralNoise = !!e.includeStructuralNoise
     editBoundaryKey = entryBoundaryKey(e)
+    editSourceList = e.sourceList
     wtError = null
   }
 
@@ -775,6 +783,7 @@
       name: editName.trim() || undefined,
       invert: editMode === 'fence',
       source,
+      sourceList: editSourceList,
       destIp: editMode === 'expect' ? destIp : undefined,
       ports: editMode === 'expect' ? ports : undefined,
       includeStructuralNoise: editMode === 'fence' ? editIncludeStructuralNoise : undefined,
@@ -854,17 +863,17 @@
   let wtFilters = $state({ watch: '', boundary: '', window: '', state: '', lastEvent: '' })
 
   function wtToggleSort(key: WatchTableSortKey) {
-    if (wtSortKey === key) {
-      wtSortDir = wtSortDir === 'asc' ? 'desc' : 'asc'
-    } else {
-      wtSortKey = key
-      wtSortDir = 'asc'
-    }
+    const next = nextSort({ key: wtSortKey, dir: wtSortDir }, key, 'asc')
+    wtSortKey = next.key
+    wtSortDir = next.dir
   }
 
   function wtDirGlyph(key: WatchTableSortKey): string {
-    if (wtSortKey !== key) return ''
-    return wtSortDir === 'asc' ? '▲' : '▼'
+    return sortGlyph({ key: wtSortKey, dir: wtSortDir }, key)
+  }
+
+  function wtAriaSort(key: WatchTableSortKey): 'ascending' | 'descending' | 'none' {
+    return sortAriaSort({ key: wtSortKey, dir: wtSortDir }, key)
   }
 
   type WatchRow = {
@@ -1327,27 +1336,27 @@
       <table class="watch-table">
         <thead>
           <tr>
-            <th>
+            <th aria-sort={wtAriaSort('watch')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'watch'} onclick={() => wtToggleSort('watch')}>
                 watch <span class="dir">{wtDirGlyph('watch')}</span>
               </button>
             </th>
-            <th>
+            <th aria-sort={wtAriaSort('boundary')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'boundary'} onclick={() => wtToggleSort('boundary')}>
                 boundary <span class="dir">{wtDirGlyph('boundary')}</span>
               </button>
             </th>
-            <th>
+            <th aria-sort={wtAriaSort('window')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'window'} onclick={() => wtToggleSort('window')}>
                 window <span class="dir">{wtDirGlyph('window')}</span>
               </button>
             </th>
-            <th>
+            <th aria-sort={wtAriaSort('state')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'state'} onclick={() => wtToggleSort('state')}>
                 state <span class="dir">{wtDirGlyph('state')}</span>
               </button>
             </th>
-            <th>
+            <th aria-sort={wtAriaSort('lastEvent')}>
               <button type="button" class="th-sort" class:on={wtSortKey === 'lastEvent'} onclick={() => wtToggleSort('lastEvent')}>
                 last event <span class="dir">{wtDirGlyph('lastEvent')}</span>
               </button>

@@ -81,6 +81,30 @@ describe('City', () => {
     expect(container.querySelector('.mini rect.viewport')).not.toBeNull()
   })
 
+  it("says how many zones a router's plate has no room for (#1073)", () => {
+    const zone = (id: string) => ({
+      id,
+      name: id,
+      cidr: null,
+      hosts: [],
+      hostCount: 0,
+      eventCount: 0,
+      routerId: 'hapax3',
+      coverage: 'dark' as const,
+      dark: true,
+    })
+    const input = mockupEstate()
+    // hapax3 already owns two zones (wlan-wsh, wlan-cams); four more
+    // brings it to six, one past the borough's five slots.
+    input.zones.push(zone('extra-1'), zone('extra-2'), zone('extra-3'), zone('extra-4'))
+    const overflowGround = layoutGround(input)
+    expect(overflowGround.boroughs.find((b) => b.routerId === 'hapax3')?.moreZones).toBe(1)
+    // The borough ring's own label is only drawn zoomed out to city or
+    // borough level.
+    const { container } = render(City, { props: { stop: 'city', ground: overflowGround } })
+    expect(container.textContent).toContain('+1 zone not shown')
+  })
+
   it('walks buildings within a district and districts within the map', async () => {
     const { container } = render(City, { props: { stop: 'district', ground } })
     const first = container.querySelector<HTMLElement>('.plate[tabindex="0"]') as HTMLElement

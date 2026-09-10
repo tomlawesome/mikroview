@@ -93,3 +93,14 @@ dedicated read-only token limits what a leak of it could reach.
 
 Until `CI_REUSE_TOKEN` exists, nothing changes: every candidate job runs
 exactly as it did before #1066. Creating it is what turns reuse on.
+
+## Pre-release reviews (`docs/reviews/`)
+
+Each release gets a code review before it is cut: cheap finder agents per
+area and topic (security, quality, efficiency, robustness, performance),
+an independent refuter per medium/high finding, every confirmed finding
+fixed before the tag. The record is `docs/reviews/<date>-<version>.md`,
+kept forever: it names the commit reviewed, so the next release reviews
+only what changed since, plus new code. Security findings are listed there
+only once fixed robustly; anything open lives in a confidential issue.
+First one: `docs/reviews/2026-09-10-v0.5.0.md`.

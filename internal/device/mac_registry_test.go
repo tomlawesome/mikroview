@@ -312,6 +312,40 @@ func TestMACRegistryPersistLockedRateLimitsWrites(t *testing.T) {
 	}
 }
 
+// TestSeenInATightLoopProducesFarFewerWritesThanCalls is #1087's proof
+// for this store: before that fix, Seen unconditionally ran
+// json.MarshalIndent over the whole registry on every call -- including
+// the ordinary case where a MAC already known simply had its LastSeen
+// bumped, which TestSeenFiresOnceThenNeverAgain shows is most calls in
+// practice. A sustained stream of Seen calls against the same MAC must
+// not turn into anywhere near one backend write per call.
+func TestSeenInATightLoopProducesFarFewerWritesThanCalls(t *testing.T) {
+	b := newCountingSaveBackend()
+	r, err := OpenMACRegistryWithBackend(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		r.Close(ctx)
+	}()
+
+	const n = 2000
+	now := time.Now()
+	for i := 0; i < n; i++ {
+		r.Seen("aa:bb:cc:dd:ee:ff", now)
+	}
+	flushForTest(t, r)
+
+	if got := b.saveCount(); got >= n/10 {
+		t.Errorf("%d Seen calls in a tight loop against the same MAC produced %d backend writes, want far fewer than %d", n, got, n)
+	}
+	if len(r.List()) != 1 {
+		t.Fatalf("expected the one MAC to still be the only entry, got %d", len(r.List()))
+	}
+}
+
 // TestPersistenceRoundTrip proves the actual point of this whole store:
 // a MAC seen before a restart must still be recognized as "already
 // known" after reopening from disk -- the 24h event-retention window

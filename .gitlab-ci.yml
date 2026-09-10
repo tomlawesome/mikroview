@@ -45,6 +45,20 @@ default:
 variables:
   GOFLAGS: "-mod=readonly"
 
+# #1091: the only thing this workflow:rules block exists for is to set
+# NPM_CACHE_POLICY per pipeline, for .npm_cache below. `when: always` is
+# the catch-all rung -- every pipeline source still creates a pipeline
+# exactly as it did with no workflow: block at all, so nothing about
+# which pipelines run changes here, only a variable they carry.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables:
+        NPM_CACHE_POLICY: "pull"
+    - when: always
+      variables:
+        NPM_CACHE_POLICY: "pull-push"
+
 # Scheduled pipelines exist only to carry the CHR exercise, CHR watch and
 # Renovate jobs, which select themselves on $CHR_EXERCISE / $CHR_WATCH /
 # $RENOVATE. Without the `never` line every schedule on dev also ran the full
@@ -264,6 +278,24 @@ variables:
         exit 1
       fi
 
+# Shared npm cache (#1091), keyed on the lockfile so a dependency bump
+# invalidates it rather than serving stale node_modules. `npm ci` still
+# runs in every job below -- it is fast against a warm node_modules and
+# is what actually keeps the tree honest against the lockfile -- this
+# only saves each of them a cold npm-registry fetch. Policy comes from
+# NPM_CACHE_POLICY (set above in workflow:rules): pull-push on dev, so
+# the cache a merge request pulls stays warm; pull-only on a merge
+# request, so an unreviewed branch can never write back and poison what
+# dev or another MR pulls next.
+.npm_cache: &npm_cache
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+    paths:
+      - frontend/node_modules/
+    policy: $NPM_CACHE_POLICY
+
 # Standing on an earlier run instead of repeating it (#1066, ported from
 # Orbit's reuse gate, orbit #898). A push that only touched one shard's
 # scenario files used to rerun all four gate:scenarios shards plus
@@ -399,7 +431,7 @@ lint:frontend:
   # Light lane (#949): svelte-check and a few node:test files fit in 2 GB.
   tags: [light]
   image: node:22-alpine
-  <<: *dev_or_mr_code_frontend
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
   script:
     # The CHR watch suites (scripts/chr-watch) and #1066's reuse gate have
     # node:test suites that no other job runs, so they run here.
@@ -464,7 +496,7 @@ test:frontend:
   stage: test
   tags: [light]
   image: node:22-alpine
-  <<: *dev_or_mr_code_frontend
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
   # The other half of #684. lint:frontend above proves the frontend compiles;
   # nothing here proved it behaves, so this lane had the same hole GitHub did
   # and 542 real assertions gated nothing on either. jsdom, so no browser and
@@ -504,7 +536,7 @@ test:build-checks:
       exists: ["frontend/package.json"]
     - if: $CI_COMMIT_BRANCH == "dev"
       exists: ["frontend/package.json"]
-  <<: *git_safe
+  <<: [*git_safe, *npm_cache]
   script:
     - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
     - export PATH="/usr/local/go/bin:$PATH" && go version
@@ -761,7 +793,7 @@ gate:scenarios:
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr_code, *git_safe]
+  <<: [*dev_or_mr_code, *git_safe, *npm_cache]
   parallel: 4
   timeout: 30m
   script:
@@ -873,7 +905,7 @@ gate:scripts:
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr_code, *git_safe]
+  <<: [*dev_or_mr_code, *git_safe, *npm_cache]
   timeout: 30m
   script:
     - set -o pipefail
@@ -941,7 +973,7 @@ perf:promotion:
   stage: gate
   tags: [big]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: *git_safe
+  <<: [*git_safe, *npm_cache]
   # The #1038 ladder, target-branch guard and all: a 25-minute job that
   # holds the whole host quiet is the one most worth not running for a
   # prose change. In practice it will almost always run anyway, because a
@@ -1191,7 +1223,7 @@ security:npm-audit:
   stage: security
   tags: [light]
   image: node:22-alpine
-  <<: *dev_or_mr_code_frontend
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
   script:
     - cd frontend
     # node:22-alpine's bundled npm tries the fast bulk advisory endpoint
@@ -1245,7 +1277,7 @@ security:licence-policy:
   stage: security
   tags: [light]
   image: node:22-bookworm
-  <<: [*dev_or_mr_code, *git_safe]
+  <<: [*dev_or_mr_code, *git_safe, *npm_cache]
   script:
     - node --test tools/licenses/licence-policy.test.mjs
     - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
@@ -1324,13 +1356,29 @@ security:trivy-fs:
     paths:
       - .trivy-cache
   script:
-    - trivy fs --exit-code 0 --severity CRITICAL,HIGH,MEDIUM,LOW --scanners vuln,license --format sarif --output trivy-fs.sarif .
+    # Full-severity report kept as the SARIF artifact for visibility only --
+    # exit-code 0, never fails the job by itself. --include-dev-deps:
+    # frontend/package.json declares 0 runtime "dependencies" (this Vite
+    # layout puts everything under devDependencies even though it all
+    # reaches the built bundle), so without the flag trivy silently reports
+    # "no supported files" for npm and this scan covers Go modules only.
+    - trivy fs --exit-code 0 --severity CRITICAL,HIGH,MEDIUM,LOW --scanners vuln,license --include-dev-deps --format sarif --output trivy-fs.sarif .
+    # The real gate (#1079): fails the job on a fixed-available CRITICAL or
+    # HIGH vulnerability (--ignore-unfixed: no point blocking on a fix that
+    # doesn't exist yet). Licences stay report-only above, not gated here.
+    # Trivy's licence scanner reads the whole npm tree including build-only
+    # native tooling -- sharp/libvips (LGPL-3.0-or-later) and lightningcss
+    # (MPL-2.0) -- none of which reaches the shipped frontend bundle. The
+    # project's own shipped-scope licence gate (security:licence-policy,
+    # tools/licenses/licence-policy.mjs) already covers what actually ships
+    # and deliberately excludes build tooling for this reason; gating here
+    # too would fail the pipeline on packages already decided to be fine.
+    - trivy fs --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --scanners vuln --include-dev-deps .
   artifacts:
     when: always
     paths:
       - trivy-fs.sarif
     expire_in: 1 week
-  allow_failure: true
   # See security:gosec's retry comment above (#950): same artifact-upload
   # flake, same fix.
   retry:

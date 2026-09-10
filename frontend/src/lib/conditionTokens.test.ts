@@ -103,6 +103,62 @@ describe('the value shape picks the operator', () => {
   })
 })
 
+// #1076. An identity's pair is [mac, ip], but unlike addressListMembership's
+// [router, list] the engine (matchlog.Identity.Empty) only refuses an
+// identity with *neither* side -- a MAC-only or IP-only device still names
+// something. The bar's parser has to accept the one-sided shapes the engine
+// already does, not just the two-non-empty-parts shape every other pair
+// takes.
+describe('a source identity keeps an empty side, unlike other pairs', () => {
+  it('takes a mac with no address', () => {
+    expect(parseValue('sourceIdentity', 'aa:bb:cc:dd:ee:ff,')).toEqual({
+      operator: 'equals',
+      values: ['aa:bb:cc:dd:ee:ff', ''],
+    })
+  })
+
+  it('takes an address with no mac', () => {
+    expect(parseValue('sourceIdentity', ',10.0.0.5')).toEqual({
+      operator: 'equals',
+      values: ['', '10.0.0.5'],
+    })
+  })
+
+  it('refuses both sides empty', () => {
+    expect(parseValue('sourceIdentity', ',')).toEqual({
+      error: 'identity takes mac,ip -- either side may be left empty, not both',
+    })
+  })
+
+  it('refuses no comma at all', () => {
+    expect(parseValue('sourceIdentity', 'aa:bb:cc:dd:ee:ff')).toEqual({
+      error: 'identity takes mac,ip -- either side may be left empty, not both',
+    })
+  })
+
+  it('refuses three parts', () => {
+    expect(parseValue('sourceIdentity', 'aa:bb:cc:dd:ee:ff,10.0.0.5,extra')).toEqual({
+      error: 'identity takes mac,ip -- either side may be left empty, not both',
+    })
+  })
+
+  it('round-trips a one-sided identity through valueText back into parseValue', () => {
+    const macOnly = { field: 'sourceIdentity', operator: 'equals', values: ['aa:bb:cc:dd:ee:ff', ''] }
+    expect(valueText(macOnly)).toBe('aa:bb:cc:dd:ee:ff,')
+    expect(parseValue('sourceIdentity', valueText(macOnly))).toEqual({
+      operator: 'equals',
+      values: ['aa:bb:cc:dd:ee:ff', ''],
+    })
+
+    const ipOnly = { field: 'sourceIdentity', operator: 'equals', values: ['', '10.0.0.5'] }
+    expect(valueText(ipOnly)).toBe(',10.0.0.5')
+    expect(parseValue('sourceIdentity', valueText(ipOnly))).toEqual({
+      operator: 'equals',
+      values: ['', '10.0.0.5'],
+    })
+  })
+})
+
 // A verb taken off the list before anything was typed only ever wins over
 // a bare single value -- the one shape that says nothing about which
 // comparison was meant.

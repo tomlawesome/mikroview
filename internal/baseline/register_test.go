@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // noon is a fixed reference instant. Tests that care about calendar days
@@ -543,4 +546,94 @@ func TestNilRegisterIsSafe(t *testing.T) {
 // MaxLines distinct private addresses.
 func testIP(i int) string {
 	return "10." + strconv.Itoa(i/65536%256) + "." + strconv.Itoa(i/256%256) + "." + strconv.Itoa(i%256)
+}
+
+// countingSaveBackend is an in-memory persist.Backend that counts Save
+// calls -- see device.countingSaveBackend, the twin of this type.
+type countingSaveBackend struct {
+	mu      sync.Mutex
+	payload []byte
+	version int64
+	saves   int
+}
+
+func newCountingSaveBackend() *countingSaveBackend { return &countingSaveBackend{} }
+
+func (b *countingSaveBackend) Load(ctx context.Context) (persist.Snapshot, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return persist.Snapshot{Payload: b.payload, Version: b.version, Exists: b.version != 0}, nil
+}
+
+func (b *countingSaveBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if expect != b.version {
+		return 0, persist.ErrConflict
+	}
+	b.saves++
+	b.payload = payload
+	b.version++
+	return b.version, nil
+}
+
+func (b *countingSaveBackend) Close() error     { return nil }
+func (b *countingSaveBackend) Describe() string { return "counting test backend" }
+
+func (b *countingSaveBackend) saveCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.saves
+}
+
+// flushForTest waits for r's write-behind writer to persist whatever is
+// currently dirty -- see device.flushForTest, the twin of this helper.
+func flushForTest(t *testing.T, r *Register) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := r.Flush(ctx); err != nil {
+		t.Fatalf("flushForTest: %v", err)
+	}
+}
+
+// TestObserveInATightLoopProducesFarFewerWritesThanCalls is #1087's
+// proof for this store: Observe used to marshal the whole register --
+// deep-copy, sort, json.MarshalIndent -- on every call, on the single
+// ingest goroutine, under the register's own lock. A sustained stream of
+// Observe calls against the same line (the ordinary "one busy
+// conversation" ingest case) must not turn into anywhere near one
+// backend write per call: the encode is now owned by a background
+// goroutine that debounces it, so the whole tight loop below should cost
+// on the order of one or two writes, not thousands.
+func TestObserveInATightLoopProducesFarFewerWritesThanCalls(t *testing.T) {
+	b := newCountingSaveBackend()
+	r, err := OpenWithBackend(b, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		r.Close(ctx)
+	}()
+
+	const n = 2000
+	now := day(0)
+	for i := 0; i < n; i++ {
+		r.Observe("bridge-lan", "10.0.10.5", "10.0.0.1", 443, "tcp", OutcomeAccept, now)
+	}
+	flushForTest(t, r)
+
+	if got := b.saveCount(); got >= n/10 {
+		t.Errorf("%d Observe calls in a tight loop against the same line produced %d backend writes, want far fewer than %d", n, got, n)
+	}
+
+	l, ok := r.Get(KeyFor("10.0.10.5", "10.0.0.1", 443, "tcp"))
+	if !ok {
+		t.Fatal("the line observed in the loop is missing from the register")
+	}
+	if l.CountToday != n {
+		t.Errorf("CountToday = %d, want %d -- debouncing the write must never drop an in-memory update", l.CountToday, n)
+	}
 }

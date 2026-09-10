@@ -114,6 +114,18 @@ class WatchlistState {
   async matchesFor(mac?: string, ip?: string): Promise<WatchlistMatch[]> {
     return fetchWatchlistMatches({ mac, ip, limit: 50 })
   }
+
+  // #1083: called from both auth.svelte.ts logout paths so the watchlist
+  // doesn't survive into the next person's sign-in on this tab. Every
+  // field here is server-sourced (refresh()'s own doc comment: refreshed
+  // wholesale rather than patched locally), so resetting to the
+  // constructor's initial values is the whole of it -- there is no
+  // connection-level field on this class to leave alone.
+  reset() {
+    this.entries = []
+    this.coverage = {}
+    this.loaded = false
+  }
 }
 
 export const watchlistState = new WatchlistState()

@@ -23,6 +23,7 @@
   import { formatHM } from '../lib/format'
   import { compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
+  import { nextSort, ariaSort as sortAriaSort, sortGlyph } from '../lib/tableSort'
   import type { AuditEntry } from '../lib/types'
 
   onMount(() => {
@@ -41,17 +42,17 @@
   let filters = $state({ time: '', actor: '', what: '' })
 
   function toggleSort(key: SortKey) {
-    if (sortKey === key) {
-      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
-    } else {
-      sortKey = key
-      sortDir = key === 'time' ? 'desc' : 'asc'
-    }
+    const next = nextSort({ key: sortKey, dir: sortDir }, key, key === 'time' ? 'desc' : 'asc')
+    sortKey = next.key
+    sortDir = next.dir
   }
 
   function dirGlyph(key: SortKey): string {
-    if (sortKey !== key) return ''
-    return sortDir === 'asc' ? '▲' : '▼'
+    return sortGlyph({ key: sortKey, dir: sortDir }, key)
+  }
+
+  function ariaSort(key: SortKey): 'ascending' | 'descending' | 'none' {
+    return sortAriaSort({ key: sortKey, dir: sortDir }, key)
   }
 
   // formatWhen renders round 30's absolute-with-relative-fallback time
@@ -232,19 +233,21 @@
     </p>
   {/if}
 
-  {#if auditState.list.length === 0}
+  {#if auditState.error}
+    <p class="empty error">Could not load the audit log: {auditState.error}</p>
+  {:else if auditState.loaded && auditState.list.length === 0}
     <p class="empty">No admin actions recorded yet.</p>
-  {:else}
+  {:else if auditState.list.length > 0}
     <table>
       <thead>
         <tr>
-          <th onclick={() => toggleSort('time')} aria-sort={sortKey === 'time' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+          <th onclick={() => toggleSort('time')} aria-sort={ariaSort('time')}>
             When <span class="dir">{dirGlyph('time')}</span>
           </th>
-          <th onclick={() => toggleSort('actor')} aria-sort={sortKey === 'actor' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+          <th onclick={() => toggleSort('actor')} aria-sort={ariaSort('actor')}>
             Who <span class="dir">{dirGlyph('actor')}</span>
           </th>
-          <th onclick={() => toggleSort('what')} aria-sort={sortKey === 'what' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+          <th onclick={() => toggleSort('what')} aria-sort={ariaSort('what')}>
             What <span class="dir">{dirGlyph('what')}</span>
           </th>
         </tr>
@@ -303,6 +306,12 @@
     color: var(--fg-dim);
     font-size: 13px;
     padding: 10px 0;
+  }
+
+  /* #1089: a failed fetch reads as a distinct, coloured state -- never
+     the same quiet "nothing here" ink an empty-but-successful log gets. */
+  .empty.error {
+    color: var(--reject);
   }
 
   /* Flags.svelte's `.ftable` and Watchlist.svelte's `.watch-table`

@@ -7,7 +7,31 @@ import {
   register,
   signOutEverywhere,
 } from "./api";
+import { appState } from "./state.svelte";
+import { flagsState } from "./flags.svelte";
+import { watchlistState } from "./watchlist.svelte";
 import type { AuthSession } from "./types";
+
+// #1083: signing out (or being bounced by a 401) must not leave this
+// account's events, filters, devices, stats or watchlist visible to the
+// next person who signs in on this tab -- these are module-level
+// singletons that survive a logout/login pair, not a fresh page load.
+//
+// flagsState (lib/flags.svelte.ts) has no reset() of its own -- another
+// agent owns that file for #1083's batch -- so its fields are cleared
+// here directly through its existing public API: clearPins() is already
+// exported for this, and `list`/`timeSeries`/`loaded`/`baselinesWarming`
+// are plain public $state fields with no setter to go through, so they
+// are set straight back to what FlagsState's own field initialisers use.
+function clearSessionState() {
+  appState.reset();
+  watchlistState.reset();
+  flagsState.list = [];
+  flagsState.timeSeries = [];
+  flagsState.loaded = false;
+  flagsState.baselinesWarming = undefined;
+  flagsState.clearPins();
+}
 
 // 'loading' only lasts for the initial check() call on app boot; after
 // that it's always one of the other three. App.svelte renders a
@@ -190,6 +214,7 @@ class AuthState {
     this.username = "";
     this.role = "";
     this.justSignedOut = true;
+    clearSessionState();
     return err;
   }
 
@@ -212,6 +237,7 @@ class AuthState {
       this.state = "unauthenticated";
       this.username = "";
       this.role = "";
+      clearSessionState();
     }
   }
 }

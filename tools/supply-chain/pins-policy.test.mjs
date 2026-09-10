@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { diffPolicy, extractActionPins, extractImagePins, loadPolicy } from "./pins-policy.mjs";
+import { collectRepositoryPins, diffPolicy, extractActionPins, extractImagePins, loadPolicy } from "./pins-policy.mjs";
 
 const scratchDirs = [];
 function scratchDir() {
@@ -171,6 +171,20 @@ describe("diffPolicy", () => {
     ]);
     const problems = diffPolicy(basePolicy(), { actionPins, imagePins });
     assert.ok(problems.some((p) => p.includes("node:22-alpine") && p.includes("not recorded")));
+  });
+});
+
+describe("collectRepositoryPins", () => {
+  it("reads live-check.Dockerfile's FROM line, not just the product Dockerfile (#1078)", () => {
+    const dir = scratchDir();
+    writeFileSync(join(dir, "Dockerfile"), "FROM golang:1.27.0-alpine AS build\n", "utf8");
+    writeFileSync(join(dir, "live-check.Dockerfile"), "FROM node:26-bookworm\n", "utf8");
+    const { imagePins } = collectRepositoryPins(dir);
+    assert.ok(
+      imagePins.has("node:26-bookworm"),
+      "live-check.Dockerfile's base image was never scanned, so it can drift unpinned without failing the gate",
+    );
+    assert.deepEqual(imagePins.get("node:26-bookworm"), new Set(["live-check.Dockerfile"]));
   });
 });
 

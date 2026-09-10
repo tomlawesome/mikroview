@@ -31,11 +31,12 @@
     openBoundaryInStream as openInStream,
     type FallBoundary,
   } from '../lib/fall.svelte'
-  import { fetchEventsWindow, fetchFlags } from '../lib/api'
+  import { flagsState } from '../lib/flags.svelte'
+  import { fetchEventsWindow } from '../lib/api'
   import { formatHM, formatRelative } from '../lib/format'
   import { lookupPort } from '../lib/commonPorts'
   import { nightlySummary } from '../lib/watchWindow'
-  import type { ClientEvent, Flag, WatchlistEntry } from '../lib/types'
+  import type { ClientEvent, WatchlistEntry } from '../lib/types'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import AlarmCluster from './AlarmCluster.svelte'
 
@@ -141,7 +142,6 @@
   const DEFAULT_FRAME_W = 1600
 
   let span = $state<SpanId>('15m')
-  let flags = $state<Flag[]>([])
   let windowEvents = $state<ClientEvent[]>([])
   let windowHasMore = $state(false)
   let windowLoading = $state(true)
@@ -156,12 +156,9 @@
   async function loadWindow() {
     const end = Date.now()
     const start = end - spanMs
-    // Flags ride the same poll, non-fatally: the fall prints them at
-    // their moment on their band, but a flags fetch failing must never
-    // take the waterfall down with it.
-    fetchFlags()
-      .then((r) => (flags = r.flags))
-      .catch(() => {})
+    // Flags come from the shared flagsState store (App.svelte already
+    // refreshes it every 5s) rather than a second fetchFlags() here --
+    // Fall used to poll flags on its own tick too, doubling the request.
     try {
       const res = await fetchEventsWindow({ since: new Date(start).toISOString(), limit: WINDOW_LIMIT })
       const receivedAt = Date.now()
@@ -408,7 +405,7 @@
     // so a storm of near-simultaneous flags never prints as a stack of
     // colliding rings and labels.
     const flagsByKey = new Map<string, FlagMark[]>()
-    for (const f of flags) {
+    for (const f of flagsState.list) {
       if (f.cleared) continue
       const key = ipToKey.get(f.target)
       if (!key) continue
@@ -855,15 +852,15 @@
   // (a `15 m` default is a common case) silently dropped off every chip,
   // even though the header's own flag count (⚑) is span-independent and
   // kept counting it. The chips are the fall's restatement of that same
-  // current state, not a narrower one, so they read straight off `flags`
-  // instead. The boundary label (", iot → bridge1") is still
+  // current state, not a narrower one, so they read straight off
+  // `flagsState.list` instead. The boundary label (", iot → bridge1") is still
   // window-scoped best-effort via ipToBoundaryKey above -- omitted, not
   // guessed, when the flagged IP hasn't produced a matching event in the
   // window currently loaded.
   const flagChips = $derived.by(() => {
     const byKeyLabel = new Map(fallState.boundaries.map((b) => [b.key, b.label]))
     const byType = new Map<string, { n: number; t: number; hm: string; boundaryLabel?: string }>()
-    for (const f of flags) {
+    for (const f of flagsState.list) {
       if (f.cleared) continue
       const t = new Date(f.firstSeen).getTime()
       if (Number.isNaN(t)) continue
