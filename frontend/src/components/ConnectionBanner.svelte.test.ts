@@ -12,6 +12,7 @@ import ConnectionBanner from './ConnectionBanner.svelte'
 
 beforeEach(() => {
   appState.connState = 'open'
+  appState.refreshError = null
 })
 
 afterEach(() => {
@@ -43,5 +44,30 @@ describe('ConnectionBanner', () => {
     const banner = screen.getByRole('status')
     expect(banner.className).toContain('banner-closed')
     expect(banner.textContent).toContain('Disconnected from server')
+  })
+
+  // #1089: the socket being open only says the live feed is up -- it says
+  // nothing about the separate background HTTP polls (stats/flags/
+  // watchlist). A failed one used to leave no on-screen signal at all.
+  it('shows the stale-refresh line when the socket is open but a background refresh failed', () => {
+    appState.connState = 'open'
+    appState.refreshError = 'stats: fetchStats: 500'
+    render(ConnectionBanner)
+    flushSync()
+
+    const banner = screen.getByRole('status')
+    expect(banner.className).toContain('banner-refresh-error')
+    expect(banner.textContent).toContain(
+      'Live feed is up, but the last background refresh failed: stats: fetchStats: 500. Numbers may be stale.',
+    )
+  })
+
+  it('renders nothing when the socket is open and no refresh has failed', () => {
+    appState.connState = 'open'
+    appState.refreshError = null
+    render(ConnectionBanner)
+    flushSync()
+
+    expect(screen.queryByRole('status')).toBeNull()
   })
 })

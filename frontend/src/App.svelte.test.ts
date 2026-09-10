@@ -1,7 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/svelte'
+import type { Stats } from './lib/types'
+
+const FAKE_STATS: Stats = {
+  total: 0,
+  byAction: {},
+  topRules: [],
+  timeSeries: [],
+  eventsPerSecond: 0,
+  capacity: 0,
+  count: 0,
+  windowSeconds: 0,
+  oldestHeld: null,
+  connectedClients: 0,
+}
 
 // App.svelte's mount effect used to gate the watchlist coverage refresh
 // (both the immediate first-paint call and the interval beside it) on
@@ -106,7 +120,8 @@ if (typeof IntersectionObserver === 'undefined') {
 const { default: App } = await import('./App.svelte')
 const { authState } = await import('./lib/auth.svelte')
 const { watchlistState } = await import('./lib/watchlist.svelte')
-const { fetchWatchlistEntries } = await import('./lib/api')
+const { appState } = await import('./lib/state.svelte')
+const { fetchWatchlistEntries, fetchStats, fetchFlags, ApiError } = await import('./lib/api')
 
 describe('App mount effect: watchlist coverage refresh gate (#756)', () => {
   beforeEach(() => {
@@ -137,5 +152,69 @@ describe('App mount effect: watchlist coverage refresh gate (#756)', () => {
       expect(watchlistState.entries.length).toBeGreaterThan(0)
       expect(watchlistState.coverage.e1).toBe('covered')
     })
+  })
+})
+
+// #1089: a background poll failing used to be swallowed entirely unless it
+// was a 401 -- a backend outage left stale numbers on screen with no
+// indication. App.svelte's handleApiError now tags every non-401 poll
+// failure with what it was refreshing and stores it as appState.refreshError
+// (ConnectionBanner.svelte.test.ts covers the banner this feeds); the next
+// successful poll of any kind clears it back to null.
+describe('App mount effect: background poll failure surfaces refreshError (#1089)', () => {
+  beforeEach(() => {
+    authState.state = 'loading'
+    authState.role = ''
+    appState.refreshError = null
+    vi.mocked(fetchStats).mockReset().mockResolvedValue(FAKE_STATS)
+    vi.mocked(fetchFlags).mockReset().mockResolvedValue({ flags: [], timeSeries: [] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('sets refreshError on a 500 and clears it on the next successful poll', async () => {
+    vi.useFakeTimers()
+    render(App)
+
+    // Flush the mount effect's own microtasks (authState.check() and
+    // appState.loadInitial() both resolve off mocked, non-delayed
+    // promises) without a real setTimeout-based waitFor, which fake
+    // timers would otherwise stall.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(authState.state).toBe('authenticated')
+
+    // Both stats and flags fail on the same tick (rather than just one)
+    // so the assertion below can't land on a false negative from racing
+    // against the other poll's same-tick success clearing the error --
+    // see pollStats/pollFlags's shared "any success clears it" rule in
+    // App.svelte.
+    vi.mocked(fetchStats).mockRejectedValueOnce(new ApiError('fetchStats: 500', 500))
+    vi.mocked(fetchFlags).mockRejectedValueOnce(new ApiError('fetchFlags: 500', 500))
+
+    // STATS_REFRESH_MS in App.svelte -- the interval driving both polls.
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(appState.refreshError).toMatch(/^(stats|flags): /)
+
+    // Next tick: both mocks are back to their default resolved value.
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(appState.refreshError).toBeNull()
+  })
+
+  it('routes a 401 to the login bounce instead of refreshError', async () => {
+    vi.useFakeTimers()
+    render(App)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(authState.state).toBe('authenticated')
+
+    vi.mocked(fetchStats).mockRejectedValueOnce(new ApiError('fetchStats: 401', 401))
+
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(appState.refreshError).toBeNull()
+    expect(authState.state).toBe('unauthenticated')
   })
 })
