@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
@@ -325,7 +326,7 @@ func (v *Vault) Store(device, kind string, data []byte, now time.Time) error {
 		return fmt.Errorf("backupvault: creating %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, v.fileName(gen.ID, kind))
-	if err := os.WriteFile(path, sealed, 0o600); err != nil {
+	if err := persist.WriteFileAtomic(path, sealed, 0o600); err != nil {
 		return fmt.Errorf("backupvault: writing %s: %w", path, err)
 	}
 
@@ -355,11 +356,7 @@ func (v *Vault) persistMetaLocked() error {
 	if err != nil {
 		return fmt.Errorf("backupvault: sealing the vault index: %w", err)
 	}
-	tmp := filepath.Join(v.dir, metaFileName+".tmp")
-	if err := os.WriteFile(tmp, sealed, 0o600); err != nil {
-		return fmt.Errorf("backupvault: writing the vault index: %w", err)
-	}
-	if err := os.Rename(tmp, filepath.Join(v.dir, metaFileName)); err != nil {
+	if err := persist.WriteFileAtomic(filepath.Join(v.dir, metaFileName), sealed, 0o600); err != nil {
 		return fmt.Errorf("backupvault: committing the vault index: %w", err)
 	}
 	return nil
