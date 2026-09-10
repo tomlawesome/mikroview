@@ -165,8 +165,23 @@ check(
 
 const shippedClone = await api('POST', '/api/definitions/port_scan/clone', { name: 'port scan copy' })
 check(
-  shippedClone.status === 400,
-  `a shipped detection definition refuses to be cloned rather than producing a copy that evaluates nothing (${shippedClone.status})`,
+  shippedClone.status === 201,
+  `a shipped declarative detector clones into an operator-owned copy (${shippedClone.status})`,
+)
+const shippedCopy = shippedClone.body ?? {}
+check(
+  shippedCopy.provenance?.origin === 'custom' && shippedCopy.enabled === false && shippedCopy.name === 'port scan copy',
+  `the copy is custom, paused and carries the asked-for name (${shippedCopy.provenance?.origin}, ${shippedCopy.enabled}, ${shippedCopy.name})`,
+)
+check(
+  (shippedCopy.detection?.conditions?.length ?? 0) > 0,
+  'the copy carries the original\'s conditions rather than evaluating nothing',
+)
+if (shippedCopy.id) await api('DELETE', `/api/definitions/${shippedCopy.id}`)
+const codeClone = await api('POST', '/api/definitions/activity_spike/clone', { name: 'spike copy' })
+check(
+  codeClone.status === 400,
+  `a shipped code detector has no conditions to copy, so the clone is refused (${codeClone.status})`,
 )
 
 // --- custom definitions: create, clone, replay, delete ------------------

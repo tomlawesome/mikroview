@@ -3,12 +3,14 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -91,6 +93,35 @@ func getDecommission(t *testing.T, ts *httptest.Server) decommissionResponse {
 func postUndo(t *testing.T, ts *httptest.Server, id string) *http.Response {
 	t.Helper()
 	resp, err := http.Post(ts.URL+"/api/decommission/watches/"+id+"/undo", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// deleteDecommission forgets a watch outright -- the watchlist page's own
+// action, optionally carrying the #1069 reason. body is nil for a
+// caller checking the route still works with none, the pre-#1069 shape.
+func deleteDecommission(t *testing.T, ts *httptest.Server, id string, reason string) *http.Response {
+	t.Helper()
+	var body *bytes.Reader
+	if reason != "" {
+		b, err := json.Marshal(map[string]string{"reason": reason})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = bytes.NewReader(b)
+	} else {
+		body = bytes.NewReader(nil)
+	}
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/decommission/watches/"+id, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,5 +398,56 @@ func TestTheLastStragglersDetailReachesTheWire(t *testing.T) {
 	}
 	if body.Watches[0].TrafficCount != 1 {
 		t.Errorf("trafficCount = %d, want 1 beside the detail", body.Watches[0].TrafficCount)
+	}
+}
+
+// #1069: the watchlist page's "forget" is what the card's force-remove
+// warning means by "can only be forgotten from there" -- it ends a watch
+// outright, and (like force-remove) records why.
+func TestDeleteRecordsTheReasonTheWatchlistGives(t *testing.T) {
+	s, _ := decommissionServer(t)
+	watch := addWatch(t, s, "192.0.2.0/24", time.Now())
+
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+	resp := deleteDecommission(t, ts, watch.ID, "range was reclaimed for a new build")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete = %d, want 204", resp.StatusCode)
+	}
+	if _, ok := s.Decommissions.Get(watch.ID); ok {
+		t.Error("the watch is still stored after being forgotten")
+	}
+
+	entries := s.Audit.Query(audit.Query{}).Entries
+	var found bool
+	for _, e := range entries {
+		if e.Action == "decommission.delete" && e.Target == watch.ID {
+			found = true
+			if e.Detail != "range was reclaimed for a new build" {
+				t.Errorf("audit detail = %q, want the reason given", e.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no decommission.delete audit entry for the forgotten watch")
+	}
+}
+
+// A DELETE with no body is the shape this route took before #1069 --
+// still has to work, since Reason is optional on the wire.
+func TestDeleteWithNoReasonStillWorks(t *testing.T) {
+	s, _ := decommissionServer(t)
+	watch := addWatch(t, s, "192.0.2.0/24", time.Now())
+
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+	resp := deleteDecommission(t, ts, watch.ID, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete with no body = %d, want 204", resp.StatusCode)
+	}
+	if _, ok := s.Decommissions.Get(watch.ID); ok {
+		t.Error("the watch is still stored after being forgotten")
 	}
 }

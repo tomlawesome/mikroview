@@ -13,19 +13,19 @@ vi.mock('../lib/api', () => ({
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),
   fetchFlagEpisode: vi.fn(async () => ({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })),
-  // The learning shelf (#642) reads baseline warm-up through
-  // detectorSettingsState, whose refresh() calls these two.
+  // Kept mocked so a test can assert the shelf never reaches for the
+  // definitions catalogue any more (#768): its warming signal rides on
+  // the flags response now.
   fetchDefinitions: vi.fn(async () => ({ definitions: [], coverageEvidence: { complete: true } })),
   updateDefinition: vi.fn(),
   // The learning shelf's honesty line (#640) reads the expectations
   // ledger directly on mount -- an empty ledger by default, same
-  // "swallow a failure" grammar as detectorSettingsState.refresh().
+  // "swallow a failure" grammar the shelf uses throughout.
   fetchExpectations: vi.fn(async () => []),
 }))
 
 import { deleteFlagVerdict, fetchDefinitions, fetchExpectations, fetchFlagEpisode, setFlagVerdict } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
-import { detectorSettingsState } from '../lib/detectorSettings.svelte'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
@@ -649,28 +649,8 @@ describe('opening a flag drawer from the topography dial (#724)', () => {
 // alone), absent when empty and nothing is warming. See the issue body's
 // ruling for why it is not a fourth docket tab and not interleaved.
 describe('the learning shelf (#642)', () => {
-  // One warming detection, as GET /api/definitions would serve it --
-  // driven through detectorSettingsState.refresh() (the component's own
-  // path) rather than poked into the store, so the projection is
-  // exercised too.
-  const warmingDefinitions = {
-    definitions: [
-      {
-        id: 'port_scan',
-        name: 'Port scan',
-        intent: 'detection',
-        available: true,
-        enabled: true,
-        scope: {},
-        learning: { floor: { minDurationSeconds: 1209600 }, keys: 3, ready: 1 },
-      },
-    ],
-    coverageEvidence: { complete: true },
-  }
-
   beforeEach(() => {
     vi.resetAllMocks()
-    vi.mocked(fetchDefinitions).mockResolvedValue({ definitions: [], coverageEvidence: { complete: true } } as never)
     vi.mocked(fetchFlagEpisode).mockResolvedValue({
       events: [],
       hasMore: false,
@@ -680,8 +660,10 @@ describe('the learning shelf (#642)', () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     authState.username = 'kai'
-    detectorSettingsState.list = []
     flagsState.list = []
+    // #768: the warming signal is a field on the flags response, so the
+    // shelf's default here is "the server says nothing is warming".
+    flagsState.baselinesWarming = false
   })
 
   it('a provisional flag renders on the shelf, not in the settled table', () => {
@@ -731,7 +713,7 @@ describe('the learning shelf (#642)', () => {
   })
 
   it('a warming baseline with no provisional flags states the case in words', async () => {
-    vi.mocked(fetchDefinitions).mockResolvedValue(warmingDefinitions as never)
+    flagsState.baselinesWarming = true
     flagsState.list = [testFlag({ id: 's1' })]
     render(Flags)
     flushSync()
@@ -741,26 +723,32 @@ describe('the learning shelf (#642)', () => {
     expect(document.querySelector('section[aria-label^="Learning shelf"] table')).toBeNull()
   })
 
-  it('a viewer never gets the warming line -- the signal is user-tier, so it degrades by absence', async () => {
+  it('a viewer gets the warming line too -- #768 made the signal viewer-readable', async () => {
     authState.role = 'viewer'
-    vi.mocked(fetchDefinitions).mockResolvedValue(warmingDefinitions as never)
+    flagsState.baselinesWarming = true
     // A well-stocked ledger (#640), so the shelf's other reason to
     // appear -- the early-noise honesty line -- stays out of this
     // assertion, which is about the warming signal alone.
     vi.mocked(fetchExpectations).mockResolvedValue(
       Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, type: 'port_scan', target: `198.51.100.${i}` })) as never,
     )
-    // Even a stale store left over from a more-privileged session must
-    // not leak the claim to a viewer.
-    detectorSettingsState.list = [
-      {
-        name: 'port_scan',
-        label: 'Port scan',
-        enabled: true,
-        scope: {},
-        learning: { floor: { minDurationSeconds: 1209600 }, keys: 3, ready: 1 },
-      },
-    ]
+    flagsState.list = []
+    render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    expect(await screen.findByText(/still warming/)).toBeTruthy()
+    // The shelf no longer reaches for the definitions catalogue at all:
+    // one surface, one request (#768).
+    expect(fetchDefinitions).not.toHaveBeenCalled()
+  })
+
+  it('says nothing when the server did not answer the warming question -- absence, not "settled"', async () => {
+    flagsState.baselinesWarming = undefined
+    vi.mocked(fetchExpectations).mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, type: 'port_scan', target: `198.51.100.${i}` })) as never,
+    )
     flagsState.list = []
     render(Flags)
     flushSync()
@@ -768,7 +756,6 @@ describe('the learning shelf (#642)', () => {
     flushSync()
 
     expect(document.querySelector('section[aria-label^="Learning shelf"]')).toBeNull()
-    expect(fetchDefinitions).not.toHaveBeenCalled()
   })
 
   it('the settled empty state points at an occupied shelf instead of claiming nothing was flagged', () => {
@@ -842,8 +829,10 @@ describe('the learning shelf states the early-noise honesty line (#640)', () => 
     authState.state = 'authenticated'
     authState.role = 'user'
     authState.username = 'kai'
-    detectorSettingsState.list = []
     flagsState.list = []
+    // #768: the warming signal is a field on the flags response, so the
+    // shelf's default here is "the server says nothing is warming".
+    flagsState.baselinesWarming = false
   })
 
   it('with no expectations recorded yet, the shelf shows the early-noise line', async () => {

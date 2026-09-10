@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Round 6 — the sentence is the editor (#829)</title>
+<style>
+  /* ============================================================
+     ROUND 6 — THE CONDITIONS EDITOR (#829, under #490's engine room).
+
+     Rounds 4 and 5 were rejected: "not very elegant, super generic",
+     "cluttered and confusing", "needs to be simple, intuitive, clean",
+     and "the engine room is the wrong place to look for style --
+     consider the rest of the app". So this round keeps round 5's
+     sentence grammar and data story and nothing else of its drawing.
+
+     The model is the docket's expanded flag (Flags.svelte: tr.frow +
+     tr.drawer, .dwr-in's story/side grid, .vrow's .v pill buttons,
+     .stamp, .olink, the 9px mono small-caps .lab) and the popover
+     family (NameEditorPopover.svelte / IpLookupPopover.svelte:
+     .popover, .header + title + close, body, .actions save/cancel).
+     The bench row and its dashed-underline click-to-edit value are
+     EngineRoomWatchers.svelte's .line / .row-knob / .scope-fact.
+
+     Dark only: round 30 (#708) removed the theme picker. Colour is
+     meaning only. --alarm appears nowhere here; amber is --now, the
+     engine room's time colour, borrowed for "not yet".
+     ============================================================ */
+
+  :root {
+    /* app.css, verbatim */
+    --bg: #06080e;
+    --bg-elevated: #0f1422;
+    --bg-hover: rgba(160, 185, 230, 0.08);
+    --border: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --fg: #e9eefb;
+    --fg-muted: #97a4c4;
+    --fg-dim: #55628a;
+    --accent: #9db8e8;
+    --now: #e8b05a;
+    --accept: #3ecf7e;
+    --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    color: var(--fg);
+    background:
+      radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%),
+      var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- sheet chrome (not part of the app) ---------- */
+  .concept {
+    position: sticky; top: 0; z-index: 90;
+    display: flex; gap: 14px; align-items: baseline;
+    padding: 8px 22px;
+    background: rgba(6, 8, 14, 0.96);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; color: var(--fg-dim);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.14em; font-weight: 650; }
+  .scene { border-bottom: 1px solid var(--hair-2); padding: 0 0 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80;
+    padding: 7px 22px;
+    background: rgba(6, 8, 14, 0.94);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; color: var(--fg-muted);
+  }
+  .scene-tag b { color: var(--accent); font-family: var(--font-mono); font-weight: 600; margin-right: 4px; }
+  .sheet { width: min(1180px, 94%); margin: 24px auto 0; }
+  .anno {
+    width: min(1180px, 94%); margin: 14px auto 0;
+    font-size: 11.5px; line-height: 1.55; color: var(--fg-muted);
+    border-left: 2px solid var(--accent); padding: 2px 0 2px 12px;
+  }
+  .anno b { color: var(--fg); font-weight: 600; }
+  .side-note {
+    width: min(1180px, 94%); margin: 26px auto 0;
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-dim);
+  }
+
+  /* ---------- the settings card, EngineRoom.svelte (.og / h3 / .orow) ---------- */
+  .og {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px 16px;
+  }
+  .og h3 {
+    margin: 0 0 2px;
+    font-size: 10px; font-weight: 650;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .orow {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 14px; padding: 7px 0; font-size: 12px;
+  }
+  .orow > span:first-child { color: var(--fg-dim); flex: none; }
+  .orow .ov { color: var(--fg-muted); text-align: right; }
+
+  /* Flags.svelte's .olink, verbatim */
+  .olink {
+    background: none; border: none; padding: 0;
+    font-size: inherit; font-family: inherit;
+    color: var(--accent); cursor: pointer;
+    text-decoration: underline; text-decoration-color: transparent;
+  }
+  .olink:hover { text-decoration-color: currentColor; }
+  .olink.quiet { color: var(--fg-dim); }
+
+  /* ---------- the bench, EngineRoomWatchers.svelte ---------- */
+  .bench { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .row { font-size: 12px; }
+  .line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .cbx { align-self: center; flex: none; accent-color: var(--accent); }
+  .name { color: var(--fg); font-weight: 600; }
+  .id { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-dim); }
+  .dash { color: var(--fg-dim); }
+  .scope-fact { color: var(--fg-muted); border-bottom: 1px dashed var(--accent); }
+  .state {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+    color: var(--fg-muted); white-space: nowrap;
+  }
+  .state .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accept); }
+  .state.paused { color: var(--fg-dim); }
+  .state.paused .dot { background: transparent; border: 1px solid var(--fg-dim); }
+  /* EditNameButton's pencil: on the open row only, as on hover in the app */
+  .pencil { background: none; border: none; padding: 0 2px; color: var(--fg-dim); cursor: pointer; font-size: 11px; }
+  .pencil:hover { color: var(--accent); }
+
+  /* An open row hands its bottom edge to the drawer (Flags.svelte's
+     .frow.open), so row and drawer read as one block. */
+  .row.open .line {
+    background: var(--bg-hover);
+    margin: 0 -10px; padding: 6px 10px;
+    border-radius: 6px 6px 0 0;
+  }
+
+  /* ---------- the drawer, Flags.svelte's tr.drawer + .dwr-in ---------- */
+  .drawer {
+    box-shadow: inset 3px 0 0 var(--accent);
+    margin: 0 -10px;
+    padding: 12px 10px 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .dwr-in {
+    display: grid;
+    grid-template-columns: 1.35fr 1fr;
+    gap: 12px 40px;
+    align-items: start;
+  }
+  .dwr-in .left { grid-column: 1; min-width: 0; }
+  .dwr-in .side { grid-column: 2; grid-row: 1 / span 2; min-width: 0; }
+  .dwr-in .acts { grid-column: 1; }
+
+  /* The copied-from line: mono, dim, above the sentence. */
+  .copied {
+    margin: 0 0 10px;
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-dim);
+  }
+
+  /* ---------- 1. the sentence, and it is the editor ---------- */
+  .sentence {
+    margin: 0;
+    max-width: 62ch;
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    line-height: 2.0;
+    color: var(--fg-muted);
+  }
+  /* Every changeable part: the bench's own handle -- a value wearing a
+     dashed accent underline, not a button. */
+  .k {
+    font: inherit; color: var(--fg);
+    line-height: 1.3;
+    background: transparent; border: none;
+    border-bottom: 1px dashed var(--accent);
+    padding: 0; cursor: pointer;
+    text-align: left;
+  }
+  .k:hover { color: var(--accent); }
+  .k .m, .k.m { font-family: var(--font-mono); font-size: 0.9em; }
+  .k.open { color: var(--accent); border-bottom-style: solid; }
+  /* The one part still missing a value. */
+  .k .gap { color: var(--now); font-family: var(--font-mono); }
+  .and { color: var(--fg-dim); }
+  .sep { color: var(--fg-dim); margin: 0 4px; }
+
+  /* The clause's remove mark, on hover only. */
+  .clause { position: relative; white-space: nowrap; }
+  .clause .x {
+    background: none; border: none; padding: 0 0 0 4px;
+    color: var(--fg-dim); cursor: pointer; font-size: 11px;
+    visibility: hidden;
+  }
+  .clause:hover .x, .clause.hov .x { visibility: visible; }
+  .clause .x:hover { color: var(--fg); }
+
+  /* ---------- 2. what it says ---------- */
+  .says { margin: 12px 0 0; display: flex; align-items: baseline; gap: 10px; }
+  /* Flags.svelte's .lab */
+  .lab {
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-dim);
+    flex: none;
+  }
+  .says .k { font-family: var(--font-mono); font-size: 11.5px; }
+  .ph { color: var(--accent); }
+
+  /* ---------- 3. the receipt, in THE EPISODE's place ---------- */
+  .side .fired {
+    margin: 6px 0 0;
+    font-family: var(--font-sans); font-size: 12.5px; color: var(--fg-muted);
+  }
+  .side .fired b { color: var(--fg); font-weight: 600; font-size: 14px; }
+  .side svg { display: block; width: 190px; height: 22px; margin: 8px 0 6px; }
+  .side .who {
+    font-family: var(--font-mono); font-size: 10.5px; line-height: 1.7; color: var(--fg-muted);
+  }
+  .side .who span { color: var(--fg-dim); margin-left: 8px; }
+  .side .none { margin: 6px 0 0; font-family: var(--font-sans); font-size: 12.5px; color: var(--fg-dim); }
+
+  /* ---------- 4. the actions, Flags.svelte's .vrow button.v ---------- */
+  .acts { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .v {
+    --vc: var(--fg-muted);
+    font-family: var(--font-mono); font-size: 10.5px;
+    color: var(--fg-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 11px 2px 9px;
+    line-height: 16px; cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s, transform .15s;
+  }
+  .v i { font-style: normal; color: var(--vc); margin-right: 6px; font-weight: 700; }
+  .v.try { --vc: var(--accent); }
+  .v.save { --vc: var(--accept); }
+  .v:hover:not(:disabled) {
+    color: var(--vc); border-color: var(--vc);
+    background: color-mix(in srgb, var(--vc) 12%, transparent);
+    transform: translateY(-1px);
+  }
+  .v:disabled { opacity: 0.5; cursor: default; }
+  .acts .olink { font-size: 11px; }
+  .acts .gapsep { color: var(--fg-dim); font-size: 11px; }
+  .waiting { font-family: var(--font-mono); font-size: 10.5px; color: var(--now); margin-left: 4px; }
+
+  /* ---------- the popover family ---------- */
+  /* NameEditorPopover/.popover, verbatim but anchored in flow here so a
+     single screenshot holds the popover and the sentence it came from. */
+  .anchor { position: relative; }
+  .popover {
+    /* Beside the word rather than under it: the sentence stays readable
+       while its own clause is being written, which is the whole point of
+       editing in the sentence. */
+    position: absolute; top: -10px; left: calc(100% + 22px);
+    width: 300px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 10px 12px;
+    box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.55);
+    z-index: 41;
+    font-size: 13px;
+    text-align: left;
+    white-space: normal;
+  }
+  .popover .header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 8px;
+  }
+  .crumb { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.03em; color: var(--fg-dim); white-space: nowrap; }
+  .crumb i { font-style: normal; margin: 0 5px; opacity: 0.7; }
+  .crumb .on { color: var(--fg); }
+  .popover .close {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--fg-muted); border-radius: 5px;
+    width: 20px; height: 20px; font-size: 11px; line-height: 1; cursor: pointer;
+  }
+  .popover .close:hover { color: var(--fg); border-color: var(--fg-muted); }
+
+  /* The choices: plain words in a list, the house "pick a value" shape --
+     never a select, never a boxed menu item. */
+  .choices { list-style: none; margin: 0; padding: 0; }
+  .choices li {
+    padding: 3px 6px; margin: 0 -6px; border-radius: 4px;
+    font-size: 12.5px; color: var(--fg-muted); cursor: pointer;
+  }
+  .choices li:hover { color: var(--fg); background: var(--bg-hover); }
+  .choices li.on { color: var(--fg); background: var(--bg-hover); }
+  .choices.dim li { color: var(--fg-dim); cursor: default; }
+  .choices.dim li:hover { background: transparent; color: var(--fg-dim); }
+  .choices li .m { font-family: var(--font-mono); font-size: 11.5px; }
+
+  /* Typing narrows the current step: the typed prefix is text with the
+     bench's own dashed handle under it, not another box. */
+  .typed {
+    margin: 0 0 6px;
+    font-family: var(--font-mono); font-size: 12px; color: var(--fg);
+    border-bottom: 1px dashed var(--accent);
+    display: inline-block; padding-bottom: 1px;
+  }
+  .typed .caret {
+    display: inline-block; width: 1px; height: 12px;
+    background: var(--accent); margin-left: 1px; vertical-align: -2px;
+  }
+  /* The one boxed input in the whole drawing: a typed value. */
+  .vin {
+    width: 100%; margin-top: 8px;
+    padding: 5px 7px;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--fg); background: var(--bg);
+    border: 1px solid var(--accent); border-radius: 5px;
+    outline: none;
+  }
+  .popover .hint { margin: 6px 0 0; font-size: 11.5px; color: var(--fg-dim); }
+  .popover .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+  .popover .actions button {
+    font: inherit; font-size: 12px; padding: 4px 10px;
+    border-radius: 5px; border: 1px solid var(--border);
+    background: transparent; color: var(--fg-muted); cursor: pointer;
+  }
+  .popover .actions .save { border-color: var(--accent); color: var(--accent); }
+  .popover .actions .save:disabled { opacity: 0.5; cursor: default; }
+  .popover .actions button:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-muted); }
+
+  /* The popover overlays in the build; here it is given the room it
+     would cover, so one screenshot holds the popover, the sentence it
+     came off and the actions still waiting below it. */
+  .popgap { height: 235px; }
+
+  /* ---------- what a viewer sees ---------- */
+  .viewer .k { border-bottom: none; color: var(--fg); cursor: default; }
+  .viewer .k:hover { color: var(--fg); }
+
+  /* ---------- the phone ---------- */
+  .phone {
+    width: 390px;
+    border: 1px solid var(--hair-2);
+    border-radius: 16px;
+    padding: 12px 14px 16px;
+    background: var(--bg-elevated);
+  }
+  .phone .dwr-in { grid-template-columns: 1fr; gap: 14px; }
+  .phone .dwr-in .side { grid-column: 1; grid-row: auto; }
+  .phone .sentence { font-size: 13px; line-height: 1.95; }
+  .phone .side svg { width: 100%; }
+  .below { display: flex; gap: 34px; align-items: flex-start; flex-wrap: wrap; }
+  .below > div { min-width: 0; }
+  .below .col { flex: 1 1 520px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .v { transition: none; }
+    .v:hover:not(:disabled) { transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>ROUND 6</b>
+  <span>the sentence is the editor — custom detectors on the settings bench (#829, under #490)</span>
+</div>
+
+<!-- ============================ s1 ============================ -->
+<section class="scene" id="s1">
+  <div class="scene-tag"><b>s1</b> just cloned — the copy says what it carries, and its sentence is already complete</div>
+  <div class="sheet">
+    <div class="og">
+      <h3>detection</h3>
+      <div class="orow">
+        <span>detectors</span>
+        <span class="ov">17 of 18 on · <button class="olink">close the bench</button></span>
+      </div>
+      <div class="bench">
+        <ul class="rows">
+          <li class="row">
+            <div class="line">
+              <input class="cbx" type="checkbox" checked aria-label="Port scan runs">
+              <span class="name">Port scan</span>
+              <span class="id">port_scan</span>
+              <span class="dash">—</span>
+              <span class="scope-fact">watching everything in range</span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+
+          <li class="row open">
+            <div class="line">
+              <input class="cbx" type="checkbox" aria-label="Port scan (copy) runs">
+              <span class="name">Port scan (copy)</span>
+              <button class="pencil" aria-label="rename">✎</button>
+              <span class="id">port_scan_copy</span>
+              <span class="dash">—</span>
+              <span class="scope-fact">watching everything in range</span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+            <div class="drawer">
+              <div class="dwr-in">
+                <div class="left">
+                  <p class="copied">copied from Port scan · conditions, scope and numbers · paused until you run it</p>
+                  <div class="sentence">
+                    Flag a <button class="k">source address</button>
+                    that reaches <button class="k"><b class="m">20</b> distinct destination ports</button>
+                    within <button class="k m">60 s</button>,
+                    counting only events where
+                    <span class="clause hov"><button class="k">connection state is <b class="m">new</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="sep">·</span><button class="olink">+ and…</button>
+                  </div>
+                  <p class="says">
+                    <span class="lab">says</span>
+                    <button class="k"><span class="ph">{Count}</span> distinct destination ports in <span class="ph">{Window}</span></button>
+                  </p>
+                </div>
+                <div class="side">
+                  <span class="lab">tried · 24 h</span>
+                  <p class="none">not tried yet</p>
+                </div>
+                <div class="acts">
+                  <button class="v try"><i>▸</i>try</button>
+                  <button class="v save"><i>✓</i>save</button>
+                  <button class="olink">clone</button>
+                  <span class="gapsep">·</span>
+                  <button class="olink quiet">remove</button>
+                </div>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <p class="anno">
+    <b>Clone says nothing beside the button.</b> The copy is the answer: a new row
+    directly under the one it came from, paused, its drawer already open, one dim mono
+    line saying what came across. Everything changeable in the sentence wears the bench's
+    own dashed handle; hovering a condition shows its <b>×</b>.
+  </p>
+</section>
+
+<!-- ============================ s2 ============================ -->
+<section class="scene" id="s2">
+  <div class="scene-tag"><b>s2</b> writing a value — the port line, unfinished, and both buttons waiting</div>
+  <div class="sheet">
+    <div class="og">
+      <h3>detection</h3>
+      <div class="orow">
+        <span>detectors</span>
+        <span class="ov">17 of 18 on · <button class="olink">close the bench</button></span>
+      </div>
+      <div class="bench">
+        <ul class="rows">
+          <li class="row">
+            <div class="line">
+              <input class="cbx" type="checkbox" checked aria-label="Port scan runs">
+              <span class="name">Port scan</span>
+              <span class="id">port_scan</span>
+              <span class="dash">—</span>
+              <span class="scope-fact">watching everything in range</span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+
+          <li class="row open">
+            <div class="line">
+              <input class="cbx" type="checkbox" aria-label="Garage probes runs">
+              <span class="name">Garage probes</span>
+              <button class="pencil" aria-label="rename">✎</button>
+              <span class="id">garage_probes</span>
+              <span class="dash">—</span>
+              <span class="scope-fact">watching 10.0.70.0/24</span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+            <div class="drawer">
+              <div class="dwr-in">
+                <div class="left">
+                  <div class="sentence">
+                    Flag a <button class="k">source address</button>
+                    that is dropped reaching <button class="k"><b class="m">8</b> distinct destination addresses</button>
+                    within <button class="k m">300 s</button>,
+                    counting only events where
+                    <span class="clause"><button class="k">source address is within <b class="m">10.0.70.0/24</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="and">and</span>
+                    <span class="clause"><button class="k">action is <b class="m">drop</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="and">and</span>
+                    <span class="clause anchor"><button class="k open">destination port is between <b class="m">1</b> and <b class="gap">…</b></button><button class="x" aria-label="remove this condition">×</button>
+                      <div class="popover" role="dialog" aria-label="destination port is between">
+                        <div class="header">
+                          <span class="crumb">destination port <i>›</i> is between <i>›</i> <span class="on">value</span></span>
+                          <button class="close" aria-label="close">✕</button>
+                        </div>
+                        <ul class="choices dim">
+                          <li><span class="m">1-1024</span> · the well-known ports</li>
+                          <li><span class="m">1024-49151</span> · registered</li>
+                          <li><span class="m">49152-65535</span> · ephemeral</li>
+                        </ul>
+                        <input class="vin" value="1-" aria-label="value">
+                        <div class="hint">low-high · 1-1024, or 22:00-06:00 for time of day</div>
+                        <div class="actions">
+                          <button class="save" disabled>save</button>
+                          <button>cancel</button>
+                        </div>
+                      </div>
+                    </span>
+                    <span class="and">and</span>
+                    <span class="clause"><button class="k">destination address is classed as <b class="m">internal</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="sep">·</span><button class="olink">+ and…</button>
+                  </div>
+                  <div class="popgap"></div>
+                  <p class="says">
+                    <span class="lab">says</span>
+                    <button class="k"><span class="ph">{Count}</span> distinct destination addresses from <span class="ph">{SourceAddress}</span></button>
+                  </p>
+                </div>
+                <div class="side">
+                  <span class="lab">tried · 24 h</span>
+                  <p class="none">not tried yet</p>
+                </div>
+                <div class="acts">
+                  <button class="v try" disabled><i>▸</i>try</button>
+                  <button class="v save" disabled><i>✓</i>save</button>
+                  <span class="waiting">finish the port line</span>
+                </div>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <p class="anno">
+    <b>One popover, off the word you clicked.</b> Three quiet steps as a breadcrumb;
+    at <i>value</i> the closed suggestions go dim and the one boxed input in the drawing
+    takes the range. Behind it the sentence keeps reading, with an amber <b>…</b> where
+    the value is still missing — and that is the only reason try and save are waiting.
+  </p>
+</section>
+
+<!-- ============================ s3 ============================ -->
+<section class="scene" id="s3">
+  <div class="scene-tag"><b>s3</b> choosing a field — typing <b>dst</b> narrows the list to two words</div>
+  <div class="sheet">
+    <div class="og">
+      <h3>detection</h3>
+      <div class="orow">
+        <span>detectors</span>
+        <span class="ov">17 of 18 on · <button class="olink">close the bench</button></span>
+      </div>
+      <div class="bench">
+        <ul class="rows">
+          <li class="row">
+            <div class="line">
+              <input class="cbx" type="checkbox" checked aria-label="Port scan runs">
+              <span class="name">Port scan</span>
+              <span class="id">port_scan</span>
+              <span class="dash">—</span>
+              <span class="scope-fact">watching everything in range</span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+
+          <li class="row open">
+            <div class="line">
+              <input class="cbx" type="checkbox" aria-label="Garage probes runs">
+              <span class="name">Garage probes</span>
+              <button class="pencil" aria-label="rename">✎</button>
+              <span class="id">garage_probes</span>
+              <span class="dash">—</span>
+              <span class="scope-fact">watching 10.0.70.0/24</span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+            <div class="drawer">
+              <div class="dwr-in">
+                <div class="left">
+                  <div class="sentence">
+                    Flag a <button class="k">source address</button>
+                    that is dropped reaching <button class="k"><b class="m">8</b> distinct destination addresses</button>
+                    within <button class="k m">300 s</button>,
+                    counting only events where
+                    <span class="clause"><button class="k">source address is within <b class="m">10.0.70.0/24</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="and">and</span>
+                    <span class="clause"><button class="k">action is <b class="m">drop</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="and">and</span>
+                    <span class="clause anchor"><button class="k open">destination port is between <b class="m">1</b> and <b class="gap">…</b></button><button class="x" aria-label="remove this condition">×</button>
+                      <div class="popover" role="dialog" aria-label="destination port is between">
+                        <div class="header">
+                          <span class="crumb"><span class="on">field</span> <i>›</i> verb <i>›</i> value</span>
+                          <button class="close" aria-label="close">✕</button>
+                        </div>
+                        <div class="typed">dst<span class="caret"></span></div>
+                        <ul class="choices">
+                          <li class="on">destination address</li>
+                          <li>destination port</li>
+                        </ul>
+                        <p class="hint">15 fields · type to narrow · ↑ ↓ · enter takes</p>
+                        <div class="actions">
+                          <button class="save" disabled>save</button>
+                          <button>cancel</button>
+                        </div>
+                      </div>
+                    </span>
+                    <span class="and">and</span>
+                    <span class="clause"><button class="k">destination address is classed as <b class="m">internal</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="sep">·</span><button class="olink">+ and…</button>
+                  </div>
+                  <div class="popgap"></div>
+                  <p class="says">
+                    <span class="lab">says</span>
+                    <button class="k"><span class="ph">{Count}</span> distinct destination addresses from <span class="ph">{SourceAddress}</span></button>
+                  </p>
+                </div>
+                <div class="side">
+                  <span class="lab">tried · 24 h</span>
+                  <p class="none">not tried yet</p>
+                </div>
+                <div class="acts">
+                  <button class="v try" disabled><i>▸</i>try</button>
+                  <button class="v save" disabled><i>✓</i>save</button>
+                  <span class="waiting">finish the port line</span>
+                </div>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <p class="anno">
+    <b>The same popover, one step back.</b> Clicking the clause's first word reopens it at
+    <i>field</i>: the fifteen fields are plain words, and a typed prefix cuts them down —
+    <span class="m">dst</span> leaves two. No select, no menu chrome, nothing boxed.
+  </p>
+</section>
+
+<!-- ============================ s4 ============================ -->
+<section class="scene" id="s4">
+  <div class="scene-tag"><b>s4</b> complete and tried — the receipt, then the same row as a viewer sees it, then at 390 px</div>
+  <div class="sheet">
+    <div class="og">
+      <h3>detection</h3>
+      <div class="orow">
+        <span>detectors</span>
+        <span class="ov">17 of 18 on · <button class="olink">close the bench</button></span>
+      </div>
+      <div class="bench">
+        <ul class="rows">
+          <li class="row">
+            <div class="line">
+              <input class="cbx" type="checkbox" checked aria-label="Port scan runs">
+              <span class="name">Port scan</span>
+              <span class="id">port_scan</span>
+              <span class="dash">—</span>
+              <span class="scope-fact">watching everything in range</span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+
+          <li class="row open">
+            <div class="line">
+              <input class="cbx" type="checkbox" aria-label="Garage probes runs">
+              <span class="name">Garage probes</span>
+              <button class="pencil" aria-label="rename">✎</button>
+              <span class="id">garage_probes</span>
+              <span class="dash">—</span>
+              <span class="scope-fact">watching 10.0.70.0/24</span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+            <div class="drawer">
+              <div class="dwr-in">
+                <div class="left">
+                  <div class="sentence">
+                    Flag a <button class="k">source address</button>
+                    that is dropped reaching <button class="k"><b class="m">8</b> distinct destination addresses</button>
+                    within <button class="k m">300 s</button>,
+                    counting only events where
+                    <span class="clause"><button class="k">source address is within <b class="m">10.0.70.0/24</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="and">and</span>
+                    <span class="clause"><button class="k">action is <b class="m">drop</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="and">and</span>
+                    <span class="clause"><button class="k">destination port is between <b class="m">1</b> and <b class="m">1024</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="and">and</span>
+                    <span class="clause"><button class="k">destination address is classed as <b class="m">internal</b></button><button class="x" aria-label="remove this condition">×</button></span>
+                    <span class="sep">·</span><button class="olink">+ and…</button>
+                  </div>
+                  <p class="says">
+                    <span class="lab">says</span>
+                    <button class="k"><span class="ph">{Count}</span> distinct destination addresses from <span class="ph">{SourceAddress}</span></button>
+                  </p>
+                </div>
+                <div class="side">
+                  <span class="lab">tried · 24 h</span>
+                  <p class="fired">would have fired <b>3</b> times</p>
+                  <svg viewBox="0 0 190 22" aria-label="three firings across the last 24 hours">
+                    <line x1="0" y1="18" x2="190" y2="18" stroke="rgba(160,185,230,0.26)" stroke-width="1"/>
+                    <line x1="46" y1="5" x2="46" y2="18" stroke="#e8b05a" stroke-width="2"/>
+                    <line x1="52" y1="9" x2="52" y2="18" stroke="#e8b05a" stroke-width="2"/>
+                    <line x1="151" y1="7" x2="151" y2="18" stroke="#e8b05a" stroke-width="2"/>
+                  </svg>
+                  <p class="who">
+                    10.0.70.14 <span>garage-cam</span><br>
+                    10.0.70.31 <span>ev-charger</span>
+                  </p>
+                </div>
+                <div class="acts">
+                  <button class="v try"><i>▸</i>try</button>
+                  <button class="v save"><i>✓</i>save</button>
+                  <button class="olink">clone</button>
+                  <span class="gapsep">·</span>
+                  <button class="olink quiet">remove</button>
+                </div>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <p class="side-note">the same row, read-only · and at 390 px</p>
+  <div class="sheet below">
+    <div class="col">
+      <div class="og">
+        <div class="rows">
+          <div class="row viewer">
+            <div class="line">
+              <span class="name">Garage probes</span>
+              <span class="id">garage_probes</span>
+              <span class="dash">—</span>
+              <span style="color: var(--fg-muted)">watching 10.0.70.0/24</span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+            <div class="drawer" style="border-bottom: none">
+              <div class="dwr-in">
+                <div class="left">
+                  <div class="sentence">
+                    Flag a <span class="k">source address</span>
+                    that is dropped reaching <span class="k"><b class="m">8</b> distinct destination addresses</span>
+                    within <span class="k m">300 s</span>,
+                    counting only events where
+                    <span class="k">source address is within <b class="m">10.0.70.0/24</b></span>
+                    <span class="and">and</span>
+                    <span class="k">action is <b class="m">drop</b></span>
+                    <span class="and">and</span>
+                    <span class="k">destination port is between <b class="m">1</b> and <b class="m">1024</b></span>
+                    <span class="and">and</span>
+                    <span class="k">destination address is classed as <b class="m">internal</b></span>
+                  </div>
+                  <p class="says">
+                    <span class="lab">says</span>
+                    <span class="k" style="font-family: var(--font-mono); font-size: 11.5px">8 distinct destination addresses from 10.0.70.14</span>
+                  </p>
+                </div>
+                <div class="side">
+                  <span class="lab">tried · 24 h</span>
+                  <p class="fired">would have fired <b>3</b> times</p>
+                  <p class="who">10.0.70.14 <span>garage-cam</span><br>10.0.70.31 <span>ev-charger</span></p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="phone">
+      <div class="rows">
+        <div class="row open">
+          <div class="line">
+            <input class="cbx" type="checkbox" aria-label="Garage probes runs">
+            <span class="name">Garage probes</span>
+            <span class="id">garage_probes</span>
+            <span class="state paused"><span class="dot"></span>paused</span>
+          </div>
+          <div class="drawer" style="border-bottom: none">
+            <div class="dwr-in">
+              <div class="left">
+                <div class="sentence">
+                  Flag a <button class="k">source address</button>
+                  that is dropped reaching <button class="k"><b class="m">8</b> distinct destination addresses</button>
+                  within <button class="k m">300 s</button>,
+                  counting only events where
+                  <button class="k">source address is within <b class="m">10.0.70.0/24</b></button>
+                  <span class="and">and</span>
+                  <button class="k">action is <b class="m">drop</b></button>
+                  <span class="and">and</span>
+                  <button class="k">destination port is between <b class="m">1</b> and <b class="m">1024</b></button>
+                  <span class="and">and</span>
+                  <button class="k">destination address is classed as <b class="m">internal</b></button>
+                  <span class="sep">·</span><button class="olink">+ and…</button>
+                </div>
+                <p class="says">
+                  <span class="lab">says</span>
+                  <button class="k"><span class="ph">{Count}</span> distinct destination addresses from <span class="ph">{SourceAddress}</span></button>
+                </p>
+              </div>
+              <div class="side">
+                <span class="lab">tried · 24 h</span>
+                <p class="fired">would have fired <b>3</b> times</p>
+                <svg viewBox="0 0 190 22" aria-label="three firings across the last 24 hours">
+                  <line x1="0" y1="18" x2="190" y2="18" stroke="rgba(160,185,230,0.26)" stroke-width="1"/>
+                  <line x1="46" y1="5" x2="46" y2="18" stroke="#e8b05a" stroke-width="2"/>
+                  <line x1="52" y1="9" x2="52" y2="18" stroke="#e8b05a" stroke-width="2"/>
+                  <line x1="151" y1="7" x2="151" y2="18" stroke="#e8b05a" stroke-width="2"/>
+                </svg>
+                <p class="who">10.0.70.14 <span>garage-cam</span><br>10.0.70.31 <span>ev-charger</span></p>
+              </div>
+              <div class="acts">
+                <button class="v try"><i>▸</i>try</button>
+                <button class="v save"><i>✓</i>save</button>
+                <button class="olink">clone</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="anno">
+    <b>The receipt sits where the docket puts THE EPISODE:</b> a small mono label, the
+    count, a tick strip and the two hosts it would have named. A viewer gets the same
+    sentence with the handles taken off, and nothing to press. At 390 px the sentence
+    wraps and the receipt drops underneath it — the same drawer, one column.
+  </p>
+</section>
+
+</body>
+</html>

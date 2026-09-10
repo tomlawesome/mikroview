@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Round 5 — the conditions editor in mikroview's own clothes (#829)</title>
+<style>
+  /* ============================================================
+     ROUND 5 — THE CONDITIONS EDITOR (#829, under #490's engine room).
+
+     Round 4's verdict: "looks like a generic program. This is
+     mikroview - it should LOOK like mikroview." So every token and
+     nearly every rule below is lifted from the built app rather than
+     invented: frontend/src/app.css for the tokens and the two font
+     stacks, EngineRoomWatchers.svelte for the bench, the row, the
+     panel, the chips, the inputs and the actions row, EngineRoom.svelte
+     for the settings card (.og / h3 / .orow / .olink) the bench lives
+     in. The one new object is the "matches when" token bar, drawn
+     after the stream's own filter bar (live-filter-dark.png).
+
+     Dark only: round 30 (#708) removed the theme picker.
+     Colour stays meaning-only. --alarm appears nowhere on the bench;
+     amber is --now, the engine room's time colour, borrowed for
+     "not yet".
+     ============================================================ */
+
+  :root {
+    /* app.css, verbatim */
+    --bg: #06080e;
+    --bg-elevated: #0f1422;
+    --bg-hover: rgba(160, 185, 230, 0.08);
+    --border: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --fg: #e9eefb;
+    --fg-muted: #97a4c4;
+    --fg-dim: #55628a;
+    --accent: #9db8e8;
+    --accent-bg: rgba(157, 184, 232, 0.12);
+    --accent-bg-hover: rgba(157, 184, 232, 0.18);
+    --now: #e8b05a;
+    --now-bg: rgba(232, 176, 90, 0.09);
+    --accept: #3ecf7e;
+    --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    color: var(--fg);
+    /* app.css body: the void, with Atlas's faint glow off the top right */
+    background:
+      radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%),
+      var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- sheet chrome (not part of the app) ---------- */
+  .concept {
+    position: sticky; top: 0; z-index: 90;
+    display: flex; gap: 14px; align-items: baseline;
+    padding: 8px 22px;
+    background: rgba(6, 8, 14, 0.96);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; color: var(--fg-dim);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.14em; font-weight: 650; }
+  .scene { border-bottom: 1px solid var(--hair-2); padding: 0 0 26px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80;
+    padding: 7px 22px;
+    background: rgba(6, 8, 14, 0.94);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; color: var(--fg-muted);
+  }
+  .scene-tag b { color: var(--accent); font-family: var(--font-mono); font-weight: 600; margin-right: 4px; }
+  .sheet { width: min(1500px, 96%); margin: 20px auto 0; }
+  .notes { display: flex; gap: 14px; width: min(1500px, 96%); margin: 14px auto 0; }
+  .anno {
+    flex: 1; font-size: 11.5px; line-height: 1.55; color: var(--fg-muted);
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    border-left: 2px solid var(--accent); border-radius: 0 8px 8px 0;
+    padding: 9px 12px;
+  }
+  .anno b { color: var(--fg); font-weight: 600; }
+  .anno .spec { margin-top: 7px; }
+
+  /* ---------- the settings card, EngineRoom.svelte (.og / .stsection.wide) ---------- */
+  .og {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .og h3 {
+    margin: 0 0 6px;
+    font-size: 10px; font-weight: 650;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .wide { display: grid; grid-template-columns: 460px 1fr; column-gap: 40px; align-items: start; }
+  .wide > h3 { grid-column: 1 / -1; }
+  .stflags { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; font-family: var(--font-mono); }
+  .stf { color: var(--now); }
+  .stf b { font-weight: 600; }
+  .stf.dim { color: var(--fg-dim); }
+  .orow {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 14px; padding: 7px 0; font-size: 12px;
+  }
+  .orow > span:first-child { color: var(--fg-dim); flex: none; }
+  .orow .ov { color: var(--fg-muted); text-align: right; }
+  .olink { background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+
+  /* ---------- the bench, EngineRoomWatchers.svelte ---------- */
+  .bench {
+    list-style: none; margin: 8px 0 0; padding: 8px 0 0;
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .row { font-size: 12px; }
+  .line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .cbx {
+    flex: none; align-self: center;
+    width: 13px; height: 13px; border-radius: 3px;
+    background: var(--accent); color: var(--bg);
+    display: inline-grid; place-items: center;
+    font-size: 9px; line-height: 1;
+  }
+  .cbx.off { background: transparent; border: 1px solid var(--fg-dim); color: transparent; }
+  .name { color: var(--fg); font-weight: 600; }
+  .id { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-dim); }
+  .dash { color: var(--fg-dim); }
+  .scope-fact { color: var(--fg-muted); }
+  .row-knob .scope-fact { border-bottom: 1px dashed var(--accent); }
+  .tuned { font-size: 10.5px; color: var(--fg-muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
+  .state { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted); white-space: nowrap; }
+  .state .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accept); }
+  .state.paused { color: var(--fg-dim); }
+  .state.paused .dot { background: transparent; border: 1px solid var(--fg-dim); }
+
+  .panel {
+    margin-top: 6px; padding: 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .note, .example { margin: 0; font-size: 11.5px; color: var(--fg-muted); line-height: 1.5; }
+  .example { color: var(--fg); }
+  .note b, .example b { color: var(--fg); font-weight: 600; }
+  .group { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .group h4 {
+    margin: 0; font-size: 11px; font-weight: 600;
+    text-transform: lowercase; letter-spacing: 0.04em; color: var(--fg-dim);
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--fg-muted); }
+  .field-row { display: flex; gap: 6px; align-items: center; }
+  .hint { color: var(--fg-dim); font-size: 11px; line-height: 1.45; }
+
+  /* the panel's inputs and selects, exactly as the component styles them */
+  .in, .sel {
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    color: var(--fg); border-radius: 5px; padding: 5px 7px; font-size: 12px;
+    font-family: var(--font-sans);
+  }
+  .in.wide { display: block; width: 100%; }
+  .in.num { width: 62px; text-align: right; font-family: var(--font-mono); }
+  .in.mono { font-family: var(--font-mono); }
+  .sel { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .sel::after { content: "⌄"; color: var(--fg-dim); font-size: 11px; line-height: 0.6; }
+
+  /* chips, .chipbox / .chip / .chip-x / .chip-add / .chip-plus */
+  .chipbox {
+    flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center;
+    gap: 5px; padding: 4px; border: 1px solid var(--border);
+    border-radius: 5px; background: var(--bg-elevated);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 4px 1px 7px; border: 1px solid var(--border);
+    border-radius: 999px; background: var(--bg); color: var(--fg);
+    font-size: 11.5px; white-space: nowrap;
+  }
+  .chip-x { border: none; background: transparent; color: var(--fg-dim); padding: 0 2px; font-size: 13px; line-height: 1; cursor: pointer; }
+  .chip-add { color: var(--fg-dim); padding: 2px 4px; }
+
+  /* actions row */
+  .actions {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--border);
+  }
+  .actions-left, .actions-right { display: inline-flex; gap: 8px; align-items: center; }
+  .quiet, .cancel, .try, .save { border-radius: 5px; padding: 5px 10px; font-size: 12px; font-family: var(--font-sans); cursor: pointer; }
+  .quiet { background: transparent; border: 1px solid transparent; color: var(--fg-muted); }
+  .cancel, .try { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
+  .save { background: var(--accent); border: 1px solid var(--accent); color: var(--bg); font-weight: 600; }
+  .quiet.off, .cancel.off, .try.off, .save.off { opacity: 0.6; cursor: default; }
+  .aside { font-size: 11px; color: var(--fg-dim); line-height: 1.4; max-width: 40ch; }
+  .waitfor { font-size: 11.5px; color: var(--now); white-space: nowrap; }
+
+  /* the Try receipt, .tried / .tried-count / .tried-current / .tried-hosts */
+  .tried { margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--fg-muted); line-height: 1.5; }
+  .tried-count { margin: 0; color: var(--fg); }
+  .tried-current { color: var(--fg-muted); }
+  .tried-hosts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; font-family: var(--font-mono); font-size: 11px; color: var(--fg-dim); }
+
+  /* ============================================================
+     THE ONE NEW OBJECT — the "matches when" token bar.
+     Shaped after the stream's filter bar: one full-width well, mono
+     placeholder, a thin --accent ring when focused. A finished line is
+     a chip; the gutter between chips says "and", because the engine
+     has no "or".
+     ============================================================ */
+  .tokbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 5px 6px;
+    min-height: 32px; padding: 4px 6px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg-elevated);
+  }
+  .tokbar.focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(157, 184, 232, 0.22);
+  }
+  .tok {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 4px 2px 9px; border: 1px solid var(--border);
+    border-radius: 999px; background: var(--bg); font-size: 11.5px; white-space: nowrap;
+  }
+  .tok .tf { color: var(--fg-muted); }
+  .tok .tv { color: var(--fg-muted); }
+  .tok .tval { color: var(--fg); font-family: var(--font-mono); font-size: 11px; }
+  .tok .tval.word { font-family: var(--font-sans); font-size: 11.5px; }
+  .tok .tsep { color: var(--fg-dim); }
+  .tok.bad { border-color: var(--now); background: var(--now-bg); }
+  .tok.bad .tval { color: var(--now); }
+  .tok .tsay { color: var(--now); font-size: 11px; border-left: 1px solid rgba(232, 176, 90, 0.4); padding-left: 6px; margin-left: 1px; }
+  .andsep { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-dim); padding: 0 1px; }
+  .typing { display: inline-flex; align-items: center; padding: 2px 2px 2px 3px; font-family: var(--font-mono); font-size: 11.5px; color: var(--fg); }
+  .caret { display: inline-block; width: 1px; height: 13px; background: var(--accent); margin-left: 1px; }
+  .tokph { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-dim); padding: 2px 3px; }
+  .tokph em { font-style: normal; color: var(--fg-muted); }
+
+  /* the step dropdown. Drawn in flow rather than floating over the
+     panel, so a screenshot can show the bar, the menu and the sentence
+     under it at once; in the build it overlays. */
+  .dd {
+    margin-top: 4px; border: 1px solid var(--hair-2); border-radius: 6px;
+    background: var(--bg-elevated); box-shadow: 0 10px 24px rgba(2, 3, 7, 0.55);
+    overflow: hidden;
+  }
+  .dd-steps {
+    display: flex; align-items: center; gap: 7px;
+    padding: 6px 9px; border-bottom: 1px solid var(--border);
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-dim);
+  }
+  .dd-steps .on { color: var(--accent); }
+  .dd-steps .done { color: var(--fg-muted); text-transform: none; letter-spacing: 0.02em; font-size: 11px; }
+  .dd-list { list-style: none; margin: 0; padding: 4px 0; max-height: 268px; }
+  .dd-list li {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 4px 10px; font-size: 12px; color: var(--fg-muted);
+  }
+  .dd-list li .lab { color: var(--fg); }
+  .dd-list li .m { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+  .dd-list li .dh { margin-left: auto; font-size: 11px; color: var(--fg-dim); }
+  .dd-list li.hi { background: var(--accent-bg); }
+  .dd-list li.hi .lab { color: var(--fg); }
+  .dd-cols { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .dd-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .dd-foot {
+    padding: 5px 9px; border-top: 1px solid var(--border);
+    font-size: 10.5px; color: var(--fg-dim);
+  }
+  .dd-foot .k { font-family: var(--font-mono); color: var(--fg-muted); }
+
+  /* counting sentence, template box, reads-as */
+  .sentence {
+    display: flex; flex-wrap: wrap; gap: 5px 6px; align-items: center;
+    font-size: 12px; color: var(--fg-muted); line-height: 2;
+  }
+  .sentence .sel, .sentence .in { padding: 3px 7px; }
+  .tmpl {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: 5px; padding: 5px 7px; font-size: 12px; color: var(--fg);
+  }
+  .tmpl .ph { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+  .canuse { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+  .canuse .lbl { font-size: 11px; color: var(--fg-dim); }
+  .canuse .t {
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--accent);
+    border: 1px dashed var(--hair-2); border-radius: 999px; padding: 1px 7px; cursor: pointer;
+  }
+  .readsas { font-size: 11.5px; line-height: 1.55; color: var(--fg-muted); }
+  .readsas b { color: var(--fg); font-weight: 600; }
+  .readsas .m { font-family: var(--font-mono); font-size: 11px; color: var(--fg); }
+
+  .viewer-line { font-size: 11.5px; line-height: 1.55; color: var(--fg-muted); margin: 0; }
+  .viewer-line b { color: var(--fg); font-weight: 600; }
+  .viewer-line .m { font-family: var(--font-mono); font-size: 11px; color: var(--fg); }
+
+  /* the pocket bench */
+  .phone { width: 390px; flex: none; }
+  .phone .og { padding: 10px 11px; }
+  .phone .wide { display: block; }
+  .phone .tok { white-space: normal; }
+  .caption { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-dim); margin: 0 0 6px; }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 5 — THE CONDITIONS EDITOR</b> #829 · in mikroview's own clothes: app tokens, the built bench, and a GitLab-style token bar for a condition line · dark only (#708)</div>
+
+<!-- ================= s1 ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag"><b>s1 ·</b> the shipped row on the bench, and what Clone says it will carry</div>
+  <div class="sheet">
+    <div class="og wide">
+      <h3>detection</h3>
+      <div class="wleft">
+        <div class="stflags">
+          <span class="stf">▲ rule spike · <b>1</b></span>
+          <span class="stf dim">+ 15 more · quiet this hour</span>
+        </div>
+      </div>
+      <div class="wrows">
+        <div class="orow">
+          <span>detectors</span>
+          <span class="ov">17 of 17 on · <button class="olink">close the bench</button></span>
+        </div>
+
+        <ul class="bench">
+          <li class="row">
+            <div class="line">
+              <span class="cbx">✓</span>
+              <span class="row-knob"><span class="name">Port scan</span> <span class="id">port_scan</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="tuned">tuned</span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+
+          <li class="row open">
+            <div class="line">
+              <span class="cbx">✓</span>
+              <span class="row-knob"><span class="name">Internal reconnaissance</span> <span class="id">internal_recon</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+
+            <div class="panel">
+              <p class="note"><b>What this restricts:</b> how many internal hosts one source may reach before the room calls it a sweep. Nothing outside the window counts.</p>
+              <p class="example"><b>Example:</b> a backup agent that touches every server each night — raise the threshold rather than pausing the detector.</p>
+
+              <div class="group">
+                <h4>when it fires</h4>
+                <div class="field">
+                  <label>Threshold (distinct internal hosts)</label>
+                  <input class="in wide" value="8">
+                  <span class="hint">Distinct internal destination addresses one source reaches within the window. (min 1)</span>
+                </div>
+                <div class="field">
+                  <label>Window (seconds)</label>
+                  <input class="in wide" value="300">
+                  <span class="hint">Rolling window the host count is measured over. (min 1)</span>
+                </div>
+              </div>
+
+              <div class="group">
+                <h4>what it watches</h4>
+                <p class="hint">This detector's conditions are built in — it has no conditions editor of its own. A copy gets an empty bar to write in.</p>
+              </div>
+
+              <div class="actions">
+                <span class="actions-left">
+                  <button class="quiet">Reset to stock</button>
+                  <button class="quiet">Clone</button>
+                  <span class="aside">copies scope and numbers; conditions start empty; the copy starts paused</span>
+                </span>
+                <span class="actions-right">
+                  <button class="cancel">Cancel</button>
+                  <button class="try">Try</button>
+                  <button class="save">Save</button>
+                </span>
+              </div>
+            </div>
+          </li>
+
+          <li class="row">
+            <div class="line">
+              <span class="cbx">✓</span>
+              <span class="row-knob"><span class="name">Critical-port attempts</span> <span class="id">critical_port</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+          <li class="row">
+            <div class="line">
+              <span class="cbx">✓</span>
+              <span class="row-knob"><span class="name">Distributed brute-force</span> <span class="id">distributed_brute_force</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="anno"><b>Clone says beforehand what it carries.</b> Internal reconnaissance is written in code, so a copy takes its scope and its two numbers and nothing else; the sentence sits beside the button, not behind a confirm. Copies always start paused — nothing an operator has not yet read can raise a flag.
+      <div class="spec">
+        <div class="caption">the copy's empty bar</div>
+        <div class="tokbar"><span class="tokph">every event — click to add a condition, or type one like <em>dst port is one of 22, 3389</em></span></div>
+      </div>
+    </div>
+    <div class="anno"><b>Nothing here is new furniture.</b> The card, the group heading, the row, the dashed scope knob, the panel, the input, the hint line and the Reset · Clone · Cancel · Try · Save row are the built ones (<i>EngineRoomWatchers.svelte</i>). Round 5 adds one object to this panel and no chrome around it.</div>
+  </div>
+</section>
+
+<!-- ================= s2 ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag"><b>s2 ·</b> writing a line: one chip held, the field list open and narrowed by typing <span style="font-family:var(--font-mono)">dst</span></div>
+  <div class="sheet">
+    <div class="og wide">
+      <h3>detection</h3>
+      <div class="wleft">
+        <div class="stflags">
+          <span class="stf">▲ rule spike · <b>1</b></span>
+          <span class="stf dim">+ 15 more · quiet this hour</span>
+        </div>
+      </div>
+      <div class="wrows">
+        <div class="orow">
+          <span>detectors</span>
+          <span class="ov">17 of 18 on · <button class="olink">close the bench</button></span>
+        </div>
+
+        <ul class="bench">
+          <li class="row">
+            <div class="line">
+              <span class="cbx">✓</span>
+              <span class="row-knob"><span class="name">Port scan</span> <span class="id">port_scan</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="tuned">tuned</span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+
+          <li class="row open">
+            <div class="line">
+              <span class="cbx off">✓</span>
+              <span class="row-knob"><span class="name">Port scan (copy)</span> <span class="id">custom</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+
+            <div class="panel">
+              <p class="note"><b>Copied from Port scan</b> just now — its conditions, its scope and its numbers. Change what you like; it stays paused until you run it.</p>
+
+              <div class="field">
+                <label>Name</label>
+                <input class="in wide" value="Port scan (copy)">
+              </div>
+
+              <div class="group">
+                <h4>matches when</h4>
+                <div class="tokbar focus">
+                  <span class="tok">
+                    <span class="tf">connection state</span><span class="tsep">·</span><span class="tv">is one of</span><span class="tsep">·</span><span class="tval word">new</span>
+                    <button class="chip-x">×</button>
+                  </span>
+                  <span class="andsep">and</span>
+                  <span class="typing">dst<span class="caret"></span></span>
+                </div>
+
+                <div class="dd">
+                  <div class="dd-steps"><span class="on">1 · field</span><span>›</span><span>2 · verb</span><span>›</span><span>3 · value</span></div>
+                  <ul class="dd-list">
+                    <li class="hi"><span class="lab"><span class="m">d</span>e<span class="m">st</span>ination address</span><span class="dh">an address, a range, or a class</span></li>
+                    <li><span class="lab"><span class="m">d</span>e<span class="m">st</span>ination port</span><span class="dh">a port, a list, or a range</span></li>
+                  </ul>
+                  <div class="dd-foot"><span class="k">↑ ↓</span> to choose · <span class="k">enter</span> to take it · <span class="k">esc</span> to close · 15 fields, narrowed to 2 by <span class="k">dst</span></div>
+                </div>
+                <p class="hint">Every line must hold — the engine has no "or", so the gutter says <i>and</i>. Click a chip to reopen it.</p>
+              </div>
+
+              <div class="group">
+                <h4>counts</h4>
+                <div class="sentence">
+                  count <span class="sel">distinct destination ports</span> per <span class="sel">source address</span>, and flag a source at <input class="in num" value="20"> within <input class="in num" value="60"> s.
+                </div>
+              </div>
+
+              <div class="group">
+                <h4>what the flag says</h4>
+                <div class="field">
+                  <label>Detail</label>
+                  <div class="tmpl"><span class="ph">{Count}</span> distinct destination ports in <span class="ph">{Window}</span></div>
+                </div>
+                <div class="canuse">
+                  <span class="lbl">can use</span>
+                  <span class="t">{Count}</span><span class="t">{SourceAddress}</span><span class="t">{Window}</span>
+                </div>
+              </div>
+
+              <div class="group">
+                <h4>reads as</h4>
+                <p class="readsas">Flag a <b>source address</b> that reaches <b>20 distinct destination ports</b> within <b>60 s</b>, counting only events whose <b>connection state is new</b>.</p>
+              </div>
+
+              <div class="actions">
+                <span class="actions-left">
+                  <button class="quiet">Remove</button>
+                </span>
+                <span class="actions-right">
+                  <button class="cancel">Cancel</button>
+                  <button class="try">Try</button>
+                  <button class="save">Save</button>
+                </span>
+              </div>
+            </div>
+          </li>
+
+          <li class="row">
+            <div class="line">
+              <span class="cbx">✓</span>
+              <span class="row-knob"><span class="name">Repeated drops</span> <span class="id">repeated_drops</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="anno"><b>Three steps, one bar.</b> Field, then the verbs that field allows, then a value control that suits the verb — a choice list for action, chain, protocol, interface, connection state, day of week and classification; a typed box (chips, for <i>is one of</i>) for addresses and ports. Typing narrows the list at every step, and a whole line typed straight in parses to the same chip.</div>
+    <div class="anno"><b>A finished line is a chip</b>, reading <span style="font-family:var(--font-mono);font-size:11px">field · verb · value</span> so the bar can be read left to right as the sentence it is. Click a chip to reopen it at whichever step you want to change; the <b>×</b> is the built <span style="font-family:var(--font-mono);font-size:11px">.chip-x</span>.</div>
+  </div>
+</section>
+
+<!-- ================= s3 ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag"><b>s3 ·</b> one line unfinished — the chip says so in amber, and Try and Save both wait</div>
+  <div class="sheet">
+    <div class="og wide">
+      <h3>detection</h3>
+      <div class="wleft">
+        <div class="stflags">
+          <span class="stf">▲ rule spike · <b>1</b></span>
+          <span class="stf dim">+ 15 more · quiet this hour</span>
+        </div>
+      </div>
+      <div class="wrows">
+        <div class="orow">
+          <span>detectors</span>
+          <span class="ov">17 of 18 on · <button class="olink">close the bench</button></span>
+        </div>
+
+        <ul class="bench">
+          <li class="row">
+            <div class="line">
+              <span class="cbx">✓</span>
+              <span class="row-knob"><span class="name">Internal reconnaissance</span> <span class="id">internal_recon</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="state"><span class="dot"></span>running</span>
+            </div>
+          </li>
+
+          <li class="row open">
+            <div class="line">
+              <span class="cbx off">✓</span>
+              <span class="row-knob"><span class="name">Garage probes</span> <span class="id">custom</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+
+            <div class="panel">
+              <p class="note"><b>Copied from Internal reconnaissance</b> — its scope and its numbers. Its conditions are built in and could not be copied, so these were written here.</p>
+
+              <div class="field">
+                <label>Name</label>
+                <input class="in wide" value="Garage probes">
+              </div>
+
+              <div class="group">
+                <h4>matches when</h4>
+                <div class="tokbar focus">
+                  <span class="tok"><span class="tf">source address</span><span class="tsep">·</span><span class="tv">is within</span><span class="tsep">·</span><span class="tval">10.0.70.0/24</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tok"><span class="tf">action</span><span class="tsep">·</span><span class="tv">is</span><span class="tsep">·</span><span class="tval word">drop</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tok"><span class="tf">destination address</span><span class="tsep">·</span><span class="tv">is classed as</span><span class="tsep">·</span><span class="tval word">internal</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tok bad"><span class="tf">destination port</span><span class="tsep">·</span><span class="tv">is between</span><span class="tsep">·</span><span class="tval">1 – …</span><span class="tsay">between needs both ends</span><button class="chip-x">×</button></span>
+                </div>
+
+                <div class="dd">
+                  <div class="dd-steps"><span class="done">destination port</span><span>›</span><span class="done">is between</span><span>›</span><span class="on">3 · value</span></div>
+                  <div class="dd-body">
+                    <div class="field-row">
+                      <input class="in mono" style="width:150px" value="1-">
+                      <span class="hint">low-high, e.g. <span style="font-family:var(--font-mono);color:var(--fg-muted)">1-1024</span> — or <span style="font-family:var(--font-mono);color:var(--fg-muted)">22:00-06:00</span> when the field is time of day</span>
+                    </div>
+                  </div>
+                  <div class="dd-foot"><span class="k">enter</span> to finish the line · <span class="k">esc</span> to leave it as it is · <span class="k">shift ⇥</span> back to the verb</div>
+                </div>
+              </div>
+
+              <div class="group">
+                <h4>counts</h4>
+                <div class="sentence">
+                  count <span class="sel">distinct destination addresses</span> per <span class="sel">source address</span>, and flag a source at <input class="in num" value="8"> within <input class="in num" value="300"> s.
+                </div>
+              </div>
+
+              <div class="group">
+                <h4>what the flag says</h4>
+                <div class="field">
+                  <label>Detail</label>
+                  <div class="tmpl"><span class="ph">{SourceAddress}</span> in the garage range was dropped reaching <span class="ph">{Count}</span> internal hosts</div>
+                </div>
+                <div class="canuse">
+                  <span class="lbl">can use</span>
+                  <span class="t">{Count}</span><span class="t">{SourceAddress}</span><span class="t">{Window}</span>
+                </div>
+              </div>
+
+              <div class="group">
+                <h4>reads as</h4>
+                <p class="readsas">Flag a <b>source address</b> that is dropped reaching <b>8 distinct internal destination addresses</b> within <b>300 s</b>, counting only events from <span class="m">10.0.70.0/24</span> with action <b>drop</b> — once the destination-port line is finished.</p>
+              </div>
+
+              <div class="actions">
+                <span class="actions-left">
+                  <button class="quiet">Remove</button>
+                </span>
+                <span class="actions-right">
+                  <span class="waitfor">finish this line</span>
+                  <button class="cancel">Cancel</button>
+                  <button class="try off">Try</button>
+                  <button class="save off">Save</button>
+                </span>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="anno"><b>Wrong is said on the line, in amber.</b> <span style="font-family:var(--font-mono);font-size:11px">--now</span> is the engine room's time colour, borrowed for "not yet"; <span style="font-family:var(--font-mono);font-size:11px">--alarm</span> never appears on the bench. The chip carries its own message so the eye goes to the thing that needs finishing, not to a summary at the foot.</div>
+    <div class="anno"><b>Try and Save both wait</b> (owner, 2026-09-09). A receipt replayed from three of four lines describes a detector that is not the one on screen, which is a quiet lie. Both buttons take the built <span style="font-family:var(--font-mono);font-size:11px">:disabled</span> style, and <i>finish this line</i> sits beside them saying why.</div>
+    <div class="anno"><b>is between takes time too.</b> Ports read <span style="font-family:var(--font-mono);font-size:11px">1-1024</span>, time of day reads <span style="font-family:var(--font-mono);font-size:11px">22:00-06:00</span>; one box, one grammar, and the hint changes with the field.</div>
+  </div>
+</section>
+
+<!-- ================= s4 ================= -->
+<section class="scene" id="s4">
+  <div class="scene-tag"><b>s4 ·</b> a moment later: four lines complete, tried, Save live — and the same row for a viewer and in a pocket</div>
+  <div class="sheet">
+    <div class="og wide">
+      <h3>detection</h3>
+      <div class="wleft">
+        <div class="stflags">
+          <span class="stf">▲ rule spike · <b>1</b></span>
+          <span class="stf dim">+ 15 more · quiet this hour</span>
+        </div>
+      </div>
+      <div class="wrows">
+        <div class="orow">
+          <span>detectors</span>
+          <span class="ov">17 of 18 on · <button class="olink">close the bench</button></span>
+        </div>
+
+        <ul class="bench">
+          <li class="row open">
+            <div class="line">
+              <span class="cbx off">✓</span>
+              <span class="row-knob"><span class="name">Garage probes</span> <span class="id">custom</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span></span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+
+            <div class="panel">
+              <div class="field">
+                <label>Name</label>
+                <input class="in wide" value="Garage probes">
+              </div>
+
+              <div class="group">
+                <h4>matches when</h4>
+                <div class="tokbar">
+                  <span class="tok"><span class="tf">source address</span><span class="tsep">·</span><span class="tv">is within</span><span class="tsep">·</span><span class="tval">10.0.70.0/24</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tok"><span class="tf">action</span><span class="tsep">·</span><span class="tv">is</span><span class="tsep">·</span><span class="tval word">drop</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tok"><span class="tf">destination address</span><span class="tsep">·</span><span class="tv">is classed as</span><span class="tsep">·</span><span class="tval word">internal</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tok"><span class="tf">destination port</span><span class="tsep">·</span><span class="tv">is between</span><span class="tsep">·</span><span class="tval">1-1024</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tokph">add a condition…</span>
+                </div>
+              </div>
+
+              <div class="group">
+                <h4>counts</h4>
+                <div class="sentence">
+                  count <span class="sel">distinct destination addresses</span> per <span class="sel">source address</span>, and flag a source at <input class="in num" value="8"> within <input class="in num" value="300"> s.
+                </div>
+              </div>
+
+              <div class="group">
+                <h4>what the flag says</h4>
+                <div class="field">
+                  <label>Detail</label>
+                  <div class="tmpl"><span class="ph">{SourceAddress}</span> in the garage range was dropped reaching <span class="ph">{Count}</span> internal hosts</div>
+                </div>
+                <div class="canuse">
+                  <span class="lbl">can use</span>
+                  <span class="t">{Count}</span><span class="t">{SourceAddress}</span><span class="t">{Window}</span>
+                </div>
+              </div>
+
+              <div class="group">
+                <h4>reads as</h4>
+                <p class="readsas">Flag a <b>source address</b> that is dropped reaching <b>8 distinct internal destination addresses</b> within <b>300 s</b>, counting only events from <span class="m">10.0.70.0/24</span> with action <b>drop</b> to <b>internal</b> destinations on ports <span class="m">1-1024</span>.</p>
+              </div>
+
+              <div class="tried">
+                <p class="tried-count">Would have fired <b>3 times</b> in the last 24 h <span class="tried-current">· currently: 0</span></p>
+                <ul class="tried-hosts">
+                  <li>10.0.70.14 garage-cam</li>
+                  <li>10.0.70.31 ev-charger</li>
+                  <li>10.0.70.14 garage-cam</li>
+                </ul>
+              </div>
+
+              <div class="actions">
+                <span class="actions-left">
+                  <button class="quiet">Remove</button>
+                </span>
+                <span class="actions-right">
+                  <button class="cancel">Cancel</button>
+                  <button class="try">Try</button>
+                  <button class="save">Save</button>
+                </span>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="sheet" style="display:flex;gap:18px;align-items:flex-start;margin-top:16px">
+    <div style="flex:1;min-width:0">
+      <p class="caption">the same row, read by a viewer</p>
+      <div class="og">
+        <div class="orow"><span>detectors</span><span class="ov">17 of 18 on</span></div>
+        <ul class="bench">
+          <li class="row">
+            <div class="line">
+              <span class="cbx off">✓</span>
+              <span class="name">Garage probes</span> <span class="id">custom</span> <span class="dash">—</span> <span class="scope-fact">watching everything in range</span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+            <div class="panel">
+              <p class="viewer-line">Flags a <b>source address</b> in <span class="m">10.0.70.0/24</span> that is <b>dropped</b> reaching <b>8 distinct internal destination addresses</b> on ports <span class="m">1-1024</span> within <b>300 s</b>. Copied from Internal reconnaissance; paused.</p>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="phone">
+      <p class="caption">the bar in a pocket · 390 px</p>
+      <div class="og">
+        <div class="orow"><span>detectors</span><span class="ov">17 of 18 on</span></div>
+        <ul class="bench">
+          <li class="row open">
+            <div class="line">
+              <span class="cbx off">✓</span>
+              <span class="name">Garage probes</span>
+              <span class="state paused"><span class="dot"></span>paused</span>
+            </div>
+            <div class="panel">
+              <div class="group" style="border-top:none;padding-top:0">
+                <h4>matches when</h4>
+                <div class="tokbar">
+                  <span class="tok"><span class="tf">source address</span><span class="tsep">·</span><span class="tv">is within</span><span class="tsep">·</span><span class="tval">10.0.70.0/24</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tok"><span class="tf">action</span><span class="tsep">·</span><span class="tv">is</span><span class="tsep">·</span><span class="tval word">drop</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tok"><span class="tf">destination address</span><span class="tsep">·</span><span class="tv">is classed as</span><span class="tsep">·</span><span class="tval word">internal</span><button class="chip-x">×</button></span>
+                  <span class="andsep">and</span>
+                  <span class="tok"><span class="tf">destination port</span><span class="tsep">·</span><span class="tv">is between</span><span class="tsep">·</span><span class="tval">1-1024</span><button class="chip-x">×</button></span>
+                </div>
+              </div>
+              <div class="group">
+                <h4>counts</h4>
+                <div class="sentence">flag a <span class="sel">source</span> at <input class="in num" value="8"> in <input class="in num" value="300"> s.</div>
+              </div>
+              <div class="actions">
+                <span class="actions-left"><button class="cancel">Cancel</button></span>
+                <span class="actions-right"><button class="try">Try</button><button class="save">Save</button></span>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="anno"><b>The receipt is the built one</b> (#786): the count, the window, and the hosts it would have named, in the mono face, under the fields and above the actions row — no box, no colour, exactly where <i>watchers-try-dark.png</i> puts it.</div>
+    <div class="anno"><b>A viewer's row is one sentence.</b> No bar, no chips, nothing focusable pretending to be pressable; the prose is the same string <i>reads as</i> shows the editor.</div>
+    <div class="anno"><b>In a pocket the chips wrap</b> and the bar grows downward — the same object, no separate mobile grammar. Type size holds; the panel scrolls.</div>
+  </div>
+</section>
+
+</body>
+</html>

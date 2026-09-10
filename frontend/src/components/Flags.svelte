@@ -46,7 +46,6 @@
   import { onMount } from 'svelte'
   import { flagsState, extractSourceIp, buildCampaigns } from '../lib/flags.svelte'
   import type { Campaign } from '../lib/flags.svelte'
-  import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { anyBaselineWarming } from '../lib/learningShelf'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -362,27 +361,20 @@
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
 
-  // "Any baseline warming" (#642, ruling amendment 1): readable only
-  // from GET /api/definitions' learning field, which #653 gates at the
-  // user tier -- so it is evaluated for user/admin only, and a viewer's
-  // shelf appears only when it has contents. Degrades by absence, the
-  // app's grammar, never by a disabled control or an unverifiable claim.
-  const warming = $derived(canEdit && anyBaselineWarming(detectorSettingsState.list))
-
-  // Fetch the warm-up projection where this scene is allowed to read
-  // it. A failure is deliberately swallowed: with no data the shelf
-  // falls back to contents-only -- the absence of a claim, not a false
-  // one -- and EngineRoom's own use of this store is unaffected.
-  $effect(() => {
-    if (canEdit) detectorSettingsState.refresh().catch(() => {})
-  })
+  // "Any baseline warming" (#642, ruling amendment 1), read from the
+  // flags poll itself since #768: GET /api/flags carries the answer, so
+  // the shelf and the flags beside it come from one response and cannot
+  // disagree while two polls are out of step. No second fetch, and no
+  // role gate -- the field is viewer-readable like the rest of that
+  // route (#653), so a viewer now gets the same explanation of the
+  // silence anyone else does. Where the server does not answer at all
+  // (no live engine) the signal is simply absent and the shelf makes no
+  // claim, the app's grammar as before.
+  const warming = $derived(anyBaselineWarming(flagsState))
 
   // The expectations ledger's own thinness (#640, the honesty line):
-  // fetched once per mount, viewer-readable with no role gate -- an
-  // expectation is not owner-only information the way the warming
-  // signal above is. A failed fetch is swallowed the same way as
-  // detectorSettingsState.refresh() above: absence of a claim, not a
-  // false one.
+  // fetched once per mount, viewer-readable with no role gate. A failed
+  // fetch is swallowed: absence of a claim, not a false one.
   let expectations = $state<Exclusion[] | null>(null)
 
   $effect(() => {
@@ -999,9 +991,10 @@
          flags, below the settled table -- an untrusted item never
          outranks a trusted one -- and never a fourth docket tab, which
          would hide the learning state from the very person reviewing
-         flags. Present when it has contents or (for user/admin, who can
-         read the warming signal) while any baseline is warming; absent
-         otherwise, as everywhere else in the app (#653). -->
+         flags. Present when it has contents or while any baseline is
+         warming (#768: the flags response says so, and says it to a
+         viewer too); absent otherwise, as everywhere else in the app
+         (#653). -->
     {#if showShelf}
       <section class="shelf" aria-label="Learning shelf ({provisionalActive.length} provisional)">
         <h2 class="shelf-head">
