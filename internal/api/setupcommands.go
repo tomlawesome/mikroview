@@ -265,6 +265,13 @@ func validSetupDevice(device string) bool {
 	if len(device) > maxSetupDeviceLen {
 		return false
 	}
+	// An auto-discovered device's id is its source address
+	// (internal/device.Registry.Resolve), so an IPv6 id carries colons
+	// the charset below does not; an IP literal is safe bare in every
+	// placement the templates use.
+	if net.ParseIP(device) != nil {
+		return true
+	}
 	for i := 0; i < len(device); i++ {
 		c := device[i]
 		switch {

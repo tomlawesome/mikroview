@@ -307,4 +307,22 @@ func TestHandleSetupCommandsAcceptsSafeInput(t *testing.T) {
 	if !strings.Contains(out.Steps.CaTrust.Commands, "mv.example.com") {
 		t.Errorf("caTrust commands missing the address: %s", out.Steps.CaTrust.Commands)
 	}
+
+	// An auto-discovered device's id is its source address
+	// (internal/device.Registry.Resolve), so an IPv6 router's id carries
+	// colons the charset rule alone would refuse.
+	for _, device := range []string{"fd00::1", "192.0.2.7"} {
+		body, err := json.Marshal(setupCommandsRequest{Address: "mv.example.com", Device: device})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("device %q: status = %d, want 200", device, resp.StatusCode)
+		}
+	}
 }
