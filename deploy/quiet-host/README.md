@@ -43,6 +43,10 @@ cp quiet-host-apply.sh /usr/local/sbin/quiet-host-apply.sh
 chmod 0755 /usr/local/sbin/quiet-host-apply.sh
 ```
 
+The host script caps any hold at one hour regardless of what the flag file
+says, so re-copy it to `/usr/local/sbin/` (the `cp` above) whenever this file
+changes for that to take effect.
+
 Install the units:
 
 ```
