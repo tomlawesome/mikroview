@@ -248,31 +248,14 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+// The Lax-not-Strict reasoning this cookie depends on lives with
+// writeCookie in auth.go, which is where SameSite is now set.
 func (s *Server) setOIDCFlowCookie(w http.ResponseWriter, value string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     oidcFlowCookieName,
-		Value:    value,
-		Path:     "/api/auth/oidc",
-		HttpOnly: true,
-		Secure:   s.SecureCookie,
-		// Lax, not Strict: the provider's redirect back to /callback is
-		// a top-level cross-site GET navigation, which Strict would drop
-		// this cookie on entirely, breaking the flow.
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(oidcFlowCookieMaxAge.Seconds()),
-	})
+	s.writeCookie(w, oidcFlowCookieName, value, "/api/auth/oidc", int(oidcFlowCookieMaxAge.Seconds()))
 }
 
 func (s *Server) clearOIDCFlowCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     oidcFlowCookieName,
-		Value:    "",
-		Path:     "/api/auth/oidc",
-		HttpOnly: true,
-		Secure:   s.SecureCookie,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
+	s.writeCookie(w, oidcFlowCookieName, "", "/api/auth/oidc", -1)
 }
 
 func redirectWithSSOError(w http.ResponseWriter, r *http.Request, code string) {

@@ -1,27 +1,20 @@
 # ============================================================
-# UNDER CONSTRUCTION - NOT YET LIVE - DO NOT USE
+# GitLab is where mikroview is developed: branches, merge requests and
+# the dev -> preview -> main promotions all happen here, and this file is
+# the CI that gates them. GitHub is a read-only mirror of those three
+# branches -- the `sync` stage pushes each one after a merge -- and keeps
+# what already works there: CodeQL, the container registry and cosign
+# signing, Pages and secret scanning. #935 is the migration record; the
+# general model is in the gitlab-first-migration skill.
 #
-# This pipeline is real and runs green through the `security`
-# stage, but the cutover it belongs to has not been activated.
-# `dev` has not moved off GitHub. Do not push feature branches
-# to the `gitlab` remote, do not open merge requests there, and
-# do not treat a result from this pipeline as a gate on
-# anything -- work through GitHub pull requests as normal.
+# The `sync` stage is inert until the owner sets MIRROR_TO_GITHUB=true as
+# a project CI/CD variable (#935 step 4). Nothing in this file sets it.
 #
-# Blocker on activation: the `sync` stage below has never run
-# successfully. It needs a GITHUB_MIRROR_TOKEN CI/CD variable
-# that does not exist yet, so cutting over now would silently
-# stop GitHub issues closing on merge to `dev`.
-#
-# Status and remaining work:
-# gitlab-ci-plan/07-implementation-status-and-handover.md
-# Current instruction: AGENTS.md, "Where code review happens".
+# The live-check gate runs here too, sharded, since #1004: the `gate`
+# stage below. It used to be kept off CI on purpose -- 36 minutes holding
+# one host -- and the second-host loop on `dev` (AGENTS.md, "The gate runs
+# on `dev`") is still there until the CI gate has proven itself.
 # ============================================================
-#
-# GitLab CI for the `dev` lane. `preview`/`main` and everything they run
-# (docker.yml, codeql.yml, branch-policy.yml on GitHub) are untouched and
-# stay exactly as they are — see gitlab-ci-plan/07-mikroview-github-side-changes.md
-# for what changes there and why.
 #
 # Runner: rootless-Docker executor, single group runner, untagged jobs only.
 # Tool versions pinned below were verified current as of this session (Aug 2026)
@@ -31,49 +24,439 @@ stages:
   - lint
   - test
   - security
+  - gate
   - sync
+  - chr-exercise
+  - renovate
+
+# Runner lanes (#949, ai/agent-infra#3). Every job names its lane: `big`
+# is gitlab-runners-01 (8 CPU / 18 GB, two at a time) and `light` is the
+# 4 CPU / 6 GB runner (four at a time). A job with no matching tag does
+# not run at all, so a new job must pick one. Measured peaks per job are
+# on ai/agent-infra#3; anything under about 3 GB belongs on light.
+default:
+  tags: [big]
+  # #952: a new push to the same branch cancels the still-running previous
+  # pipeline instead of letting it hold a big-lane slot to the end. Jobs
+  # that push, publish or post externally override this back to false
+  # below, so they are never cut mid-write.
+  interruptible: true
 
 variables:
   GOFLAGS: "-mod=readonly"
 
-.dev_or_mr: &dev_or_mr
+# #1091: the only thing this workflow:rules block exists for is to set
+# NPM_CACHE_POLICY per pipeline, for .npm_cache below. `when: always` is
+# the catch-all rung -- every pipeline source still creates a pipeline
+# exactly as it did with no workflow: block at all, so nothing about
+# which pipelines run changes here, only a variable they carry.
+workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables:
+        NPM_CACHE_POLICY: "pull"
+    - when: always
+      variables:
+        NPM_CACHE_POLICY: "pull-push"
+
+# Scheduled pipelines exist only to carry the CHR exercise, CHR watch and
+# Renovate jobs, which select themselves on $CHR_EXERCISE / $CHR_WATCH /
+# $RENOVATE. Without the `never` line every schedule on dev also ran the full
+# lint, test and security set -- a daily CI run for a job that reads one JSON
+# file. The same jobs' on-demand path (web UI or API, same variable) was
+# doing it too (#951: pipelines 358 and 362 each re-ran all of dev 357), so
+# a web/API run carrying one of those variables is treated like a schedule.
+# A web/API run of dev with no variable still runs everything: that is what
+# "run pipeline" should mean.
+.dev_or_mr: &dev_or_mr
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
+
+# ---------------------------------------------------------------------------
+# DOCS-ONLY LANE (#1038). Until now nothing here decided what to run from
+# what changed, so a typo fix in a README paid for the same ~26 jobs as a
+# schema change, on runners shared with every other project.
+#
+# Two lists, and the order they are asked in is the whole mechanism:
+#
+#   *code_paths        deliberately over-broad -- every tree that is not
+#                      docs/, every source extension anywhere in the repo,
+#                      and every root file that is not prose. Matching too
+#                      much costs one full pipeline, which is the harmless
+#                      direction to be wrong in.
+#   *docs_only_paths   a closed list of prose and pictures. This is the
+#                      only thing in the file that can cause a skip.
+#
+# Every gated job asks them in that order (.dev_or_mr_code below):
+#
+#   1. a code path changed        -> run
+#   2. else a docs path changed   -> never
+#   3. else                       -> run
+#
+# Rule 3 is the point, and it is why the skip is opt-in rather than a
+# fallback. A path in neither list -- a new top-level directory, an
+# extension nobody has used here yet, an empty diff -- reaches rule 3 and
+# runs the job. So do the cases where GitLab cannot compute a diff at all
+# (a new branch's first push, a `web`/`api` run): `changes:` evaluates to
+# true there, so rule 1 matches first and the whole pipeline runs. A gate
+# that failed the other way would read green while having tested nothing,
+# which is worse than having no gate.
+#
+# Order is also what keeps a mixed diff honest. `changes:` asks "did any
+# of these change", never "did only these change", so the two lists cannot
+# be collapsed into one: README.md plus main.go matches rule 1 on main.go
+# and never reaches rule 2. Putting the docs list first would skip that
+# merge request outright.
+#
+# On a merge request GitLab diffs against the merge base with the target
+# branch, so a dev -> preview promotion is diffed against the preview tip:
+# the accumulated batch, not the last commit. Promotions therefore see
+# code and run everything, which is what a promotion has to do.
+#
+# Not every job is gated. AGENTS.md ("The docs-only lane") lists the ones
+# that always run and why -- Go tests read docs/configuration.md, and
+# test:build-checks link-checks the markdown, so prose really can fail
+# them, and a leaked secret can sit in a paragraph as easily as in code.
+# ---------------------------------------------------------------------------
+
+.docs_only_paths: &docs_only_paths
+  # Root-level prose. `*` does not cross a `/`, so this is README.md,
+  # CHANGELOG.md, AGENTS.md and friends, not every .md in the repo.
+  # THIRD-PARTY-NOTICES.md is in *code_paths below and is asked first.
+  - "*.md"
+  - "LICENSE"
+  - "docs/**/*.md"
+  # Screenshots and diagrams that documentation embeds.
+  - "docs/**/*.png"
+  - "docs/**/*.jpg"
+  - "docs/**/*.jpeg"
+  - "docs/**/*.gif"
+  - "docs/**/*.webp"
+  - "docs/**/*.svg"
+
+.code_paths: &code_paths
+  # Source extensions at any depth. These are what catch a file in a
+  # directory that does not exist yet, including the mockup rounds under
+  # docs/design/concepts (.html/.mjs/.py): those run the full set. That is
+  # deliberate -- narrowing it would mean trusting a path list to know
+  # which HTML is only a picture of an interface.
+  - "**/*.go"
+  - "**/*.js"
+  - "**/*.cjs"
+  - "**/*.mjs"
+  - "**/*.ts"
+  - "**/*.tsx"
+  - "**/*.svelte"
+  - "**/*.css"
+  - "**/*.html"
+  - "**/*.json"
+  - "**/*.yml"
+  - "**/*.yaml"
+  - "**/*.toml"
+  - "**/*.sh"
+  - "**/*.bash"
+  - "**/*.py"
+  - "**/*.sql"
+  - "**/*.service"
+  - "**/*.timer"
+  - "**/*.path"
+  - "**/*.Dockerfile"
+  - "**/Dockerfile"
+  - "**/Makefile"
+  # No root-only duplicates (`*.go` beside `**/*.go`): GitLab matches
+  # with Ruby's fnmatch, where `**/` stands for zero or more directories,
+  # so `**/*.go` already covers main.go at the root. A `changes:` list is
+  # capped at 50 entries, and pipeline 726 refused the file at 56.
+  # Every tree except docs/. A new top-level directory belongs on this
+  # list the day it is created: until it is, a change inside it only
+  # runs the full set on its own, and a diff pairing it with a README
+  # edit would be read as documentation.
+  - "brand/**/*"
+  - "cmd/**/*"
+  - "deploy/**/*"
+  - "frontend/**/*"
+  - "internal/**/*"
+  - "scripts/**/*"
+  - "site/**/*"
+  - "supply-chain/**/*"
+  - "tools/**/*"
+  - "web/**/*"
+  - ".claude/**/*"
+  - ".github/**/*"
+  - ".gitlab/**/*"
+  # Root files that are not prose. THIRD-PARTY-NOTICES.md is here on
+  # purpose: `*.md` would otherwise call it documentation, and it is
+  # compiled into the binary (notices.go's //go:embed) and regenerated and
+  # checked by test:build-checks.
+  - "go.mod"
+  - "go.sum"
+  - "VERSION"
+  - "THIRD-PARTY-NOTICES.md"
+  - ".gitlab-ci.yml"
+  - ".dockerignore"
+  - ".gitignore"
+  - ".gitleaksignore"
+  - "renovate.json"
+
+# .dev_or_mr, plus the three-rule ladder described above. Everything
+# .dev_or_mr does is unchanged and comes first: schedules and the
+# on-demand CHR/Renovate runs still select themselves out (#951).
+.dev_or_mr_code: &dev_or_mr_code
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *code_paths
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *docs_only_paths
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev"
+      changes: *code_paths
+    - if: $CI_COMMIT_BRANCH == "dev"
+      changes: *docs_only_paths
+      when: never
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+# The same ladder for the three frontend jobs, which additionally refuse to
+# run without frontend/package.json. `exists:` and `changes:` in one rule
+# are ANDed, and the guard has to be repeated on every rung rather than
+# merged in from .dev_or_mr_code, which is why this block exists at all.
+.dev_or_mr_code_frontend: &dev_or_mr_code_frontend
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+      changes: *code_paths
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+      changes: *docs_only_paths
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+      changes: *code_paths
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+      changes: *docs_only_paths
+      when: never
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+
+# Every job that shells out to git needs this. `go build` stamps VCS metadata
+# by running git, and git refuses a repository owned by another user unless it
+# is marked safe — which failed the whole lint stage with nothing but
+# "error obtaining VCS status: exit status 128" to go on (#908).
+#
+# The likely owner mismatch is our own doing: test:go chowns $CI_PROJECT_DIR to
+# ci-test, and the runner reuses its build directory between pipelines, so a
+# later job running as root meets a checkout owned by uid 10001. test:go now
+# hands ownership back, but marking the directory safe is the durable half —
+# it costs nothing and does not depend on that cleanup having run.
+#
+# The check below exists because the Go wrapper swallows git's actual message.
+# If git is still unusable, fail here with the real error rather than three
+# stages later with a riddle.
+.git_safe: &git_safe
+  before_script:
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - |
+      if ! git rev-parse --git-dir >/dev/null 2>&1; then
+        echo "git cannot read the checkout at $CI_PROJECT_DIR. Real error:"
+        git status || true
+        exit 1
+      fi
+
+# Shared npm cache (#1091), keyed on the lockfile so a dependency bump
+# invalidates it rather than serving stale node_modules. `npm ci` still
+# runs in every job below -- it is fast against a warm node_modules and
+# is what actually keeps the tree honest against the lockfile -- this
+# only saves each of them a cold npm-registry fetch. Policy comes from
+# NPM_CACHE_POLICY (set above in workflow:rules): pull-push on dev, so
+# the cache a merge request pulls stays warm; pull-only on a merge
+# request, so an unreviewed branch can never write back and poison what
+# dev or another MR pulls next.
+#
+# Only for jobs that run as root (the node:22 images). The live-check
+# image runs as `node`, and a cache the root jobs saved is restored
+# root-owned into a node-user job, so its `npm ci` fails with EACCES on
+# the first rmdir (#1098). Those jobs fetch cold; it costs them ~11 s.
+.npm_cache: &npm_cache
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+    paths:
+      - frontend/node_modules/
+    policy: $NPM_CACHE_POLICY
+
+# Standing on an earlier run instead of repeating it (#1066, ported from
+# Orbit's reuse gate, orbit #898). A push that only touched one shard's
+# scenario files used to rerun all four gate:scenarios shards plus
+# gate:image, test:container and test:postgres. Each of those jobs now
+# hashes what scripts/ci-reuse-inputs.js's JOB_INPUTS says it reads, and
+# stands on an earlier successful run of the same job on this same merge
+# request when the hash has not moved. docs/quality-strategy.md, "What
+# stands on what", has the job-by-job reasoning; test:go and test:frontend
+# are deliberately left out (#1066: cheap enough already).
+#
+# Merge requests only -- .gitlab-ci.yml is itself one of every job's
+# inputs (JOB_INPUTS' COMMON), so a delivery-branch pipeline and any
+# change to this file both run everything, same as before this existed.
+#
+# Nothing here can fail a job: every fault ci-reuse-gate.js meets -- no
+# CI_REUSE_TOKEN, no network, an expired evidence artefact, an unknown
+# job -- reads as "no earlier run to stand on", which reruns the job. That
+# is the only direction that can never be wrong, which is also why this
+# never adopts `workflow: auto_cancel: on_job_failure` (orbit #923): the
+# owner wants the full line to run so one push shows every failure.
+.reuse_gate: &reuse_gate |
+  if node scripts/ci-reuse-gate.js gate "$CI_JOB_NAME"; then
+    exit 0
+  fi
+
+# The other half: the proof the next pipeline reads back. The LAST line of
+# a candidate job's `script:`, so it is reached only when everything
+# before it passed -- never in `after_script`, which runs whatever the job
+# did, including a failure before this line.
+.reuse_evidence: &reuse_evidence node scripts/ci-reuse-gate.js evidence "$CI_JOB_NAME"
+
+# ---------------------------------------------------------------------------
+# POLICY — the three-lane promotion order, dev -> preview -> main, with no
+# shortcuts. Replaces .github/workflows/branch-policy.yml, which cannot see
+# a merge that happens here. Only bites if the project requires a passing
+# pipeline to merge (Settings > Merge requests > "Pipelines must succeed"),
+# which is the owner's setting; without it this job is a warning, not a gate.
+# ---------------------------------------------------------------------------
+
+policy:promotion-hop:
+  stage: lint
+  # Light lane (#949): a shell script, no build.
+  tags: [light]
+  image: alpine:3.24
+  needs: []
+  # #952: a gate for the dev -> preview -> main hop; a cancelled-mid-run
+  # result must never be read as a pass.
+  interruptible: false
+  # Not gated by #1038: this is the promotion-order gate itself. A
+  # documentation-only merge request into main is still a merge request
+  # into main, and still has to come from preview.
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
+  script:
+    - 'echo "MR !$CI_MERGE_REQUEST_IID: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME -> $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"'
+    - |
+      case "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" in
+        main)
+          if [ "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" != "preview" ]; then
+            echo "main only accepts merge requests from preview (got '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME') -- promote dev -> preview first, then preview -> main."
+            exit 1
+          fi
+          ;;
+        preview)
+          if [ "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" != "dev" ]; then
+            echo "preview only accepts merge requests from dev (got '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME')."
+            exit 1
+          fi
+          ;;
+      esac
 
 # ---------------------------------------------------------------------------
 # LINT — mirrors what ci.yml already does on GitHub (build+vet+gofmt, svelte-check),
 # not introducing golangci-lint since mikroview doesn't use it today.
 # ---------------------------------------------------------------------------
 
+# Short scanners run on the light lane (2 CPU / 2 GB, three at a time) so
+# they stop holding a big-lane slot; if one is ever killed for memory, move
+# it back to big (owner decision, ai/agent-infra#3, 2026-09-05).
+# The one hole the docs-only lane cannot close on its own (#1038): a path
+# in neither list is invisible to `changes:`, so paired with a README edit
+# it reads as documentation and the pipeline skips. This job runs on
+# every merge request and dev pipeline with no `changes:` of its own, and
+# goes red naming any changed path that is in neither *docs_only_paths
+# nor *code_paths. scripts/ci-changed-paths-guard.py reads both lists
+# from this file, so there is one copy; its .test.sh covers the cases.
+# alpine plus Alpine's own python3/py3-yaml/git rather than a new image:
+# every image tag here must be in supply-chain/pins-policy.json, and this
+# one already is. GIT_DEPTH 0 as gitleaks and semgrep: a promotion's diff
+# base is the preview tip, far past the shallow default, and an
+# unreachable base passes with a note rather than guarding nothing.
+lint:changed-paths-guard:
+  stage: lint
+  tags: [light]
+  image: alpine:3.24
+  needs: []
+  <<: *dev_or_mr
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - apk add --no-cache git python3 py3-yaml >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - python3 scripts/ci-changed-paths-guard.py --git
+
 lint:go:
   stage: lint
+  tags: [light]
   image: golang:1.27
-  <<: *dev_or_mr
+  <<: [*dev_or_mr_code, *git_safe]
   script:
     - go build ./...
     - go vet ./...
     - |
-      unformatted=$(gofmt -l $(git ls-files '*.go'))
+      # Count the files first. A broken git makes `git ls-files` print nothing,
+      # gofmt then reads stdin instead of a file list, and the check passes
+      # having examined nothing at all — reported success, zero coverage.
+      # Reproduced locally on 2026-09-03 while diagnosing #908.
+      files=$(git ls-files '*.go')
+      if [ -z "$files" ]; then
+        echo "git ls-files returned no Go files -- refusing to report a gofmt pass on an empty list"
+        exit 1
+      fi
+      unformatted=$(gofmt -l $files)
       if [ -n "$unformatted" ]; then
         echo "Not gofmt-clean:"
         echo "$unformatted"
-        gofmt -d $(git ls-files '*.go')
+        gofmt -d $files
         exit 1
       fi
 
 lint:frontend:
   stage: lint
+  # Light lane (#949): svelte-check and a few node:test files fit in 2 GB.
+  tags: [light]
   image: node:22-alpine
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      exists: ["frontend/package.json"]
-    - if: $CI_COMMIT_BRANCH == "dev"
-      exists: ["frontend/package.json"]
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
   script:
+    # The CHR watch suites (scripts/chr-watch) and #1066's reuse gate have
+    # node:test suites that no other job runs, so they run here.
+    - node --test scripts/chr-watch/*.test.js scripts/ci-reuse-inputs.test.js scripts/ci-reuse-gate.test.js
     - cd frontend
     - npm ci
     - npx svelte-check --tsconfig ./tsconfig.app.json
+
+lint:supply-chain-pins:
+  stage: lint
+  # Light lane (#949): reads two files and a policy, no install.
+  tags: [light]
+  image: node:22-alpine
+  <<: *dev_or_mr_code
+  script:
+    # #711: every action SHA and image tag CI uses must be in
+    # supply-chain/pins-policy.json with its review date. Fails on a pin the
+    # policy does not record, or a recorded pin CI no longer uses.
+    - node --test tools/supply-chain/pins-policy.test.mjs
+    - node tools/supply-chain/pins-policy.mjs
 
 # ---------------------------------------------------------------------------
 # TEST
@@ -81,7 +464,13 @@ lint:frontend:
 
 test:go:
   stage: test
+  # Stays on big: peaks at ~7.2 GB, over the light lane's 6 GB cap.
   image: golang:1.27
+  # Not gated by #1038, and must not be: five tests read
+  # docs/configuration.md and assert on its contents (ca_docs_test.go,
+  # migrate_cli_test.go, internal/api/route_docs_test.go,
+  # internal/config/env_docs_test.go and problem_docs_test.go). A prose
+  # edit can fail this job for real, so it runs for prose.
   <<: *dev_or_mr
   # GitLab's docker executor runs this container as root by default; GitHub's
   # ci.yml runs the same test directly on the runner VM as an unprivileged
@@ -98,9 +487,590 @@ test:go:
     - useradd -m -u 10001 ci-test
     - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
     - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -coverprofile=coverage.out"
+  # The runner reuses its build directory between pipelines, so leaving the
+  # checkout owned by ci-test hands the next pipeline's root-run jobs a
+  # repository git will not touch. Give it back (#908).
+  after_script:
+    - chown -R root:root "$CI_PROJECT_DIR" || true
   artifacts:
     paths:
       - coverage.out
+    expire_in: 1 week
+
+test:frontend:
+  stage: test
+  tags: [light]
+  image: node:22-alpine
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
+  # The other half of #684. lint:frontend above proves the frontend compiles;
+  # nothing here proved it behaves, so this lane had the same hole GitHub did
+  # and 542 real assertions gated nothing on either. jsdom, so no browser and
+  # no runner image beyond the one lint:frontend already uses.
+  script:
+    - cd frontend
+    - npm ci
+    - npm test
+
+# The checks that need the frontend actually built, moved here from GitHub's
+# ci.yml `test` job (#935 step 7). Each one's reason is in the script it
+# runs: the bundle budget (frontend/scripts/check-bundle-budget.mjs, #462)
+# measures the real dist/, THIRD-PARTY-NOTICES.md is generated from what
+# that build bundled plus `go list` over the binary's modules, and the docs
+# link check (tools/docs/check-anchors.mjs) rides along because it is a
+# node one-liner with nowhere better to live.
+#
+# node plus Go in one image: the notices generator needs both. The Go
+# toolchain is the official tarball, pinned to go.mod's version; Debian's
+# packaged Go is too old to read this module.
+test:build-checks:
+  stage: test
+  tags: [light]
+  image: node:22-bookworm
+  # Not gated by #1038: the last line below is tools/docs/check-anchors.mjs,
+  # the markdown link and anchor check, and generate-notices --check reads
+  # THIRD-PARTY-NOTICES.md. This job's whole reason to exist includes prose,
+  # so it keeps .dev_or_mr's plain rules rather than the ladder.
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
+    # keeps these rules inline rather than merged from the anchor.
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+  <<: [*git_safe, *npm_cache]
+  script:
+    - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
+    - export PATH="/usr/local/go/bin:$PATH" && go version
+    - (cd frontend && npm ci && npm run build)
+    - node frontend/scripts/check-bundle-budget.mjs
+    - node tools/licenses/generate-notices.mjs --check
+    - node tools/docs/check-anchors.mjs
+
+# Postgres integration (#131), ported from GitHub's ci.yml (#942). Same
+# image and the same TLS-only shape: internal/persist refuses any
+# connection that could fall back to plaintext (its requireTLS), so the
+# server must present a certificate. GitHub built a one-line derived
+# image to get the cert in; here the service's entrypoint is overridden
+# to generate it before handing over to the stock entrypoint, which
+# needs no image build and no Docker inside the job. The cert is
+# self-signed and one day old at most, hence sslmode=require rather
+# than verify-full -- this checks the storage logic, not certificate
+# validation. Runs in every lane, dev included, for the reason ci.yml's
+# header gave: this job's absence from dev once let a storage defect
+# sit for 41 commits (#273).
+test:postgres:
+  stage: test
+  tags: [light]
+  image: golang:1.27
+  <<: *dev_or_mr_code
+  services:
+    - name: postgres:18-alpine
+      alias: postgres
+      entrypoint: ["sh", "-c"]
+      command:
+        - |
+          apk add --no-cache openssl >/dev/null
+          mkdir -p /certs
+          openssl req -new -x509 -days 1 -nodes -subj "/CN=localhost" \
+            -keyout /certs/server.key -out /certs/server.crt
+          chown postgres:postgres /certs/server.crt /certs/server.key
+          chmod 600 /certs/server.key && chmod 644 /certs/server.crt
+          exec docker-entrypoint.sh postgres -c ssl=on \
+            -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
+  variables:
+    POSTGRES_PASSWORD: ci
+    POSTGRES_DB: mikroview
+    MIKROVIEW_TEST_POSTGRES: postgres://postgres:ci@postgres:5432/mikroview?sslmode=require
+  before_script:
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    # The runner only waits for the service's port, and Postgres listens
+    # briefly during its own init before restarting, so a port check can
+    # pass early. Ask the server itself, as ci.yml did. Debian's client
+    # is older than the server; pg_isready does not care. No `exit` in
+    # this loop: before_script and script share one shell, and an early
+    # exit here would end the job green with nothing tested.
+    # nodejs alongside postgresql-client: #1066's reuse gate is plain
+    # Node (scripts/ci-reuse-gate.js), and this image has neither by
+    # default. Paid here rather than skipped for a reused run -- the
+    # postgres wait above already started before script: runs -- but it
+    # is cheap next to the `go test -race` this can now skip.
+    - apt-get -qq update && apt-get -qq install -y postgresql-client nodejs >/dev/null
+    - |
+      ready=0
+      for attempt in $(seq 1 40); do
+        if pg_isready -h postgres -U postgres -d mikroview >/dev/null 2>&1; then ready=1; break; fi
+        sleep 1
+      done
+      [ "$ready" = 1 ] || { echo "postgres never became ready"; false; }
+  script:
+    - *reuse_gate
+    # internal/matchlog alongside internal/persist (#243 slice 6): its
+    # Postgres backend is a second, independent SQL sink with its own
+    # table and needs the same real-database coverage.
+    - go test -race -count=1 ./internal/persist/... ./internal/matchlog/...
+    - *reuse_evidence
+  artifacts:
+    paths:
+      - ci-reuse-evidence/
+    expire_in: 1 week
+
+# Container smoke test, ported from GitHub's ci.yml (#942, the second
+# half). Builds the production image and runs it the way
+# deploy/docker-compose.yml runs it -- read-only root, tmpfs for /tmp and
+# the data directory, every capability dropped, no-new-privileges, pid,
+# memory and CPU limits -- and asks /api/healthz whether it came up.
+#
+# This is the one job that needs a Docker daemon from inside a job. The
+# runner is a rootless-Docker executor with no privileged mode, so the
+# owner binds the runner's own rootless daemon socket into every job
+# (`volumes = [".../docker.sock:/var/run/docker.sock"]` in the runner's
+# config.toml; owner decision 137a on #942, 2026-09-05). Consequences
+# this job is written around:
+#
+# - The daemon is the runner host's, not this container's. `docker build`
+#   ships the checkout over the socket as its context, so paths inside
+#   this job container do not matter; `--publish` would bind a port on
+#   the runner host, which this container cannot reach, so nothing is
+#   published. The health check instead runs in a throwaway container
+#   joined to the app container's network namespace, where 127.0.0.1 is
+#   the app.
+# - Two pipelines can run at once on the one daemon, so every name here
+#   carries $CI_JOB_ID, and after_script removes the container and the
+#   image tag whatever happened. The layer cache stays on the daemon,
+#   which is what keeps the build quick when the Dockerfile inputs have
+#   not changed.
+# - The image runs as uid 65532 (Dockerfile), so the tmpfs at the data
+#   directory is created with that owner: without a writable data
+#   directory the container has nowhere to persist its CA, and the app
+#   once carried a "persistence is optional" contract purely to keep this
+#   test green (#535). Same flags as ci.yml had.
+#
+# `-k` on the health check: TLS is on by default (self-signed, generated
+# on first start -- internal/servertls), and this only asks whether the
+# server answers, not whether the chain verifies.
+test:container:
+  stage: test
+  tags: [light]
+  image: docker:28-cli
+  <<: *dev_or_mr_code
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    APP: mikroview-test-$CI_JOB_ID
+  script:
+    # apk before the reuse gate: this image is Alpine and carries neither
+    # Node nor curl by default, and #1066's gate (scripts/ci-reuse-gate.js)
+    # needs Node to run at all.
+    - apk add --no-cache nodejs >/dev/null
+    - *reuse_gate
+    - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
+    - docker build --tag "$APP" .
+    - >-
+      docker run --detach --name "$APP"
+      --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m
+      --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=65532,gid=65532
+      --cap-drop ALL --security-opt no-new-privileges
+      --pids-limit 64 --memory 128m --cpus 0.5
+      "$APP"
+    - |
+      for attempt in $(seq 1 20); do
+        if docker run --rm --network "container:$APP" alpine:3.22 \
+             wget -q -O /dev/null --no-check-certificate https://127.0.0.1:8080/api/healthz; then
+          echo "healthz answered on attempt $attempt"
+          break
+        fi
+        sleep 1
+        if [ "$attempt" = 20 ]; then
+          echo "healthz never answered; container log follows"
+          docker logs "$APP"
+          exit 1
+        fi
+      done
+    - *reuse_evidence
+  after_script:
+    - docker rm --force "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
+    - docker image rm "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
+  artifacts:
+    paths:
+      - ci-reuse-evidence/
+    expire_in: 1 week
+
+# ---------------------------------------------------------------------------
+# GATE — the live-check gate, sharded (#1004).
+#
+# `make live-check` drives 85 browser scenarios one at a time against one
+# real instance, about 36 minutes on about three cores, and then four
+# standalone shell checks. It had been kept off CI because a 36-minute job
+# holding a host is a poor fit for a pipeline, and run instead by a loop on
+# the second host after each merge to dev (#831 has that loop and the
+# measurements). But that host *is* the CI runner's host, so any pipeline
+# lands on a running gate and the gate fails on navigation timeouts that
+# have nothing to do with the code.
+#
+# Sharding is the fix: `MV_SHARD=i/N make live-check` runs the i-th of N
+# contiguous slices of the scenario list against its own instance
+# (scripts/run-scenarios.sh explains how the list is cut), so four jobs in
+# parallel take the browser phase in about nine minutes each. That is a
+# shorter *window*, not more capacity -- the core-minutes are the same, the
+# host is the same -- but a nine-minute window collides with the rest of
+# the world far less often than a thirty-six-minute one, and here GitLab
+# does the scheduling instead of a lock file. The standalone scripts are
+# one unit and run once, in gate:scripts.
+#
+# Three jobs, all blocking: a turnstile, not a tripwire. They ran as
+# `allow_failure: true` from #1004 until 2026-09-08, with a loop on the
+# workstation as the gate of record -- but a gate nobody is made to read
+# is not a gate (owner). Now a red shard stops the merge by itself. A red
+# that looks like the host, not the code, is reproduced with
+# scripts/gate-local.sh on the quieter workstation and recorded in
+# docs/flakes.md; the job is retried only once that run is green.
+#
+# The image is the same one gate-remote.sh builds on the second host
+# (live-check.Dockerfile: node, Go, the three Playwright engines, ~1.5 GB).
+# gate:image builds it once per Dockerfile revision into the project
+# registry and points a per-branch tag at it, so the shard jobs can name
+# an `image:` without computing anything; a pipeline whose Dockerfile has
+# not changed just moves the tag.
+# ---------------------------------------------------------------------------
+
+# In the `test` stage on purpose, with `needs: []`: it starts the moment the
+# pipeline does, and the shards below, which name no `needs`, wait for the
+# whole of lint, test and security to finish before they start. Giving
+# the shards `needs: [gate:image]` instead would start them early, on top
+# of trivy and the Go compiles, on the four-slot light lane they would
+# fill -- exactly the contention #831 measured.
+gate:image:
+  stage: test
+  tags: [light]
+  image: docker:28-cli
+  # Not gated by #1038. When live-check.Dockerfile has not changed this
+  # job is a registry lookup and a retag -- seconds -- and gate:scenarios,
+  # gate:scripts and perf:promotion all name the per-branch tag it
+  # publishes. Skipping it to save nothing would risk a promotion finding
+  # no tag to pull.
+  <<: *dev_or_mr
+  needs: []
+  # #952: pushes to the registry -- never cut mid-write.
+  interruptible: false
+  timeout: 45m
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    IMAGE: $CI_REGISTRY_IMAGE/live-check
+  script:
+    # apk before the reuse gate (#1066): this image is Alpine and carries
+    # neither Node nor curl by default, and scripts/ci-reuse-gate.js needs
+    # Node to run at all.
+    - apk add --no-cache nodejs >/dev/null
+    - *reuse_gate
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      TAG="df-$(sha256sum live-check.Dockerfile | cut -c1-12)"
+      if docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+        echo "live-check image for this Dockerfile is already in the registry: $IMAGE:$TAG"
+      else
+        docker pull "$IMAGE:latest" || true
+        # A plain single manifest, no provenance/SBOM attestations: the
+        # registry refused the attestation index BuildKit attaches by
+        # default ("blob unknown to registry", pipeline 539).
+        docker build --provenance=false --sbom=false --cache-from "$IMAGE:latest" --tag "$IMAGE:$TAG" --tag "$IMAGE:latest" -f live-check.Dockerfile .
+        docker push "$IMAGE:$TAG"
+        docker push "$IMAGE:latest"
+      fi
+      # Retag in the registry, without pulling: the shards name this tag.
+      docker buildx imagetools create -t "$IMAGE:$CI_COMMIT_REF_SLUG" "$IMAGE:$TAG"
+    - *reuse_evidence
+  artifacts:
+    paths:
+      - ci-reuse-evidence/
+    expire_in: 1 week
+
+# One slice each. `parallel: 4` sets CI_NODE_INDEX (1-based) and
+# CI_NODE_TOTAL, which is exactly MV_SHARD's shape. Four, because the
+# light lane runs four at a time and the shards all sit there: a fifth
+# would queue behind the first four and add nothing but a longer window.
+# The image runs as its own `node` user (the gate must not run as root --
+# docs/decisions/gitlab-ci-root-in-container-test-failure.md) and the
+# executor checks out world-writable, so no chown dance is needed here.
+gate:scenarios:
+  stage: gate
+  tags: [light]
+  image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
+  <<: [*dev_or_mr_code, *git_safe]
+  parallel: 4
+  timeout: 30m
+  script:
+    # #1066: CI_JOB_NAME under `parallel: 4` is "gate:scenarios 1/4" etc,
+    # exactly the shape scripts/ci-reuse-inputs.js's JOB_INPUTS uses. Node
+    # is already in this image, so no install is needed to run the gate.
+    - *reuse_gate
+    - set -o pipefail
+    # #1032: how much CPU does a shard actually use, as opposed to how
+    # long it occupies a slot? The infra audit ranked this job the
+    # biggest consumer of the shared `light` lane, but classified it
+    # IO-bound from its name rather than from measurement, and the code
+    # does not settle it: `npm ci` and the live instance burn CPU, while
+    # the scenarios themselves mostly poll and wait.
+    #
+    # Deliberately started here rather than in a `before_script`: this
+    # job takes its before_script from .git_safe, and a job-level one
+    # replaces an inherited one outright rather than adding to it (the
+    # chr-exercise job carries the same warning), so adding one here
+    # would quietly drop the safe.directory setup and break the
+    # checkout. `script` runs in the same shell straight after it, so
+    # starting the clock on the first line costs nothing and clobbers
+    # nothing.
+    - echo "MV_CPU_START=$(awk '/^usage_usec/{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null) MV_T_START=$(date +%s) MV_CPUS=$(nproc)" > /tmp/mv-cpu-$CI_NODE_INDEX
+    - (cd frontend && npm ci)
+    # Both cgroup samples must be taken by this shell. The first attempt
+    # closed the clock in `after_script`, which the executor runs as its
+    # own step with its own cgroup, so `usage_usec` there started again
+    # near zero: all four shards of pipeline 702 reported `cpu=0s`, and
+    # two of them a *negative* average -- impossible from one cgroup,
+    # because the counter only ever climbs. Hence the exit-code dance
+    # below rather than the obvious extra script line: `make live-check`
+    # is allowed to fail, and a red shard must still close its clock.
+    - |
+      set +e
+      MV_SHARD="$CI_NODE_INDEX/$CI_NODE_TOTAL" make live-check 2>&1 | tee "gate-shard-$CI_NODE_INDEX.log"
+      mv_rc=$?
+      echo "MV_CPU_END=$(awk '/^usage_usec/{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null) MV_T_END=$(date +%s)" >> /tmp/mv-cpu-$CI_NODE_INDEX
+      # Evidence only on a real pass (#1066): the LAST thing this shard
+      # does when it did the work, so a red or cancelled shard leaves none
+      # and the next pipeline reruns it rather than trusting a shard that
+      # never finished.
+      if [ "$mv_rc" -eq 0 ]; then
+        node scripts/ci-reuse-gate.js evidence "$CI_JOB_NAME"
+      fi
+      exit $mv_rc
+  # after_script now does arithmetic and nothing else: both readings are
+  # taken above and left on disk, which is also how they survive into
+  # this fresh shell.
+  after_script:
+    - |
+      set +e
+      start_file=/tmp/mv-cpu-$CI_NODE_INDEX
+      if [ ! -f "$start_file" ]; then
+        echo "cpu-measure shard $CI_NODE_INDEX: no start sample -- the job died before the first script line"
+        exit 0
+      fi
+      . "$start_file"
+      # cgroup v2 only, and only when the container has its own cgroup
+      # namespace. Rather than print a confident wrong number if either
+      # is untrue, say which piece is missing.
+      if [ -z "$MV_CPU_START" ]; then
+        echo "cpu-measure shard $CI_NODE_INDEX: /sys/fs/cgroup/cpu.stat has no usage_usec -- not cgroup v2, or not readable in this container"
+        exit 0
+      fi
+      # Only a cancel or a timeout gets here: an ordinary red shard still
+      # closes its own clock. There is no honest number to print.
+      if [ -z "$MV_CPU_END" ]; then
+        echo "cpu-measure shard $CI_NODE_INDEX: no end sample -- the job was cancelled or timed out before the work finished"
+        exit 0
+      fi
+      wall=$(( MV_T_END - MV_T_START ))
+      if [ "$wall" -le 0 ]; then
+        echo "cpu-measure shard $CI_NODE_INDEX: wall time was ${wall}s -- nothing to average over"
+        exit 0
+      fi
+      used=$(( MV_CPU_END - MV_CPU_START ))
+      # What pipeline 702 did, and what a confident `0` hid. A shard that
+      # ran for minutes cannot have used no CPU at all, so a flat or
+      # falling counter means the two samples did not come from one
+      # cgroup -- report that rather than a number someone would rank a
+      # lane by.
+      if [ "$used" -le 0 ]; then
+        echo "cpu-measure shard $CI_NODE_INDEX: the counter did not move over ${wall}s (start=${MV_CPU_START} end=${MV_CPU_END}) -- unusable, not a real zero"
+        exit 0
+      fi
+      cpu=$(( used / 1000000 ))
+      avg=$(awk "BEGIN{printf \"%.2f\", $used / 1000000 / $wall}")
+      echo "cpu-measure shard $CI_NODE_INDEX: wall=${wall}s cpu=${cpu}s avg_cpus=${avg} of ${MV_CPUS} visible"
+      # A shard cannot use more cores than the container can see. If it
+      # appears to, the counter being read is the host's and not this
+      # job's -- a shared cgroup namespace -- and the number means
+      # nothing. Worth saying loudly: a bogus figure here would be used
+      # to make a scheduling decision.
+      awk "BEGIN{exit !($avg > $MV_CPUS)}" && echo "cpu-measure shard $CI_NODE_INDEX: WARNING avg_cpus exceeds the ${MV_CPUS} cores this container can see -- reading the host cgroup, treat as unusable"
+      echo "$avg" > "cpu-measure-shard-$CI_NODE_INDEX.txt"
+  artifacts:
+    when: always
+    paths:
+      - gate-shard-*.log
+      - cpu-measure-shard-*.txt
+      - ci-reuse-evidence/
+    expire_in: 1 week
+
+# The four standalone shell checks (scripts/run-live-scripts.sh), once,
+# plus the quiet-host unit tests (#1003) -- plain bash, no live instance
+# needed, so they run here rather than earning their own job.
+gate:scripts:
+  stage: gate
+  tags: [light]
+  image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
+  <<: [*dev_or_mr_code, *git_safe]
+  timeout: 30m
+  script:
+    - set -o pipefail
+    - (cd frontend && npm ci)
+    - make live-check-scripts 2>&1 | tee gate-scripts.log
+    - deploy/quiet-host/quiet-host-apply.test.sh
+    - scripts/quiet-host.test.sh
+    - scripts/wait-quiet-host.test.sh
+    - scripts/assert-ui-built.test.sh
+  artifacts:
+    when: always
+    paths:
+      - gate-scripts.log
+    expire_in: 1 week
+
+# perf:promotion (#1003) -- the dev -> preview promotion gate refuses a
+# regression rather than merely recording one. It runs probe-perf.mjs
+# (frontend/scripts/probe-perf.mjs -- deck-to-deck roll times, long-task
+# totals per phase, docket-scroll mean frame time) against a fresh instance
+# from scripts/live-env.sh, exactly as `make live-check` starts one, then
+# diffs the result against the committed frontend/perf-baseline.json with
+# perf-compare.mjs. No baseline yet: the run records one as an artifact
+# and passes, printing what to commit. Baseline present: a metric worse
+# than it by more than 30% *and* more than 300ms (mean scroll frame: 30%
+# and 4ms) fails the job -- both conditions, so noise on a small number can't
+# trip it. Accepting a regression means committing the new numbers in the
+# same MR, so the change is reviewed rather than silently overwritten.
+#
+# The box this runs on (`big`) also carries every other runner in the
+# group and mikroview's own dev gate loop, so a fair measurement needs
+# the rest of that work out of the way, not just a quiet moment: hold ->
+# drain -> measure -> release.
+#   - hold: scripts/quiet-host.sh writes a flag the host's root-owned
+#     unit reacts to (deploy/quiet-host/) by setting `concurrent = 1` on
+#     the runner, so no sibling job starts while this one measures. No
+#     token is involved -- a flag file and a script the owner installed
+#     once. Until that install happens, this step refuses with exit 2:
+#     that is expected, not a bug, and deploy/quiet-host/README.md has
+#     the install steps.
+#   - drain: scripts/wait-quiet-host.sh still waits for whatever was
+#     already running to finish, since holding stops new work, not work
+#     in flight. It watches CPU busy from /proc/stat, not only the load
+#     average: the light-lane shards start a second before this job and
+#     the one-minute average had not moved when it first looked (#1099).
+#   - measure: probe-perf.mjs against the fresh instance, as before.
+#   - release: the after_script below always runs -- pass, fail, timeout
+#     or cancel -- so the hold never outlives the job on purpose. If the
+#     job dies without even that, the flag carries its own expiry (this
+#     job's timeout plus 5 minutes) and the host's minutely timer
+#     releases it -- the self-heal for the stuck case.
+#
+# resource_group still serialises this against any other promotion MR
+# measuring at the same time -- two at once would each see the other's
+# CPU as noise in its own numbers, and a second `hold` would simply
+# refuse while the first is active.
+#
+# Timeout arithmetic, corrected 2026-09-06 from the job's first four runs
+# on the runner rather than from workstation figures: npm ci measured 11,
+# 13, 14 and 21s, not the ~90s originally assumed; quiet-host hold applied
+# in 5s, and wait-quiet-host's drain is bounded at 600s because it gives
+# up and fails there (scripts/wait-quiet-host.sh, MAX_WAIT_S); the probe
+# took 38s unseeded, and will be longer now it renders 3000 events.
+#
+# The drain cap sets the bound, not npm ci. Worst case is roughly 60s
+# npm ci + 60s hold + 600s drain + 180s probe, about 16 minutes, so the
+# 25 stands -- 1.6x worst case, not the 11x a 134s run makes it look.
+perf:promotion:
+  stage: gate
+  tags: [big]
+  image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
+  <<: *git_safe
+  # The #1038 ladder, target-branch guard and all: a 25-minute job that
+  # holds the whole host quiet is the one most worth not running for a
+  # prose change. In practice it will almost always run anyway, because a
+  # promotion merge request is diffed against the preview tip and so
+  # carries every commit since the last promotion.
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
+      changes: *code_paths
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
+      changes: *docs_only_paths
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
+  resource_group: perf-promotion
+  timeout: 25m
+  # #1104: the hold stops the runner picking up *new* jobs; it cannot
+  # stop the scenario shards this pipeline already started, and they run
+  # for ten minutes on the same box. Twice (pipelines 899 and 914) the
+  # probe measured a scroll frame p95 of 33 ms with three shards still
+  # compiling beside it, against 16.8 ms on a quiet box for the same
+  # commit. So start only when this pipeline's other gate jobs are done.
+  # `optional`, because a docs-only diff runs neither of them (#1038),
+  # and a missing hard need would skip this job silently.
+  needs:
+    - job: gate:scenarios
+      optional: true
+      artifacts: false
+    - job: gate:scripts
+      optional: true
+      artifacts: false
+  # This is the only `big` job that runs as a non-root user (the image's
+  # `node`, uid 1000), and it shares its per-slot checkout with test:go,
+  # whose after_script hands the whole tree to root:root (#908). Whenever
+  # two pipelines' big jobs overlap, test:go lands in the slot this job
+  # reuses and live-env.sh can no longer clear web/dist (#1048: jobs 8292
+  # and 8477, red twice in one afternoon). This flag makes the runner
+  # chown the build directory to the image's uid at job start instead of
+  # relying on umask 0000 -- set here alone: gate:scenarios on `light`
+  # depends on the world-writable checkout (comment above it).
+  variables:
+    FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR: "true"
+  script:
+    - set -o pipefail
+    - t0=$(date +%s)
+    - (cd frontend && npm ci)
+    - 't1=$(date +%s); echo "npm ci wall seconds: $((t1 - t0))"'
+    - scripts/quiet-host.sh hold
+    - scripts/wait-quiet-host.sh
+    - 't2=$(date +%s); echo "hold+drain wall seconds: $((t2 - t1))"'
+    # Two lines, not `eval "$(... up)"`: `up` fails with a message on
+    # stderr and nothing on stdout, and eval of an empty string is 0, so
+    # the one-liner threw the exit status away and the job died a second
+    # later on the seed's "Connection refused" instead (#1048). The
+    # assignment keeps the substitution's status, so the real error is
+    # the one GitLab shows.
+    - mv_env="$(scripts/live-env.sh up)"
+    - eval "$mv_env"
+    - trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT
+    # Seed before measuring. Without this the probe rendered an empty
+    # instance: `up` creates no events, and the 300-event baseline other
+    # suites feed comes from run-scenarios.sh, which this job does not
+    # call. The first successful run (job 5833) measured 16.7ms frames
+    # and zero long tasks on every surface -- which is what an idle app
+    # with nothing on screen looks like, not a result. A gate that
+    # renders an empty screen passes exactly the regressions that only
+    # appear with rows on it, which is the failure #690 describes.
+    #
+    # 3000 is a gate number, not a realistic one: enough to fill the
+    # docket, the stream and the entity lists, well short of the demo's
+    # pathological hour (~8000 events, 2462 New device episodes, #690),
+    # and fixed so run-to-run comparison stays meaningful. Change it and
+    # the baseline must be regenerated -- perf-compare.mjs would
+    # otherwise be diffing two different workloads.
+    - scripts/live-env.sh syslog 3000 perf-seed
+    - t3=$(date +%s)
+    - node frontend/scripts/probe-perf.mjs --json perf-current.json
+    - 't4=$(date +%s); echo "probe wall seconds: $((t4 - t3))"'
+    - |
+      if [ -f frontend/perf-baseline.json ]; then
+        node frontend/scripts/perf-compare.mjs frontend/perf-baseline.json perf-current.json
+      else
+        echo "no baseline -- commit perf-current.json as frontend/perf-baseline.json"
+      fi
+  after_script:
+    - scripts/quiet-host.sh release
+  artifacts:
+    when: always
+    paths:
+      - perf-current.json
+    expire_in: 4 weeks
 
 # ---------------------------------------------------------------------------
 # SECURITY — parallel jobs, diff-scoped Semgrep on MRs, full scan on dev.
@@ -108,66 +1078,300 @@ test:go:
 
 security:semgrep:
   stage: security
-  image: semgrep/semgrep:1.170.1
-  <<: *dev_or_mr
+  tags: [light]
+  image: semgrep/semgrep:1.176.0
+  <<: *dev_or_mr_code
+  variables:
+    # The whole history, as gitleaks below. On a merge request the scan
+    # is diff-scoped against $CI_MERGE_REQUEST_DIFF_BASE_SHA, and on the
+    # dev -> preview promotion that base is the preview tip, a thousand
+    # commits back: outside GitLab's 20-commit shallow default, so
+    # semgrep's `git diff --merge-base <base>` failed (exit 128) and the
+    # job died with "Exception in BaselineHandler initialization" before
+    # scanning a file (!980, first promotion run under #1003). A dev MR
+    # never saw it because its base is always within reach.
+    GIT_DEPTH: 0
   script:
+    # The image sets SEMGREP_IN_DOCKER, which makes semgrep insist the
+    # code is bind-mounted at /src and chdir there before it looks at
+    # anything (config_resolver.adjust_for_docker). GitLab's docker
+    # executor mounts the checkout at $CI_PROJECT_DIR instead and gives
+    # a job no way to add a volume, so /src is empty and every run died
+    # with "Detected Docker environment without a code volume" -- before
+    # scanning a single file. Unsetting it here leaves semgrep working
+    # from the job's own directory, which is where the code actually is.
+    # Reproduced and the fix confirmed locally under the same image
+    # (#912).
+    - unset SEMGREP_IN_DOCKER
+    # A rule that exceeds --timeout is skipped for that file, and after
+    # --timeout-threshold of them semgrep abandons the file entirely and
+    # still exits 0. So the job got *greener* the slower the runner was,
+    # and a file could contribute no findings without saying so. Two runs
+    # over an unchanged tree disagreed: scripts/seed-demo.py reported
+    # disabled-cert-validation on one and was abandoned on the other
+    # (#918).
+    #
+    # 120s rather than the 5s default so the slow rules finish, threshold
+    # 0 so no file is ever abandoned, and the grep below so that a
+    # timeout that still happens fails the job instead of quietly
+    # shrinking the scan. An incomplete scan is not a pass.
     - |
+      set -o pipefail
+      run_semgrep() {
+        semgrep scan --config p/security-audit --config p/owasp-top-ten \
+          --timeout 120 --timeout-threshold 0 \
+          --sarif --output semgrep.sarif --error "$@" 2>&1 | tee semgrep.log
+      }
+      status=0
       if [ -n "$CI_MERGE_REQUEST_DIFF_BASE_SHA" ]; then
-        semgrep scan --config p/security-audit --config p/owasp-top-ten \
-          --baseline-commit "$CI_MERGE_REQUEST_DIFF_BASE_SHA" \
-          --sarif --output semgrep.sarif --error
+        run_semgrep --baseline-commit "$CI_MERGE_REQUEST_DIFF_BASE_SHA" || status=$?
       else
-        semgrep scan --config p/security-audit --config p/owasp-top-ten \
-          --sarif --output semgrep.sarif --error
+        run_semgrep || status=$?
       fi
+      if grep -q 'timeout error' semgrep.log; then
+        echo "A rule timed out, so this scan covered less than it reported on (#918):"
+        grep 'timeout error' semgrep.log
+        exit 1
+      fi
+      exit $status
   artifacts:
     when: always
     paths:
       - semgrep.sarif
+      - semgrep.log
+    expire_in: 1 week
+  # See security:gosec's retry comment below (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 security:gosec:
   stage: security
-  image: securego/gosec:2.28.0
-  <<: *dev_or_mr
+  # Stays on big: gosec loads the whole module graph and peaks at ~6.7 GB,
+  # over the light lane's 6 GB cap.
+  # ghcr, not Docker Hub. gosec stopped publishing to Docker Hub after
+  # 2.24.6, so `securego/gosec:2.28.0` resolved to nothing and the job
+  # failed before it started -- an image pull failure, which reads like
+  # a registry outage rather than a tag that was never published.
+  # Bumped to the current release while here, per AGENTS.md's
+  # pin-to-latest rule (#912).
+  #
+  # entrypoint: [""] for the same reason gitleaks and trivy below carry
+  # it: this image's entrypoint is a wrapper that execs `/bin/gosec $@`,
+  # so GitLab's generated shell script would arrive as gosec's arguments
+  # rather than as a script to run. That is the failure this job would
+  # have hit next, once the pull succeeded.
+  image:
+    name: ghcr.io/securego/gosec:2.29.0
+    entrypoint: [""]
+  <<: *dev_or_mr_code
   script:
     - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
   artifacts:
     when: always
     paths:
       - gosec.sarif
+    expire_in: 1 week
+  # #950: this job's scan finished clean three times in a row on MR !944
+  # and still failed the merge, because GitLab's coordinator returned 502
+  # to the runner's artifact upload each time and the runner gave up
+  # rather than retrying that class of failure -- a red job for a green
+  # scan. runner_system_failure covers the runner exhausting its own
+  # upload attempts; api_failure covers the coordinator-side error a 502
+  # is. Confirmed accepted by the CI lint API (`glab api -X POST
+  # projects/53/ci/lint`), including a warning that the deprecated
+  # stuck_or_timeout_failure/job_execution_timeout pair (not used here)
+  # should not be added. Never add script_failure: that would retry past
+  # a real gosec finding instead of just past the upload flake.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 security:govulncheck:
   stage: security
+  tags: [light]
   image: golang:1.27
-  <<: *dev_or_mr
+  <<: [*dev_or_mr_code, *git_safe]
   script:
     - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
     - govulncheck -format=json ./... > govulncheck.json
-
+    # The JSON run above exits 0 whatever it finds -- that is how -format
+    # json behaves -- so on its own this job could only ever pass. The
+    # plain run is the gate: it exits non-zero on a reachable
+    # vulnerability, as GitHub's ci.yml did before #935 step 7 moved that
+    # check here.
+    - govulncheck ./...
   artifacts:
     when: always
     paths:
       - govulncheck.json
+    expire_in: 1 week
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
+
+# The two remaining halves of GitHub's ci.yml `security` job, moved here
+# under #935 step 7. Their long rationale is in that file's history
+# (ci.yml at 65fbc05); the short form:
+#
+# The fuzz step is a regression gate, not a campaign: it replays each
+# parser's seed corpus (the f.Add calls in its own source, #526) plus a
+# little fresh exploration, so a newly-introduced crash on attacker-shaped
+# input fails the merge request. Budgets are execution counts (`Nx`), not
+# durations, so the gate does the same work on a busy runner as an idle
+# one (#523) -- do not "tidy" them back to `30s`. A crashing input is
+# written to internal/<pkg>/testdata/fuzz/, which the artifact below
+# rescues from the discarded workspace; commit it, and plain `go test`
+# replays it forever.
+security:fuzz:
+  stage: security
+  tags: [light]
+  image: golang:1.27
+  <<: [*dev_or_mr_code, *git_safe]
+  timeout: 15m
+  script:
+    - go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=160000x
+    - go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=590000x
+    - go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=156000x
+  artifacts:
+    when: on_failure
+    paths:
+      - internal/*/testdata/fuzz/
+    expire_in: 30 days
+
+security:npm-audit:
+  stage: security
+  tags: [light]
+  image: node:22-alpine
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
+  script:
+    - cd frontend
+    # node:22-alpine's bundled npm tries the fast bulk advisory endpoint
+    # first, and only on a failure there falls back to
+    # /-/npm/v1/security/audits/quick -- the endpoint the registry is
+    # retiring, and the one that actually 400'd on #931 (npm's own
+    # @npmcli/arborist, lib/audit-report.js: bulk POST wrapped in a
+    # try/catch whose catch calls quick). The bulk call passes cleanly
+    # against this lockfile every time it was tried; the intermittent
+    # trigger was whatever made it fail once and fall through to the
+    # endpoint being shut down. npm 12.0.2 -- the current `latest`, checked
+    # 2026-09-05 -- removed that fallback outright and only calls bulk, so
+    # pin to it rather than trust whatever patch of the image's bundled
+    # npm a given runner has cached. Verified in a throwaway node:22-alpine
+    # container against this frontend/: `npm install -g npm@12.0.2 && npm
+    # ci && npm audit --audit-level=high` -> "found 0 vulnerabilities",
+    # with `--loglevel verbose` showing only a POST to
+    # .../security/advisories/bulk, never to .../audits/quick.
+    - npm install -g npm@12.0.2
+    - npm ci
+    - npm audit --audit-level=high
+
+# Checks the licence of every dependency mikroview actually ships -- Go
+# modules and the frontend's bundled npm packages, the same inventory
+# tools/licenses/generate-notices.mjs attributes -- against
+# supply-chain/licence-policy.yml. Replaces
+# .github/dependency-review-config.yml, which actions/dependency-review-action
+# read on a pull-request diff and stopped running when GitHub became a
+# push-mirror with no pull requests (#935); deliberately scoped to what ships
+# rather than the whole installed tree, since an earlier version of this job
+# walking node_modules wholesale failed on twelve build/test-tooling packages
+# that never reach the binary (#945 item 3, #948).
+#
+# tools/licenses/licence-policy.mjs is the npm half and the one place the
+# allow-list lives (supply-chain/licence-policy.yml); its --print-allowed
+# feeds the same list into go-licenses' --allowed_licenses for the Go half,
+# so the two checks cannot drift apart into disagreeing about what is
+# allowed.
+#
+# mikroview itself is AGPL-3.0-only (LICENSE) -- go-licenses' --ignore flag
+# below excludes mikroview's own module, so this never flags the project
+# shipping under its own licence. That is not the same as allowing AGPL: it
+# is not in allow-licenses, so an actual dependency under AGPL still fails,
+# exactly like any other disallowed licence.
+#
+# node:22-bookworm plus the Go tarball, the same combination
+# test:build-checks uses: this job needs both toolchains in one image, and
+# the Go toolchain is the official tarball pinned to go.mod's version, since
+# Debian's packaged Go is too old to read this module.
+security:licence-policy:
+  stage: security
+  tags: [light]
+  image: node:22-bookworm
+  <<: [*dev_or_mr_code, *git_safe, *npm_cache]
+  script:
+    - node --test tools/licenses/licence-policy.test.mjs
+    - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
+    - export PATH="/usr/local/go/bin:$PATH" && go version
+    # `go install` drops the binary in $(go env GOPATH)/bin, which the node
+    # image does not have on PATH; pipeline 287 failed with "command not
+    # found" for exactly that reason.
+    - export PATH="$(go env GOPATH)/bin:$PATH"
+    - go install github.com/google/go-licenses/v2@v2.0.1
+    - go-licenses check ./... --ignore github.com/tomlawesome/mikroview --allowed_licenses="$(node tools/licenses/licence-policy.mjs --print-allowed)"
+    # --ignore-scripts: this install only needs to feed the Vite build
+    # licence-policy.mjs runs internally (via npmPackages()) to see which
+    # packages' source actually reached the bundle; no postinstall step
+    # changes that set (sharp's platform binaries arrive as ordinary
+    # optionalDependencies, not through a lifecycle script).
+    - (cd frontend && npm ci --ignore-scripts)
+    - node tools/licenses/licence-policy.mjs
 
 security:gitleaks:
   stage: security
+  tags: [light]
   image:
     name: ghcr.io/gitleaks/gitleaks:v8.30.1
     entrypoint: [""]
+  # Not gated by #1038. A secret pastes into a paragraph as easily as into
+  # code -- a token in a README example, a key in a migration guide -- and
+  # this job scans the whole tree, so a docs-only diff is exactly the case
+  # it has to keep covering.
   <<: *dev_or_mr
+  variables:
+    # The whole history, not GitLab's shallow default. This job reported
+    # 28 leaks that are not leaks, and the depth is why: `.gitleaksignore`
+    # pins each accepted finding to commit:path:rule:line, and a shallow
+    # clone's oldest commit presents the entire tree as newly added under
+    # *its* SHA rather than the SHA that really introduced each line. So
+    # every fingerprint missed, and every fixture key in
+    # recovery_prompt_test.go came back as a finding. The byte counts say
+    # the same thing: 177MB over 102 commits shallow, against 20MB over
+    # 999 full, because a truncated history has no diffs to scan, only
+    # whole files.
+    #
+    # Reproduced with `git clone --depth 20` of this repo and the job's
+    # own command: 24 findings, all in the file `.gitleaksignore` already
+    # covers. A full clone finds none (#912).
+    GIT_DEPTH: 0
   script:
-    - gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --exit-code 1
+    # --redact for the same reason secret-scan.yml gives on the GitHub
+    # side: without it, a job that finds a real secret republishes it into
+    # the build log and into an artifact anyone with repository access can
+    # download. The finding still names the file, the rule and the commit,
+    # which is what anyone fixing it needs. This lane had no redaction at
+    # all until #912.
+    - gitleaks detect --source . --redact --report-format sarif --report-path gitleaks.sarif --exit-code 1
   artifacts:
     when: always
     paths:
       - gitleaks.sarif
+    expire_in: 1 week
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 security:trivy-fs:
   stage: security
+  tags: [light]
   image:
-    name: aquasec/trivy:0.73.0
+    name: aquasec/trivy:0.74.0
     entrypoint: [""]
-  <<: *dev_or_mr
+  <<: *dev_or_mr_code
   variables:
     TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivy-cache"
   cache:
@@ -175,57 +1379,302 @@ security:trivy-fs:
     paths:
       - .trivy-cache
   script:
-    - trivy fs --exit-code 0 --severity CRITICAL,HIGH,MEDIUM,LOW --scanners vuln,license --format sarif --output trivy-fs.sarif .
+    # Full-severity report kept as the SARIF artifact for visibility only --
+    # exit-code 0, never fails the job by itself. --include-dev-deps:
+    # frontend/package.json declares 0 runtime "dependencies" (this Vite
+    # layout puts everything under devDependencies even though it all
+    # reaches the built bundle), so without the flag trivy silently reports
+    # "no supported files" for npm and this scan covers Go modules only.
+    - trivy fs --exit-code 0 --severity CRITICAL,HIGH,MEDIUM,LOW --scanners vuln,license --include-dev-deps --format sarif --output trivy-fs.sarif .
+    # The real gate (#1079): fails the job on a fixed-available CRITICAL or
+    # HIGH vulnerability (--ignore-unfixed: no point blocking on a fix that
+    # doesn't exist yet). Licences stay report-only above, not gated here.
+    # Trivy's licence scanner reads the whole npm tree including build-only
+    # native tooling -- sharp/libvips (LGPL-3.0-or-later) and lightningcss
+    # (MPL-2.0) -- none of which reaches the shipped frontend bundle. The
+    # project's own shipped-scope licence gate (security:licence-policy,
+    # tools/licenses/licence-policy.mjs) already covers what actually ships
+    # and deliberately excludes build tooling for this reason; gating here
+    # too would fail the pipeline on packages already decided to be fine.
+    - trivy fs --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --scanners vuln --include-dev-deps .
   artifacts:
     when: always
     paths:
       - trivy-fs.sarif
-  allow_failure: true
+    expire_in: 1 week
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
 
 # ---------------------------------------------------------------------------
-# SYNC — only on an actual push to dev (not MR pipelines). Mirrors dev to
-# GitHub so the existing GitHub dev->preview->main flow keeps working
-# unchanged, then closes whatever GitHub issues the merge commit references
-# (replaces close-issues-on-dev.yml, which never fires now that merges into
-# dev are GitLab MRs, not GitHub PRs).
+# SYNC — GitHub is a mirror of dev, preview and main, and of release tags.
+# After a push to any of the three (a merge here lands as a push),
+# mirror-to-github pushes that branch to GitHub. It runs only once the
+# owner has set MIRROR_TO_GITHUB=true (#935 step 4).
 #
-# Needs a GITHUB_MIRROR_TOKEN CI/CD variable (masked+protected): a
-# fine-grained GitHub PAT scoped to just this repo, contents:write +
-# issues:write. Not yet created — see gitlab-ci-plan project-settings task.
+# A `v*` tag is a release (owner decision on #572, 2026-09-10: the tag is
+# made here, because GitLab is the source of truth, and GitHub's docker
+# workflow publishes from the tag it receives). The tag must be protected
+# (`v*` under Settings > Repository) or the protected variable below is
+# empty and the job fails on its first check -- which is the right
+# outcome for an unprotected tag claiming to be a release.
+#
+# The mirror pushes over SSH with a GitHub deploy key -- one repository,
+# push only, no API access -- held in GITHUB_MIRROR_SSH_KEY, a protected
+# file-type CI/CD variable. GitHub's rulesets on the three branches exempt
+# deploy keys and nothing else, so no owner token is ever able to bypass
+# them (owner decision on #935, 2026-09-04). Protected-only means the
+# variable is empty on an unprotected branch: preview and main must be
+# protected here before their first promotion.
+#
+# GitHub's SSH host keys come from api.github.com/meta over TLS rather than
+# ssh-keyscan, so the first connection is verified rather than trusted.
+#
+# There was a second job here that closed GitHub issues from the merged
+# merge request. It is gone: issues live on GitLab now (owner decision on
+# #935, 2026-09-04), and GitLab closes them itself from the merge request
+# description, because dev is this project's default branch.
 # ---------------------------------------------------------------------------
 
 sync:mirror-to-github:
   stage: sync
-  image: alpine/git:2.47.3
+  # Light lane (#949): a git push, no build.
+  tags: [light]
+  # Plain alpine plus git, like policy:promotion-hop. alpine/git's entrypoint
+  # is git itself, so the runner's shell arrives as `git sh` and the job dies
+  # before its script (dev pipeline 193).
+  image: alpine:3.24
+  # `needs: []`: the mirror reflects the branch, not the pipeline. The merge
+  # request already ran lint, test and security before it merged; a flaky
+  # test on the post-merge run must not leave GitHub behind, silently.
+  needs: []
+  # #952: pushes to GitHub -- never cut mid-write.
+  interruptible: false
+  # Not gated by #1038: the mirror reflects the branch, not the diff. A
+  # docs-only merge is a commit GitHub must receive like any other, and
+  # this job's rule keys off `push` rather than .dev_or_mr anyway.
   rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true" && ($CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "preview" || $CI_COMMIT_BRANCH == "main")'
+      variables:
+        MIRROR_REF: refs/heads/$CI_COMMIT_BRANCH
+    - if: '$CI_PIPELINE_SOURCE == "push" && $MIRROR_TO_GITHUB == "true" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+      variables:
+        MIRROR_REF: refs/tags/$CI_COMMIT_TAG
+  variables:
+    GIT_DEPTH: 0
   script:
-    - git remote add github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git" 2>/dev/null || git remote set-url github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git"
-    - git push github HEAD:dev
+    - apk add --no-cache git openssh-client curl jq >/dev/null
+    - test -n "$GITHUB_MIRROR_SSH_KEY" || { echo "GITHUB_MIRROR_SSH_KEY is not set -- is ${CI_COMMIT_TAG:-$CI_COMMIT_BRANCH} protected?"; exit 1; }
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    # GitLab's variable editor trims the key's final newline, and OpenSSH
+    # refuses a key without one ("error in libcrypto", dev pipeline 198).
+    # Strip CRs, put the newline back, and prove the key loads before
+    # trying GitHub -- without printing any of it.
+    - tr -d '\r' < "$GITHUB_MIRROR_SSH_KEY" > ~/.ssh/mirror_key && chmod 600 ~/.ssh/mirror_key
+    - '[ -n "$(tail -c1 ~/.ssh/mirror_key)" ] && echo >> ~/.ssh/mirror_key || true'
+    - 'head -1 ~/.ssh/mirror_key | grep -q "PRIVATE KEY" || { echo "GITHUB_MIRROR_SSH_KEY does not begin with a PRIVATE KEY header -- was the public half pasted?"; exit 1; }'
+    - 'ssh-keygen -y -f ~/.ssh/mirror_key > /dev/null || { echo "GITHUB_MIRROR_SSH_KEY is not a readable private key ($(wc -l < ~/.ssh/mirror_key) lines) -- re-paste the whole file"; exit 1; }'
+    - curl -fsS https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com \(.)"' > ~/.ssh/known_hosts
+    - test -s ~/.ssh/known_hosts
+    - export GIT_SSH_COMMAND="ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+    - git remote add github git@github.com:tomlawesome/mikroview.git 2>/dev/null || git remote set-url github git@github.com:tomlawesome/mikroview.git
+    # Never --force: if this is refused non-fast-forward, something wrote to
+    # GitHub's copy and the branch has forked. Reconcile by merge (#935).
+    # A tag refused as already existing means GitHub has a different
+    # commit under that name -- a release that was never made here.
+    - git push github "HEAD:$MIRROR_REF"
 
-sync:close-github-issues:
-  stage: sync
-  image: alpine:3.20
-  needs:
-    - sync:mirror-to-github
+# ---------------------------------------------------------------------------
+# CHR-EXERCISE — #894: weekly, boots MikroTik's own CHR image under
+# software-emulated QEMU (no /dev/kvm needed — this exercises
+# configuration commands, not throughput, per the owner's decision on
+# #894) at the newest stable RouterOS release, and runs the setup
+# wizard's starting commands against it. Green with nothing to exercise
+# is silent; green after actually booting a CHR opens a merge request
+# appending the verified row; red names the refused command.
+#
+# Inert on every pipeline source except a GitLab Pipeline Schedule that
+# itself carries a CHR_EXERCISE=true variable — set on that one
+# schedule, not project-wide, so this cannot fire from a dev push or a
+# merge request, and cannot collide with any other scheduled pipeline
+# this project adds later. The owner has already created that schedule
+# (weekly, matching routeros-freshness.yml's GitHub cron: 0 7 * * 1) and
+# the GITLAB_MR_TOKEN CI/CD variable scripts/routeros-chr-open-mr.sh
+# needs — see that script's header and docs/routeros-chr-exercise.md.
+#
+# No Docker anywhere in this job, and so no privileged runner and no
+# runner tag: #894 only exercises RouterOS command syntax, never
+# throughput, which is exactly what QEMU's software emulation (-accel
+# tcg) is for. TCG needs no /dev/kvm and no elevated privilege, so
+# scripts/routeros-chr-boot.sh runs qemu-system-x86_64 directly inside
+# this job's own container — installed below — on the same untagged
+# shared runner the rest of this file already uses. scripts/live-routeros.sh's
+# Docker path stays for local development, unused by this job — see
+# routeros-chr-boot.sh's header for why the two scripts are split.
+# ---------------------------------------------------------------------------
+
+chr-exercise:run:
+  stage: chr-exercise
+  image: golang:1.27
+  # #952: this job pushes chr/last-run.json to the chr-reports branch on
+  # every run (scripts/chr-report.sh) and, on a fully clean exercise, also
+  # pushes a branch and opens a merge request
+  # (scripts/routeros-chr-open-mr.sh) -- never cut mid-write.
+  interruptible: false
+  # This job gates nothing. It boots a CHR and records which of the
+  # wizard's commands RouterOS still accepts (#894); a unit test failing
+  # on this runner says nothing about that. Without `needs: []` it sits
+  # in the last stage behind lint, test and security, so any failure
+  # anywhere ahead of it skips it -- which is exactly what had happened:
+  # it had never run once, in any pipeline, because something earlier
+  # always failed first (#908, #923). A skipped job reports nothing while
+  # looking like it was considered.
+  needs: []
+  # The weekly schedule, plus an on-demand path from the web UI or the
+  # API. Without one, a change to this job can only be tested by waiting
+  # for the next Monday, which in practice means it never gets tested --
+  # the same argument the testing rules make for keeping heavy validation
+  # reachable without waiting on the trigger that normally runs it.
+  # CHR_EXERCISE stays required, so an ordinary pipeline never picks it up
+  # by accident.
   rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
-  allow_failure: true
+    - if: '$CHR_EXERCISE == "true" && $CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CHR_EXERCISE == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$CHR_EXERCISE == "true" && $CI_PIPELINE_SOURCE == "api"'
+  before_script:
+    # Repeated rather than merged from .git_safe: a job-level before_script
+    # replaces an inherited one outright, so this job cannot have both.
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - apt-get update -qq && apt-get install -y -qq qemu-system-x86 qemu-utils python3 unzip curl >/dev/null
+    # Quoted whole: a bare "key: value" inside the message makes YAML read
+    # this line as a mapping and GitLab reject the file (pipeline 145).
+    - 'command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "chr-exercise: qemu-system-x86_64 missing after installing qemu-system-x86 -- cannot boot CHR"; exit 1; }'
   script:
-    - apk add --no-cache curl git
+    # #929: the chr-watch job has to hear about this run whether it passed
+    # or failed -- the failure path matters more, since that is the one a
+    # plain `script:` line would silently skip. A script section stops
+    # at the first non-zero line, and `after_script` runs afterwards in
+    # a brand new shell that only sees files left on disk, not anything
+    # this shell computed -- and the report's summary needs more than a
+    # bare exit code, so building it here (where the exercise's own log
+    # is already sitting in a file this same shell just wrote) is
+    # simpler than reconstructing it from scratch in a second shell.
+    # Capturing the status and reporting from it, then exiting with that
+    # same status at the end, keeps this one job both always-reporting
+    # and still red when the exercise itself failed.
     - |
-      msg="$(git log -1 --pretty=%B)"
-      echo "$msg" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+#[0-9]+' \
-        | grep -oE '[0-9]+' | sort -u | while read -r num; do
-          echo "Closing GitHub issue #$num"
-          curl -sf -X PATCH \
-            -H "Authorization: token ${GITHUB_MIRROR_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/tomlawesome/mikroview/issues/$num" \
-            -d '{"state":"closed","state_reason":"completed"}' || echo "warn: could not close #$num"
-          curl -sf -X POST \
-            -H "Authorization: token ${GITHUB_MIRROR_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/tomlawesome/mikroview/issues/$num/comments" \
-            -d "{\"body\":\"Closed by a merge to \`dev\` (via GitLab). Merged is not released — promotion to \`preview\` and then \`main\` is a separate, deliberate step.\"}" || true
-        done
+      set +e
+      scripts/routeros-chr-exercise.sh >chr-exercise.log 2>&1
+      status=$?
+      set -e
+      cat chr-exercise.log
+
+      if [ "$status" -eq 0 ]; then
+        result=pass
+        summary="$(grep -m1 -E 'already covered|every starting command parsed' chr-exercise.log || true)"
+      elif grep -q 'failed after 3 attempts' chr-exercise.log; then
+        # The retry loop in routeros-chr-boot.sh's chr_image() already
+        # gave the download three tries with a pause between (#929: a
+        # reset partway through the ~43 MB image, reproduced on two
+        # hosts, must not read as an exercise failure). Exhausting all
+        # three is a real failure, but naming it here keeps it from
+        # being reported as "the exercise failed" when RouterOS itself
+        # was never even reached.
+        result=fail
+        summary="the CHR image download failed after 3 attempts (network reset before reaching RouterOS), not the exercise itself"
+      elif grep -q 'refused a command:' chr-exercise.log; then
+        result=fail
+        cmd="$(grep -A1 'refused a command:' chr-exercise.log | tail -n1 | sed 's/^ *//')"
+        summary="RouterOS refused a command: $cmd"
+      else
+        result=fail
+        summary="$(grep -m1 -E 'would not boot|could not (reach|compare|determine)' chr-exercise.log || true)"
+      fi
+      summary="$(printf '%s' "$summary" | sed 's/^routeros-chr-exercise: //')"
+      [ -n "$summary" ] || summary="CHR exercise finished with exit $status -- see the job log"
+      routeros_version="$(grep -oE '(RouterOS|CHR) [0-9]+\.[0-9]+(\.[0-9]+)?' chr-exercise.log | head -n1 | awk '{print $2}')"
+
+      # A failure to publish the report is never allowed to hide, or to
+      # stand in for, the exercise's own result -- report, then exit with
+      # the exercise's real status regardless of how reporting went.
+      if ! CHR_REPORT_RESULT="$result" CHR_REPORT_SUMMARY="$summary" \
+        CHR_REPORT_ROUTEROS_VERSION="$routeros_version" scripts/chr-report.sh; then
+        echo "chr-exercise: publishing the run report to GitLab failed -- see above"
+      fi
+
+      exit "$status"
+
+# ---------------------------------------------------------------------------
+# CHR-WATCH — #929, moved to GitLab by #943: reads chr/last-run.json off the
+# chr-reports branch that chr-exercise:run above (via scripts/chr-report.sh)
+# writes on every run, decides what it means (scripts/chr-watch/chr-watch.js,
+# tested in chr-watch.test.js), and opens, comments on or closes a single
+# tracking issue accordingly (scripts/chr-watch/run.js). Green closes a
+# stale issue if one is open and otherwise does nothing; anything else
+# (failing, stale, missing) fails this job on purpose, so the schedule
+# itself shows red.
+#
+# Inert on every pipeline source except a GitLab Pipeline Schedule that
+# itself carries a CHR_WATCH=true variable, the same pattern CHR_EXERCISE
+# uses above. The owner creates that schedule (daily, matching the old
+# GitHub workflow's cron) and it needs the same GITLAB_MR_TOKEN CI/CD
+# variable chr-exercise:run already needs, since this job reads and writes
+# issues through the same GitLab API.
+# ---------------------------------------------------------------------------
+
+chr-watch:run:
+  stage: chr-exercise
+  # Light lane (#949): reads one report and calls the API.
+  tags: [light]
+  image: node:22-alpine
+  # #952: opens, comments on or closes a tracking issue via the GitLab API
+  # -- never cut mid-write.
+  interruptible: false
+  # This job only reads the report chr-exercise:run already wrote and talks
+  # to the GitLab API -- nothing earlier in the pipeline can invalidate
+  # that, and it must still run (and still be able to report a stale report)
+  # even if something earlier in the same pipeline failed.
+  needs: []
+  rules:
+    - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "api"'
+  script:
+    - node scripts/chr-watch/run.js
+
+# ---------------------------------------------------------------------------
+# RENOVATE — #945: self-hosted Renovate, replacing the Dependabot config retired
+# in d3c152a now that dependency work happens on GitLab. renovate.json at the
+# repo root carries the policy (dev as base branch, 7-day cooldown, minor and
+# patch grouped per ecosystem, majors separate, ten open MRs); this job only
+# executes it. The github-actions manager is deliberately off: the remaining
+# .github/workflows/*.yml are the mirror side and are updated by hand.
+#
+# Inert on every pipeline source except a Pipeline Schedule carrying
+# RENOVATE=true (schedule 10, Mondays 05:00 London) and the web/API paths, the
+# same pattern as CHR_EXERCISE and CHR_WATCH above. RENOVATE_TOKEN is an
+# impersonation token of mikroview-bot held as a masked, protected CI/CD
+# variable; never echo it. GITHUB_COM_TOKEN, if set the same way, lets Renovate
+# fetch release notes from github.com without hitting the anonymous rate limit.
+# ---------------------------------------------------------------------------
+
+renovate:run:
+  stage: renovate
+  image: renovate/renovate:44
+  needs: []
+  # #952: opens and updates merge requests via the GitLab API -- never cut
+  # mid-write.
+  interruptible: false
+  rules:
+    - if: '$RENOVATE == "true" && $CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$RENOVATE == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$RENOVATE == "true" && $CI_PIPELINE_SOURCE == "api"'
+  variables:
+    RENOVATE_GIT_AUTHOR: "mikroview-bot <mikroview-bot@noreply.gitlab.tomlawson.io>"
+    RENOVATE_ONBOARDING: "false"
+    RENOVATE_REQUIRE_CONFIG: "required"
+    LOG_LEVEL: info
+  script:
+    - renovate --platform gitlab --endpoint "$CI_API_V4_URL" "$CI_PROJECT_PATH"

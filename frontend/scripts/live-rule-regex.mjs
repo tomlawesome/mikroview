@@ -23,13 +23,14 @@
 //      500ms budget, so the Worker returns normally and nothing is
 //      refused. 45 does not finish in 20 seconds. Anything below ~40 is
 //      a test that silently passes.
-import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, waitForStreamRows } from './live-browser.mjs'
 
 const CHEAP = 'a'.repeat(38)             // matches instantly, see (1)
 const EXPENSIVE = 'a'.repeat(45) + 'b'   // does not finish in 20s, see (2)/(3)
 
+const { page, consoleErrors } = await session()
 feedSyslog(200, CHEAP)
-const { page, consoleErrors } = await session({ waitForEvents: 100 })
+await waitForStreamRows(page, 100)
 
 // #183: the initial fetch and the WebSocket stream overlap, so an event
 // arriving in both used to land in the buffer twice and give LiveTable's
@@ -44,6 +45,12 @@ check(
 // Regex mode on, with a pattern that is cheap against what is buffered.
 await page.click('button.regex-toggle')
 await page.fill('input.rule', '(a+)+$')
+// No DOM signal distinguishes "still evaluating" from a settled, healthy
+// "idle" -- appState.ruleMatchStatus (state.svelte.ts) only shows up in
+// the DOM via the .refused class, which too-slow/invalid set and idle and
+// evaluating both leave alone. This is a negative assertion with no
+// observable end-state to wait for instead, so the pause covers the
+// 250ms debounce plus evaluation margin.
 await page.waitForTimeout(1500)
 
 const refusedEarly = (await page.getAttribute('button.regex-toggle', 'class')).includes('refused')
@@ -54,7 +61,7 @@ feedSyslog(20, EXPENSIVE)
 
 check(await responsive(page, 4000), 'main thread stays responsive while the pattern is unevaluable')
 
-await page.waitForTimeout(1500)
+await page.locator('button.regex-toggle.refused').waitFor({ timeout: 10000 })
 const cls = await page.getAttribute('button.regex-toggle', 'class')
 const title = await page.getAttribute('button.regex-toggle', 'title')
 check(cls.includes('refused'), 'the toggle reports the pattern was refused')
@@ -68,7 +75,7 @@ check(
 // -- a toggle still reading "refused" against an empty input is exactly
 // the misleading state the indicator exists to avoid.
 await page.fill('input.rule', '')
-await page.waitForTimeout(800)
+await page.waitForFunction(() => !document.querySelector('button.regex-toggle')?.classList.contains('refused'))
 const clsAfterClear = await page.getAttribute('button.regex-toggle', 'class')
 check(
   !clsAfterClear.includes('refused'),
@@ -78,6 +85,9 @@ check(
 // And the recovery path all the way through: a fresh, cheap pattern after
 // a refusal must evaluate normally rather than inheriting the dead state.
 await page.fill('input.rule', 'live-test')
+// Same gap as the first refusal-free pattern above: evaluating and idle
+// are DOM-indistinguishable, so this negative assertion still needs a
+// real pause rather than a wait it cannot express.
 await page.waitForTimeout(1200)
 const clsAfterRetype = await page.getAttribute('button.regex-toggle', 'class')
 check(

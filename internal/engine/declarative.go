@@ -110,11 +110,46 @@ const (
 	// event -- last-writer-wins rather than a set, see
 	// EvidenceSet.SetNAT for why this one category works that way.
 	EvidenceNAT EvidenceField = "nat"
+	// EvidencePairs accumulates the (destination host, destination port)
+	// combination of every matching event, always from e.DstIP/e.DstPort
+	// regardless of KeyMode -- unlike EvidenceHosts, whose asymmetry is
+	// about *whose* address a per-source vs. per-target definition
+	// records (see recordEvidence's own doc comment), a pair is always
+	// about what got touched, which is the destination side by
+	// definition. #654: declared only where both a destination address
+	// and a destination port are independently meaningful for this
+	// definition -- port_scan (ports without a meaningful destination
+	// set) never declares this, and neither does any definition whose
+	// KeyMode already fixes
+	// the destination port for the whole window (repeated_drops,
+	// distributed_brute_force), since a pair there would just repeat the
+	// key's own port against each host, adding nothing Hosts and the
+	// Target don't already say together.
+	//
+	// dest_spread was in that first list and is not any more: #641 turned
+	// pairs on for outbound_anomaly and internal_recon, which record the
+	// port alongside each destination. They are programmatic, so they do
+	// it in their own Evaluate rather than by declaring this field --
+	// see destSpreadDefinition.pairsFor.
+	EvidencePairs EvidenceField = "pairs"
+	// EvidenceMAC records the matching event's source MAC address,
+	// last-writer-wins (see EvidenceSet.SetSrcMAC) and only when the
+	// source is a local device -- recordEvidence enforces both the
+	// presence check and the locality check, not this declaration.
+	// #654: a MAC-identified device survives a DHCP lease change an
+	// IP-identified one would silently stop matching (the same
+	// MAC-preferred identity matchlog.Identity already uses, see
+	// eventIdentity in router.go). Declared only for definitions whose
+	// source can genuinely be local -- never for critical_port or
+	// distributed_brute_force, both of which condition on
+	// sourceAddress matchesClassification "external", so their source
+	// MAC would never pass the locality check anyway.
+	EvidenceMAC EvidenceField = "mac"
 )
 
 func validateEvidenceField(f EvidenceField) error {
 	switch f {
-	case EvidencePorts, EvidenceHosts, EvidenceLabels, EvidenceNAT:
+	case EvidencePorts, EvidenceHosts, EvidenceLabels, EvidenceNAT, EvidencePairs, EvidenceMAC:
 		return nil
 	default:
 		return fmt.Errorf("engine: invalid evidence field %q", f)
@@ -164,13 +199,15 @@ type DeclarativeDefinition struct {
 	detailTemplate string
 	targetTemplate string
 	carryCountry   bool
-	// evidencePorts/Hosts/Labels/NAT are DeclarativeSpec.Evidence
+	// evidencePorts/Hosts/Labels/NAT/Pairs/MAC are DeclarativeSpec.Evidence
 	// resolved to booleans once, at construction, so recordEvidence's
 	// per-event path is a few field reads rather than a slice scan.
 	evidencePorts  bool
 	evidenceHosts  bool
 	evidenceLabels bool
 	evidenceNAT    bool
+	evidencePairs  bool
+	evidenceMAC    bool
 
 	members AddressListMembership
 
@@ -321,6 +358,10 @@ func NewDeclarativeDefinition(def Definition, spec DeclarativeSpec) (*Declarativ
 			d.evidenceLabels = true
 		case EvidenceNAT:
 			d.evidenceNAT = true
+		case EvidencePairs:
+			d.evidencePairs = true
+		case EvidenceMAC:
+			d.evidenceMAC = true
 		}
 	}
 	if err := d.validateKeyTokens("detailTemplate", spec.DetailTemplate); err != nil {
@@ -348,6 +389,38 @@ func (d *DeclarativeDefinition) Definition() Definition { return d.def }
 // without reaching into an unexported field.
 func (d *DeclarativeDefinition) Conditions() []Condition {
 	return append([]Condition(nil), d.conditions...)
+}
+
+// Structure returns what this definition matches on and how it counts,
+// in the same shape a custom detection stores (#829) -- conditions, key
+// mode, counting mode, distinct field and detail template.
+//
+// The point of it is a shipped detector. A custom one already carries a
+// DetectionSpec on its envelope, but a shipped declarative detector's
+// structure only exists as whatever its Go builder assembled, so until
+// this there was no way to answer "what does port_scan actually match?"
+// short of reading the source. Cloning a shipped detector into a custom
+// one needs exactly that answer, or the copy arrives with an empty bar.
+//
+// Threshold and window are not here, deliberately: they are Params on
+// both sides of the shipped/custom line, and a structure that carried
+// them would be two doors onto one value. See DetectionSpec's own doc
+// comment on the structure/tunable split.
+//
+// The spec returned is not guaranteed to satisfy DetectionSpec.Validate.
+// A shipped detector may accumulate evidence and name it in its detail
+// template ({Ports}, {Hosts}), and a custom detection declares no
+// evidence categories, so a caller copying one must be prepared to
+// replace a template this binary would not accept back -- see
+// internal/api's cloneShippedDetector.
+func (d *DeclarativeDefinition) Structure() DetectionSpec {
+	return DetectionSpec{
+		Conditions:     d.Conditions(),
+		Key:            d.key,
+		Counting:       d.countingMode,
+		DistinctField:  d.distinctField,
+		DetailTemplate: d.detailTemplate,
+	}
 }
 
 // newStateForWindow builds one key's fresh state, sized to window (rather
@@ -479,6 +552,24 @@ func (d *DeclarativeDefinition) recordEvidence(st *declState, e store.Event) {
 	if d.evidenceNAT {
 		st.evidence.SetNAT(NATInfo{IP: e.NatIP, Port: e.NatPort, Raw: e.NatRaw})
 	}
+	// #654: pairs and MAC each have their own event fields and their own
+	// gate, independent of evidenceHosts below -- a definition can (and
+	// critical_port does) want the destination pair without wanting the
+	// standalone Hosts set, and MAC has no relationship to KeyMode at
+	// all. Neither reads d.evidenceHosts.
+	if d.evidencePairs && e.DstIP != "" && e.DstPort != 0 {
+		st.evidence.AddPair(HostPort{Host: e.DstIP, Port: e.DstPort})
+	}
+	// isPublicIPAddress(e.SrcIP) is the same classification
+	// OpMatchesClassification's "external"/"internal" conditions use
+	// (conditions.go) -- a MAC only ever accompanies a frame RouterOS
+	// captured off a local L2 segment, so an external source's SrcMAC is
+	// either empty or the router's own upstream-facing MAC, and #654's
+	// design explicitly calls carrying either "worse than useless": it
+	// would look like a device identity but silently misidentify one.
+	if d.evidenceMAC && e.SrcMAC != "" && !isPublicIPAddress(e.SrcIP) {
+		st.evidence.SetSrcMAC(e.SrcMAC)
+	}
 	if !d.evidenceHosts {
 		return
 	}
@@ -568,6 +659,16 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 	// Emission, so it is what fills it in.
 	conf := overshootConfidence(count, d.threshold)
 	em.Confidence = &conf
+	// Size: a declarative definition's size is always the counting-mode
+	// tally that crossed the threshold -- distinct destination ports for
+	// port_scan, attempts for critical_port, and so on -- because
+	// "threshold-over-window" is the whole of what this kind evaluates
+	// (docs/decisions/evaluation-engine.md section 2). So it is set here,
+	// once, rather than per shipped builder: there is no declarative
+	// definition, shipped or operator-authored, whose size is anything
+	// else. See Emission.Size and #640.
+	size := count
+	em.Size = &size
 	// Country/EventTime: see Emission's own doc comment on why these are
 	// set here, from the triggering event, rather than by RenderEmission.
 	// Country only where the definition declared it honest -- see

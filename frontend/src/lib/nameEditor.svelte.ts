@@ -8,11 +8,17 @@ import { toastState } from './toast.svelte'
 import type { NameProvenance } from './types'
 
 // The kinds of token this editor can rename. Narrower than EntityType on
-// purpose: these are the three that a live row actually shows a label
+// purpose: these are the four that a live row actually shows a label
 // for, and each one has its own title, scope sentence and identity line
 // below. An arbitrary entity type has none of those, so it has no
 // business opening this.
-export type EditableTokenType = 'host' | 'port' | 'rule'
+//
+// 'device' is the fourth #413's ratified design listed and left
+// deliberately unbuilt: until #600 a device name had nowhere to be
+// stored that everybody read, so a rename would have shown to the one
+// admin who typed it. It is stored on the server now, so the token
+// joins the other three.
+export type EditableTokenType = 'host' | 'port' | 'rule' | 'device'
 
 interface Anchor {
   x: number
@@ -34,6 +40,10 @@ const COPY: Record<EditableTokenType, { title: string; scope: (key: string) => s
   rule: {
     title: 'Name this rule',
     scope: (key) => `Applies to every event logged with prefix “${key}”.`,
+  },
+  device: {
+    title: 'Rename this device',
+    scope: (key) => `Display name only — the device id “${key}” stays the identity.`,
   },
 }
 
@@ -71,11 +81,12 @@ class NameEditorState {
 
   private requestId = 0
 
-  // Whether this operator gets a pencil at all. Admins only, and the
-  // control is absent rather than disabled for everyone else: #439
-  // named a control that cannot act the lying-affordance class, which
-  // is the same failure this editor exists to remove, so shipping one
-  // on every row of a viewer's screen would be self-defeating.
+  // Whether this operator gets a pencil at all. Admin or user tier
+  // (#653's three roles), not a viewer's -- and the control is absent
+  // rather than disabled for everyone else: #439 named a control that
+  // cannot act the lying-affordance class, which is the same failure
+  // this editor exists to remove, so shipping one on every row of a
+  // viewer's screen would be self-defeating.
   //
   // Lives here rather than in EditNameButton so the callers that must
   // skip building the button at all can ask the same question the
@@ -84,7 +95,7 @@ class NameEditorState {
   // not the same as "costs nothing" -- for every session that never
   // sees a pencil, the component is now never created either.
   get available(): boolean {
-    return authState.state === 'authenticated' && authState.role === 'admin'
+    return authState.state === 'authenticated' && authState.canEdit
   }
 
   get title(): string {
@@ -113,6 +124,10 @@ class NameEditorState {
       case 'entity':
         return `${this.key} — currently “${p.name}”, from your label`
       case 'config':
+      // A device named in config.yaml says the same sentence: the
+      // operator does not care which map it came out of, only that the
+      // file holds it. What differs is the refusal below.
+      case 'config-device':
         return `${this.key} — currently “${p.name}”, from config.yaml`
       case 'router-dhcp-lease':
         return `${this.key} — currently “${p.name}”, from a DHCP lease`
@@ -135,8 +150,19 @@ class NameEditorState {
   get refusal(): string | null {
     const p = this.provenance
     if (!p || p.editable) return null
-    const where = p.router ? `“${p.router}”` : 'the router'
     const shadowed = p.label ? ` Your label “${p.label}” is saved, but it is not what is shown.` : ''
+    // Two refusals, one grammar (#600): what supplies the name, that it
+    // wins, what would happen to an edit, and where to go instead. Only
+    // the last clause differs, because only one of them has a router to
+    // send anybody to -- a device is named in config.yaml, on the
+    // machine mikroview runs on.
+    if (p.source === 'config-device') {
+      return (
+        'config.yaml supplies this name, and config.yaml wins — a name set here would be stored and never displayed.' +
+        ` Change it in config.yaml, in this device’s entry.${shadowed}`
+      )
+    }
+    const where = p.router ? `“${p.router}”` : 'the router'
     return (
       'RouterOS supplies this name, and RouterOS wins — a name set here would be stored and never displayed.' +
       ` Change it on ${where}, in the table above.${shadowed}`
@@ -152,7 +178,11 @@ class NameEditorState {
     return lookupPort(Number(this.key))?.[0]?.name ?? ''
   }
 
-  open(type: EditableTokenType, key: string, device: string, rect: DOMRect) {
+  // `suggestion` is the dossier card's own suggested label (#410),
+  // passed only from there. It ranks below every name that already
+  // exists -- a suggestion is not a name -- so it prefills the field
+  // only for a host nothing has named yet.
+  open(type: EditableTokenType, key: string, device: string, rect: DOMRect, suggestion = '') {
     this.type = type
     this.key = key
     this.device = device
@@ -177,7 +207,7 @@ class NameEditorState {
         // operator's own label, else the name in use, else the
         // well-known service name for a port. The common case is
         // confirming a suggestion, not typing.
-        this.draft = p.label || p.name || this.wellKnown
+        this.draft = p.label || p.name || suggestion || this.wellKnown
         this.loading = false
       },
       () => {

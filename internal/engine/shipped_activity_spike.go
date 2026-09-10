@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -110,12 +111,16 @@ type activitySpikeDefinition struct {
 
 // activitySpikeSourceState is one source's freeze/day bookkeeping -- the
 // state that is not itself a Baseline. Mirrors offHoursDay
-// (shipped_off_hours.go) in kind and, deliberately, in persistence: it
-// is Keyed in-memory bookkeeping only, never handed to the StateStore.
-// See buildActivitySpikeDefinition's doc comment on persistence for why
-// that split (baselines persisted, bespoke bookkeeping not) is this
-// package's existing convention rather than something invented for this
-// redesign.
+// (shipped_off_hours.go) in kind and in how it is carried: never handed
+// to the StateStore, which holds baselines and nothing else, but no
+// longer lost on restart either.
+//
+// It used to be lost. Issue #795 (owner, 2026-09-02) is the decision
+// that revisited that: this state now survives a restart through the
+// periodic snapshot, separate from the StateStore -- see this
+// definition's ExportState/ImportState in shipped_export.go, and that
+// file's doc comment for what a restored day is and is not allowed to
+// mean.
 type activitySpikeSourceState struct {
 	// hourDay/hourPeak track, per hour-of-day, which calendar day is
 	// currently accumulating for that hour and the peak windowed rate
@@ -501,7 +506,14 @@ func rollHourBucket(buckets *baselineSet, st *activitySpikeSourceState, key stri
 	st.hourDay[hour] = day
 	st.hourPeak[hour] = 0
 	if prevDay == "" {
-		return // first time this hour has ever been seen for this source
+		// First sight of this hour in this process -- either genuinely
+		// first-ever (resume finds nothing persisted, and is a no-op) or
+		// first-since-restart (resume brings an earlier process's
+		// persisted bucket back so it judges immediately, rather than
+		// waiting up to 24h for the next rollover to materialise it via
+		// buckets.reading -- issue #902).
+		buckets.resume(key, now)
+		return
 	}
 	if st.frozen {
 		return
@@ -547,6 +559,10 @@ func (d *activitySpikeDefinition) emitFallbackFiring(srcIP, country, iface strin
 		count, d.window, applicable.Value, samples, applicable.ZScore,
 	) + vpnDetailSuffix(d.vpnInterfaces, iface)
 
+	// Size is the event count in the window -- activity_spike's declared
+	// size, the measure its own threshold param is compared against.
+	// See ShippedSizeMeasure and #640.
+	size := count
 	d.emit(Emission{
 		Target:     srcIP,
 		Detail:     detail,
@@ -554,6 +570,7 @@ func (d *activitySpikeDefinition) emitFallbackFiring(srcIP, country, iface strin
 		Country:    country,
 		SourceIP:   srcIP,
 		EventTime:  now,
+		Size:       &size,
 	})
 }
 
@@ -579,6 +596,10 @@ func (d *activitySpikeDefinition) emitBucketFiring(srcIP, country, iface string,
 		count, d.window, applicable.Value, hour, days, applicable.ZScore,
 	) + vpnDetailSuffix(d.vpnInterfaces, iface)
 
+	// Size is the event count in the window, exactly as on the fallback
+	// path above -- which baseline judged the firing changes the
+	// confidence, not what the size means.
+	size := count
 	d.emit(Emission{
 		Target:     srcIP,
 		Detail:     detail,
@@ -586,7 +607,58 @@ func (d *activitySpikeDefinition) emitBucketFiring(srcIP, country, iface string,
 		Country:    country,
 		SourceIP:   srcIP,
 		EventTime:  now,
+		Size:       &size,
 	})
+}
+
+// Learning satisfies LearningReporter, merging this definition's two
+// baselineSets (see this file's own doc comment for why there are two)
+// into one per-*source* answer, as every other optional interface here
+// merges rather than exposing bucketKey/buckets separately.
+//
+// keys/ready are counted per source, not per (source, hour) bucket: the
+// bucket set's key space is an internal implementation detail (up to 24
+// keys per source) that would make "ready for 12 of 50 sources" actually
+// mean "ready for 12 of 1,200," which is not the question an operator is
+// asking. A source counts as ready the moment *either* representation
+// does, matching activitySpikeCheck's own useBucket rule (a mature hour
+// bucket is the applicable baseline the instant it clears its floor,
+// fallback otherwise) -- so this answers the same "could this source
+// actually fire today" question Fire itself would.
+//
+// The floor reported, and the one nearest's progress is measured
+// against, is always the fallback's: it is the one an operator's own
+// params actually tune (bucketFloor is a fixed structural constant, see
+// activityBucketMinDays), and the two floors' dimensions are not
+// comparable numbers to blend. A source with bucket-only progress (no
+// fallback entry yet) falls back to that bucket key's own progress as
+// the least-wrong stand-in; in practice every source acquires a fallback
+// entry before any bucket ever can (checkBaseline always folds the
+// fallback until useBucket first turns true), so this path is a
+// defensive fallback, not the common case.
+func (d *activitySpikeDefinition) Learning(now time.Time) (LearningState, bool) {
+	fallback := d.baselines.learning(now)
+	buckets := d.buckets.learning(now)
+
+	merged := make(map[string]baselineLearning, len(fallback))
+	for srcIP, bl := range fallback {
+		merged[srcIP] = bl
+	}
+	for key, bl := range buckets {
+		srcIP, _, ok := strings.Cut(key, "\x00")
+		if !ok {
+			continue
+		}
+		existing, has := merged[srcIP]
+		switch {
+		case !has:
+			merged[srcIP] = bl
+		case bl.ready && !existing.ready:
+			existing.ready = true
+			merged[srcIP] = existing
+		}
+	}
+	return learningStateFrom(d.baselines.floor, merged), true
 }
 
 // Replay satisfies Replayable: the same per-source count-and-baseline

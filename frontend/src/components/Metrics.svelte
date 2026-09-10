@@ -14,27 +14,83 @@
   //
   // It replaced the old dashboard wholesale: the overlay charts
   // (EventsChart/FlagsChart) and the ranked-count cards are gone, their
-  // magnitude answers rehoused in MetricsTotals.svelte -- the Register's
-  // ledger strip and the Table's opening section.
+  // magnitude answers rehoused in MetricsTotals.svelte -- the ledger,
+  // which rounds 36-37 put above the Table's minutes and nowhere else.
   import { appState } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { metricsPref, METRICS_VIEWS } from '../lib/metrics.svelte'
   import { buildHour, minuteIndexOf, readMinute } from '../lib/metricsSeries'
+  import { fetchStatsTops } from '../lib/api'
   import { formatEps, formatHM } from '../lib/format'
-  import PageHeader from './PageHeader.svelte'
+  import { startStatement } from '../lib/provenance'
   import MetricsSeismograph from './MetricsSeismograph.svelte'
   import MetricsRegister from './MetricsRegister.svelte'
   import MetricsTable from './MetricsTable.svelte'
+  import type { HourTopBucket } from '../lib/types'
 
-  const hour = $derived(buildHour(appState.stats?.timeSeries ?? [], flagsState.timeSeries))
+  // #644 round 21's top-port/top-talker columns: GET /api/stats/tops is
+  // its own poll, scoped to this page rather than riding App.svelte's
+  // global STATS_REFRESH_MS -- same reasoning, and the same POLL_MS
+  // pattern, as Fall.svelte's own per-page fetch. See fetchStatsTops'
+  // own doc comment for why this isn't folded into appState.stats.
+  const TOPS_POLL_MS = 5000
+  let tops = $state<HourTopBucket[]>([])
+
+  $effect(() => {
+    let cancelled = false
+    async function refresh() {
+      try {
+        const result = await fetchStatsTops()
+        if (!cancelled) tops = result
+      } catch {
+        // A failed poll leaves the previous tops in place -- the table
+        // then shows slightly stale (rather than blank) top port/talker
+        // columns until the next successful poll, matching how a failed
+        // appState.refreshDevicesAndStats() leaves the rest of the page
+        // showing its last-known figures instead of clearing them.
+      }
+    }
+    refresh()
+    const id = setInterval(refresh, TOPS_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  })
+
+  const hour = $derived(buildHour(appState.stats?.timeSeries ?? [], flagsState.timeSeries, tops))
   const cursor = $derived(minuteIndexOf(hour.axis, metricsPref.minute))
   const reading = $derived(readMinute(hour, cursor))
 
   const perMinuteNow = $derived(hour.traffic.reduce((a, s) => a + s.now, 0))
-  const refusedAtCursor = $derived(
-    reading ? reading.traffic.filter((r) => r.ink === 'refused').reduce((a, r) => a + r.value, 0) : 0,
+
+  // null rather than 0 when stats have not arrived, so the hour line says
+  // nothing instead of claiming "0 events/s now" -- a fetch that has not
+  // landed, or one that failed, is not a measurement of zero. Topography.svelte
+  // already models it this way; this line had drifted from it (#750).
+  const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
+
+  // What this hour is an account of (#795, round 41 #s4): restored from
+  // a snapshot, or counted from a cold start, for the first hour after
+  // boot. Built in lib/provenance.ts, which the docket's own chip reads
+  // too -- one derivation, so the two surfaces cannot disagree about the
+  // wording or about when it clears.
+  //
+  // The clock is read here rather than ticked: appState.stats is
+  // replaced by App.svelte's own poll every STATS_REFRESH_MS, and that
+  // replacement is what re-runs this. So the statement clears within one
+  // poll of the hour, on both surfaces, off the same store update --
+  // which is cheaper and less drifty than either surface owning a timer.
+  const provenance = $derived(startStatement(appState.stats, new Date()))
+
+  // Rounds 36-37 (#803): reading the minute under the cursor across every
+  // series is the hourline's job, so the register's aside panel has no
+  // work left and is gone. The episode count carries the type names that
+  // panel used to print, so nothing it said is lost -- "2 flag episodes —
+  // unplanned · ring broken", exactly as #s4 draws it.
+  const episodeNames = $derived(
+    reading ? reading.episodes.map((e) => `${e.label}${e.value > 1 ? ` ×${e.value}` : ''}`).join(' · ') : '',
   )
-  const eventsAtCursor = $derived(reading ? reading.traffic.reduce((a, r) => a + r.value, 0) : 0)
 
   function select(index: number) {
     if (index < 0 || index >= hour.axis.length) return
@@ -97,41 +153,56 @@
 </script>
 
 <div class="metrics scrollbar" onkeydown={onkeydown} role="presentation">
-  <PageHeader title="Metrics">
-    <div class="views" role="group" aria-label="Metrics view">
-      {#each METRICS_VIEWS as option (option.value)}
-        <button
-          class="view"
-          class:on={metricsPref.view === option.value}
-          aria-pressed={metricsPref.view === option.value}
-          title={option.title}
-          onclick={() => metricsPref.setView(option.value)}>{option.label}</button
-        >
-      {/each}
-    </div>
-  </PageHeader>
-
+  <!-- No page heading (#697/#700), and the view switcher rides the
+       scene bar where it used to sit -- round 30 puts it beside the
+       wordmark, and #488's "three views of one data set" is satisfied
+       there. -->
+  <!-- Round 30's arrangement (#s4): the minute under the cursor and its
+       own facts on the left, the hour's rate facts pinned to the right
+       by `.rate`'s own margin-left:auto -- the reverse of what this
+       used to draw (rate on the left, nothing meaningful on the
+       right). -->
   <div class="hourline">
     {#if reading}
       <span class="big">{formatHM(reading.time)}<span class="unit">the minute under the cursor</span></span>
+      <!-- One fact per series, in the hour's own order, refused in the
+           refused ink: the whole minute read in one line rather than a
+           ratio ("9 refused of 61 events") that named two series and hid
+           the rest. -->
+      {#each reading.traffic as row (row.key)}
+        <span class="sep">·</span>
+        <span class="fact" class:ref={row.ink === 'refused'}><b>{row.value}</b> {row.label}</span>
+      {/each}
       <span class="sep">·</span>
-      <span class="fact"><b>{refusedAtCursor}</b> refused of <b>{eventsAtCursor}</b> events</span>
-      <span class="sep">·</span>
-      <span class="fact"><b>{reading.episodeTotal}</b> flag episodes</span>
-    {:else}
-      <span class="big">{formatEps(appState.stats?.eventsPerSecond ?? 0)}<span class="unit">events/s now</span></span>
-      <span class="sep">·</span>
+      <span class="fact"
+        ><b>{reading.episodeTotal}</b> flag episode{reading.episodeTotal === 1 ? '' : 's'}{episodeNames
+          ? ` — ${episodeNames}`
+          : ''}</span
+      >
+    {/if}
+    <span class="rate">
+      {#if epsText}
+        <span class="big">{epsText}<span class="unit">events/s now</span></span>
+        <span class="sep">·</span>
+      {/if}
       <span class="fact"><b>{perMinuteNow}</b>/min</span>
       <span class="sep">·</span>
       <span class="fact"><b>{hour.eventsInHour}</b> events in the hour</span>
-      <span class="sep">·</span>
-      <span class="fact"
-        ><b>{hour.episodesInHour}</b> episodes raised, from <b>{hour.typesThatSpoke}</b> of {hour.flags.length} types</span
-      >
-    {/if}
-    {#if hour.brink}
-      <span class="brinkmark">the brink · {formatHM(hour.brink)}</span>
-    {/if}
+      {#if hour.brink}
+        <span class="sep">·</span>
+        <span class="brinkmark">the brink · {formatHM(hour.brink)}</span>
+      {/if}
+      <!-- The last fact on the line (#795, round 41 #s4): what the hour
+           is an account of, after a restart. A fact, not a control --
+           there is nowhere for it to lead, so it is a `.fact` among the
+           facts, dimmed one step, exactly as the drawing writes it. Its
+           separator sits inside the `{#if}` so an absent statement takes
+           its `·` with it, the same way the events/s reading does. -->
+      {#if provenance}
+        <span class="sep">·</span>
+        <span class="fact stmt">{provenance}</span>
+      {/if}
+    </span>
   </div>
 
   <!-- A slider is what this actually is: one value moving along the
@@ -153,17 +224,16 @@
     {#if metricsPref.view === 'seismograph'}
       <MetricsSeismograph {hour} {cursor} onselect={select} />
     {:else if metricsPref.view === 'register'}
-      <MetricsRegister {hour} {cursor} {reading} onselect={select} />
+      <MetricsRegister {hour} {cursor} onselect={select} />
     {:else}
       <MetricsTable {hour} {cursor} onselect={select} />
     {/if}
   </div>
 
-  <p class="keys">
-    Click a minute to read it across every series · <kbd>←</kbd><kbd>→</kbd> a minute · <kbd>Shift</kbd> ten ·
-    <kbd>Home</kbd>/<kbd>End</kbd> the ends of the hour · <kbd>Esc</kbd> clears the cursor
-  </p>
-
+  <!-- No keyboard hint printed on the page (#697/#700 -- round 30 draws
+       no aids to understanding anywhere, and the surface keeps every
+       one of those keys working regardless; the slider announces itself
+       to a screen reader through its own aria-valuetext). -->
   <p class="sr-only" role="status">{metricsPref.announcement}</p>
 </div>
 
@@ -176,33 +246,12 @@
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
+    /* The scroll track sits inside this box, so without a right inset the
+       content runs under it -- the register's own scroll and the table's
+       right-hand column both did (#743). Padding lives on the scrolling
+       element itself, so it holds whether or not the track is showing. */
+    padding-right: 14px;
     padding-bottom: 10px;
-  }
-
-  .views {
-    display: flex;
-    gap: 6px;
-    margin-left: auto;
-  }
-
-  .view {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--fg-muted);
-    font-size: 11.5px;
-    padding: 3px 10px;
-  }
-
-  .view:hover {
-    color: var(--fg);
-    border-color: var(--fg-dim);
-  }
-
-  .view.on {
-    color: var(--fg);
-    border-color: var(--accent);
-    background: var(--accent-bg);
   }
 
   .hourline {
@@ -246,8 +295,35 @@
     font-weight: 600;
   }
 
-  .brinkmark {
+  /* Round 37's `.hourline .fact.ref b`: refused wears the refused ink
+     here too, so the one series that means "turned away" is legible
+     without reading its name -- the same token the table's own refused
+     column and the drum's inner stroke already use. */
+  .fact.ref b {
+    color: var(--chart-refused);
+  }
+
+  /* Round 41's `.hourline .stmt { color: var(--ink-3) }` (#795): the
+     restart statement is a fact about the other facts, so it is set one
+     step dimmer than they are -- --fg-dim against their --fg-muted,
+     which is the same step the separators and the `.big` captions take. */
+  .fact.stmt {
+    color: var(--fg-dim);
+  }
+
+  /* The right-hand rate group (round 30's `.hourline .gap { flex: 1 }`
+     spacer, folded into the group itself since it is the only thing
+     that ever sits on this side): pinned to the far right regardless
+     of whether the left-hand cursor group is present. */
+  .rate {
     margin-left: auto;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .brinkmark {
     font-family: var(--font-mono);
     font-size: 10px;
     letter-spacing: 0.08em;
@@ -255,29 +331,15 @@
   }
 
   .surface {
+    flex: 1;
     min-width: 0;
+    min-height: 0;
   }
 
   .surface:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 4px;
     border-radius: 4px;
-  }
-
-  .keys {
-    margin: 0;
-    font-size: 10.5px;
-    color: var(--fg-dim);
-  }
-
-  kbd {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    border: 1px solid var(--border);
-    border-bottom-width: 2px;
-    border-radius: 4px;
-    padding: 0 4px;
-    margin: 0 1px;
   }
 
   /* Clipped rather than hidden -- display:none would remove the live

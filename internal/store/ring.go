@@ -10,6 +10,7 @@ import (
 	"cmp"
 	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -97,6 +98,22 @@ type Store struct {
 	// reused for a new minute.
 	minuteBuckets    [timeSeriesMinutes][len(actionSlots)]uint64
 	minuteBucketTime [timeSeriesMinutes]int64
+
+	// liveSince is when this Store started observing, and restoredTo is
+	// the taken time of the snapshot its counters came from (zero on a
+	// cold start). Together they are what lets the UI say "counters from
+	// a snapshot 4 m old; live from 14:02" and drop the statement once
+	// the series has refilled -- see #795.
+	//
+	// liveSince is set in New, i.e. effectively process start, not the
+	// first Insert. The question it answers is "from when is this
+	// process's own account of the traffic complete", and that is the
+	// moment it began listening: a quiet first ten minutes is a real
+	// observation of quiet, not an absence of observation, and dating
+	// liveSince from the first event would report those ten minutes as
+	// unobserved and re-date them every restart of a quiet network.
+	liveSince  time.Time
+	restoredTo time.Time
 }
 
 // New creates a Store holding at most capacity events, logically windowed
@@ -111,6 +128,7 @@ func New(capacity int, window time.Duration) *Store {
 		window:        window,
 		totalByAction: make(map[Action]uint64),
 		totalByRule:   make(map[string]uint64),
+		liveSince:     time.Now(),
 	}
 }
 
@@ -202,6 +220,39 @@ func (s *Store) shedRuleLabelsLocked() {
 	}
 }
 
+// Reset empties the ring and every figure derived from it: the held
+// events, the lifetime and per-action/per-rule totals, and both rolling
+// bucket series Stats reads its rate and time series from. Written for
+// the test-only POST /api/test/reset (#1064), which gives each live-check
+// scenario an instance that has seen nothing rather than one carrying its
+// siblings' traffic.
+//
+// nextID is deliberately not rewound. It is an identity, not a count:
+// reusing IDs would hand a WebSocket client already holding event 900 a
+// fresh event 1, and the frontend's own newest-wins bookkeeping would
+// have no way to tell that apart from a stale delivery. liveSince is
+// re-stamped instead, because "from when is this process's account of the
+// traffic complete" is genuinely now again; restoredTo is dropped for the
+// same reason -- the counters this Store holds no longer came from a
+// snapshot.
+func (s *Store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.buf = make([]Event, s.capacity)
+	s.head = 0
+	s.count = 0
+	s.total = 0
+	s.totalByAction = make(map[Action]uint64)
+	s.totalByRule = make(map[string]uint64)
+	s.secBuckets = [60]uint64{}
+	s.secBucketTime = [60]int64{}
+	s.minuteBuckets = [timeSeriesMinutes][len(actionSlots)]uint64{}
+	s.minuteBucketTime = [timeSeriesMinutes]int64{}
+	s.liveSince = time.Now()
+	s.restoredTo = time.Time{}
+}
+
 // RuleCount is one entry in Stats.TopRules.
 type RuleCount struct {
 	Rule  string `json:"rule"`
@@ -226,6 +277,25 @@ type Stats struct {
 	Capacity        int               `json:"capacity"`
 	Count           int               `json:"count"`
 	Window          time.Duration     `json:"windowNs"`
+	// OldestHeld is the receipt time of the oldest event the ring still
+	// holds, or the zero time when it holds none. It is deliberately not
+	// the same thing as a query's WindowStart: that is now-minus-window,
+	// the retention the operator configured, while this is how far back
+	// the buffer actually reaches after capacity eviction has had its
+	// say. On a busy day the two are far apart, and only this one can
+	// answer "how much history is really here" -- #703's span control
+	// offers a span from this and would otherwise claim a day of quiet
+	// that was really an evicted buffer.
+	OldestHeld time.Time `json:"oldestHeld"`
+	// RestoredTo is when the snapshot these counters were restored from
+	// was taken, or nil on a cold start -- a pointer so "not restored" is
+	// absent from the wire rather than a zero date the UI has to
+	// special-case, the same shape internal/api's oldestHeldJSON uses.
+	// LiveSince is when this process started observing. Between them a
+	// caller can say which part of the hour is this process's own account
+	// and which came off disk (#795).
+	RestoredTo *time.Time `json:"restoredTo,omitempty"`
+	LiveSince  time.Time  `json:"liveSince"`
 }
 
 // Stats returns current totals and a rolling events/sec rate averaged over
@@ -274,6 +344,21 @@ func (s *Store) Stats() Stats {
 		timeSeries[i] = TimeBucket{Time: time.Unix(minute*60, 0).UTC(), ByAction: byAction}
 	}
 
+	// The ring's own oldest currently-held event, by the same indexing
+	// hourTops uses below: index 0 while the buffer has not filled yet,
+	// or s.head once it has, that being the next slot Insert overwrites
+	// and so the oldest survivor. Zero time when nothing is held, which
+	// is a real answer -- an empty buffer reaches back no distance at
+	// all -- and not a missing one.
+	var oldestHeld time.Time
+	if s.count > 0 {
+		oldestIdx := 0
+		if s.count == s.capacity {
+			oldestIdx = s.head
+		}
+		oldestHeld = s.buf[oldestIdx].ReceivedAt
+	}
+
 	out := Stats{
 		Total:           s.total,
 		ByAction:        byAction,
@@ -282,6 +367,12 @@ func (s *Store) Stats() Stats {
 		Capacity:        s.capacity,
 		Count:           s.count,
 		Window:          s.window,
+		OldestHeld:      oldestHeld,
+		LiveSince:       s.liveSince,
+	}
+	if !s.restoredTo.IsZero() {
+		restored := s.restoredTo
+		out.RestoredTo = &restored
 	}
 	s.mu.RUnlock()
 
@@ -328,4 +419,196 @@ func (s *Store) eventsPerSecondLocked() float64 {
 		}
 	}
 	return float64(sum) / window
+}
+
+// HourTop is one axis minute's top talker and top port (#644 round 21's
+// table columns), computed from only the events the ring buffer
+// currently holds -- never a persisted per-minute counter, and never
+// the client's own capped tail. TimeBucket carries byAction alone for
+// exactly this reason: a busy hour that has partially evicted deserves
+// an honest "don't know," not a plausible-looking undercount.
+type HourTop struct {
+	Time time.Time `json:"time"`
+	// Talker/Port are the winning source (SrcHostName when configured,
+	// else the raw address -- lib/whisperStats.ts's topTalker uses this
+	// same fallback over the client's own buffer) and destination port
+	// (falling back to the source port when there is no destination one,
+	// again matching whisperStats.ts's topPort) for this minute. Both
+	// empty whenever Complete is false, or the minute genuinely held
+	// nothing to count (e.g. ICMP-only traffic has no port).
+	Talker string `json:"talker,omitempty"`
+	Port   string `json:"port,omitempty"`
+	// Complete is false once eviction has reached into this minute --
+	// the buffer no longer holds every event it received in that
+	// window, so Talker/Port are left blank rather than answering from
+	// whatever fragment survived. See Store.HourTops.
+	Complete bool `json:"complete"`
+}
+
+// HourTops answers #644 round 21's top-port/top-talker table columns:
+// the same 60-minute axis Stats().TimeSeries covers (independently
+// computed -- the two are read by different endpoints on different
+// cadences, see handleStatsTops), each minute's winning source address
+// and destination port, honest about which minutes it can actually
+// answer for.
+//
+// A minute is Complete only once the ring's oldest currently-held event
+// (O(1) -- see Insert's own head/count bookkeeping) predates that
+// minute's start: since Insert evicts strictly oldest-first and
+// ReceivedAt is monotonic with insertion order (single ingest
+// goroutine), that is the exact point past which nothing from the
+// minute could have been evicted. A minute that fails this check is
+// left blank even if the buffer still holds some of its events --
+// counting only the survivors would silently undercount, which is the
+// dishonesty #644 asked this to avoid.
+//
+// The scan below walks backward from the newest event exactly like
+// Query does, and stops the moment it passes the axis's start rather
+// than touching the whole buffer -- bounded by how many events arrived
+// in the last hour, not by capacity, and the whole tally happens under
+// one RLock rather than copying first: Query already accepts the same
+// trade-off (see its own doc comment measuring ~60ms at 50,000 events),
+// and a linear tally here is cheaper per event than Query's per-event
+// filter matching.
+func (s *Store) HourTops() []HourTop {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	now := time.Now()
+	nowMinute := now.Unix() / 60
+	axisStart := nowMinute - int64(timeSeriesMinutes-1)
+
+	out := make([]HourTop, timeSeriesMinutes)
+	for i := range out {
+		out[i] = HourTop{Time: time.Unix((axisStart+int64(i))*60, 0).UTC(), Complete: true}
+	}
+
+	// A restored store knows, from the snapshot, that events happened in
+	// minutes whose event lines it does not have -- snapshots carry
+	// counts, never lines (#795). Those minutes are exactly the #644
+	// case: an answer computed from what the ring holds would be an
+	// undercount dressed up as a total, so they read as unknown instead.
+	//
+	// The cut is liveSince rather than the snapshot's own taken time,
+	// because the gap between the two -- the restart itself -- is just as
+	// unheld. Minutes that start after this process began listening are
+	// unaffected, so the flag clears by itself as live traffic refills
+	// the axis, which is the "and later clears" half of #795.
+	if !s.restoredTo.IsZero() {
+		for i := range out {
+			if out[i].Time.Before(s.liveSince) {
+				out[i].Complete = false
+			}
+		}
+	}
+
+	if s.count == 0 {
+		return out
+	}
+
+	// The ring's own oldest currently-held event: index 0 while the
+	// buffer hasn't filled yet (Insert has only ever appended), or
+	// s.head once it has (the next slot Insert will overwrite is the
+	// oldest surviving one) -- the same indexing Insert's own doc
+	// comment relies on.
+	oldestIdx := 0
+	if s.count == s.capacity {
+		oldestIdx = s.head
+	}
+	oldestReceived := s.buf[oldestIdx].ReceivedAt
+	for i := range out {
+		if oldestReceived.After(out[i].Time) {
+			out[i].Complete = false
+		}
+	}
+
+	talkerCounts := make([]map[string]uint64, timeSeriesMinutes)
+	portCounts := make([]map[string]uint64, timeSeriesMinutes)
+	hourStart := time.Unix(axisStart*60, 0)
+
+	idx := s.head - 1
+	if idx < 0 {
+		idx = s.capacity - 1
+	}
+	for i := 0; i < s.count; i++ {
+		e := s.buf[idx]
+		idx--
+		if idx < 0 {
+			idx = s.capacity - 1
+		}
+		if e.ReceivedAt.Before(hourStart) {
+			break
+		}
+		minuteIdx := int(e.ReceivedAt.Unix()/60 - axisStart)
+		if minuteIdx < 0 || minuteIdx >= timeSeriesMinutes || !out[minuteIdx].Complete {
+			// Out of range, or a minute already known incomplete --
+			// no point tallying an answer that will be discarded.
+			continue
+		}
+		if talker := talkerKey(e); talker != "" {
+			if talkerCounts[minuteIdx] == nil {
+				talkerCounts[minuteIdx] = make(map[string]uint64)
+			}
+			talkerCounts[minuteIdx][talker]++
+		}
+		if port := portKey(e); port != "" {
+			if portCounts[minuteIdx] == nil {
+				portCounts[minuteIdx] = make(map[string]uint64)
+			}
+			portCounts[minuteIdx][port]++
+		}
+	}
+
+	for i := range out {
+		if !out[i].Complete {
+			continue
+		}
+		out[i].Talker = topOf(talkerCounts[i])
+		out[i].Port = topOf(portCounts[i])
+	}
+
+	return out
+}
+
+// talkerKey is the top-talker identity HourTops counts by: SrcHostName
+// when configured, else the raw source address -- mirrors
+// lib/whisperStats.ts's topTalker exactly, so the table's server-
+// computed column and the whisper's client-computed one never disagree
+// about what "top talker" means, only about which events back the
+// answer.
+func talkerKey(e Event) string {
+	if e.SrcHostName != "" {
+		return e.SrcHostName
+	}
+	return e.SrcIP
+}
+
+// portKey mirrors lib/whisperStats.ts's topPort: the destination port,
+// falling back to the source port when there is no destination one.
+func portKey(e Event) string {
+	if e.DstPort != 0 {
+		return strconv.Itoa(e.DstPort)
+	}
+	if e.SrcPort != 0 {
+		return strconv.Itoa(e.SrcPort)
+	}
+	return ""
+}
+
+// topOf picks counts' highest-count key, ties broken by the lower label
+// so the result never depends on Go's randomised map iteration order --
+// the same reasoning shedRuleLabelsLocked's sort documents, just as a
+// running max instead of a full sort since only the winner is wanted.
+// "" (no entries) for an empty map, which HourTops leaves as the
+// column's honest empty value.
+func topOf(counts map[string]uint64) string {
+	best := ""
+	var bestCount uint64
+	for label, count := range counts {
+		if count > bestCount || (count == bestCount && label < best) {
+			best = label
+			bestCount = count
+		}
+	}
+	return best
 }

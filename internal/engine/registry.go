@@ -88,6 +88,10 @@ type RegistrationDeps struct {
 	// own params -- which are themselves part of what Sync re-reads.
 	Flags      *flags.Store
 	Reputation ReputationLookup
+	// Decommission holds the retiring segments (#460). nil is valid and
+	// registers a set that evaluates nothing, the same nil-tolerant
+	// contract the two groups above state.
+	Decommission DecommissionStore
 }
 
 // NewRegistry constructs a Registry over eng and store. Nothing is
@@ -206,6 +210,23 @@ func (r *Registry) Sync() []error {
 	for _, pd := range programmatic {
 		r.eng.Register(pd)
 	}
+	r.eng.Register(&watchLivenessTicker{
+		store:      r.store,
+		devices:    r.deps.Shipped.Devices,
+		staleAfter: deviceStaleAfterFrom(nextBuilt),
+		enabled:    deviceSilenceEnabledFrom(nextBuilt),
+	})
+
+	// The decommission watches are rebuilt wholesale on every Sync, like
+	// the ticker above and unlike a stored definition: they hold no
+	// evaluation state of their own (the clock lives on the watch record
+	// in the decommission store), and the store's own change hook drives
+	// Sync, so an accepted or force-removed watch is live on the very next
+	// event rather than the next restart -- #407's contract, extended to
+	// an object that is not in the definitions document at all.
+	decomm := NewDecommissionWatches(r.deps.Decommission)
+	decomm.OnRoutedEmission = r.deps.Expectations.Sink
+	r.eng.Register(decomm)
 
 	inverted, err := NewInvertedExpectations(entries, r.deps.Expectations.Observations)
 	if err != nil {
@@ -253,6 +274,23 @@ func (r *Registry) build(def Definition, policy ReputationPolicy) (Evaluated, er
 		return dd, nil
 	}
 	if def.Kind == KindDeclarative {
+		// Custom first: an operator-authored detection is the one
+		// declarative definition whose whole shape comes from stored
+		// data, so it must not fall through to the shipped builder,
+		// which is keyed by shipped id and has nothing to look up for
+		// it. Its sink is the ordinary reputation sink -- the grouped
+		// variant is a property of specific shipped detectors, and a
+		// custom id is never one of them.
+		// BuildForInspection makes the same discrimination, for the
+		// replay and replayability answers; the two must not drift.
+		if def.Provenance.Origin == ProvenanceCustom {
+			dd, err := BuildCustomDetectionDefinition(def, r.deps.Expectations.Members)
+			if err != nil {
+				return nil, err
+			}
+			dd.OnRoutedEmission = ReputationSink(r.deps.Flags, r.deps.Reputation, policy)
+			return dd, nil
+		}
 		dd, err := BuildShippedDeclarativeDefinition(def)
 		if err != nil {
 			return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)

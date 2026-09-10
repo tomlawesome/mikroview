@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/tomlawesome/mikroview/internal/baseline"
 )
 
 // DefaultDataDir is where every optional persistence path defaults to
@@ -166,9 +168,21 @@ type Store struct {
 	// is the thing an operator actually controls (it is what they set on
 	// a container) and mikroview can derive the rest.
 	MaxMemory ByteSize `yaml:"maxMemory"`
+	// SettingsStorePath is where internal/settings keeps the figure an
+	// admin set from the app's own memory control (#796). It is not a
+	// second copy of MaxMemory: it is empty until somebody moves that
+	// slider, and from then on it is the value that applies, because a
+	// figure chosen with the live consequence on screen is a more recent
+	// and more deliberate statement than the one the file was built
+	// with. mikroview says at startup which of the two it took.
+	//
+	// Optional persistence, same contract as Flags.StorePath: left
+	// empty, the control still works and still resizes the running
+	// buffer, the choice just does not survive a restart.
+	SettingsStorePath string `yaml:"settingsStorePath"`
 }
 
-// assumedBytesPerEvent is what a typical retained event costs: the fixed
+// AssumedBytesPerEvent is what a typical retained event costs: the fixed
 // struct (464 bytes, internal/store.Event) plus one heap allocation for
 // its raw syslog line, rounded to the allocator's size class. Measured in
 // internal/store/memory_test.go's TestRetainedBytesPerEvent against a
@@ -189,7 +203,7 @@ type Store struct {
 // warning compounding it rather than catching it. The worst case is now
 // roughly 2 KiB + the struct, about 3.5x this constant rather than 107x.
 // See #285 finding 5.
-const assumedBytesPerEvent = 624
+const AssumedBytesPerEvent = 624
 
 // Capacity derives the event ring's element count from the configured
 // memory budget. Always at least 1 -- store.New already treats a
@@ -197,7 +211,7 @@ const assumedBytesPerEvent = 624
 // event's assumed cost should fail the same way rather than silently
 // holding zero.
 func (s Store) Capacity() int {
-	n := int64(s.MaxMemory) / assumedBytesPerEvent
+	n := int64(s.MaxMemory) / AssumedBytesPerEvent
 	if n < 1 {
 		n = 1
 	}
@@ -368,6 +382,82 @@ type Entities struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Coverage configures internal/coverage's persisted, admin-manageable
+// coverage-gap declaration store (issue #630/#392): an admin's on-record
+// statement that a given boundary-direction pair is intentionally, not
+// accidentally, quiet. StorePath left empty is a fully supported,
+// deliberate choice, same optional-persistence contract as
+// Entities.StorePath: the store still works, declarations just don't
+// survive a restart.
+type Coverage struct {
+	StorePath string `yaml:"storePath"`
+}
+
+// Hosts configures internal/hosts' host presence register (issue
+// #1016): every host the syslog feed has shown, so the map can grey out
+// one that has gone quiet instead of silently dropping it, plus the
+// marks an operator has put on quiet hosts. StorePath left empty is a
+// fully supported, deliberate choice, same optional-persistence
+// contract as Coverage.StorePath above: the register still works, it
+// just rebuilds from the feed after a restart and the marks do not
+// survive.
+type Hosts struct {
+	StorePath string `yaml:"storePath"`
+}
+
+// Baseline configures internal/baseline's line register (issue #1016,
+// round 49): which source/destination/port/protocol lines the feed has
+// shown, on which of the last few days, so the map can draw a line that
+// is off the established pattern brightly and let every settled one
+// recede.
+//
+// Unlike Hosts.StorePath above, StorePath left empty here is supported
+// but genuinely lossy, and worth saying plainly: the register rebuilds
+// from the feed, but recurrence is *time*, not volume, so a restart
+// leaves every line looking like it was first seen today. The map would
+// then light up everything for the first Days days after every restart.
+// It works, and it is the wrong picture; set a path.
+type Baseline struct {
+	// StorePath is where the register persists. See the note above on
+	// what an empty path really costs here.
+	StorePath string `yaml:"storePath"`
+	// Days and Of are the establishment threshold: a line seen on Days
+	// distinct days out of the last Of is established and recedes.
+	// Defaults are the owner-ratified 3-of-14 (2026-09-07,
+	// docs/design/screens/city/DESIGN.md).
+	//
+	// They are here rather than in internal/settings because that package
+	// is deliberately narrow -- "not a second configuration system", only
+	// values whose whole point is being adjusted against live evidence on
+	// a settings screen. These are deployment shape: how much recurrence
+	// this network needs before it counts as a habit.
+	Days int `yaml:"days"`
+	// Of is the window Days is counted within, in days. Capped at
+	// baseline.MaxDays by the width of the per-line recurrence bitmap, so
+	// a longer window is refused rather than silently truncated.
+	Of int `yaml:"of"`
+	// HostQuietAfter is how long a host may be silent before the map
+	// draws it as quiet. 24 hours by owner ratification (2026-09-07),
+	// replacing a ten-minute default that made an idle laptop look like a
+	// disappearance: "a host silent for ten minutes means nothing".
+	//
+	// It sits in this block rather than under Hosts because it is the
+	// same kind of number as Days and Of -- how patient the map is before
+	// it calls something unusual -- and the owner asked for the three to
+	// be configurable together.
+	HostQuietAfter time.Duration `yaml:"hostQuietAfter"`
+}
+
+// DefaultHostQuietAfter is how long a host may be silent before the map
+// calls it quiet, owner-ratified at 24 hours on 2026-09-07.
+//
+// The number it replaced was ten minutes, chosen in slice B before
+// anything drew it. The owner's correction was that ten minutes is not
+// evidence of anything -- a laptop with its lid shut over lunch is not a
+// host that has gone away -- and that presence is only worth drawing at
+// the scale of a working day.
+const DefaultHostQuietAfter = 24 * time.Hour
+
 // Audit configures internal/audit's persisted admin-action accountability
 // log (issue #112) -- who created a user, changed a detector setting,
 // upserted/deleted an entity, created or revoked an API token, or removed
@@ -397,23 +487,20 @@ type Setup struct {
 	StorePath string `yaml:"storePath"`
 }
 
-// Watchlist configures internal/watchlist's entry store and its
-// internal/matchlog match log (#243) -- the persisted replacement for
-// Control Ports' single flat criticalPorts port list. StorePath (the
-// entries themselves) follows the same optional-persistence contract as
-// every other small store here: left empty, entries still work, just
-// don't survive a restart.
+// Watchlist configures the match log (#243) behind the watchlist -- the
+// persisted replacement for Control Ports' single flat criticalPorts
+// port list. The entries themselves are definitions and live in the
+// definitions store (engine.definitionsStorePath).
 //
-// MatchLogPath does not share that contract -- it has no in-memory-only
-// mode, unlike every other store in this file. Durability is the entire
-// reason this store exists (#243 section 3's "a match must survive a
-// restart" requirement); an in-memory match log would be a second
-// volatile event ring with extra steps, not a lesser version of this
-// feature. So MatchLogPath must be non-empty (see CFG-0040) and
-// MatchLogCapacity must be positive (CFG-0041) -- both a good default
-// out of the box, not settings an operator has to supply.
+// MatchLogPath has no in-memory-only mode, unlike every other store in
+// this file. Durability is the entire reason this store exists (#243
+// section 3's "a match must survive a restart" requirement); an
+// in-memory match log would be a second volatile event ring with extra
+// steps, not a lesser version of this feature. So MatchLogPath must be
+// non-empty (see CFG-0040) and MatchLogCapacity must be positive
+// (CFG-0041) -- both a good default out of the box, not settings an
+// operator has to supply.
 type Watchlist struct {
-	StorePath string `yaml:"storePath"`
 	// MatchLogPath is where internal/matchlog's append-only JSON-lines
 	// file lives.
 	MatchLogPath string `yaml:"matchLogPath"`
@@ -435,8 +522,8 @@ type Watchlist struct {
 	MatchLogRetention time.Duration `yaml:"matchLogRetention"`
 	// SuggestionsStorePath is where internal/suggest's candidate pool
 	// (#243 slice 5 -- watchlist entries suggested from data RouterOS has
-	// already pushed) persists. Same optional-persistence contract as
-	// StorePath above: left empty, suggestions still work, they just
+	// already pushed) persists. Optional persistence, same contract as
+	// Flags.StorePath: left empty, suggestions still work, they just
 	// regenerate from scratch (at Off, nothing lost that matters -- see
 	// internal/suggest's package doc comment) on every restart instead of
 	// remembering what was already accepted or hidden.
@@ -571,9 +658,9 @@ type DetectorScope struct {
 // DetectorSettings is one detector's config.yaml-configurable starting
 // point -- enabled by default, unscoped. A live admin-only UI toggle
 // (see docs/configuration.md's "Per-detector toggles" section) can
-// override this at runtime without a restart, persisted separately to
-// DetectorSettingsStorePath; these YAML values are only ever the seed
-// for the first run, not re-read afterward.
+// override this at runtime without a restart, persisted onto the
+// definition itself in the definitions store; these YAML values are only
+// ever the seed for a definition that store does not already hold.
 type DetectorSettings struct {
 	Enabled bool          `yaml:"enabled"`
 	Scope   DetectorScope `yaml:"scope"`
@@ -664,15 +751,11 @@ type Flags struct {
 	StaleRuleDays          int           `yaml:"staleRuleDays"`
 	StaleRuleCheckInterval time.Duration `yaml:"staleRuleCheckInterval"`
 
-	// DetectorSettingsStorePath persists live UI on/off+scope toggles
-	// (see internal/detect.SettingsStore) so they survive a restart --
-	// same optional-persistence contract as StorePath above. Detectors
-	// map is YAML-only (no env var), same rationale as RuleNames/
+	// Detectors is YAML-only (no env var), same rationale as RuleNames/
 	// HostNames/Devices below: a structured per-detector record doesn't
 	// map cleanly onto env vars. Keyed by detector name (e.g.
-	// "port_scan", "rule_spike" -- see internal/detect.DetectorName).
-	DetectorSettingsStorePath string                      `yaml:"detectorSettingsStorePath"`
-	Detectors                 map[string]DetectorSettings `yaml:"detectors"`
+	// "port_scan", "rule_spike" -- see engine.ShippedDefinitionIDs).
+	Detectors map[string]DetectorSettings `yaml:"detectors"`
 
 	// VPNInterfaces/VPNConfidenceMultiplier (issue #105): see
 	// internal/detect.Config's matching fields for what each one means
@@ -710,14 +793,24 @@ type DeviceMAC struct {
 // definitions store stays in-memory only.
 type Engine struct {
 	StorePath string `yaml:"storePath"`
-	// DefinitionsStorePath persists the definitions store (#404). On
-	// first boot against an empty document, it is seeded from
-	// internal/detect's settings store and internal/watchlist's entries
-	// store (see engine.MigrateDefinitions) -- non-destructively: both
-	// old stores keep reading and writing their own documents until
-	// #405/#406 port their evaluation logic onto this chassis and retire
-	// them.
+	// DefinitionsStorePath persists the definitions store (#404): every
+	// shipped detector and every watchlist expectation, in one document.
+	// Anything it does not already hold is seeded on boot from this
+	// binary's shipped catalogue (see engine.SeedShippedDefinitions).
 	DefinitionsStorePath string `yaml:"definitionsStorePath"`
+	// DecommissionStorePath persists the decommission watches (#460):
+	// each retiring network segment, its clean-window clock and the
+	// last-known names inside the range it retired. Same optional
+	// contract as the two above -- left empty, the watches still work and
+	// simply do not survive a restart.
+	DecommissionStorePath string `yaml:"decommissionStorePath"`
+	// DecommissionCleanWindow is how long a retired range must stay
+	// completely silent before it leaves the map (#460, owner ruling
+	// 2026-08-17: "measured in hours, not days -- param, hours-scale
+	// default"). It is the default offered when a watch is created; each
+	// watch keeps the window it was created with, so changing this does
+	// not retune decommissions already under way.
+	DecommissionCleanWindow time.Duration `yaml:"decommissionCleanWindow"`
 }
 
 // Blocklist configures internal/blocklist's local IP/CIDR "known-bad"
@@ -767,6 +860,32 @@ type NetClass struct {
 	Sources []string `yaml:"sources"`
 }
 
+// OUI configures internal/oui's MAC-vendor lookups: the IEEE MA-L
+// registry that turns a hardware address' first three octets into the
+// organisation that registered them (issue #410's device dossier).
+//
+// On by default, and with no source setting at all: there is exactly
+// one publisher of this registry, and it is named by
+// internal/oui.SourceURL. That follows Blocklist and NetClass above,
+// which take vetted source *names* and deliberately not arbitrary URLs
+// -- an operator enabling a feed is trusting mikroview's vetting of it.
+// Mirroring the file internally, or reaching it through a proxy, is a
+// separate feature and would arrive on that same vetted-name pattern.
+//
+// Refresh cadence is not configurable either, same reasoning as
+// Blocklist and NetClass -- see internal/oui.RefreshInterval.
+type OUI struct {
+	// Enabled at false switches the feed off entirely: no fetch, no
+	// goroutine, and a dossier that reports vendor data as unavailable
+	// rather than pretending an address has no vendor.
+	Enabled bool `yaml:"enabled"`
+	// CachePath is where the parsed registry is kept between restarts,
+	// so vendor names are available immediately on start rather than
+	// after the first fetch. Empty disables the cache (the feed then
+	// re-downloads on every start).
+	CachePath string `yaml:"cachePath"`
+}
+
 // Postgres optionally moves mikroview's persisted state off this host
 // and onto a database server (issue #131).
 //
@@ -802,6 +921,171 @@ type Postgres struct {
 	DSNFile string `yaml:"dsnFile"`
 }
 
+// Snapshot configures the rotated warm-restart documents
+// internal/snapshot writes (#795): the derived state mikroview has
+// learned since it started -- the hourline's per-minute counters, the
+// detectors' rolling windows, each device's first and last seen -- so a
+// restart resumes from a few minutes ago instead of from nothing.
+//
+// Always on, and deliberately without an off switch: the cost is one
+// small JSON file every few minutes, and the thing it prevents (a
+// restart silently resetting every counter and every device's first-seen
+// date to now) is invisible when it happens, which is the worst kind of
+// default to leave to an operator's attention.
+//
+// A snapshot is derived, disposable state, never custody data. It holds
+// counts, minute stamps, rule and log-prefix labels, device ids/names
+// and their first/last seen, and per-source window counts keyed by
+// address. It never holds event lines, payloads or the router-pushed
+// rule/NAT/DHCP tables -- see SECURITY.md and internal/snapshot's own
+// doc comment for why those two are out.
+//
+// This is why Dir is a plain directory even on a Postgres deployment:
+// there is nothing here worth a database round trip every few minutes,
+// and nothing here whose loss matters beyond one cold start.
+type Snapshot struct {
+	// Interval is how often a snapshot is written while mikroview runs.
+	// Below MinSnapshotInterval the default is applied instead
+	// (CFG-0070): the write borrows the evaluation goroutine for the
+	// duration of one export, so a very short interval spends the
+	// process's time describing itself rather than evaluating traffic.
+	Interval time.Duration `yaml:"interval"`
+	// Keep is how many generations are kept in Dir; older ones are
+	// deleted after each write. Below 1 the default is applied
+	// (CFG-0071), since keeping zero would delete the file just
+	// written.
+	//
+	// More than one is kept because the newest file is the one a crash
+	// mid-write can truncate, and the loader falls through to the next
+	// (see snapshot.Load).
+	Keep int `yaml:"keep"`
+	// Dir is where the snapshot-<stamp>.json files live, mode 0600 in a
+	// 0700 directory. Left empty, mikroview puts them beside its other
+	// state -- see main.snapshotDirectory. A directory it cannot create
+	// or write is one startup log line and no snapshots, never a refusal
+	// to boot.
+	Dir string `yaml:"dir"`
+}
+
+const (
+	// defaultSnapshotInterval: five minutes is what #795 settled on --
+	// short enough that a restart loses a few minutes of counters rather
+	// than an hour of them, long enough that the work is invisible next
+	// to evaluating traffic.
+	defaultSnapshotInterval = 5 * time.Minute
+	// defaultSnapshotKeep: six generations, half an hour of history at
+	// the default interval. Enough that a run of bad writes (a full disk
+	// truncating each one in turn) still leaves the loader something
+	// older to fall through to.
+	defaultSnapshotKeep = 6
+	// MinSnapshotInterval is the shortest cadence accepted. Below it,
+	// the write's share of the evaluation goroutine stops being
+	// negligible, and the counters it saves are worth less than the
+	// evaluation it displaces. A shorter value is treated as a mistake
+	// and the default applied -- see CFG-0070.
+	MinSnapshotInterval = 30 * time.Second
+)
+
+// History configures the on-disk event history internal/retention
+// writes (#856): encrypted, compressed daily files holding the same
+// events the ring holds, so a replay can reach further back than memory
+// does.
+//
+// Off unless two things are true: KeyFile names a readable key, and
+// Enabled is set. Both, deliberately. The key alone must not start
+// writing events to disk on an operator who mounted it for something
+// else -- #853 puts the state store and the warm-restart snapshots under
+// the same key -- and the switch alone cannot write anything, because
+// there is no unencrypted mode to fall back to. See
+// docs/decisions/event-retention.md.
+//
+// Unlike Snapshot above, this holds custody data: event lines,
+// addresses, who talked to whom. That is the entire reason for the key
+// and for the default being off. SECURITY.md says the same thing to
+// operators.
+type History struct {
+	// KeyFile is the path to the master key, which must live outside
+	// the data directory. A key kept beside the files it protects is
+	// decoration: whoever copies the directory copies both.
+	//
+	// Not a key value, and not an environment variable -- a path to a
+	// file the operator mounts, per AGENTS.md's secret rule.
+	KeyFile string `yaml:"keyFile"`
+	// Enabled is the operator's switch, beside the memory slider.
+	// Turning it off deletes what was retained (see CFG-0080's note and
+	// retention.Store.Purge): off has to mean the history is gone, or
+	// the setting is a lie.
+	Enabled bool `yaml:"enabled"`
+	// Days is how many days are kept. Below 1 the default is applied
+	// (CFG-0081): zero would mean the day just written is deleted on the
+	// next flush, which is retention that reports itself as on and keeps
+	// nothing.
+	Days int `yaml:"days"`
+	// MaxBytes is the second cap, applied alongside Days -- the oldest
+	// day is dropped when either is hit. It exists because the day count
+	// alone does not bound anything on a deployment logging far more
+	// than it should: the ADR's sizing puts thirty days at roughly
+	// 600MB at the recommended posture, and at ~560 events/sec the same
+	// thirty days would be tens of gigabytes. Below MinRetentionBytes
+	// the default is applied (CFG-0082).
+	MaxBytes int64 `yaml:"maxBytes"`
+	// Dir is where the daily files live, mode 0600 in a 0700 directory.
+	// Left empty, mikroview puts them beside its other state -- see
+	// main.retentionDirectory.
+	Dir string `yaml:"dir"`
+}
+
+const (
+	// defaultRetentionDays: thirty days is what docs/decisions/event-retention.md
+	// settled on -- long enough that a threshold can be loosened against
+	// a fortnight of real traffic rather than an afternoon of it.
+	defaultRetentionDays = 30
+	// defaultRetentionMaxBytes: 1 GiB. At the recommended logging
+	// posture thirty days is about 600MB, so this is only reached by a
+	// deployment that is logging too much -- which is exactly the case
+	// needing a bound the day count cannot give it.
+	defaultRetentionMaxBytes = 1 << 30
+	// MinRetentionBytes is the smallest byte cap accepted. Below about a
+	// megabyte the cap is smaller than a single day at any realistic
+	// rate, so every flush would drop everything but the open day and
+	// the feature would report itself on while holding hours. A smaller
+	// value is treated as a mistake and the default applied -- see
+	// CFG-0082.
+	MinRetentionBytes = 1 << 20
+)
+
+// Backup configures the SFTP drop box that receives RouterOS
+// configuration backups pushed on a schedule (#394) -- named to match
+// the wizard/Settings copy ("router backups"), distinct from the
+// `-backup`/`-restore` CLI flags which back up mikroview's own state
+// (and, per #394, this vault along with it).
+type Backup struct {
+	// Enabled turns the SFTP listener on. Off by default: this is a
+	// second listening port, opened only once an operator has actually
+	// decided to use it -- the wizard's step 6 is what flips it on in
+	// practice.
+	Enabled bool `yaml:"enabled"`
+	// Listen is the drop box's bind address. Fixed default port 47022
+	// (owner decision, #394, deliberately not a conventional SFTP port
+	// like 22 or 2222 -- "rejected as scanner bait" per the issue's own
+	// record), configurable for a deployment that needs a different
+	// port mapped through.
+	Listen string `yaml:"listen"`
+	// VaultDir is where encrypted generations live on disk. Left empty,
+	// mikroview puts them beside its other state -- see
+	// main.backupVaultDirectory -- the same "resolved from the data
+	// directory unless overridden" contract Snapshot.Dir and
+	// History.Dir already use. Deliberately named Dir-style rather than
+	// *Path: it is a directory of many per-router, per-generation files,
+	// not a single JSON document, so it is out of scope for
+	// backup_cli.go's generic backedUpStores loop the same way
+	// History.Dir is -- see that file's excludedFromBackup comment. The
+	// vault's own contents are still carried by -backup/-restore, just
+	// through bespoke code that understands its shape (backup_cli.go's
+	// vaultBundle), not through that generic path.
+	VaultDir string `yaml:"vaultDir"`
+}
+
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
@@ -811,6 +1095,9 @@ type Config struct {
 	Flags      Flags      `yaml:"flags"`
 	Auth       Auth       `yaml:"auth"`
 	Entities   Entities   `yaml:"entities"`
+	Coverage   Coverage   `yaml:"coverage"`
+	Hosts      Hosts      `yaml:"hosts"`
+	Baseline   Baseline   `yaml:"baseline"`
 	Audit      Audit      `yaml:"audit"`
 	Setup      Setup      `yaml:"setup"`
 	Watchlist  Watchlist  `yaml:"watchlist"`
@@ -822,7 +1109,11 @@ type Config struct {
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 	Blocklist  Blocklist  `yaml:"blocklist"`
 	NetClass   NetClass   `yaml:"netClass"`
+	OUI        OUI        `yaml:"oui"`
 	Engine     Engine     `yaml:"engine"`
+	Snapshot   Snapshot   `yaml:"snapshot"`
+	History    History    `yaml:"history"`
+	Backup     Backup     `yaml:"backup"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -860,11 +1151,12 @@ func defaults() Config {
 		},
 		Store: Store{
 			Retention: 24 * time.Hour,
-			// 120MiB / 624 bytes/event (assumedBytesPerEvent) derives to
+			// 120MiB / 624 bytes/event (AssumedBytesPerEvent) derives to
 			// ~201,649 events -- close to the old flat 200,000 default,
 			// so a fresh install's memory footprint does not jump on
 			// upgrade even though the unit did.
-			MaxMemory: 120 * 1024 * 1024,
+			MaxMemory:         120 * 1024 * 1024,
+			SettingsStorePath: DefaultDataDir + "/settings.json",
 		},
 		Log: Log{
 			Level: "info",
@@ -927,8 +1219,7 @@ func defaults() Config {
 			StaleRuleDays:          30,
 			StaleRuleCheckInterval: time.Hour,
 
-			StorePath:                 DefaultDataDir + "/flags.json",
-			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
+			StorePath: DefaultDataDir + "/flags.json",
 
 			// VPNInterfaces is empty by default -- see its doc comment
 			// for why that's the deliberate, backward-compatible no-op
@@ -949,6 +1240,21 @@ func defaults() Config {
 		Entities: Entities{
 			StorePath: DefaultDataDir + "/entities.json",
 		},
+		Coverage: Coverage{
+			StorePath: DefaultDataDir + "/coverage.json",
+		},
+		Hosts: Hosts{
+			StorePath: DefaultDataDir + "/hosts.json",
+		},
+		Baseline: Baseline{
+			StorePath: DefaultDataDir + "/baseline.json",
+			// Taken from internal/baseline rather than restated, so the
+			// shipped default and the register's own fallback can never
+			// drift into disagreeing about what 3-of-14 means.
+			Days:           baseline.DefaultDays,
+			Of:             baseline.DefaultOf,
+			HostQuietAfter: DefaultHostQuietAfter,
+		},
 		Audit: Audit{
 			StorePath: DefaultDataDir + "/audit.json",
 		},
@@ -956,7 +1262,6 @@ func defaults() Config {
 			StorePath: DefaultDataDir + "/setup.json",
 		},
 		Watchlist: Watchlist{
-			StorePath:            DefaultDataDir + "/watchlist.json",
 			MatchLogPath:         DefaultDataDir + "/matchlog.jsonl",
 			MatchLogCapacity:     200_000,
 			MatchLogRetention:    7 * 24 * time.Hour,
@@ -972,6 +1277,11 @@ func defaults() Config {
 		Engine: Engine{
 			StorePath:            DefaultDataDir + "/engine-state.json",
 			DefinitionsStorePath: DefaultDataDir + "/definitions.json",
+			// Mirrors decommission.DefaultCleanWindow -- kept as a
+			// literal so this package stays a dependency-free leaf, the
+			// same reasoning Blocklist.Sources gives just below.
+			DecommissionStorePath:   DefaultDataDir + "/decommission.json",
+			DecommissionCleanWindow: 6 * time.Hour,
 		},
 		Blocklist: Blocklist{
 			// Mirrors internal/blocklist.DefaultSources -- kept as a
@@ -996,6 +1306,33 @@ func defaults() Config {
 			// the same ranges, so leaving Apple's own list out is what
 			// makes ordinary iPhone/iPad/Mac traffic read as a VPN exit.
 			Sources: []string{"tor", "apple_private_relay", "x4b_vpn"},
+		},
+		OUI: OUI{
+			Enabled:   true,
+			CachePath: DefaultDataDir + "/oui-registry.json",
+		},
+		Snapshot: Snapshot{
+			Interval: defaultSnapshotInterval,
+			Keep:     defaultSnapshotKeep,
+			// Dir stays empty on purpose: main.snapshotDirectory resolves
+			// it from the data directory at startup, so a deployment that
+			// moved its state (auth.storePath) keeps its snapshots beside
+			// it rather than on the default volume.
+		},
+		History: History{
+			// Enabled and KeyFile stay zero on purpose: memory-only is
+			// the default and a first-class mode, not a setup step
+			// somebody forgot. Dir is resolved from the data directory
+			// at startup, same as Snapshot.Dir.
+			Days:     defaultRetentionDays,
+			MaxBytes: defaultRetentionMaxBytes,
+		},
+		Backup: Backup{
+			// Enabled stays false on purpose, same reasoning as
+			// History.Enabled above. Listen is set even though the
+			// listener does not start until Enabled is true, so turning
+			// it on needs no second decision about the port.
+			Listen: ":47022",
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -1301,9 +1638,6 @@ func applyEnv(cfg *Config) {
 			cfg.Flags.StaleRuleCheckInterval = d
 		}
 	}
-	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {
-		cfg.Flags.DetectorSettingsStorePath = v
-	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_VPN_INTERFACES"); v != "" {
 		cfg.Flags.VPNInterfaces = parseStringList(v)
 	}
@@ -1333,14 +1667,20 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_ENTITIES_STORE_PATH"); v != "" {
 		cfg.Entities.StorePath = v
 	}
+	if v := os.Getenv("MIKROVIEW_COVERAGE_STORE_PATH"); v != "" {
+		cfg.Coverage.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_HOSTS_STORE_PATH"); v != "" {
+		cfg.Hosts.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_BASELINE_STORE_PATH"); v != "" {
+		cfg.Baseline.StorePath = v
+	}
 	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
 		cfg.Audit.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_SETUP_STORE_PATH"); v != "" {
 		cfg.Setup.StorePath = v
-	}
-	if v := os.Getenv("MIKROVIEW_WATCHLIST_STORE_PATH"); v != "" {
-		cfg.Watchlist.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH"); v != "" {
 		cfg.Watchlist.MatchLogPath = v
@@ -1467,11 +1807,77 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
 		cfg.Blocklist.Sources = parseStringList(v)
 	}
+	if v := os.Getenv("MIKROVIEW_OUI_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.OUI.Enabled = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_OUI_CACHE_PATH"); v != "" {
+		cfg.OUI.CachePath = v
+	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_STORE_PATH"); v != "" {
 		cfg.Engine.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH"); v != "" {
 		cfg.Engine.DefinitionsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_DECOMMISSION_STORE_PATH"); v != "" {
+		cfg.Engine.DecommissionStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_DECOMMISSION_CLEAN_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Engine.DecommissionCleanWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_SNAPSHOT_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Snapshot.Interval = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_SNAPSHOT_KEEP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Snapshot.Keep = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_SNAPSHOT_DIR"); v != "" {
+		cfg.Snapshot.Dir = v
+	}
+	// MIKROVIEW_HISTORY_KEY_FILE is a path, never the key itself.
+	// There is deliberately no environment variable carrying key
+	// material: AGENTS.md's secret rule keeps secrets out of the
+	// environment, where a process listing, a crash dump or a container
+	// inspect would expose them.
+	if v := os.Getenv("MIKROVIEW_HISTORY_KEY_FILE"); v != "" {
+		cfg.History.KeyFile = v
+	}
+	if v := os.Getenv("MIKROVIEW_HISTORY_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.History.Enabled = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_HISTORY_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.History.Days = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_HISTORY_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.History.MaxBytes = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_HISTORY_DIR"); v != "" {
+		cfg.History.Dir = v
+	}
+	if v := os.Getenv("MIKROVIEW_BACKUP_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Backup.Enabled = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_BACKUP_LISTEN"); v != "" {
+		cfg.Backup.Listen = v
+	}
+	if v := os.Getenv("MIKROVIEW_BACKUP_VAULT_DIR"); v != "" {
+		cfg.Backup.VaultDir = v
 	}
 }
 

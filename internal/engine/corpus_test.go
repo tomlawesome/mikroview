@@ -63,9 +63,10 @@ func TestMemoryCorpusReplayVisitsEveryEventInChronologicalOrder(t *testing.T) {
 
 // TestMemoryCorpusReplayPaginatesAcrossMultiplePages shrinks
 // corpusPageSize far below the event count, forcing Replay to walk
-// several pages via its descending-Until cursor -- pinning that the
-// page-boundary dedup (by event ID) and reassembly into chronological
-// order both work, not just the trivial single-page case.
+// several pages via its BeforeID cursor -- pinning that pages don't
+// overlap or drop events (each ID visited exactly once) and that
+// reassembly into chronological order works, not just the trivial
+// single-page case.
 func TestMemoryCorpusReplayPaginatesAcrossMultiplePages(t *testing.T) {
 	origPageSize := corpusPageSize
 	corpusPageSize = 7
@@ -141,5 +142,64 @@ func TestMemoryCorpusReplayTruncatesAtMaxCorpusEvents(t *testing.T) {
 	}
 	if got[len(got)-1].ID != uint64(n) {
 		t.Fatalf("newest kept event ID = %d, want %d", got[len(got)-1].ID, n)
+	}
+}
+
+// TestMemoryCorpusReplayReportsTruncatedWhenCursorIsEvicted pins the
+// eviction-during-replay case issue #759 named but didn't originally
+// surface to a caller: BeforeID pages don't overlap or drop events among
+// what the ring still holds when each page runs, but that guarantee says
+// nothing about an event the ring evicts *between* two pages, under fast
+// ingest, while Replay isn't holding the lock. When that happens, the
+// events the lost page would have returned are gone for good, and Replay
+// must report that via CorpusWindow.Truncated rather than stopping
+// silently the same way it would at a genuine, uncontended end of
+// history -- collapsing the two would mean a caller can never tell "I
+// read everything currently retained" from "the ring evicted the rest
+// while I was reading it."
+//
+// afterReplayPageForTest deterministically forces the eviction to land
+// between exactly the two pages this test cares about, rather than
+// relying on a timing race between concurrent goroutines -- the same
+// reason internal/store's queryScanHook pins a scan count instead of a
+// wall-clock duration: see that field's own doc comment for why a timing
+// race is the wrong tool here (#501, #744).
+func TestMemoryCorpusReplayReportsTruncatedWhenCursorIsEvicted(t *testing.T) {
+	origPageSize := corpusPageSize
+	corpusPageSize = 2
+	t.Cleanup(func() { corpusPageSize = origPageSize })
+
+	const capacity = 6
+	s := store.New(capacity, time.Hour)
+	base := time.Now().Add(-time.Minute)
+	for i := 0; i < capacity; i++ {
+		s.Insert(corpusEvent(base.Add(time.Duration(i)*time.Second), fmt.Sprintf("10.4.0.%d", i)))
+	}
+
+	var evicted bool
+	afterReplayPageForTest = func() {
+		if evicted {
+			return
+		}
+		evicted = true
+		// Wrap the ring with a full capacity's worth of new events,
+		// evicting everything the first page read -- including the
+		// event it handed the next page as a resume cursor -- before
+		// that next page runs.
+		for i := 0; i < capacity; i++ {
+			s.Insert(corpusEvent(base.Add(time.Duration(capacity+i)*time.Second), fmt.Sprintf("10.4.1.%d", i)))
+		}
+	}
+	t.Cleanup(func() { afterReplayPageForTest = nil })
+
+	c := NewMemoryCorpus(s)
+	var got []store.Event
+	w := c.Replay(func(e store.Event) { got = append(got, e) })
+
+	if !w.Truncated {
+		t.Fatalf("CorpusWindow.Truncated = false, want true -- the second page's events were evicted before Replay could read them")
+	}
+	if w.Count != corpusPageSize || len(got) != corpusPageSize {
+		t.Fatalf("Count/visited = %d/%d, want exactly %d (only the first page's events -- the second page's cursor was evicted)", w.Count, len(got), corpusPageSize)
 	}
 }

@@ -64,11 +64,32 @@ var maxDevices = 256
 // number.
 var maxRecordsPerKind = 5000
 
+// maxVersionHints bounds versionHints the same way internal/setup's
+// maxSources bounds its own source-keyed maps: the key is the requester's
+// source IP, chosen by whoever connects, since /ca.crt is deliberately
+// public (#436 step 3). Evict the least-recently-hinted rather than
+// refuse outright, so a flood cannot permanently blot out the hint for
+// the router an operator is actually setting up.
+var maxVersionHints = 256
+
 // Store is safe for concurrent use: Apply takes the write lock, every
 // read takes the read lock. Construct with New.
 type Store struct {
 	mu      sync.RWMutex
 	devices map[string]*deviceState
+	// versionHints holds what an unauthenticated /ca.crt?ros= fetch
+	// claimed as its RouterOS version, keyed by the request's source IP
+	// rather than by device -- there is no device identity at all at
+	// that point in the wizard, only an address (#436 step 3). See
+	// NoteVersionHint and VersionHint.
+	versionHints map[string]versionHint
+}
+
+// versionHint is one source address's unauthenticated claim about its
+// own RouterOS version, and when it was last made.
+type versionHint struct {
+	version string
+	at      time.Time
 }
 
 type deviceState struct {
@@ -85,6 +106,11 @@ type deviceState struct {
 	// rebuild every other's.
 	hostsExact map[string]hostName
 	hostsCIDR  []cidrName
+	// departures is this device's address-table baseline and its pending
+	// decommission offers (#460) -- nil until a first *complete*
+	// ip-address cycle has arrived. See departures.go, which is entirely
+	// about why that word "complete" carries the design.
+	departures *departureState
 }
 
 // hostName is one resolved router-supplied name plus which pushed table
@@ -122,7 +148,26 @@ type kindState struct {
 }
 
 func New() *Store {
-	return &Store{devices: make(map[string]*deviceState)}
+	return &Store{
+		devices:      make(map[string]*deviceState),
+		versionHints: make(map[string]versionHint),
+	}
+}
+
+// Reset drops every device's pushed tables and every unauthenticated
+// version hint, putting the Store back to what New returns. Written for
+// the test-only POST /api/test/reset (#1064): a filter or NAT table a
+// sibling scenario pushed is the residue that makes the next one's
+// coverage answer depend on which scenarios ran before it.
+//
+// In-memory only by this package's design, so there is nothing to
+// persist and nothing on disk to tidy up -- a real router simply pushes
+// again on its next cycle.
+func (s *Store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.devices = make(map[string]*deviceState)
+	s.versionHints = make(map[string]versionHint)
 }
 
 // Apply stores one validated page of pushed state for device. The
@@ -187,6 +232,12 @@ func (s *Store) Apply(device string, p ingest.Payload, now time.Time) error {
 	switch p.Kind {
 	case ingest.KindDNSStatic, ingest.KindDHCPLease, ingest.KindWireguardPeer:
 		ds.rebuildIdentityLocked()
+	case ingest.KindIPAddress:
+		// A segment "goes" when a later complete push stops carrying it
+		// (#460). Only a complete cycle is ever compared -- see
+		// departures.go -- so this is a no-op for every page but the one
+		// that finishes a table.
+		ds.noteAddressCycleLocked(device, p, now)
 	}
 	return nil
 }
@@ -519,6 +570,84 @@ func (s *Store) AddressLists(device string) (entries []ingest.AddressListEntry, 
 	return entries, ks.updatedAt, true
 }
 
+// IPAddresses returns device's pushed /ip/address table, sorted by
+// address -- issue #627, mirroring ARPEntries: an interface's own
+// configured address rather than what the router has observed answering
+// (ARP) or handed out (a DHCP lease).
+func (s *Store) IPAddresses(device string) (entries []ingest.IPAddressEntry, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindIPAddress)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		entries = append(entries, p.IPAddresses...)
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Address < entries[j].Address })
+	return entries, ks.updatedAt, true
+}
+
+// WireguardInterfaces returns device's pushed /interface/wireguard
+// table, sorted by name. ok is false when the wireguard-interface kind
+// has never been pushed for this device -- the same "no data yet"
+// convention every other accessor here uses. Issue #874's city-9 ingest
+// side: this and WireguardPeers/PPPActive are what the API layer
+// derives per-tunnel up/down/unknown state from; this package only
+// holds the pushed rows.
+func (s *Store) WireguardInterfaces(device string) (interfaces []ingest.WireguardInterface, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindWireguardInterface)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		interfaces = append(interfaces, p.WireguardInterfaces...)
+	}
+	sort.SliceStable(interfaces, func(i, j int) bool { return interfaces[i].Name < interfaces[j].Name })
+	return interfaces, ks.updatedAt, true
+}
+
+// WireguardPeers returns device's pushed /interface/wireguard/peers
+// table, sorted by public key. ok is false when the wireguard-peer kind
+// has never been pushed for this device.
+func (s *Store) WireguardPeers(device string) (peers []ingest.WireguardPeer, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindWireguardPeer)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		peers = append(peers, p.WireguardPeers...)
+	}
+	sort.SliceStable(peers, func(i, j int) bool { return peers[i].PublicKey < peers[j].PublicKey })
+	return peers, ks.updatedAt, true
+}
+
+// PPPActive returns device's pushed /ppp/active table (issue #874),
+// sorted by name. ok is false when the ppp-active kind has never been
+// pushed for this device -- distinct from "pushed, currently empty",
+// which is every session on the device being down right now.
+func (s *Store) PPPActive(device string) (sessions []ingest.PPPActiveSession, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindPPPActive)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		sessions = append(sessions, p.PPPActive...)
+	}
+	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].Name < sessions[j].Name })
+	return sessions, ks.updatedAt, true
+}
+
 // Devices returns every device with at least one pushed page, sorted by
 // name -- the enumeration FilterRules/DHCPLeases/etc need a caller to
 // already have a device name, this is how a caller (e.g. the suggestions
@@ -551,6 +680,70 @@ func (s *Store) RouterOSVersion(device string) (version string, updatedAt time.T
 		return "", time.Time{}, false
 	}
 	return ds.routerosVersion, ds.routerosVersionAt, true
+}
+
+// NoteVersionHint records what a source address's /ca.crt?ros= fetch
+// claimed as its RouterOS version (#436 step 3) -- the wizard's first
+// step, so mikroview can pick the right command dialect before that
+// router has pushed anything at all.
+//
+// This is untrusted, unauthenticated text: /ca.crt is deliberately
+// public, so anyone can hint anything for any address. It is stored
+// anyway, because the one thing it is used for -- VersionHint, read only
+// as a fallback when no push has reported a version -- costs nothing
+// worse than showing the wrong (but never harmful) set of RouterOS
+// commands to whoever is looking at the wizard from that address. main.go's
+// handler validates the value before calling this (length and character
+// class), but this method does not re-check that -- it only refuses an
+// empty source or version, same as every other Note* method here.
+func (s *Store) NoteVersionHint(sourceIP, version string, now time.Time) {
+	if sourceIP == "" || version == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.versionHints[sourceIP]; !exists {
+		evictOldestVersionHint(s.versionHints, maxVersionHints)
+	}
+	s.versionHints[sourceIP] = versionHint{version: version, at: now}
+}
+
+// VersionHint returns the version last hinted for sourceIP by an
+// unauthenticated /ca.crt?ros= fetch, and when. ok is false when nothing
+// has hinted for that address.
+//
+// Callers must prefer RouterOSVersion (an actual push) over this, and
+// only fall back to it when RouterOSVersion reports ok=false -- a pushed
+// version is real evidence from an authenticated router; this is a
+// guess offered before that evidence exists, and must never override it.
+func (s *Store) VersionHint(sourceIP string) (version string, at time.Time, ok bool) {
+	if sourceIP == "" {
+		return "", time.Time{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	h, ok := s.versionHints[sourceIP]
+	if !ok {
+		return "", time.Time{}, false
+	}
+	return h.version, h.at, true
+}
+
+// evictOldestVersionHint drops the least-recently-hinted entry when m is
+// at cap, mirroring internal/setup's evictOldest -- one at a time, since
+// this runs at most once per new source address.
+func evictOldestVersionHint(m map[string]versionHint, cap int) {
+	if len(m) < cap {
+		return
+	}
+	var oldestKey string
+	var oldest time.Time
+	for k, v := range m {
+		if oldestKey == "" || v.at.Before(oldest) {
+			oldestKey, oldest = k, v.at
+		}
+	}
+	delete(m, oldestKey)
 }
 
 // PushedKinds reports, for one device, every table it has pushed and

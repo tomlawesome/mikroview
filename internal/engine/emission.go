@@ -56,6 +56,30 @@ type Emission struct {
 	// definition declared EvidenceNAT and the event carried one -- see
 	// EvidenceSet.SetNAT.
 	NAT *NATInfo
+	// Pairs/PairsTotal/PairsTotalIsFloor are #654's addition: the (host,
+	// port) combinations actually seen together, structural only like NAT
+	// above (no {Pairs} token -- a Detail sentence naming specific pairs
+	// would make the same single-event-stands-for-the-window claim #379
+	// found, just for a pair instead of a port). PairsTotal is the
+	// distinct count before EvidenceSet.Pairs's display cap, carried
+	// separately so a caller can state "50 of 214 pairs" rather than
+	// showing 50 and letting the list read as complete -- see
+	// EvidenceSet.PairsTotal. PairsTotalIsFloor says whether that count is
+	// exact or a lower bound (EvidenceSet.AddPair's own storage ceiling,
+	// maxEvidencePairsTracked, traded exactness for a bounded memory
+	// footprint past a point -- see that constant's doc comment); a
+	// caller must render the floor case as "50 of 200+", never a flat
+	// "50 of 200".
+	Pairs             []HostPort
+	PairsTotal        int
+	PairsTotalIsFloor bool
+	// SrcMAC is the triggering event's source MAC address, when the
+	// definition declared EvidenceMAC and recordEvidence's locality gate
+	// passed -- see EvidenceSet.SetSrcMAC. Structural only, like NAT: a
+	// MAC identifies a device for whatever consumes the flag downstream
+	// (#654's motivating case is a future watchlist draft surviving a
+	// DHCP lease change), it is not part of any human-readable sentence.
+	SrcMAC string
 	// Confidence is 0-100, set only by a definition that makes a
 	// statistical judgment call rather than a deterministic threshold
 	// crossing -- the Emission-level counterpart to flags.Flag.Confidence
@@ -63,6 +87,25 @@ type Emission struct {
 	// the definition's own evaluation code, not by RenderEmission, which
 	// has no confidence computation of its own.
 	Confidence *int
+	// Size is this emission's *size*: the measure this definition
+	// compares against its threshold, and the one number an expectation
+	// for (definition, target) is recorded in and judged against (#640 --
+	// see flags.Exclusion.Absorbs). For a declarative definition it is
+	// always the counting-mode tally that crossed the threshold; a
+	// programmatic one sets whatever its own declaration names.
+	//
+	// nil means this definition declares no size, mirroring Confidence's
+	// "nil means not scored" convention just above: some judgements have
+	// no count to be normal at (device_silence is an absence,
+	// known_bad_ip is list membership), and a made-up number would be a
+	// claim on the ledger nobody measured. Every shipped definition's
+	// declaration -- including the ones that declare none -- is in
+	// shipped_params.go's ShippedSizeMeasure, which shipped_params_test.go
+	// requires to be exhaustive rather than defaulted.
+	//
+	// Populated by the definition's own evaluation code, not by
+	// RenderEmission, same as Target/Confidence above.
+	Size *int
 	// Country/EventTime carry the triggering store.Event's SrcCountry and
 	// ReceivedAt forward -- added by #405, which is this package's first
 	// real producer of an Emission from live traffic (router.go's own doc
@@ -196,6 +239,18 @@ func RenderEmission(evidence *EvidenceSet, count int, detailTemplate string, pro
 	// the window, and a Detail sentence naming it would make exactly the
 	// single-event-stands-for-the-window claim #379 found.
 	em.NAT = evidence.NAT()
+	// Pairs/PairsTotal/PairsTotalIsFloor/SrcMAC are structural only too,
+	// for the same reason NAT is -- see Emission's own doc comment on
+	// each field. Unlike Ports/Hosts/Labels there is no "was this ever
+	// accumulated" gate to apply here: Pairs()/PairsTotal()/
+	// PairsTotalIsFloor() simply read whatever EvidenceSet.AddPair
+	// recorded (empty/zero/false for a definition that never declared
+	// EvidencePairs, exactly like NAT stays nil for one that never
+	// declared EvidenceNAT), and SrcMAC() reads "" the same way.
+	em.Pairs = evidence.Pairs()
+	em.PairsTotal = evidence.PairsTotal()
+	em.PairsTotalIsFloor = evidence.PairsTotalIsFloor()
+	em.SrcMAC = evidence.SrcMAC()
 
 	var unaccumulated []string
 	detail := emissionToken.ReplaceAllStringFunc(detailTemplate, func(tok string) string {

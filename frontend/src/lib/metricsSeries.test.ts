@@ -91,6 +91,19 @@ describe('the metrics hour', () => {
     expect(hour.brink).toBe(minute(2))
   })
 
+  it('defaults every minute to an unknown top port/talker, then fills in whatever the tops payload answers for (#644 round 21)', () => {
+    const hour = buildHour(traffic, flags, [
+      { time: minute(0), talker: 'nas', port: '443', complete: true },
+      { time: minute(1), complete: false },
+      // No entry at all for minute(2) -- e.g. the tops poll hasn't
+      // landed yet, or that minute has aged off the tops axis.
+    ])
+    expect(hour.tops).toHaveLength(3)
+    expect(hour.tops[0]).toEqual({ talker: 'nas', port: '443', complete: true })
+    expect(hour.tops[1]).toEqual({ talker: undefined, port: undefined, complete: false })
+    expect(hour.tops[2]).toEqual({ complete: false })
+  })
+
   it('reads a whole minute at once, across every series', () => {
     const hour = buildHour(traffic, flags)
     const reading = readMinute(hour, 1)!

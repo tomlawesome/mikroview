@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { fetchDevices, fetchEvents, fetchStats } from './api'
+import { clearIngestLoss as clearIngestLossApi, fetchDevices, fetchEvents, fetchStats } from './api'
 import { matchesAddressQuery, type AddressCandidate } from './addressMatch'
 import { MAX_CLIENT_EVENTS } from './constants'
+import { LANDING_BY_CARD } from './deckCards'
+import { deckOrderState } from './deckOrder.svelte'
 import { matchesCountry, UNKNOWN_COUNTRY } from './countryMatch'
 import { countryFlag, isPublicIp } from './format'
+import {
+  EMPTY_WS_DROPPED_EPISODE,
+  noteWsDropped,
+  wsDroppedActive as isWsDroppedActive,
+  type WsDroppedEpisode,
+} from './ingestLossBanners'
 import { matchesPortQuery } from './portMatch'
 import { retentionState } from './retention.svelte'
 import {
@@ -31,8 +39,10 @@ function stamp(events: FirewallEvent[]): ClientEvent[] {
 
 export type ConnState = 'connecting' | 'open' | 'closed'
 
-// 'live' is the scrolling event table + filter bar; 'metrics' is the
-// metrics page (see Metrics.svelte); 'watchlist' (issue #243) is the
+// 'fall' (#616) is the ratified hero live view and landing page (see
+// Fall.svelte) -- a band per boundary, live spectrum on top, time
+// pouring down below it; 'live' is the scrolling event table + filter
+// bar (Stream, the fall's own click-through target); 'metrics' is the
 // admin-only watched-ports/watched-devices management tab (see
 // Watchlist.svelte, successor to the old Control Ports tab) -- it also
 // carries a Suggestions tab (#243 slice 5, merged in by #547) for
@@ -48,7 +58,7 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // Entities.svelte, issue #107); 'fleet' (issue #98) is the
 // multi-router-fleet health table (see Fleet.svelte) -- every known
 // device, live/stale/never-seen status, last-seen, and event counts in
-// one place, richer than the toolbar's always-on DeviceStatus dot-strip;
+// one place, and the only device-health view there is;
 // 'audit' (issue #112) is the admin-only, read-only log of
 // admin-privileged mutations (see AuditLog.svelte); 'engineroom' (#490)
 // is mikroview's own signal path drawn as a live vertical diagram, with
@@ -58,9 +68,9 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // pages wholesale: 'users' and 'tokens' (#548's account/API-token
 // management pages, successors to the UsersOverlay/TokensOverlay
 // modals) and 'detectors' (the per-detector on/off + scope settings
-// tab) -- all three retired with no alias once the engine room's doors
-// and watchers station existed to replace them (see
-// EngineRoomDoors.svelte/EngineRoomWatchers.svelte, which reuse their
+// tab) -- all three retired with no alias once the engine room's keys/
+// people groups and watchers station existed to replace them (see
+// EngineRoom.svelte/EngineRoomWatchers.svelte, which reuse their
 // state modules and API calls unchanged). A real (if minimal) view
 // switch -- only one is ever mounted at a time -- rather than a modal
 // layered over the live table, which used to leave LiveTable running
@@ -73,7 +83,21 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // the shell now (see SetupWizard.svelte), not a page to navigate to, so
 // the route is gone rather than aliased or redirected -- "Run setup…"
 // opens the modal from wherever the operator already is.
+//
+// 'fall' (#616) is the ratified hero live view and landing page -- see
+// Fall.svelte. It retires #544's interim ("Stream as landing") wholesale:
+// the default view below is 'fall', not 'live', and Stream keeps its own
+// Live-group row rather than being the entry point.
+// 'tune-logging' (#435) is the config-annotation helper -- its own
+// surface, not a wizard step (the issue's decision 2), reached from the
+// wizard's finish screen and from the topography's coverage lens on a
+// dark pair. Deliberately outside the deck (see App.svelte's DECK_VIEWS
+// and its own comment): a workflow you step into and leave, not a
+// dashboard you'd swipe to, the same shape Fleet historically had before
+// #647/#785 folded it in.
 export type View =
+  | 'fall'
+  | 'topography'
   | 'live'
   | 'metrics'
   | 'watchlist'
@@ -82,6 +106,7 @@ export type View =
   | 'fleet'
   | 'audit'
   | 'engineroom'
+  | 'tune-logging'
 
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
@@ -96,7 +121,11 @@ export type View =
 // `events` with that server-filtered baseline, so the two layers
 // together cover both "instant" and "actually complete" filtering.
 class AppState {
-  view = $state<View>('live')
+  // #616: the fall is the ratified landing default; #633's Settings
+  // shelf lets the operator reorder the deck, and sign-in lands on
+  // whichever card they keep first (rounds 23-25). Every card's landing
+  // view is role-safe -- see LANDING_BY_CARD's own comment.
+  view = $state<View>(LANDING_BY_CARD[deckOrderState.order[0]] ?? 'fall')
   // $state.raw, not $state: every write to this array replaces it whole
   // (setInitialEvents, appendUnseen and flushIncoming all reassign rather
   // than mutate), so the deep per-element proxy a plain $state would build
@@ -108,7 +137,14 @@ class AppState {
   devices = $state<Device[]>([])
   stats = $state<Stats | null>(null)
   connState = $state<ConnState>('connecting')
+  // Cumulative total, as ws.ts reads it straight off the socket.
   wsDropped = $state(0)
+  // #1015: wsDropped's own episode, mirroring the freshness treatment
+  // the server now gives its four counters (see lib/ingestLossBanners.ts
+  // -- noteWsDropped/wsDroppedActive) since this one is a browser-side
+  // total the server has never seen. wsDroppedActive is declared below,
+  // beside `now`, which it depends on -- see that field's own comment.
+  wsDroppedEpisode = $state<WsDroppedEpisode>(EMPTY_WS_DROPPED_EPISODE)
   // ruleMatches holds the ids matching the current regex pattern, or
   // null when there is nothing usable to filter by. Kept here rather than
   // inside the Worker so eviction is handled where eviction already
@@ -132,6 +168,15 @@ class AppState {
   // successful call, whichever of the two runs it.
   fetchFailed = $state(false)
 
+  // #1089: set by App.svelte's handleApiError when a background poll
+  // (stats, devices, flags, watchlist) fails with anything other than a
+  // 401 -- those already bounce to login. A short human message ("stats:
+  // <error>") naming which poll failed, or null when the most recent
+  // refresh of every kind succeeded. Distinct from fetchFailed above,
+  // which only ever describes the one-shot loadInitial()/
+  // refetchWithFilters() path, not the recurring polls.
+  refreshError = $state<string | null>(null)
+
   // True once the app's one loadInitial() call (App.svelte's mount
   // effect) has settled, success or failure -- never cleared afterward.
   // #549's "Loading" chrome state (shell plus ghost rows, never a
@@ -153,6 +198,17 @@ class AppState {
   paused = $state(false)
   pendingCount = $state(0)
   autoscroll = $state(true)
+
+  // When the hold was taken, and when the lines held here were last
+  // wiped -- both ms, both null when the state they describe is not the
+  // case. Rounds 36-38 draw each as a fact on the whisper's stat line
+  // ("held at 14:02:11 · 212 arrived since, waiting"; "wiped 14:02:11")
+  // and the wipe again in the empty table ("nothing since 14:02:11 --
+  // wiped here, by you"), so the moment has to be recorded rather than
+  // inferred: neither can be recovered from the buffer afterwards, and
+  // a wipe's whole point is that the buffer no longer holds it.
+  pausedAt = $state<number | null>(null)
+  wipedAt = $state<number | null>(null)
 
   // Open row-anchored surfaces. Newest-at-top (#363) pushes rows *down*
   // as events arrive, so a popover anchored to a row it is about would
@@ -244,6 +300,10 @@ class AppState {
   // in filteredEvents actually re-evaluates over time, not just when the
   // buffer itself changes.
   now = $state(Date.now())
+  // #1015: wsDropped's `active`, recomputed against `now` above so a tab
+  // that stopped dropping events falls quiet on the next tick without
+  // needing a new WS message to tell it to.
+  wsDroppedActive = $derived(isWsDroppedActive(this.wsDroppedEpisode, this.now))
 
   private pendingBuffer: ClientEvent[] = []
 
@@ -418,6 +478,10 @@ class AppState {
     })
     if (fresh.length === 0) return []
     this.events = [...this.events, ...fresh].slice(-MAX_CLIENT_EVENTS)
+    // The wipe notice describes a silence, and the silence has ended --
+    // "nothing since 14:02:11" is false the moment a line lands, and a
+    // stale one would keep saying it for the rest of the session.
+    this.wipedAt = null
     return fresh
   }
 
@@ -429,6 +493,8 @@ class AppState {
     this.events = stamp(events)
       .filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
       .slice(-MAX_CLIENT_EVENTS)
+    // As in appendUnseen: a refilled buffer is not a wiped one.
+    if (this.events.length > 0) this.wipedAt = null
     this.syncRuleMatches()
   }
 
@@ -466,6 +532,7 @@ class AppState {
 
   togglePause() {
     this.paused = !this.paused
+    this.pausedAt = this.paused ? Date.now() : null
     if (!this.paused && this.pendingBuffer.length) {
       // The third insert path, and the easiest to forget: a pause that
       // spans a reconnect can hold events the refreshed buffer already
@@ -502,10 +569,26 @@ class AppState {
   // `label` is '' for a removed label, which restores the raw value --
   // matching what the server will resolve for the next event, since the
   // entity is gone.
-  relabel(type: 'host' | 'port' | 'rule', key: string, label: string) {
+  relabel(type: 'host' | 'port' | 'rule' | 'device', key: string, label: string) {
+    // A device name is not stamped on events at all: rows read it from
+    // this list, which the server refreshes every STATS_REFRESH_MS and
+    // serves identically to every session (#600). So the rename needs
+    // no buffer rewrite -- only this list, brought forward by the few
+    // seconds until the next poll confirms it, and falling back to the
+    // raw id when a label is removed, exactly as the server will.
+    if (type === 'device') {
+      this.devices = this.devices.map((d) =>
+        d.id === key ? { ...d, name: label || d.id, nameSource: label ? 'entity' : 'none' } : d,
+      )
+      return
+    }
+
     const name = label || undefined
-    const rewrite = (e: ClientEvent): ClientEvent => {
-      switch (type) {
+    // Narrowed once, here: `type` is a parameter, so the early return
+    // above does not narrow it inside the closure below.
+    const kind: 'host' | 'port' | 'rule' = type
+    const rewrite = <E extends FirewallEvent>(e: E): E => {
+      switch (kind) {
         case 'host': {
           const src = e.srcIp === key
           const dst = e.dstIp === key
@@ -523,6 +606,7 @@ class AppState {
       }
     }
 
+
     // Every buffer that can still reach the screen, not just `events`:
     // a rename made while paused, or in the moment between a websocket
     // batch landing and the next flush, would otherwise show the old
@@ -533,6 +617,13 @@ class AppState {
     if (this.frozenPool !== null) this.frozenPool = this.frozenPool.map(rewrite)
     this.incomingBuffer = this.incomingBuffer.map(rewrite)
     this.pendingBuffer = this.pendingBuffer.map(rewrite)
+
+    // A server fetch in flight right now was snapshotted before this
+    // rename reached the server's buffer, so its response still carries
+    // the old name and would undo everything above the moment it lands
+    // (#993: ~9 ms later, wholesale, via setInitialEvents). Remember the
+    // rewrite so that response gets it too -- see fetchEventsRelabelSafe.
+    if (this.eventsFetchesInFlight > 0) this.midFlightRelabels.push(rewrite)
   }
 
   clearBuffer() {
@@ -540,6 +631,11 @@ class AppState {
     this.pendingBuffer = []
     this.pendingCount = 0
     this.incomingBuffer = []
+    // What the whisper and the empty table then say happened, and when.
+    // Only this screen's copy went: the server's ring is untouched, which
+    // is the half of it the operator cannot see and so the half the
+    // interface has to state (rounds 36-38, `#hwipe`).
+    this.wipedAt = Date.now()
     // Release the #232 freeze snapshot too, or Clear is a no-op on screen
     // whenever autoscroll is off: the buffer empties and the table keeps
     // rendering the frozen pool, with nothing to explain why and no way
@@ -580,18 +676,52 @@ class AppState {
     }
   }
 
+  // The rename-vs-refetch race (#993). loadInitial/refetchWithFilters
+  // replace `events` wholesale with the server's snapshot -- and a
+  // snapshot taken before a rename reached the server carries the old
+  // name, so landing it after relabel() has run silently undoes the
+  // rename on every visible row (an operator only needs to change a
+  // filter, then rename within FILTER_DEBOUNCE_MS + the round trip).
+  //
+  // The guard: relabels taken while a fetch is in flight are recorded
+  // and re-applied, once, to that fetch's response before it lands.
+  // Scoped to the flight on purpose -- cleared the moment no fetch is
+  // outstanding, never consulted at render -- so this stays a one-shot
+  // rewrite in relabel()'s own mould, not the standing overlay its
+  // comment records as rejected. Fetches *issued* after the save need
+  // nothing from this: the server re-stamps its buffered events on
+  // entity upsert/delete (internal/api's restampBufferedNames), so
+  // their responses already carry the new name.
+  //
+  // Plain fields, not $state: nothing renders from them, same reasoning
+  // as `holds` above.
+  private eventsFetchesInFlight = 0
+  private midFlightRelabels: (<E extends FirewallEvent>(e: E) => E)[] = []
+
+  private async fetchEventsRelabelSafe(): Promise<FirewallEvent[]> {
+    this.eventsFetchesInFlight++
+    try {
+      const res = await fetchEvents({ ...this.filters, limit: 500 })
+      const raced = this.midFlightRelabels
+      return raced.length === 0 ? res.events : res.events.map((e) => raced.reduce((ev, rw) => rw(ev), e))
+    } finally {
+      this.eventsFetchesInFlight--
+      if (this.eventsFetchesInFlight === 0) this.midFlightRelabels = []
+    }
+  }
+
   async loadInitial() {
     // Uses whatever's already in this.filters -- App.svelte sets this from
     // the URL's query string (if present) before calling loadInitial(), so
     // a shared/bookmarked filtered link loads pre-filtered instead of
     // fetching everything and only filtering after the fact.
     try {
-      const [eventsRes, devices, stats] = await Promise.all([
-        fetchEvents({ ...this.filters, limit: 500 }),
+      const [events, devices, stats] = await Promise.all([
+        this.fetchEventsRelabelSafe(),
         fetchDevices(),
         fetchStats(),
       ])
-      this.setInitialEvents(eventsRes.events)
+      this.setInitialEvents(events)
       this.devices = devices
       this.stats = stats
       this.fetchFailed = false
@@ -616,8 +746,7 @@ class AppState {
   // to exist alongside client-side filtering, not instead of it.
   async refetchWithFilters() {
     try {
-      const res = await fetchEvents({ ...this.filters, limit: 500 })
-      this.setInitialEvents(res.events)
+      this.setInitialEvents(await this.fetchEventsRelabelSafe())
       this.fetchFailed = false
     } catch (err) {
       // Deliberately does not touch `events` -- the pre-refetch buffer is
@@ -633,6 +762,84 @@ class AppState {
     const [devices, stats] = await Promise.all([fetchDevices(), fetchStats()])
     this.devices = devices
     this.stats = stats
+  }
+
+  // #1015: folds one new cumulative wsDropped total (ws.ts's onmessage)
+  // into its episode -- see noteWsDropped's own comment for the rule.
+  // wsDroppedActive above re-derives off `now`, ticked by tick() below,
+  // so a tab that stopped dropping events falls quiet without a new
+  // WS message telling it to.
+  noteWsDropped(total: number) {
+    this.wsDroppedEpisode = noteWsDropped(this.wsDroppedEpisode, total, this.now)
+    this.wsDropped = total
+  }
+
+  // A new WS connection is a new server-side client registration whose
+  // dropped counter starts back at 0 (ws.ts's onopen) -- the episode
+  // resets with it rather than carrying a stale lastAt across
+  // connections.
+  resetWsDropped() {
+    this.wsDropped = 0
+    this.wsDroppedEpisode = EMPTY_WS_DROPPED_EPISODE
+  }
+
+  // IngestLossDrawer.svelte's "Clear all" (#1015): clears the server's
+  // four ingest-loss counters, zeroes wsDropped locally (it is per-tab
+  // and the server has never seen it, so there is nothing server-side
+  // to clear), then refreshes stats immediately -- the drawer's
+  // disappearance is the confirmation, so it cannot wait for the next
+  // 5s poll.
+  async clearIngestLoss() {
+    await clearIngestLossApi()
+    this.resetWsDropped()
+    await this.refreshDevicesAndStats()
+  }
+
+  // #1083: signing out must not leave the next person to sign in on this
+  // tab looking at the previous account's events, filters, devices or
+  // stats -- this is a singleton that survives a logout/login pair, not
+  // a fresh page load. Called from both auth.svelte.ts logout paths.
+  //
+  // Puts every field that holds this account's own data back to exactly
+  // what the constructor/initialisers above set it to -- including the
+  // private, non-reactive buffers (pendingBuffer/incomingBuffer hold
+  // real un-flushed events; matchedPattern/ruleDebounce/holds are
+  // per-session bookkeeping tied to that data), since those are as much
+  // "the previous session's data" as the reactive fields are.
+  //
+  // Deliberately left alone: `view` (which tab is open is navigation,
+  // not this account's data), and the connection-level trio
+  // connState/wsDropped/wsDroppedEpisode (they describe this tab's
+  // socket, not anything scoped to the account that just signed out --
+  // a fresh login over the same socket doesn't need them re-learned).
+  // `matcher` (RuleMatcher) is also left alone: its own doc comment
+  // above states it is deliberately stateless between calls, so there is
+  // nothing on it to leak.
+  reset() {
+    this.events = []
+    this.filters = emptyFilters()
+    this.devices = []
+    this.stats = null
+    this.ruleMatches = null
+    this.ruleMatchStatus = 'idle'
+    this.matchedPattern = ''
+    if (this.ruleDebounce) clearTimeout(this.ruleDebounce)
+    this.ruleDebounce = null
+    this.fetchFailed = false
+    this.initialLoadDone = false
+    this.paused = false
+    this.pendingCount = 0
+    this.autoscroll = true
+    this.pausedAt = null
+    this.wipedAt = null
+    this.holds = 0
+    this.heldOpen = false
+    this.frozenPool = null
+    this.now = Date.now()
+    this.pendingBuffer = []
+    this.incomingBuffer = []
+    this.eventsFetchesInFlight = 0
+    this.midFlightRelabels = []
   }
 }
 

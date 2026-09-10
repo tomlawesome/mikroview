@@ -22,6 +22,12 @@
 // document -- see docs/decisions/postgres-backend.md §1a. It shares
 // this package's Pool (Pool.Raw) and migration runner, but not the
 // Backend interface below.
+//
+// EncryptedFileBackend (#853) wraps FileBackend so every document is
+// sealed under the operator's retention key -- the same key and cipher
+// internal/retention uses for the on-disk event history. See its own doc
+// comment, and docs/decisions/event-retention.md's amendment, for what it
+// does and does not cover.
 package persist
 
 import (

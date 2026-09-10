@@ -38,12 +38,13 @@ const RULE = 'flags-clamp-live'
 // worst case the unit tests pin (internal/routeros/clamp_test.go's
 // TestFlagsFieldIsClamped).
 const oversized = 'a'.repeat(65000)
+
+const { page } = await session()
+
 feedRaw(
   `A|${RULE}|forward: in:ether1 out:bridge1, proto TCP (${oversized}), ` +
     '198.51.100.77:1024->203.0.113.9:443, len 60',
 )
-
-const { page } = await session()
 
 const res = await page.request.get(`${URL_BASE}/api/events?rule=${RULE}&limit=5`)
 check(res.status() === 200, `the event query succeeds (${res.status()})`)

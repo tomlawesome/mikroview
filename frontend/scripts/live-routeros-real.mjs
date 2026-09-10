@@ -70,6 +70,30 @@ async function waitFor(fn, timeoutMs = 30000) {
   }
 }
 
+// summariseEvents prints, at a named checkpoint, the event population
+// mikroview actually holds: total count and a breakdown by chain and
+// destination port. #614 needed exactly this evidence -- traffic on
+// the entry's own port had arrived, but no stored event ever showed
+// that port as its dstPort, which is what a TCP framing defect looked
+// like from the outside -- and finding it took a first, separately
+// instrumented run. Left in place, slimmed to counts only, so a future
+// failure of these checks starts from that same evidence rather than
+// from zero.
+async function summariseEvents(label) {
+  const all = await events()
+  const byChain = {}
+  const byDstPort = {}
+  for (const e of all) {
+    const chainKey = e.chain || '(none)'
+    const portKey = e.dstPort === undefined || e.dstPort === null ? '(none)' : String(e.dstPort)
+    byChain[chainKey] = (byChain[chainKey] ?? 0) + 1
+    byDstPort[portKey] = (byDstPort[portKey] ?? 0) + 1
+  }
+  console.log(
+    `#614 checkpoint -- ${label}: total=${all.length} byChain=${JSON.stringify(byChain)} byDstPort=${JSON.stringify(byDstPort)} at ${new Date().toISOString()}`,
+  )
+}
+
 // --- Real firewall traffic, in every chain the fixture can reach ---------
 
 router('traffic', '6')
@@ -82,8 +106,18 @@ check(!!arrived, `real router syslog reached mikroview (${arrived?.length ?? 0} 
 
 // Every line here came off the router, so this is the parser's real
 // input rather than its test fixtures.
+//
+// Checks for the scenario's own log-prefix marker rather than the
+// literal 'firewall,info ' topic text: setup() (#614) now asks for
+// remote-log-format=syslog, so that topic/severity travels in the
+// numeric PRI RouterOS puts at the front of the line, not as text in
+// the body -- ParseEnvelope strips the PRI off before Raw is stored.
+// 'A|' is what every rule this scenario creates actually logs with, so
+// this still proves the same thing the old check did (the body is
+// RouterOS's own, not something rebuilt from it). Do not "fix" this
+// back to 'firewall,info ' -- that prefix no longer exists on the wire.
 check(
-  arrived?.every((e) => e.raw?.startsWith('firewall,info ')),
+  arrived?.every((e) => e.raw?.startsWith('A|')),
   'every event carries the raw line RouterOS itself sent',
 )
 
@@ -145,6 +179,7 @@ const watched = await api('POST', '/api/definitions', {
   expectation: { ports: [15902], source: { mac: typedMac } },
 })
 check(watched.status === 201, `an entry scoped to the router's real device is created (${watched.status})`)
+await summariseEvents('after the watched entry was created')
 
 router('traffic', '3')
 
@@ -152,6 +187,7 @@ const matches = await waitFor(async () => {
   const got = await api('GET', `/api/matches?mac=${encodeURIComponent(typedMac)}`)
   return got.body?.matches?.length ? got.body.matches : null
 })
+await summariseEvents('before: entry matches the device')
 check(
   !!matches,
   'an entry whose MAC was typed in the conventional case matches the same device as the router reports it',
@@ -175,6 +211,7 @@ const collapsed = await waitFor(async () => {
   const rec = got.body?.matches?.find((m) => m.tuple?.port === 15902)
   return rec && rec.count > 1 ? rec : null
 })
+await summariseEvents('before: repeated traffic collapsed into one record')
 check(!!collapsed, `repeated identical real traffic collapsed into one record (count ${collapsed?.count})`)
 check(
   (await api('GET', `/api/matches?mac=${encodeURIComponent(typedMac)}`)).body.matches.filter(
@@ -195,6 +232,7 @@ check(
   inverted.status === 201 && inverted.body?.expectation?.observing === true,
   'an inverted entry on the real device starts observing',
 )
+await summariseEvents('after the inverted entry was created')
 
 router('traffic', '3')
 
@@ -203,6 +241,7 @@ const observed = await waitFor(async () => {
   const d = (got.body?.definitions ?? []).find((x) => x.id === inverted.body?.id)
   return d?.expectation?.observed?.length ? d.expectation.observed[0] : null
 })
+await summariseEvents('before: real traffic became an Observed candidate')
 check(!!observed, 'real traffic from the device became an Observed candidate while observing')
 
 const promoted = await api('POST', `/api/definitions/${inverted.body?.id}/promote`, {

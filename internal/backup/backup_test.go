@@ -75,21 +75,20 @@ func TestTheDocumentContainsNoFilenames(t *testing.T) {
 
 // A few hundred bytes of gzip can expand to gigabytes. The cap is what
 // stops that becoming the process's memory.
+//
+// This exercises readCapped directly, at a small cap, rather than Read
+// against the real MaxDecompressed (~6.5 GiB as of #394): gzip-bombing and
+// then decompressing that much on every CI run is what timed out pipeline
+// 456's 10-minute budget, with this test still running when the job was
+// killed. The cap's own value is pinned separately by
+// TestMaxDecompressedCoversTenVaultGenerationsPerRouter; nothing here
+// depends on gzip at all, since readCapped's check has nothing to do with
+// how the bytes were produced.
 func TestRefusesADecompressionBomb(t *testing.T) {
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	chunk := bytes.Repeat([]byte("A"), 1<<20)
-	for written := 0; written <= MaxDecompressed; written += len(chunk) {
-		if _, err := zw.Write(chunk); err != nil {
-			t.Fatal(err)
-		}
-	}
-	zw.Close()
+	const smallCap = 4 << 20                          // a few MiB: enough to be a real cap, small enough to run in milliseconds
+	data := bytes.Repeat([]byte("A"), smallCap+1<<20) // comfortably past the cap
 
-	if compressed := buf.Len(); compressed > 4<<20 {
-		t.Logf("bomb is %d bytes compressed", compressed)
-	}
-	_, err := Read(bytes.NewReader(buf.Bytes()))
+	_, err := readCapped(bytes.NewReader(data), smallCap)
 	if err == nil {
 		t.Fatal("a bomb expanding past the cap was accepted")
 	}
@@ -101,15 +100,15 @@ func TestRefusesADecompressionBomb(t *testing.T) {
 // Exhausting the limit must be distinguishable from a clean end of
 // stream. Without the +1 and the post-read check, a bomb truncated
 // exactly at the cap reads as a valid short backup.
+//
+// Same small cap as TestRefusesADecompressionBomb and the same reason: the
+// real MaxDecompressed made this test the next one to time out pipeline
+// 456 after TestRefusesADecompressionBomb did.
 func TestABombTruncatedExactlyAtTheCapIsStillRefused(t *testing.T) {
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(bytes.Repeat([]byte("A"), MaxDecompressed+1)); err != nil {
-		t.Fatal(err)
-	}
-	zw.Close()
+	const smallCap = 4 << 20
+	data := bytes.Repeat([]byte("A"), smallCap+1)
 
-	_, err := Read(bytes.NewReader(buf.Bytes()))
+	_, err := readCapped(bytes.NewReader(data), smallCap)
 	if err == nil {
 		t.Fatal("a payload sitting exactly on the cap was accepted")
 	}
@@ -183,5 +182,28 @@ func TestRefusesAFutureFormat(t *testing.T) {
 func TestRefusesPlainJSONThatIsNotGzipped(t *testing.T) {
 	if _, err := Read(strings.NewReader(`{"format":1,"stores":{}}`)); err == nil {
 		t.Error("an ungzipped document was accepted")
+	}
+}
+
+// TestMaxDecompressedCoversTenVaultGenerationsPerRouter pins
+// maxVaultBytesPerRouter against backupvault's own retention constants
+// (#394) -- 10 generations, two 16 MiB files each -- so a change to
+// either side's numbers is caught here rather than silently letting
+// -backup refuse a vault that is actually within the documented limits.
+// Not an import of internal/backupvault (see MaxDecompressed's own doc
+// comment for why this package stays a dependency-free leaf): the
+// figures are asserted directly instead.
+func TestMaxDecompressedCoversTenVaultGenerationsPerRouter(t *testing.T) {
+	const (
+		generationsPerRouter = 10
+		filesPerGeneration   = 2
+		maxFileBytes         = 16 << 20
+	)
+	want := generationsPerRouter * filesPerGeneration * maxFileBytes
+	if maxVaultBytesPerRouter != want {
+		t.Errorf("maxVaultBytesPerRouter = %d, want %d (10 generations x 2 files x 16 MiB)", maxVaultBytesPerRouter, want)
+	}
+	if MaxDecompressed < baseMaxDecompressed+maxVaultBytesPerRouter {
+		t.Error("MaxDecompressed does not even cover one router's full vault on top of every other store")
 	}
 }

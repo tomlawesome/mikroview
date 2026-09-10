@@ -1,12 +1,27 @@
-:root {
-  --bg: #0b0e14;
-  --bg-elevated: #12161f;
-  --bg-hover: #171c27;
-  --border: #232a38;
-  --fg: #eceef2;
-  --fg-muted: #9aa3b2;
-  --fg-dim: #6b7686;
-  --accent: #4d9fff;
+:root,
+[data-void] {
+  /* The Atlas II refined identity (owner ratification, 2026-08-29: the
+     app's common identity now, pulled forward from #492's theme rounds).
+     Values are direction-f-atlas2.html's own token block: the void
+     ground, blue-washed inks, hairline borders drawn from the same
+     160,185,230 wash, and the soft periwinkle accent. The semantic
+     verdict/action colors below are deliberately untouched -- they carry
+     traffic-state meaning and never shift with identity.
+
+     [data-void] re-declares the whole block on that subtree, so a scene
+     that is always the void -- the door (#645): "the fall rains across
+     the whole screen", ratified against the dark ground -- keeps these
+     exact tokens under every colorway. */
+  --bg: #06080e;
+  --bg-elevated: #0f1422;
+  --bg-hover: rgba(160, 185, 230, 0.08);
+  --border: rgba(160, 185, 230, 0.13);
+  --hair-2: rgba(160, 185, 230, 0.26);
+  --glass: rgba(15, 20, 34, 0.66);
+  --fg: #e9eefb;
+  --fg-muted: #97a4c4;
+  --fg-dim: #55628a;
+  --accent: #9db8e8;
 
   /* The chrome's one alarm colour, from the ratified navigation record
      (docs/design/screens/navigation/DESIGN.md): the open-flag count badge
@@ -35,6 +50,23 @@
   --reject-bg: rgba(239, 68, 68, 0.12);
   --log: #38bdf8;
   --log-bg: rgba(56, 189, 248, 0.12);
+
+  /* The ingest-loss banner family's warning and below-warning tiers
+     (#995, docs/design/concepts/ingest-loss-995): a permanent pair, not
+     a mockup-local value, approved by the owner alongside the drawing.
+     Deliberately not --drop (also amber, #f5a623) even though the two
+     sit close on the wheel -- --drop names a firewall verdict on packet
+     rows, --warn names an ingest-loss severity on the connection
+     banner, and they appear in different regions, so reuse would have
+     conflated two distinct meanings. Both values are chosen, not
+     eyeballed: the dataviz colour-separation validator moved the
+     initial amber/yellow pair (ΔE 10.9 normal, below its floor of 15)
+     to this one (ΔE 20.4 normal, 15.1 deutan, 21.2 tritan -- all pass)
+     against --bg. Changing either value without re-running that
+     validator can silently put orange and yellow back below the
+     separation floor. */
+  --warn: #f28a1e;
+  --caution: #e8e04d;
   /* The two non-filter action classes (#437): a mangle mark rule and an
      address translation. Placed in the two widest gaps the existing five
      leave on the hue circle -- violet between --log (sky, ~235) and the
@@ -50,6 +82,32 @@
   --natted-bg: rgba(45, 212, 191, 0.12);
   --unknown: #838d9e;
   --unknown-bg: rgba(131, 141, 158, 0.12);
+
+  /* The topography's lane inks (#485/#627, ratified in the #634 round
+     palette): one per subnet lane, fixed data colours like the flag
+     families -- themes retune chrome, not lane identity. Never the
+     saturated alarm: that stays reserved for unplanned traffic and a
+     broken watch. */
+  --lane-lan: #3987e5;
+  --lane-srv: #199e70;
+  --lane-iot: #c98500;
+  --lane-guest: #d76a9e;
+  /* The fifth lane's own ink (Fable 5, #715 item 11). The #634 palette
+     ratified four, and the fifth slot had been wearing --marked, which
+     means watchers on this same screen -- one colour, two meanings.
+     Minted rather than overloaded, the way --fall-nat was. Olive
+     because no hue at the other four's lightness clears the normal-
+     vision floor against all of them: the only passing regions are dark
+     olive and dark plum, and plum is violet-family, which would half
+     recreate the collision this replaces. Validated categorical, all
+     pairs, on both shipped grounds (--bg #0b0e14, --bg-elevated
+     #0f1422): worst new pair dE 15.8 normal, min(protan, deutan) >= 11.6
+     against all four lanes, dE 32 against --marked. Its 3.6:1 on --bg is
+     fine because a lane ink only ever paints small fills and 2.4-2.5px
+     strokes, never text. The lane row is ordered busiest-first and
+     capped at five, so this is always the quietest lane -- the lower
+     brightness reads honestly. */
+  --lane-5: #7b6a0b;
 
   /* The metrics record's two chart inks (#488, docs/design/screens/
      metrics/DESIGN.md): "Identity is the label, colour is meaning. Two
@@ -74,23 +132,43 @@
               CVD dE 19.2 (protan), normal-vision dE 29.0. Contrast
               5.31:1 traffic and 5.98:1 refused against --bg (4.97 and
               5.60 against --bg-elevated), so the dark lane is left
-              exactly as the record ratified it.
-       light (#2a78d6, #d13a39 on --bg #dedad2): ALL CHECKS PASS --
-              CVD dE 24.0 (protan), normal-vision dE 31.8, contrast
-              3.17:1 traffic and 3.44:1 refused.
-
-     The light refused ink is the one value that differs from the
-     record's hex, deliberately. The record ratified #e34948, validated
-     against a cooler #eef1f7 that this app does not use; measured
-     against the real --bg (#dedad2, a warm paper) that same hex lands
-     at 2.84:1, under the 3:1 floor for a non-text graphical object.
-     A value validated against the wrong background is not a validated
-     value for this one, so it is darkened to #d13a39 -- 3.44:1,
-     recognisably the same red, headroom over the floor rather than
-     sitting on it (#dc4241 would have scraped 3.08). Re-measure both
-     lanes if either theme's --bg ever moves. */
+              exactly as the record ratified it. Re-measure if --bg
+              ever moves. */
   --chart-traffic: #3987e5;
   --chart-refused: #e66767;
+
+  /* The fall's own third ink (#616): NAT, alongside the traffic/refused
+     pair above -- both already validated for exactly this surface, and
+     already named for it ("drop . reject -- the fall's grammar", the
+     comment above). Its own token rather than reusing --marked (also
+     violet, #a78bfa): that token means a mangle-mark rule everywhere
+     else in the app, and a NAT mark on the fall is a different fact.
+     --natted (teal) is the app's other existing NAT token, but the
+     record specifies violet for the fall specifically, so this mints
+     one rather than silently overriding a ratified colour choice with
+     the app's existing convention.
+
+     Validated with the dataviz six-checks validator, categorical, all
+     pairs, against --chart-traffic/--chart-refused on this app's real
+     surfaces:
+       dark  (#9b3fc9 on --bg #0b0e14): PASS with a CVD WARN (deutan
+              ΔE 6.4, in the 6-8 floor band) -- legal because the fall
+              never shows a NAT mark without its "nat" text label
+              (record: "always labelled", "no meaning by colour alone").
+              Normal-vision ΔE 19.5, contrast >=3:1. */
+  --fall-nat: #9b3fc9;
+  /* The fall's own heat identities and canvas, from round 3's validated
+     palette (docs/design/concepts/round-3/README.md: accept #5aa7f0 /
+     drop #e05252 pass at deltaE 22.1 deutan on the near-black surfaces).
+     Deliberately NOT the generic chart tokens: the fall is the hero and
+     was ratified against these exact colours on this exact ground. */
+  /* Under the Atlas identity the fall's canvas IS the void -- one
+     ground, no page-within-a-page. Round 3 validated the heat pair on
+     #08090c; the void is within a hair of it. */
+  --fall-canvas: #06080e;
+  --fall-accept: #5aa7f0;
+  --fall-drop: #e05252;
+  --fall-other: #6b7280;
 
   /* Nudged toward the active colorway's --accent (see the [data-colorway]
      rules below) before being washed to a low-alpha row fill just below
@@ -134,7 +212,11 @@
   --accent-bg-hover: color-mix(in srgb, var(--accent) 18%, transparent);
 
   --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  /* 'Liberation Mono' sits ahead of the bare 'monospace' keyword (#1010):
+     that generic keyword resolves to whatever font each host's own
+     fontconfig picks, so pin the font Playwright installs on Debian --
+     dev and CI then measure text against the same font. */
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
   color-scheme: dark;
   color: var(--fg);
@@ -145,122 +227,16 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-:root[data-theme='light'] {
-  /* See the @media block below for why these are softer than a plain
-     white-page/near-black-text pair. */
-  --bg: #dedad2;
-  --bg-elevated: #ece9e3;
-  --bg-hover: #e0dcd4;
-  --border: #cfc9bd;
-  --fg: #34312c;
-  --fg-muted: #635e54;
-  --fg-dim: #8c8677;
-  color-scheme: light;
-
-  /* The light lane's own alarm step, per the record: the dark-mode red is
-     a light tone and loses its urgency on a light page. */
-  --alarm: #d63c5e;
-
-  /* The light lane's own time step, matching the engine room's round-2
-     mockup light theme (docs/design/screens/settings/round-2). */
-  --now: #9a6b10;
-  --chart-traffic: #2a78d6;
-  --chart-refused: #d13a39;
-
-  /* Light mode uses its own darker/more saturated base tones here (a
-     0.12-alpha wash of the dark-mode --accept reads too washed-out on a
-     light page) -- same accent-tinting idea as :root, just starting from
-     these instead. */
-  --accept-tinted: color-mix(in srgb, #16a34a 85%, var(--accent) 15%);
-  --drop-tinted: color-mix(in srgb, #d97706 85%, var(--accent) 15%);
-  --reject-tinted: color-mix(in srgb, #dc2626 85%, var(--accent) 15%);
-  --log-tinted: color-mix(in srgb, #0284c7 85%, var(--accent) 15%);
-  --marked-tinted: color-mix(in srgb, #7c3aed 85%, var(--accent) 15%);
-  --natted-tinted: color-mix(in srgb, #0d9488 85%, var(--accent) 15%);
-
-  --row-accept-bg: color-mix(in srgb, var(--accept-tinted) 10%, transparent);
-  --row-accept-bg-hover: color-mix(in srgb, var(--accept-tinted) 17%, transparent);
-  --row-drop-bg: color-mix(in srgb, var(--drop-tinted) 10%, transparent);
-  --row-drop-bg-hover: color-mix(in srgb, var(--drop-tinted) 17%, transparent);
-  --row-reject-bg: color-mix(in srgb, var(--reject-tinted) 10%, transparent);
-  --row-reject-bg-hover: color-mix(in srgb, var(--reject-tinted) 17%, transparent);
-  --row-log-bg: color-mix(in srgb, var(--log-tinted) 8%, transparent);
-  --row-log-bg-hover: color-mix(in srgb, var(--log-tinted) 14%, transparent);
-  --row-marked-bg: color-mix(in srgb, var(--marked-tinted) 8%, transparent);
-  --row-marked-bg-hover: color-mix(in srgb, var(--marked-tinted) 14%, transparent);
-  --row-natted-bg: color-mix(in srgb, var(--natted-tinted) 8%, transparent);
-  --row-natted-bg-hover: color-mix(in srgb, var(--natted-tinted) 14%, transparent);
-  --row-unknown-bg: rgba(100, 110, 125, 0.07);
-  --row-unknown-bg-hover: rgba(100, 110, 125, 0.13);
-}
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    /* Softer than a stark white-page/near-black-text pair on purpose:
-       pure #fff panels next to near-black (#12141a) text read as glary
-       under normal room lighting despite passing contrast checks easily.
-       This keeps body text comfortably above WCAG AAA (~9-10:1) while
-       trimming both ends toward a gentler warm-neutral gray. */
-    --bg: #dedad2;
-    --bg-elevated: #ece9e3;
-    --bg-hover: #e0dcd4;
-    --border: #cfc9bd;
-    --fg: #34312c;
-    --fg-muted: #635e54;
-    --fg-dim: #8c8677;
-    color-scheme: light;
-
-    --alarm: #d63c5e;
-    --now: #9a6b10;
-    --chart-traffic: #2a78d6;
-    --chart-refused: #d13a39;
-
-    --accept-tinted: color-mix(in srgb, #16a34a 85%, var(--accent) 15%);
-    --drop-tinted: color-mix(in srgb, #d97706 85%, var(--accent) 15%);
-    --reject-tinted: color-mix(in srgb, #dc2626 85%, var(--accent) 15%);
-    --log-tinted: color-mix(in srgb, #0284c7 85%, var(--accent) 15%);
-    --marked-tinted: color-mix(in srgb, #7c3aed 85%, var(--accent) 15%);
-    --natted-tinted: color-mix(in srgb, #0d9488 85%, var(--accent) 15%);
-
-    --row-accept-bg: color-mix(in srgb, var(--accept-tinted) 10%, transparent);
-    --row-accept-bg-hover: color-mix(in srgb, var(--accept-tinted) 17%, transparent);
-    --row-drop-bg: color-mix(in srgb, var(--drop-tinted) 10%, transparent);
-    --row-drop-bg-hover: color-mix(in srgb, var(--drop-tinted) 17%, transparent);
-    --row-reject-bg: color-mix(in srgb, var(--reject-tinted) 10%, transparent);
-    --row-reject-bg-hover: color-mix(in srgb, var(--reject-tinted) 17%, transparent);
-    --row-log-bg: color-mix(in srgb, var(--log-tinted) 8%, transparent);
-    --row-log-bg-hover: color-mix(in srgb, var(--log-tinted) 14%, transparent);
-    --row-marked-bg: color-mix(in srgb, var(--marked-tinted) 8%, transparent);
-    --row-marked-bg-hover: color-mix(in srgb, var(--marked-tinted) 14%, transparent);
-    --row-natted-bg: color-mix(in srgb, var(--natted-tinted) 8%, transparent);
-    --row-natted-bg-hover: color-mix(in srgb, var(--natted-tinted) 14%, transparent);
-    --row-unknown-bg: rgba(100, 110, 125, 0.07);
-    --row-unknown-bg-hover: rgba(100, 110, 125, 0.13);
-  }
-}
-
 /* ---------- colorways ----------
-   Each colorway only overrides --accent (light + dark variant) -- the
-   neutrals and the accept/drop/reject/log semantic colors stay constant
-   across colorways on purpose, since those carry traffic-state meaning
-   and shouldn't shift with a cosmetic preference. "signal" (blue) is the
-   default and needs no override, since it's what :root already defines. */
+   Each colorway only overrides --accent -- the neutrals and the
+   accept/drop/reject/log semantic colors stay constant across colorways
+   on purpose, since those carry traffic-state meaning and shouldn't
+   shift with a cosmetic preference. "signal" (blue) is the default and
+   needs no override, since it's what :root already defines. */
 [data-colorway='pulse'] { --accent: #f472b6; }
 [data-colorway='nebula'] { --accent: #a78bfa; }
 [data-colorway='frequency'] { --accent: #22d3ee; }
 [data-colorway='mono'] { --accent: #94a3b8; }
-
-[data-colorway='pulse'][data-theme='light'] { --accent: #db2777; }
-[data-colorway='nebula'][data-theme='light'] { --accent: #7c3aed; }
-[data-colorway='frequency'][data-theme='light'] { --accent: #0891b2; }
-[data-colorway='mono'][data-theme='light'] { --accent: #475569; }
-
-@media (prefers-color-scheme: light) {
-  [data-colorway='pulse']:not([data-theme='dark']) { --accent: #db2777; }
-  [data-colorway='nebula']:not([data-theme='dark']) { --accent: #7c3aed; }
-  [data-colorway='frequency']:not([data-theme='dark']) { --accent: #0891b2; }
-  [data-colorway='mono']:not([data-theme='dark']) { --accent: #475569; }
-}
 
 * {
   box-sizing: border-box;
@@ -270,11 +246,21 @@ html,
 body {
   margin: 0;
   height: 100%;
+  /* The app is full-viewport (#app is 100vh and manages its own
+     scrolling); the window itself must never scroll. Without this a
+     stray overflow (login's slight overrun surviving the view swap)
+     left the document scrolled and clipped the deck's first bar. */
+  overflow: hidden;
 }
 
 body {
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 15px;
+  /* Atlas ambience: the faint blue glow high off the top-right of the
+     void, from the identity's own body background. */
+  background:
+    radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%),
+    var(--bg);
 }
 
 #app {

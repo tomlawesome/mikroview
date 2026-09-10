@@ -5,22 +5,28 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/hosts"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -51,6 +57,8 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		t.Fatal(err)
 	}
 	ru, _ := rules.Open("")
+	cs, _ := coverage.Open("")
+	hr, _ := hosts.Open("")
 	as, _ := audit.Open("")
 	ss, _ := suggest.Open("")
 	// matchlog.Open has no in-memory-only mode (see internal/matchlog's
@@ -69,6 +77,8 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Definitions:   newTestDefinitionsStore(t),
 		Entities:      es,
 		Rules:         ru,
+		Coverage:      cs,
+		Hosts:         hr,
 		Audit:         as,
 		Suggest:       ss,
 		MatchLog:      ml,
@@ -300,6 +310,324 @@ func TestHandleDevicesReportsStatus(t *testing.T) {
 	}
 }
 
+// TestHandleDevicesReportsMultihomedCandidates covers #442's operator
+// half through the real handler: a configured device that has received
+// nothing while undeclared devices stream carries their source
+// addresses, so the wizard's step 2 and the fleet cards can say "you
+// declared X, but logs arrive from Y" without re-deriving the pairing.
+// The field is candidates, not a diagnosis: every arriving address is
+// listed, and it is absent from every other device.
+func TestHandleDevicesReportsMultihomedCandidates(t *testing.T) {
+	s, _ := newTestServer(t)
+	// newTestServer's "core" device (192.168.1.1) is configured and
+	// silent; two undeclared sources are streaming.
+	s.Devices.Resolve("10.0.30.1", time.Now())
+	s.Devices.Resolve("10.0.20.1", time.Now())
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Devices []struct {
+			ID         string   `json:"id"`
+			Candidates []string `json:"multihomedCandidates"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string][]string{}
+	for _, d := range body.Devices {
+		byID[d.ID] = d.Candidates
+	}
+	if got := byID["core"]; len(got) != 2 || got[0] != "10.0.20.1" || got[1] != "10.0.30.1" {
+		t.Errorf("expected core to carry both arriving addresses in id order, got %v", got)
+	}
+	for _, id := range []string{"10.0.20.1", "10.0.30.1"} {
+		if byID[id] != nil {
+			t.Errorf("expected undeclared %s to carry no candidates, got %v", id, byID[id])
+		}
+	}
+}
+
+// TestHandleDevicesOmitsMultihomedCandidatesOnceDeclaredDeviceSpeaks
+// guards the notice clearing itself: once the declared device receives
+// its own traffic there is no silent declared side, so nothing is paired
+// even though an undeclared device is still streaming.
+func TestHandleDevicesOmitsMultihomedCandidatesOnceDeclaredDeviceSpeaks(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Devices.Resolve("192.168.1.1", time.Now())
+	s.Devices.Resolve("10.0.20.1", time.Now())
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "multihomedCandidates") {
+		t.Errorf("expected no multihomedCandidates field once the declared device has traffic, got %s", raw)
+	}
+}
+
+// TestHandleDevicesReportsRouterOSVersion covers issue #675's router
+// cards, which need "RouterOS 7.20.1" alongside the device's status: the
+// version comes from RouterState (a routerstate push), not from Devices
+// itself, so a device that never pushed any router state must not report
+// one, and a Server with no RouterState at all (an older test fixture)
+// must not panic.
+func TestHandleDevicesReportsRouterOSVersion(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Devices.Resolve("203.0.113.9", time.Now())
+	p, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.20.1 (stable)","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Devices []struct {
+			ID              string `json:"id"`
+			RouterOSVersion string `json:"routerosVersion"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]string{}
+	for _, d := range body.Devices {
+		byID[d.ID] = d.RouterOSVersion
+	}
+	if byID["core"] != "7.20.1 (stable)" {
+		t.Errorf("core's routerosVersion = %q, want the pushed version", byID["core"])
+	}
+	if byID["203.0.113.9"] != "" {
+		t.Errorf("203.0.113.9's routerosVersion = %q, want empty -- it never pushed router state", byID["203.0.113.9"])
+	}
+}
+
+// TestHandleDevicesRouterOSVersionNilRouterState covers the same field
+// against a Server built without RouterState at all -- a nil dereference
+// here would take down every other field in the response with it.
+func TestHandleDevicesRouterOSVersionNilRouterState(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.RouterState = nil
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestHandleDevicesReportsRouterOSStanding covers #436's
+// routerosStanding: present and derived correctly for a version a row
+// covers, and omitted -- not "unknown" -- for a device that never
+// reported one at all.
+func TestHandleDevicesReportsRouterOSStanding(t *testing.T) {
+	s, _ := newTestServer(t)
+	p, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.20.1 (stable)","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Devices []struct {
+			ID               string `json:"id"`
+			RouterOSStanding string `json:"routerosStanding"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]string{}
+	for _, d := range decoded.Devices {
+		byID[d.ID] = d.RouterOSStanding
+	}
+	if byID["core"] != "reviewed" {
+		t.Errorf(`core's routerosStanding = %q, want "reviewed"`, byID["core"])
+	}
+	// A device that never pushed anything must not even carry the key --
+	// omitempty means the field is entirely absent, never "unknown".
+	if strings.Contains(string(body), `"unknown"`) {
+		t.Error(`a devices response carried a literal "unknown" standing -- routerosStanding must be omitted, not spelled out, for a device with no known version`)
+	}
+}
+
+// TestHandleDevicesFallsBackToVersionHint covers #436 step 3: a device
+// with no push at all still reports a version if its source address
+// received a /ca.crt?ros= hint, and a real push always wins once one
+// arrives, even if the hint is newer.
+func TestHandleDevicesFallsBackToVersionHint(t *testing.T) {
+	s, _ := newTestServer(t)
+	// "core" is declared with sourceIp 192.168.1.1 in newTestServer.
+	s.RouterState.NoteVersionHint("192.168.1.1", "7.18", time.Now())
+
+	fetchDevices := func() map[string]struct {
+		Version  string
+		Standing string
+	} {
+		ts := httptest.NewServer(s.mux())
+		defer ts.Close()
+		resp, err := http.Get(ts.URL + "/api/devices")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var decoded struct {
+			Devices []struct {
+				ID               string `json:"id"`
+				RouterOSVersion  string `json:"routerosVersion"`
+				RouterOSStanding string `json:"routerosStanding"`
+			} `json:"devices"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]struct {
+			Version  string
+			Standing string
+		}{}
+		for _, d := range decoded.Devices {
+			out[d.ID] = struct {
+				Version  string
+				Standing string
+			}{d.RouterOSVersion, d.RouterOSStanding}
+		}
+		return out
+	}
+
+	got := fetchDevices()
+	if got["core"].Version != "7.18" || got["core"].Standing != "reviewed" {
+		t.Fatalf("core = %+v, want the hinted version and its standing", got["core"])
+	}
+
+	// A real push for the same device overrides the hint, even though
+	// the hint's version parses as newer -- see effectiveRouterOSVersion.
+	p, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.12.1","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	got = fetchDevices()
+	if got["core"].Version != "7.12.1" || got["core"].Standing != "below-minimum" {
+		t.Fatalf("core = %+v, want the pushed version to override the hint", got["core"])
+	}
+}
+
+// TestHandleDeviceMACs covers issue #675's Entities table source: every
+// persisted MAC entry, with its paired IP, comes back from GET
+// /api/devices/macs -- and a Server with no MACRegistry configured
+// answers an empty list rather than panicking, same as the nil-guarded
+// fields above.
+func TestHandleDeviceMACs(t *testing.T) {
+	s, _ := newTestServer(t)
+	reg, err := device.OpenMACRegistry("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.MACRegistry = reg
+	reg.Seen("aa:bb:cc:dd:ee:ff", time.Now())
+	reg.NoteIP("aa:bb:cc:dd:ee:ff", "10.0.10.2")
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices/macs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Macs []device.MACEntry `json:"macs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Macs) != 1 || body.Macs[0].MAC != "aa:bb:cc:dd:ee:ff" || body.Macs[0].LastIP != "10.0.10.2" {
+		t.Fatalf("unexpected macs: %+v", body.Macs)
+	}
+}
+
+func TestHandleDeviceMACsNilRegistry(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices/macs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Macs []device.MACEntry `json:"macs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Macs == nil || len(body.Macs) != 0 {
+		t.Errorf("macs = %v, want an empty (not null) list", body.Macs)
+	}
+}
+
 // TestDeviceStatus is a direct, table-driven unit test of deviceStatus's
 // three-way classification -- the HTTP-level test above already covers
 // it end to end, this pins the exact boundary/zero-threshold behavior
@@ -365,6 +693,11 @@ func TestDeviceStatus(t *testing.T) {
 // source: GET /api/rules must serve every rule label internal/rules.Store
 // has ever seen fire (via Touch), not just what's currently loaded --
 // mirroring TestHandleDevices' shape for the analogous device endpoint.
+// It also covers issue #701's honesty bound: the response must carry
+// recordingSince, matching what the underlying rules.Store reports, so
+// a client can bound an "active rules" claim by the window mikroview
+// actually recorded rather than a fixed seven days it may not have
+// seen.
 func TestHandleRules(t *testing.T) {
 	s, _ := newTestServer(t)
 	now := time.Now()
@@ -382,7 +715,8 @@ func TestHandleRules(t *testing.T) {
 	defer resp.Body.Close()
 
 	var body struct {
-		Rules []rules.Usage `json:"rules"`
+		Rules          []rules.Usage `json:"rules"`
+		RecordingSince time.Time     `json:"recordingSince"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
@@ -399,6 +733,23 @@ func TestHandleRules(t *testing.T) {
 	}
 	if byRule["r99"].Count != 1 {
 		t.Errorf("expected r99's count = 1, got %d", byRule["r99"].Count)
+	}
+	if !body.RecordingSince.Equal(s.Rules.RecordingSince()) {
+		t.Errorf("expected recordingSince = %v, got %v", s.Rules.RecordingSince(), body.RecordingSince)
+	}
+}
+
+// TestHandleRulesRecordingSinceOmittedWhenZero covers oldestHeldJSON's
+// zero-time convention (see its doc comment) applied to recordingSince:
+// a zero time must render as JSON null, not "0001-01-01T00:00:00Z",
+// which a client could otherwise mistake for a real two-thousand-year
+// recording window. rules.Store always stamps a non-zero RecordingSince
+// on Open in production, so this pins the wire contract directly
+// against oldestHeldJSON rather than relying on that store invariant to
+// exercise it.
+func TestHandleRulesRecordingSinceOmittedWhenZero(t *testing.T) {
+	if got := oldestHeldJSON(time.Time{}); got != nil {
+		t.Errorf("expected oldestHeldJSON(zero time) = nil, got %v", got)
 	}
 }
 
@@ -422,6 +773,42 @@ func TestHandleStats(t *testing.T) {
 	if body["total"].(float64) != 1 {
 		t.Errorf("total = %v, want 1", body["total"])
 	}
+
+	// #1015: "syslog.loss" is the one field ListenerStats gained.
+	// Nothing above it changed shape (still asserted by "total" == 1
+	// above, unaffected by loss), so this only pins the new part: one
+	// entry per counter, each with recent/lastAt/active present, and
+	// lastAt null on a counter that has never moved -- exactly what the
+	// frontend drawer reads to decide whether a row is active. Values
+	// aren't asserted (this package never drives real syslog traffic),
+	// only shape; internal/syslog's own tests cover the freshness
+	// arithmetic itself.
+	syslogStats, ok := body["syslog"].(map[string]any)
+	if !ok {
+		t.Fatalf("body[\"syslog\"] = %v (%T), want an object", body["syslog"], body["syslog"])
+	}
+	loss, ok := syslogStats["loss"].(map[string]any)
+	if !ok {
+		t.Fatalf("syslog.loss = %v (%T), want an object", syslogStats["loss"], syslogStats["loss"])
+	}
+	for _, kind := range []string{"dropped", "rejectedConfigured", "rejected", "oversized"} {
+		entry, ok := loss[kind].(map[string]any)
+		if !ok {
+			t.Fatalf("syslog.loss[%q] = %v (%T), want an object", kind, loss[kind], loss[kind])
+		}
+		if _, ok := entry["recent"].(float64); !ok {
+			t.Errorf("syslog.loss[%q].recent = %v (%T), want a number", kind, entry["recent"], entry["recent"])
+		}
+		if _, ok := entry["active"].(bool); !ok {
+			t.Errorf("syslog.loss[%q].active = %v (%T), want a bool", kind, entry["active"], entry["active"])
+		}
+		lastAt, present := entry["lastAt"]
+		if !present {
+			t.Errorf("syslog.loss[%q] is missing lastAt entirely -- it must be present and null, not absent", kind)
+		} else if lastAt != nil {
+			t.Errorf("syslog.loss[%q].lastAt = %v, want null (this test drives no real syslog traffic)", kind, lastAt)
+		}
+	}
 }
 
 // asAdmin wraps the ungated mux with a stand-in admin identity -- what a
@@ -441,6 +828,25 @@ func asAdmin(h http.Handler) http.Handler {
 	})
 }
 
+// asUser and asViewer are asAdmin's #653 counterparts, injecting a
+// stand-in identity at the user and viewer tiers respectively -- for
+// tests of a handler's own behavior (not the gate, which is
+// authzMatrix's job) that need a caller below admin to reach it, or to
+// pin that a caller below a handler's floor is refused.
+func asUser(h http.Handler) http.Handler {
+	user := &auth.User{ID: "test-user", Username: "user", Role: auth.RoleUser}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
+	})
+}
+
+func asViewer(h http.Handler) http.Handler {
+	viewer := &auth.User{ID: "test-viewer", Username: "viewer", Role: auth.RoleViewer}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, viewer)))
+	})
+}
+
 // newTestDefinitionsStore is an in-memory definitions store seeded with
 // the whole shipped catalogue at its defaults -- what a real boot
 // produces (see engine.SeedShippedDefinitions), and the replacement for
@@ -456,4 +862,132 @@ func newTestDefinitionsStore(t *testing.T) *engine.DefinitionsStore {
 		t.Fatal(err)
 	}
 	return defs
+}
+
+// GET /api/stats always says when this process started observing, and
+// says when the counters were restored from only if they were (#795).
+//
+// The two shapes are what the hourline's last fact and the docket's
+// clear-all chip read to choose between "restored to 13:14 · live since
+// 13:18" and "counting since 13:18 -- nothing before". A cold start
+// omits restoredTo entirely rather than sending null: the key's presence
+// is the question being asked, and a null would make every client write
+// the same two-step check.
+func TestHandleStatsColdStartOmitsRestoredTo(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	body := getStats(t, ts.URL)
+	if _, present := body["restoredTo"]; present {
+		t.Errorf("restoredTo = %v on a cold start, want the key absent", body["restoredTo"])
+	}
+	live, ok := body["liveSince"].(string)
+	if !ok {
+		t.Fatalf("liveSince = %v (%T), want an RFC3339 string on every start, warm or cold", body["liveSince"], body["liveSince"])
+	}
+	if _, err := time.Parse(time.RFC3339, live); err != nil {
+		t.Errorf("liveSince %q is not RFC3339: %v", live, err)
+	}
+	if !strings.HasSuffix(live, "Z") {
+		t.Errorf("liveSince = %q, want UTC so the client is not left to guess the offset", live)
+	}
+}
+
+func TestHandleStatsWarmRestartReportsRestoredTo(t *testing.T) {
+	s, st := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	taken := time.Now().Add(-3 * time.Minute).UTC().Truncate(time.Second)
+	if err := st.SnapshotPart().Import(json.RawMessage(`{"total":7}`), taken, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getStats(t, ts.URL)
+	restored, ok := body["restoredTo"].(string)
+	if !ok {
+		t.Fatalf("restoredTo = %v (%T), want the snapshot's taken time as an RFC3339 string", body["restoredTo"], body["restoredTo"])
+	}
+	if restored != taken.Format(time.RFC3339) {
+		t.Errorf("restoredTo = %q, want the snapshot's own taken time %q", restored, taken.Format(time.RFC3339))
+	}
+	live, ok := body["liveSince"].(string)
+	if !ok {
+		t.Fatalf("liveSince = %v, want it present on a warm restart too -- the UI shows both", body["liveSince"])
+	}
+	// The pair only means anything in this order: the snapshot was taken
+	// before the process that loaded it started.
+	liveAt, err := time.Parse(time.RFC3339, live)
+	if err != nil {
+		t.Fatalf("liveSince %q is not RFC3339: %v", live, err)
+	}
+	if !taken.Before(liveAt) {
+		t.Errorf("restoredTo %s is not before liveSince %s, so the UI would report the future as restored", restored, live)
+	}
+}
+
+func getStats(t *testing.T, base string) map[string]any {
+	t.Helper()
+	resp, err := http.Get(base + "/api/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// TestHandleDevicesServesTheStoredNameWithProvenance is issue #600 at
+// the endpoint everyone reads: a device renamed by one operator comes
+// back named for everybody, and every device says where its name came
+// from. "config-device" is the refusal case -- a name config.yaml
+// decides, which no label can out-rank -- and the editor reads exactly
+// that distinction before offering a field.
+func TestHandleDevicesServesTheStoredNameWithProvenance(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Devices.Resolve("203.0.113.9", time.Now())
+	if _, err := s.Entities.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "203.0.113.9", Label: "lab crs"}); err != nil {
+		t.Fatal(err)
+	}
+	// The wiring main does: one resolver, held by the registry and by
+	// the server, so the name and its provenance cannot disagree.
+	s.Naming = naming.Resolver{Devices: map[string]string{"core": "Core"}, Entities: s.Entities}
+	s.Devices.SetNames(s.Naming)
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Devices []struct {
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			NameSource string `json:"nameSource"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][2]string{}
+	for _, d := range body.Devices {
+		got[d.ID] = [2]string{d.Name, d.NameSource}
+	}
+	if got["203.0.113.9"] != [2]string{"lab crs", naming.SourceEntity} {
+		t.Errorf("discovered device = %v, want the stored rename reported as an entity name", got["203.0.113.9"])
+	}
+	if got["core"] != [2]string{"Core", naming.SourceConfigDevice} {
+		t.Errorf("declared device = %v, want config.yaml's name reported as config-owned", got["core"])
+	}
 }

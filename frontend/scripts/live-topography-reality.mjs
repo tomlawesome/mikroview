@@ -1,0 +1,228 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// #629, map layer 3: the map judges observed traffic against the pushed
+// intent. Round 49 made this the picture rather than one lens of three
+// (`traffic as a lens: it is the picture`, DESIGN.md "Superseded"), so
+// there is no tab to select first -- what it draws is what the map is.
+// Feeds all three deltas through the real listeners:
+// a planned flow (an accepting rule anticipated it), a held one (drops
+// on a refusing pair -- policy doing its job, calm), an unplanned one
+// (accepted traffic where the table only refuses -- the alarm), and an
+// accepting rule nothing exercises, drawn as a ghost.
+//
+// Self-contained: pushes its own address and filter-rule tables whole,
+// including the extra lane and the never-exercised rule the ghost needs.
+
+import { session, check, done, feedRaw, feedSyslog as syslog, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
+
+const URL_BASE = process.env.MV_URL
+
+const { page, consoleErrors } = await session()
+
+/**
+ * Poll a selector's own transform+opacity signature until it stops
+ * changing -- the real end of Topography.svelte's camera transitions
+ * (`.camera { transition: transform 0.35s ease }`, and 0.55s opacity
+ * fades on its child layers), not a guessed margin over them.
+ */
+async function waitForSettle(selector, timeoutMs = 2000) {
+  const read = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return cs.transform + '|' + cs.opacity
+    }, selector)
+  let last = await read()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(50)
+    const cur = await read()
+    if (cur === last && cur !== null) return cur
+    last = cur
+  }
+  return last
+}
+
+syslog(2, 'topo-reality-probe')
+let DEVICE
+for (let i = 0; i < 40 && !DEVICE; i++) {
+  await new Promise((r) => setTimeout(r, 250))
+  const res = await page.request.get(`${URL_BASE}/api/devices`)
+  if (res.ok()) DEVICE = (await res.json()).devices?.[0]?.id
+}
+check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`)
+
+const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
+  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+  data: { name: 'live-topo-reality', kind: 'ingest', device: DEVICE },
+})
+check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
+const token = (await tokenRes.json()).value
+
+async function push(payload) {
+  const res = await fetch(`${URL_BASE}/api/ingest/routeros`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return res.status
+}
+
+// A second lane whose accepting rule nothing will exercise: the ghost.
+// A push replaces its kind's whole table, so the LAN's own address
+// rides along -- dropping it would strip the name an earlier scenario
+// gave the bridge1 lane.
+check(
+  (await push({
+    kind: 'ip-address',
+    page: 1,
+    pages: 1,
+    routerosVersion: '7.23.3 (stable)',
+    records: [
+      { address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' },
+      { address: '10.9.0.1/24', network: '10.9.0.0', interface: 'ether5', comment: 'The quiet lane' },
+    ],
+  })) === 200,
+  'a second lane is pushed for the ghost to anchor on',
+)
+// The complete intended table, pushed whole (a RouterOS push always
+// carries the full table): bridge1→ether1 accepts, ether1→bridge1
+// refusal, and the quiet lane's accepting rule nothing will exercise.
+// Self-contained on purpose -- a standalone run judges identically.
+check(
+  (await push({
+    kind: 'filter-rule',
+    page: 1,
+    pages: 1,
+    routerosVersion: '7.23.3 (stable)',
+    records: [
+      { ordinal: 0, comment: 'LAN out to the web', chain: 'forward', action: 'accept', srcAddressList: '', logPrefix: '', inInterface: 'bridge1', outInterface: 'ether1', dstPort: 443, protocol: 'tcp' },
+      { ordinal: 1, comment: 'Nothing unsolicited comes in', chain: 'forward', action: 'drop', srcAddressList: '', logPrefix: 'D|forward-drop|', log: true, inInterface: 'ether1', outInterface: 'bridge1' },
+      { ordinal: 2, comment: 'quiet lane ssh out', chain: 'forward', action: 'accept', srcAddressList: '', logPrefix: '', inInterface: 'ether5', outInterface: 'ether1', dstPort: 22, protocol: 'tcp' },
+      { ordinal: 3, comment: 'the quiet lane may not reach the LAN', chain: 'forward', action: 'drop', srcAddressList: '', logPrefix: 'D|quiet-block|', log: true, inInterface: 'ether5', outInterface: 'bridge1' },
+    ],
+  })) === 200,
+  'the intended table is pushed whole, quiet-lane rules included',
+)
+
+// The three realities, through the real syslog listener: planned
+// (bridge1→ether1 accepts, intended), held (ether1→bridge1 drops on the
+// refusing rule -- policy doing its job), and unplanned (an accepted
+// flow into the quiet lane no rule anywhere anticipates).
+const plannedHeldLines = []
+for (let i = 0; i < 6; i++) {
+  plannedHeldLines.push(`firewall,info A|planned-web| forward: in:bridge1 out:ether1, connection-state:new, proto TCP (SYN), 192.168.1.${20 + i}:5${100 + i}->203.0.113.9:443, len 60`)
+  plannedHeldLines.push(`firewall,info D|forward-drop| forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 198.51.100.${30 + i}:4${400 + i}->192.168.1.10:23, len 60`)
+}
+const mysteryLine = 'firewall,info A|mystery-accept| forward: in:ether1 out:ether5, connection-state:new, proto TCP (SYN), 203.0.113.66:41000->10.9.0.20:8443, len 60'
+// The held pair rides its own boundary, ether5→bridge1, which no other
+// scenario feeds: on a shared suite instance the ether1→bridge1 pair
+// has accepts from five earlier scenarios, so its verdict is unplanned
+// and its badge can never say held -- the refused-share check below
+// starved on exactly that. accepts stays 0 on this pair, so it reads
+// holding in the suite and standalone alike.
+//
+// #1006: 20 iterations, not 4. zones.svelte.ts caps the lane row at the
+// five busiest boundaries (deliberately -- "the map is spare by
+// design"), and on a suite run live-topography-layout.mjs has already
+// planted five lanes of its own (bridge-lan/srv/iot/guest/lab, 8 events
+// apiece, fixed). ether5 is in the pushed address table so it always
+// enters that ranking, but it only wins a *slot* by outscoring layout's
+// lanes on events -- 4 drops here plus the one mystery-accept above
+// (5 total) placed it 6th of 7 and the ghost's own zone never rendered,
+// so `ghostCount` read 0 without the map's ghost logic being wrong.
+// 20 clears layout's fixed 8 with room to spare; bridge1 (fed by nearly
+// every sibling scenario) is always first regardless, so this only has
+// to beat the other four, fixed-size lanes actually in the running.
+const quietBlockLines = Array.from(
+  { length: 20 },
+  (_, i) => `firewall,info D|quiet-block| forward: in:ether5 out:bridge1, connection-state:new, proto TCP (SYN), 10.9.0.${40 + i}:3${300 + i}->192.168.1.10:445, len 60`,
+)
+
+// Every line above collected and fed as one call rather than one per
+// line -- a separate TLS handshake and process start per line is the
+// exact cost #1061 exists to cut.
+const allLines = [...plannedHeldLines, mysteryLine, ...quietBlockLines]
+const beforeFeed = await eventsTotal(page)
+feedRaw(...allLines)
+await waitForEventsTotal(page, beforeFeed + allLines.length)
+
+// This session has not yet visited Topography, so its own $effect
+// (zonesState/policyState/etc, gated on appState.devices) fires fresh on
+// this first navigation -- the honest "first load" path, with no reload
+// needed to see the tables and events pushed above.
+await page.click('.rail-name >> text=Topography')
+// #869: off the city default and onto zones before waiting on anything
+// the 2D map draws -- see the coverage scenario for the full note.
+await page.waitForSelector('[data-card="topography"] .altitude input[type="range"]', { timeout: 10000 })
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('2')
+await page.waitForSelector('[data-card="topography"] .redge', { timeout: 10000 })
+// The first `.redge` paints as soon as `appState.events` has landed;
+// `ghostIntents` also needs `policyState.edges` from its own separate
+// fetch. A fixed settle here once stood in for that fetch's own
+// latency, which is fine on a quiet instance but not on a gate run
+// that has already pushed dozens of scenarios' state through the same
+// server (0 ghosts where the pushed table always draws one, seen at
+// this exact point) -- wait for the ghost edge itself to land instead
+// of guessing how long its fetch takes. `.redge` above already proves
+// the card is mounted, so this resolves the moment the fetch finishes
+// rather than timing out; the ghost-count check below still fails
+// honestly if the edge never arrives.
+await page.waitForSelector('[data-card="topography"] .gedge', { timeout: 10000 }).catch(() => {})
+
+// SVG geometry-box visibility lies for lines (live-check skill), so
+// presence and text carry the assertions.
+const alarmCount = await page.locator('[data-card="topography"] .redge.alarm').count()
+check(alarmCount >= 1, `the unplanned flow spends the saturated colour (${alarmCount} alarm edge)`)
+
+const badges = await page.locator('[data-card="topography"] [class*="edge-badge"]').allTextContents()
+// f2451cc (#897 item 2): the busiest unplanned pair no longer draws a
+// pill at all -- it escalates into its own `.unplanned-card`, labelled
+// in the card's own words ("UNPLANNED · from -> to ..."). With only one
+// unplanned pair fed below, that pair *is* the escalated one, so the
+// word never appears among the ordinary `[class*="edge-badge"]` pills;
+// it has to be read off the card too, case-insensitively (the card
+// shouts it, the pills murmur it lower-case).
+const escalatedCard = await page.locator('[data-card="topography"] .unplanned-card').allTextContents()
+const labels = [...badges, ...escalatedCard]
+check(
+  labels.some((b) => b.toLowerCase().includes('unplanned')),
+  `the unplanned flow says so in words (${JSON.stringify(labels)})`,
+)
+check(
+  badges.some((b) => b.includes('held') || b.includes('dropped')),
+  'the refused share is counted where it dies',
+)
+
+const ghostCount = await page.locator('[data-card="topography"] .gedge').count()
+check(ghostCount >= 1, `intent nothing exercised draws as a ghost (${ghostCount})`)
+check(
+  badges.some((b) => b.includes('never exercised')),
+  'the ghost is named, not just faint',
+)
+
+// Click-through from a reality edge lands on the filtered stream. The
+// worst unplanned pair -- the internet-side one this check is about --
+// draws as the escalated card and no longer as a pill (#897 item 2), so
+// click the card when it is there; the first alarm pill otherwise.
+//
+// #852/#869: whichever shape wins, both live in `.detail`, hidden at
+// zones the same way the badges above are -- see the coverage scenario
+// for the full note. Off zones and onto services before touching either.
+await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
+await waitForSettle('[data-card="topography"] .camera')
+const escalated = page.locator('[data-card="topography"] .unplanned-card')
+if ((await escalated.count()) > 0) {
+  await escalated.first().click()
+} else {
+  await page.click('[data-card="topography"] text.edge-badge.alarm-t >> nth=0')
+}
+await page.waitForFunction(() => location.search.includes('Query=') || location.search.includes('Scope='), null, { timeout: 5000 })
+check(
+  decodeURIComponent(page.url()).includes('srcScope=external'),
+  `the unplanned internet-side flow rides scope into the stream's filters (${page.url()})`,
+)
+
+check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
+done()

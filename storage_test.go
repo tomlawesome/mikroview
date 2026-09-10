@@ -3,12 +3,14 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 func cfgWithData(dir string) config.Config {
@@ -145,5 +147,39 @@ func TestAdoptionMarkerLivesBesideTheFilesItGuards(t *testing.T) {
 
 	if got, want := filepath.Dir(markerPath(cfg)), filepath.Dir(cfg.Auth.StorePath); got != want {
 		t.Errorf("marker is in %q, want it beside the stores in %q -- anywhere the database can roll back is useless here", got, want)
+	}
+}
+
+// #853 rule 6 (owner decision, 2026-09-05): auth, tokens and
+// recovery_keys hold only one-way hashes, so they keep persisting to a
+// plain JSON file with no key configured, exactly as every mikroview
+// release before #853. Every other store still follows "no key, no
+// storage" and gets nil.
+func TestBackendForKeepsTheHashedStoresWithoutAKey(t *testing.T) {
+	dir := t.TempDir()
+	s := &storage{}
+	ctx := context.Background()
+
+	for _, name := range []string{"auth", "tokens", "recovery_keys"} {
+		path := filepath.Join(dir, name+".json")
+		backend, err := s.backendFor(ctx, name, path)
+		if err != nil {
+			t.Fatalf("%s: backendFor: %v", name, err)
+		}
+		if backend == nil {
+			t.Errorf("%s: backendFor returned nil with no key -- this store should keep persisting (#853 rule 6)", name)
+			continue
+		}
+		if _, ok := backend.(*persist.FileBackend); !ok {
+			t.Errorf("%s: backendFor returned %T, want a plain *persist.FileBackend", name, backend)
+		}
+	}
+
+	backend, err := s.backendFor(ctx, "flags", filepath.Join(dir, "flags.json"))
+	if err != nil {
+		t.Fatalf("flags: backendFor: %v", err)
+	}
+	if backend != nil {
+		t.Errorf("flags: backendFor returned %T with no key, want nil -- flags is not a hashed store", backend)
 	}
 }

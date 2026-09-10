@@ -296,28 +296,38 @@ func ingestTokenFromContext(r *http.Request) *auth.Token {
 	return t
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, sessionID string) {
+// writeCookie is the only place in the package a cookie is handed to the
+// client, so the three security attributes are decided once instead of
+// being repeated at four call sites that would then have to be kept in
+// step by hand.
+//
+// SameSite is Lax rather than Strict because of the OIDC flow cookie:
+// the provider's redirect back to /callback is a top-level cross-site
+// GET navigation, and Strict would drop the cookie on it, breaking
+// login. The session cookie is happy either way.
+func (s *Server) writeCookie(w http.ResponseWriter, name, value, path string, maxAge int) {
+	// Secure is read from auth.secureCookie, which defaults to true and
+	// which validate.go reports as CFG-0021 when it is off while TLS is
+	// on. The rule looks for a literal true and cannot follow a config
+	// field, so it cannot see that the deployment already decides this.
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    sessionID,
-		Path:     "/",
+		Name:     name,
+		Value:    value,
+		Path:     path,
 		HttpOnly: true,
 		Secure:   s.SecureCookie,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(cookieMaxAge.Seconds()),
+		MaxAge:   maxAge,
 	})
 }
 
+func (s *Server) setSessionCookie(w http.ResponseWriter, sessionID string) {
+	s.writeCookie(w, sessionCookieName, sessionID, "/", int(cookieMaxAge.Seconds()))
+}
+
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   s.SecureCookie,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
+	s.writeCookie(w, sessionCookieName, "", "/", -1)
 }
 
 type sessionResponse struct {
@@ -334,6 +344,11 @@ type sessionResponse struct {
 	// with SSO" link at all -- true whenever s.OIDC is configured,
 	// regardless of the other fields above.
 	SSOAvailable bool `json:"ssoAvailable"`
+	// SignedInSince is this session's own auth.Session.IssuedAt (issue
+	// #677's sessions row: "signed in 4 d"), RFC3339 -- when *this*
+	// login happened, not when the account was created. Empty when
+	// unauthenticated.
+	SignedInSince string `json:"signedInSince,omitempty"`
 }
 
 // handleAuthSession always returns 200 -- it reports state, it doesn't
@@ -341,15 +356,26 @@ type sessionResponse struct {
 // frontend calls this once on load to decide whether to render the
 // first-run choice screen, a login form, or the live app.
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
 	resp := sessionResponse{
 		SetupRequired: s.Auth.Count() == 0,
 		SSOAvailable:  s.OIDC != nil,
 	}
-	if user, ok := s.sessionUser(r, time.Now()); ok {
+	if user, ok := s.sessionUser(r, now); ok {
 		resp.Authenticated = true
 		resp.Username = user.Username
 		resp.Role = string(user.Role)
 		resp.HasLocalPassword = user.LocalPassword()
+		// sessionUser already validated the cookie once (that is how
+		// user was resolved); re-reading it here just for IssuedAt
+		// rather than widening sessionUser's own signature, which
+		// requireAuth and every other caller would then have to carry
+		// too for a field only this endpoint needs.
+		if cookie, err := r.Cookie(sessionCookieName); err == nil {
+			if sess, ok := s.Sessions.Validate(cookie.Value, now); ok {
+				resp.SignedInSince = sess.IssuedAt.Format(time.RFC3339)
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -370,6 +396,7 @@ var authErrorMessages = map[error]string{
 	auth.ErrPasswordTooShort:   auth.ErrPasswordTooShort.Error(), // already phrased for an end user
 	auth.ErrUsernameInvalid:    "that username contains characters that aren't allowed -- no control characters, and no leading or trailing spaces",
 	auth.ErrUsernameLength:     auth.ErrUsernameLength.Error(), // already phrased for an end user
+	auth.ErrInvalidRole:        `role must be "user" or "viewer"`,
 }
 
 // writeAuthError translates err into a safe, user-facing message via
@@ -588,10 +615,56 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"loggedOut": true})
 }
 
+// handleAuthLogoutAll is the settings page's "sign out everywhere"
+// (issue #677): every session the caller holds, on every device, ends
+// at once. It then issues the caller a fresh session and cookie so the
+// tab the button was clicked from is not itself logged out by the call
+// it just made -- the identical revoke-then-recreate shape
+// handleAuthChangePassword already uses below, which is where
+// SessionStore.RevokeAllForUser was introduced.
+//
+// User-tier (#653's viewer floor, same reasoning as POST
+// /api/auth/password -- see authzMatrix's row for it): this acts only
+// on the caller's own sessions, resolved from the session cookie, never
+// from a body field naming someone else, so there is nothing here an
+// admin-only gate would be protecting. Ending another account's
+// sessions stays admin-only, via handleAuthDeleteUser.
+func (s *Server) handleAuthLogoutAll(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	user, ok := s.sessionUser(r, now)
+	if !ok {
+		http.Error(w, "sign in first", http.StatusUnauthorized)
+		return
+	}
+
+	s.Sessions.RevokeAllForUser(user.ID)
+	s.Audit.Record(user.Username, "account.sessions_ended", user.Username, "sessions ended: all, via sign out everywhere")
+
+	sess := s.Sessions.Create(user.ID, now)
+	s.setSessionCookie(w, sess.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"signedOutEverywhere": true})
+}
+
 type createUserRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Role     string `json:"role"`
+}
+
+// callerAtLeast reports whether r's authenticated caller holds a role at
+// or above min (auth.Role.AtLeast's stacked tiers: admin ⊇ user ⊇
+// viewer). callerIsAdmin below is this specialized to RoleAdmin -- every
+// gate in this package, admin or user tier, is defined in terms of this
+// one function, so there is a single implementation of "who is allowed
+// to reach this" rather than an admin check and a separately-maintained
+// user check that could drift apart.
+//
+// While no account exists, caller is nil, so this returns false without
+// needing to know why Count() is 0 -- see callerIsAdmin's doc comment
+// for why that property matters.
+func callerAtLeast(r *http.Request, min auth.Role) bool {
+	caller := userFromContext(r)
+	return caller != nil && caller.Role.AtLeast(min)
 }
 
 // callerIsAdmin reports whether r's authenticated caller is an admin --
@@ -611,8 +684,18 @@ type createUserRequest struct {
 // While no account exists, caller is nil, so this returns false without
 // needing to know why Count() is 0.
 func callerIsAdmin(r *http.Request) bool {
-	caller := userFromContext(r)
-	return caller != nil && caller.Role == auth.RoleAdmin
+	return callerAtLeast(r, auth.RoleAdmin)
+}
+
+// callerIsUser reports whether r's authenticated caller holds at least
+// the user role -- the gate for #653's operational tier: the writes that
+// affect what mikroview is watching or clearing (flag judgement/clearing,
+// and every /api/definitions, /api/entities, /api/naming/provenance and
+// /api/suggestions route), open to "user" and "admin" alike but not
+// "viewer". See callerAtLeast for the shared nil-caller/no-bypass
+// reasoning.
+func callerIsUser(r *http.Request) bool {
+	return callerAtLeast(r, auth.RoleUser)
 }
 
 // handleAuthCreateUser lets an existing admin add another account -- the
@@ -630,7 +713,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A request for an admin is refused outright rather than quietly
-	// downgraded to a user: the caller asked for something this
+	// downgraded to a lesser role: the caller asked for something this
 	// deployment does not have, and silently creating a lesser account
 	// under the name they chose is worse than telling them. auth.Store
 	// refuses it too -- this exists to give a usable status and message
@@ -639,14 +722,30 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, r, auth.ErrSingleAdmin, http.StatusBadRequest)
 		return
 	}
+	// Empty defaults to RoleUser (#653) -- the pre-existing behavior for
+	// every caller of this endpoint before viewer existed, preserved so
+	// an unmodified admin UI/script keeps creating the same accounts it
+	// always did. Anything other than "", "user" or "viewer" is a request
+	// for a role this deployment does not recognize, refused the same way
+	// "admin" is above rather than silently coerced.
+	role := auth.RoleUser
+	switch req.Role {
+	case "", string(auth.RoleUser):
+		role = auth.RoleUser
+	case string(auth.RoleViewer):
+		role = auth.RoleViewer
+	default:
+		writeAuthError(w, r, auth.ErrInvalidRole, http.StatusBadRequest)
+		return
+	}
 
-	user, err := s.Auth.CreateUser(req.Username, req.Password, auth.RoleUser, time.Now())
+	user, err := s.Auth.CreateUser(req.Username, req.Password, role, time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch err {
 		case auth.ErrUsernameTaken:
 			status = http.StatusConflict
-		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
+		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrInvalidRole, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
 			status = http.StatusBadRequest
 		}
 		writeAuthError(w, r, err, status)

@@ -16,6 +16,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
+. "$REPO/scripts/live-stores.sh"
+. "$REPO/scripts/live-slot.sh"
 
 DIR="$(mktemp -d)"
 cleanup() {
@@ -24,14 +26,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-PORT=19831
+# Port comes from the shared standalone allocator (live-slot.sh), not a
+# hardcoded value: that used to sit inside live-env.sh's per-checkout
+# band and collide with it (#660).
+PORT=$MV_STANDALONE_HTTP_PORT
+mv_require_free_port "$PORT" "the TLS-log-lines check's server"
 
 cat > "$DIR/cfg.yaml" <<EOF
 listen: {http: "127.0.0.1:$PORT", httpRedirect: "", syslogTls: ""}
 tls: {enabled: true, storePath: $DIR/tls}
-auth: {storePath: $DIR/users.json, tokensStorePath: $DIR/tokens.json, secureCookie: true}
-flags: {storePath: $DIR/flags.json}
-watchlist: {storePath: $DIR/watchlist.json, matchLogPath: $DIR/matchlog.jsonl}
+$(mv_store_block "$DIR" true)
 EOF
 
 if [ ! -f web/dist/index.html ]; then

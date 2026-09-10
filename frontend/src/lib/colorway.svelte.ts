@@ -22,10 +22,9 @@ function loadInitial(): Colorway {
   return 'signal'
 }
 
-// The accent color, independent of light/dark mode -- see the
-// [data-colorway] rules in app.css. Kept separate from theme.svelte.ts
-// (light/dark/system) since they're independent axes, same as the
-// "Theme" colorway picker + separate light/dark toggle in the toolbar.
+// The accent color -- see the [data-colorway] rules in app.css. This is
+// the only theme axis left: the light and system themes were removed
+// wholesale in #708, since round 30 is dark throughout.
 class ColorwayState {
   pref = $state<Colorway>(loadInitial())
 

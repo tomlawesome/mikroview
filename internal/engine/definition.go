@@ -176,24 +176,6 @@ type Provenance struct {
 	ShippedParams Params `json:"shippedParams,omitempty"`
 }
 
-// Suppression is one exclusion scoped to this definition -- a target
-// this definition should never emit for, even though its own match/
-// baseline logic would otherwise fire. Where flags.Exclusion today is
-// global (any detector, permanently, keyed by (Type, Target) at the
-// flags.Store level), a Suppression lives on the definition it excludes
-// for: "exclusions live with the feature they exclude for" (#385) at
-// the data layer, per docs/decisions/evaluation-engine.md section 3.
-//
-// This issue (#401) models the field and its JSON shape only -- the
-// matching semantics (what "Target" means for a given definition/
-// intent, how a suppression actually gates an emission before it
-// reaches Route) port later.
-type Suppression struct {
-	ID     string `json:"id"`
-	Target string `json:"target"`
-	Reason string `json:"reason,omitempty"`
-}
-
 // Definition is the one envelope every evaluated thing carries,
 // whatever its Kind or Intent -- docs/decisions/evaluation-engine.md
 // section 2. This issue (#401) is the envelope's contract: no
@@ -248,9 +230,23 @@ type Definition struct {
 	// definition schema" per the ADR. See params.go.
 	ParamSchema []ParamSchema `json:"paramSchema,omitempty"`
 	Provenance  Provenance    `json:"provenance"`
-	// Suppressions are this definition's own scoped exclusions -- see
-	// Suppression's own doc comment.
-	Suppressions []Suppression `json:"suppressions,omitempty"`
+	// Detection is the structure an operator-authored detector needs and
+	// nothing else does: its conditions and the aggregation around them
+	// (issue #502). Set on exactly the definitions that are all three of
+	// intent=detection, kind=declarative and provenance=custom, and
+	// absent everywhere else -- Validate enforces both directions, which
+	// is why this is an intent-specific block rather than five top-level
+	// fields that would be meaningless on every other definition. See
+	// DetectionSpec for the structure/tunable split and why nothing in
+	// it serialises non-deterministically.
+	Detection *DetectionSpec `json:"detection,omitempty"`
+	// Family is the flag family an operator filed this detector under
+	// (#829). Display only -- see Family's own doc comment -- and set on
+	// a custom definition alone, since a shipped detector's family is
+	// already the design record's, held in the frontend's palette by
+	// definition id. Empty means "not filed", and reads exactly as an
+	// unfiled detector always did.
+	Family Family `json:"family,omitempty"`
 }
 
 // newDefinitionID returns a random 32-character hex string. Mirrors
@@ -295,6 +291,8 @@ func NewDefinition(name string, intent Intent, kind Kind) Definition {
 //   - Params and Provenance.ShippedParams (when set) both validate
 //     against ParamSchema -- malformed values are rejected here, never
 //     stored to be read as a zero value later.
+//   - A Detection block, where one is present, belongs to a custom
+//     detection and is itself well-formed -- see validateDetectionBlock.
 func (d Definition) Validate() error {
 	if err := ValidateScope(d.Scope); err != nil {
 		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
@@ -312,6 +310,12 @@ func (d Definition) Validate() error {
 	if d.Provenance.Origin == ProvenanceCustom && d.Kind != KindDeclarative {
 		return fmt.Errorf("engine: definition %q: provenance=custom requires kind=declarative -- programmatic definitions are shipped-only (see Kind's doc comment); no request shape may express a custom programmatic definition", d.ID)
 	}
+	if err := d.validateDetectionBlock(); err != nil {
+		return err
+	}
+	if err := d.validateFamily(); err != nil {
+		return err
+	}
 	if _, err := ValidateParams(d.ParamSchema, d.Params); err != nil {
 		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
 	}
@@ -319,6 +323,56 @@ func (d Definition) Validate() error {
 		if _, err := ValidateParams(d.ParamSchema, d.Provenance.ShippedParams); err != nil {
 			return fmt.Errorf("engine: definition %q: shipped defaults: %w", d.ID, err)
 		}
+	}
+	return nil
+}
+
+// validateDetectionBlock checks who may carry a Detection block, and
+// that the one they carry is well-formed.
+//
+// Only a custom detection may: on a shipped definition the structure is
+// the Go builder's, and on an expectation it is fixed by
+// BuildExpectationDefinition, so a block on either would be data that
+// looked authoritative and was never read.
+//
+// The other direction -- that a custom detection *must* carry one -- is
+// deliberately not enforced here. It binds where a definition is stored
+// (DefinitionsStore.Upsert), not on the envelope, because a definition
+// built in-process is handed its structure directly as a DeclarativeSpec
+// and the block would be a second copy of it. What makes the block
+// mandatory is persistence: a stored definition is rebuilt from its
+// bytes alone, so a stored custom detection without one would list and
+// evaluate nothing.
+func (d Definition) validateDetectionBlock() error {
+	if d.Detection == nil {
+		return nil
+	}
+	if d.Provenance.Origin != ProvenanceCustom || d.Intent != IntentDetection {
+		return fmt.Errorf("engine: definition %q: a detection block belongs only to a custom detection definition, and this one is intent=%q provenance=%q", d.ID, d.Intent, d.Provenance.Origin)
+	}
+	if err := d.Detection.Validate(); err != nil {
+		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
+	}
+	return nil
+}
+
+// validateFamily checks who may be filed under a flag family, and that
+// the family named is one of the seven.
+//
+// Only a custom definition may carry one. A shipped detector's family is
+// the design record's own classification of the sixteen built-ins, held
+// in the frontend palette by definition id, so a stored one here would be
+// a second answer to a question already answered -- and the two could
+// disagree after an upgrade retuned the record.
+func (d Definition) validateFamily() error {
+	if d.Family == "" {
+		return nil
+	}
+	if d.Provenance.Origin != ProvenanceCustom {
+		return fmt.Errorf("engine: definition %q: only a custom definition is filed under a flag family; a shipped one's family is the design record's, keyed by its own id", d.ID)
+	}
+	if err := ValidateFamily(d.Family); err != nil {
+		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
 	}
 	return nil
 }

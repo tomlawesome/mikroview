@@ -6,6 +6,16 @@ export function formatTime(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour12: false })
 }
 
+// The stream's time column (#644's squared columns). Milliseconds, not
+// just seconds: at real event rates several rows share a second, and the
+// order the table shows is decided below one -- whole-second stamps make
+// distinct arrivals read as simultaneous.
+export function formatTimeMs(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return `${d.toLocaleTimeString(undefined, { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`
+}
+
 export function formatAddr(ip?: string, port?: number): string {
   if (!ip) return '—'
   return port ? `${ip}:${port}` : ip
@@ -49,6 +59,23 @@ export function formatHM(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+// formatDayMonth renders a date as a bare day and short month -- "2
+// Sept" in a UK locale, "Sep 2" in a US one. For the returning-flag
+// cards (#640), which say when a pair was last judged ("you checked this
+// on 2 Sept and found it fine"): the day is what the operator needs to
+// place the event, and a clock time would imply a precision the sentence
+// is not making a claim about.
+//
+// Locale-driven like every other helper here (formatTime, formatHM),
+// rather than a hand-built month table: the browser already knows how
+// this reader writes a date. Returns the original string unchanged if it
+// does not parse, same as its neighbours.
+export function formatDayMonth(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
 export function formatEps(eps: number): string {
   if (eps < 1) return eps.toFixed(1)
   return Math.round(eps).toString()
@@ -70,19 +97,62 @@ export function formatDurationShort(totalSeconds: number): string {
   return `${d}d ${h % 24}h`
 }
 
-// formatUptimeFull renders a duration in seconds as all four units --
-// "3d 4h 12m 05s" -- for the toolbar's server-uptime readout, which sits
-// right beside the connection indicator and wants a fixed-width,
-// always-fully-qualified string rather than formatDurationShort's
-// "drop to the two units that matter" summary. Seconds are zero-padded
-// so the string doesn't twitch in width every ten ticks.
-export function formatUptimeFull(totalSeconds: number): string {
+// formatUptimeDaysHours renders a duration in seconds as days and hours
+// only -- "12 d 4 h" -- for the account menu's foot, where uptime sits
+// beside the version: "0.9 · AGPL-3.0 · up 12 d 4 h".
+//
+// Two units, and no smaller one, is the ratified design rather than a
+// simplification (round 37, accepted by the owner 2026-09-02): "a
+// ticking second is a clock, not a fact". The counter underneath still
+// advances every second; reading only these two units off it means the
+// rendered string changes once an hour, so a menu left open does not
+// twitch. Both units always appear, so the string keeps one shape.
+export function formatUptimeDaysHours(totalSeconds: number): string {
   const s = Math.max(0, Math.round(totalSeconds))
   const days = Math.floor(s / 86_400)
   const hours = Math.floor((s % 86_400) / 3600)
-  const minutes = Math.floor((s % 3600) / 60)
-  const seconds = s % 60
-  return `${days}d ${hours}h ${minutes}m ${String(seconds).padStart(2, '0')}s`
+  return `${days} d ${hours} h`
+}
+
+// parseGoDurationSeconds reads a Go time.Duration.String() value (the
+// wire format internal/engine's ValidateParams normalizes a "duration"
+// param to -- see validateDurationParam's `d.String()` -- e.g. "1m0s",
+// "500ms", "1h30m0s") into whole seconds. Used by the port-scan window
+// row (#677) to show/edit a definition's window param as a plain
+// second count ("60 s") rather than Go's compound notation.
+export function parseGoDurationSeconds(s: string): number {
+  const re = /(\d+(?:\.\d+)?)(h|ms|m|s)/g
+  let total = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s))) {
+    const v = parseFloat(m[1])
+    switch (m[2]) {
+      case 'h':
+        total += v * 3600
+        break
+      case 'm':
+        total += v * 60
+        break
+      case 's':
+        total += v
+        break
+      case 'ms':
+        total += v / 1000
+        break
+    }
+  }
+  return total
+}
+
+// formatDaysSince renders how long ago iso was as a whole-day count --
+// "4 d", or "under a day" for anything still inside the first 24h.
+// Mirrors EngineRoom.svelte's own quietFor day-count convention (same
+// Math.floor-of-whole-days reasoning: "quiet 3 d" there, "signed in 4
+// d" here for #677's sessions row) rather than introducing a second way
+// to say the same kind of thing.
+export function formatDaysSince(iso: string): string {
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
+  return days >= 1 ? `${days} d` : 'under a day'
 }
 
 // formatBufferDepth summarizes how full the server's in-memory event ring
@@ -136,6 +206,75 @@ export function formatRelative(iso: string, nowMs: number): string {
   if (h < 24) return `${h}h ago`
   const d = Math.floor(h / 24)
   return `${d}d ago`
+}
+
+// formatSpacedAge renders how long ago `iso` was in round 30's own
+// duration idiom -- a bare "<number> <unit>", no "ago" suffix -- which
+// is what the record writes wherever a table column answers "how long
+// ago" rather than "when". Entities is the worked example: round 38's
+// `#ent` writes `412 d`, `2 m`, `19 m` down first seen/last seen, `2 s`
+// and `12 s` down the rules view's last fired, and `now` for anything
+// that has just happened (`the-whole.html` #et-hosts/#et-rules/
+// #et-ports). Same spaced-letter shape as the scene bar's own span
+// picker (`15 m`/`1 h`/`24 h`/`14 d`) and the docket's age column.
+//
+// Distinct from formatRelative above, which keeps the "Xm ago" phrasing
+// for prose that reads as a sentence (Fleet's "last heard ... — quiet is
+// a fact, not a fault"), and from Flags.svelte's own age formatter,
+// which never says "now": round 30's flags table has no sub-minute row
+// and its comment records that seconds there read "N s" instead (#688).
+export function formatSpacedAge(iso: string, nowMs: number): string {
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return iso
+  const deltaMs = Math.max(0, nowMs - t)
+  const s = Math.floor(deltaMs / 1000)
+  if (s < 5) return 'now'
+  if (s < 60) return `${s} s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} h`
+  const d = Math.floor(h / 24)
+  return `${d} d`
+}
+
+// formatLastHeard renders Fleet's and Entities' "last heard" line in
+// round 38's cutover (`the-whole.html`'s device card: "last heard
+// Tuesday 21:14"), which round 30's plain formatRelative left as a bare
+// "3d ago" -- fine for "how long", useless for "which day", the same gap
+// AuditLog's formatWhen and Watchlist's matchWhen each closed locally for
+// their own tables. This is that rule, shared, for prose rather than a
+// table cell:
+//
+//   - under an hour: formatSpacedAge's short form ("12 m") -- freshness,
+//     not a clock, is the fact worth a glance here.
+//   - later than an hour but still today: the clock time alone ("21:14").
+//   - within the last 7 calendar days: weekday name + time
+//     ("Tuesday 21:14").
+//   - older: day + short month + time ("2 Sep 21:14"), formatDayMonth's
+//     own rendering with the clock time appended.
+//
+// Calendar days throughout, not 24h windows, so a device last heard from
+// at 23:59 read at 00:01 the next day is "yesterday's weekday", not
+// "today". Locale-driven like every other helper here: toLocaleDateString
+// with `undefined` lets the browser pick how this reader writes a
+// weekday and a month, rather than a hand-built name table.
+export function formatLastHeard(iso: string, nowMs: number): string {
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return iso
+  const deltaMs = Math.max(0, nowMs - t)
+  if (deltaMs < 3_600_000) return formatSpacedAge(iso, nowMs)
+
+  const d = new Date(t)
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+  const startOfDay = (ms: number): number => {
+    const x = new Date(ms)
+    return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  }
+  const dayDiff = Math.round((startOfDay(nowMs) - startOfDay(t)) / 86_400_000)
+  if (dayDiff <= 0) return time
+  if (dayDiff <= 6) return `${d.toLocaleDateString(undefined, { weekday: 'long' })} ${time}`
+  return `${formatDayMonth(iso)} ${time}`
 }
 
 // rawTooltip is the verbatim router log line as shown on hover, plus a

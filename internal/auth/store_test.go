@@ -94,6 +94,37 @@ func TestCreateUserAddsAdditionalAccounts(t *testing.T) {
 	}
 }
 
+// TestCreateUserAcceptsViewer is TestCreateUserAddsAdditionalAccounts'
+// #653 counterpart: RoleViewer, the new lowest tier, is a valid role for
+// CreateUser, same as RoleUser.
+func TestCreateUserAcceptsViewer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	s.Register("admin", "password123", time.Now())
+
+	u, err := s.CreateUser("watcher", "password789", RoleViewer, time.Now())
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if u.Role != RoleViewer {
+		t.Errorf("expected RoleViewer, got %v", u.Role)
+	}
+}
+
+// TestCreateUserRejectsUnknownRole covers the branch ErrSingleAdmin
+// doesn't: a role that is neither RoleAdmin (refused separately as
+// ErrSingleAdmin, see transfer_test.go) nor one of the two CreateUser
+// actually grants.
+func TestCreateUserRejectsUnknownRole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	s.Register("admin", "password123", time.Now())
+
+	if _, err := s.CreateUser("someone", "password789", Role("owner"), time.Now()); !errors.Is(err, ErrInvalidRole) {
+		t.Errorf("expected ErrInvalidRole for an unrecognized role, got %v", err)
+	}
+}
+
 func TestCreateUserRejectsDuplicateUsernameCaseInsensitive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
@@ -357,6 +388,70 @@ func TestOpenReadsNewObjectFormat(t *testing.T) {
 	}
 }
 
+// TestOpenLeavesAnEmptyRoleFailingClosed pins what replaced #653's
+// pre-roles default: an accounts file whose account carries no "role"
+// key can now only have been hand-edited, so the empty Role is loaded
+// as-is and rank() denies it every gate -- not even viewer. Silently
+// promoting an unassigned role to RoleUser is the wrong direction for a
+// value nobody legitimately wrote.
+func TestOpenLeavesAnEmptyRoleFailingClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	data := `{"users":[{"id":"u1","username":"someone","passwordHash":"$argon2id$fake","createdAt":"2026-01-01T00:00:00Z"}]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() returned an unexpected error: %v", err)
+	}
+	u, ok := s.ByUsername("someone")
+	if !ok {
+		t.Fatal("expected the roleless account to load")
+	}
+	if u.Role != "" {
+		t.Errorf("expected the empty on-disk role to be preserved, got %q", u.Role)
+	}
+	for _, min := range []Role{RoleViewer, RoleUser, RoleAdmin} {
+		if u.Role.AtLeast(min) {
+			t.Errorf("expected a roleless account to be denied %q, but AtLeast granted it", min)
+		}
+	}
+}
+
+// TestReloadIfStaleLeavesAnEmptyRoleFailingClosed is the same behaviour
+// reached through the other code path that parses a storeFile --
+// reloadIfStale, which a live server calls on every read once a separate
+// process has touched the file. Mirrors TestReloadIfStaleSkipsNilArrayElements
+// above.
+func TestReloadIfStaleLeavesAnEmptyRoleFailingClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := `{"users":[{"id":"u1","username":"someone","passwordHash":"$argon2id$fake","createdAt":"2026-01-01T00:00:00Z"}]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond) // see other mtime-staleness tests' identical reasoning
+
+	u, ok := s.ByUsername("someone") // triggers reloadIfStale
+	if !ok {
+		t.Fatal("expected the externally-written account to be picked up")
+	}
+	if u.Role != "" {
+		t.Errorf("expected the empty on-disk role to be preserved, got %q", u.Role)
+	}
+	for _, min := range []Role{RoleViewer, RoleUser, RoleAdmin} {
+		if u.Role.AtLeast(min) {
+			t.Errorf("expected a roleless account to be denied %q, but AtLeast granted it", min)
+		}
+	}
+}
+
 // A deployment that took the removed no-auth option has "disabled": true
 // in its accounts file and no accounts. The key is no longer read at
 // all, so it must load as an ordinary undecided store -- setup required,
@@ -499,5 +594,35 @@ func TestDeleteUserUnknownIDReturnsNotFound(t *testing.T) {
 
 	if _, err := s.DeleteUser("no-such-id"); err != ErrUserNotFound {
 		t.Errorf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+// TestRoleAtLeastStacksTheThreeTiers pins #653's ordering: admin implies
+// user implies viewer, an unrecognized or empty role outranks nothing --
+// not even itself as a min, which is deliberate: there is no legitimate
+// call site that ever passes one as min, so what it denies doesn't
+// matter, only that it never grants.
+func TestRoleAtLeastStacksTheThreeTiers(t *testing.T) {
+	cases := []struct {
+		role Role
+		min  Role
+		want bool
+	}{
+		{RoleAdmin, RoleAdmin, true},
+		{RoleAdmin, RoleUser, true},
+		{RoleAdmin, RoleViewer, true},
+		{RoleUser, RoleAdmin, false},
+		{RoleUser, RoleUser, true},
+		{RoleUser, RoleViewer, true},
+		{RoleViewer, RoleUser, false},
+		{RoleViewer, RoleViewer, true},
+		{RoleViewer, RoleAdmin, false},
+		{Role(""), RoleViewer, false},
+		{Role("bogus"), RoleViewer, false},
+	}
+	for _, c := range cases {
+		if got := c.role.AtLeast(c.min); got != c.want {
+			t.Errorf("Role(%q).AtLeast(%q) = %v, want %v", c.role, c.min, got, c.want)
+		}
 	}
 }
