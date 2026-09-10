@@ -16,12 +16,17 @@ export QH_STATE="$TMP/state"
 export CONFIG="$TMP/config.toml"
 mkdir -p "$QH_DIR" "$TMP/bin"
 
+# The stub records its arguments: #1103 found `systemctl reload` exiting 3
+# on a unit with no ExecReload=, which a stub that ignores its arguments
+# can never catch, so the hold test below checks the exact call.
 cat >"$TMP/bin/systemctl" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"${SYSTEMCTL_LOG:?}"
 exit 0
 STUB
 chmod +x "$TMP/bin/systemctl"
 export PATH="$TMP/bin:$PATH"
+export SYSTEMCTL_LOG="$TMP/systemctl.log"
 
 fail=0
 check() {
@@ -49,6 +54,7 @@ write_flag "$(($(date +%s) + 300))"
 check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 1" "hold sets concurrent=1"
 check "$(cat "$QH_STATE/concurrent.orig")" "4" "orig saved"
 [ -f "$QH_DIR/applied" ] && echo "ok - applied written" || { echo "FAIL - applied written"; fail=1; }
+check "$(cat "$SYSTEMCTL_LOG")" "kill --kill-whom=main --signal=HUP gitlab-runner" "hold sends SIGHUP to the runner's main process, not a reload job (#1103)"
 
 # idempotent re-run while held
 "$SCRIPT" >/dev/null
@@ -110,7 +116,7 @@ fi
 check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 1" "config is still set to 1 even though the reload failed"
 [ -f "$QH_DIR/failed" ] && echo "ok - a failed marker was written" || { echo "FAIL - a failed marker was written"; fail=1; }
 [ -f "$QH_DIR/applied" ] && { echo "FAIL - applied must not be written when the reload failed"; fail=1; } || echo "ok - applied was not written"
-grep -q 'systemctl reload gitlab-runner exited 1' "$QH_DIR/failed" \
+grep -q 'systemctl kill -s HUP gitlab-runner exited 1' "$QH_DIR/failed" \
   && echo "ok - the failed marker names the reason" \
   || { echo "FAIL - the failed marker names the reason"; fail=1; }
 
