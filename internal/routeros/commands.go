@@ -285,20 +285,26 @@ func BackupScheduleCommands(dialect string) string {
 // the rsc block, pasted one after the other into the same script
 // (BackupPushScript), never redeclare the same :local name.
 //
-// Three RouterOS primitives below are not measured anywhere in #394 or
-// #955 and are this function's biggest open question -- flagged again
-// on BackupPushScript's own doc comment:
-//   - `as-value output=user` on `/tool fetch` to capture the "begin"
-//     POST's response body into a variable. #394 only ever used
-//     `as-value` on `/file read`, and always `output=none` on `/tool
-//     fetch` pushes, since nothing before this needed a response back.
-//   - `:deserialize from=json`, the presumed inverse of the already-used
-//     `:serialize to=json` -- never exercised either.
-//   - `:serialize to="base64"` to turn a `/file read` slice's raw byte
-//     string into the base64 the wire contract's "data" field needs.
-//     #394's own slice measurements never needed this: that design
-//     POSTed the raw bytes as the whole http-data body, not as a JSON
-//     string field.
+// The three RouterOS primitives this block leans on were measured on a
+// CHR running 7.23.3 (2026-09-10), because #394 and #955 had measured
+// none of them and one of the three guesses was wrong:
+//   - `as-value output=user` on `/tool fetch` does return the response
+//     body in the result's `data` key, on a POST as well as a GET.
+//   - `:deserialize from=json` parses it, in the positional form used
+//     below. It is the inverse of the `:serialize to=json` this file
+//     already relies on.
+//   - **`:serialize to="base64"` does not exist** -- it is a syntax
+//     error on 7.23.3. `:convert ... from=raw to=base64` is the
+//     primitive, and it was checked for exactness rather than assumed:
+//     a 36-byte text file and an 18,673-byte binary `.backup` both
+//     arrived byte-identical, the server decoding what the router sent
+//     and matching its SHA-256.
+//
+// One measured refusal has no fix here and belongs to whoever reads a
+// failure log: `/tool fetch` cannot report a 401 that carries no
+// `WWW-Authenticate` header. It fails with "ERROR parsing http" instead
+// of the status, so an expired ingest token reads on the router as a
+// malformed reply rather than as a rejected credential.
 func backupPushHTTPSBlock(address, token, localFile, kind, v string) string {
 	url := fmt.Sprintf(`https://%s/api/ingest/router-backup`, quote(address))
 	// token is quoted here even though PushBlock's identical Bearer
@@ -313,14 +319,14 @@ func backupPushHTTPSBlock(address, token, localFile, kind, v string) string {
 		fmt.Sprintf(`:local %sTotalSlices (($%sSize + 32767) / 32768)`, v, v),
 		fmt.Sprintf(`:local %sBegin [:serialize to=json value={"op"="begin"; "kind"="%s"; "totalBytes"=$%sSize; "totalSlices"=$%sTotalSlices}]`, v, kind, v, v),
 		fmt.Sprintf(`:local %sBeginResp [/tool fetch url="%s" http-method=post http-data=$%sBegin %s check-certificate=yes as-value output=user]`, v, url, v, header),
-		fmt.Sprintf(`:local %sTransferId (([:deserialize from=json value=($%sBeginResp->"data")])->"transferId")`, v, v),
+		fmt.Sprintf(`:local %sTransferId (([:deserialize from=json ($%sBeginResp->"data")])->"transferId")`, v, v),
 		fmt.Sprintf(`:local %sSent 0`, v),
 		fmt.Sprintf(`:local %sIndex 0`, v),
 		fmt.Sprintf(`:while ($%sSent < $%sSize) do={`, v, v),
 		fmt.Sprintf(`  :local %sTake ($%sSize - $%sSent)`, v, v, v),
 		fmt.Sprintf(`  :if ($%sTake > 32768) do={ :set %sTake 32768 }`, v, v),
 		fmt.Sprintf(`  :local %sChunk [/file read file=%s offset=$%sSent chunk-size=$%sTake as-value]`, v, localFile, v, v),
-		fmt.Sprintf(`  :local %sData64 [:serialize to="base64" value=($%sChunk->"data")]`, v, v),
+		fmt.Sprintf(`  :local %sData64 [:convert ($%sChunk->"data") from=raw to=base64]`, v, v),
 		fmt.Sprintf(`  :local %sSlice [:serialize to=json value={"op"="slice"; "transferId"=$%sTransferId; "index"=$%sIndex; "data"=$%sData64}]`, v, v, v, v),
 		fmt.Sprintf(`  /tool fetch url="%s" http-method=post http-data=$%sSlice %s check-certificate=yes output=none`, url, v, header),
 		fmt.Sprintf(`  :set %sSent ($%sSent + $%sTake)`, v, v, v),
