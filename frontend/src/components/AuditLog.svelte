@@ -23,6 +23,7 @@
   import { formatHM } from '../lib/format'
   import { compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
+  import { nextSort, ariaSort as sortAriaSort, sortGlyph } from '../lib/tableSort'
   import type { AuditEntry } from '../lib/types'
 
   onMount(() => {
@@ -41,17 +42,17 @@
   let filters = $state({ time: '', actor: '', what: '' })
 
   function toggleSort(key: SortKey) {
-    if (sortKey === key) {
-      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
-    } else {
-      sortKey = key
-      sortDir = key === 'time' ? 'desc' : 'asc'
-    }
+    const next = nextSort({ key: sortKey, dir: sortDir }, key, key === 'time' ? 'desc' : 'asc')
+    sortKey = next.key
+    sortDir = next.dir
   }
 
   function dirGlyph(key: SortKey): string {
-    if (sortKey !== key) return ''
-    return sortDir === 'asc' ? '▲' : '▼'
+    return sortGlyph({ key: sortKey, dir: sortDir }, key)
+  }
+
+  function ariaSort(key: SortKey): 'ascending' | 'descending' | 'none' {
+    return sortAriaSort({ key: sortKey, dir: sortDir }, key)
   }
 
   // formatWhen renders round 30's absolute-with-relative-fallback time
@@ -240,13 +241,13 @@
     <table>
       <thead>
         <tr>
-          <th onclick={() => toggleSort('time')} aria-sort={sortKey === 'time' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+          <th onclick={() => toggleSort('time')} aria-sort={ariaSort('time')}>
             When <span class="dir">{dirGlyph('time')}</span>
           </th>
-          <th onclick={() => toggleSort('actor')} aria-sort={sortKey === 'actor' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+          <th onclick={() => toggleSort('actor')} aria-sort={ariaSort('actor')}>
             Who <span class="dir">{dirGlyph('actor')}</span>
           </th>
-          <th onclick={() => toggleSort('what')} aria-sort={sortKey === 'what' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+          <th onclick={() => toggleSort('what')} aria-sort={ariaSort('what')}>
             What <span class="dir">{dirGlyph('what')}</span>
           </th>
         </tr>
