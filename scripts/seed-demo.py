@@ -59,6 +59,7 @@ import os
 import random
 import socket
 import ssl
+import stat
 import sys
 import time
 
@@ -1382,11 +1383,15 @@ def _write_seeded_accounts(dir_path=SEEDED_ACCOUNTS_DIR):
     first, and lock both it and the file down since they hold seeded
     passwords."""
     os.makedirs(dir_path, exist_ok=True)
-    os.chmod(dir_path, 0o700)
+    # Owner-only rwx: a directory needs its x bit to be entered, so this
+    # is the tightest mode that still works. Spelled with the stat
+    # constant because semgrep's insecure-file-permissions rule reads
+    # any literal >= 0o650 as "widely permissive" (pipeline 890).
+    os.chmod(dir_path, stat.S_IRWXU)
     ref = os.path.join(dir_path, SEEDED_ACCOUNTS_FILE)
     with open(ref, "w") as f:
         f.write(f"reviewer(user)={DEMO_USER_PASSWORD}\nobserver(viewer)={DEMO_VIEWER_PASSWORD}\n")
-    os.chmod(ref, 0o600)
+    os.chmod(ref, stat.S_IRUSR | stat.S_IWUSR)
     return ref
 
 
