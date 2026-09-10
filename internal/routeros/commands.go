@@ -20,6 +20,18 @@ import (
 // `<mikroview-host>` was one of the failures that prompted this feature
 // in the first place, and it fails much later, somewhere else.
 
+// quote escapes s for use inside a RouterOS double-quoted string:
+// backslash first, then quote, so an already-escaped backslash cannot
+// swallow the quote-escape that follows it (#1095). Every value this
+// package places inside a quoted string goes through this rather than
+// its own hand-rolled escaping, so there is exactly one place the rule
+// can be wrong.
+func quote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
+}
+
 // Hostname strips a port. Certificate names never carry one, so this is
 // what tls.hosts is compared against.
 func Hostname(hostPort string) string {
@@ -52,7 +64,7 @@ func PortOf(listenAddr string) string {
 // import it, so the router will open a TLS connection to it at all.
 func CaTrustCommands(address, dialect string) string {
 	return strings.Join([]string{
-		fmt.Sprintf(`/tool fetch url="https://%s/ca.crt" check-certificate=no dst-path=mikroview-ca.crt`, address),
+		fmt.Sprintf(`/tool fetch url="https://%s/ca.crt" check-certificate=no dst-path=mikroview-ca.crt`, quote(address)),
 		`/certificate import file-name=mikroview-ca.crt passphrase=""`,
 	}, "\n")
 }
@@ -62,6 +74,9 @@ func CaTrustCommands(address, dialect string) string {
 func SyslogCommands(address, syslogPort, dialect string) string {
 	host := Hostname(address)
 	port := PortOf(syslogPort)
+	// host and port are placed bare, not inside a quoted string -- the
+	// handler validates address/syslogPort's charset before either
+	// reaches here (#1095), so there is nothing for quote() to do.
 	return strings.Join([]string{
 		fmt.Sprintf(`/system logging action add name=mikroview target=remote remote=%s remote-port=%s remote-protocol=tls check-certificate=yes`, host, port),
 		`/system logging add topics=firewall,info action=mikroview`,
@@ -165,7 +180,10 @@ func PushBlock(address, token, kind, dialect string) string {
 		// #436's derived version source). Optional server-side, and the
 		// same line in every block.
 		fmt.Sprintf(`:local %s [:serialize to=json value={"kind"="%s"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$%s}]`, payload, kind, recs),
-		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$%s http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, address, payload, token),
+		// address sits inside url="...", so it goes through quote();
+		// token in the Bearer header is placed bare, relying on the
+		// handler's Token validation to keep it well-formed (#1095).
+		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$%s http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), payload, token),
 	}, "\n")
 }
 
@@ -230,6 +248,14 @@ const BackupScriptPolicy = "read,write,test,sensitive"
 // destination file stem, matching internal/backupsftp's
 // kindForFilename.
 func BackupScript(address, port, device, token, dialect string) string {
+	// address, port, device (user=/dst-path=) are placed bare inside the
+	// outer source="..." block, relying on the handler's Address/Device
+	// validation to keep their charset safe (#1095); port here is
+	// server config, never operator input. token sits inside its own
+	// hand-written \"...\" wrapper, so it goes through quote() -- the
+	// one value here that still needs escaping if it ever carries a
+	// quote or backslash.
+	tok := quote(token)
 	return fmt.Sprintf(`/system script add name=mv-backup policy=%s source="
   /system backup save name=mv-backup dont-encrypt=yes
   /export file=mv-backup
@@ -237,7 +263,7 @@ func BackupScript(address, port, device, token, dialect string) string {
   /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-backup.rsc dst-path=%s.rsc
   /file remove mv-backup.backup
   /file remove mv-backup.rsc
-"`, BackupScriptPolicy, address, port, device, token, device, address, port, device, token, device)
+"`, BackupScriptPolicy, address, port, device, tok, device, address, port, device, tok, device)
 }
 
 // BackupScheduleCommands is step 6's scheduler entry: nightly at 03:00,
