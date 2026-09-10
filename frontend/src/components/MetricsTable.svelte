@@ -17,6 +17,7 @@
   import CustomTopTalkers from './CustomTopTalkers.svelte'
   import { copyToClipboard } from '../lib/clipboard'
   import { toastState } from '../lib/toast.svelte'
+  import { nextSort, ariaSort as sortAriaSort } from '../lib/tableSort'
 
   let { hour, cursor, onselect }: { hour: MetricsHour; cursor: number; onselect: (index: number) => void } = $props()
 
@@ -65,17 +66,13 @@
   )
 
   function sortBy(key: SortKey) {
-    if (sortKey === key) {
-      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
-    } else {
-      sortKey = key
-      sortDir = 'desc'
-    }
+    const next = nextSort({ key: sortKey, dir: sortDir }, key, 'desc')
+    sortKey = next.key
+    sortDir = next.dir
   }
 
   function ariaSort(key: SortKey): 'ascending' | 'descending' | 'none' {
-    if (sortKey !== key) return 'none'
-    return sortDir === 'asc' ? 'ascending' : 'descending'
+    return sortAriaSort({ key: sortKey, dir: sortDir }, key)
   }
 
   const episodesTotal = $derived(hour.episodesPerMinute.reduce((a, b) => a + b, 0))
