@@ -392,6 +392,15 @@
     align-items: center;
     gap: 18px;
     padding: 10px 4px 10px 8px;
+    /* Its own stacking context, so the browser hit-tests the rail
+       first and stops there. The pointer rests on the rail after every
+       click on it, and the browser re-runs a hit test under the pointer
+       each time the stream re-lays out; without this the test walks the
+       whole deck first -- every row's hidden buttons and sticky time
+       cells are separate paint layers -- at 12-20 ms a time (#1102), which
+       turned each stream update into a long frame. The fixed rail this
+       column replaced had its own layer for free. */
+    isolation: isolate;
   }
 
   .rail-name {
