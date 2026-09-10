@@ -927,6 +927,43 @@ func TestHandleStatsWarmRestartReportsRestoredTo(t *testing.T) {
 	}
 }
 
+// droppedStub reports a fixed count for the Evaluation interface, so the
+// stats endpoint can be tested without standing up a real engine.
+type droppedStub uint64
+
+func (d droppedStub) Dropped() uint64 { return uint64(d) }
+
+// #1107: the engine sheds events it cannot evaluate under a burst --
+// they are stored and broadcast, so nothing looks wrong, and the only
+// symptom is flags that were never raised. This pins the number being
+// readable at all. Absent rather than zero when no engine is wired: a
+// Server without one cannot honestly say "nothing was skipped", and
+// zero is exactly that claim.
+func TestHandleStatsReportsWhatTheEngineNeverEvaluated(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Evaluation = droppedStub(12000)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	eng, ok := getStats(t, ts.URL)["engine"].(map[string]any)
+	if !ok {
+		t.Fatal(`body["engine"] missing or not an object`)
+	}
+	if got := eng["droppedFromEvaluation"].(float64); got != 12000 {
+		t.Errorf("droppedFromEvaluation = %v, want 12000", got)
+	}
+}
+
+func TestHandleStatsOmitsEngineWhenNoneIsWired(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	if v, present := getStats(t, ts.URL)["engine"]; present {
+		t.Errorf(`body["engine"] = %v, want the key absent when no engine is wired`, v)
+	}
+}
+
 func getStats(t *testing.T, base string) map[string]any {
 	t.Helper()
 	resp, err := http.Get(base + "/api/stats")
