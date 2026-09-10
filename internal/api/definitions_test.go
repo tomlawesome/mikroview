@@ -768,6 +768,97 @@ func TestHandleDefinitionsUpdate(t *testing.T) {
 	}
 }
 
+// #1077: an entry scoped to a router address list (the way
+// internal/api/suggest.go's handleSuggestionsAccept creates one when an
+// operator accepts a KindAddressList suggestion) lost that scope the
+// first time it was edited for any other reason, because
+// frontend/src/lib/api.ts's expectationBlock built the PUT body without
+// a sourceList key at all -- reproduced here with
+// TestHandleDefinitionsUpdateOmittingSourceListClearsIt asserting the
+// scope survived: it failed, got.SourceList coming back empty.
+//
+// expectationRequest.SourceList is deliberately full-replace, the same
+// as Source/DestIP/Ports/Boundary -- not a leave-alone pointer like
+// Window, see that field's own doc comment -- so making Go tolerate an
+// absent sourceList was rejected as the fix: it would special-case this
+// one field for no caller but the watchlist editor, which is exactly the
+// leave-alone trap Window's doc comment already explains the cost of.
+// The real fix is the frontend now reading sourceList off the entry it
+// is editing and resending it on every PUT (Watchlist.svelte's
+// editSourceList, api.ts's WatchlistEntryRequest.sourceList) -- both
+// tests below now document and pin that contract: omitting the field
+// still clears it (full-replace, unchanged), and the frontend's fixed
+// behaviour -- always sending it -- keeps the scope.
+func TestHandleDefinitionsUpdateOmittingSourceListClearsIt(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name: "list-scoped",
+		Expectation: &expectationRequest{
+			SourceList: watchlist.AddressListRef{Device: "rb5009", List: "iot-clients"},
+			Ports:      []int{443},
+		},
+	})
+	entry := mustDecodeDefinition(t, created)
+	if entry.Expectation.SourceList.Empty() {
+		t.Fatal("setup failed: expected the created entry to carry a SourceList")
+	}
+
+	// The shape frontend/src/lib/api.ts's expectationBlock sent before
+	// the #1077 fix: every operator-settable field except sourceList,
+	// which it never carried at all. Still full-replace, deliberately --
+	// see the doc comment above.
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{Ports: []int{443, 8443}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _, err := s.Definitions.GetExpectation(entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.SourceList.Empty() {
+		t.Errorf("expected an update that omits sourceList to clear it (full-replace, same as Boundary), got %+v", got.SourceList)
+	}
+}
+
+// The other half of the #1077 fix's contract: a PUT that does carry
+// sourceList -- what the watchlist editor now always sends, reading it
+// back off the entry being edited -- keeps the scope.
+func TestHandleDefinitionsUpdateSourceListSurvivesWhenSent(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	list := watchlist.AddressListRef{Device: "rb5009", List: "iot-clients"}
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", createDefinitionRequest{
+		Name:        "list-scoped",
+		Expectation: &expectationRequest{SourceList: list, Ports: []int{443}},
+	})
+	entry := mustDecodeDefinition(t, created)
+
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
+		Expectation: &expectationRequest{SourceList: list, Ports: []int{443, 8443}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _, err := s.Definitions.GetExpectation(entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceList != list {
+		t.Errorf("expected SourceList to survive an update that resends it, got %+v", got.SourceList)
+	}
+}
+
 func TestHandleDefinitionsUpdateUnknownID(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))
