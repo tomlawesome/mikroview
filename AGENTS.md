@@ -131,7 +131,10 @@ line in `-d`).
 Mechanics: after a merge, `sync:mirror-to-github` in `.gitlab-ci.yml` pushes
 the branch to GitHub over SSH with a deploy key (one repository, push only —
 deliberately not a token, so a leak of it cannot reach anything else). It
-runs only when the `MIRROR_TO_GITHUB` CI/CD variable is `true`.
+runs only when the `MIRROR_TO_GITHUB` CI/CD variable is `true`. A release is
+a protected `v*` tag pushed to `gitlab`: the same job mirrors it, and
+GitHub's `docker` workflow publishes from it
+(`docs/decisions/release-versioning.md`, "The tag is the trigger").
 `policy:promotion-hop` fails a merge request into `preview` unless it comes
 from `dev`, and into `main` unless it comes from `preview`.
 
