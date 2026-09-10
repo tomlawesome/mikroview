@@ -649,7 +649,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### github.com/oschwald/geoip2-golang v1.13.0
+### github.com/oschwald/geoip2-golang/v2 v2.4.0
 
 <!-- LICENSE -->
 
@@ -671,7 +671,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### github.com/oschwald/maxminddb-golang v1.13.1
+### github.com/oschwald/maxminddb-golang/v2 v2.6.0
 
 <!-- LICENSE -->
 
