@@ -2,7 +2,7 @@
 //
 // Unit tests for perf-compare.mjs's comparison rule: a metric regresses
 // only when it is worse than baseline by more than 30% AND more than
-// 300ms (frame p95: 30% and 8ms), improvements never fail, and a metric
+// 300ms (mean scroll frame: 30% and 4ms), improvements never fail, and a metric
 // missing from either file is 'new'/'missing' rather than a failure.
 
 import { describe, expect, it } from 'vitest'
@@ -57,7 +57,7 @@ describe('compareMetrics', () => {
     commit: 'abc123',
     decks: { 'The fall': { wallAvgMs: 1000 }, Topography: { wallAvgMs: 500 } },
     longTasks: { rolls: { totalMs: 200 } },
-    docketScroll: { frameP95Ms: 10 },
+    docketScroll: { frameAvgMs: 18 },
   }
 
   it('passes and marks everything ok/improved when nothing regresses', () => {
@@ -79,11 +79,22 @@ describe('compareMetrics', () => {
     expect(rows.find((r) => r.name === 'decks.The fall.wallAvgMs').verdict).toBe('regressed')
   })
 
-  it('applies the tighter frame-p95 thresholds', () => {
+  it('applies the tighter mean-frame thresholds', () => {
     const current = structuredClone(baseline)
-    current.docketScroll.frameP95Ms = 20 // +100%, +10ms -- fails p95's 8ms floor
+    current.docketScroll.frameAvgMs = 24 // +33%, +6ms -- past both of the 30%/4ms pair
     const { failed } = compareMetrics(baseline, current)
     expect(failed).toBe(true)
+  })
+
+  it('does not fail the mean frame on the one-frame swing that flipped p95 (#1111)', () => {
+    // Job 11185 vs job 10875, same app code: p95 went 16.8 -> 33.3 while
+    // the mean stayed at 18.0. A mean within the 4ms floor is never a
+    // regression whatever the percentage.
+    const current = structuredClone(baseline)
+    current.docketScroll.frameAvgMs = 21.9 // +21.7%, +3.9ms -- under both
+    const { rows, failed } = compareMetrics(baseline, current)
+    expect(failed).toBe(false)
+    expect(rows.find((r) => r.name === 'docketScroll.frameAvgMs').verdict).toBe('ok')
   })
 
   it('reports a metric missing from current as missing, not a failure', () => {
