@@ -295,6 +295,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		// means visible to nobody. See internal/syslog.ListenerStats.
 		"syslog": syslog.Stats(),
 	}
+	// What detection never saw (#1107). Same reasoning as the syslog
+	// counters above: the condition was previously visible only in a
+	// rate-limited log line, which means visible to nobody. Under a
+	// burst the engine sheds what it cannot evaluate while every event
+	// is still stored and broadcast, so the symptom is flags that were
+	// never raised -- silence, which reads as "nothing is wrong". How an
+	// operator should be told is #1109; this is only the number.
+	if s.Evaluation != nil {
+		body["engine"] = map[string]any{"droppedFromEvaluation": s.Evaluation.Dropped()}
+	}
 	// When the snapshot these counters came from was taken (#795), and
 	// only then. Absent on a cold start rather than null: the key's
 	// presence is the whole question the UI asks -- "was this a warm
