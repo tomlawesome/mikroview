@@ -2230,8 +2230,8 @@ data is what would let mikroview tell "this peer roamed to a new IP"
 (normal for a mobile client) apart from "this peer's private key was
 stolen and is now being used from somewhere else" (a real compromise
 signal) -- arguably the more interesting half of "VPN peer anomaly,"
-but it's blocked on [issue #21](https://github.com/tomlawesome/mikroview/issues/21)
-deciding whether/how mikroview talks to the RouterOS API at all.
+but it's blocked on issue #21 deciding whether/how mikroview talks to
+the RouterOS API at all.
 
 **Confidence score.** Every detector except global-volume-spike and
 rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each

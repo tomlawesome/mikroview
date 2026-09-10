@@ -18,6 +18,19 @@ rewritten.
 
 Nothing yet.
 
+## [0.5.1] - 2026-09-10
+
+### Security
+
+- **Two 0.5.0 audit fixes completed.** Re-checking the 0.5.0 security
+  fixes on the released code found two of the three incomplete. The
+  root-side quiet-host script now caps a hold at one hour from when the
+  host itself applied it, instead of from a time written in the hold
+  file; re-copy `deploy/quiet-host/quiet-host-apply.sh` to
+  `/usr/local/sbin/` on the runner host after upgrading. The setup
+  commands endpoint also refuses a `$` in the token field, which
+  RouterOS would expand inside the rendered script.
+
 ## [0.5.0] - 2026-09-10
 
 The ratified concepts, built. Ten capability milestones since 0.4.0:
