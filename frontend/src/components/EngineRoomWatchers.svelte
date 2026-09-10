@@ -140,8 +140,9 @@
   // The mounted bar's instance, so Save can ask it to commit a
   // still-typed token before reading `draftConditions` back out (#1075).
   // Only one of the two ConditionsBar tags below is ever mounted at a
-  // time (draft vs. an open custom row), the same sharing nameInput
-  // already does.
+  // time: openPanel() discards a pending draft the same way
+  // startDraftFrom() closes an open row's panel, so the two never
+  // coexist and one ref is always the right one.
   let conditionsBarRef = $state<ReturnType<typeof ConditionsBar> | null>(null)
   let draftKey = $state('perSource')
   let draftCounting = $state('total')
@@ -279,6 +280,11 @@
   function openPanel(name: string, from: { name: string; carried: string } | null = null) {
     const d = detectorSettingsState.list.find((x) => x.name === name)
     if (!d) return
+    // The reverse of startDraftFrom()'s closePanel(): a row panel and an
+    // in-progress clone-draft must never both be mounted, or the one
+    // conditionsBarRef above would point at whichever mounted last while
+    // draftConditions and friends still belonged to the other (#1075).
+    discardDraft()
     openRow = name
     draftName = d.label
     fields = paramFields(schemaFor(name), d.params)
