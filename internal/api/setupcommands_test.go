@@ -248,3 +248,63 @@ func TestHandleSetupCommandsBackupRendersOnlyWhenReady(t *testing.T) {
 		t.Errorf("backup schedule commands = %q, want the scheduler entry", ready.Steps.BackupSchedule.Commands)
 	}
 }
+
+// TestHandleSetupCommandsRejectsUnsafeInput covers #1095: every field
+// that reaches routeros' command templates must be rejected with 400
+// before it can change the structure of the RouterOS commands an
+// operator pastes verbatim -- a '"', '\', ';', space or newline in
+// device or address, and a syslogPort outside 1..65535.
+func TestHandleSetupCommandsRejectsUnsafeInput(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	cases := []struct {
+		name string
+		req  setupCommandsRequest
+	}{
+		{"device with a quote", setupCommandsRequest{Address: "mv.example.com", Device: `router"1`}},
+		{"device with a backslash", setupCommandsRequest{Address: "mv.example.com", Device: `router\1`}},
+		{"device with a semicolon", setupCommandsRequest{Address: "mv.example.com", Device: "router;1"}},
+		{"device with a space", setupCommandsRequest{Address: "mv.example.com", Device: "router 1"}},
+		{"device with a newline", setupCommandsRequest{Address: "mv.example.com", Device: "router\n1"}},
+		{"address with a quote", setupCommandsRequest{Address: `mv.example.com"`}},
+		{"address with a space", setupCommandsRequest{Address: "mv example.com"}},
+		{"address with a semicolon", setupCommandsRequest{Address: "mv.example.com;reboot"}},
+		{"syslogPort non-numeric", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "abc"}},
+		{"syslogPort zero", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "0"}},
+		{"syslogPort out of range", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "70000"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(tc.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", resp.StatusCode)
+			}
+		})
+	}
+}
+
+// TestHandleSetupCommandsAcceptsSafeInput is the positive case beside
+// TestHandleSetupCommandsRejectsUnsafeInput: ordinary values in every
+// validated field must still render normally.
+func TestHandleSetupCommandsAcceptsSafeInput(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "mv.example.com", SyslogPort: "5514", Device: "router-1.lan",
+	})
+	if !strings.Contains(out.Steps.CaTrust.Commands, "mv.example.com") {
+		t.Errorf("caTrust commands missing the address: %s", out.Steps.CaTrust.Commands)
+	}
+}
