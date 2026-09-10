@@ -12,7 +12,7 @@
 # actually open it, and the guest falls back to TCG software emulation
 # when it cannot, which is the case on an account that is not in the
 # `kvm` group.
-FROM alpine:3.22
+FROM alpine:3.24
 
 RUN apk add --no-cache qemu-system-x86_64 qemu-img
 

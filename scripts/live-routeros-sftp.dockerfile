@@ -7,7 +7,7 @@
 # not ship an SFTP server and this is not a step towards one -- see
 # docs/decisions/routeros-ingest-spike.md for what the experiment found
 # and why the answer was no.
-FROM alpine:3.22
+FROM alpine:3.24
 
 RUN apk add --no-cache openssh-server openssh-sftp-server \
  && ssh-keygen -A \
