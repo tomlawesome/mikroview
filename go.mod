@@ -3,7 +3,7 @@ module github.com/tomlawesome/mikroview
 go 1.27.0
 
 require (
-	github.com/coreos/go-oidc/v3 v3.20.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/gaissmai/bart v0.29.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/gorilla/websocket v1.5.3
@@ -11,8 +11,8 @@ require (
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/pkg/sftp v1.13.11
 	golang.org/x/crypto v0.56.0
-	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/oauth2 v0.37.0
+	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 )

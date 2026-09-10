@@ -15,7 +15,7 @@ travel with the container image and are reachable from the running app.
 
 ## Go modules
 
-### github.com/coreos/go-oidc/v3 v3.20.0
+### github.com/coreos/go-oidc/v3 v3.21.0
 
 <!-- LICENSE -->
 
@@ -743,7 +743,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### golang.org/x/oauth2 v0.36.0
+### golang.org/x/oauth2 v0.37.0
 
 <!-- LICENSE -->
 
@@ -811,7 +811,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### golang.org/x/sys v0.47.0
+### golang.org/x/sys v0.48.0
 
 <!-- LICENSE -->
 
