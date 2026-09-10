@@ -1084,6 +1084,15 @@ below are the operator-visible changes, grouped as usual.
   value in local storage now simply has an unread key. The colourway
   picker (Signal/Pulse/Nebula/Frequency/Mono) is unaffected.
 
+### Security
+
+- **Pre-release audit hardening.** The router-backup drop box rejects
+  out-of-range SFTP write offsets and recovers per connection; the
+  root-side quiet-host script caps a hold at one hour whatever the hold
+  file says; `POST /api/setup/commands` validates its fields and quotes
+  every value it templates into a RouterOS string. The audit's coverage
+  is in `docs/reviews/2026-09-10-v0.5.0.md`.
+
 ### Fixed
 
 - **A `Flush` satisfied by a save already in flight no longer leaves the
