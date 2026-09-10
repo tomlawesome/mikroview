@@ -385,6 +385,40 @@ func TestMigrationNamesStoresItIsNotMoving(t *testing.T) {
 	}
 }
 
+// TestMigrationNamesTheRouterBackupVaultWhenOutside is #1071: the router
+// backup vault (Backup.VaultDir) carries the same "resolved from the data
+// directory unless overridden" contract as History.Dir (backups.go's
+// backupVaultDirectory doc comment), so an operator pointing it at a
+// separate mount -- the SFTP-backed vault's realistic deployment -- has to
+// see it called out as not moved, exactly as TestMigrationNamesStoresItIsNotMoving
+// requires for geoip_db above. Silently leaving it out of migratedStores
+// meant it landed in neither plan.Stores nor plan.Outside: no copy, no
+// warning, and the vault's encrypted generations were gone the moment the
+// operator deleted the old data directory per the command's own instructions.
+func TestMigrationNamesTheRouterBackupVaultWhenOutside(t *testing.T) {
+	_, cfg := seedDataDir(t)
+	elsewhere := t.TempDir()
+	cfg.Backup.VaultDir = elsewhere
+	if err := os.WriteFile(filepath.Join(elsewhere, "generation.enc"), []byte("placeholder encrypted vault file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, _ := migrate(t, cfg, filepath.Join(t.TempDir(), "new-data"), false)
+
+	var outside []string
+	for _, s := range plan.Outside {
+		outside = append(outside, s.Name)
+	}
+	if len(outside) != 1 || outside[0] != vaultStoreName {
+		t.Fatalf("stores outside the data directory reported as %v, want [%s]", outside, vaultStoreName)
+	}
+	for _, s := range plan.Stores {
+		if s.Name == vaultStoreName {
+			t.Error("the router backup vault was reported as moved, but it is on a different mount and was not")
+		}
+	}
+}
+
 // TestRunMigrateDataEndToEnd drives the command itself, through
 // config.Load and the argument handling, rather than the pieces.
 func TestRunMigrateDataEndToEnd(t *testing.T) {
