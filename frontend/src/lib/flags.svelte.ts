@@ -170,6 +170,20 @@ class FlagsState {
   // away and back (to `live`, say) still starts the list over.
   pinnedIds = $state<string[]>([])
 
+  // Bumped by refresh() before its fetch and by every optimistic
+  // mutation below, same requestId idiom as dossier.svelte.ts/
+  // ipLookup.svelte.ts (#1074). refresh() replaces `this.list` wholesale
+  // with new objects (see refresh() below), while judgeInvestigate/
+  // judgeAndClear/undoVerdict/clearAll mutate an object captured from
+  // the *old* list across an await. Without this, a refresh already in
+  // flight when one of those mutations lands can resolve afterwards
+  // with the pre-mutation snapshot it fetched and stomp the optimistic
+  // change -- the operator's undo/verdict/clear appears to revert until
+  // the next poll. refresh() only applies its result if this counter
+  // still reads what it captured before the fetch, so a mutation (or a
+  // newer refresh) landing in between makes it a no-op instead.
+  private generation = 0
+
   pin(id: string) {
     if (!this.pinnedIds.includes(id)) this.pinnedIds = [...this.pinnedIds, id]
   }
@@ -195,7 +209,12 @@ class FlagsState {
   provisionalCount = $derived(this.list.filter((f) => !f.cleared && f.provisional).length)
 
   async refresh() {
+    const gen = ++this.generation
     const res = await fetchFlags()
+    // A mutation (or a newer refresh) landed while this fetch was in
+    // flight -- its snapshot predates that change, so applying it now
+    // would revert it. Drop it; the next poll re-fetches current state.
+    if (gen !== this.generation) return
     this.list = res.flags
     this.timeSeries = res.timeSeries
     this.baselinesWarming = res.baselinesWarming
@@ -219,6 +238,7 @@ class FlagsState {
 
     const snapshot = touched.map((f) => ({ flag: f, clearedAt: f.clearedAt }))
     const now = new Date().toISOString()
+    this.generation++
     for (const f of touched) {
       f.cleared = true
       f.clearedAt = now
@@ -262,6 +282,7 @@ class FlagsState {
     if (!flag || flag.verdict) return
 
     const prev = { verdict: flag.verdict, verdictBy: flag.verdictBy, verdictAt: flag.verdictAt }
+    this.generation++
     flag.verdict = 'investigate'
     flag.verdictBy = judgedBy
     flag.verdictAt = new Date().toISOString()
@@ -314,6 +335,7 @@ class FlagsState {
       verdictBy: flag.verdictBy,
       verdictAt: flag.verdictAt,
     }
+    this.generation++
     flag.cleared = true
     flag.clearedAt = new Date().toISOString()
 
@@ -355,6 +377,7 @@ class FlagsState {
       verdictBy: flag.verdictBy,
       verdictAt: flag.verdictAt,
     }
+    this.generation++
     flag.cleared = false
     flag.clearedAt = undefined
     flag.verdict = undefined
