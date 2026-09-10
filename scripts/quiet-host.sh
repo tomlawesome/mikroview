@@ -20,6 +20,7 @@ set -euo pipefail
 QH_MOUNT="${QH_MOUNT:-/quiet-host}"
 HOLD="$QH_MOUNT/hold"
 APPLIED="$QH_MOUNT/applied"
+FAILED="$QH_MOUNT/failed"
 
 field() { grep -m1 "^$2=" "$1" 2>/dev/null | cut -d= -f2-; }
 
@@ -54,6 +55,14 @@ cmd_hold() {
 
   waited=0
   while [ "$waited" -lt 90 ]; do
+    # #1092: the host writes $FAILED instead of $APPLIED when it could
+    # not confirm gitlab-runner picked up concurrent=1 -- fail loudly
+    # with that reason now, rather than reading a 90s timeout as the only
+    # signal, or (before this fix) not failing at all.
+    if [ -f "$FAILED" ]; then
+      echo "host quieting failed: $(cat "$FAILED")" >&2
+      exit 5
+    fi
     if [ -f "$APPLIED" ] && grep -qE "job=${job}\$" "$APPLIED"; then
       echo "quiet-host: hold applied (${waited}s)"
       return 0

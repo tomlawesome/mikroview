@@ -90,4 +90,62 @@ else
   echo "ok - duplicate concurrent line refused"
 fi
 
+# #1092: a reload that fails must not be read as a confirmed hold. The
+# old script swallowed systemctl's exit status with `|| true` and wrote
+# APPLIED unconditionally; this stub makes systemctl fail so the fix's
+# exit-status check is the thing under test, not the stub's plumbing.
+rm -f "$QH_DIR/hold" "$QH_STATE/concurrent.orig" "$QH_DIR/applied" "$QH_DIR/failed"
+write_config
+write_flag "$(($(date +%s) + 300))"
+cat >"$TMP/bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+chmod +x "$TMP/bin/systemctl"
+if "$SCRIPT" >/dev/null 2>"$TMP/err"; then
+  echo "FAIL - a failed reload should not exit 0"; fail=1
+else
+  echo "ok - a failed reload exits nonzero"
+fi
+check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 1" "config is still set to 1 even though the reload failed"
+[ -f "$QH_DIR/failed" ] && echo "ok - a failed marker was written" || { echo "FAIL - a failed marker was written"; fail=1; }
+[ -f "$QH_DIR/applied" ] && { echo "FAIL - applied must not be written when the reload failed"; fail=1; } || echo "ok - applied was not written"
+grep -q 'systemctl reload gitlab-runner exited 1' "$QH_DIR/failed" \
+  && echo "ok - the failed marker names the reason" \
+  || { echo "FAIL - the failed marker names the reason"; fail=1; }
+
+# A later run, once systemctl works again, retries rather than trusting
+# the earlier failure: apply_hold's ORIG guard makes it safe to call
+# again without re-saving the original value.
+cat >"$TMP/bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$TMP/bin/systemctl"
+"$SCRIPT" >/dev/null
+[ -f "$QH_DIR/applied" ] && echo "ok - a retry after the fix writes applied" || { echo "FAIL - a retry after the fix writes applied"; fail=1; }
+[ -f "$QH_DIR/failed" ] && { echo "FAIL - the failed marker should be cleared after a successful retry"; fail=1; } || echo "ok - the failed marker was cleared after a successful retry"
+check "$(cat "$QH_STATE/concurrent.orig")" "4" "the retry did not clobber the saved original value"
+
+# Releasing (the flag going away) clears a failed marker too, so a stale
+# failure from an earlier hold cannot leak into the next one. Release the
+# still-applied hold from above first, so ORIG is gone and the next hold
+# below goes through a genuine apply_hold reload attempt rather than the
+# ORIG-already-exists re-mark branch.
+rm -f "$QH_DIR/hold"
+"$SCRIPT" >/dev/null
+check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 4" "released back to concurrent=4 before the next scenario"
+
+write_flag "$(($(date +%s) + 300))"
+cat >"$TMP/bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+chmod +x "$TMP/bin/systemctl"
+"$SCRIPT" >/dev/null 2>/dev/null || true
+[ -f "$QH_DIR/failed" ] && echo "ok - failed marker present before release" || { echo "FAIL - failed marker present before release"; fail=1; }
+rm -f "$QH_DIR/hold"
+"$SCRIPT" >/dev/null
+[ -f "$QH_DIR/failed" ] && { echo "FAIL - release should clear the failed marker"; fail=1; } || echo "ok - release cleared the failed marker"
+
 exit $fail
