@@ -1074,13 +1074,19 @@ perf:promotion:
     # renders an empty screen passes exactly the regressions that only
     # appear with rows on it, which is the failure #690 describes.
     #
-    # 3000 is a gate number, not a realistic one: enough to fill the
-    # docket, the stream and the entity lists, well short of the demo's
+    # perfseed's defaults -- 3000 stream events and 500 port scans --
+    # are gate numbers, not realistic ones: enough to fill the docket,
+    # the stream and the entity lists, well short of the demo's
     # pathological hour (~8000 events, 2462 New device episodes, #690),
-    # and fixed so run-to-run comparison stays meaningful. Change it and
-    # the baseline must be regenerated -- perf-compare.mjs would
+    # and fixed so run-to-run comparison stays meaningful. Change either
+    # and the baseline must be regenerated -- perf-compare.mjs would
     # otherwise be diffing two different workloads.
-    - scripts/live-env.sh syslog 3000 perf-seed
+    #
+    # #1100: this was `syslog 3000 perf-seed`, whose every line went to
+    # port 443, so no detector ever fired. The docket was empty on every
+    # run, the baseline recording included, and the scroll phase below
+    # measured scrolling an empty list. perfseed sends both halves.
+    - scripts/live-env.sh perfseed
     - t3=$(date +%s)
     - node frontend/scripts/probe-perf.mjs --json perf-current.json
     - 't4=$(date +%s); echo "probe wall seconds: $((t4 - t3))"'

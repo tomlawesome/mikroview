@@ -325,7 +325,13 @@ async function main() {
   // startup cost.
   await page.waitForTimeout(3000)
 
-  const flagCount = await page.evaluate(() => document.querySelectorAll('.card[data-card="docket"] .card-grid > *').length)
+  // #1100: this counted `.card-grid > *` until now. #688 replaced the
+  // docket's card grid with the ratified table -- Flags.svelte.test.ts
+  // asserts `.card-grid` is null -- so the count had been reading a
+  // container that no longer exists and reporting 0 on every run,
+  // whatever the docket actually held. `table.ftable` is what the four
+  // live-flags-* scenarios wait on.
+  const flagCount = await page.evaluate(() => document.querySelectorAll('.card[data-card="docket"] table.ftable tbody tr').length)
   const rowCount = await page.evaluate(() => document.querySelectorAll('.card[data-card="live"] .row').length)
   console.log(`context: ${flagCount || 'n/a (docket not yet mounted)'} flag cards in the DOM at first mount, ${rowCount || 'n/a'} stream rows at first mount`)
   console.log('')
@@ -383,8 +389,14 @@ async function main() {
   console.log(`== Scrolling the docket for ${SCROLL_MS}ms ==`)
   await rollTo(page, 'Flags', 45000).catch((err) => console.log(`  !! Flags roll did not settle: ${err.message.split('\n')[0]}`))
   await page.waitForTimeout(500)
-  const flagsInDom = await page.evaluate(() => document.querySelectorAll('.card[data-card="docket"] .card-grid > *').length)
-  console.log(`  ${flagsInDom} flag cards in the DOM`)
+  const flagsInDom = await page.evaluate(() => document.querySelectorAll('.card[data-card="docket"] table.ftable tbody tr').length)
+  console.log(`  ${flagsInDom} flag rows in the DOM`)
+  // A docket-scroll measurement over an empty table measures nothing,
+  // and read as a number it is indistinguishable from a fast one. Say so
+  // rather than recording it (#1100).
+  if (flagsInDom === 0) {
+    console.log('  !! the docket is empty -- the scroll numbers below measure an empty list, not scrolling')
+  }
 
   await cdp.send('Profiler.setSamplingInterval', { interval: 200 })
   await cdp.send('Profiler.start')

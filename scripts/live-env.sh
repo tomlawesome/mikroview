@@ -424,6 +424,73 @@ PY
   echo "sent ${1:-100} events labelled ${2:-live-test-rule}" >&2
 }
 
+# perfseed [SCANS] [EVENTS] -- the seed the perf probe measures against
+# (#1100). Two halves down one connection: EVENTS bulk stream lines for
+# the live view, and SCANS port scans so the docket the probe scrolls
+# actually holds flag cards.
+#
+# `syslog N perf-seed` alone sent every line to port 443, so no detector
+# ever fired: the probe printed "0 flag cards in the DOM" on every run,
+# including the one that recorded the baseline, and its docket-scroll
+# phase measured scrolling an empty list. Each scan here is 16 distinct
+# destination ports from one source, well clear of port_scan's shipped
+# threshold of 15 distinct ports in 60 seconds. 20, not 16, for the
+# margin live-flags-clearing and live-docket-sort-filter already take:
+# the threshold is a floor on *delivered* events, and the listener drops
+# on a full channel, so a scan sized at the threshold stops raising a
+# flag the moment one event is lost.
+#
+# Sources stay inside the documentation ranges: 203.0.113.0/24 for the
+# stream lines, 198.51.100.0/24 then 192.0.2.0/24 for the scanners. That
+# is what caps SCANS at 508 -- raising it needs a range to put them in,
+# not a bigger number here.
+perfseed() {
+  local scans="${1:-500}" events="${2:-3000}" chunk=50
+  if [ "$scans" -gt 508 ]; then
+    echo "perfseed: SCANS is capped at 508 -- one source per address in the two documentation ranges" >&2
+    exit 2
+  fi
+
+  python3 - "$events" <<'PY' | send_tls
+import sys
+events = int(sys.argv[1])
+for i in range(events):
+    print(f"firewall,info D|perf-seed| forward: in:ether1 out:bridge1, "
+          f"connection-state:new, proto TCP (SYN), "
+          f"203.0.113.{i%250}:{5000+i%1000}->192.168.1.10:443, len 60")
+PY
+
+  # One connection per chunk of sources, with a pause between them. The
+  # whole scan half in a single burst does not work: the listener stores
+  # and broadcasts every line (its own loss counters stay at zero), but
+  # the engine's evaluation queue is a 4096-slot channel with a
+  # non-blocking send, so a burst that outruns evaluation is dropped from
+  # *detection* while still looking delivered. Measured on 2026-09-10: 5
+  # sources raised 5 flags and 100 raised 100, then 500 in one burst
+  # raised none at all. Filed as its own defect; the seed's job is to
+  # stay under it, not to work around it silently.
+  local sent=0 batch
+  while [ "$sent" -lt "$scans" ]; do
+    batch=$(( scans - sent ))
+    [ "$batch" -gt "$chunk" ] && batch=$chunk
+    python3 - "$sent" "$batch" <<'PY' | send_tls
+import sys
+first, batch = int(sys.argv[1]), int(sys.argv[2])
+nets = ("198.51.100", "192.0.2")
+for s in range(first, first + batch):
+    src = f"{nets[s // 254]}.{1 + s % 254}"
+    for p in range(20):
+        print(f"firewall,info D|perf-seed-scan| forward: in:ether1 out:bridge1, "
+              f"connection-state:new, proto TCP (SYN), "
+              f"{src}:{40000 + p}->192.168.1.10:{1000 + p}, len 60")
+PY
+    sent=$(( sent + batch ))
+    sleep 1
+  done
+
+  echo "sent ${events} stream events and ${scans} port scans" >&2
+}
+
 # raw LINE... -- deliver exact syslog lines over one connection, for
 # scenarios needing a specific shape (a control-port hit, say) rather
 # than the bulk generators. Scenarios must use this rather than opening
@@ -494,8 +561,9 @@ case "${1:-}" in
   syslog) shift; syslog "$@" ;;
   raw) shift; raw "$@" ;;
   rawfrom) shift; rawfrom "$@" ;;
+  perfseed) shift; perfseed "$@" ;;
   portscan) shift; portscan "$@" ;;
   recon) shift; recon "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|build PATH|syslog N [label]|raw LINE...|rawfrom SRC-IP LINE...|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|build PATH|syslog N [label]|perfseed [SCANS] [EVENTS]|raw LINE...|rawfrom SRC-IP LINE...|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
 esac
