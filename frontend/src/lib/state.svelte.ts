@@ -168,6 +168,15 @@ class AppState {
   // successful call, whichever of the two runs it.
   fetchFailed = $state(false)
 
+  // #1089: set by App.svelte's handleApiError when a background poll
+  // (stats, devices, flags, watchlist) fails with anything other than a
+  // 401 -- those already bounce to login. A short human message ("stats:
+  // <error>") naming which poll failed, or null when the most recent
+  // refresh of every kind succeeded. Distinct from fetchFailed above,
+  // which only ever describes the one-shot loadInitial()/
+  // refetchWithFilters() path, not the recurring polls.
+  refreshError = $state<string | null>(null)
+
   // True once the app's one loadInitial() call (App.svelte's mount
   // effect) has settled, success or failure -- never cleared afterward.
   // #549's "Loading" chrome state (shell plus ghost rows, never a

@@ -17,6 +17,14 @@
       ? 'Connecting to mikroview…'
       : 'Disconnected from server — attempting to reconnect…'}
   </div>
+{:else if appState.refreshError}
+  <!-- #1089: the socket being open only says the live feed is up -- it
+       says nothing about the separate HTTP polls (stats/flags/
+       watchlist) App.svelte also runs. Without this a failed poll left
+       stale numbers on screen with no indication at all. -->
+  <div class="banner banner-refresh-error" role="status">
+    Live feed is up, but the last background refresh failed: {appState.refreshError}. Numbers may be stale.
+  </div>
 {/if}
 
 <style>
@@ -36,5 +44,10 @@
   .banner-closed {
     background: var(--row-reject-bg);
     color: var(--reject);
+  }
+
+  .banner-refresh-error {
+    background: color-mix(in srgb, var(--warn) 9%, transparent);
+    color: var(--warn);
   }
 </style>
