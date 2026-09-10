@@ -96,6 +96,12 @@ You should see a `HOLD applied` line. Check the config changed:
 grep ^concurrent /etc/gitlab-runner/config.toml
 ```
 
+The script tells the runner to re-read the file with `systemctl kill
+--kill-whom=main --signal=HUP gitlab-runner`, not `systemctl reload`: the
+packaged unit has no `ExecReload=`, so `reload` exits 3 without doing
+anything (#1103). The runner also re-reads `config.toml` on its own when
+the file changes, so the signal is the prompt, not the only path.
+
 Remove the flag and watch it restore (the minutely timer catches it
 within a minute even if the watcher misses the removal):
 
