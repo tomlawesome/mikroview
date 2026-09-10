@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"math"
 	"net"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/retention"
 )
@@ -325,5 +327,46 @@ func TestUnrecognisedExtensionRefused(t *testing.T) {
 
 	if _, err := client.Create("rb5009.exe"); err == nil {
 		t.Error("creating a file with an unrecognised extension succeeded")
+	}
+}
+
+// TestWriteAtRejectsOutOfRangeOffsets exercises pendingWrite.WriteAt
+// directly rather than through a real SFTP client: the client library
+// only ever sends a non-negative offset, so the one way to reach a
+// negative or overflowing off here is to call the method the way
+// pkg/sftp itself does, straight off the wire value. A deferred
+// recover turns a regression back into a clear test failure instead of
+// crashing the whole `go test` process.
+func TestWriteAtRejectsOutOfRangeOffsets(t *testing.T) {
+	cases := []struct {
+		name string
+		off  int64
+		p    []byte
+	}{
+		{"negative offset", -1, []byte("x")},
+		{"offset overflows when added to the payload length", math.MaxInt64 - 1, []byte("xy")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &pendingWrite{device: "rb5009", kind: backupvault.KindBackup, log: logging.New("backupsftp")}
+
+			var n int
+			var err error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("WriteAt(off=%d) panicked instead of returning an error: %v", tc.off, r)
+					}
+				}()
+				n, err = w.WriteAt(tc.p, tc.off)
+			}()
+
+			if err == nil {
+				t.Fatalf("WriteAt(off=%d) returned no error, want one", tc.off)
+			}
+			if n != 0 {
+				t.Fatalf("WriteAt(off=%d) reported %d bytes written, want 0", tc.off, n)
+			}
+		})
 	}
 }
