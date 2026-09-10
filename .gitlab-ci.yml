@@ -996,6 +996,21 @@ perf:promotion:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
   resource_group: perf-promotion
   timeout: 25m
+  # #1104: the hold stops the runner picking up *new* jobs; it cannot
+  # stop the scenario shards this pipeline already started, and they run
+  # for ten minutes on the same box. Twice (pipelines 899 and 914) the
+  # probe measured a scroll frame p95 of 33 ms with three shards still
+  # compiling beside it, against 16.8 ms on a quiet box for the same
+  # commit. So start only when this pipeline's other gate jobs are done.
+  # `optional`, because a docs-only diff runs neither of them (#1038),
+  # and a missing hard need would skip this job silently.
+  needs:
+    - job: gate:scenarios
+      optional: true
+      artifacts: false
+    - job: gate:scripts
+      optional: true
+      artifacts: false
   # This is the only `big` job that runs as a non-root user (the image's
   # `node`, uid 1000), and it shares its per-slot checkout with test:go,
   # whose after_script hands the whole tree to root:root (#908). Whenever
