@@ -15,8 +15,10 @@ on:
     branches: [main]
     paths:
       - 'site/**'
-      - 'docs/screenshots/live-view-dark.png'
-      - 'docs/screenshots/live-view-light.png'
+      - 'docs/screenshots/fall-dark.png'
+      - 'docs/screenshots/fall-light.png'
+      - 'docs/screenshots/topography-dark.png'
+      - 'docs/screenshots/stream-dark.png'
       - 'brand/logo-mark.svg'
       - '.github/workflows/pages.yml'
   workflow_dispatch: {}
@@ -38,8 +40,9 @@ jobs:
         run: |
           mkdir -p _site/img
           cp -r site/. _site/
-          cp docs/screenshots/live-view-dark.png _site/img/live-view-dark.png
-          cp docs/screenshots/live-view-light.png _site/img/live-view-light.png
+          for shot in fall-dark fall-light topography-dark stream-dark; do
+            cp "docs/screenshots/$shot.png" "_site/img/$shot.png"
+          done
           cp brand/logo-mark.svg _site/img/logo-mark.svg
 
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
