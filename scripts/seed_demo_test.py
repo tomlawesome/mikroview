@@ -16,8 +16,12 @@ safe: everything below `if __name__ == "__main__":` only runs when the
 file is executed directly, never on import.
 """
 import importlib.util
+import os
 import pathlib
 import random
+import shutil
+import stat
+import tempfile
 import time
 import unittest
 
@@ -225,6 +229,41 @@ class RuleFiresConsistencyTests(unittest.TestCase):
         self.assertEqual(
             wrongly_fired, set(),
             f"declared fires=False but the generator emits them anyway: {wrongly_fired}")
+
+
+class SeededAccountsFileTests(unittest.TestCase):
+    """#1072: cmd_accounts opened seeded-accounts.txt for writing under
+    /tmp/mikroview-atlas-demo/ but nothing created that directory first,
+    so the write always raised FileNotFoundError -- caught and printed to
+    stderr, then ignored, so the seeded passwords were silently never
+    written. Points the reference dir at a fresh tmp subpath that does
+    not exist yet, same shape as the real /tmp target before first run,
+    and never touches the real /tmp/mikroview-atlas-demo."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="seed-demo-test-")
+        self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
+        # A subpath that does not exist yet -- mirrors the real target
+        # before cmd_accounts has ever run on a fresh host.
+        self.ref_dir = os.path.join(self._tmp, "mikroview-atlas-demo")
+
+    def test_write_creates_missing_dir_and_writes_file(self):
+        ref = seed_demo._write_seeded_accounts(self.ref_dir)
+        self.assertTrue(os.path.isfile(ref))
+        with open(ref) as f:
+            content = f.read()
+        self.assertIn(seed_demo.DEMO_USER_PASSWORD, content)
+        self.assertIn(seed_demo.DEMO_VIEWER_PASSWORD, content)
+
+    def test_dir_created_mode_0700(self):
+        seed_demo._write_seeded_accounts(self.ref_dir)
+        mode = stat.S_IMODE(os.stat(self.ref_dir).st_mode)
+        self.assertEqual(mode, 0o700)
+
+    def test_file_created_mode_0600(self):
+        ref = seed_demo._write_seeded_accounts(self.ref_dir)
+        mode = stat.S_IMODE(os.stat(ref).st_mode)
+        self.assertEqual(mode, 0o600)
 
 
 if __name__ == "__main__":
