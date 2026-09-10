@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -116,6 +117,12 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 // connection.
 func (s *Server) handleConn(nc net.Conn, cfg *ssh.ServerConfig) {
 	defer nc.Close()
+	// Covers this goroutine's own code (the handshake and the channel
+	// dispatch loop below); it does not reach into pkg/sftp's own
+	// request-worker goroutines started inside handleSession -- see
+	// recoverAndClose's doc comment for why those need their own
+	// recover instead.
+	defer logging.Recover(s.log)
 	sconn, chans, reqs, err := ssh.NewServerConn(nc, cfg)
 	if err != nil {
 		s.log.Warn(fmt.Sprintf("SFTP handshake from %s failed: %v", nc.RemoteAddr(), err))
@@ -146,6 +153,7 @@ func (s *Server) handleConn(nc net.Conn, cfg *ssh.ServerConfig) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer logging.Recover(s.log)
 			s.handleSession(ch, chReqs, device)
 		}()
 	}
@@ -170,7 +178,7 @@ func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, device 
 			FileGet:  refusingReader{},
 			FileCmd:  refusingCmder{},
 			FileList: refusingLister{},
-			FilePut:  &deviceWriter{vault: s.Vault, device: device, log: s.log},
+			FilePut:  &deviceWriter{vault: s.Vault, device: device, log: s.log, closeConn: ch.Close},
 		}
 		server := sftp.NewRequestServer(ch, handlers)
 		_ = server.Serve()
@@ -225,6 +233,12 @@ type deviceWriter struct {
 	vault  *backupvault.Vault
 	device string
 	log    *slog.Logger
+	// closeConn ends this connection's SFTP channel. It is called only
+	// from the panic-recovery wrapping below -- see pendingWrite's
+	// closeConn field doc for why closing the connection, rather than
+	// trying to fabricate a return value, is the right response to a
+	// recovered panic here.
+	closeConn func() error
 }
 
 // kindForFilename maps an upload's destination name to the vault kind
@@ -249,7 +263,13 @@ func kindForFilename(name string) (string, bool) {
 // rooted at "/" by the library, so a ".." segment cannot escape it; this
 // still refuses anything but a single flat file name, so there is no
 // subdirectory for a login to address even inside its own folder.
-func (w *deviceWriter) Filewrite(req *sftp.Request) (io.WriterAt, error) {
+func (w *deviceWriter) Filewrite(req *sftp.Request) (wa io.WriterAt, err error) {
+	// pkg/sftp calls Filewrite (and the WriterAt it returns) from its
+	// own per-request worker goroutines, not from any goroutine this
+	// package starts -- see the package doc comment on recoverAndClose
+	// below for why that means this recover has to sit here rather than
+	// on handleConn/handleSession.
+	defer recoverAndClose(w.log, w.device, "Filewrite", w.closeConn, &err)
 	name := strings.TrimPrefix(req.Filepath, "/")
 	if name == "" || strings.Contains(name, "/") {
 		w.log.Warn(fmt.Sprintf("%s tried to open %q -- refused: not a plain file name", w.device, req.Filepath))
@@ -260,7 +280,7 @@ func (w *deviceWriter) Filewrite(req *sftp.Request) (io.WriterAt, error) {
 		w.log.Warn(fmt.Sprintf("%s tried to upload %q -- refused: destination must end .backup or .rsc", w.device, name))
 		return nil, sftp.ErrSSHFxPermissionDenied
 	}
-	return &pendingWrite{vault: w.vault, device: w.device, kind: kind, log: w.log}, nil
+	return &pendingWrite{vault: w.vault, device: w.device, kind: kind, log: w.log, closeConn: w.closeConn}, nil
 }
 
 // pendingWrite buffers one upload in memory until its SFTP Close
@@ -288,6 +308,10 @@ type pendingWrite struct {
 	device string
 	kind   string
 	log    *slog.Logger
+	// closeConn ends this connection's SFTP channel; see
+	// recoverAndClose's doc comment for why a recovered panic closes
+	// the connection instead of inventing a return value.
+	closeConn func() error
 
 	mu      sync.Mutex
 	buf     []byte
@@ -296,26 +320,66 @@ type pendingWrite struct {
 	aborted bool
 }
 
+// recoverAndClose is deferred directly -- as logging.Recover's own doc
+// comment explains, one layer of closure in between would stop
+// recover() from seeing the panic at all -- at the top of every method
+// pkg/sftp calls straight from its own per-request worker goroutines
+// (request-server.go's packetWorker, spawned from Serve). Those
+// goroutines belong to pkg/sftp, not this package, so the
+// defer logging.Recover(...) already covering handleConn/handleSession's
+// own goroutines (see ListenAndServe/handleConn) never runs in the same
+// goroutine as a call into Filewrite, WriteAt or Close and could not
+// catch a panic there.
+//
+// A recovered panic here has no good return value to invent -- the
+// call stopped mid-way through, not at a point that produced one -- so
+// this closes the SFTP channel instead. That lands the transfer on the
+// same "interrupted, nothing kept" path an ordinary dropped connection
+// already takes (TransferError/aborted, above), rather than risking
+// pkg/sftp treating a zero-valued response as a successful write or
+// commit.
+func recoverAndClose(log *slog.Logger, device, op string, closeConn func() error, errp *error) {
+	if r := recover(); r != nil {
+		log.Error(fmt.Sprintf("recovered from a panic in %s for %s -- closing the connection: %v\n%s", op, device, r, debug.Stack()))
+		*errp = fmt.Errorf("backupsftp: internal error")
+		if closeConn != nil {
+			closeConn()
+		}
+	}
+}
+
 // TransferError implements sftp.TransferError -- see the type doc
-// comment above.
+// comment above. It only ever assigns a bool under a lock already held
+// by every other method here, so it has no recover of its own: there is
+// nothing in it that can panic.
 func (w *pendingWrite) TransferError(err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.aborted = true
 }
 
-func (w *pendingWrite) WriteAt(p []byte, off int64) (int, error) {
+func (w *pendingWrite) WriteAt(p []byte, off int64) (n int, err error) {
+	defer recoverAndClose(w.log, w.device, "WriteAt", w.closeConn, &err)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.overCap {
 		return 0, fmt.Errorf("backupsftp: file exceeds the %d-byte cap", backupvault.MaxFileBytes)
 	}
-	end := off + int64(len(p))
-	if end > backupvault.MaxFileBytes {
+	// off is the client's requested write offset, passed straight
+	// through by pkg/sftp from the wire (a uint64 cast to int64) with
+	// no validation of its own. A negative value, or one that would
+	// overflow when added to len(p), must be rejected here before
+	// either ever reaches the slice expression below. The check is
+	// written as a subtraction from the cap rather than off+len(p) so
+	// that the check itself cannot overflow: off is already known
+	// non-negative and at most MaxFileBytes at this point, so
+	// MaxFileBytes-off is always in [0, MaxFileBytes].
+	if off < 0 || off > backupvault.MaxFileBytes || int64(len(p)) > backupvault.MaxFileBytes-off {
 		w.overCap = true
 		w.buf = nil
 		return 0, fmt.Errorf("backupsftp: file exceeds the %d-byte cap", backupvault.MaxFileBytes)
 	}
+	end := off + int64(len(p))
 	if int64(len(w.buf)) < end {
 		grown := make([]byte, end)
 		copy(grown, w.buf)
@@ -332,7 +396,8 @@ func (w *pendingWrite) WriteAt(p []byte, off int64) (int, error) {
 // failed, which is honest -- the alternative is the router believing the
 // push succeeded and deleting its only local copy (the wizard's script
 // removes the source file immediately after each fetch).
-func (w *pendingWrite) Close() error {
+func (w *pendingWrite) Close() (err error) {
+	defer recoverAndClose(w.log, w.device, "Close", w.closeConn, &err)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
