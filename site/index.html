@@ -212,13 +212,6 @@
   .hero-shot .chrome span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
   .hero-shot .chrome .label { margin-left: 6px; }
   .hero-shot img { display: block; width: 100%; height: auto; }
-  .hero-shot img[data-theme-img='light'] { display: none; }
-  :root[data-theme='light'] .hero-shot img[data-theme-img='dark'] { display: none; }
-  :root[data-theme='light'] .hero-shot img[data-theme-img='light'] { display: block; }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme='dark']) .hero-shot img[data-theme-img='dark'] { display: none; }
-    :root:not([data-theme='dark']) .hero-shot img[data-theme-img='light'] { display: block; }
-  }
 
   /* ---------- features ---------- */
   .features { padding: 30px 0 76px; }
@@ -387,8 +380,7 @@
 
     <figure class="hero-shot" style="margin:0">
       <div class="chrome"><span></span><span></span><span></span><span class="label">the fall — MikroView's landing view</span></div>
-      <img data-theme-img="dark" src="img/fall-dark.png" alt="The fall, dark theme: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top" />
-      <img data-theme-img="light" src="img/fall-light.png" alt="The fall, light theme: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top" />
+      <img src="img/fall-dark.png" alt="The fall: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top" />
     </figure>
   </div>
 </section>
