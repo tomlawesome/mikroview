@@ -36,8 +36,28 @@
   //
   // #640's expectations ledger -- the station's second section, under
   // the bench. Its own component, so this file stays the bench.
+  //
+  // #829 gave a custom detector its own drawer, drawn as settings round 8
+  // (docs/design/screens/settings/round-8/): the family picker whose ink
+  // runs through everything below it, the conditions bar, the counting
+  // line, the says line and the receipt. A shipped row keeps the #787
+  // panel above -- the design draws a shipped detector's drawer nowhere,
+  // because there is nothing structural in one to draw.
   import ExpectationsLedger from './ExpectationsLedger.svelte'
+  import ConditionsBar from './ConditionsBar.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
+  import { FAMILY_NAMES, NAMED_FAMILIES, familyOf } from '../lib/flagPalette'
+  import {
+    DISTINCT_FIELDS,
+    KEY_MODES,
+    countingPhrase,
+    goDuration,
+    keyPhrase,
+    placeholdersFor,
+    saysParts,
+    windowSeconds,
+  } from '../lib/detectionCopy'
+  import type { DefinitionCondition, DefinitionDetection, DetectorScope } from '../lib/types'
   import { scopeSuggestionsState, CLASSIFICATIONS } from '../lib/scopeSuggestions.svelte'
   import { appState } from '../lib/state.svelte'
   import {
@@ -108,6 +128,110 @@
   let focusName = $state(false)
   let nameInput = $state<HTMLInputElement | null>(null)
 
+  // --- the custom detector's drawer (#829) --------------------------------
+
+  // The open panel's working copy of the things only a custom detector
+  // has: what it matches on, how it counts, what its flags say, and which
+  // family it is filed under. Held beside the params draft above rather
+  // than inside it, because they are saved through different doors -- the
+  // structure through PUT's detection block, the numbers through its
+  // params -- and mixing them would make one refusal look like the other.
+  let draftConditions = $state<DefinitionCondition[]>([])
+  let draftKey = $state('perSource')
+  let draftCounting = $state('total')
+  let draftDistinct = $state('destinationAddress')
+  let draftTemplate = $state('')
+  let draftFamily = $state('')
+  // Set while a half-written condition is in the bar -- the sentence
+  // beside the greyed try and save pills, naming the line to finish.
+  let unfinishedLine = $state('')
+  // Which of the counting line's numbers is being typed into, if any. The
+  // numbers are the bench's own dashed click-to-edit, not form fields.
+  let editingCount = $state<'threshold' | 'window' | null>(null)
+  let editingSays = $state(false)
+  // Where the copy came from, for the one dim mono line the drawer shows
+  // after a clone. Cleared when the panel is opened any other way, so it
+  // never claims a provenance for a detector that was simply opened.
+  let copiedFrom = $state<{ name: string; carried: string } | null>(null)
+
+  // The ink the whole drawer wears: the chosen family's, or -- for a
+  // detector nobody has filed -- whatever the palette already gives this
+  // detector, which is the operator-authored accent.
+  function drawerInk(name: string): string {
+    const fam = draftFamily ? NAMED_FAMILIES[draftFamily] : undefined
+    return (fam ?? familyOf(name)).ink
+  }
+
+  function drawerMark(name: string): string {
+    const fam = draftFamily ? NAMED_FAMILIES[draftFamily] : undefined
+    return (fam ?? familyOf(name)).mark
+  }
+
+  // The threshold and window as the counting line reads them. Both are
+  // ordinary params behind the same schema every detector's numbers use,
+  // so they are read out of the params draft rather than held twice.
+  function numberField(name: string): ParamField | undefined {
+    return fields.find((f) => f.schema.name === name)
+  }
+
+  function thresholdValue(): number {
+    const raw = numberField('threshold')?.value
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : 1
+  }
+
+  function windowValue(): number {
+    const f = numberField('window')
+    if (!f) return 60
+    const n = Number(f.value)
+    if (Number.isFinite(n) && n > 0) return n
+    return windowSeconds(String(f.value ?? ''), 60)
+  }
+
+  function setNumber(name: string, next: number) {
+    const f = numberField(name)
+    if (!f) return
+    f.value = name === 'window' && f.control !== 'seconds' ? goDuration(next) : next
+  }
+
+  // A placeholder click inserts at the end of the sentence rather than at
+  // a caret position: the says line is one short line, and tracking a
+  // caret through a swap between rendered text and an input would be a
+  // lot of machinery for a token that is nearly always appended anyway.
+  function insertPlaceholder(token: string) {
+    draftTemplate = draftTemplate.trimEnd() + (draftTemplate.trim() === '' ? '' : ' ') + token
+    editingSays = true
+  }
+
+  // The structure as it would be saved, or null when the drawer has
+  // nothing to save -- an unfinished line in the bar, or no conditions at
+  // all, which the engine refuses because a detector matching nothing
+  // meaningfully is almost certainly a mistake rather than a valid
+  // "watch everything".
+  function draftStructure(): DefinitionDetection | null {
+    if (unfinishedLine !== '') return null
+    if (draftConditions.length === 0) return null
+    if (draftTemplate.trim() === '') return null
+    return {
+      conditions: draftConditions,
+      key: draftKey,
+      counting: draftCounting,
+      ...(draftCounting === 'distinct' ? { distinctField: draftDistinct } : {}),
+      detailTemplate: draftTemplate,
+    }
+  }
+
+  // What the drawer says instead of letting Save be pressed. One line,
+  // amber, beside the waiting pills -- never a disabled button with no
+  // explanation, and never red, because a half-written detector is a line
+  // someone is in the middle of rather than a mistake they have made.
+  const waiting = $derived.by(() => {
+    if (unfinishedLine !== '') return unfinishedLine
+    if (draftConditions.length === 0) return 'add a condition'
+    if (draftTemplate.trim() === '') return 'write what a flag says'
+    return ''
+  })
+
   $effect(() => {
     if (focusName && nameInput) {
       nameInput.focus()
@@ -146,7 +270,7 @@
     fields = paramFields(declared, d?.params)
   })
 
-  function openPanel(name: string) {
+  function openPanel(name: string, from: { name: string; carried: string } | null = null) {
     const d = detectorSettingsState.list.find((x) => x.name === name)
     if (!d) return
     openRow = name
@@ -155,6 +279,21 @@
     scope = scopeDraftFrom(d.scope)
     adding = { hosts: '', ports: '', rules: '' }
     addError = {}
+    // The structure half (#829). A shipped detector has none -- its
+    // structure is Go in this binary -- so the drawer's conditions bar,
+    // counting line and says line are simply absent on those rows rather
+    // than present and empty.
+    const det = d.detection
+    draftConditions = det ? det.conditions.map((c) => ({ ...c, values: [...c.values] })) : []
+    draftKey = det?.key ?? 'perSource'
+    draftCounting = det?.counting ?? 'total'
+    draftDistinct = det?.distinctField ?? 'destinationAddress'
+    draftTemplate = det?.detailTemplate ?? ''
+    draftFamily = d.family ?? ''
+    unfinishedLine = ''
+    editingCount = null
+    editingSays = false
+    copiedFrom = from
     // A receipt is an answer about the numbers that were in the fields
     // when Try was pressed, so it cannot outlive them -- reopening a
     // panel, or opening a different row, starts with an empty slot rather
@@ -166,6 +305,7 @@
   function closePanel() {
     openRow = null
     replay = null
+    copiedFrom = null
   }
 
   function togglePanel(name: string) {
@@ -266,6 +406,28 @@
   // have been flagged three times appears three times. The slot names the
   // hosts that would have been flagged, not how many entries the sample
   // has, so each one is listed once.
+  // Where each firing sits along the strip, in the SVG's own 0-260
+  // coordinates. Placed by when it happened within the window the receipt
+  // covers, not spread evenly: two firings a minute apart look like two
+  // firings a minute apart, which is the whole reason the strip is a
+  // strip rather than a number.
+  //
+  // A window with no span to speak of, or a sample the server bounded,
+  // still draws its marks -- clustered at the left rather than dividing
+  // by zero. The count above the strip is the exact figure; the strip is
+  // about shape.
+  function tickPositions(receipt: ReplayReceipt): number[] {
+    const from = Date.parse(receipt.window.start)
+    const to = Date.parse(receipt.window.end)
+    const span = to - from
+    return receipt.sample.map((entry) => {
+      const at = Date.parse(entry.at)
+      if (!Number.isFinite(span) || span <= 0 || !Number.isFinite(at)) return 4
+      const frac = Math.min(1, Math.max(0, (at - from) / span))
+      return 4 + frac * 252
+    })
+  }
+
   function flaggedHosts(receipt: ReplayReceipt): string[] {
     return [...new Set(receipt.sample.map((s) => s.target))]
   }
@@ -289,9 +451,17 @@
     // only for a custom definition -- and only when it actually changed,
     // since an unchanged name is not an edit worth risking a refusal on.
     const renameable = d?.origin === 'custom'
+    // The structure goes up in the same PUT as the numbers and the scope,
+    // because they are one Save press and one detector (#787's own
+    // reasoning for the single request). Sent only where there is a whole
+    // structure to send: a half-written condition never reaches the
+    // server, because the pills that would send it are already waiting.
+    const structure = d?.detection ? draftStructure() : null
     const err = await detectorSettingsState.edit(name, {
       ...(renameable && draftName !== d?.label ? { name: draftName } : {}),
       ...(fields.length > 0 ? { params: paramsFromFields(fields) } : {}),
+      ...(structure ? { detection: structure } : {}),
+      ...(d?.origin === 'custom' && draftFamily !== (d?.family ?? '') ? { family: draftFamily } : {}),
       scope: scopeFromDraft(scope),
     })
     saving[name] = false
@@ -330,9 +500,19 @@
   // less than the reason it gave.
   async function cloneRow(name: string) {
     const d = detectorSettingsState.list.find((x) => x.name === name)
+    if (!d) return
+    // Two clones, and which one this is depends on whether the original's
+    // matching is data or Go. A custom detector or a shipped declarative
+    // one has conditions the server can copy; a shipped code detector has
+    // none, and its copy is written here instead (#829) -- carrying the
+    // scope and the numbers, with the bar left for the operator.
+    if (d.origin !== 'custom' && !d.structure) {
+      startDraftFrom(d)
+      return
+    }
     busy = true
     saving[name] = true
-    const result = await detectorSettingsState.clone(name, cloneName(d?.label ?? name))
+    const result = await detectorSettingsState.clone(name, cloneName(d.label))
     saving[name] = false
     busy = false
     if (typeof result === 'string') {
@@ -340,10 +520,407 @@
       return
     }
     errors[name] = undefined
-    openPanel(result.id)
+    openPanel(result.id, { name: d.label, carried: 'conditions, scope and numbers · paused' })
     focusName = true
   }
+
+  // --- the draft copy of a code detector (#829) ---------------------------
+
+  // A detector being written rather than edited. It exists only in this
+  // component until the first Save: the server refuses to store a
+  // detection with no conditions -- a detector matching nothing
+  // meaningfully is almost certainly a mistake -- so a copy that arrives
+  // with an empty bar cannot be a stored definition yet.
+  let draft = $state<{
+    fromLabel: string
+    label: string
+    scope: DetectorScope
+    threshold: number
+    window: string
+  } | null>(null)
+
+  function startDraftFrom(d: (typeof detectorSettingsState.list)[number]) {
+    closePanel()
+    draft = {
+      fromLabel: d.label,
+      label: cloneName(d.label),
+      scope: d.scope ?? {},
+      threshold: Number(d.params?.threshold ?? 5) || 5,
+      window: String(d.params?.window ?? '60s'),
+    }
+    draftName = draft.label
+    scope = scopeDraftFrom(draft.scope)
+    adding = { hosts: '', ports: '', rules: '' }
+    addError = {}
+    fields = []
+    draftConditions = []
+    draftKey = 'perSource'
+    draftCounting = 'total'
+    draftDistinct = 'destinationAddress'
+    draftTemplate = '{Count} matching events from {SourceAddress}'
+    draftFamily = ''
+    draftThreshold = draft.threshold
+    draftWindow = windowSeconds(draft.window, 60)
+    draftError = ''
+    unfinishedLine = ''
+    editingCount = null
+    editingSays = false
+    replay = null
+    copiedFrom = {
+      name: d.label,
+      // Round 7's own words. A copy that quietly arrived with an empty
+      // bar would look like a clone that half-failed; this says what came
+      // across and what is being asked for.
+      carried: 'scope and numbers · its conditions are built in — write them here',
+    }
+    focusName = true
+  }
+
+  function discardDraft() {
+    draft = null
+    copiedFrom = null
+    replay = null
+  }
+
+  async function saveDraft() {
+    if (!draft) return
+    const structure = draftStructure()
+    if (!structure) return
+    busy = true
+    const result = await detectorSettingsState.create({
+      name: draftName.trim() || draft.label,
+      family: draftFamily,
+      detection: {
+        ...structure,
+        threshold: draftThreshold,
+        window: goDuration(draftWindow),
+      },
+    })
+    busy = false
+    if (typeof result === 'string') {
+      draftError = result
+      return
+    }
+    draftError = ''
+    const made = result.id
+    draft = null
+    // The new detector's scope is not part of creation -- the create
+    // endpoint takes structure and numbers only -- so it goes up as the
+    // ordinary edit it is, immediately after, and its failure is reported
+    // on the row it belongs to rather than on a draft that no longer
+    // exists.
+    const scopeErr = await detectorSettingsState.edit(made, { scope: scopeFromDraft(scope) })
+    errors[made] = scopeErr ?? undefined
+    openPanel(made)
+  }
+
+  // A draft's own numbers, which have no param schema behind them until
+  // the detector exists. Kept apart from `fields` for exactly that
+  // reason: paramFields builds from a schema, and there is not one yet.
+  let draftThreshold = $state(5)
+  let draftWindow = $state(60)
+  let draftError = $state('')
+
+  // Remove, offered only on a custom row: a shipped definition is never
+  // deleted, only paused (the engine's own invariant), so the server
+  // refuses one and a button whose only outcome is that refusal would be
+  // worse than no button.
+  async function removeRow(name: string) {
+    busy = true
+    saving[name] = true
+    const err = await detectorSettingsState.remove(name)
+    saving[name] = false
+    busy = false
+    if (err) {
+      errors[name] = err
+      return
+    }
+    errors[name] = undefined
+    closePanel()
+  }
+
 </script>
+
+{#snippet scopeGroup(fieldsFor: string[])}
+          <div class="group">
+            <h4>What it watches</h4>
+
+            {#if fieldsFor.includes('hosts')}
+              <div class="field">
+                <span>Hosts</span>
+                <div class="field-row">
+                  <select bind:value={scope.hostsMode} aria-label="Hosts restriction">
+                    <option value="">no restriction</option>
+                    <option value="allow">allow only</option>
+                    <option value="deny">deny</option>
+                  </select>
+                  <div class="chipbox">
+                    {#each scope.hosts as h (h)}
+                      <span class="chip">
+                        {h}
+                        <button
+                          type="button"
+                          class="chip-x"
+                          aria-label="remove host {h}"
+                          onclick={() => dropChip('hosts', h)}>×</button
+                        >
+                      </span>
+                    {/each}
+                    <input
+                      type="text"
+                      class="chip-add"
+                      list="watchers-hosts"
+                      aria-label="add a host"
+                      placeholder="192.168.1.50 or 203.0.113.0/24"
+                      bind:value={adding.hosts}
+                      onkeydown={(e) => onAddKey(e, 'hosts')}
+                    />
+                    <button type="button" class="chip-plus" onclick={() => commitChip('hosts')}
+                      >add</button
+                    >
+                  </div>
+                </div>
+                {#if addError.hosts}<span class="adderr">{addError.hosts}</span>{/if}
+              </div>
+            {/if}
+
+            {#if fieldsFor.includes('classification')}
+              <!-- One value, not a list (internal/store.Scope), so this
+                   stays the select it has always been rather than
+                   becoming a chip row that could only ever hold one
+                   chip. The fixed set is the select's own options. -->
+              <label class="field">
+                <span>Source classification</span>
+                <select bind:value={scope.classification}>
+                  <option value="">any</option>
+                  {#each CLASSIFICATIONS as c (c)}
+                    <option value={c}>{c} only</option>
+                  {/each}
+                </select>
+              </label>
+            {/if}
+
+            {#if fieldsFor.includes('ports')}
+              <div class="field">
+                <span>Ports</span>
+                <div class="field-row">
+                  <select bind:value={scope.portsMode} aria-label="Ports restriction">
+                    <option value="">no restriction</option>
+                    <option value="allow">allow only</option>
+                    <option value="deny">deny</option>
+                  </select>
+                  <div class="chipbox">
+                    {#each scope.ports as p (p)}
+                      <span class="chip">
+                        {p}
+                        <button
+                          type="button"
+                          class="chip-x"
+                          aria-label="remove port {p}"
+                          onclick={() => dropChip('ports', p)}>×</button
+                        >
+                      </span>
+                    {/each}
+                    <input
+                      type="text"
+                      class="chip-add"
+                      inputmode="numeric"
+                      aria-label="add a port"
+                      placeholder="22, or a range like 8000-8010"
+                      bind:value={adding.ports}
+                      onkeydown={(e) => onAddKey(e, 'ports')}
+                    />
+                    <button type="button" class="chip-plus" onclick={() => commitChip('ports')}
+                      >add</button
+                    >
+                  </div>
+                </div>
+                {#if addError.ports}<span class="adderr">{addError.ports}</span>{/if}
+              </div>
+            {/if}
+
+            {#if fieldsFor.includes('rules')}
+              <div class="field">
+                <span>Rule labels</span>
+                <div class="field-row">
+                  <select bind:value={scope.rulesMode} aria-label="Rules restriction">
+                    <option value="">no restriction</option>
+                    <option value="allow">allow only</option>
+                    <option value="deny">deny</option>
+                  </select>
+                  <div class="chipbox">
+                    {#each scope.rules as r (r)}
+                      <span class="chip">
+                        {r}
+                        <button
+                          type="button"
+                          class="chip-x"
+                          aria-label="remove rule {r}"
+                          onclick={() => dropChip('rules', r)}>×</button
+                        >
+                      </span>
+                    {/each}
+                    <input
+                      type="text"
+                      class="chip-add"
+                      list="watchers-rules"
+                      aria-label="add a rule label"
+                      placeholder="r13"
+                      bind:value={adding.rules}
+                      onkeydown={(e) => onAddKey(e, 'rules')}
+                    />
+                    <button type="button" class="chip-plus" onclick={() => commitChip('rules')}
+                      >add</button
+                    >
+                  </div>
+                </div>
+                {#if addError.rules}<span class="adderr">{addError.rules}</span>{/if}
+              </div>
+            {/if}
+          </div>
+{/snippet}
+
+{#if canEdit && draft}
+  <!-- A detector being written rather than edited (#829). It exists only
+       here until the first Save: a shipped code detector carries no
+       conditions to copy, and the server refuses to store a detection
+       with none, so the copy is written in the drawer and created once it
+       is a whole detector. Drawn exactly as a stored one's drawer,
+       because it is the same drawer -- what is different is only that
+       nothing has been created yet, which the copied-from line says. -->
+  <div class="row open draft">
+    <div class="line" style="--ft: {drawerInk('')}">
+      <span class="name">{draftName || draft.label}</span>
+      <span class="dash">—</span>
+      <span class="scope-fact">{scopeSummary(scopeFromDraft(scope))}</span>
+      <span class="state paused"><span class="dot"></span>not created yet</span>
+    </div>
+    {#if draftError}
+      <p class="error">{draftError}</p>
+    {/if}
+    <div class="drawer" style="--ft: {drawerInk('')}">
+      {#if copiedFrom}
+        <p class="copied">copied from <em>{copiedFrom.name}</em> · {copiedFrom.carried}</p>
+      {/if}
+
+      <div class="famline">
+        <div class="famtop">
+          <span class="famname"><i>{drawerMark('')}</i>{draftName || draft.label}</span>
+          <div class="picker" role="group" aria-label="file this detector under a flag family">
+            {#each FAMILY_NAMES as fam (fam)}
+              <button
+                type="button"
+                class:on={draftFamily === fam}
+                style="--pk: {NAMED_FAMILIES[fam].ink}"
+                aria-label={fam}
+                aria-pressed={draftFamily === fam}
+                onclick={() => (draftFamily = draftFamily === fam ? '' : fam)}
+                >{NAMED_FAMILIES[fam].mark}</button
+              >
+            {/each}
+          </div>
+        </div>
+        <span class="btbar"></span>
+        <span class="lab famcap">
+          {#if draftFamily}
+            filed as · <em>{draftFamily}</em> — its flags wear this ink on the docket, the fall and
+            the map
+          {:else}
+            not filed yet · its flags wear the operator's accent
+          {/if}
+        </span>
+      </div>
+
+      <ConditionsBar bind:conditions={draftConditions} bind:unfinishedLine />
+
+      <p class="stat">
+        <input
+          class="kin"
+          type="number"
+          min="1"
+          bind:value={draftThreshold}
+          aria-label="how many before it fires"
+        />
+        <select class="k sel" bind:value={draftCounting} aria-label="what it counts">
+          <option value="total">matching events</option>
+          <option value="distinct">distinct…</option>
+        </select>
+        {#if draftCounting === 'distinct'}
+          <select class="k sel" bind:value={draftDistinct} aria-label="what it counts distinctly">
+            {#each DISTINCT_FIELDS as f (f)}
+              <option value={f}>{countingPhrase('distinct', f).replace('distinct ', '')}</option>
+            {/each}
+          </select>
+        {/if}
+        <span class="mid">·</span> per
+        <select class="k sel" bind:value={draftKey} aria-label="what the window is counted per">
+          {#each KEY_MODES as k (k)}
+            <option value={k}>{keyPhrase(k)}</option>
+          {/each}
+        </select>
+        <span class="mid">·</span> within
+        <input
+          class="kin"
+          type="number"
+          min="1"
+          bind:value={draftWindow}
+          aria-label="the window it counts over, in seconds"
+        />
+        <span class="u">s</span>
+      </p>
+
+      <p class="says">
+        <span class="lab">says</span>
+        <input
+          class="saysin"
+          type="text"
+          bind:value={draftTemplate}
+          aria-label="what a raised flag says"
+        />
+        <span class="phoffer">
+          {#each placeholdersFor(draftKey) as token (token)}
+            <button
+              type="button"
+              class="ph add"
+              onclick={() => insertPlaceholder(token)}
+              aria-label="add {token} to what a flag says">{token}</button
+            >
+          {/each}
+        </span>
+      </p>
+
+      <!-- Try is absent here, not disabled: a replay asks the server what
+           a *stored* definition would have done, and this one is not
+           stored yet. The app's own rule is absent rather than disabled,
+           so the pill is simply not drawn until Save has made it a
+           detector -- at which point its drawer has one. -->
+      {@render scopeGroup(['hosts', 'classification', 'ports', 'rules'])}
+
+      <div class="acts">
+        <button
+          type="button"
+          class="p"
+          class:wait={waiting !== ''}
+          class:live={waiting === ''}
+          disabled={busy || waiting !== ''}
+          onclick={saveDraft}><i>✓</i>{busy ? 'saving…' : 'save'}</button
+        >
+        {#if waiting}
+          <span class="waiting">{waiting}</span>
+        {/if}
+        <span class="mid">·</span>
+        <button type="button" class="olink quiet" disabled={busy} onclick={discardDraft}>
+          discard
+        </button>
+      </div>
+
+      <label class="field rename">
+        <span class="lab">name</span>
+        <input type="text" bind:this={nameInput} bind:value={draftName} />
+      </label>
+    </div>
+  </div>
+{/if}
 
 <ul class="bench">
   {#each detectorSettingsState.list as d (d.name)}
@@ -416,7 +993,223 @@
         <p class="error">{errors[d.name]}</p>
       {/if}
 
-      {#if canEdit && open}
+      {#if canEdit && open && d.detection}
+        <!-- The custom detector's drawer, settings round 8. One unbroken
+             family stripe from the row into the drawer, the way a flag
+             opens on the docket, and every ink below it is the chosen
+             family's. -->
+        <div class="drawer" style="--ft: {drawerInk(d.name)}">
+          {#if copiedFrom}
+            <p class="copied">copied from <em>{copiedFrom.name}</em> · {copiedFrom.carried}</p>
+          {/if}
+
+          <div class="famline">
+            <div class="famtop">
+              <span class="famname"><i>{drawerMark(d.name)}</i>{draftName || label}</span>
+              <div class="picker" role="group" aria-label="file this detector under a flag family">
+                {#each FAMILY_NAMES as fam (fam)}
+                  <button
+                    type="button"
+                    class:on={draftFamily === fam}
+                    style="--pk: {NAMED_FAMILIES[fam].ink}"
+                    aria-label={fam}
+                    aria-pressed={draftFamily === fam}
+                    onclick={() => (draftFamily = draftFamily === fam ? '' : fam)}
+                    >{NAMED_FAMILIES[fam].mark}</button
+                  >
+                {/each}
+              </div>
+            </div>
+            <span class="btbar"></span>
+            <span class="lab famcap">
+              {#if draftFamily}
+                filed as · <em>{draftFamily}</em> — its flags wear this ink on the docket, the fall
+                and the map
+              {:else}
+                not filed yet · its flags wear the operator's accent
+              {/if}
+            </span>
+          </div>
+
+          <ConditionsBar bind:conditions={draftConditions} bind:unfinishedLine />
+
+          <p class="stat">
+            {#if editingCount === 'threshold'}
+              <input
+                class="kin"
+                type="number"
+                min="1"
+                value={thresholdValue()}
+                oninput={(e) => setNumber('threshold', Number(e.currentTarget.value))}
+                onblur={() => (editingCount = null)}
+                onkeydown={(e) => e.key === 'Enter' && (editingCount = null)}
+                aria-label="how many before it fires"
+              />
+            {:else}
+              <button type="button" class="k" onclick={() => (editingCount = 'threshold')}>
+                <b>{thresholdValue()}</b>
+              </button>
+            {/if}
+            <!-- What is being counted. Total counts events; distinct
+                 counts distinct values of one field, which is the thing
+                 the noun after the number has to name. -->
+            <select class="k sel" bind:value={draftCounting} aria-label="what it counts">
+              <option value="total">matching events</option>
+              <option value="distinct">distinct…</option>
+            </select>
+            {#if draftCounting === 'distinct'}
+              <select class="k sel" bind:value={draftDistinct} aria-label="what it counts distinctly">
+                {#each DISTINCT_FIELDS as f (f)}
+                  <option value={f}>{countingPhrase('distinct', f).replace('distinct ', '')}</option>
+                {/each}
+              </select>
+            {/if}
+            <span class="mid">·</span> per
+            <select class="k sel" bind:value={draftKey} aria-label="what the window is counted per">
+              {#each KEY_MODES as k (k)}
+                <option value={k}>{keyPhrase(k)}</option>
+              {/each}
+            </select>
+            <span class="mid">·</span> within
+            {#if editingCount === 'window'}
+              <input
+                class="kin"
+                type="number"
+                min="1"
+                value={windowValue()}
+                oninput={(e) => setNumber('window', Number(e.currentTarget.value))}
+                onblur={() => (editingCount = null)}
+                onkeydown={(e) => e.key === 'Enter' && (editingCount = null)}
+                aria-label="the window it counts over, in seconds"
+              />
+            {:else}
+              <button type="button" class="k" onclick={() => (editingCount = 'window')}>
+                <b>{windowValue()}</b> <span class="u">s</span>
+              </button>
+            {/if}
+          </p>
+
+          <p class="says">
+            <span class="lab">says</span>
+            {#if editingSays}
+              <input
+                class="saysin"
+                type="text"
+                bind:value={draftTemplate}
+                onblur={() => (editingSays = false)}
+                onkeydown={(e) => e.key === 'Enter' && (editingSays = false)}
+                aria-label="what a raised flag says"
+              />
+            {:else}
+              <button type="button" class="saying" onclick={() => (editingSays = true)}>
+                {#each saysParts(draftTemplate) as part, i (i)}
+                  {#if part.placeholder}<span class="ph">{part.text}</span>{:else}{part.text}{/if}
+                {/each}
+              </button>
+            {/if}
+            <span class="phoffer">
+              {#each placeholdersFor(draftKey) as token (token)}
+                <button
+                  type="button"
+                  class="ph add"
+                  onclick={() => insertPlaceholder(token)}
+                  aria-label="add {token} to what a flag says">{token}</button
+                >
+              {/each}
+            </span>
+          </p>
+
+          {#if replay?.receipt}
+            {@const receipt = replay.receipt}
+            <div class="side">
+              <span class="lab">tried · 24 h</span>
+              <p class="fired">
+                would have fired {receipt.corpusTruncated ? 'at least ' : ''}<b
+                  >{receipt.emissionCount}</b
+                >
+                {receipt.emissionCount === 1 ? 'time' : 'times'}
+              </p>
+              <!-- The docket's own tick strip, in the family ink: one mark
+                   per firing, placed where in the window it happened.
+                   Same shape as THE EPISODE, because it answers the same
+                   question about a different subject. -->
+              <svg viewBox="0 0 260 34" preserveAspectRatio="none" role="img"
+                aria-label="{receipt.emissionCount} firings across the window">
+                {#each tickPositions(receipt) as x, i (i)}
+                  <line x1={x} y1="6" x2={x} y2="28" stroke="var(--ft)" stroke-width="2.5"
+                    stroke-linecap="round" />
+                {/each}
+              </svg>
+              {#if receipt.sample.length > 0}
+                <p class="hosts">
+                  {#each flaggedHosts(receipt) as host (host)}
+                    <span>{host}</span><br />
+                  {/each}
+                </p>
+              {/if}
+            </div>
+          {:else if replay?.decline}
+            {@const decline = replay.decline}
+            <div class="side">
+              <span class="lab">tried · 24 h</span>
+              <p class="none">
+                needs a {asDuration(decline.definitionWindow)} window, only
+                {asDuration(decline.corpusSpan)} held
+              </p>
+            </div>
+          {:else}
+            <div class="side">
+              <span class="lab">tried · 24 h</span>
+              <p class="none">{trying ? 'trying…' : 'not tried yet'}</p>
+            </div>
+          {/if}
+
+          <!-- Scope has no home in the drawing, and taking it off the
+               surface would leave a custom detector unable to say what it
+               watches at all -- so it stays, under the drawer, in the
+               bench's own chips. Recorded as a gap on #829 rather than
+               given a home nobody drew. -->
+          {@render scopeGroup(fieldsFor)}
+
+          <div class="acts">
+            <button
+              type="button"
+              class="p"
+              class:wait={waiting !== ''}
+              disabled={trying || waiting !== ''}
+              onclick={() => tryRow(d.name)}><i>▸</i>{replay ? 'try again' : 'try'}</button
+            >
+            <button
+              type="button"
+              class="p"
+              class:wait={waiting !== ''}
+              class:live={waiting === '' && replay !== null}
+              disabled={busy || waiting !== ''}
+              onclick={() => save(d.name)}><i>✓</i>{saving[d.name] ? 'saving…' : 'save'}</button
+            >
+            {#if waiting}
+              <span class="waiting">{waiting}</span>
+            {/if}
+            <span class="mid">·</span>
+            <button type="button" class="olink" disabled={busy} onclick={() => cloneRow(d.name)}>
+              clone
+            </button>
+            <span class="mid">·</span>
+            <button type="button" class="olink quiet" disabled={busy} onclick={() => removeRow(d.name)}>
+              remove
+            </button>
+            <span class="mid">·</span>
+            <button type="button" class="olink quiet" disabled={busy} onclick={closePanel}>
+              close
+            </button>
+          </div>
+
+          <label class="field rename">
+            <span class="lab">name</span>
+            <input type="text" bind:this={nameInput} bind:value={draftName} />
+          </label>
+        </div>
+      {:else if canEdit && open}
         <div class="panel">
           {#if copy?.scopeNote}
             <p class="note"><strong>What this restricts:</strong> {copy.scopeNote}</p>
@@ -512,144 +1305,7 @@
             </div>
           {/if}
 
-          {#if fieldsFor.length > 0}
-            <div class="group">
-              <h4>What it watches</h4>
-
-              {#if fieldsFor.includes('hosts')}
-                <div class="field">
-                  <span>Hosts</span>
-                  <div class="field-row">
-                    <select bind:value={scope.hostsMode} aria-label="Hosts restriction">
-                      <option value="">no restriction</option>
-                      <option value="allow">allow only</option>
-                      <option value="deny">deny</option>
-                    </select>
-                    <div class="chipbox">
-                      {#each scope.hosts as h (h)}
-                        <span class="chip">
-                          {h}
-                          <button
-                            type="button"
-                            class="chip-x"
-                            aria-label="remove host {h}"
-                            onclick={() => dropChip('hosts', h)}>×</button
-                          >
-                        </span>
-                      {/each}
-                      <input
-                        type="text"
-                        class="chip-add"
-                        list="watchers-hosts"
-                        aria-label="add a host"
-                        placeholder="192.168.1.50 or 203.0.113.0/24"
-                        bind:value={adding.hosts}
-                        onkeydown={(e) => onAddKey(e, 'hosts')}
-                      />
-                      <button type="button" class="chip-plus" onclick={() => commitChip('hosts')}
-                        >add</button
-                      >
-                    </div>
-                  </div>
-                  {#if addError.hosts}<span class="adderr">{addError.hosts}</span>{/if}
-                </div>
-              {/if}
-
-              {#if fieldsFor.includes('classification')}
-                <!-- One value, not a list (internal/store.Scope), so this
-                     stays the select it has always been rather than
-                     becoming a chip row that could only ever hold one
-                     chip. The fixed set is the select's own options. -->
-                <label class="field">
-                  <span>Source classification</span>
-                  <select bind:value={scope.classification}>
-                    <option value="">any</option>
-                    {#each CLASSIFICATIONS as c (c)}
-                      <option value={c}>{c} only</option>
-                    {/each}
-                  </select>
-                </label>
-              {/if}
-
-              {#if fieldsFor.includes('ports')}
-                <div class="field">
-                  <span>Ports</span>
-                  <div class="field-row">
-                    <select bind:value={scope.portsMode} aria-label="Ports restriction">
-                      <option value="">no restriction</option>
-                      <option value="allow">allow only</option>
-                      <option value="deny">deny</option>
-                    </select>
-                    <div class="chipbox">
-                      {#each scope.ports as p (p)}
-                        <span class="chip">
-                          {p}
-                          <button
-                            type="button"
-                            class="chip-x"
-                            aria-label="remove port {p}"
-                            onclick={() => dropChip('ports', p)}>×</button
-                          >
-                        </span>
-                      {/each}
-                      <input
-                        type="text"
-                        class="chip-add"
-                        inputmode="numeric"
-                        aria-label="add a port"
-                        placeholder="22, or a range like 8000-8010"
-                        bind:value={adding.ports}
-                        onkeydown={(e) => onAddKey(e, 'ports')}
-                      />
-                      <button type="button" class="chip-plus" onclick={() => commitChip('ports')}
-                        >add</button
-                      >
-                    </div>
-                  </div>
-                  {#if addError.ports}<span class="adderr">{addError.ports}</span>{/if}
-                </div>
-              {/if}
-
-              {#if fieldsFor.includes('rules')}
-                <div class="field">
-                  <span>Rule labels</span>
-                  <div class="field-row">
-                    <select bind:value={scope.rulesMode} aria-label="Rules restriction">
-                      <option value="">no restriction</option>
-                      <option value="allow">allow only</option>
-                      <option value="deny">deny</option>
-                    </select>
-                    <div class="chipbox">
-                      {#each scope.rules as r (r)}
-                        <span class="chip">
-                          {r}
-                          <button
-                            type="button"
-                            class="chip-x"
-                            aria-label="remove rule {r}"
-                            onclick={() => dropChip('rules', r)}>×</button
-                          >
-                        </span>
-                      {/each}
-                      <input
-                        type="text"
-                        class="chip-add"
-                        list="watchers-rules"
-                        aria-label="add a rule label"
-                        placeholder="r13"
-                        bind:value={adding.rules}
-                        onkeydown={(e) => onAddKey(e, 'rules')}
-                      />
-                      <button type="button" class="chip-plus" onclick={() => commitChip('rules')}
-                        >add</button
-                      >
-                    </div>
-                  </div>
-                  {#if addError.rules}<span class="adderr">{addError.rules}</span>{/if}
-                </div>
-              {/if}
-            </div>
-          {/if}
+          {@render scopeGroup(fieldsFor)}
 
           <!-- One slot under the fields for whatever the last Try
                answered (#786): a receipt or a decline, never both, which
@@ -718,17 +1374,15 @@
               <button type="button" class="quiet" disabled={busy} onclick={() => resetRow(d.name)}>
                 Reset to stock
               </button>
-              <!-- Offered only where it can succeed (#810). A shipped
-                   detector's logic is Go keyed by its own id, so the
-                   server refuses to copy it and always will; a button
-                   whose only outcome is that refusal is worse than no
-                   button. Starting a custom detector from a shipped one
-                   is a different operation, and #829 owns it. -->
-              {#if d.origin === 'custom'}
-                <button type="button" class="quiet" disabled={busy} onclick={() => cloneRow(d.name)}>
-                  Clone
-                </button>
-              {/if}
+              <!-- Offered on every row since #829. It was custom-only
+                   under #810, when a shipped detector's logic was Go the
+                   server could not copy; now a shipped declarative one's
+                   conditions come across with the copy, and a shipped
+                   code one's copy is written in the drawer instead. Both
+                   are things this button can do, so both get it. -->
+              <button type="button" class="quiet" disabled={busy} onclick={() => cloneRow(d.name)}>
+                Clone
+              </button>
             </span>
             <!-- Try (#786) sits between the destructive-ish pair on the
                  left and the commit pair on the right: trying a candidate
@@ -774,6 +1428,318 @@
 {/if}
 
 <style>
+  /* ---- the custom detector's drawer (#829, settings round 8) ----------
+     Ported from docs/design/screens/settings/round-8/conditions-editor.
+     html: the docket's one unbroken family stripe running row into
+     drawer, the .btbar gradient rule, .lab for every label, the .stamp
+     shrunk to a placeholder, the .v pills for try and save, .olink for
+     the text actions and the bench's own dashed click-to-edit for the
+     counting numbers. No bordered panel anywhere -- the conditions bar is
+     the one boxed input on the surface. */
+  .drawer {
+    box-shadow: inset 3px 0 0 var(--ft);
+    padding: 4px 10px 16px 13px;
+  }
+  .copied {
+    margin: 0 0 12px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .copied em {
+    font-style: normal;
+    color: var(--ft);
+  }
+  .lab {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .famline {
+    margin-bottom: 16px;
+  }
+  .famtop {
+    display: flex;
+    align-items: baseline;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .famname {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ft);
+    white-space: nowrap;
+  }
+  .famname i {
+    font-style: normal;
+    margin-right: 7px;
+  }
+  .picker {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+  }
+  .picker button {
+    background: none;
+    border: none;
+    padding: 0 1px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--pk);
+    opacity: 0.34;
+    line-height: 1;
+  }
+  .picker button.on {
+    opacity: 1;
+  }
+  .picker button:hover {
+    opacity: 0.8;
+  }
+  /* The docket's BY TYPE bar: a 16% tint of the ink washing up to it. */
+  .btbar {
+    display: block;
+    height: 3px;
+    margin: 7px 0;
+    border-radius: 2px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ft) 16%, transparent),
+      var(--ft)
+    );
+  }
+  .famcap {
+    display: block;
+  }
+  .famcap em {
+    font-style: normal;
+    color: var(--ft);
+  }
+
+  /* the counting line: the bench's own dashed click-to-edit numbers */
+  .stat {
+    margin: 16px 0 0;
+    font-size: 13px;
+    line-height: 2.05;
+    color: var(--fg-muted);
+  }
+  .k {
+    font: inherit;
+    color: var(--fg);
+    font-weight: 600;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed var(--accent);
+    padding: 0;
+    cursor: pointer;
+    line-height: 1.3;
+  }
+  .k:hover {
+    color: var(--accent);
+  }
+  .k b {
+    font-weight: 700;
+  }
+  .k .u {
+    color: var(--fg-muted);
+    font-weight: 400;
+  }
+  .k.sel {
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  .kin {
+    font: inherit;
+    color: var(--fg);
+    font-weight: 700;
+    width: 5ch;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed var(--accent);
+    padding: 0;
+  }
+  .mid {
+    color: var(--fg-dim);
+    margin: 0 5px;
+  }
+
+  /* the says line, and the placeholders offered beside it */
+  .says {
+    margin: 12px 0 0;
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+  .saying {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--fg-muted);
+    background: none;
+    border: none;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+  }
+  .saysin {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--fg);
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed var(--accent);
+    min-width: 32ch;
+    flex: 1;
+    padding: 0;
+  }
+  /* the docket's .stamp, shrunk: 1.5px of the family ink around a word */
+  .ph {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: var(--ft);
+    border: 1.5px solid var(--ft);
+    border-radius: 3px;
+    padding: 0 5px;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ft) 30%, transparent);
+    vertical-align: 1px;
+    background: none;
+  }
+  .phoffer {
+    display: inline-flex;
+    gap: 6px;
+    align-items: baseline;
+  }
+  .phoffer .add {
+    opacity: 0.55;
+    cursor: pointer;
+  }
+  .phoffer .add:hover {
+    opacity: 1;
+  }
+
+  /* the receipt, where THE EPISODE sits */
+  .side {
+    margin-top: 16px;
+  }
+  .side .fired {
+    margin: 6px 0 0;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+  .side .fired b {
+    color: var(--fg);
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .side svg {
+    display: block;
+    width: 100%;
+    max-width: 420px;
+    height: 34px;
+    margin: 6px 0 2px;
+  }
+  .side .hosts {
+    margin: 4px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.7;
+    color: var(--fg-muted);
+  }
+  .side .none {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+
+  /* the actions: the docket's .v pills, and .olink for the text ones */
+  .acts {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }
+  .p {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 11px 2px 9px;
+    cursor: pointer;
+    line-height: 16px;
+  }
+  .p i {
+    font-style: normal;
+    color: var(--ft);
+    margin-right: 6px;
+    font-weight: 700;
+  }
+  .p:hover:not(:disabled) {
+    color: var(--fg);
+    border-color: var(--ft);
+    background: color-mix(in srgb, var(--ft) 12%, transparent);
+  }
+  .p.live {
+    color: var(--fg);
+    border-color: color-mix(in srgb, var(--ft) 55%, transparent);
+  }
+  /* Waiting, not disabled-looking: amber, because a half-written detector
+     is a line someone is in the middle of, not a mistake. */
+  .p.wait {
+    color: var(--fg-dim);
+    border-color: color-mix(in srgb, var(--now) 30%, transparent);
+    cursor: default;
+  }
+  .p.wait i {
+    color: var(--now);
+    opacity: 0.55;
+  }
+  .waiting {
+    color: var(--now);
+    font-size: 11.5px;
+  }
+  .olink {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+  }
+  .olink:hover:not(:disabled) {
+    text-decoration-color: currentColor;
+  }
+  .olink.quiet {
+    color: var(--fg-dim);
+  }
+  .rename {
+    margin-top: 16px;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .rename input {
+    font: 12px var(--font-mono);
+  }
+
   .bench {
     list-style: none;
     margin: 8px 0 0;

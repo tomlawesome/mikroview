@@ -22,11 +22,18 @@ vi.mock('../lib/api', () => ({
   hideSuggestion: vi.fn(),
   unhideSuggestion: vi.fn(),
   resetSuggestions: vi.fn(),
+  // #1069: decommissionsState.refresh() (called from this component's
+  // own onMount) reaches these two -- see "the decommission table
+  // (#1069)" below for the tests that exercise them for real.
+  fetchDecommission: vi.fn(async () => ({ offers: [], watches: [], evidenceComplete: true })),
+  deleteDecommissionWatch: vi.fn(),
 }))
 
 import {
   acceptSuggestion,
   createWatchlistEntry,
+  deleteDecommissionWatch,
+  fetchDecommission,
   fetchRecentMatches,
   fetchSuggestions,
   fetchWatchlistEntries,
@@ -39,10 +46,11 @@ import {
 import { watchlistState } from '../lib/watchlist.svelte'
 import { suggestState } from '../lib/suggest.svelte'
 import { matchesState } from '../lib/matches.svelte'
+import { decommissionsState } from '../lib/decommission.svelte'
 import { appState } from '../lib/state.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
 import { fallState, type FallBoundary } from '../lib/fall.svelte'
-import type { Suggestion, WatchNight, WatchlistCoverage, WatchlistEntry, WatchlistMatch } from '../lib/types'
+import type { DecommissionWatch, Suggestion, WatchNight, WatchlistCoverage, WatchlistEntry, WatchlistMatch } from '../lib/types'
 import Watchlist from './Watchlist.svelte'
 
 // #806: a real boundary the picker can offer and a scoped row can name --
@@ -74,6 +82,29 @@ function fallBoundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
 // actually lives in now.
 function entry(id: string, name: string, overrides: Partial<WatchlistEntry> = {}): WatchlistEntry {
   return { id, name, enabled: true, createdAt: '2026-08-24T09:00:00Z', ...overrides }
+}
+
+// A decommission watch (#1069), holding by default -- covered, no
+// traffic since it started, six hours still to go on a fresh window.
+function decommissionWatch(id: string, overrides: Partial<DecommissionWatch> = {}): DecommissionWatch {
+  return {
+    id,
+    cidr: '203.0.113.0/24',
+    device: 'core',
+    interface: 'ether3',
+    name: 'lab',
+    createdAt: '2026-08-24T09:00:00Z',
+    cleanWindow: 6 * 3_600_000_000_000, // a Go time.Duration, in nanoseconds
+    trafficCount: 0,
+    covered: true,
+    detached: false,
+    replayCount: 0,
+    replaySpan: 0,
+    state: 'holding',
+    retiresIn: '6h0m0s',
+    coverage: 'covered',
+    ...overrides,
+  }
 }
 
 function recordFor(id: string, entryId: string, overrides: Partial<WatchlistMatch> = {}): WatchlistMatch {
@@ -122,8 +153,17 @@ function suggestion(
 // assigned onto watchlistState: Watchlist refreshes on mount, so
 // anything written directly onto the store is overwritten by the fetch
 // a moment later.
-async function renderWatchlist(entries: WatchlistEntry[], coverage: Record<string, WatchlistCoverage> = {}) {
+async function renderWatchlist(
+  entries: WatchlistEntry[],
+  coverage: Record<string, WatchlistCoverage> = {},
+  decommissionWatches: DecommissionWatch[] = [],
+) {
   vi.mocked(fetchWatchlistEntries).mockResolvedValue({ entries, coverage })
+  // #1069: Watchlist.svelte's own onMount also refreshes
+  // decommissionsState -- every caller gets an empty answer by default,
+  // same as fetchSuggestions/fetchRecentMatches above, unless a test
+  // hands its own fixture through the third argument.
+  vi.mocked(fetchDecommission).mockResolvedValue({ offers: [], watches: decommissionWatches, evidenceComplete: true })
   const result = render(Watchlist)
   await settle()
   return result
@@ -1085,5 +1125,146 @@ describe('a watcher offered by a resolved flag (#641)', () => {
     await settle()
 
     expect(appState.view).toBe('watchlist')
+  })
+})
+
+// #1069: "Watchlist page does not list decommission watches" -- the
+// ghost's card (DecommissionCard.svelte) offers a `watchlist ▸` door and
+// its force-remove warning promises the watch "can only be forgotten
+// from there", so this table is what that promise actually points at.
+describe('the decommission table (#1069)', () => {
+  function decommSection(): HTMLElement | null {
+    return document.querySelector('.decomm-section')
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchSuggestions).mockResolvedValue([])
+    vi.mocked(fetchRecentMatches).mockResolvedValue([])
+    watchlistState.entries = []
+    watchlistState.coverage = {}
+    suggestState.candidates = []
+    matchesState.reset()
+    topologyNavState.pendingDecommissionWatchId = null
+    appState.now = new Date('2026-08-24T10:05:00Z').getTime()
+  })
+
+  it('renders nothing when there are no decommission watches', async () => {
+    await renderWatchlist([], {}, [])
+    expect(decommSection()).toBeNull()
+  })
+
+  it('shows a holding watch as a row: its range, when it started, and its state', async () => {
+    const watch = decommissionWatch('w1', { name: 'garage segment', cidr: '203.0.113.0/24' })
+    await renderWatchlist([], {}, [watch])
+
+    const section = decommSection()
+    expect(section).toBeTruthy()
+    const row = section?.querySelector('tr.wt-row')
+    expect(row?.textContent).toContain('garage segment · 203.0.113.0/24')
+    expect(row?.textContent).toContain('retired 09:00')
+    // 09:00 to 10:05, covered, nothing has straggled: an hour of the six
+    // is claimed -- watchlistRowText's own words, the same the ghost's
+    // card shows in its .wrow (DecommissionCard.svelte).
+    expect(row?.textContent).toContain('holding · 1 h of 6 h')
+  })
+
+  it('shows a broken watch in the ring-broken words the card uses', async () => {
+    const watch = decommissionWatch('w1', { covered: false, trafficCount: 0 })
+    await renderWatchlist([], {}, [watch])
+
+    expect(decommSection()?.textContent).toContain('broken · nothing logs this range')
+  })
+
+  it('shows a retired watch as retired, not holding or broken', async () => {
+    const watch = decommissionWatch('w1', { state: 'retired', retiredAt: '2026-08-24T09:30:00Z' })
+    await renderWatchlist([], {}, [watch])
+
+    const row = decommSection()?.querySelector('tr.wt-row')
+    expect(row?.textContent).toContain('retired')
+    expect(row?.querySelector('.wchip2.paused')).toBeTruthy()
+  })
+
+  // The forget action force-remove's own warning points at (#385's
+  // pattern, same as force-remove): armed by opening the row, then
+  // gated on a reason exactly as the card's own force-remove form is.
+  describe('forgetting a watch', () => {
+    it('keeps forget disabled until a reason is typed, then calls the delete API with it', async () => {
+      const watch = decommissionWatch('w1')
+      await renderWatchlist([], {}, [watch])
+      vi.mocked(deleteDecommissionWatch).mockResolvedValue(null)
+      vi.mocked(fetchDecommission).mockResolvedValue({ offers: [], watches: [], evidenceComplete: true })
+
+      const section = decommSection() as HTMLElement
+      await fireEvent.click(within(section).getByRole('button', { name: /open the drawer/i }))
+      await settle()
+      await fireEvent.click(within(section).getByRole('button', { name: 'forget' }))
+      await settle()
+
+      const button = within(section).getByRole('button', { name: /forget this watch/ }) as HTMLButtonElement
+      expect(button.disabled).toBe(true)
+
+      const reasonInput = within(section).getByLabelText('Why this watch is being forgotten') as HTMLInputElement
+      await fireEvent.input(reasonInput, { target: { value: 'range was reclaimed' } })
+      expect(button.disabled).toBe(false)
+
+      await fireEvent.click(button)
+      await settle()
+
+      expect(deleteDecommissionWatch).toHaveBeenCalledWith('w1', 'range was reclaimed')
+      // A successful forget re-reads the list, which now has nothing --
+      // same refresh-after-mutation idiom every other action on this
+      // page uses.
+      expect(decommSection()).toBeNull()
+    })
+
+    it('shows the server refusal and leaves the row in place', async () => {
+      const watch = decommissionWatch('w1')
+      await renderWatchlist([], {}, [watch])
+      vi.mocked(deleteDecommissionWatch).mockResolvedValue('no such watch')
+
+      const section = decommSection() as HTMLElement
+      await fireEvent.click(within(section).getByRole('button', { name: /open the drawer/i }))
+      await settle()
+      await fireEvent.click(within(section).getByRole('button', { name: 'forget' }))
+      const reasonInput = within(section).getByLabelText('Why this watch is being forgotten')
+      await fireEvent.input(reasonInput, { target: { value: 'no longer needed' } })
+      await fireEvent.click(within(section).getByRole('button', { name: /forget this watch/ }))
+      await settle()
+
+      expect(decommSection()?.textContent).toContain('no such watch')
+      expect(decommSection()?.querySelector('.wt-row')).toBeTruthy()
+    })
+  })
+
+  // The card's `watchlist ▸` door (#1069's own bug): it hands the watch's
+  // id through topologyNavState the same one-shot way the topography
+  // dial's pendingWatchId already does for an ordinary watch.
+  describe("the card's watchlist ▸ door", () => {
+    it("opens that watch's drawer on arrival, scrolls to it, and clears the pending id", async () => {
+      const scrollSpy = vi.fn()
+      Element.prototype.scrollIntoView = scrollSpy
+      const watches = [decommissionWatch('w1', { name: 'first' }), decommissionWatch('w2', { name: 'second' })]
+      // Set directly, same reasoning as the pendingWatchId test above
+      // (#724): in real use the table is already populated by the time
+      // a card's link is followed, and setting it here rather than only
+      // through the mocked fetch keeps this test's timing the same as
+      // real use, not racing decommissionsState's own async refresh().
+      decommissionsState.watches = watches
+      topologyNavState.pendingDecommissionWatchId = 'w2'
+      await renderWatchlist([], {}, watches)
+
+      expect(document.getElementById('decomm-watch-w2')?.nextElementSibling?.classList.contains('wt-drawer')).toBe(true)
+      expect(topologyNavState.pendingDecommissionWatchId).toBeNull()
+      expect(scrollSpy).toHaveBeenCalled()
+    })
+
+    it('a pending id that matches nothing opens no drawer and raises no error', async () => {
+      topologyNavState.pendingDecommissionWatchId = 'no-such-watch'
+      await renderWatchlist([], {}, [decommissionWatch('w1')])
+
+      expect(decommSection()?.querySelector('.wt-drawer')).toBeNull()
+      expect(topologyNavState.pendingDecommissionWatchId).toBeNull()
+    })
   })
 })

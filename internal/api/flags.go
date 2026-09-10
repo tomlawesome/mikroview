@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/flags"
 )
 
@@ -18,11 +19,69 @@ import (
 // FlagsChart. Same shape convention as GET /api/stats's timeSeries
 // field (internal/store/ring.go's Stats.TimeSeries) -- added alongside
 // the existing flags array rather than as a new endpoint.
+//
+// Since #768 it also carries "baselinesWarming": whether any enabled
+// detection is still warming, for the learning shelf's "why is
+// mikroview silent" line. Additive and omitted when it cannot be
+// answered -- see baselinesWarming below.
 func (s *Server) handleFlagsList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"flags":      s.Flags.List(),
 		"timeSeries": s.Flags.TimeSeries(),
-	})
+	}
+	if warming := s.baselinesWarming(s.now()); warming != nil {
+		body["baselinesWarming"] = *warming
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// baselinesWarming answers the learning shelf's one question (#768): is
+// any enabled detection still holding an observed key below its history
+// floor -- the state engine.Snapshot.ProvisionalFire fires in, and so
+// the state in which the shelf's "a spike seen now appears here as a
+// provisional flag" claim is true.
+//
+// It rides on GET /api/flags rather than being inferred from
+// /api/definitions (the owner's decision on #768, 2026-09-02): the shelf
+// is a flags surface, re-rendering on the flags poll, and two polls on
+// different cadences feeding one component let it disagree with the
+// flags beside it. Viewer-readable, because this route is (#653) --
+// the same fact, on the surface that shows it.
+//
+// nil means "cannot say", and the field is then omitted from the
+// response entirely rather than sent as false: with no live engine
+// wired there is no warm-up state to report, and false would be a claim
+// this server cannot make. Same silence-over-guess rule the definitions
+// surface's own learning field follows (learningView's doc comment).
+//
+// The three exclusions are #642's ruling, amendment 2, unchanged --
+// they were the frontend's anyBaselineWarming and are now this:
+//   - a definition with no warm-up concept (Learning's own ok=false);
+//   - a disabled detection, however warm its baseline;
+//   - "no traffic seen yet" (Keys 0) -- nothing observed can be
+//     provisional, so the shelf's claim would be false.
+func (s *Server) baselinesWarming(now time.Time) *bool {
+	if s.Learning == nil || s.Definitions == nil {
+		return nil
+	}
+	warming := false
+	for _, sd := range s.Definitions.List() {
+		d := sd.Definition
+		// An unavailable definition is preserved but never evaluated
+		// (engine.StoredDefinition.Available), so it can warm nothing.
+		if !sd.Available || !d.Enabled || d.Intent != engine.IntentDetection {
+			continue
+		}
+		state, ok := s.Learning.Learning(d.ID, now)
+		if !ok {
+			continue
+		}
+		if state.Keys > state.Ready {
+			warming = true
+			break
+		}
+	}
+	return &warming
 }
 
 // verdictRequest is POST /api/flags/{id}/verdict's body: one of the

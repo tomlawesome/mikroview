@@ -246,47 +246,114 @@ check(
   'the panel stays open on the freshly stock values, so the operator can see what reset did',
 )
 
-// --- clone -------------------------------------------------------------
+// --- clone: the shipped row (#829) --------------------------------------
 //
-// Clone is offered where it can succeed and nowhere else (#810). A
-// shipped detector's logic is Go keyed by its own id, so the server
-// refuses to copy it and always will -- that row carries no button. An
-// operator-authored one is stored structure, so it copies, and what this
-// section pins is the interaction #787 decision C describes: the copy
-// appears, paused, expanded, with its name selected to be typed over.
+// Clone used to be custom-only (#810), because a shipped detector's logic
+// was Go keyed by its own id and a copy of it would evaluate nothing.
+// #829 changed what a copy can be: a shipped *declarative* detector's
+// conditions are readable off its own builder, so the copy arrives
+// carrying them and is a real detector from the moment it exists.
 //
 // Driven through the bench and then read back from the server, never from
 // the browser's own optimism: a copy the UI shows and the store never
-// stored would pass any assertion made against the DOM alone.
+// stored would pass any assertion made against the DOM alone. That is the
+// whole reason this is a live scenario and not a component test -- the
+// conditions being copied are assembled by Go in the running binary, and
+// a mocked store would hand back whatever the component asked for.
+const shipped = await api('GET', '/api/definitions/port_scan')
 check(
-  (await row.locator('.panel button:has-text("Clone")').count()) === 0,
-  'the shipped row offers no Clone -- the one outcome it could have is a refusal',
+  (shipped.body?.structure?.conditions ?? []).length > 0,
+  `port_scan's own conditions are on the wire for a copy to start from (${JSON.stringify(shipped.body?.structure)})`,
 )
 
+const shippedClone = row.locator('.panel button:has-text("Clone")')
+check((await shippedClone.count()) === 1, 'the shipped row offers Clone')
+await shippedClone.click()
+
+const shippedCopyRow = page.locator('.bench li.row:has-text("Port scan (copy)")')
+await shippedCopyRow.waitFor({ state: 'visible', timeout: 15000 })
+check(true, 'pressing Clone on a shipped row produces the copy with no prompt in between')
+check(
+  (await shippedCopyRow.locator('.drawer').count()) === 1,
+  'the copy opens into the conditions editor, ready to be changed',
+)
+check(
+  ((await shippedCopyRow.locator('.state').textContent()) ?? '').includes('paused'),
+  `the copy is paused, so a half-edited detector never runs (${await shippedCopyRow.locator('.state').textContent()})`,
+)
+// The conditions are drawn, not merely stored: an empty bar is exactly
+// the failure this half of #829 exists to prevent.
+check(
+  (await shippedCopyRow.locator('.drawer .tok').count()) > 0,
+  `the copy's bar carries the original's conditions as tokens (${await shippedCopyRow.locator('.drawer .tok').count()})`,
+)
+
+const shippedCopyID = ((await shippedCopyRow.locator('.id').textContent()) ?? '').trim()
+const shippedStored = await api('GET', `/api/definitions/${encodeURIComponent(shippedCopyID)}`)
+check(
+  shippedStored.status === 200 && shippedStored.body?.provenance?.origin === 'custom',
+  `the copy is an operator-authored detector with its own id (${shippedCopyID}, ${shippedStored.status})`,
+)
+check(
+  shippedStored.body?.enabled === false,
+  `the store agrees the copy is paused (enabled ${shippedStored.body?.enabled})`,
+)
+check(
+  JSON.stringify(shippedStored.body?.detection?.conditions) ===
+    JSON.stringify(shipped.body?.structure?.conditions),
+  `the copy's stored conditions are the original's (${JSON.stringify(shippedStored.body?.detection?.conditions)})`,
+)
+check(
+  shippedStored.body?.params?.threshold === shipped.body?.params?.threshold,
+  `and its tuning came across (${JSON.stringify(shippedStored.body?.params)}, original ${JSON.stringify(shipped.body?.params)})`,
+)
+
+// Filing it under a family is the one thing on this surface that colours
+// everything else, and it has to survive a save -- a picker that forgets
+// on reopen looks exactly like one that never wrote anything.
+await shippedCopyRow.locator('.picker button[aria-label="scan"]').click()
+await shippedCopyRow.locator('.acts button:has-text("save")').click()
+await page.waitForTimeout(500)
+const filed = await api('GET', `/api/definitions/${encodeURIComponent(shippedCopyID)}`)
+check(
+  filed.body?.family === 'scan',
+  `the family the picker chose reached the store (${JSON.stringify(filed.body?.family)})`,
+)
+
+// --- clone: the custom row ----------------------------------------------
+//
+// The #810 path, unchanged: a custom detector is stored structure all the
+// way down, so the server copies it whole. What this pins is #787
+// decision C's interaction -- the copy appears, paused, expanded, with
+// its name selected to be typed over.
 const custom = page.locator(`.bench li.row:has(.id:text-is("${seedID}"))`)
 check((await custom.count()) === 1, 'the authored detector is a row on this bench like any other')
 await custom.locator('.row-knob').click()
-await custom.locator('.panel').waitFor({ state: 'visible' })
+await custom.locator('.drawer').waitFor({ state: 'visible' })
 check(
-  (await custom.locator('.panel button:has-text("Clone")').count()) === 1,
-  'the custom row offers Clone',
+  (await custom.locator('.drawer .acts button:has-text("clone")').count()) === 1,
+  'the custom row offers clone, in the drawer beside try and save',
 )
 
-await custom.locator('.panel button:has-text("Clone")').click()
+await custom.locator('.drawer .acts button:has-text("clone")').click()
 const copyRow = page.locator(`.bench li.row:has-text("${SEED_NAME} (copy)")`)
 await copyRow.waitFor({ state: 'visible', timeout: 15000 })
-check(true, 'pressing Clone produces the copy with no prompt in between')
+check(true, 'pressing clone produces the copy with no prompt in between')
 check(
-  (await copyRow.locator('.panel').count()) === 1,
+  (await copyRow.locator('.drawer').count()) === 1,
   'the copy is already expanded, ready to be edited',
 )
 check(
-  (await page.locator('.bench .panel').count()) === 1,
-  'and it is the only panel open -- the original closed behind it',
+  (await page.locator('.bench .drawer').count()) === 1,
+  'and it is the only drawer open -- the original closed behind it',
 )
 check(
   ((await copyRow.locator('.state').textContent()) ?? '').includes('paused'),
   `the copy is paused, so a half-edited detector never runs (${await copyRow.locator('.state').textContent()})`,
+)
+check(
+  ((await copyRow.locator('.copied').textContent()) ?? '').toLowerCase().includes('copied from'),
+  `the drawer says where the copy came from (${await copyRow.locator('.copied').textContent()})`,
 )
 
 // The name field, focused and selected, is what makes this "start
@@ -330,7 +397,7 @@ check(
   `and its tuning (${JSON.stringify(stored.body?.params)}, original ${JSON.stringify(seed.body?.params)})`,
 )
 
-for (const id of [seedID, copyID]) {
+for (const id of [seedID, copyID, shippedCopyID]) {
   if (!id) continue
   await api('DELETE', `/api/definitions/${encodeURIComponent(id)}`)
 }
@@ -348,13 +415,15 @@ check(
 
 const leftovers = (await api('GET', '/api/definitions')).body?.definitions ?? []
 check(
-  leftovers.filter((d) => (d.name ?? '').startsWith('live-watchers-editor')).length === 0,
+  leftovers.filter(
+    (d) => (d.name ?? '').startsWith('live-watchers-editor') || (d.name ?? '') === 'Port scan (copy)',
+  ).length === 0,
   'this scenario left no definitions of its own behind',
 )
 
-// Nothing here asks the server for a refusal any more (#810 offers Clone
-// only where it succeeds), so every console error is a defect and none is
-// filtered out.
+// Nothing here asks the server for a refusal -- clone is offered on both
+// kinds of row and succeeds on both (#829) -- so every console error is a
+// defect and none is filtered out.
 check(
   consoleErrors.length === 0,
   `no console errors -- got ${JSON.stringify(consoleErrors.slice(0, 3))}`,

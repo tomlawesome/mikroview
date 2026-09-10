@@ -391,6 +391,38 @@ func (d *DeclarativeDefinition) Conditions() []Condition {
 	return append([]Condition(nil), d.conditions...)
 }
 
+// Structure returns what this definition matches on and how it counts,
+// in the same shape a custom detection stores (#829) -- conditions, key
+// mode, counting mode, distinct field and detail template.
+//
+// The point of it is a shipped detector. A custom one already carries a
+// DetectionSpec on its envelope, but a shipped declarative detector's
+// structure only exists as whatever its Go builder assembled, so until
+// this there was no way to answer "what does port_scan actually match?"
+// short of reading the source. Cloning a shipped detector into a custom
+// one needs exactly that answer, or the copy arrives with an empty bar.
+//
+// Threshold and window are not here, deliberately: they are Params on
+// both sides of the shipped/custom line, and a structure that carried
+// them would be two doors onto one value. See DetectionSpec's own doc
+// comment on the structure/tunable split.
+//
+// The spec returned is not guaranteed to satisfy DetectionSpec.Validate.
+// A shipped detector may accumulate evidence and name it in its detail
+// template ({Ports}, {Hosts}), and a custom detection declares no
+// evidence categories, so a caller copying one must be prepared to
+// replace a template this binary would not accept back -- see
+// internal/api's cloneShippedDetector.
+func (d *DeclarativeDefinition) Structure() DetectionSpec {
+	return DetectionSpec{
+		Conditions:     d.Conditions(),
+		Key:            d.key,
+		Counting:       d.countingMode,
+		DistinctField:  d.distinctField,
+		DetailTemplate: d.detailTemplate,
+	}
+}
+
 // newStateForWindow builds one key's fresh state, sized to window (rather
 // than unconditionally to d.window -- the seam Replay,
 // replay_declarative.go, uses to build state against a candidate window
