@@ -686,7 +686,7 @@ test:postgres:
 test:container:
   stage: test
   tags: [light]
-  image: docker:28-cli
+  image: docker:29-cli
   <<: *dev_or_mr_code
   variables:
     DOCKER_HOST: unix:///var/run/docker.sock
@@ -776,7 +776,7 @@ test:container:
 gate:image:
   stage: test
   tags: [light]
-  image: docker:28-cli
+  image: docker:29-cli
   # Not gated by #1038. When live-check.Dockerfile has not changed this
   # job is a registry lookup and a retag -- seconds -- and gate:scenarios,
   # gate:scripts and perf:promotion all name the per-branch tag it
