@@ -177,6 +177,23 @@
     input?.focus()
   }
 
+  // commitPending is commit()'s other caller (#1075): the drawer's Save
+  // reads only the committed `conditions`, so a token still sitting in
+  // `typed` -- never finished with Enter or a list pick -- would
+  // otherwise be sent to the server as if the operator never wrote it.
+  // Called from the drawer just before it reads the conditions back out.
+  // A token that parses commits itself, the same path Enter takes; one
+  // that does not is left alone, because unfinishedLine (the $effect
+  // above) is already carrying the reason and the drawer's amber line is
+  // already showing it -- this only reports whether Save may proceed.
+  export function commitPending(): boolean {
+    if (step !== 'value') return true
+    const built = conditionFrom(pendingField, typed, pinned)
+    if ('error' in built) return false
+    commit()
+    return true
+  }
+
   function remove(field: string) {
     conditions = conditions.filter((c) => c.field !== field)
     onchange?.(conditions)
