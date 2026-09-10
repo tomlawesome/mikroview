@@ -952,6 +952,82 @@ describe('the custom detector drawer', () => {
     expect(api.updateDefinition).not.toHaveBeenCalled()
   })
 
+  it('closes an open draft when a row panel opens, so only one conditions bar is ever mounted (#1075)', async () => {
+    // draft (the #829 clone-with-no-structure copy) and openRow used to
+    // be independent state: opening a second row's panel while the draft
+    // was still open mounted a second ConditionsBar without closing the
+    // first, and conditionsBarRef pointed at whichever mounted last.
+    // openPanel() now discards the draft first, the same way
+    // startDraftFrom() already closed an open row's panel, so the two
+    // can never coexist.
+    const { container } = render(EngineRoomWatchers, { canEdit: true })
+
+    // rule_spike ships no structure, so cloning it writes a draft here
+    // rather than asking the server for a copy.
+    await open('Rule hit-rate spike')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+    expect(container.querySelector('.draft')).toBeTruthy()
+
+    // Opening a different row's panel discards the draft outright.
+    await open('SSH hammering')
+    expect(container.querySelector('.draft')).toBeFalsy()
+
+    // The row's own panel still commits a typed-but-uncommitted token on
+    // Save, same as before this fix (#1075).
+    const bar = screen.getByLabelText('add a condition')
+    await fireEvent.focus(bar)
+    await fireEvent.input(bar, { target: { value: 'action' } })
+    await settle()
+    await fireEvent.keyDown(bar, { key: 'Enter' })
+    await settle()
+    await fireEvent.input(bar, { target: { value: 'drop' } })
+    await settle()
+    // No Enter here -- "drop" is still only typed.
+    await fireEvent.click(screen.getByRole('button', { name: /save/ }))
+    await settle()
+
+    expect(api.updateDefinition).toHaveBeenCalledWith(
+      'ssh_hammering',
+      expect.objectContaining({
+        detection: expect.objectContaining({
+          conditions: expect.arrayContaining([
+            { field: 'destinationPort', operator: 'equals', values: ['22'] },
+            { field: 'action', operator: 'equals', values: ['drop'] },
+          ]),
+        }),
+      }),
+    )
+  })
+
+  it('commits a typed-but-uncommitted value in the draft bar on Save Draft (#1075)', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+
+    await open('Rule hit-rate spike')
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
+    await settle()
+
+    const bar = screen.getByLabelText('add a condition')
+    await fireEvent.focus(bar)
+    await fireEvent.input(bar, { target: { value: 'action' } })
+    await settle()
+    await fireEvent.keyDown(bar, { key: 'Enter' })
+    await settle()
+    await fireEvent.input(bar, { target: { value: 'drop' } })
+    await settle()
+    // No Enter here -- "drop" is still only typed.
+    await fireEvent.click(screen.getByRole('button', { name: /save/ }))
+    await settle()
+
+    expect(api.createCustomDetection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detection: expect.objectContaining({
+          conditions: [{ field: 'action', operator: 'equals', values: ['drop'] }],
+        }),
+      }),
+    )
+  })
+
   it('offers only the placeholders this key mode can resolve', async () => {
     // The set is the engine's own, closed and validated server-side, so
     // one offered here that it refuses is a sentence rejected on save
