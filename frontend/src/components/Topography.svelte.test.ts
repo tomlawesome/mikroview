@@ -32,7 +32,7 @@ import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { Host } from '../lib/api'
 import type { RouterFilterRule, RouterIPAddress } from '../lib/api'
 import { emptyFilters, type ClientEvent, type Device, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
-import Topography from './Topography.svelte'
+import Topography, { tunnelEventCounts } from './Topography.svelte'
 // Vite's own `?raw` import (typed by vite/client, already in this
 // project's tsconfig) -- not a Node fs read -- so the handful of
 // assertions below that care about a raw CSS value or a stylesheet's own
@@ -2500,6 +2500,28 @@ describe('#715 item 3, as #981 left it: the marks are the data, not an overlay',
     flushSync()
 
     expect(container.querySelectorAll('.fchip').length).toBeGreaterThan(0)
+  })
+})
+
+describe('tunnelEventCounts (#1090)', () => {
+  it('counts one pass over the buffer into a per-interface map', () => {
+    const counts = tunnelEventCounts([
+      event({ inInterface: 'wg0' }),
+      event({ outInterface: 'wg0' }),
+      event({ inInterface: 'wg1', outInterface: 'bridge1' }),
+      event({}),
+    ])
+    expect(counts.get('wg0')).toBe(2)
+    expect(counts.get('wg1')).toBe(1)
+    expect(counts.get('bridge1')).toBe(1)
+    expect(counts.has('unused')).toBe(false)
+  })
+
+  it('counts an event once per interface even if in and out match the same tunnel', () => {
+    // Mirrors tunnelEventsOf's old `e.inInterface === iface || e.outInterface === iface`
+    // OR check: one matching event is one count, not two.
+    const counts = tunnelEventCounts([event({ inInterface: 'wg0', outInterface: 'wg0' })])
+    expect(counts.get('wg0')).toBe(1)
   })
 })
 
