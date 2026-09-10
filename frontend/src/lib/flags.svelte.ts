@@ -246,10 +246,30 @@ class FlagsState {
 
     try {
       await clearAllFlags()
+      // A refresh that started after the bump above (so it passed its own
+      // gen check) can still resolve while this request is in flight and
+      // replace this.list wholesale -- see the `generation` field's doc
+      // comment. The objects `touched` points at would then be detached
+      // from this.list, so re-find each by id in the *current* list
+      // before writing the confirmed state (a no-op if it's gone), and
+      // bump generation again so a refresh already past its gen check
+      // cannot land on top of this write afterwards.
+      this.generation++
+      for (const { flag } of snapshot) {
+        const current = this.list.find((f) => f.id === flag.id)
+        if (current) {
+          current.cleared = flag.cleared
+          current.clearedAt = flag.clearedAt
+        }
+      }
     } catch (err) {
+      this.generation++
       for (const { flag, clearedAt } of snapshot) {
-        flag.cleared = false
-        flag.clearedAt = clearedAt
+        const current = this.list.find((f) => f.id === flag.id)
+        if (current) {
+          current.cleared = false
+          current.clearedAt = clearedAt
+        }
       }
       throw err
     }
@@ -267,6 +287,23 @@ class FlagsState {
   // beyond what the flag itself says.
   isUndoable(id: string): boolean {
     return !!this.list.find((f) => f.id === id)?.verdict
+  }
+
+  // Re-finds `id` in the *current* this.list and applies `fn` to it, or
+  // no-ops if it's gone. Every mutation below calls this right after its
+  // own network call resolves (both on success and on revert), because a
+  // refresh that starts after the mutation's pre-await generation bump
+  // (so it passes refresh()'s own gen check) can still resolve *while
+  // that network call is in flight* and replace this.list wholesale --
+  // see the `generation` field's doc comment. That detaches the object
+  // the mutation captured before its await, so writing straight onto it
+  // afterwards lands on an object the UI no longer shows. Bumping
+  // generation again here also stops a refresh that raced past its own
+  // gen check from landing on top of this write afterwards.
+  private applyToCurrent(id: string, fn: (flag: Flag) => void) {
+    this.generation++
+    const current = this.list.find((f) => f.id === id)
+    if (current) fn(current)
   }
 
   // 'investigate' (#640): records the verdict without clearing the flag,
@@ -289,13 +326,17 @@ class FlagsState {
 
     try {
       const updated = await setFlagVerdict(id, 'investigate')
-      flag.verdict = updated.verdict
-      flag.verdictBy = updated.verdictBy
-      flag.verdictAt = updated.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.verdict = updated.verdict
+        current.verdictBy = updated.verdictBy
+        current.verdictAt = updated.verdictAt
+      })
     } catch (err) {
-      flag.verdict = prev.verdict
-      flag.verdictBy = prev.verdictBy
-      flag.verdictAt = prev.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.verdict = prev.verdict
+        current.verdictBy = prev.verdictBy
+        current.verdictAt = prev.verdictAt
+      })
       throw err
     }
   }
@@ -341,17 +382,21 @@ class FlagsState {
 
     try {
       const updated = await setFlagVerdict(id, verdict)
-      flag.verdict = updated.verdict
-      flag.verdictBy = updated.verdictBy
-      flag.verdictAt = updated.verdictAt
-      flag.cleared = updated.cleared
-      flag.clearedAt = updated.clearedAt
+      this.applyToCurrent(id, (current) => {
+        current.verdict = updated.verdict
+        current.verdictBy = updated.verdictBy
+        current.verdictAt = updated.verdictAt
+        current.cleared = updated.cleared
+        current.clearedAt = updated.clearedAt
+      })
     } catch (err) {
-      flag.cleared = prev.cleared
-      flag.clearedAt = prev.clearedAt
-      flag.verdict = prev.verdict
-      flag.verdictBy = prev.verdictBy
-      flag.verdictAt = prev.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.cleared = prev.cleared
+        current.clearedAt = prev.clearedAt
+        current.verdict = prev.verdict
+        current.verdictBy = prev.verdictBy
+        current.verdictAt = prev.verdictAt
+      })
       throw err
     }
   }
@@ -386,17 +431,21 @@ class FlagsState {
 
     try {
       const updated = await deleteFlagVerdict(id)
-      flag.cleared = updated.cleared
-      flag.clearedAt = updated.clearedAt
-      flag.verdict = updated.verdict
-      flag.verdictBy = updated.verdictBy
-      flag.verdictAt = updated.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.cleared = updated.cleared
+        current.clearedAt = updated.clearedAt
+        current.verdict = updated.verdict
+        current.verdictBy = updated.verdictBy
+        current.verdictAt = updated.verdictAt
+      })
     } catch (err) {
-      flag.cleared = prev.cleared
-      flag.clearedAt = prev.clearedAt
-      flag.verdict = prev.verdict
-      flag.verdictBy = prev.verdictBy
-      flag.verdictAt = prev.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.cleared = prev.cleared
+        current.clearedAt = prev.clearedAt
+        current.verdict = prev.verdict
+        current.verdictBy = prev.verdictBy
+        current.verdictAt = prev.verdictAt
+      })
       throw err
     }
   }
