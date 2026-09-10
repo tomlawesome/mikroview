@@ -201,15 +201,15 @@
   "containerImages": [
     {
       "name": "Alpine (light-lane shell/tooling image)",
-      "reference": "alpine:3.22",
+      "reference": "alpine:3.24",
       "shipped": false,
       "license": "MIT",
       "source": "https://github.com/alpinelinux/docker-alpine",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
+      "reviewedOn": "2026-09-10",
+      "reviewBy": "2026-11-10"
     },
     {
       "name": "Go toolchain (CI build/test image)",
@@ -333,15 +333,15 @@
     },
     {
       "name": "Trivy filesystem/dependency scanner",
-      "reference": "aquasec/trivy:0.73.0",
+      "reference": "aquasec/trivy:0.74.0",
       "shipped": false,
       "license": "Apache-2.0",
       "source": "https://github.com/aquasecurity/trivy",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
+      "reviewedOn": "2026-09-10",
+      "reviewBy": "2026-11-10"
     },
     {
       "name": "PostgreSQL (integration test service)",
