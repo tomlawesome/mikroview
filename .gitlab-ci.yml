@@ -929,13 +929,13 @@ gate:scripts:
 # perf:promotion (#1003) -- the dev -> preview promotion gate refuses a
 # regression rather than merely recording one. It runs probe-perf.mjs
 # (frontend/scripts/probe-perf.mjs -- deck-to-deck roll times, long-task
-# totals per phase, docket-scroll frame p95) against a fresh instance
+# totals per phase, docket-scroll mean frame time) against a fresh instance
 # from scripts/live-env.sh, exactly as `make live-check` starts one, then
 # diffs the result against the committed frontend/perf-baseline.json with
 # perf-compare.mjs. No baseline yet: the run records one as an artifact
 # and passes, printing what to commit. Baseline present: a metric worse
-# than it by more than 30% *and* more than 300ms (frame p95: 30% and
-# 8ms) fails the job -- both conditions, so noise on a small number can't
+# than it by more than 30% *and* more than 300ms (mean scroll frame: 30%
+# and 4ms) fails the job -- both conditions, so noise on a small number can't
 # trip it. Accepting a regression means committing the new numbers in the
 # same MR, so the change is reviewed rather than silently overwritten.
 #
