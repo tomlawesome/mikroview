@@ -1356,13 +1356,29 @@ security:trivy-fs:
     paths:
       - .trivy-cache
   script:
-    - trivy fs --exit-code 0 --severity CRITICAL,HIGH,MEDIUM,LOW --scanners vuln,license --format sarif --output trivy-fs.sarif .
+    # Full-severity report kept as the SARIF artifact for visibility only --
+    # exit-code 0, never fails the job by itself. --include-dev-deps:
+    # frontend/package.json declares 0 runtime "dependencies" (this Vite
+    # layout puts everything under devDependencies even though it all
+    # reaches the built bundle), so without the flag trivy silently reports
+    # "no supported files" for npm and this scan covers Go modules only.
+    - trivy fs --exit-code 0 --severity CRITICAL,HIGH,MEDIUM,LOW --scanners vuln,license --include-dev-deps --format sarif --output trivy-fs.sarif .
+    # The real gate (#1079): fails the job on a fixed-available CRITICAL or
+    # HIGH vulnerability (--ignore-unfixed: no point blocking on a fix that
+    # doesn't exist yet). Licences stay report-only above, not gated here.
+    # Trivy's licence scanner reads the whole npm tree including build-only
+    # native tooling -- sharp/libvips (LGPL-3.0-or-later) and lightningcss
+    # (MPL-2.0) -- none of which reaches the shipped frontend bundle. The
+    # project's own shipped-scope licence gate (security:licence-policy,
+    # tools/licenses/licence-policy.mjs) already covers what actually ships
+    # and deliberately excludes build tooling for this reason; gating here
+    # too would fail the pipeline on packages already decided to be fine.
+    - trivy fs --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --scanners vuln --include-dev-deps .
   artifacts:
     when: always
     paths:
       - trivy-fs.sarif
     expire_in: 1 week
-  allow_failure: true
   # See security:gosec's retry comment above (#950): same artifact-upload
   # flake, same fix.
   retry:
