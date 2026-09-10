@@ -272,6 +272,18 @@
       "reviewBy": "2026-11-05"
     },
     {
+      "name": "Node.js (live-check.Dockerfile base image, #1078)",
+      "reference": "node:26-bookworm",
+      "shipped": false,
+      "license": "MIT",
+      "source": "https://github.com/nodejs/docker-node",
+      "locations": [
+        "live-check.Dockerfile"
+      ],
+      "reviewedOn": "2026-09-10",
+      "reviewBy": "2026-11-10"
+    },
+    {
       "name": "live-check gate image (this repository's own live-check.Dockerfile, built by gate:image into the project registry, #1004)",
       "reference": "$CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG",
       "shipped": false,
