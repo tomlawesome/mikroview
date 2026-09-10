@@ -42,6 +42,7 @@ import {
   resetSuggestions,
   setWatchlistEnabled,
   unhideSuggestion,
+  updateWatchlistEntry,
 } from '../lib/api'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { suggestState } from '../lib/suggest.svelte'
@@ -665,6 +666,34 @@ describe('The ratified watch table (#676)', () => {
     } finally {
       fallState.boundaries = []
     }
+  })
+
+  // #1077: an entry scoped to a router address list (the way accepting an
+  // address-list suggestion creates one, internal/api/suggest.go) has no
+  // control here to change that scope -- it must simply survive an
+  // ordinary edit of another field, the same way boundary/ports/invert
+  // already do. Before the fix, saveEditWatch's request never carried
+  // sourceList at all, so this same edit silently wiped it.
+  it('editing a watch that is scoped to an address list keeps that scope in the save request', async () => {
+    await renderWatchlist([
+      entry('e1', 'iot cam', {
+        source: { mac: 'aa:bb:cc:dd:ee:ff' },
+        ports: [443],
+        sourceList: { device: 'rb5009', list: 'iot-clients' },
+      }),
+    ])
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Open the drawer for iot cam' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'edit' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
+    await settle()
+
+    expect(updateWatchlistEntry).toHaveBeenCalledWith(
+      'e1',
+      expect.objectContaining({ sourceList: { device: 'rb5009', list: 'iot-clients' } }),
+    )
   })
 
   it("shows the entry's most recent match as last event, from matchesState's bulk feed", async () => {
