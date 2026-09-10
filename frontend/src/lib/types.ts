@@ -1126,6 +1126,19 @@ export interface WatchRing {
   reason?: string
 }
 
+// Mirrors internal/watchlist.AddressListRef's JSON tags -- the router
+// address list an entry is scoped to, set when it was created by
+// accepting an address-list suggestion (internal/api/suggest.go's
+// KindAddressList branch, #1077). Full-replace on PUT, like source/
+// destIp/ports/boundary below, not a leave-alone pointer like window --
+// see internal/api's expectationRequest.SourceList doc comment. A caller
+// that edits any other field must resend this unchanged or the entry
+// loses its list scope (#1077).
+export interface WatchlistAddressListRef {
+  device?: string
+  list?: string
+}
+
 // Mirrors internal/watchlist.Boundary's JSON tags (#806) -- the boundary
 // a watcher is scoped to, keyed exactly as fall.svelte.ts's own
 // boundaryKeyOf(chain, inInterface, outInterface). Absent (the server's
@@ -1156,6 +1169,10 @@ export interface WatchlistEntry {
   // off is not promising mikroview can see it.
   enabled: boolean
   source?: WatchlistIdentity
+  // The router address list this entry is scoped to, if any -- see
+  // WatchlistAddressListRef's own doc comment (#1077). omitzero
+  // server-side, so absent means unscoped, same as an all-empty value.
+  sourceList?: WatchlistAddressListRef
   destIp?: string
   ports?: number[]
   invert?: boolean

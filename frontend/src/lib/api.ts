@@ -47,6 +47,7 @@ import type {
   TuneLoggingRenderResponse,
   UserSummary,
   Verdict,
+  WatchlistAddressListRef,
   WatchlistBoundary,
   WatchlistEntry,
   WatchlistCoverage,
@@ -842,6 +843,13 @@ export async function deleteEntity(type: string, key: string): Promise<string | 
 export interface WatchlistEntryRequest {
   name?: string
   source?: WatchlistIdentity
+  // The router address list this entry is scoped to, if any (#1077,
+  // mirrors internal/watchlist.AddressListRef) -- full-replace like
+  // source/destIp/ports/boundary below, so a caller editing any other
+  // field must read this back off the entry it is editing and resend it
+  // unchanged, or the entry silently loses its list scope. See
+  // WatchlistAddressListRef's own doc comment.
+  sourceList?: WatchlistAddressListRef
   destIp?: string
   ports?: number[]
   invert?: boolean
@@ -860,6 +868,7 @@ export interface WatchlistEntryRequest {
 function expectationBlock(req: WatchlistEntryRequest) {
   return {
     source: req.source ?? {},
+    sourceList: req.sourceList ?? {},
     destIp: req.destIp ?? '',
     ports: req.ports ?? [],
     invert: req.invert ?? false,
