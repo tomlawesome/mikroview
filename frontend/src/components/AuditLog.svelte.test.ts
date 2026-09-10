@@ -270,3 +270,36 @@ describe('AuditLog classifies the action by subject family (#736)', () => {
     expect(detail?.textContent).toContain('reclassified as server')
   })
 })
+
+// #1089: auditState.refresh() used to have no catch at all, and the
+// "No admin actions recorded yet." message showed whenever `list` was
+// empty -- including the instant after a failed fetch, which read as a
+// confirmed-empty log rather than a load that never landed.
+describe('AuditLog surfaces a failed fetch, not an empty log (#1089)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    appState.now = new Date('2026-08-30T12:00:00Z').getTime()
+  })
+
+  it('renders the error, and never the empty-log message, when the fetch rejects', async () => {
+    vi.mocked(fetchAuditLog).mockRejectedValue(new Error('network unreachable'))
+    render(AuditLog)
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    expect(screen.getByText('Could not load the audit log: network unreachable')).toBeTruthy()
+    expect(screen.queryByText('No admin actions recorded yet.')).toBeNull()
+  })
+
+  it('still shows the empty-log message once a fetch actually succeeds with nothing to show', async () => {
+    vi.mocked(fetchAuditLog).mockResolvedValue({ entries: [], hasMore: false })
+    render(AuditLog)
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    expect(screen.getByText('No admin actions recorded yet.')).toBeTruthy()
+    expect(screen.queryByText(/Could not load the audit log/)).toBeNull()
+  })
+})

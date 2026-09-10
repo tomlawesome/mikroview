@@ -232,9 +232,11 @@
     </p>
   {/if}
 
-  {#if auditState.list.length === 0}
+  {#if auditState.error}
+    <p class="empty error">Could not load the audit log: {auditState.error}</p>
+  {:else if auditState.loaded && auditState.list.length === 0}
     <p class="empty">No admin actions recorded yet.</p>
-  {:else}
+  {:else if auditState.list.length > 0}
     <table>
       <thead>
         <tr>
@@ -303,6 +305,12 @@
     color: var(--fg-dim);
     font-size: 13px;
     padding: 10px 0;
+  }
+
+  /* #1089: a failed fetch reads as a distinct, coloured state -- never
+     the same quiet "nothing here" ink an empty-but-successful log gets. */
+  .empty.error {
+    color: var(--reject);
   }
 
   /* Flags.svelte's `.ftable` and Watchlist.svelte's `.watch-table`

@@ -73,10 +73,23 @@
   // Any polling call that fails with a 401 (an expired or reset-
   // invalidated session -- see internal/api's sessionUser) bounces to
   // the login view instead of failing silently forever.
-  function handleApiError(err: unknown) {
+  //
+  // #1089: everything else used to be swallowed silently, so a backend
+  // outage or 500 left stale numbers on screen with no indication. Every
+  // non-initial poll now passes a `source` naming what it was refreshing
+  // ("stats", "flags" or "watchlist"), which becomes appState.refreshError
+  // -- cleared back to null by the next successful refresh of any kind
+  // (see pollStats/pollFlags/pollWatchlist below). loadInitial()'s own
+  // failure is left alone here: it already has its own on-screen signal
+  // (appState.fetchFailed), so it calls handleApiError with no source.
+  function handleApiError(err: unknown, source?: string) {
     if (err instanceof ApiError && err.status === 401) {
       authState.handleUnauthorized()
+      return
     }
+    if (!source) return
+    const message = err instanceof Error ? err.message : String(err)
+    appState.refreshError = `${source}: ${message}`
   }
 
   const STATS_REFRESH_MS = 5000
@@ -133,7 +146,39 @@
 
     appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
-    flagsState.refresh().catch(handleApiError)
+
+    // #1089: each poll clears appState.refreshError on success (whichever
+    // kind refreshed -- the banner only ever claims "the last background
+    // refresh failed", not which one) and tags its own failure with what
+    // it was fetching so handleApiError's message says what went stale.
+    function pollStats() {
+      return appState
+        .refreshDevicesAndStats()
+        .then(() => {
+          appState.refreshError = null
+        })
+        .catch((err) => handleApiError(err, 'stats'))
+    }
+
+    function pollFlags() {
+      return flagsState
+        .refresh()
+        .then(() => {
+          appState.refreshError = null
+        })
+        .catch((err) => handleApiError(err, 'flags'))
+    }
+
+    function pollWatchlist() {
+      return watchlistState
+        .refresh()
+        .then(() => {
+          appState.refreshError = null
+        })
+        .catch((err) => handleApiError(err, 'watchlist'))
+    }
+
+    pollFlags()
     // #546's broken ring needs a live coverage answer even when Watchlist
     // itself is never opened -- the rail is chrome, not a page, so it
     // cannot wait on that page's own onMount. Gated to canEdit because the
@@ -143,15 +188,15 @@
     // canEdit and below (#653; internal/api/authz_matrix_test.go). The
     // immediate call here is what makes the ring correct on first paint;
     // WATCHLIST_COVERAGE_REFRESH_MS above is what keeps it correct after.
-    if (authState.canEdit) watchlistState.refresh().catch(handleApiError)
+    if (authState.canEdit) pollWatchlist()
 
     function refreshStats() {
-      appState.refreshDevicesAndStats().catch(handleApiError)
-      flagsState.refresh().catch(handleApiError)
+      pollStats()
+      pollFlags()
     }
 
     function refreshWatchlist() {
-      watchlistState.refresh().catch(handleApiError)
+      pollWatchlist()
     }
 
     let statsInterval: ReturnType<typeof setInterval> | undefined
@@ -207,7 +252,7 @@
     const stopListeningForChanges = authState.canEdit
       ? liveSocket.onChange((change) => {
           if (change === 'router-state' || change === 'definitions') {
-            watchlistState.refresh().catch(handleApiError)
+            pollWatchlist()
           }
         })
       : undefined
