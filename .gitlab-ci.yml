@@ -405,6 +405,32 @@ lint:changed-paths-guard:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - python3 scripts/ci-changed-paths-guard.py --git
 
+# #1068: both suites here test a script the pipeline itself leans on --
+# ci-changed-paths-guard.py decides whether a job is skipped, and
+# ci-reuse-gate.js decides whether one is reused -- yet nothing ran
+# either, so a change to that logic was only ever caught by someone
+# remembering to run it locally. The node:test files beside them already
+# run in lint:frontend; these are the shell suites, which drive the real
+# scripts end to end.
+# alpine plus apk for the same reason as the job above: every image tag
+# must be in supply-chain/pins-policy.json and this one already is. bash
+# is installed explicitly because both scripts are `#!/usr/bin/env bash`
+# and Alpine ships ash. No GIT_DEPTH: neither suite reads this
+# repository's history -- the reuse gate builds its own scratch repo, and
+# the guard's two --git cases are the ones that pass without consulting
+# git at all.
+lint:script-tests:
+  stage: lint
+  tags: [light]
+  image: alpine:3.24
+  needs: []
+  <<: *dev_or_mr_code
+  script:
+    - apk add --no-cache bash git python3 py3-yaml nodejs >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - bash scripts/ci-changed-paths-guard.test.sh
+    - bash scripts/ci-reuse-gate.test.sh
+
 lint:go:
   stage: lint
   tags: [light]
