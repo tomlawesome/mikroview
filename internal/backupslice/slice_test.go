@@ -446,3 +446,31 @@ func TestSliceReturnsASinkErrorAsIsAndDropsTheTransfer(t *testing.T) {
 		t.Fatalf("InFlight = %d after a sink error, want 0 (transfer dropped)", r.InFlight())
 	}
 }
+
+// TestBeginRefusesBeyondTheMemoryBudget covers the bound the device
+// count alone does not give: a handful of devices each declaring a
+// 16MiB file would reserve more than any memory-limited container has,
+// so the budget is counted in declared bytes rather than in routers.
+func TestBeginRefusesBeyondTheMemoryBudget(t *testing.T) {
+	r := New(&fakeSink{})
+	now := time.Now()
+	big := Begin{Kind: backupvault.KindRsc, TotalBytes: backupvault.MaxFileBytes, TotalSlices: backupvault.MaxFileBytes / maxSliceBytes}
+
+	// Three at the per-file cap: 48MiB of the 64MiB budget.
+	for i := 0; i < 3; i++ {
+		if _, err := r.Begin(fmt.Sprintf("rb%d", i), big, now); err != nil {
+			t.Fatalf("Begin while the budget has room = %v, want nil", err)
+		}
+	}
+
+	// A real backup is well under half a megabyte, so one still fits
+	// alongside them -- the budget refuses sizes, not routers.
+	if _, err := r.Begin("small", Begin{Kind: backupvault.KindRsc, TotalBytes: 1024, TotalSlices: 1}, now); err != nil {
+		t.Fatalf("Begin for a small file = %v, want nil", err)
+	}
+
+	// A fourth at the per-file cap would take the total past the budget.
+	if _, err := r.Begin("one-too-many", big, now); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Begin past the byte budget = %v, want ErrBusy", err)
+	}
+}

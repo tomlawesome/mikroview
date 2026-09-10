@@ -160,6 +160,7 @@ func (s *Server) readOnlyRoutes() http.Handler {
 func (s *Server) ingestRoutes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/ingest/routeros", s.handleIngestRouterOS)
+	mux.HandleFunc("POST /api/ingest/router-backup", s.handleIngestRouterBackup)
 	return mux
 }
 

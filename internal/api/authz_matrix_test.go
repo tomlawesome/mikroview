@@ -581,6 +581,14 @@ var bearerMuxRoutes = map[string][]string{
 	},
 	"ingest": {
 		"POST /api/ingest/routeros",
+		// #955's HTTPS route for a router backup. Widening the ingest
+		// token's blast radius is the deliberate decision this list
+		// exists to force, and what it buys is bounded: the token names
+		// one device, a transfer belongs to the device that began it, and
+		// the only thing a holder can do is push a file into that
+		// device's own vault slot -- the same thing #394's SFTP
+		// credential already does for the same router.
+		"POST /api/ingest/router-backup",
 	},
 }
 

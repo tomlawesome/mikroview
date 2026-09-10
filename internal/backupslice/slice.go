@@ -43,6 +43,18 @@ const maxSliceBytes = 32768
 // arbitrary number of routers all mid-upload.
 const maxInFlightDevices = 32
 
+// maxInFlightBytes bounds what every in-flight transfer may reserve
+// between them, counted from the sizes they declared rather than from
+// what has arrived so far.
+//
+// The device count above is not a memory bound on its own: 32 devices
+// each declaring MaxFileBytes is half a gigabyte of buffers, which OOMs
+// any memory-limited container -- the same failure internal/auth bounds
+// its Argon2id calls against. A real backup measured ~460KB (#394), so
+// 64MiB is well over a hundred routers pushing at once and only refuses
+// the shapes nobody legitimate produces.
+const maxInFlightBytes = 64 << 20
+
 // idleExpiry is how long a transfer may sit with no accepted slice
 // before Sweep drops it (rule 7, #955).
 const idleExpiry = 15 * time.Minute
@@ -127,6 +139,19 @@ type Receiver struct {
 	byDevice map[string]string
 }
 
+// reservedBytesLocked is what every in-flight transfer except except's
+// has declared. Caller holds r.mu.
+func (r *Receiver) reservedBytesLocked(except string) int64 {
+	var total int64
+	for _, t := range r.transfers {
+		if t.device == except {
+			continue
+		}
+		total += t.totalBytes
+	}
+	return total
+}
+
 // New returns a Receiver that hands finished files to sink.
 func New(sink Sink) *Receiver {
 	return &Receiver{
@@ -173,6 +198,12 @@ func (r *Receiver) Begin(device string, b Begin, now time.Time) (string, error) 
 
 	if _, already := r.byDevice[device]; !already && len(r.byDevice) >= maxInFlightDevices {
 		log.Warn(fmt.Sprintf("refused a transfer from %s: %d devices already in flight", device, maxInFlightDevices))
+		return "", ErrBusy
+	}
+	// The device's own previous transfer is about to be discarded, so it
+	// does not count against the budget it is being replaced within.
+	if r.reservedBytesLocked(device)+b.TotalBytes > maxInFlightBytes {
+		log.Warn(fmt.Sprintf("refused a transfer from %s: %d bytes already reserved by transfers in flight", device, r.reservedBytesLocked(device)))
 		return "", ErrBusy
 	}
 
