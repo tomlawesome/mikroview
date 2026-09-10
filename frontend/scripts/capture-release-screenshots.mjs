@@ -15,20 +15,26 @@
 // captures whichever view it actually names rather than relying on
 // where sign-in happens to land.
 //
-// Produces four shots for the README and the GitHub Pages site, against
+// Produces three shots for the README and the GitHub Pages site, against
 // a seeded demo (AGENTS.md's "Seed it: a demo on bare syslog is not a
-// demo" -- run scripts/seed-demo.py push/entities/accounts and let
-// `feed` run a while first, or the fall's bands and the topography stay
-// flat/boundary-derived):
+// demo" -- run scripts/seed-demo.py push/entities/accounts and capture
+// while `feed` is still running, or the header rate reads 0.0/s and the
+// stream rows all carry one stale timestamp instead of a live spread):
 //
-//  - docs/screenshots/fall-dark.png / fall-light.png: the landing view.
+//  - docs/screenshots/fall-dark.png: the landing view.
 //  - docs/screenshots/topography-dark.png: the Topography rail view.
 //  - docs/screenshots/stream-dark.png: the Stream rail view.
+//
+// 1600x900: at 1440 wide the fall's band headers overlap each other.
+//
+// No light-mode shot -- colorway.svelte.ts: the light/system themes
+// were removed wholesale in #708, so a "light" capture would just be a
+// second copy of the same dark UI.
 //
 // Usage:
 //   eval "$(scripts/live-env.sh up)"   # MV_DEMO_DEVICES=1 MV_DEMO_BUILD=1
 //   scripts/seed-demo.py push / entities / accounts, then feed &
-//   cd frontend && node scripts/capture-release-screenshots.mjs
+//   cd frontend && node scripts/capture-release-screenshots.mjs   # while feed is still running
 //   scripts/live-env.sh down   (from the repo root)
 
 import { chromium } from 'playwright'
@@ -46,10 +52,10 @@ if (!URL_BASE || !USER || !PASS) {
 
 const outDir = path.join(REPO, 'docs', 'screenshots')
 
-async function signedInPage(browser, scheme) {
+async function signedInPage(browser) {
   const context = await browser.newContext({
-    viewport: { width: 1440, height: 860 },
-    colorScheme: scheme,
+    viewport: { width: 1600, height: 900 },
+    colorScheme: 'dark',
     ignoreHTTPSErrors: true,
   })
   const page = await context.newPage()
@@ -64,17 +70,17 @@ async function signedInPage(browser, scheme) {
 
 const browser = await chromium.launch()
 
-// The fall -- landing view, both colour schemes.
-for (const scheme of ['dark', 'light']) {
-  const { context, page } = await signedInPage(browser, scheme)
-  await page.screenshot({ path: path.join(outDir, `fall-${scheme}.png`) })
-  console.log(`captured fall-${scheme}.png`)
+// The fall -- landing view.
+{
+  const { context, page } = await signedInPage(browser)
+  await page.screenshot({ path: path.join(outDir, 'fall-dark.png') })
+  console.log('captured fall-dark.png')
   await context.close()
 }
 
-// Topography, dark.
+// Topography.
 {
-  const { context, page } = await signedInPage(browser, 'dark')
+  const { context, page } = await signedInPage(browser)
   await page.click('.roll-rail button.rail-name:text-is("Topography")')
   await page.waitForTimeout(2000)
   await page.screenshot({ path: path.join(outDir, 'topography-dark.png') })
@@ -82,9 +88,9 @@ for (const scheme of ['dark', 'light']) {
   await context.close()
 }
 
-// Stream, dark.
+// Stream.
 {
-  const { context, page } = await signedInPage(browser, 'dark')
+  const { context, page } = await signedInPage(browser)
   await page.click('.roll-rail button.rail-name:text-is("Stream")')
   await page.waitForTimeout(2000)
   await page.screenshot({ path: path.join(outDir, 'stream-dark.png') })
