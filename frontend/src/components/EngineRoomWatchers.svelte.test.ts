@@ -900,6 +900,58 @@ describe('the custom detector drawer', () => {
     )
   })
 
+  it('commits a typed-but-uncommitted value on Save rather than dropping it (#1075)', async () => {
+    // The operator types a second, valid condition but clicks Save
+    // straight away -- no Enter, no list pick -- so it never reaches
+    // draftConditions through commit(). Save must not silently omit it.
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    const bar = screen.getByLabelText('add a condition')
+    await fireEvent.focus(bar)
+    await fireEvent.input(bar, { target: { value: 'action' } })
+    await settle()
+    await fireEvent.keyDown(bar, { key: 'Enter' })
+    await settle()
+    await fireEvent.input(bar, { target: { value: 'drop' } })
+    await settle()
+    // No Enter here -- the token is still only typed.
+    await fireEvent.click(screen.getByRole('button', { name: /save/ }))
+    await settle()
+    expect(api.updateDefinition).toHaveBeenCalledWith(
+      'ssh_hammering',
+      expect.objectContaining({
+        detection: expect.objectContaining({
+          conditions: expect.arrayContaining([
+            { field: 'destinationPort', operator: 'equals', values: ['22'] },
+            { field: 'action', operator: 'equals', values: ['drop'] },
+          ]),
+        }),
+      }),
+    )
+  })
+
+  it('blocks Save on a pending value that still fails to parse, rather than dropping it (#1075)', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    const bar = screen.getByLabelText('add a condition')
+    await fireEvent.focus(bar)
+    await fireEvent.input(bar, { target: { value: 'action' } })
+    await settle()
+    await fireEvent.keyDown(bar, { key: 'Enter' })
+    await settle()
+    // A slash routes to the inCIDR shape, which action's verbs do not
+    // offer -- conditionFrom refuses it, the same "unparseable" path an
+    // incomplete range already used to block Save before this fix.
+    await fireEvent.input(bar, { target: { value: 'a/b' } })
+    await settle()
+    expect(screen.getByText('finish the action line')).toBeTruthy()
+    const save = screen.getByRole('button', { name: /save/ }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    await fireEvent.click(save)
+    await settle()
+    expect(api.updateDefinition).not.toHaveBeenCalled()
+  })
+
   it('offers only the placeholders this key mode can resolve', async () => {
     // The set is the engine's own, closed and validated server-side, so
     // one offered here that it refuses is a sentence rejected on save
