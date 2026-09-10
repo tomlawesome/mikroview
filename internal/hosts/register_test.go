@@ -555,3 +555,37 @@ func TestObserveInATightLoopProducesFarFewerWritesThanCalls(t *testing.T) {
 		t.Errorf("Events = %d, want %d -- debouncing the write must never drop an in-memory update", h.Events, n)
 	}
 }
+
+// TestFlushWaitsForInFlightEncode: Flush must not return while
+// runPersistLoop is between clearing r.dirty and handing the bytes to
+// the writer, or the caller's "it is on disk" is a write that lands
+// later (the device package's MAC registry hit exactly this on dev
+// pipeline 899: a temp dir removed under a late write).
+func TestFlushWaitsForInFlightEncode(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	persistEncodeHookForTest = func() {
+		once.Do(func() { close(started) })
+		<-release
+	}
+	defer func() { persistEncodeHookForTest = nil }()
+
+	b := newCountingSaveBackend()
+	r, err := OpenWithBackend(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(context.Background())
+
+	r.Observe("bridge-lan", "10.0.10.5", "", time.Now())
+	<-started // the loop has taken the dirty flag and is mid-encode
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+	}()
+	flushForTest(t, r)
+	if got := b.saveCount(); got != 1 {
+		t.Fatalf("Flush returned before the in-flight encode was written: saves = %d, want 1", got)
+	}
+}

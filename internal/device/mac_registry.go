@@ -82,6 +82,12 @@ type MACRegistry struct {
 	wake        chan struct{}
 	stopPersist chan struct{}
 	persistDone chan struct{}
+
+	// encodeMu is held for the whole of persistIfDirty -- from taking
+	// the dirty flag to handing the bytes to wb -- so a Flush arriving
+	// while runPersistLoop is mid-encode waits for that encode instead of
+	// finding nothing dirty anywhere and returning before the write.
+	encodeMu sync.Mutex
 }
 
 // macRegistryPersistMinInterval rate-limits the write-behind writer's
@@ -97,6 +103,11 @@ type MACRegistry struct {
 // back-off logic that used to live here, and its #377 stall-under-load
 // defect, both moved to that type (issue #400).
 var macRegistryPersistMinInterval = time.Second
+
+// macRegistryEncodeHookForTest, when set, runs inside persistIfDirty
+// after r.dirty is cleared and before the encoded bytes reach wb --
+// the window a Flush must not slip through. Tests only; nil otherwise.
+var macRegistryEncodeHookForTest func()
 
 // macRegistryPersistClock is a test seam for the write-behind back-off's
 // own clock -- persist.WriteBehind's run loop reads it and waits on it --
@@ -409,6 +420,8 @@ func (r *MACRegistry) runPersistLoop() {
 // way, so a transient encoding problem degrades to "won't survive a
 // restart right now" rather than breaking live detection.
 func (r *MACRegistry) persistIfDirty() {
+	r.encodeMu.Lock()
+	defer r.encodeMu.Unlock()
 	r.mu.Lock()
 	if !r.dirty || r.wb == nil {
 		r.mu.Unlock()
@@ -418,6 +431,9 @@ func (r *MACRegistry) persistIfDirty() {
 	list := r.listLocked()
 	r.mu.Unlock()
 
+	if macRegistryEncodeHookForTest != nil {
+		macRegistryEncodeHookForTest()
+	}
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding MAC registry for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
