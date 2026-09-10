@@ -918,6 +918,7 @@ gate:scripts:
     - make live-check-scripts 2>&1 | tee gate-scripts.log
     - deploy/quiet-host/quiet-host-apply.test.sh
     - scripts/quiet-host.test.sh
+    - scripts/wait-quiet-host.test.sh
     - scripts/assert-ui-built.test.sh
   artifacts:
     when: always
@@ -951,7 +952,9 @@ gate:scripts:
 #     the install steps.
 #   - drain: scripts/wait-quiet-host.sh still waits for whatever was
 #     already running to finish, since holding stops new work, not work
-#     in flight.
+#     in flight. It watches CPU busy from /proc/stat, not only the load
+#     average: the light-lane shards start a second before this job and
+#     the one-minute average had not moved when it first looked (#1099).
 #   - measure: probe-perf.mjs against the fresh instance, as before.
 #   - release: the after_script below always runs -- pass, fail, timeout
 #     or cancel -- so the hold never outlives the job on purpose. If the
