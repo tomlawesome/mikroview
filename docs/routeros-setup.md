@@ -1,7 +1,7 @@
 # RouterOS setup
 
 > **There is a guided version of this page inside MikroView.** Sign in as
-> an admin and open the menu → **Connect a router**. It generates every
+> an admin and open **Admin ▸ Run setup…**. It generates every
 > command below with your own address, port and a token it mints for you
 > — nothing to fill in — and tells you as each step lands, because each
 > one ends with your router arriving at MikroView.
@@ -12,8 +12,9 @@
 
 MikroView never talks to RouterOS's API and needs no credentials on the
 router. Instead, RouterOS pushes to MikroView: firewall log lines over
-syslog (steps 1–3, required), and optionally a copy of its own
-config for host names and rule lookups (step 4). Either way, the
+syslog (steps 1–3, required), optionally a copy of its own config for
+host names and rule lookups (step 4), and optionally a nightly config
+backup MikroView keeps encrypted (step 7, issue #394). Either way, the
 router always initiates; MikroView never connects to it. This is a
 one-time configuration on each router you want to monitor.
 
@@ -69,13 +70,21 @@ CA is presumably already trusted some other way.
 Then point the router's logging at MikroView:
 
 ```
-/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls check-certificate=yes
+/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes
 ```
 
 This does **not** authenticate the router to MikroView — RouterOS's
 logging action has no client-certificate option, so anything able to
 reach the port can still connect and inject log lines. The trust here
 is one-directional: the router verifying MikroView, not the reverse.
+
+`remote-log-format=syslog` gives every message its own standard header
+(timestamp and topic), so MikroView can tell where one firewall log line
+ends and the next begins even when several arrive at once — a burst of
+matching traffic, one connection attempt logged from two different rules
+— rather than only when RouterOS happens to send them far enough apart.
+Without it, a fast-enough burst can be read as a single garbled line and
+the traffic in it silently mismatched (#614).
 
 ## 2. Forward firewall log events to it
 
@@ -242,8 +251,9 @@ follow from that:
   and an untagged one can only be narrowed down — see "NAT rules" above
   for why tagging is worth the two minutes.
 - **Suggested watchlist entries.** Named devices and ports an existing
-  rule already blocks show up as review-and-accept suggestions (Menu →
-  Suggestions) instead of the watchlist starting as a blank page — see
+  rule already blocks show up as review-and-accept suggestions
+  (**Expect ▸ Watchlist ▸ Suggestions**) instead of the watchlist
+  starting as a blank page — see
   4c-ii below and
   [configuration.md](configuration.md#suggested-watchlist-entries-issue-243).
   This is the one item on this list that needs more than the filter-rule
@@ -272,8 +282,9 @@ before step 1, go do that CA import now, then come back here.
 
 ### 4b. Mint an ingest token
 
-In MikroView, sign in as an admin, open the menu → **API tokens**, set
-the kind dropdown to **Ingest**, and pick the device the token speaks
+In MikroView, sign in as an admin, open **Admin ▸ The engine room**,
+find "Which machines may speak" among the side doors, set the kind
+dropdown to **Ingest**, and pick the device the token speaks
 for — this is what scopes it. The list offers every router MikroView
 knows about: those declared under `devices:` in `config.yaml`, and any
 that has simply sent syslog (marked *not in config.yaml*, identified by
@@ -298,7 +309,18 @@ not the address you declared as `sourceIp`. If pushes return `200` in
 the audit log but the "i" popups still say no data has been pushed,
 check whether the device id the token is scoped to actually matches the
 `deviceId` on the events you're looking at — a mismatched source
-address is the most likely cause.
+address is the most likely cause. The setup wizard's step 2 names it
+when it sees it (a declared router that has sent nothing while an
+undeclared address streams) and prints the fix. Keeping the declared
+address is the recommended one, because the token and the tables it
+pushes follow that identity, so nothing has to be reissued:
+
+```
+/system logging action set mikroview src-address=<the address you declared as sourceIp>
+```
+
+The alternative is changing `sourceIp` to the arriving address and
+restarting — then reissue any token minted for the old identity.
 
 Or via the API:
 
@@ -331,7 +353,7 @@ real RouterOS 7.23.3 router before writing this down:
 ```
 :local recs [:toarray ""]
 :foreach i,v in=[/ip/firewall/filter print as-value] do={
-  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface")}
+  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "packets"=($v->"packets"); "bytes"=($v->"bytes")}
   :set recs ($recs, {$rec})
 }
 :local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$recs}]
@@ -362,6 +384,13 @@ means the history exists when it's wanted. `connection-state` is a *set*
 — `established,related` is two values — and MikroView takes it either as
 the array RouterOS sends or as a comma-joined string, so
 `($v->"connection-state")` can go straight in with no conversion.
+
+`packets` and `bytes` were added for issue #435: RouterOS keeps a
+per-rule hit counter whether or not the rule logs, so the "Tune logging"
+helper can show a rule's real cost — "fired 41,000 times in the last
+day" — beside its tick-box before you switch logging on for it. Same
+shape as every other RouterOS integer here: `:serialize to=json` emits
+them as a float, which MikroView's decoder already expects.
 
 `routerosVersion` on the payload (not on a record — it describes the
 router, not a rule) is the router telling MikroView which RouterOS it is
@@ -409,7 +438,7 @@ Line by line:
 ### 4c-ii. DHCP leases and ARP -- what issue #243's suggestions feature needs
 
 MikroView's watchlist can *suggest* entries from named devices it
-already knows about (Menu → Suggestions -- see
+already knows about (**Expect ▸ Watchlist ▸ Suggestions** -- see
 [configuration.md](configuration.md#suggested-watchlist-entries-issue-243)),
 but only once it's actually been sent DHCP leases and ARP entries.
 Without this section pushed, that feature has nothing to suggest from --
@@ -465,13 +494,15 @@ to cover more than filter rules and DHCP/ARP:
 | `kind` | Source command | Fields |
 |---|---|---|
 | `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, `dynamic` |
-| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface` |
+| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `disabled`, `packets`, `bytes` |
 | `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `logPrefix` ← `log-prefix`, `toAddresses` ← `to-addresses`, `toPorts` ← `to-ports`, `dstPort` ← `dst-port`, `protocol`, `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `srcAddress` ← `src-address`, `dstAddress` ← `dst-address`, `disabled`, `dynamic` |
 | `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
 | `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname` ← `host-name`, `mac` ← `mac-address`, `address` |
 | `arp` | `/ip/arp print as-value` | `address`, `mac` ← `mac-address` |
+| `ip-address` | `/ip/address print as-value` | `address`, `network`, `interface`, `comment` |
 | `wireguard-interface` | `/interface/wireguard print as-value` | `name`, `comment`, `publicKey` ← `public-key`, `listenPort` ← `listen-port` |
-| `wireguard-peer` | `/interface/wireguard/peers print as-value` | `publicKey` ← `public-key`, `allowedAddress` ← `allowed-address` (**send the array as-is**), `endpointAddress` ← `endpoint-address`, `comment` |
+| `wireguard-peer` | `/interface/wireguard/peers print as-value` | `publicKey` ← `public-key`, `allowedAddress` ← `allowed-address` (**send the array as-is**), `endpointAddress` ← `endpoint-address`, `comment`, `lastHandshake` ← `last-handshake` (absent if never handshaken), `currentEndpointAddress` ← `current-endpoint-address`, `rx`, `tx`, `disabled`, `interface` ← `interface` (which WireGuard interface this peer belongs to) |
+| `ppp-active` | `/ppp/active print as-value` | `name`, `service`, `address`, `callerId` ← `caller-id`, `uptime` -- covers L2TP, PPTP, SSTP and OVPN alike; a session's presence in the push is itself the up/down signal |
 
 Every block's payload may carry `"routerosVersion"=[/system/resource get
 version]` alongside `kind`/`page`/`pages`, exactly as 4c's does. It is
@@ -608,7 +639,7 @@ way step 4a's own certificate check does, including the same
 untrusted-CA text if step 4a was skipped or the `<mikroview-host>`
 placeholder wasn't replaced consistently between the two.
 
-If you also set up 4c-ii, check **Menu → Suggestions**: a named device
+If you also set up 4c-ii, check **Expect ▸ Watchlist ▸ Suggestions**: a named device
 or an already-blocked port should show up under the Undecided filter
 within a few minutes of the push landing (suggestions regenerate in the
 background periodically, not instantly on push -- see
@@ -690,3 +721,84 @@ logs: give each logging rule a distinct `log-prefix`, and MikroView's
 per-rule counts will tell you — in numbers, within a day — whether any
 single rule is dominating your volume and deserves the same scrutiny
 the established-accept rules got above.
+
+## 7. Back up the router's configuration (optional)
+
+Issue #394. A router can push a copy of its own configuration to
+MikroView every night — the binary `.backup` that restores it whole on
+a replacement, and the plain-text `.rsc` export kept for reading.
+**MikroView is the place you turn to when the router is gone**, so this
+is worth setting up before that day, not after. See
+[configuration.md](configuration.md#router-backups-over-sftp-optional-off-by-default)
+for the server side (`backup.enabled`, the retention and quota rules,
+the missed-push receipt in Settings) and [SECURITY.md](../SECURITY.md)
+for the trust caveat below.
+
+### 7a. Turn the drop box on
+
+Set `backup.enabled: true` in `config.yaml` and restart — this opens a
+second listening port (`backup.listen`, default `:47022`), only once
+you have decided to use it. Nothing here needs the wizard, but the
+wizard's step 6 is what actually prints the script below with your own
+values filled in, which is the easier path for most people.
+
+### 7b. The token
+
+The same ingest token that pushes syslog/state (step 4b) authenticates
+this too — `internal/backupsftp` checks the SFTP login against the same
+token store, not a second credential. If you have already minted one
+for this router, reuse it; nothing here needs a token of its own kind.
+
+### 7c. The script
+
+```
+/system script add name=mv-backup policy=read,write,test,sensitive source="
+  /system backup save name=mv-backup dont-encrypt=yes
+  /export file=mv-backup
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.rsc dst-path=<device>.rsc
+  /file remove mv-backup.backup
+  /file remove mv-backup.rsc
+"
+/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup"
+/system script run mv-backup
+```
+
+`<device>` is both the SFTP username and the destination file stem —
+it must be the router's own device id, the same identity the token is
+scoped to. The binary save is asked for `dont-encrypt=yes` on purpose:
+that copy is the true restore copy and MikroView never holds a second
+password to open an encrypted one; the export is taken without
+`show-sensitive`, so it carries no secrets and is safe to read or scan
+later. The last line runs the script once immediately, so the first
+pair does not wait for 03:00.
+
+`policy=read,write,test,sensitive` is wider than the push script's
+`read,test` (4e): `write` and `sensitive` are what `/system backup
+save` and `/file remove` need, `test` is what `/tool fetch` needs, and
+`sensitive` on the script itself is also what stops a `read`-only
+RouterOS user printing the token back out of the saved source — the
+same caveat step 4b's own token warning describes.
+
+### Only on a network you trust
+
+RouterOS's SFTP client never verifies MikroView's host key (measured on
+RouterOS 7.23.3) — an attacker on the path between the router and
+MikroView could pose as MikroView and receive the pair and the token in
+plain sight. Run this over a LAN or a VPN you control, never across the
+open internet. See [SECURITY.md](../SECURITY.md) and issue #955, which
+tracks an HTTPS-based path that does verify.
+
+### 7d. Verify
+
+Settings' `router backups` group (admin-only) lists what has arrived
+per router, with `download .backup` / `.rsc` and a note of when each
+was last seen. A router that has pushed at least twice and then misses
+its usual interval shows an amber receipt there — mikroview learns the
+interval from the pushes themselves, never from this scheduler line,
+since an operator could change that on the router without mikroview
+knowing.
+
+Restoring is your own act on the replacement router
+(`/system backup load`) — MikroView never connects to a router to apply
+one; it only ever reads the header to confirm what arrived.

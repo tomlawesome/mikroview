@@ -184,6 +184,55 @@ func TestSeenEmptyMACIsNoOp(t *testing.T) {
 	}
 }
 
+// TestNoteIPPairsAnExistingMACWithAnIP covers issue #675's join: the
+// Entities page's named-things table finds a host's MAC (and its
+// first/last-seen history) by matching the entity's own IP key against
+// MACEntry.LastIP, so NoteIP has to actually land on the entry Seen
+// already created for that MAC.
+func TestNoteIPPairsAnExistingMACWithAnIP(t *testing.T) {
+	r, _ := OpenMACRegistry("")
+	r.Seen("aa:bb:cc:dd:ee:ff", time.Now())
+	r.NoteIP("aa:bb:cc:dd:ee:ff", "10.0.10.2")
+
+	list := r.List()
+	if len(list) != 1 || list[0].LastIP != "10.0.10.2" {
+		t.Fatalf("unexpected registry state: %+v", list)
+	}
+
+	// A later pairing with a different IP (a DHCP lease changing) simply
+	// overwrites -- LastIP is "where to find it now," not history.
+	r.NoteIP("aa:bb:cc:dd:ee:ff", "10.0.10.9")
+	list = r.List()
+	if list[0].LastIP != "10.0.10.9" {
+		t.Errorf("LastIP = %q, want the newer pairing", list[0].LastIP)
+	}
+}
+
+// TestNoteIPWithoutASeenMACIsNoOp covers the case NoteIP's own doc
+// comment states: it never creates an entry by itself, since an IP
+// alone (no prior Seen) has no MAC-registry identity to attach to.
+func TestNoteIPWithoutASeenMACIsNoOp(t *testing.T) {
+	r, _ := OpenMACRegistry("")
+	r.NoteIP("aa:bb:cc:dd:ee:ff", "10.0.10.2")
+	if len(r.List()) != 0 {
+		t.Errorf("expected NoteIP against an unseen MAC to create nothing, got %+v", r.List())
+	}
+}
+
+// TestNoteIPEmptyArgsAreNoOps covers the same defensive-empty-string
+// contract Seen's own TestSeenEmptyMACIsNoOp establishes.
+func TestNoteIPEmptyArgsAreNoOps(t *testing.T) {
+	r, _ := OpenMACRegistry("")
+	r.Seen("aa:bb:cc:dd:ee:ff", time.Now())
+
+	r.NoteIP("", "10.0.10.2")
+	r.NoteIP("aa:bb:cc:dd:ee:ff", "")
+
+	if r.List()[0].LastIP != "" {
+		t.Errorf("expected LastIP to stay empty against an empty mac/ip call, got %q", r.List()[0].LastIP)
+	}
+}
+
 func TestSeenTracksFirstAndLastSeen(t *testing.T) {
 	r, _ := OpenMACRegistry("")
 	t0 := time.Now()
@@ -260,6 +309,40 @@ func TestMACRegistryPersistLockedRateLimitsWrites(t *testing.T) {
 	}
 	if payload := b.lastPayload(); !strings.Contains(string(payload), "33:33:33:33:33:33") {
 		t.Errorf("expected the flushed write to include all 3 entries, got:\n%s", payload)
+	}
+}
+
+// TestSeenInATightLoopProducesFarFewerWritesThanCalls is #1087's proof
+// for this store: before that fix, Seen unconditionally ran
+// json.MarshalIndent over the whole registry on every call -- including
+// the ordinary case where a MAC already known simply had its LastSeen
+// bumped, which TestSeenFiresOnceThenNeverAgain shows is most calls in
+// practice. A sustained stream of Seen calls against the same MAC must
+// not turn into anywhere near one backend write per call.
+func TestSeenInATightLoopProducesFarFewerWritesThanCalls(t *testing.T) {
+	b := newCountingSaveBackend()
+	r, err := OpenMACRegistryWithBackend(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		r.Close(ctx)
+	}()
+
+	const n = 2000
+	now := time.Now()
+	for i := 0; i < n; i++ {
+		r.Seen("aa:bb:cc:dd:ee:ff", now)
+	}
+	flushForTest(t, r)
+
+	if got := b.saveCount(); got >= n/10 {
+		t.Errorf("%d Seen calls in a tight loop against the same MAC produced %d backend writes, want far fewer than %d", n, got, n)
+	}
+	if len(r.List()) != 1 {
+		t.Fatalf("expected the one MAC to still be the only entry, got %d", len(r.List()))
 	}
 }
 
@@ -386,5 +469,39 @@ func TestMACRegistryListReturnsIndependentSnapshot(t *testing.T) {
 	fresh := r.List()
 	if fresh[0].MAC == "tampered" {
 		t.Error("mutating a List() result affected subsequent List() output")
+	}
+}
+
+// TestMACRegistryFlushWaitsForInFlightEncode: Flush must not return while
+// runPersistLoop is between clearing r.dirty and handing the bytes to
+// the writer, or the caller's "it is on disk" is a write that lands
+// later -- on dev pipeline 899 that was TestMACRegistryPersistenceRoundTrip's
+// temp dir being removed under it ("directory not empty").
+func TestMACRegistryFlushWaitsForInFlightEncode(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	macRegistryEncodeHookForTest = func() {
+		once.Do(func() { close(started) })
+		<-release
+	}
+	defer func() { macRegistryEncodeHookForTest = nil }()
+
+	b := newCountingSaveBackend()
+	r, err := OpenMACRegistryWithBackend(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(context.Background())
+
+	r.Seen("aa:bb:cc:dd:ee:ff", time.Now())
+	<-started // the loop has taken the dirty flag and is mid-encode
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+	}()
+	flushForTest(t, r)
+	if got := b.saveCount(); got != 1 {
+		t.Fatalf("Flush returned before the in-flight encode was written: saves = %d, want 1", got)
 	}
 }

@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/flags"
 )
 
@@ -48,76 +49,47 @@ func TestHandleFlagsList(t *testing.T) {
 	if len(body.TimeSeries) != 60 {
 		t.Fatalf("expected 60 time series buckets, got %d", len(body.TimeSeries))
 	}
+	// The window ends at whichever minute the *read* happens in
+	// (flags.Store.timeSeriesLocked takes its own time.Now), while the
+	// episode above was counted into the minute it was *raised* in. Those
+	// are the same minute unless the clock ticks over between the two, and
+	// then the episode is in the second-to-last bucket instead. Accepting
+	// either keeps the assertion honest without loosening it: exactly one
+	// episode, in the current minute or the one before it, nowhere else.
+	// #1021 -- this asserted only the last bucket and went red roughly once
+	// in N runs, failing test:go and skipping the rest of the pipeline.
 	last := body.TimeSeries[len(body.TimeSeries)-1]
-	if last.ByType[flags.TypePortScan] != 1 {
-		t.Errorf("expected the just-raised port_scan episode in the latest bucket, got %+v", last.ByType)
+	prev := body.TimeSeries[len(body.TimeSeries)-2]
+	if last.ByType[flags.TypePortScan]+prev.ByType[flags.TypePortScan] != 1 {
+		t.Errorf("expected the just-raised port_scan episode in the current minute's bucket or the one before it, got %+v then %+v", prev.ByType, last.ByType)
 	}
 }
 
-func TestHandleFlagsClear(t *testing.T) {
-	s, _ := newTestServer(t)
-	s.Flags.Add(flags.TypeActivitySpike, "198.51.100.4", "500 events in 60s", time.Now())
-	id := s.Flags.List()[0].ID
+// -- #640: POST /api/flags/{id}/verdict -----------------------------
 
-	ts := httptest.NewServer(asAdmin(s.mux()))
-	defer ts.Close()
-
-	resp, err := http.Post(ts.URL+"/api/flags/"+id+"/clear", "application/json", nil)
+// postVerdict is postFlagsAction's shape for the one flags.go handler
+// that actually reads a body -- a bare {"verdict": "..."} object, no
+// CSRF header needed since these tests go through s.mux() (asAdmin),
+// not the real session-authenticated Routes().
+func postVerdict(t *testing.T, url, verdict string) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"verdict": verdict})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-
-	var body struct {
-		Cleared bool `json:"cleared"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if !body.Cleared {
-		t.Error("expected cleared=true for a known, active flag")
-	}
-
-	list := s.Flags.List()
-	if len(list) != 1 || !list[0].Cleared {
-		t.Errorf("expected the flag to be marked cleared in the store, got %+v", list)
-	}
-}
-
-func TestHandleFlagsClearUnknownID(t *testing.T) {
-	s, _ := newTestServer(t)
-	ts := httptest.NewServer(asAdmin(s.mux()))
-	defer ts.Close()
-
-	resp, err := http.Post(ts.URL+"/api/flags/does-not-exist/clear", "application/json", nil)
+	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (unknown ID is a no-op, not an error)", resp.StatusCode)
-	}
-
-	var body struct {
-		Cleared bool `json:"cleared"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Cleared {
-		t.Error("expected cleared=false for an unknown ID")
-	}
+	return resp
 }
 
-// TestHandleFlagsClearPermanent proves the "Clear and never flag this
-// again" endpoint both clears the current episode and durably suppresses
-// future raises for the same (Type, Target) -- going through the real
-// flags.Store, not a mock, so this also exercises add()'s exclusion
-// check end-to-end via the HTTP layer.
-func TestHandleFlagsClearPermanent(t *testing.T) {
+// TestHandleFlagsVerdictExpectedClearsFlag and
+// TestHandleFlagsVerdictCheckedClearsFlag cover #640's contract that
+// every verdict but investigate clears the flag, and that the response
+// is the updated flag itself (200 with verdict/verdictBy/verdictAt set)
+// rather than a {"cleared": bool} envelope.
+func TestHandleFlagsVerdictExpectedClearsFlag(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", time.Now())
 	id := s.Flags.List()[0].ID
@@ -125,271 +97,263 @@ func TestHandleFlagsClearPermanent(t *testing.T) {
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
-	resp, err := http.Post(ts.URL+"/api/flags/"+id+"/clear-permanent", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "expected")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 
-	var body struct {
-		Cleared  bool `json:"cleared"`
-		Excluded bool `json:"excluded"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	var f flags.Flag
+	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
 		t.Fatal(err)
 	}
-	if !body.Cleared || !body.Excluded {
-		t.Errorf("expected cleared=true, excluded=true for a known active flag, got %+v", body)
+	if f.Verdict != flags.VerdictExpected {
+		t.Errorf("response Verdict = %q, want %q", f.Verdict, flags.VerdictExpected)
+	}
+	if f.VerdictBy != "admin" {
+		t.Errorf("response VerdictBy = %q, want admin", f.VerdictBy)
+	}
+	if f.VerdictAt.IsZero() {
+		t.Error("response VerdictAt should be set")
+	}
+	if !f.Cleared {
+		t.Error("expected verdict should clear the flag")
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || !list[0].Cleared || list[0].Verdict != flags.VerdictExpected {
+		t.Errorf("expected the flag to be cleared and verdict-marked in the store, got %+v", list)
+	}
+}
+
+func TestHandleFlagsVerdictCheckedClearsFlag(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypeActivitySpike, "198.51.100.4", "500 events in 60s", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "checked")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || !list[0].Cleared || list[0].Verdict != flags.VerdictChecked {
+		t.Errorf("expected the flag to be cleared and verdict-marked checked, got %+v", list)
+	}
+	// Checked learns nothing that suppresses -- that is what separates it
+	// from expected, and it has to hold at the HTTP layer too.
+	if len(s.Flags.ListExclusions()) != 0 {
+		t.Errorf("a checked verdict must record no expectation, got %+v", s.Flags.ListExclusions())
+	}
+}
+
+// TestHandleFlagsVerdictResolvedClearsWithoutSuppressing is resolved's
+// own half of the same contract: it clears, and deliberately does not
+// suppress, so the same circumstances recurring bring the flag back.
+func TestHandleFlagsVerdictResolvedClearsWithoutSuppressing(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypeCriticalPort, "198.51.100.5", "6 attempts on port 22", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "resolved")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || !list[0].Cleared || list[0].Verdict != flags.VerdictResolved {
+		t.Errorf("expected the flag to be cleared and verdict-marked resolved, got %+v", list)
+	}
+	if len(s.Flags.ListExclusions()) != 0 {
+		t.Errorf("a resolved verdict must record no expectation, got %+v", s.Flags.ListExclusions())
+	}
+
+	// It's back: the same circumstances recur, and the returning flag
+	// carries the memory the card reads.
+	s.Flags.Add(flags.TypeCriticalPort, "198.51.100.5", "6 attempts on port 22", time.Now().Add(time.Hour))
+	back := s.Flags.List()[0]
+	if back.Cleared {
+		t.Error("a resolved verdict must not suppress the recurrence")
+	}
+	if back.PriorVerdict != flags.VerdictResolved {
+		t.Errorf("the returning flag should remember it was resolved, got %q", back.PriorVerdict)
+	}
+}
+
+// TestHandleFlagsVerdictInvestigateLeavesFlagOpen, through the HTTP
+// layer: investigate is the one verdict that leaves the flag open, so
+// the row can switch to expected/resolved while someone works on it.
+func TestHandleFlagsVerdictInvestigateLeavesFlagOpen(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypeCriticalPort, "203.0.113.11", "d", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "investigate")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || list[0].Cleared {
+		t.Errorf("an investigate verdict must not clear the flag, got %+v", list)
+	}
+	if list[0].Verdict != flags.VerdictInvestigate {
+		t.Errorf("expected the flag's Verdict to be recorded as investigate, got %+v", list)
+	}
+}
+
+// TestHandleFlagsVerdictInvalidVerdictReturns400 covers the contract's
+// 400 case: a verdict outside the four recognised labels. "noise" is
+// used deliberately -- it was a real verdict before #640 removed it, so
+// this also pins that the removal is wholesale rather than an alias.
+func TestHandleFlagsVerdictInvalidVerdictReturns400(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.12", "d", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "bogus")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an unrecognised verdict", resp.StatusCode)
+	}
+
+	list := s.Flags.List()
+	if list[0].Verdict != "" {
+		t.Errorf("an invalid verdict must not mutate the flag, got %+v", list)
+	}
+}
+
+// TestHandleFlagsVerdictUnknownIDReturns404 covers the contract's 404
+// case: an unknown flag id is an error here, not the silent no-op the
+// removed plain clear treated it as.
+func TestHandleFlagsVerdictUnknownIDReturns404(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/does-not-exist/verdict", "investigate")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for an unknown flag id", resp.StatusCode)
+	}
+}
+
+// -- DELETE /api/flags/verdict/{id} (undo) --------------------------
+
+// deleteVerdict issues the undo call -- no body, same shape as
+// postFlagsAction but with the DELETE verb the endpoint actually uses.
+func deleteVerdict(t *testing.T, url string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// TestHandleFlagsVerdictUndoReopensFlag covers the ordinary undo case
+// through the HTTP layer: judging an open flag clears it, and undoing
+// re-opens it with the verdict fields reset.
+func TestHandleFlagsVerdictUndoReopensFlag(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.20", "d", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "checked")
+	resp.Body.Close()
+	if !s.Flags.List()[0].Cleared {
+		t.Fatal("setup: expected the checked verdict to clear the flag")
+	}
+
+	resp = deleteVerdict(t, ts.URL+"/api/flags/verdict/"+id)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var f flags.Flag
+	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Cleared {
+		t.Error("undo should re-open a flag the verdict itself cleared")
+	}
+	if f.Verdict != "" {
+		t.Errorf("response Verdict = %q, want empty after undo", f.Verdict)
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || list[0].Cleared || list[0].Verdict != "" {
+		t.Errorf("expected the flag to be re-opened and un-judged in the store, got %+v", list)
+	}
+}
+
+// TestHandleFlagsVerdictUndoLeavesAlreadyClearedFlagCleared is #638's
+// central subtlety, exercised through the HTTP layer: judging a flag
+// that was already cleared before the verdict must not let undo re-open
+// it.
+func TestHandleFlagsVerdictUndoLeavesAlreadyClearedFlagCleared(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.21", "d", time.Now())
+	id := s.Flags.List()[0].ID
+	if _, ok := s.Flags.SetVerdict(id, flags.VerdictChecked, "someone", time.Now()); !ok {
+		t.Fatal("setup: expected the first, clearing verdict to succeed")
+	}
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "expected")
+	resp.Body.Close()
+
+	resp = deleteVerdict(t, ts.URL+"/api/flags/verdict/"+id)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 
 	list := s.Flags.List()
 	if len(list) != 1 || !list[0].Cleared {
-		t.Errorf("expected the flag to be marked cleared in the store, got %+v", list)
+		t.Errorf("undo must not re-open a flag that was already cleared before it was judged, got %+v", list)
 	}
-
-	// The actual point: it must never raise again.
-	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "re-fire attempt", time.Now())
-	list = s.Flags.List()
-	if len(list) != 1 || list[0].Detail != "20 distinct ports in 60s" {
-		t.Errorf("expected the excluded target to stay untouched by a further Add, got %+v", list)
+	if list[0].Verdict != "" {
+		t.Errorf("expected the verdict to still be cleared out, got %+v", list)
 	}
 }
 
-func TestHandleFlagsClearPermanentUnknownID(t *testing.T) {
+// TestHandleFlagsVerdictUndoUnknownIDReturns404 covers the contract's
+// 404 case, same as the POST side.
+func TestHandleFlagsVerdictUndoUnknownIDReturns404(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
-	resp, err := http.Post(ts.URL+"/api/flags/does-not-exist/clear-permanent", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := deleteVerdict(t, ts.URL+"/api/flags/verdict/does-not-exist")
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (unknown ID is a no-op, not an error)", resp.StatusCode)
-	}
-
-	var body struct {
-		Cleared  bool `json:"cleared"`
-		Excluded bool `json:"excluded"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Cleared || body.Excluded {
-		t.Error("expected cleared=false, excluded=false for an unknown ID")
-	}
-}
-
-// TestHandleExclusionsListAndRemove exercises the admin-only "undo a
-// mistake" surface: list what's currently excluded, remove one, and
-// confirm removal actually re-enables raising again -- while auth is
-// inactive (newTestServer's default, zero users), callerIsAdminOrOpen
-// treats every caller as admin-equivalent, same as detector settings.
-func TestHandleExclusionsListAndRemove(t *testing.T) {
-	s, _ := newTestServer(t)
-	s.Flags.Exclude(flags.TypePortScan, "203.0.113.9")
-	s.Flags.Exclude(flags.TypeCriticalPort, "198.51.100.4")
-
-	ts := httptest.NewServer(asAdmin(s.mux()))
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/api/flags/exclusions")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-
-	var listBody struct {
-		Exclusions []flags.Exclusion `json:"exclusions"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&listBody); err != nil {
-		t.Fatal(err)
-	}
-	if len(listBody.Exclusions) != 2 {
-		t.Fatalf("expected 2 exclusions, got %+v", listBody.Exclusions)
-	}
-
-	var target string
-	for _, e := range listBody.Exclusions {
-		if e.Type == flags.TypePortScan && e.Target == "203.0.113.9" {
-			target = e.ID
-		}
-	}
-	if target == "" {
-		t.Fatalf("expected to find the port_scan exclusion in the list, got %+v", listBody.Exclusions)
-	}
-
-	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/exclusions/"+target, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	delResp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer delResp.Body.Close()
-	if delResp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", delResp.StatusCode)
-	}
-	var delBody struct {
-		Removed bool `json:"removed"`
-	}
-	if err := json.NewDecoder(delResp.Body).Decode(&delBody); err != nil {
-		t.Fatal(err)
-	}
-	if !delBody.Removed {
-		t.Error("expected removed=true for a known exclusion")
-	}
-
-	if s.Flags.Excluded(flags.TypePortScan, "203.0.113.9") {
-		t.Error("expected the exclusion to actually be gone from the store")
-	}
-
-	// Removing it again is a no-op, not an error.
-	delResp2, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer delResp2.Body.Close()
-	var delBody2 struct {
-		Removed bool `json:"removed"`
-	}
-	if err := json.NewDecoder(delResp2.Body).Decode(&delBody2); err != nil {
-		t.Fatal(err)
-	}
-	if delBody2.Removed {
-		t.Error("expected removed=false for an already-removed exclusion")
-	}
-}
-
-// TestHandleExclusionsListRequiresAdminOnceAccountExists mirrors
-// TestHandleDetectorSettingsRequiresAdminOnceAccountExists -- the
-// exclusions list/remove endpoints are the "undo a mistake" surface for
-// a permanent exclusion, and the issue explicitly calls that out as
-// admin-only.
-func TestHandleExclusionsListRequiresAdminOnceAccountExists(t *testing.T) {
-	s := newAuthTestServer(t)
-	s.Flags.Exclude(flags.TypePortScan, "203.0.113.9")
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	if _, err := s.Auth.CreateUser("viewer", "password456", auth.RoleUser, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-
-	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	loginResp := postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"})
-	loginResp.Body.Close()
-	if loginResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected viewer login to succeed, got %d", loginResp.StatusCode)
-	}
-
-	resp, err := viewerClient.Get(ts.URL + "/api/flags/exclusions")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected 403 for a non-admin session on the exclusions list, got %d", resp.StatusCode)
-	}
-
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	adminLogin := postJSON(t, adminClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"})
-	adminLogin.Body.Close()
-	if adminLogin.StatusCode != http.StatusOK {
-		t.Fatalf("expected admin login to succeed, got %d", adminLogin.StatusCode)
-	}
-
-	adminResp, err := adminClient.Get(ts.URL + "/api/flags/exclusions")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer adminResp.Body.Close()
-	if adminResp.StatusCode != http.StatusOK {
-		t.Errorf("expected 200 for an admin session on the exclusions list, got %d", adminResp.StatusCode)
-	}
-}
-
-// TestHandleFlagsClearPermanentRequiresAdminOnceAccountExists is the
-// regression test for the permission gap this endpoint used to have: it
-// was open to any authenticated caller, so a plain user-role account --
-// or one compromised credential -- could permanently suppress detection
-// for a (Type, Target) of their choosing, unlogged. A plain Clear stays
-// open (it's reversible; the flag simply raises again), which is the
-// distinction the gate is drawn on.
-func TestHandleFlagsClearPermanentRequiresAdminOnceAccountExists(t *testing.T) {
-	s := newAuthTestServer(t)
-	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
-	flagID := s.Flags.List()[0].ID
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	if _, err := s.Auth.CreateUser("viewer", "password456", auth.RoleUser, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-
-	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
-
-	resp := postJSON(t, viewerClient, ts.URL+"/api/flags/"+flagID+"/clear-permanent", nil)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected 403 for a non-admin clear-permanent, got %d", resp.StatusCode)
-	}
-	if got := len(s.Flags.ListExclusions()); got != 0 {
-		t.Errorf("a rejected non-admin request still created %d exclusion(s); it must have no effect", got)
-	}
-
-	// The same caller may still clear the flag the ordinary, reversible
-	// way -- the gate is on permanence, not on touching flags at all.
-	plainClear := postJSON(t, viewerClient, ts.URL+"/api/flags/"+flagID+"/clear", nil)
-	plainClear.Body.Close()
-	if plainClear.StatusCode != http.StatusOK {
-		t.Errorf("expected a non-admin plain clear to still succeed, got %d", plainClear.StatusCode)
-	}
-}
-
-// TestHandleFlagsClearPermanentIsAuditLogged pins the other half of the
-// fix: now that this action is genuinely admin-gated, it belongs in the
-// admin audit trail -- previously it was deliberately excluded on the
-// grounds that it wasn't admin-only.
-func TestHandleFlagsClearPermanentIsAuditLogged(t *testing.T) {
-	s := newAuthTestServer(t)
-	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
-	flagID := s.Flags.List()[0].ID
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	postJSON(t, adminClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-
-	resp := postJSON(t, adminClient, ts.URL+"/api/flags/"+flagID+"/clear-permanent", nil)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected an admin clear-permanent to succeed, got %d", resp.StatusCode)
-	}
-
-	var found bool
-	for _, e := range s.Audit.Query(audit.Query{}).Entries {
-		if e.Action == "flag.clear_permanent" && e.Target == flagID {
-			found = true
-			if e.Actor != "admin" {
-				t.Errorf("audit entry actor = %q, want admin", e.Actor)
-			}
-		}
-	}
-	if !found {
-		t.Errorf("expected a flag.clear_permanent audit entry for %s, got: %+v", flagID, s.Audit.Query(audit.Query{}).Entries)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for an unknown flag id", resp.StatusCode)
 	}
 }
 
@@ -402,7 +366,7 @@ func TestHandleFlagsClearAll(t *testing.T) {
 	s.Flags.Add(flags.TypePortScan, "203.0.113.1", "d1", time.Now())
 	s.Flags.Add(flags.TypeActivitySpike, "203.0.113.2", "d2", time.Now())
 	preClearedID := s.Flags.List()[0].ID
-	s.Flags.Clear(preClearedID, time.Now())
+	s.Flags.SetVerdict(preClearedID, flags.VerdictChecked, "someone", time.Now())
 
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
@@ -433,11 +397,13 @@ func TestHandleFlagsClearAll(t *testing.T) {
 	}
 }
 
-// TestHandleFlagsClearAllAvailableToAnyUser mirrors
-// TestHandleFlagsClearIsAvailableToAnyUser -- same access level as the
-// per-flag clear, since clear-all is just that action applied in bulk
-// and carries the same reversibility.
-func TestHandleFlagsClearAllAvailableToAnyUser(t *testing.T) {
+// TestHandleFlagsClearAllAvailableToUserNotViewer pins #653's tightening
+// of clear-all (and, by the same reasoning, the other three flag writes
+// below it -- see TestHandleFlagsWritesRefuseViewer): a plain user may
+// still call it, same as before viewer existed to exclude, but a viewer
+// -- who must not change anything that affects the instance -- may not,
+// even though the action is reversible.
+func TestHandleFlagsClearAllAvailableToUserNotViewer(t *testing.T) {
 	s := newAuthTestServer(t)
 	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
 	ts := httptest.NewServer(s.Routes())
@@ -445,27 +411,117 @@ func TestHandleFlagsClearAllAvailableToAnyUser(t *testing.T) {
 
 	adminClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
 
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/clear-all", nil)
-	req.Header.Set(csrfHeaderName, csrfHeaderValue)
-	resp, err := viewerClient.Do(req)
+	viewerReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/clear-all", nil)
+	viewerReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	viewerResp, err := viewerClient.Do(viewerReq)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected a non-admin clear-all to succeed, got %d", resp.StatusCode)
+	defer viewerResp.Body.Close()
+	if viewerResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a viewer clear-all to be forbidden (#653), got %d", viewerResp.StatusCode)
+	}
+	if got := s.Flags.List(); len(got) != 1 || got[0].Cleared {
+		t.Errorf("a refused clear-all must have no effect, got %+v", got)
+	}
+
+	userReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/clear-all", nil)
+	userReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	userResp, err := userClient.Do(userReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer userResp.Body.Close()
+	if userResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user clear-all to succeed, got %d", userResp.StatusCode)
 	}
 }
 
-// TestHandleFlagsClearAllCreatesNoExclusions is the HTTP-level half of
-// the invariant #198 states explicitly: clear-all must never create a
-// permanent exclusion.
-func TestHandleFlagsClearAllCreatesNoExclusions(t *testing.T) {
+// TestHandleFlagsWritesRefuseViewer covers the two remaining flag writes
+// #653 tightened from "any signed-in session" to user tier: the verdict
+// and its undo (the plain clear it also covered is gone, #640). A viewer
+// is refused both; a user succeeds at both.
+// TestHandleFlagsClearAllAvailableToUserNotViewer above covers clear-all
+// with the same shape.
+func TestHandleFlagsWritesRefuseViewer(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
+	flagID := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
+
+	// Viewer: refused both.
+	viewerVerdictResp := postJSON(t, viewerClient, ts.URL+"/api/flags/"+flagID+"/verdict", verdictRequest{Verdict: flags.VerdictChecked})
+	viewerVerdictResp.Body.Close()
+	if viewerVerdictResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a viewer verdict to be forbidden, got %d", viewerVerdictResp.StatusCode)
+	}
+
+	viewerUndoReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/verdict/"+flagID, nil)
+	viewerUndoReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	viewerUndoResp, err := viewerClient.Do(viewerUndoReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewerUndoResp.Body.Close()
+	if viewerUndoResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a viewer verdict-undo to be forbidden, got %d", viewerUndoResp.StatusCode)
+	}
+
+	if got := s.Flags.List(); len(got) != 1 || got[0].Cleared || got[0].Verdict != "" {
+		t.Errorf("every refused viewer write must have no effect, got %+v", got)
+	}
+
+	// User: succeeds at both -- a verdict, then its own undo, each
+	// checked against real store state, not just the status code.
+	userVerdictResp := postJSON(t, userClient, ts.URL+"/api/flags/"+flagID+"/verdict", verdictRequest{Verdict: flags.VerdictChecked})
+	userVerdictResp.Body.Close()
+	if userVerdictResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user verdict to succeed, got %d", userVerdictResp.StatusCode)
+	}
+	if got := s.Flags.List()[0]; got.Verdict != flags.VerdictChecked {
+		t.Errorf("expected the verdict to be recorded, got %+v", got)
+	}
+
+	userUndoReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/verdict/"+flagID, nil)
+	userUndoReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	userUndoResp, err := userClient.Do(userUndoReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userUndoResp.Body.Close()
+	if userUndoResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user verdict-undo to succeed, got %d", userUndoResp.StatusCode)
+	}
+	if got := s.Flags.List()[0]; got.Cleared || got.Verdict != "" {
+		t.Errorf("expected the undo to re-open the flag it judged, got %+v", got)
+	}
+}
+
+// TestHandleFlagsClearAllCreatesNoExpectations is the HTTP-level half of
+// the invariant #198 states explicitly, in #640's vocabulary: a bulk
+// clear must never record an expectation -- only a judged flag does.
+func TestHandleFlagsClearAllCreatesNoExpectations(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
 
@@ -479,7 +535,7 @@ func TestHandleFlagsClearAllCreatesNoExclusions(t *testing.T) {
 	resp.Body.Close()
 
 	if n := len(s.Flags.ListExclusions()); n != 0 {
-		t.Errorf("clear-all created %d exclusions, want 0", n)
+		t.Errorf("clear-all recorded %d expectations, want 0", n)
 	}
 }
 
@@ -515,8 +571,7 @@ func TestHandleFlagsClearAllIsAuditLoggedOnce(t *testing.T) {
 }
 
 // TestHandleFlagsClearAllOnEmptyStoreSkipsAudit: clearing nothing is not
-// a meaningful action, matching handleExclusionRemove's own "only log a
-// meaningful action" reasoning elsewhere in this file.
+// a meaningful action, so it is not logged as one.
 func TestHandleFlagsClearAllOnEmptyStoreSkipsAudit(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
@@ -532,5 +587,472 @@ func TestHandleFlagsClearAllOnEmptyStoreSkipsAudit(t *testing.T) {
 		if e.Action == "flag.clear_all" {
 			t.Errorf("unexpected flag.clear_all audit entry on an empty store: %+v", e)
 		}
+	}
+}
+
+// TestHandleFlagsVerdictExpectedRecordsASizedExpectation is #640 part
+// B's central API contract, end to end through the real flags.Store: the
+// expected verdict is what records the expectation now that the admin-
+// only clear-permanent endpoint is gone, it takes its size from the
+// flag the operator looked at, and a later firing within tolerance is
+// absorbed rather than raised.
+func TestHandleFlagsVerdictExpectedRecordsASizedExpectation(t *testing.T) {
+	s, _ := newTestServer(t)
+	size := 30
+	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.40", "30 distinct ports in 60s", nil, flags.Evidence{}, "", false, &size, time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "expected")
+	resp.Body.Close()
+
+	ex, ok := s.Flags.Expectation(flags.TypePortScan, "203.0.113.40")
+	if !ok {
+		t.Fatal("expected the expected verdict to record an expectation")
+	}
+	if ex.Size == nil || *ex.Size != 30 {
+		t.Fatalf("expected the recorded size to be the flag's own 30, got %v", ex.Size)
+	}
+
+	// Within 1.5x: absorbed, so nothing returns to the inbox.
+	within := 40
+	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.40", "40 ports", nil, flags.Evidence{}, "", false, &within, time.Now())
+	if got := s.Flags.List()[0]; !got.Cleared {
+		t.Errorf("a firing within tolerance must stay absorbed, got %+v", got)
+	}
+
+	// Above it: back, carrying both numbers for the card.
+	above := 120
+	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.40", "120 ports", nil, flags.Evidence{}, "", false, &above, time.Now())
+	back := s.Flags.List()[0]
+	if back.Cleared {
+		t.Fatalf("a firing above tolerance must raise the flag again, got %+v", back)
+	}
+	if back.ExpectedSize == nil || *back.ExpectedSize != 30 || back.Size == nil || *back.Size != 120 {
+		t.Errorf("expected the returning flag to carry expected 30 / saw 120, got %v / %v", back.ExpectedSize, back.Size)
+	}
+}
+
+// TestHandleFlagsVerdictUndoWithdrawsTheExpectation: undo is offered on
+// an expected verdict, so it has to reverse the suppression as well as
+// the clear -- an undo that reopened the flag but left the expectation
+// standing would silently absorb every later firing of it.
+func TestHandleFlagsVerdictUndoWithdrawsTheExpectation(t *testing.T) {
+	s, _ := newTestServer(t)
+	size := 30
+	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.41", "30 distinct ports in 60s", nil, flags.Evidence{}, "", false, &size, time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "expected").Body.Close()
+	deleteVerdict(t, ts.URL+"/api/flags/verdict/"+id).Body.Close()
+
+	if _, ok := s.Flags.Expectation(flags.TypePortScan, "203.0.113.41"); ok {
+		t.Error("undoing an expected verdict must withdraw the expectation it recorded")
+	}
+	if got := s.Flags.List()[0]; got.Cleared || got.Verdict != "" {
+		t.Errorf("expected the undo to re-open the flag, got %+v", got)
+	}
+}
+
+// TestHandleFlagsVerdictIsAuditLogged: an expected verdict suppresses
+// future detection for a (detector, target) pair at user tier, where the
+// exclude-forever it replaces was admin-only. "Who decided this stopped
+// being flagged" therefore has to stay answerable from the audit log.
+func TestHandleFlagsVerdictIsAuditLogged(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.42", "20 distinct ports in 60s", time.Now())
+	flagID := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, client, ts.URL+"/api/flags/"+flagID+"/verdict", verdictRequest{Verdict: flags.VerdictExpected})
+	resp.Body.Close()
+
+	var found bool
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "flag.verdict" && e.Target == flagID {
+			found = true
+			if e.Actor != "tom" {
+				t.Errorf("audit entry actor = %q, want tom", e.Actor)
+			}
+			if e.Detail != "expected" {
+				t.Errorf("audit entry detail = %q, want the verdict itself", e.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a flag.verdict audit entry for %s, got: %+v", flagID, s.Audit.Query(audit.Query{}).Entries)
+	}
+
+	undoReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/verdict/"+flagID, nil)
+	undoReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	undoResp, err := client.Do(undoReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	undoResp.Body.Close()
+
+	var undoFound bool
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "flag.verdict_undo" && e.Target == flagID {
+			undoFound = true
+		}
+	}
+	if !undoFound {
+		t.Errorf("expected a flag.verdict_undo audit entry for %s, got: %+v", flagID, s.Audit.Query(audit.Query{}).Entries)
+	}
+}
+
+// --- #640's expectations ledger --------------------------------------
+//
+// The ledger is the record that an expectation is earning its place, so
+// what these pin is that the endpoint carries the three facts a row is
+// made of -- recorded size, absorbed count, since when -- and not just
+// the (Type, Target) pair alone.
+
+func TestHandleExpectationsListServesTheLedger(t *testing.T) {
+	s, _ := newTestServer(t)
+	size := 20
+	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", nil, flags.Evidence{}, "", false, &size, time.Now())
+	flagID := s.Flags.List()[0].ID
+	if _, ok := s.Flags.SetVerdict(flagID, flags.VerdictExpected, "someone", time.Now()); !ok {
+		t.Fatal("expected the flag to be known to SetVerdict")
+	}
+	// A firing inside the tolerance, so the row has an absorbed count to
+	// report -- a zero could not tell "never absorbed anything" from
+	// "the field is not served at all".
+	within := 25
+	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.9", "25 distinct ports in 60s", nil, flags.Evidence{}, "", false, &within, time.Now())
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/flags/expectations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Expectations []flags.Exclusion `json:"expectations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Expectations) != 1 {
+		t.Fatalf("expected 1 expectation, got %+v", body.Expectations)
+	}
+	e := body.Expectations[0]
+	if e.ID != flagID || e.Type != flags.TypePortScan || e.Target != "203.0.113.9" {
+		t.Errorf("unexpected expectation identity: %+v", e)
+	}
+	if e.Size == nil || *e.Size != size {
+		t.Errorf("size = %v, want %d -- the ledger row's \"up to N\"", e.Size, size)
+	}
+	if e.Absorbed != 1 {
+		t.Errorf("absorbed = %d, want 1", e.Absorbed)
+	}
+	if e.Since.IsZero() {
+		t.Error("since is zero -- the row cannot say when the expectation was made")
+	}
+}
+
+// A detector that declares no size records a size-less expectation, and
+// the ledger has to be able to tell that from a size of zero: the row
+// reads "any size" for one and "up to 0" for the other, which are
+// opposite meanings.
+func TestHandleExpectationsListKeepsASizelessExpectationSizeless(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypeGlobalSpike, "all", "spike", time.Now())
+	if _, ok := s.Flags.SetVerdict(s.Flags.List()[0].ID, flags.VerdictExpected, "someone", time.Now()); !ok {
+		t.Fatal("expected the flag to be known to SetVerdict")
+	}
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/flags/expectations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Expectations []flags.Exclusion `json:"expectations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Expectations) != 1 || body.Expectations[0].Size != nil {
+		t.Errorf("expected one size-less expectation, got %+v", body.Expectations)
+	}
+}
+
+func TestHandleExpectationForgetRemovesItAndRearmsDetection(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Exclude(flags.TypePortScan, "203.0.113.9")
+	id := s.Flags.ListExclusions()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	if s.Flags.Excluded(flags.TypePortScan, "203.0.113.9") {
+		t.Error("expected the expectation to be gone from the store, not just from the response")
+	}
+	// Forgetting is only worth anything if the pair can flag again.
+	if !s.Flags.Add(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", time.Now()) {
+		t.Error("expected a forgotten pair to raise a new episode")
+	}
+}
+
+// 404, not handleExclusionRemove's no-op 200: the operator clicked a row
+// they could see, so a silent success would leave the ledger looking
+// pruned when nothing was.
+func TestHandleExpectationForgetUnknownIDReturns404(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/nope", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for an unknown expectation", resp.StatusCode)
+	}
+}
+
+func TestHandleExpectationForgetIsAuditLogged(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Exclude(flags.TypePortScan, "203.0.113.9")
+	id := s.Flags.ListExclusions()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	resp, err := adminClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	var found bool
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "flag.expectation_forget" && e.Target == id {
+			found = true
+			if e.Actor != "admin" {
+				t.Errorf("audit entry actor = %q, want admin", e.Actor)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a flag.expectation_forget audit entry for %s, got: %+v", id, s.Audit.Query(audit.Query{}).Entries)
+	}
+}
+
+// The tier split the ledger is built on: a viewer may read it -- an
+// expectation explains why a flag it can see is absent -- but only a
+// user may forget one.
+func TestHandleExpectationsViewerReadsButCannotForget(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Exclude(flags.TypePortScan, "203.0.113.9")
+	id := s.Flags.ListExclusions()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
+
+	listResp, err := viewerClient.Get(ts.URL + "/api/flags/expectations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a viewer to read the ledger, got %d", listResp.StatusCode)
+	}
+
+	viewerDelete, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
+	viewerDelete.Header.Set(csrfHeaderName, csrfHeaderValue)
+	viewerResp, err := viewerClient.Do(viewerDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer viewerResp.Body.Close()
+	if viewerResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a viewer forget to be forbidden, got %d", viewerResp.StatusCode)
+	}
+	if !s.Flags.Excluded(flags.TypePortScan, "203.0.113.9") {
+		t.Error("a refused forget must have no effect")
+	}
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+
+	userDelete, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
+	userDelete.Header.Set(csrfHeaderName, csrfHeaderValue)
+	userResp, err := userClient.Do(userDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer userResp.Body.Close()
+	if userResp.StatusCode != http.StatusNoContent {
+		t.Errorf("expected a user forget to succeed with 204, got %d", userResp.StatusCode)
+	}
+}
+
+// -- #768: GET /api/flags's baselinesWarming ------------------------
+//
+// The learning shelf's warming signal, moved off the definitions
+// surface onto the flags response by the owner's decision on #768
+// (2026-09-02). Viewer-readable, like the rest of this route (#653),
+// so a viewer's shelf can say why mikroview is silent instead of
+// degrading to absence.
+
+// flagsListRaw fetches GET /api/flags as a generic map, so a test can
+// assert on a field's *presence* as well as its value -- learning_test.
+// go's decodeToMap pattern, for the same reason it exists there: a
+// missing bool decodes to false in a struct, which is exactly the
+// distinction "cannot say" turns on.
+func flagsListRaw(t *testing.T, ts *httptest.Server) map[string]any {
+	t.Helper()
+	resp, err := http.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/flags: status = %d, want 200", resp.StatusCode)
+	}
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		t.Fatal(err)
+	}
+	return decodeToMap(t, buf.Bytes())
+}
+
+// TestHandleFlagsListBaselineWarmingTrue: one enabled detection holding
+// an observed key below its floor (keys > ready) is the whole warming
+// condition, and a *viewer* must be able to read it -- the point of
+// putting it here rather than leaving it on a surface the shelf has to
+// infer it from.
+func TestHandleFlagsListBaselineWarmingTrue(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Learning = fakeLearningSource{states: map[string]engine.LearningState{
+		"rule_spike": {
+			Floor: engine.BaselineFloor{MinDuration: 14 * 24 * time.Hour, MinSamples: 14},
+			Keys:  3,
+			Ready: 1,
+		},
+	}}
+
+	ts := httptest.NewServer(asViewer(s.mux()))
+	defer ts.Close()
+
+	m := flagsListRaw(t, ts)
+	if m["baselinesWarming"] != true {
+		t.Fatalf("baselinesWarming = %v, want true (a viewer must be able to read it)", m["baselinesWarming"])
+	}
+}
+
+// TestHandleFlagsListBaselineWarmingFalse: every observed key ready is
+// not warming, and neither is "no traffic seen yet" (keys 0) -- #642's
+// ruling, amendment 2, which this field carries over unchanged. False
+// is a real answer here, so the key is present.
+func TestHandleFlagsListBaselineWarmingFalse(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Learning = fakeLearningSource{states: map[string]engine.LearningState{
+		"rule_spike":     {Keys: 4, Ready: 4},
+		"activity_spike": {Keys: 0, Ready: 0},
+	}}
+
+	ts := httptest.NewServer(asViewer(s.mux()))
+	defer ts.Close()
+
+	m := flagsListRaw(t, ts)
+	if m["baselinesWarming"] != false {
+		t.Fatalf("baselinesWarming = %v, want false", m["baselinesWarming"])
+	}
+}
+
+// TestHandleFlagsListBaselineWarmingIgnoresDisabled: a disabled
+// detection cannot raise a provisional flag, so however warm its
+// baseline it is not what the shelf is talking about.
+func TestHandleFlagsListBaselineWarmingIgnoresDisabled(t *testing.T) {
+	s, _ := newTestServer(t)
+	sd, ok := s.Definitions.Get("rule_spike")
+	if !ok {
+		t.Fatal("rule_spike missing from the seeded catalogue")
+	}
+	if err := s.Definitions.SetEnabledAndScope("rule_spike", false, sd.Definition.Scope); err != nil {
+		t.Fatal(err)
+	}
+	s.Learning = fakeLearningSource{states: map[string]engine.LearningState{
+		"rule_spike": {Keys: 3, Ready: 1},
+	}}
+
+	ts := httptest.NewServer(asViewer(s.mux()))
+	defer ts.Close()
+
+	m := flagsListRaw(t, ts)
+	if m["baselinesWarming"] != false {
+		t.Fatalf("baselinesWarming = %v, want false for a disabled detection", m["baselinesWarming"])
+	}
+}
+
+// TestHandleFlagsListBaselineWarmingOmittedWithNoLiveEngine pins the
+// silence case: newTestServer wires no engine (Server.Learning nil), so
+// there is no warm-up state to report and the key is absent entirely
+// rather than false -- the shelf then makes no claim, which is the
+// "absent, not disabled" grammar (#653), not a wrong answer.
+func TestHandleFlagsListBaselineWarmingOmittedWithNoLiveEngine(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asViewer(s.mux()))
+	defer ts.Close()
+
+	m := flagsListRaw(t, ts)
+	if _, present := m["baselinesWarming"]; present {
+		t.Fatalf("expected no \"baselinesWarming\" key with no live engine wired, got %v", m["baselinesWarming"])
 	}
 }

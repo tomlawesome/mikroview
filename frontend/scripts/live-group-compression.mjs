@@ -30,23 +30,56 @@
 // combined, so the write-up can report the real range rather than one
 // number that hides which end of it any given deployment lands on.
 
-import { session, feedRaw, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedRaw, feedSyslog, check, done, unfoldStreamFilter, eventsTotal, waitForEventsTotal, waitForStreamRows } from './live-browser.mjs'
 
-const { page, consoleErrors } = await session({ waitForEvents: 50 })
+const { page, consoleErrors } = await session()
+
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(50, 'live-group-compression')
+await waitForStreamRows(page, 50)
 
 const rowCount = () => page.$$eval('.grid .row', (els) => els.length)
 
 async function setGroupMode(desired) {
   const current = await page.evaluate(() => localStorage.getItem('mikroview:group') === '1')
   if (current !== desired) {
-    await page.click('button:text-is("Group")')
-    await page.waitForTimeout(400)
+    // Round 30 retired the scene-bar toolbar's "Group" button; rounds
+    // 36-38 put it on the whisper's own hand as a lowercase `group` pill
+    // (Whisper.svelte's `.spans.hand`), alongside `following`/`pause`.
+    await page.click('.spans.hand button:text-is("group")')
+    await page.waitForSelector(`.spans.hand button:text-is("group")[aria-pressed="${desired}"]`, { timeout: 5000 })
   }
 }
 
 async function filterTo(label) {
+  // The rule field lives behind the click-to-open drawer (#697's
+  // `.fbox`), which a click anywhere outside it -- setGroupMode's own
+  // Group pill included, since that lives on the whisper's line, not in
+  // the box or its strip -- closes again. Reopen it before every fill
+  // rather than once up front.
+  await unfoldStreamFilter(page)
   await page.fill('input.rule', label)
-  await page.waitForTimeout(400)
+  // The filter narrows an already-loaded dataset (every event this
+  // scenario cares about is fetched before this ever runs), so there is
+  // no server round trip to wait on -- only the reactive re-render the
+  // fill triggers. That re-render's own cost scales with how much is
+  // loaded (a fixed frame count under-waited on a busy shared instance,
+  // #1061 follow-up), so wait for the row count to actually stop moving
+  // instead of guessing how many frames it takes.
+  await waitForRowCountStable(page)
+}
+
+async function waitForRowCountStable(page, { intervalMs = 50, timeoutMs = 5000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let last = -1
+  while (Date.now() < deadline) {
+    const n = await rowCount()
+    if (n === last) return n
+    last = n
+    await page.waitForTimeout(intervalMs)
+  }
+  return last
 }
 
 /** measure returns {normal, grouped, reduction} for whatever the current rule filter shows. */
@@ -61,6 +94,8 @@ async function measure(label) {
 }
 
 // --- Feed the three shapes ------------------------------------------------
+
+const before = await eventsTotal(page)
 
 const HAMMER_N = 200
 const hammerLines = Array.from(
@@ -83,6 +118,11 @@ feedRaw(sweepLines)
 const BACKGROUND_N = 300
 feedSyslog(BACKGROUND_N, 'compress-background')
 
+// The server has definitely counted all three feeds before the DOM is
+// asked to have rendered them -- the stronger, exact version of the old
+// "settle" sleep.
+await waitForEventsTotal(page, before + HAMMER_N + SWEEP_N + BACKGROUND_N)
+
 // The rule filter narrows what's rendered, so waiting on the combined
 // label is enough to know all three feeds have landed -- no fixed
 // MAX_RENDERED_ROWS=800 risk here since applyFilters runs before the
@@ -94,7 +134,6 @@ await page.waitForFunction(
   HAMMER_N + SWEEP_N, // background's own repeats mean its row count is < BACKGROUND_N; don't wait on the full 700
   { timeout: 20000 },
 )
-await page.waitForTimeout(500) // let the last of the background batch settle in too
 
 // --- Measure each shape and the combination -------------------------------
 
@@ -150,6 +189,7 @@ for (const [name, m] of [['hammer', hammer], ['sweep', sweep], ['background', ba
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 
 // Leave the view as most scenarios expect to find it.
+await unfoldStreamFilter(page)
 await page.fill('input.rule', '')
 await setGroupMode(false)
 

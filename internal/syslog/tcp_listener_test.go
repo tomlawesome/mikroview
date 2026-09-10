@@ -5,10 +5,12 @@ package syslog
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -298,6 +300,89 @@ func TestPerSourceConnectionCap(t *testing.T) {
 	}
 }
 
+// TestRejectedConfiguredHostsTracksAndBoundsRecentLockouts is the
+// regression test for #995's one genuinely new backend piece:
+// noteRejected knew which declared host it was turning away but only
+// ever bumped a counter. It must now remember which hosts, most recent
+// first, so the banner can name the locked-out router -- and it must
+// never grow without bound, since the accept loop calls this off an
+// unauthenticated port that an attacker fully controls the traffic on.
+func TestRejectedConfiguredHostsTracksAndBoundsRecentLockouts(t *testing.T) {
+	prevConfigured := configuredSources.Load()
+	t.Cleanup(func() { configuredSources.Store(prevConfigured) })
+	rejectedConfiguredHostsMu.Lock()
+	prevHosts := append([]rejectedConfiguredHostEntry(nil), rejectedConfiguredHosts...)
+	rejectedConfiguredHostsMu.Unlock()
+	t.Cleanup(func() {
+		rejectedConfiguredHostsMu.Lock()
+		rejectedConfiguredHosts = prevHosts
+		rejectedConfiguredHostsMu.Unlock()
+	})
+
+	hosts := make([]string, maxRejectedConfiguredHosts+3)
+	for i := range hosts {
+		hosts[i] = fmt.Sprintf("10.20.%d.1", i)
+	}
+	SetConfiguredSources(hosts)
+
+	for _, h := range hosts {
+		noteRejected(h)
+	}
+
+	got := rejectedConfiguredHostsSnapshot()
+	if len(got) != maxRejectedConfiguredHosts {
+		t.Fatalf("got %d retained hosts, want bounded to %d: %v", len(got), maxRejectedConfiguredHosts, got)
+	}
+
+	wantMostRecent := hosts[len(hosts)-1]
+	if got[0] != wantMostRecent {
+		t.Errorf("most recently rejected host = %q, want %q (list: %v)", got[0], wantMostRecent, got)
+	}
+
+	for _, h := range hosts[:3] {
+		for _, g := range got {
+			if g == h {
+				t.Errorf("host %q rejected earliest should have been evicted, still found in %v", h, got)
+			}
+		}
+	}
+
+	// Re-rejecting an already-listed host moves it to the front instead
+	// of duplicating it or growing the list.
+	repeat := got[len(got)-1]
+	noteRejected(repeat)
+	got2 := rejectedConfiguredHostsSnapshot()
+	if len(got2) != maxRejectedConfiguredHosts {
+		t.Fatalf("re-rejecting a known host changed the list length: got %d, want %d", len(got2), maxRejectedConfiguredHosts)
+	}
+	if got2[0] != repeat {
+		t.Errorf("re-rejecting %q should move it to the front, got %v", repeat, got2)
+	}
+	count := 0
+	for _, g := range got2 {
+		if g == repeat {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("%q appears %d times, want exactly once: %v", repeat, count, got2)
+	}
+
+	// An undeclared host is never a "locked-out router" -- it must not
+	// leak into the same list, which the banner reads as declared-only.
+	noteRejected("10.99.99.99")
+	got3 := rejectedConfiguredHostsSnapshot()
+	for _, g := range got3 {
+		if g == "10.99.99.99" {
+			t.Errorf("undeclared host leaked into RejectedConfiguredHosts: %v", got3)
+		}
+	}
+
+	if stats := Stats(); len(stats.RejectedConfiguredHosts) != maxRejectedConfiguredHosts {
+		t.Errorf("Stats().RejectedConfiguredHosts length = %d, want %d", len(stats.RejectedConfiguredHosts), maxRejectedConfiguredHosts)
+	}
+}
+
 // TestTCPUnterminatedMessageIsIngested is the case every other test in
 // this file misses, and the one that matters: RouterOS sends each
 // message as a bare payload with no trailing newline and no octet
@@ -559,5 +644,749 @@ func TestTCPOversizedMessageFragmentedAcrossManyReadsStaysBounded(t *testing.T) 
 	}
 	if Stats().Oversized == 0 {
 		t.Error("the discarded continuation was not counted")
+	}
+
+	// #995: the yellow "non-RouterOS sender" banner's ratified copy
+	// names the sender ("received from <ip>"), which only Stats().
+	// OversizedHost can supply. The second (normal) message's emit
+	// happens-after noteOversizedHost in program order on the
+	// connection's own goroutine, and the channel receive above
+	// synchronizes with it, so this read is race-free without a poll.
+	wantHost, _, err := net.SplitHostPort(conn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("split local addr: %v", err)
+	}
+	if got := Stats().OversizedHost; got != wantHost {
+		t.Errorf("Stats().OversizedHost = %q, want %q (the connection that sent the oversized message)", got, wantHost)
+	}
+}
+
+// --- #614: eager RFC3164-header splitting --------------------------------
+
+// rfc3164Msg builds a single verified-shape RouterOS syslog-format
+// message: "<PRI>MMM DD HH:MM:SS HOSTNAME body" -- the literal wire
+// shape confirmed against a real CHR 7.23.3 with remote-log-format=
+// syslog set (see live-routeros.sh's setup() and the #614 issue
+// comment recording the sample).
+func rfc3164Msg(ts time.Time, body string) string {
+	return "<30>" + ts.Format(bsdTimeLayout) + " CHR " + body
+}
+
+// TestTCPBurstSplitsOnRFC3164Headers is the core #614 regression test:
+// several bare RouterOS-shaped messages, each carrying its own RFC3164
+// header, glued together in a single write with no newline anywhere at
+// all -- exactly the shape a real CHR burst produces under
+// remote-log-format=syslog, and exactly what used to coalesce into one
+// stored event with fields read from whichever embedded line the
+// parser's left-to-right scan happened to read last.
+func TestTCPBurstSplitsOnRFC3164Headers(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	msgs := []string{
+		rfc3164Msg(base, "A|live-in| input: first message"),
+		rfc3164Msg(base.Add(time.Second), "A|lan-wan| forward: second message"),
+		rfc3164Msg(base.Add(2*time.Second), "A|live-in| input: third message"),
+	}
+	if _, err := conn.Write([]byte(strings.Join(msgs, ""))); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// The first two split eagerly, the instant the next header proves the
+	// one before it is complete. The third has no following header to
+	// prove it, so it only resolves via tcpQuiescence once the burst goes
+	// quiet -- both paths are exercised by one write here.
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < len(msgs) {
+		select {
+		case m := <-out:
+			got = append(got, string(m.Data))
+		case <-deadline:
+			t.Fatalf("received %d/%d messages: %q", len(got), len(msgs), got)
+		}
+	}
+	for i, want := range msgs {
+		if got[i] != want {
+			t.Errorf("message %d = %q, want %q", i, got[i], want)
+		}
+	}
+}
+
+// TestTCPHeaderSplitAcrossReadsDoesNotSplitMidHeader proves the split
+// only fires once a header is fully present in pending, not the moment
+// its first bytes arrive. A header arriving split across two reads --
+// ordinary TCP/TLS segmentation, not a burst -- must not corrupt the
+// message still accumulating in front of it, and must not be mistaken
+// for a boundary until it is actually complete.
+//
+// This is the test that flaked on the GitLab runner in #914. The 50ms
+// pause below is deliberately shorter than tcpQuiescence, but on a
+// loaded host the listener's own read could land late enough for
+// quiescence to expire inside it -- and quiescence then flushed the
+// partial header along with the message in front of it. It no longer
+// matters which way that lands: rfc3164HeaderStillArriving makes the
+// assertion hold whether quiescence fires during the pause or not. The
+// version that does not depend on timing at all is
+// TestTCPMessageEndsBeforeAPartiallyArrivedHeader, below.
+func TestTCPHeaderSplitAcrossReadsDoesNotSplitMidHeader(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	second := rfc3164Msg(base.Add(time.Second), "A|lan-wan| forward: second message")
+	whole := first + second
+
+	// The first write ends partway through second's own timestamp --
+	// enough of a header to look like one is starting, not enough to
+	// confirm it.
+	splitAt := len(first) + len("<30>Aug 29 20:52:4")
+	if _, err := conn.Write([]byte(whole[:splitAt])); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+
+	// Give the server time to read and process the partial header. If it
+	// were (wrongly) treating an incomplete match as a boundary, first
+	// would already be sitting on out.
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case m := <-out:
+		t.Fatalf("received a message before the second header was complete: %q", m.Data)
+	default:
+	}
+
+	if _, err := conn.Write([]byte(whole[splitAt:])); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < 2 {
+		select {
+		case m := <-out:
+			got = append(got, string(m.Data))
+		case <-deadline:
+			t.Fatalf("received %d/2 messages: %q", len(got), got)
+		}
+	}
+	if got[0] != first {
+		t.Errorf("first message = %q, want %q", got[0], first)
+	}
+	if got[1] != second {
+		t.Errorf("second message = %q, want %q", got[1], second)
+	}
+}
+
+// TestTCPHeaderSplitOnHeaderLikeContentIsAcceptedHeuristic documents,
+// rather than guards against, a known false positive: this eager split
+// treats any RFC3164-shaped substring as a boundary, including one that
+// merely happens to appear inside a message's own body rather than
+// starting a new one. Real firewall log lines essentially never contain
+// date-like text of their own, so this is a deliberately accepted
+// trade -- the same shape of heuristic that RFC6587-style framing
+// techniques already carry -- rather than a defect to fix here. See the
+// #614 issue comment's decided-fix note.
+func TestTCPHeaderSplitOnHeaderLikeContentIsAcceptedHeuristic(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	// first's own body coincidentally contains a bare (no-PRI) date-like
+	// substring, shaped exactly like a header this split recognises.
+	const embedded = "Jan  5 10:00:00"
+	first := rfc3164Msg(base, "A|live-in| input: reported around "+embedded+" in an unrelated note")
+	second := rfc3164Msg(base.Add(time.Second), "A|lan-wan| forward: second message")
+
+	if _, err := conn.Write([]byte(first + second)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < 3 {
+		select {
+		case m := <-out:
+			got = append(got, string(m.Data))
+		case <-deadline:
+			t.Fatalf("received %d/3 messages: %q", len(got), got)
+		}
+	}
+
+	idx := strings.Index(first, embedded)
+	wantFirstPart, wantSecondPart := first[:idx], first[idx:]
+	if got[0] != wantFirstPart {
+		t.Errorf("first fragment = %q, want %q -- the embedded date-like text should split first's own body in two", got[0], wantFirstPart)
+	}
+	if got[1] != wantSecondPart {
+		t.Errorf("second fragment = %q, want %q", got[1], wantSecondPart)
+	}
+	if got[2] != second {
+		t.Errorf("third message = %q, want %q", got[2], second)
+	}
+}
+
+// TestTCPHeaderSplitRejectsOutOfRangePRI proves an out-of-range PRI
+// (envelope.go's own bound: 0-191, the same one ParseEnvelope enforces)
+// is not treated as a header start, so text that merely begins with a
+// bracket and digits is not split on -- the whole blob stays one
+// message, same as before #614.
+func TestTCPHeaderSplitRejectsOutOfRangePRI(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	// A syslog PRI is 0-191 (24 facilities x 8 severities); 999 is out
+	// of range. No text after it forms a header of its own, so nothing
+	// here should be recognised as a boundary at any position.
+	whole := first + "<999>this is not a valid header, just text that starts with a bracket"
+
+	if _, err := conn.Write([]byte(whole)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	select {
+	case m := <-out:
+		if string(m.Data) != whole {
+			t.Errorf("Data = %q, want the whole unsplit blob %q", m.Data, whole)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the (unsplit) message")
+	}
+
+	select {
+	case extra := <-out:
+		t.Errorf("expected exactly one message, got a second: %q", extra.Data)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestTCPHeaderSplitRejectsBogusMonth is the timestamp-side counterpart:
+// a syntactically PRI-valid header whose month abbreviation isn't real
+// must not be recognised either -- time.Parse itself is what enforces
+// "real month name", and nothing here should second-guess it into a
+// looser match.
+func TestTCPHeaderSplitRejectsBogusMonth(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	// "Xxx" is not a real month abbreviation -- time.Parse must reject
+	// it, and nothing else in this text forms a header either.
+	whole := first + "<30>Xxx 29 20:52:45 CHR A|lan-wan| forward: should not split here"
+
+	if _, err := conn.Write([]byte(whole)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	select {
+	case m := <-out:
+		if string(m.Data) != whole {
+			t.Errorf("Data = %q, want the whole unsplit blob %q", m.Data, whole)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the (unsplit) message")
+	}
+
+	select {
+	case extra := <-out:
+		t.Errorf("expected exactly one message, got a second: %q", extra.Data)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// --- #914: a header still arriving must not end the message before it ----
+
+// scriptTimeout is the error a net.Conn returns when a read deadline
+// expires. handleTCPConn tells it apart from a real error by the
+// net.Error interface alone, so this is all a fake connection needs in
+// order to stand in for tcpQuiescence (or the idle timeout) elapsing.
+type scriptTimeout struct{}
+
+func (scriptTimeout) Error() string   { return "i/o timeout" }
+func (scriptTimeout) Timeout() bool   { return true }
+func (scriptTimeout) Temporary() bool { return true }
+
+// scriptStep is one Read outcome: either bytes handed to the read loop,
+// or the error that read returns instead of bytes.
+type scriptStep struct {
+	data []byte
+	err  error
+}
+
+// scriptedConn is a net.Conn whose reads are a fixed script, so a
+// framing test can state exactly where the read boundaries and the
+// deadline expiries fall instead of trying to provoke them with sleeps
+// over a real socket.
+//
+// That distinction is the whole of #914. The defect only shows when
+// tcpQuiescence expires *between* two segments of one message, and over
+// a real socket whether that happens depends on how loaded the machine
+// is -- it reproduced on the GitLab runner and never once on GitHub.
+// Driven from a script it reproduces everywhere, every time.
+type scriptedConn struct {
+	mu     sync.Mutex
+	steps  []scriptStep
+	closed bool
+}
+
+func (c *scriptedConn) Read(b []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || len(c.steps) == 0 {
+		return 0, io.EOF
+	}
+	step := c.steps[0]
+	c.steps = c.steps[1:]
+	if step.err != nil {
+		return 0, step.err
+	}
+	return copy(b, step.data), nil
+}
+
+func (c *scriptedConn) Write(b []byte) (int, error) { return len(b), nil }
+
+func (c *scriptedConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	return nil
+}
+
+func (c *scriptedConn) LocalAddr() net.Addr  { return scriptAddr("192.0.2.1:514") }
+func (c *scriptedConn) RemoteAddr() net.Addr { return scriptAddr("192.0.2.10:41234") }
+
+func (c *scriptedConn) SetDeadline(time.Time) error      { return nil }
+func (c *scriptedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *scriptedConn) SetWriteDeadline(time.Time) error { return nil }
+
+type scriptAddr string
+
+func (scriptAddr) Network() string  { return "tcp" }
+func (a scriptAddr) String() string { return string(a) }
+
+// runScriptedConn drives handleTCPConn to completion over a scripted
+// connection and returns every message it emitted, in order.
+func runScriptedConn(t *testing.T, steps ...scriptStep) []string {
+	t.Helper()
+	out := make(chan RawMessage, 32)
+	handleTCPConn(context.Background(), &scriptedConn{steps: steps}, out)
+	close(out)
+	var got []string
+	for m := range out {
+		got = append(got, string(m.Data))
+	}
+	return got
+}
+
+// TestTCPMessageEndsBeforeAPartiallyArrivedHeader is the #914 regression
+// test, and the deterministic form of the flake reported there: two
+// RouterOS syslog-format messages where the network splits the second
+// message's own RFC3164 header, and the gap between the two segments
+// outlasts tcpQuiescence -- an ordinary TCP retransmit, or (as on the
+// GitLab runner) a read loop that simply did not get scheduled in time.
+//
+// The table walks that split through every byte of the header, from the
+// message boundary itself to the header's final byte, because the
+// defect is invisible at all but a handful of offsets: only a split
+// that leaves *part* of a header sitting in pending exposes it.
+//
+// What must hold at every offset is that the first message is delivered
+// exactly as it was sent. Before the fix it was delivered with a
+// fragment of the next message's header glued onto its end, because the
+// quiescence flush emptied pending wholesale without asking whether the
+// bytes at the end of it were a header that had not finished arriving.
+//
+// The walk stops at the end of the header rather than running on into
+// the body: a header is the only part of a message whose incompleteness
+// is visible in the bytes themselves, so it is the only part quiescence
+// can be taught to wait for. A split inside a message *body* is, and
+// remains, indistinguishable from a message that simply ended there.
+func TestTCPMessageEndsBeforeAPartiallyArrivedHeader(t *testing.T) {
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	second := rfc3164Msg(base.Add(time.Second), "A|lan-wan| forward: second message")
+	whole := first + second
+
+	// The bytes rfc3164HeaderLen recognises: "<PRI>" plus the BSD
+	// timestamp. Everything past it -- hostname, body -- is message.
+	header := "<30>" + base.Add(time.Second).Format(bsdTimeLayout)
+
+	for cut := 0; cut <= len(header); cut++ {
+		t.Run(fmt.Sprintf("%02d_header_bytes_arrive_early", cut), func(t *testing.T) {
+			at := len(first) + cut
+			got := runScriptedConn(t,
+				scriptStep{data: []byte(whole[:at])},
+				// tcpQuiescence expires with the second message's
+				// header only partly present.
+				scriptStep{err: scriptTimeout{}},
+				scriptStep{data: []byte(whole[at:])},
+				// And again, now with one whole message pending and
+				// nothing following it -- the ordinary bare-message
+				// resolution tcpQuiescence exists for.
+				scriptStep{err: scriptTimeout{}},
+				scriptStep{err: io.EOF},
+			)
+
+			want := []string{first, second}
+			if len(got) != len(want) {
+				t.Fatalf("got %d messages, want %d:\n\t%q", len(got), len(want), got)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Errorf("message %d =\n\t%q\nwant\n\t%q", i, got[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestRFC3164HeaderStillArriving pins both sides of the #914 wait
+// condition, because both sides cost something. Holding a message that
+// really had ended delays a live view for tcpHeaderCompletionWindow;
+// flushing one that had not corrupts a record. The "arriving" cases are
+// what the fix has to catch; the "ended" cases are ordinary RouterOS
+// log lines, which must still resolve on quiescence as fast as they
+// always did.
+func TestRFC3164HeaderStillArriving(t *testing.T) {
+	arriving := []string{
+		// A header with no message behind it yet.
+		"<30>Aug 29 20:52:44",
+		// The PRI itself, part-way through.
+		"a whole message<",
+		"a whole message<3",
+		"a whole message<30",
+		"a whole message<30>",
+		// The timestamp, part-way through.
+		"a whole message<30>A",
+		"a whole message<30>Au",
+		"a whole message<30>Aug",
+		"a whole message<30>Aug 2",
+		"a whole message<30>Aug 29 20:52:4",
+		// A bare header, no PRI, once its month is decidable.
+		"a whole message Aug 29 20:5",
+	}
+	for _, s := range arriving {
+		if !rfc3164HeaderStillArriving([]byte(s)) {
+			t.Errorf("flushed while a header was still arriving: %q", s)
+		}
+	}
+
+	ended := []string{
+		"",
+		"firewall,info forward: in:ether1 out:ether2, proto TCP (SYN), 192.168.88.10:52344->142.250.187.238:443, len 60",
+		"dhcp,info dhcp1 assigned 192.168.88.253 to A8:A1:59:3B:0C:5A",
+		"system,info,account user admin logged in from 192.168.88.2 via winbox",
+		"<30>Aug 29 20:52:44 CHR A|live-in| input: first message",
+		"interface,info ether1 link up (speed 1G, full duplex)",
+		"firewall,info drop: proto ICMP, type 8, code 0, len 84",
+		// A capital letter, or a capitalised word, at the very end of a
+		// body: common enough that a bare header must show its whole
+		// month abbreviation before it counts as evidence of anything.
+		"wireless,info connected to AP",
+		"pppoe,info authenticated user Bob",
+		"script,info finished run X",
+		// PRI-shaped text that no legal PRI could extend to.
+		"a whole message<1999",
+		"a whole message<9x",
+		// A month that time.Parse rejects.
+		"a whole message<30>Xxx 29 20:5",
+	}
+	for _, s := range ended {
+		if rfc3164HeaderStillArriving([]byte(s)) {
+			t.Errorf("held back a message that had ended: %q", s)
+		}
+	}
+}
+
+// TestTCPHeaderThatNeverArrivesIsNotWaitedForForever records the
+// residual the #914 fix deliberately leaves, so it is a decision on
+// record rather than a gap nobody noticed.
+//
+// The wait is bounded: if the rest of the header never turns up, the
+// next timeout flushes pending exactly as the code always did, header
+// fragment and all. That case is a sender that wrote the start of a
+// header and then stopped -- a torn connection, not a message boundary
+// -- so there is no following message to protect, and the only cost is
+// that the last thing delivered off a dying connection is untidy. What
+// #914 was about is the case where the rest *does* arrive, which the
+// table test above covers; this only proves the wait cannot be used to
+// hold a connection open indefinitely by dribbling half a header.
+func TestTCPHeaderThatNeverArrivesIsNotWaitedForForever(t *testing.T) {
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	stump := "<30>Aug 29 20:52:4"
+
+	got := runScriptedConn(t,
+		scriptStep{data: []byte(first + stump)},
+		// tcpQuiescence expires: the header is still arriving, so wait.
+		scriptStep{err: scriptTimeout{}},
+		// tcpHeaderCompletionWindow expires too. Nothing more is
+		// coming; stop waiting and hand up what there is.
+		scriptStep{err: scriptTimeout{}},
+		scriptStep{err: io.EOF},
+	)
+
+	want := []string{first + stump}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestTCPOversizedLineWithTerminatorInSameReadIsCapped is the
+// deterministic form of the flake #944 turned out to be. The paced
+// real-socket test above only exercised the cap when the reader saw
+// pending cross it *before* the terminator arrived; on a loaded runner
+// the reader fell behind, one read brought in both the cap-crossing
+// bytes and the '\n' after them, and the newline split delivered the
+// whole 85536-byte line intact -- the cap check ran only after it.
+//
+// net.Pipe makes the read boundaries exact: each Write is one Read. The
+// first leaves pending just under the cap with no newline; the second
+// carries it past the cap and the terminator and the next message in
+// the same read. That is the shape a slow reader sees, reproduced on
+// purpose rather than by luck.
+func TestTCPOversizedLineWithTerminatorInSameReadIsCapped(t *testing.T) {
+	out := make(chan RawMessage, 16)
+	serverConn, clientConn := net.Pipe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleTCPConn(ctx, serverConn, out)
+	}()
+
+	before := Stats().Oversized
+	leadUp := bytes.Repeat([]byte("A"), maxTCPMessageBytes-1000)
+	if _, err := clientConn.Write(leadUp); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rest := append(bytes.Repeat([]byte("A"), 21000), []byte("\nD|wan-in|forward: proto TCP, 192.0.2.1:1->198.51.100.1:80\n")...)
+	if _, err := clientConn.Write(rest); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < 2 {
+		select {
+		case m := <-out:
+			got = append(got, string(m.Data))
+		case <-deadline:
+			t.Fatalf("timed out; received %d messages: %q", len(got), got)
+		}
+	}
+	clientConn.Close()
+	<-done
+
+	if len(got[0]) != maxTCPMessageBytes {
+		t.Errorf("first message is %d bytes, want the %d-byte cap -- the terminator arriving in the same read must not lift the cap", len(got[0]), maxTCPMessageBytes)
+	}
+	if got[1] != "D|wan-in|forward: proto TCP, 192.0.2.1:1->198.51.100.1:80" {
+		t.Errorf("second message = %q, want the normal line that followed the terminator", got[1])
+	}
+	if Stats().Oversized == before {
+		t.Error("the discarded remainder was not counted")
+	}
+}
+
+// TestLossEpisodeRestartsAfterWindow is issue #1015's central claim
+// about lossFreshness: a gap wider than the counter's window between
+// two hits starts a fresh episode at 1, rather than the episode
+// growing forever the way the monotonic total beside it already does.
+// Driven entirely against setLossClock's injected clock -- no real
+// sleeping, per this repo's own rule against timing-based tests (see
+// logging.Limiter's own now seam).
+func TestLossEpisodeRestartsAfterWindow(t *testing.T) {
+	tcpDroppedFreshness.clear()
+	prevDropped := tcpDropped.Swap(0)
+	t.Cleanup(func() {
+		tcpDroppedFreshness.clear()
+		tcpDropped.Store(prevDropped)
+	})
+
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() { setLossClock(nil) })
+
+	noteIngestDrop()
+	noteIngestDrop()
+	if got := Stats().Loss.Dropped.Recent; got != 2 {
+		t.Fatalf("episode after 2 hits inside the window = %d, want 2", got)
+	}
+
+	// A gap wider than lossWindowDropped: whatever was happening
+	// stopped, so this hit starts a new episode rather than becoming a
+	// third occurrence of the old one.
+	now = now.Add(lossWindowDropped + time.Second)
+	noteIngestDrop()
+	if got := Stats().Loss.Dropped.Recent; got != 1 {
+		t.Errorf("episode after a gap past the window = %d, want 1 (restarted, not accumulated to 3)", got)
+	}
+}
+
+// TestLossActiveFlipsFalseAfterWindow is #1015's other central claim:
+// active is computed fresh against now on every call, not latched once
+// true, so a counter that has gone quiet for longer than its window
+// must stop reporting active even though nothing cleared it.
+func TestLossActiveFlipsFalseAfterWindow(t *testing.T) {
+	tcpRejectedFreshness.clear()
+	prevRejected := tcpRejected.Swap(0)
+	prevConfigured := configuredSources.Load()
+	empty := map[string]bool{}
+	configuredSources.Store(&empty) // the probe host below must be undeclared
+	t.Cleanup(func() {
+		tcpRejectedFreshness.clear()
+		tcpRejected.Store(prevRejected)
+		configuredSources.Store(prevConfigured)
+	})
+
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() { setLossClock(nil) })
+
+	noteRejected("203.0.113.50")
+	loss := Stats().Loss.Rejected
+	if !loss.Active {
+		t.Fatalf("expected Rejected.Active immediately after a hit, got %+v", loss)
+	}
+	if loss.LastAt == nil {
+		t.Error("expected Rejected.LastAt to be set after a hit, got nil")
+	}
+
+	now = now.Add(lossWindowRejected + time.Second)
+	if got := Stats().Loss.Rejected; got.Active {
+		t.Errorf("expected Rejected.Active to flip false once the window elapsed with no new hit, got %+v", got)
+	}
+}
+
+// TestClearLossZeroesTotalsEpisodesAndHosts is issue #1015's "Clear
+// all": every one of the four totals, their episodes and lastAt, and
+// both host records, and ClearLoss's own return value carries the
+// totals as they stood immediately before the reset (what
+// handleSyslogLossClear audits).
+func TestClearLossZeroesTotalsEpisodesAndHosts(t *testing.T) {
+	prevDropped := tcpDropped.Load()
+	prevRejected := tcpRejected.Load()
+	prevRejectedConfigured := tcpRejectedConfigured.Load()
+	prevOversized := tcpOversized.Load()
+	prevConfigured := configuredSources.Load()
+	rejectedConfiguredHostsMu.Lock()
+	prevHosts := append([]rejectedConfiguredHostEntry(nil), rejectedConfiguredHosts...)
+	rejectedConfiguredHostsMu.Unlock()
+	tcpOversizedHostMu.Lock()
+	prevOversizedHost, prevOversizedHostLastAt := tcpOversizedHost, tcpOversizedHostLastAt
+	tcpOversizedHostMu.Unlock()
+	t.Cleanup(func() {
+		tcpDropped.Store(prevDropped)
+		tcpRejected.Store(prevRejected)
+		tcpRejectedConfigured.Store(prevRejectedConfigured)
+		tcpOversized.Store(prevOversized)
+		configuredSources.Store(prevConfigured)
+		rejectedConfiguredHostsMu.Lock()
+		rejectedConfiguredHosts = prevHosts
+		rejectedConfiguredHostsMu.Unlock()
+		tcpOversizedHostMu.Lock()
+		tcpOversizedHost, tcpOversizedHostLastAt = prevOversizedHost, prevOversizedHostLastAt
+		tcpOversizedHostMu.Unlock()
+		tcpDroppedFreshness.clear()
+		tcpRejectedFreshness.clear()
+		tcpRejectedConfiguredFreshness.clear()
+		tcpOversizedFreshness.clear()
+	})
+	tcpDropped.Store(0)
+	tcpRejected.Store(0)
+	tcpRejectedConfigured.Store(0)
+	tcpOversized.Store(0)
+	tcpDroppedFreshness.clear()
+	tcpRejectedFreshness.clear()
+	tcpRejectedConfiguredFreshness.clear()
+	tcpOversizedFreshness.clear()
+
+	configured := map[string]bool{"203.0.113.9": true}
+	configuredSources.Store(&configured)
+
+	noteIngestDrop()
+	noteRejected("203.0.113.9") // configured -- moves Rejected and RejectedConfigured together
+	tcpOversized.Add(1)
+	noteOversizedHost("203.0.113.10")
+
+	before := Stats()
+	if before.Dropped == 0 || before.Rejected == 0 || before.RejectedConfigured == 0 || before.Oversized == 0 {
+		t.Fatalf("setup did not move all four counters: %+v", before)
+	}
+	if len(before.RejectedConfiguredHosts) == 0 || before.OversizedHost == "" {
+		t.Fatalf("setup did not record host state: %+v", before)
+	}
+
+	result := ClearLoss()
+	if result.Dropped != before.Dropped || result.Rejected != before.Rejected ||
+		result.RejectedConfigured != before.RejectedConfigured || result.Oversized != before.Oversized {
+		t.Errorf("ClearLoss result = %+v, want the pre-clear totals %+v", result, before)
+	}
+
+	after := Stats()
+	if after.Dropped != 0 || after.Rejected != 0 || after.RejectedConfigured != 0 || after.Oversized != 0 {
+		t.Errorf("totals after ClearLoss = %+v, want all zero", after)
+	}
+	if len(after.RejectedConfiguredHosts) != 0 {
+		t.Errorf("RejectedConfiguredHosts after ClearLoss = %v, want empty", after.RejectedConfiguredHosts)
+	}
+	if after.OversizedHost != "" {
+		t.Errorf("OversizedHost after ClearLoss = %q, want empty", after.OversizedHost)
+	}
+	if after.Loss.Dropped.Recent != 0 || after.Loss.Dropped.Active || after.Loss.Dropped.LastAt != nil {
+		t.Errorf("Loss.Dropped after ClearLoss = %+v, want a zeroed, inactive, never-moved entry", after.Loss.Dropped)
+	}
+	if after.Loss.Rejected.Recent != 0 || after.Loss.Rejected.Active || after.Loss.Rejected.LastAt != nil {
+		t.Errorf("Loss.Rejected after ClearLoss = %+v, want a zeroed, inactive, never-moved entry", after.Loss.Rejected)
+	}
+	if after.Loss.RejectedConfigured.Recent != 0 || after.Loss.RejectedConfigured.Active ||
+		after.Loss.RejectedConfigured.LastAt != nil || len(after.Loss.RejectedConfigured.Hosts) != 0 {
+		t.Errorf("Loss.RejectedConfigured after ClearLoss = %+v, want zeroed with no hosts", after.Loss.RejectedConfigured)
+	}
+	if after.Loss.Oversized.Recent != 0 || after.Loss.Oversized.Active ||
+		after.Loss.Oversized.LastAt != nil || after.Loss.Oversized.Host != "" {
+		t.Errorf("Loss.Oversized after ClearLoss = %+v, want zeroed with no host", after.Loss.Oversized)
 	}
 }

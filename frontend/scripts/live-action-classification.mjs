@@ -15,7 +15,7 @@
 // Every line below is synthetic and uses documentation address space
 // (RFC 5737 / RFC 1918). Nothing here comes from a real deployment.
 
-import { session, feedRaw, check, done } from './live-browser.mjs'
+import { session, feedRaw, check, done, waitForStreamRows } from './live-browser.mjs'
 
 // One distinctive slug per class, so the rule filter can isolate this
 // scenario's own events on an instance other scenarios have already
@@ -23,6 +23,8 @@ import { session, feedRaw, check, done } from './live-browser.mjs'
 const MARK = 'mv437-mark'
 const NAT = 'mv437-nat'
 const LOGONLY = 'mv437-logonly'
+
+const { page, consoleErrors } = await session()
 
 // Tagged: the operator declares the rule kind in the log-prefix.
 feedRaw(
@@ -49,13 +51,17 @@ feedRaw(
   `firewall,info postrouting: in:(unknown 0) out:ether1, proto TCP (ACK), ` +
     `192.168.88.20:51512->203.0.113.44:443, len 52`,
 )
+await waitForStreamRows(page, 1)
 
-const { page, consoleErrors } = await session({ waitForEvents: 1 })
 
 /** Sets the rule filter and returns the action badges left on screen. */
 async function badgesForRule(rule) {
   await page.fill('input.rule', rule)
-  await page.waitForTimeout(900)
+  // `rule` is one of MARK/NAT/LOGONLY, and EventRow's own `title` carries
+  // the raw line (rawTooltip) -- so a row for this mark reaching the DOM
+  // is the filter having actually applied, not just the input accepting
+  // the keystrokes.
+  await page.waitForSelector(`.grid .row[title*="${rule}"] .badge`, { timeout: 10000 })
   return page.$$eval('.grid .row .badge', (els) => els.map((e) => e.textContent.trim()))
 }
 
@@ -86,7 +92,9 @@ check(
 // someone tries to narrow to it.
 await page.fill('input.rule', '')
 await page.selectOption('select[aria-label="Action"]', 'marked')
-await page.waitForTimeout(900)
+// Same reasoning as badgesForRule: wait for the MARK-tagged row itself
+// to be present under the new filter before reading badges off it.
+await page.waitForSelector(`.grid .row[title*="${MARK}"] .badge`, { timeout: 10000 })
 const underMarkedFilter = await page.$$eval('.grid .row .badge', (els) =>
   els.map((e) => e.textContent.trim()),
 )
@@ -96,7 +104,10 @@ check(
 )
 
 await page.selectOption('select[aria-label="Action"]', 'natted')
-await page.waitForTimeout(900)
+// Wait for the NAT-tagged row specifically -- the untagged dstnat line
+// asserted below is also natted, but this row is the one guaranteed to
+// carry the filter's own mark string.
+await page.waitForSelector(`.grid .row[title*="${NAT}"] .badge`, { timeout: 10000 })
 const underNattedFilter = await page.$$eval('.grid .row .badge', (els) =>
   els.map((e) => e.textContent.trim()),
 )
@@ -108,9 +119,11 @@ check(
 // The untagged dstnat line has no rule label to search by, so it is
 // found here: under the natted filter, on the chain the inference keys
 // off. Two natted sources -- one declared, one inferred -- and this
-// asserts the inferred one arrived.
-const nattedChains = await page.$$eval('.grid .row .cell.chain', (els) =>
-  els.map((e) => e.textContent.trim()),
+// asserts the inferred one arrived. Read off each row's data-chain
+// attribute: #644's squared columns dropped the chain cell, and this
+// attribute is the hook EventRow carries in its place.
+const nattedChains = await page.$$eval('.grid .row[data-chain]', (els) =>
+  els.map((e) => e.dataset.chain),
 )
 check(
   nattedChains.includes('dstnat'),
@@ -125,9 +138,11 @@ check(
 // mangle action ran, so it must not have been given a confident label on
 // the way past.
 await page.selectOption('select[aria-label="Action"]', 'unknown')
-await page.waitForTimeout(900)
-const unknownChains = await page.$$eval('.grid .row .cell.chain', (els) =>
-  els.map((e) => e.textContent.trim()),
+// The untagged postrouting line has no mark string to filter on, but it
+// is the one row on the chain that must survive the "unknown" filter.
+await page.waitForSelector('.grid .row[data-chain="postrouting"]', { timeout: 10000 })
+const unknownChains = await page.$$eval('.grid .row[data-chain]', (els) =>
+  els.map((e) => e.dataset.chain),
 )
 check(
   unknownChains.includes('postrouting'),
@@ -135,7 +150,13 @@ check(
 )
 
 await page.selectOption('select[aria-label="Action"]', '')
-await page.waitForTimeout(500)
+// Clearing the filter should bring all 5 fed lines back into view --
+// wait for that rather than a guessed settle time.
+await page.waitForFunction(
+  (n) => document.querySelectorAll('.grid .row').length >= n,
+  5,
+  { timeout: 10000 },
+)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()

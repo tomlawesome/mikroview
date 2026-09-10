@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/engine"
@@ -25,18 +26,23 @@ import (
 // entry were two shapes over the same thing -- a definition the engine
 // evaluates -- and the endpoints below expose that one thing uniformly:
 // list/get, enable/disable, scope, param overrides with schema
-// validation, suppressions, provenance and replayability on every
+// validation, provenance and replayability on every
 // response, plus the operator actions an expectation has of its own
 // (promote, observing).
 //
-// Access is admin-only for every route here, exactly matching what the
-// two removed surfaces enforced. #385 records the owner decision that
-// non-admins should eventually see settings surfaces read-only, but that
-// belongs to phase 2's RBAC work: shipping a read-open route now that
-// phase 2 might have to narrow is worse than shipping it closed and
-// widening it deliberately. Every row is recorded in
-// authz_matrix_test.go, which is what forces the question to be answered
-// rather than inherited.
+// Access is user-tier for every route here bar one: each checks
+// callerIsUser, so an admin or a user reaches it and a viewer does not.
+// The exception is handleDefinitionsList, which is open to any signed-in
+// session including viewer -- see its own doc comment.
+//
+// This surface shipped admin-only, matching what the two removed
+// surfaces enforced, and #653 widened it: running the detector bench --
+// enabling a detector, editing its scope, tuning its thresholds -- is a
+// normal operational action rather than an owner-level one, so it
+// belongs to the middle tier that issue introduced. A viewer therefore
+// still reads the whole list, and changes nothing in it. Every row is
+// recorded in authz_matrix_test.go, which is what forces the question to
+// be answered rather than inherited.
 
 // definitionView is one definition as this API serves it: the whole
 // envelope, plus the four things a caller cannot derive from it --
@@ -49,20 +55,19 @@ import (
 // field added to the engine's own struct cannot silently start appearing
 // in an API response.
 type definitionView struct {
-	ID           string                       `json:"id"`
-	Name         string                       `json:"name"`
-	Description  string                       `json:"description,omitempty"`
-	Intent       engine.Intent                `json:"intent"`
-	Kind         engine.Kind                  `json:"kind"`
-	Enabled      bool                         `json:"enabled"`
-	Scope        engine.Scope                 `json:"scope,omitzero"`
-	Params       engine.Params                `json:"params,omitempty"`
-	ParamSchema  []engine.ParamSchema         `json:"paramSchema,omitempty"`
-	Provenance   engine.Provenance            `json:"provenance"`
-	Suppressions []engine.Suppression         `json:"suppressions,omitempty"`
-	Available    bool                         `json:"available"`
-	Distance     map[string]engine.ParamDelta `json:"distance,omitempty"`
-	Replay       replayabilityView            `json:"replay"`
+	ID          string                       `json:"id"`
+	Name        string                       `json:"name"`
+	Description string                       `json:"description,omitempty"`
+	Intent      engine.Intent                `json:"intent"`
+	Kind        engine.Kind                  `json:"kind"`
+	Enabled     bool                         `json:"enabled"`
+	Scope       engine.Scope                 `json:"scope,omitzero"`
+	Params      engine.Params                `json:"params,omitempty"`
+	ParamSchema []engine.ParamSchema         `json:"paramSchema,omitempty"`
+	Provenance  engine.Provenance            `json:"provenance"`
+	Available   bool                         `json:"available"`
+	Distance    map[string]engine.ParamDelta `json:"distance,omitempty"`
+	Replay      replayabilityView            `json:"replay"`
 	// Coverage is only ever set for an expectation definition -- the
 	// question it answers ("can any pushed firewall rule produce an event
 	// this would match?", #274 item 1) is about an entry's scope, and a
@@ -78,6 +83,136 @@ type definitionView struct {
 	// watchlistInvertedParamSchema) are a storage detail no UI should
 	// have to decode.
 	Expectation *watchlist.Entry `json:"expectation,omitempty"`
+	// Detection is the operator-authored structure a custom detection
+	// carries -- its conditions and the aggregation around them. Absent
+	// for a shipped definition, whose structure is Go in this binary,
+	// and for an expectation, whose structure is fixed. See
+	// engine.DetectionSpec.
+	Detection *engine.DetectionSpec `json:"detection,omitempty"`
+	// Family is the flag family an operator filed a custom detector
+	// under (#829) -- the ink the docket, the fall and the map draw its
+	// flags in. Absent for a shipped definition, whose family is the
+	// design record's own classification of the built-ins and is held in
+	// the frontend palette by definition id, and absent for a custom one
+	// nobody has filed yet.
+	Family engine.Family `json:"family,omitempty"`
+	// Structure is what a *shipped* declarative detector matches on and
+	// how it counts, read back off the builder that assembled it (#829).
+	//
+	// Exposed for one reason: cloning a shipped detector into a custom
+	// one has to start from the conditions the original actually uses,
+	// and those existed only as Go until this. Without it the copy
+	// arrives with an empty bar and the operator is asked to reconstruct
+	// a detector they only wanted to adjust.
+	//
+	// Not the same field as Detection above, and deliberately so.
+	// Detection is the operator's own stored structure, the thing a PUT
+	// can rewrite; this is a read-only account of the binary's, and
+	// writing it back changes nothing. Absent for a custom detection
+	// (which has Detection), for an expectation, and for a shipped
+	// programmatic detector, whose logic is Go with no conditions in it
+	// to report.
+	Structure *engine.DetectionSpec `json:"structure,omitempty"`
+	// Dispatch is what this definition costs the ingest path, and is set
+	// only where an operator chose the conditions that decide it.
+	Dispatch *dispatchView `json:"dispatch,omitempty"`
+	// Learning is this definition's live baseline warm-up state (issue
+	// #639) -- set only for one of the five baseline-backed shipped
+	// definitions (activity_spike, global_spike, rule_spike, off_hours,
+	// low_slow_scan), and only when a live engine.Engine is wired
+	// (Server.Learning non-nil). Omitted entirely for a definition with
+	// no warm-up concept, following Coverage's own rule in this struct:
+	// silence rather than a value a caller could mistake for "definitely
+	// nothing to learn."
+	Learning *learningView `json:"learning,omitempty"`
+}
+
+// learningView is engine.LearningState on the wire -- durations as
+// integer seconds under names that say so, never a raw
+// time.Duration/nanosecond count and never a duration string, so a
+// frontend never has to know Go's own duration encoding to render this.
+//
+// Floor is always present when learningView itself is (including when
+// Keys is 0 -- the fresh-install case #639 exists for: the floor is
+// known statically, independent of anything having been observed yet).
+// Keys and Ready are always present alongside it. Nearest is omitted
+// when every observed key is ready, and also when no keys have been
+// observed at all -- see learningViewFor.
+type learningView struct {
+	Floor   baselineFloorView     `json:"floor"`
+	Keys    int                   `json:"keys"`
+	Ready   int                   `json:"ready"`
+	Nearest *learningProgressView `json:"nearest,omitempty"`
+}
+
+// baselineFloorView is engine.BaselineFloor on the wire. A dimension
+// this floor does not bind is omitted rather than sent as a
+// meaningless 0 an operator could misread as "zero required" -- the
+// same silence-over-guess rule learningView's own doc comment states.
+type baselineFloorView struct {
+	MinDurationSeconds int64 `json:"minDurationSeconds,omitempty"`
+	MinSamples         int   `json:"minSamples,omitempty"`
+}
+
+// learningProgressView is engine.LearningProgress on the wire: the
+// furthest-along not-yet-ready key's raw progress, in the floor's own
+// dimensions -- never a pre-baked percentage, so the frontend decides how
+// (or whether) to collapse "3 of 14 days" into a bar.
+type learningProgressView struct {
+	ObservedForSeconds int64 `json:"observedForSeconds"`
+	Samples            int   `json:"samples"`
+}
+
+// learningViewFor renders id's live learning state, or nil when there is
+// none to report -- no live engine wired (learn nil), an unknown id, or a
+// definition with no warm-up concept (engine.Engine.Learning's own ok
+// return, ultimately LearningReporter's).
+func learningViewFor(learn learningSource, id string, now time.Time) *learningView {
+	if learn == nil {
+		return nil
+	}
+	state, ok := learn.Learning(id, now)
+	if !ok {
+		return nil
+	}
+	v := &learningView{
+		Floor: baselineFloorView{
+			MinDurationSeconds: int64(state.Floor.MinDuration / time.Second),
+			MinSamples:         state.Floor.MinSamples,
+		},
+		Keys:  state.Keys,
+		Ready: state.Ready,
+	}
+	if state.Nearest != nil {
+		v.Nearest = &learningProgressView{
+			ObservedForSeconds: int64(state.Nearest.ObservedFor / time.Second),
+			Samples:            state.Nearest.Samples,
+		}
+	}
+	return v
+}
+
+// learningSource is Server.Learning's own shape, restated here so
+// learningViewFor takes the narrow interface rather than *Server --
+// keeping this file's one dependency on the live engine explicit and
+// swappable in a test.
+type learningSource interface {
+	Learning(id string, now time.Time) (engine.LearningState, bool)
+}
+
+// dispatchView tells an operator whether the detector they authored can
+// be narrowed by the engine's pre-index, or is consulted on every event.
+//
+// Disclosed rather than refused. A detector that watches one source
+// address gives the pre-index nothing to narrow on, but it is a
+// legitimate question for an operator to ask, and refusing it to protect
+// an ingest budget they may not care about is the wrong default for an
+// observe-only tool. Absorbing the cost silently is the dishonest
+// option, so the answer travels with the definition -- on the create
+// response and on every later read of it.
+type dispatchView struct {
+	AlwaysConsulted bool   `json:"alwaysConsulted"`
+	Reason          string `json:"reason,omitempty"`
 }
 
 // replayabilityView is issue #403's contract on the wire: a definition
@@ -96,21 +231,24 @@ type replayabilityView struct {
 // definitionViewFor renders one stored definition. rulesByDevice is the
 // pushed filter tables coverage is answered from, read once per request
 // by the caller rather than per definition -- see definitionsCoverage.
-func definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool) definitionView {
+// now is likewise read once per request by the caller (handler) rather
+// than once per definition, so every definition in one response answers
+// "learning" as of the same instant.
+func (s *Server) definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool, now time.Time) definitionView {
 	d := sd.Definition
 	v := definitionView{
-		ID:           d.ID,
-		Name:         d.Name,
-		Description:  d.Description,
-		Intent:       d.Intent,
-		Kind:         d.Kind,
-		Enabled:      d.Enabled,
-		Scope:        d.Scope,
-		Params:       d.Params,
-		ParamSchema:  d.ParamSchema,
-		Provenance:   d.Provenance,
-		Suppressions: d.Suppressions,
-		Available:    sd.Available,
+		ID:          d.ID,
+		Name:        d.Name,
+		Description: d.Description,
+		Intent:      d.Intent,
+		Kind:        d.Kind,
+		Enabled:     d.Enabled,
+		Scope:       d.Scope,
+		Params:      d.Params,
+		ParamSchema: d.ParamSchema,
+		Provenance:  d.Provenance,
+		Available:   sd.Available,
+		Family:      d.Family,
 	}
 	if !sd.Available {
 		// Nothing below can be answered for a definition this binary
@@ -124,7 +262,18 @@ func definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]in
 	}
 	capable, reason, known := engine.ReplayabilityOf(d)
 	v.Replay = replayabilityView{Known: known, Capable: capable, Reason: reason}
+	v.Learning = learningViewFor(s.Learning, d.ID, now)
 
+	if d.Detection != nil {
+		v.Detection = d.Detection
+		v.Dispatch = &dispatchView{AlwaysConsulted: !engine.CanNarrowDispatch(d.Detection.Conditions)}
+		if v.Dispatch.AlwaysConsulted {
+			v.Dispatch.Reason = alwaysConsultedReason
+		}
+	}
+	if d.Detection == nil && d.Intent == engine.IntentDetection && d.Kind == engine.KindDeclarative {
+		v.Structure = shippedStructureOf(d)
+	}
 	if d.Intent != engine.IntentExpectation {
 		return v
 	}
@@ -135,6 +284,32 @@ func definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]in
 	return v
 }
 
+// shippedStructureOf builds d's live logic just far enough to read its
+// conditions and aggregation back off it, or nil where there is nothing
+// to read.
+//
+// nil is the answer for a shipped detector with no declarative builder
+// registered -- the baseline-backed ones, device_silence, the reputation
+// passes -- and for one whose stored params no longer satisfy its own
+// builder. Both are ordinary rather than exceptional, and neither is an
+// error worth failing a list request over: the detector still lists, it
+// simply reports no structure, and the clone path reads that as "this one
+// carries scope and numbers only".
+//
+// Rebuilt per call rather than cached. It is a list-time cost on a
+// handful of definitions, the builders do no I/O, and a cache keyed by id
+// would have to be invalidated on every params write -- a stale answer
+// here would show an operator the conditions of a detector as it was
+// configured two edits ago.
+func shippedStructureOf(d engine.Definition) *engine.DetectionSpec {
+	built, err := engine.BuildShippedDeclarativeDefinition(d)
+	if err != nil || built == nil {
+		return nil
+	}
+	spec := built.Structure()
+	return &spec
+}
+
 // definitionCoverage applies #367's evidence-completeness downgrade to
 // one definition's coverage answer -- unchanged in meaning from the
 // watchlist endpoint this replaces, only moved: with an incomplete
@@ -142,6 +317,25 @@ func definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]in
 // which renders as silence rather than as a confident wrong claim.
 // CoverageOK is untouched, because one router demonstrably logging the
 // right traffic stays true however many others went unread.
+// expectationCoverage answers, per expectation id, whether any firewall
+// rule mikroview can see is logging that entry's pathway -- the input the
+// nightly fill needs to tell an empty night from one it could not observe
+// (watchlist.Observation). Only a definite "covered" counts: "unknown",
+// which is what an incomplete evidence base degrades every negative to
+// (#367), is not a claim that the pathway was logged, and a night filled
+// on the strength of it would be mikroview's own blind spot reported as
+// silence on the network.
+func expectationCoverage(stored []engine.StoredDefinition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool) map[string]bool {
+	out := make(map[string]bool)
+	for _, sd := range stored {
+		if !sd.Available || sd.Definition.Intent != engine.IntentExpectation {
+			continue
+		}
+		out[sd.Definition.ID] = definitionCoverage(sd.Definition, rulesByDevice, evidenceComplete) == engine.CoverageOK
+	}
+	return out
+}
+
 func definitionCoverage(d engine.Definition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool) engine.CoverageState {
 	state := d.Coverage(rulesByDevice)
 	if !evidenceComplete {
@@ -280,16 +474,31 @@ func definitionOrder(views []definitionView) {
 // the same question. A caller wanting only detections filters on intent,
 // which is a client concern; the server's job is to have one answer.
 //
-// Open to any signed-in user (#490): the design record widens this GET
-// deliberately, ahead of the rest of the definitions surface which stays
-// admin-only -- see every write handler below and handleDefinitionsGet/
-// Schema, none of which move.
+// Open to any signed-in user (#490), including viewer (#653): the design
+// record widens this GET deliberately. #653 went on to widen the rest of
+// the definitions surface too -- every handler below, both reads and
+// writes, moved from admin to user tier (the owner's ruling on #653: the
+// "watchers" bench gets full access here) -- so this GET is now the one
+// definitions route open below user tier, not the first of several.
 func (s *Server) handleDefinitionsList(w http.ResponseWriter, r *http.Request) {
 	rulesByDevice, evidence := s.definitionsCoverage()
+	now := s.now()
 	stored := s.Definitions.List()
+	// Catch the nightly history up before rendering it (#680). This is the
+	// half of the lazy fill the evaluation path cannot do: an entry
+	// nothing has matched never reaches the match sink, and an empty
+	// night is exactly what such an entry needs written down.
+	//
+	// Idempotent and cheap -- a night is keyed by the instant its window
+	// opened and written once, so this does nothing at all until a window
+	// closes. The list is read again only when it actually wrote
+	// something, so the usual request pays one read, not two.
+	if s.Definitions.FillWatchNights(now, expectationCoverage(stored, rulesByDevice, evidence.Complete)) > 0 {
+		stored = s.Definitions.List()
+	}
 	out := make([]definitionView, 0, len(stored))
 	for _, sd := range stored {
-		out = append(out, definitionViewFor(sd, rulesByDevice, evidence.Complete))
+		out = append(out, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, now))
 	}
 	definitionOrder(out)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -302,10 +511,12 @@ func (s *Server) handleDefinitionsList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDefinitionsGet serves one definition by id.
+// handleDefinitionsGet serves one definition by id. User-tier (#653),
+// same as the rest of the definitions surface -- see handleDefinitionsList's
+// doc comment.
 func (s *Server) handleDefinitionsGet(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	sd, ok := s.Definitions.Get(r.PathValue("id"))
@@ -314,7 +525,7 @@ func (s *Server) handleDefinitionsGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rulesByDevice, evidence := s.definitionsCoverage()
-	writeJSON(w, http.StatusOK, definitionViewFor(sd, rulesByDevice, evidence.Complete))
+	writeJSON(w, http.StatusOK, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, s.now()))
 }
 
 // handleDefinitionsSchema serves every param schema the definitions this
@@ -329,9 +540,12 @@ func (s *Server) handleDefinitionsGet(w http.ResponseWriter, r *http.Request) {
 // response; this endpoint exists so a caller that only wants to render
 // controls does not have to fetch every definition's current state and
 // coverage to get them.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsSchema(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	schemas := make(map[string][]engine.ParamSchema)
@@ -359,9 +573,33 @@ type expectationRequest struct {
 	Ports                  []int                    `json:"ports"`
 	Invert                 bool                     `json:"invert"`
 	IncludeStructuralNoise bool                     `json:"includeStructuralNoise"`
+	// Boundary scopes this entry to one (chain, inInterface,
+	// outInterface) triple (#806, watchlist.Boundary). Full-replace like
+	// Source/DestIP/Ports above, not a leave-alone pointer like Window
+	// below: the watchlist editor's boundary picker sends it alongside
+	// those on every save, so there is no partial-form caller yet that
+	// would need "absent means unchanged" semantics.
+	Boundary watchlist.Boundary `json:"boundary,omitempty"`
+	// Window sets when this entry is expected to see traffic (#680,
+	// watchlist.Window). Deliberately a pointer, unlike every sibling
+	// field above: those replace in full whenever the expectation block
+	// is sent at all, but the docket form does not carry a window
+	// control yet (#761/#772, round 31) and will keep PUTting this block
+	// to change ports, invert or scope long before it does. Full-replace
+	// semantics for Window would mean the first such edit silently resets
+	// an operator's window to "always" -- the exact bug #773 exists to
+	// close, reappearing one field over. So nil means "leave the entry's
+	// current window alone" on PUT, and "no window" (the zero value,
+	// which Window.Defined reports as always-on) on POST, where there is
+	// no existing window to preserve. Sending an explicit zero-value
+	// window (start == end, e.g. "00:00"/"00:00") is how a caller that
+	// does know about windows clears one back to always.
+	Window *watchlist.Window `json:"window,omitempty"`
 }
 
-// applyTo copies req's operator-settable fields onto e in place.
+// applyTo copies req's operator-settable fields onto e in place. Window is
+// the one exception to full replacement -- see its own doc comment on
+// expectationRequest for why an absent Window must not touch e.Window.
 func (req expectationRequest) applyTo(e *watchlist.Entry) {
 	e.Source = req.Source
 	e.SourceList = req.SourceList
@@ -369,6 +607,36 @@ func (req expectationRequest) applyTo(e *watchlist.Entry) {
 	e.Ports = req.Ports
 	e.Invert = req.Invert
 	e.IncludeStructuralNoise = req.IncludeStructuralNoise
+	e.Boundary = req.Boundary
+	if req.Window != nil {
+		e.Window = *req.Window
+	}
+}
+
+// detectionRequest is the wire shape for creating a custom detection --
+// the intent-specific block that mirrors expectationRequest above.
+//
+// Structure and tunables arrive together here because a definition is
+// created in one call, but they are stored apart: the conditions and
+// aggregation become the envelope's Detection block, while Threshold and
+// Window become ordinary Params. After creation the two are edited
+// through different doors -- the params editor tunes the numbers, and
+// nothing else in this API rewrites the structure. See
+// engine.DetectionSpec for why that line is drawn where it is.
+type detectionRequest struct {
+	Conditions    []engine.Condition  `json:"conditions"`
+	Key           engine.KeyMode      `json:"key"`
+	Counting      engine.CountingMode `json:"counting"`
+	DistinctField engine.Field        `json:"distinctField"`
+	// DetailTemplate is the sentence a raised flag shows. Its
+	// placeholders are a closed set, validated here at create time --
+	// see engine.ValidateDetectionDetailTemplate.
+	DetailTemplate string `json:"detailTemplate"`
+	// Window is a Go duration string ("60s", "5m"), the same
+	// representation every shipped detector's window param already
+	// stores.
+	Threshold int    `json:"threshold"`
+	Window    string `json:"window"`
 }
 
 // createDefinitionRequest is the wire shape for POST /api/definitions.
@@ -377,6 +645,11 @@ type createDefinitionRequest struct {
 	Intent      engine.Intent       `json:"intent"`
 	Kind        engine.Kind         `json:"kind"`
 	Expectation *expectationRequest `json:"expectation"`
+	Detection   *detectionRequest   `json:"detection"`
+	// Family files the new detector under a flag family (#829). Optional
+	// -- an unfiled detector wears the operator-authored accent, which is
+	// what every custom detector wore before the field existed.
+	Family engine.Family `json:"family"`
 }
 
 // ErrProgrammaticIsShippedOnly is the reasoning behind the one creation
@@ -384,13 +657,17 @@ type createDefinitionRequest struct {
 // quote the same sentence.
 const errProgrammaticIsShippedOnly = "kind=programmatic cannot be created: programmatic logic is Go compiled into this binary, not data, so only a shipped definition can have it (see engine.Kind). A custom definition is always declarative."
 
-// errCustomDetectionNotBuildable is the honest current limit on custom
-// definitions, stated at the validation boundary rather than accepted and
-// silently never evaluated.
-const errCustomDetectionNotBuildable = "intent=detection cannot be created yet: a custom detection definition needs its match conditions stored on the envelope, and the envelope has nowhere to carry them -- the only declarative logic this binary builds from stored data is an expectation's. Accepting one would create a definition that exists, lists, and evaluates nothing, which is the failure this refusal exists to avoid."
+// alwaysConsultedReason is what a definition's view says when its
+// conditions give the engine's dispatch pre-index nothing to narrow on.
+// Stated once so the create response, every later read, and the test
+// that pins the behaviour all quote the same sentence.
+const alwaysConsultedReason = "This detector's conditions give the engine nothing to pre-index on, so it is evaluated against every event rather than only the events that could match it. That is allowed -- it is a legitimate thing to watch for -- but it costs more of the ingest budget than a detector narrowed by destination port, chain, rule label or address classification."
 
 // handleDefinitionsCreate creates a custom definition with a
 // server-generated ID.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 //
 // Two refusals here are the API surface of invariants recorded on #401,
 // and both are stated rather than silently coerced:
@@ -401,8 +678,11 @@ const errCustomDetectionNotBuildable = "intent=detection cannot be created yet: 
 //     shape may express a custom programmatic definition, and this is
 //     where that becomes a 400 rather than a validation error deeper
 //     down.
-//   - intent=detection is refused, for now, with its reason. See
-//     errCustomDetectionNotBuildable.
+//
+// Only one refusal remains. intent=detection was refused too, until the
+// envelope gained somewhere to carry a detector's match conditions
+// (engine.DetectionSpec, issue #502); it is now created by
+// createCustomDetection below.
 //
 // The stored definition's kind and provenance are decided by the server
 // from the expectation's own shape, never by the request: a non-inverted
@@ -417,8 +697,8 @@ const errCustomDetectionNotBuildable = "intent=detection cannot be created yet: 
 // since starting anywhere else would mean shipping traffic decisions
 // before the operator has seen any evidence.
 func (s *Server) handleDefinitionsCreate(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	var req createDefinitionRequest
@@ -431,7 +711,7 @@ func (s *Server) handleDefinitionsCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if req.Intent == engine.IntentDetection {
-		http.Error(w, errCustomDetectionNotBuildable, http.StatusBadRequest)
+		s.createCustomDetection(w, r, req)
 		return
 	}
 	if req.Expectation == nil {
@@ -452,6 +732,53 @@ func (s *Server) handleDefinitionsCreate(w http.ResponseWriter, r *http.Request)
 	s.writeDefinition(w, http.StatusCreated, e.ID)
 }
 
+// createCustomDetection creates an operator-authored detector.
+//
+// Everything structural is validated before anything is stored, and it
+// is validated by the engine rather than restated here: the conditions,
+// key mode, counting mode and detail-template placeholders all go
+// through engine.DetectionSpec.Validate, so this handler and the store
+// and a rollback-era binary reading the same bytes all agree on what a
+// well-formed detection is. A refusal therefore names the actual
+// problem, and nothing half-valid reaches disk.
+//
+// The definition's kind and provenance are the server's, never the
+// request's -- the same rule the expectation path above follows.
+func (s *Server) createCustomDetection(w http.ResponseWriter, r *http.Request, req createDefinitionRequest) {
+	if req.Detection == nil {
+		http.Error(w, "a detection block is required: a custom detection is its conditions and the aggregation around them, and there is nothing to create without them", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "a name is required", http.StatusBadRequest)
+		return
+	}
+
+	d := engine.NewDefinition(strings.TrimSpace(req.Name), engine.IntentDetection, engine.KindDeclarative)
+	d.Enabled = true
+	d.Provenance = engine.Provenance{Origin: engine.ProvenanceCustom}
+	d.Family = req.Family
+	d.ParamSchema = engine.CustomDetectionParamSchema()
+	d.Params = engine.Params{
+		"threshold": req.Detection.Threshold,
+		"window":    req.Detection.Window,
+	}
+	d.Detection = &engine.DetectionSpec{
+		Conditions:     req.Detection.Conditions,
+		Key:            req.Detection.Key,
+		Counting:       req.Detection.Counting,
+		DistinctField:  req.Detection.DistinctField,
+		DetailTemplate: req.Detection.DetailTemplate,
+	}
+
+	if err := s.Definitions.Upsert(d); err != nil {
+		writeDefinitionError(w, err)
+		return
+	}
+	s.Audit.Record(auditActor(r), "definition.create", d.ID, d.Name)
+	s.writeDefinition(w, http.StatusCreated, d.ID)
+}
+
 // updateDefinitionRequest is the wire shape for PUT
 // /api/definitions/{id}. Every field is a pointer (or a nil-able map/
 // slice) so an absent field means "leave this alone" rather than "set it
@@ -463,16 +790,54 @@ type updateDefinitionRequest struct {
 	// ships the logic, not of the deployment -- the same reasoning that
 	// keeps kind, intent, schema and provenance untouchable there (see
 	// engine.DefinitionsStore.SetParams).
-	Name         *string               `json:"name"`
-	Enabled      *bool                 `json:"enabled"`
-	Scope        *engine.Scope         `json:"scope"`
-	Params       engine.Params         `json:"params"`
-	Suppressions *[]engine.Suppression `json:"suppressions"`
-	Expectation  *expectationRequest   `json:"expectation"`
+	Name        *string             `json:"name"`
+	Enabled     *bool               `json:"enabled"`
+	Scope       *engine.Scope       `json:"scope"`
+	Params      engine.Params       `json:"params"`
+	Expectation *expectationRequest `json:"expectation"`
+	// Family re-files a custom detector under a flag family (#829); the
+	// empty string clears the filing. Refused for a shipped definition,
+	// the same way Name is.
+	Family *engine.Family `json:"family"`
+	// Detection rewrites an operator-authored detector's structure --
+	// its conditions and the aggregation around them. The conditions
+	// editor (#829) is the first thing in the UI that can author one, so
+	// this is the door it saves through; before it, the structure was
+	// write-once at create time.
+	//
+	// Threshold and window are deliberately not here even though
+	// detectionRequest carries them at create time: they are ordinary
+	// Params once the definition exists, tuned through Params above like
+	// every other detector's, and a second door onto them would be two
+	// ways to write one value. See engine.DetectionSpec on where that
+	// line is drawn.
+	Detection *detectionStructureRequest `json:"detection"`
 }
 
-// handleDefinitionsUpdate applies whichever of enabled, scope, params,
-// suppressions and expectation data the request actually carries.
+// detectionStructureRequest is the structure half of detectionRequest --
+// what a detector *is*, without the two numbers that say how sensitive it
+// is. Its own type rather than a reused detectionRequest, so a caller
+// cannot send a threshold to an endpoint that would silently drop it.
+type detectionStructureRequest struct {
+	Conditions     []engine.Condition  `json:"conditions"`
+	Key            engine.KeyMode      `json:"key"`
+	Counting       engine.CountingMode `json:"counting"`
+	DistinctField  engine.Field        `json:"distinctField"`
+	DetailTemplate string              `json:"detailTemplate"`
+}
+
+func (req detectionStructureRequest) spec() engine.DetectionSpec {
+	return engine.DetectionSpec{
+		Conditions:     req.Conditions,
+		Key:            req.Key,
+		Counting:       req.Counting,
+		DistinctField:  req.DistinctField,
+		DetailTemplate: req.DetailTemplate,
+	}
+}
+
+// handleDefinitionsUpdate applies whichever of enabled, scope, params
+// and expectation data the request actually carries.
 //
 // Params are validated against this definition's own declared
 // ParamSchema before anything is stored (engine.DefinitionsStore.
@@ -491,9 +856,12 @@ type updateDefinitionRequest struct {
 // registerDefinitions and engine.DefinitionsStore.SetOnChange). That is
 // #407's first handover -- detector toggles became restart-effective as
 // #405 ported each detector, and this is where next-event effect returns.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -518,7 +886,12 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "only an expectation definition takes an expectation block", http.StatusBadRequest)
 		return
 	}
-	if req.Name != nil && !isExpectation {
+	// A shipped definition's name belongs to the binary that ships the
+	// logic, so it stays refused. A custom one is the operator's own and
+	// is renamed below (#612) -- this endpoint refused everything that
+	// was not an expectation only because, until #502, nothing could be
+	// both custom and not an expectation.
+	if req.Name != nil && !isExpectation && (!sd.Available || sd.Definition.Provenance.Origin != engine.ProvenanceCustom) {
 		http.Error(w, "a shipped definition's name is a property of this binary, not of the deployment, and cannot be renamed", http.StatusBadRequest)
 		return
 	}
@@ -570,13 +943,25 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if req.Suppressions != nil {
-		if err := s.Definitions.SetSuppressions(id, *req.Suppressions); err != nil {
+	if req.Name != nil && !isExpectation {
+		if err := s.Definitions.SetName(id, *req.Name); err != nil {
 			writeDefinitionError(w, err)
 			return
 		}
 	}
-	if req.Expectation != nil || req.Name != nil {
+	if req.Family != nil {
+		if err := s.Definitions.SetFamily(id, *req.Family); err != nil {
+			writeDefinitionError(w, err)
+			return
+		}
+	}
+	if req.Detection != nil {
+		if err := s.Definitions.SetDetection(id, req.Detection.spec()); err != nil {
+			writeDefinitionError(w, err)
+			return
+		}
+	}
+	if req.Expectation != nil || (req.Name != nil && isExpectation) {
 		// Switching a non-inverted expectation to inverted starts it
 		// Observing, the same rule create applies -- there is no
 		// meaningful permitted set yet, so nothing else is coherent.
@@ -626,9 +1011,6 @@ func definitionAuditDetail(req updateDefinitionRequest) string {
 	if req.Params != nil {
 		parts = append(parts, "params")
 	}
-	if req.Suppressions != nil {
-		parts = append(parts, fmt.Sprintf("suppressions=%d", len(*req.Suppressions)))
-	}
 	if req.Name != nil {
 		parts = append(parts, "name")
 	}
@@ -665,9 +1047,12 @@ func joinComma(parts []string) string {
 // want this," not "reconsider me later" (settled in #243's slice 5 design
 // conversation). A no-op when no candidate tracks this definition, which
 // is the common case.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsDelete(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -701,18 +1086,25 @@ type cloneRequest struct {
 // its own identity -- a fresh id, never the original's (see
 // engine.Definition.ID's own doc comment on why a clone needs one).
 //
-// Supported for an expectation definition, which is data all the way
-// down: cloning one produces a second entry the operator can then edit.
-// Refused, with its reason, for a shipped detection definition -- its
-// logic is Go keyed by its own id, so a "clone" of it could only be an
-// envelope with no logic behind it: a definition that lists, looks
-// configurable, and evaluates nothing. Overriding the original's params
-// (PUT) is the operation that actually exists for those, and the refusal
-// says so rather than leaving an operator to discover the clone never
-// fires.
+// Three sources, one outcome -- a definition the operator can then edit:
+//
+//   - an expectation, which is data all the way down;
+//   - a custom declarative detection, whose conditions and aggregation
+//     are a stored DetectionSpec (#502) rather than Go;
+//   - a shipped *declarative* detector, whose structure this binary can
+//     now read back off its own builder and hand to the copy as a
+//     stored spec (#829, cloneShippedDetector).
+//
+// Only a shipped *programmatic* detector is still refused, and the
+// reason narrowed with it: not "a shipped definition cannot be cloned"
+// any more, but that this particular one's conditions are Go with
+// nothing in them to copy. See errShippedCodeDetectorHasNoConditions.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -721,15 +1113,9 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 		writeDefinitionError(w, err)
 		return
 	}
-	if !ok {
-		if _, exists := s.Definitions.Get(id); !exists {
-			http.Error(w, "no such definition", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "a shipped definition cannot be cloned: its logic is compiled into this binary and keyed by its own id, so a copy would evaluate nothing. Override its params instead (PUT /api/definitions/{id}).", http.StatusBadRequest)
-		return
-	}
 
+	// Decoded before the branch below, since both clone paths honour an
+	// operator-supplied name.
 	var req cloneRequest
 	if r.ContentLength > 0 {
 		if err := decodeJSONBody(w, r, &req); err != nil {
@@ -737,6 +1123,28 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	if !ok {
+		sd, exists := s.Definitions.Get(id)
+		if !exists {
+			http.Error(w, "no such definition", http.StatusNotFound)
+			return
+		}
+		if sd.Definition.Detection != nil {
+			// A Detection block is carried by exactly the definitions
+			// that can be copied structure and all: custom, declarative,
+			// intent=detection (engine.Definition.validateDetectionBlock
+			// enforces all three), so it is the whole test. An
+			// unavailable one -- a spec from a newer build -- is not
+			// short-circuited here: Upsert validates the copy and the
+			// refusal then names the field this binary did not
+			// understand, which is more use than "unavailable".
+			s.cloneCustomDetection(w, r, sd.Definition, req.Name)
+			return
+		}
+		s.cloneShippedDetector(w, r, sd.Definition, req.Name)
+		return
+	}
+
 	clone := entry
 	clone.ID = newDefinitionEntryID()
 	clone.CreatedAt = time.Now()
@@ -760,14 +1168,173 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 	s.writeDefinition(w, http.StatusCreated, clone.ID)
 }
 
+// cloneCustomDetection copies an operator-authored detector: its
+// DetectionSpec, its params and its scope under a fresh id (issue #810).
+// Nothing here is compiled logic -- the structure is the stored spec and
+// the sensitivity is ordinary Params -- so the copy evaluates exactly
+// what the original does, which is the thing a shipped detector's clone
+// could never do.
+//
+// The copy starts paused (#787 decision C: "paused so a half-edited
+// detector never runs"). An operator clones a detector in order to change
+// it, and a copy that started firing on creation would duplicate the
+// original's flags for as long as that editing took. Suppressions are
+// carried over with it: they are exclusions the operator wrote for this
+// detector's own matching, so a copy of the matching without them would
+// fire on traffic they had already ruled out.
+func (s *Server) cloneCustomDetection(w http.ResponseWriter, r *http.Request, src engine.Definition, name string) {
+	clone := src
+	clone.ID = newDefinitionEntryID()
+	clone.Enabled = false
+	if name != "" {
+		clone.Name = name
+	} else if clone.Name != "" {
+		clone.Name = clone.Name + " (copy)"
+	}
+	if err := s.Definitions.Upsert(clone); err != nil {
+		writeDefinitionError(w, err)
+		return
+	}
+	s.Audit.Record(auditActor(r), "definition.clone", clone.ID, "from "+src.ID)
+	s.writeDefinition(w, http.StatusCreated, clone.ID)
+}
+
+// errShippedCodeDetectorHasNoConditions is what cloning a shipped
+// *programmatic* detector answers with. Stated once so the handler, the
+// frontend's copied-from line and the test that pins it all quote the
+// same reason.
+const errShippedCodeDetectorHasNoConditions = "this detector's conditions are built into this binary as Go rather than stored as data, so there are none to copy. Start a detector from it in the conditions editor instead -- the copy takes its scope and its numbers, and you write what it matches."
+
+// cloneShippedDetector starts an operator-authored detector from a
+// shipped one (#829).
+//
+// This used to be refused outright, and the refusal was right at the
+// time: a "clone" of a shipped detector could only be an envelope with
+// no logic behind it, because nothing could express the logic. What
+// changed is that a custom detection can now carry the same structure
+// the shipped builder assembles (engine.DetectionSpec, #502) and there
+// is now an editor for it, so the copy can be handed the original's real
+// conditions rather than an empty bar.
+//
+// The copy is a genuinely separate detector: its own id, its own name,
+// provenance=custom, and it evaluates its own stored structure. It is
+// not an override of the original, which keeps running exactly as it
+// was.
+//
+// It starts paused, for the same reason a custom detector's copy does
+// (#787 decision C, #810): an operator clones a detector to change it,
+// and one that started firing on creation would duplicate the original's
+// flags for as long as the editing took.
+//
+// Two things are deliberately not carried across:
+//
+//   - The shipped params that are not threshold and window. A custom
+//     detection declares exactly those two (engine.
+//     CustomDetectionParamSchema), so anything else the original tuned
+//     has no schema to be validated against here and would be stored as
+//     a value nothing reads.
+//   - A detail template naming evidence the copy cannot accumulate. A
+//     shipped detector may write "{Count} ports including {Ports}"; a
+//     DetectionSpec declares no evidence categories, so that template
+//     would be refused by its own validation. Rather than fail the
+//     clone over a sentence, the copy falls back to a plain one and the
+//     operator can rewrite it -- the says line is right there in the
+//     editor.
+func (s *Server) cloneShippedDetector(w http.ResponseWriter, r *http.Request, src engine.Definition, name string) {
+	if src.Intent != engine.IntentDetection {
+		http.Error(w, "only a detection definition can be started from: an expectation is copied through its own clone path.", http.StatusBadRequest)
+		return
+	}
+	built, err := engine.BuildShippedDeclarativeDefinition(src)
+	if err != nil {
+		http.Error(w, errShippedCodeDetectorHasNoConditions, http.StatusBadRequest)
+		return
+	}
+	spec := built.Structure()
+	if engine.ValidateDetectionDetailTemplate(spec.Key, spec.DetailTemplate) != nil {
+		spec.DetailTemplate = defaultDetailTemplate(spec.Key)
+	}
+	if err := spec.Validate(); err != nil {
+		http.Error(w, "this detector's structure cannot be expressed as an operator-authored one: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	clone := engine.NewDefinition(cloneNameFor(src.Name, name), engine.IntentDetection, engine.KindDeclarative)
+	clone.Enabled = false
+	clone.Scope = src.Scope
+	clone.Provenance = engine.Provenance{Origin: engine.ProvenanceCustom}
+	clone.ParamSchema = engine.CustomDetectionParamSchema()
+	clone.Params = customParamsFrom(src.Params, clone.ParamSchema)
+	clone.Detection = &spec
+
+	if err := s.Definitions.Upsert(clone); err != nil {
+		writeDefinitionError(w, err)
+		return
+	}
+	s.Audit.Record(auditActor(r), "definition.clone", clone.ID, "from "+src.ID)
+	s.writeDefinition(w, http.StatusCreated, clone.ID)
+}
+
+// cloneNameFor is the copy's name: whatever the operator asked for, or
+// the original's with " (copy)" after it -- the same suffix both other
+// clone paths in this file already append, so the three read alike on
+// the bench.
+func cloneNameFor(original, requested string) string {
+	if strings.TrimSpace(requested) != "" {
+		return strings.TrimSpace(requested)
+	}
+	if original == "" {
+		return "Detector (copy)"
+	}
+	return original + " (copy)"
+}
+
+// customParamsFrom keeps only the params a custom detection declares --
+// see cloneShippedDetector's own doc comment on why the rest are dropped
+// rather than carried. A param the original never set is left unset, so
+// engine.ValidateParams supplies whatever default its schema declares
+// instead of this function inventing one.
+func customParamsFrom(src engine.Params, schema []engine.ParamSchema) engine.Params {
+	out := engine.Params{}
+	for _, p := range schema {
+		if v, ok := src[p.Name]; ok {
+			out[p.Name] = v
+		}
+	}
+	return out
+}
+
+// defaultDetailTemplate is the sentence a copied detector says when the
+// original's own sentence names evidence a custom detection cannot
+// accumulate. Deliberately plain and true of every key mode: {Count} is
+// the one placeholder every detector resolves by construction (see
+// engine.ValidateDetectionDetailTemplate), and the key's own token is
+// added where the key supplies one, so the sentence names who it is
+// about rather than floating free.
+func defaultDetailTemplate(key engine.KeyMode) string {
+	switch key {
+	case engine.KeyPerSource, engine.KeyPerSourcePort:
+		return "{Count} matching events from {SourceAddress}"
+	case engine.KeyPerTarget:
+		return "{Count} matching events to {DestinationAddress}"
+	case engine.KeyPerDestinationPort:
+		return "{Count} matching events on port {DestinationPort}"
+	default:
+		return "{Count} matching events"
+	}
+}
+
 // handleDefinitionsReset puts a shipped definition's params back to
 // exactly what it shipped with. Clearing every override and "resetting to
 // default" are the same state, not two operations that have to be kept in
 // sync -- see engine.Definition.Distance, which reports an empty map
 // afterwards.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsReset(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -794,6 +1361,26 @@ type replayRequest struct {
 type replayResponse struct {
 	Receipt *receiptView `json:"receipt,omitempty"`
 	Decline *declineView `json:"decline,omitempty"`
+	// Current is the same replay run again with the definition's live
+	// params -- the number the candidate's receipt is being compared
+	// against ("would have fired 3 times ... currently: 41", #786).
+	//
+	// It has to be measured here, in this request, rather than read off
+	// anything already counted: the flag time series counts new episodes
+	// over the last 60 minutes and Flag.count is re-fires within one
+	// episode, so neither is the same measurement as a receipt, and
+	// putting either beside one would compare two different questions
+	// (#824, gap 1). Running the identical replay over the identical
+	// corpus with only the params changed is the only like-for-like
+	// answer available, and it costs one more pass over traffic already
+	// in memory.
+	//
+	// Omitted when the candidate is empty: the replay then already ran
+	// with the live params, so the receipt above *is* the current
+	// number, and a copy of it beside itself would say nothing. The
+	// nested value never carries a Current of its own for the same
+	// reason.
+	Current *replayResponse `json:"current,omitempty"`
 }
 
 // receiptView is engine.Receipt on the wire. The covered window is
@@ -842,9 +1429,17 @@ type declineView struct {
 // times" and "this question cannot honestly be asked of this definition"
 // are different answers, and collapsing them is the overclaim #403's
 // contract exists to rule out.
+//
+// A request carrying a candidate is answered twice: once with the
+// candidate, once with the definition's live params, the second under
+// `current` (#786). See replayResponse.Current for why the comparison
+// has to be measured here rather than read off an existing counter.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsReplay(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	sd, ok := s.Definitions.Get(r.PathValue("id"))
@@ -869,12 +1464,33 @@ func (s *Server) handleDefinitionsReplay(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	result, err := engine.ReplayDefinition(sd.Definition, engine.NewMemoryCorpus(s.Store), req.Params)
+	// Memory alone or disk-then-memory, with the retained half named as
+	// it would be named now (#996) -- see Server.replayCorpus, which is
+	// the one construction site issue #403 reserved. Every Replay call
+	// below is unchanged either way.
+	corpus := s.replayCorpus()
+	result, err := engine.ReplayDefinition(sd.Definition, corpus, req.Params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusOK, replayViewFor(result))
+	view := replayViewFor(result)
+	if len(req.Params) > 0 {
+		// The same replay again with the definition's live params (nil
+		// candidate) over the same corpus, so the two numbers differ in
+		// the params and in nothing else -- see replayResponse.Current.
+		if live, err := engine.ReplayDefinition(sd.Definition, corpus, nil); err == nil {
+			current := replayViewFor(live)
+			view.Current = &current
+		}
+		// A failure here is deliberately not the request's failure: the
+		// candidate's receipt is a complete, honest answer to what was
+		// asked, and losing it because the comparison alongside it could
+		// not be computed would trade the answer for the footnote.
+		// Current stays nil, and the caller shows the receipt without a
+		// "currently" beside it.
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func replayViewFor(result engine.Result) replayResponse {
@@ -924,11 +1540,13 @@ type promoteRequest struct {
 // allow-list -- the inverted-expectation action carried over from the
 // watchlist, re-expressed against a definition id.
 //
-// Admin-gated at the same tier as creating the definition: this changes
-// what future traffic is treated as expected for a device.
+// Gated at the same tier as creating the definition: this changes what
+// future traffic is treated as expected for a device. That tier moved
+// from admin to user in #653, same as the rest of the definitions
+// surface -- see handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsPromote(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -962,9 +1580,12 @@ type setObservingRequest struct {
 // in observe mode -- the raw mechanism only: this package (like the
 // matching rules themselves) makes no judgement about when an operator
 // should call it, #243 open question 3.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsSetObserving(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -1004,7 +1625,7 @@ func (s *Server) writeDefinition(w http.ResponseWriter, status int, id string) {
 		return
 	}
 	rulesByDevice, evidence := s.definitionsCoverage()
-	writeJSON(w, status, definitionViewFor(sd, rulesByDevice, evidence.Complete))
+	writeJSON(w, status, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, s.now()))
 }
 
 // writeDefinitionError maps the definitions store's sentinel errors onto

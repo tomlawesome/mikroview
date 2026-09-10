@@ -123,6 +123,7 @@
       <span class="v-group">
         <button class="v link" onclick={() => filterAndClose('device', event.deviceId)}>{deviceName}</button>
         <CopyButton value={event.deviceId} label="device id" />
+        <EditNameButton type="device" value={event.deviceId} label={deviceName} />
       </span>
     </div>
     {#if event.chain}
@@ -154,6 +155,19 @@
           <CopyButton value={String(event.srcPort)} label="source port" />
           <EditNameButton type="port" value={String(event.srcPort)} label="port {event.srcPort}" />
           {#if lookupPort(event.srcPort)}<PortInvestigateButton port={event.srcPort} />{/if}
+        </span>
+      </div>
+    {/if}
+    {#if event.srcMac}
+      <div class="row">
+        <span class="k">Src MAC</span>
+        <span class="v-group">
+          <!-- Plain text, not a filter link: no Filters field takes a MAC,
+               and a link that filtered to nothing would be a promise the
+               bar can't keep. Here at all because #644's squared columns
+               left this sheet as the one place a row's MAC surfaces. -->
+          <span class="v">{event.srcMac}</span>
+          <CopyButton value={event.srcMac} label="source MAC" />
         </span>
       </div>
     {/if}

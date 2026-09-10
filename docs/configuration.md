@@ -25,6 +25,7 @@ listen:
 store:
   retention: 24h
   maxMemory: 120MiB
+  settingsStorePath: /var/lib/mikroview/settings.json
 
 devices:
   - id: core-router
@@ -40,10 +41,24 @@ devices:
   Go duration-string-style size such as `120MiB` or `500MB` rather than
   an event count. Same section as above explains why a count would not
   mean anything portable between deployments.
+- `store.settingsStorePath` — where a size set from Settings' own memory
+  control is kept. Once somebody moves that slider and applies it, the
+  stored figure is the one that applies and `store.maxMemory` above is
+  ignored — mikroview says which one it took at startup. Delete the file
+  to go back to the config file's figure; there's no separate reset
+  control, since moving the slider back is the same act. Optional
+  persistence, same contract as `flags.storePath`: left empty, the
+  control still works and still resizes the running buffer, the choice
+  just doesn't survive a restart.
 - `devices` — maps a syslog source IP to a friendly name. Routers
   sending logs from an IP *not* listed here still appear in the UI and
   `/api/devices`, labelled by their raw IP with `configured: false`, so
   you can identify and add them rather than silently losing their events.
+  A `name` set here is the one everyone sees, and the app will not let
+  anybody change it from the browser: the pencil on a device says the
+  name comes from this file and that changing it here is the way to
+  change it. A router you have not listed can be renamed in the app, and
+  that name is stored on the server, so everyone signed in sees it.
 
 ### How events are stored
 
@@ -95,6 +110,368 @@ over hours, which is why mikroview warns above 1GiB (see
 budget on a machine that genuinely has the memory is a legitimate choice,
 and the warning only makes sure you're making it with the real cost in
 front of you.
+
+**Settings' memory control can override the config file.** Admin ▸
+Settings' memory group carries a slider under the hours bar; dragging it
+only proposes a figure, and nothing changes until you press apply. Once
+you do, mikroview stores that figure and resizes the running buffer
+immediately — growing it keeps every event already held, shrinking it
+drops the oldest first. From then on, the stored figure is what applies
+on every future restart too, and `store.maxMemory` in the config file is
+ignored — mikroview names which one it took in the startup log. To go
+back to the file's figure, delete the settings document
+(`store.settingsStorePath`, `/var/lib/mikroview/settings.json` by
+default); there's no separate reset control, since moving the slider
+back is the same act. A viewer sees the bar and the figure but isn't
+offered the drag.
+
+The same change is available over the API: `PUT /api/settings/store`
+(admin-only, audit-logged as `settings.store_max_memory`) takes
+`{"maxMemory": <bytes>}` and does exactly what applying the slider does
+-- stores the figure and resizes the ring to match. A figure outside the
+allowed range is refused with a 400 rather than being clamped to the
+nearest end.
+
+**The allowed range.** The low end is a fixed 32MiB. The high end is
+worked out once at startup, per host: mikroview takes the smallest of
+the cgroup v2 `memory.max`, the cgroup v1 `memory.limit_in_bytes`, and
+`/proc/meminfo`'s `MemTotal` (whichever actually bounds this process),
+reserves headroom of whichever is larger — 256MiB or a quarter of that
+total — and divides what's left by the same 1.47x resident overhead
+quoted above, rounding down to a whole MiB. If none of those figures can
+be read, the ceiling falls back to 1GiB. Whatever that works out to, the
+ceiling is never computed below the figure your instance is already
+running on, so a deliberately large budget set in `config.yaml` is never
+reported as out of range.
+
+`GET /api/stats` also reports all of this as a `memory` object --
+`maxMemory`, `min`, `max`, `hostTotal` and `bytesPerEvent` (the range and
+what it's a share of), `resident` (what the process is actually costing
+the host right now) and `stored` (whether the figure came from Settings
+rather than the config file). All of those are byte counts except
+`stored`. Same access tier as the rest of `/api/stats` -- see
+[API reference](#api-reference).
+
+### Warm restart: what survives a restart
+
+Everything in the section above lives in memory, so a restart used to
+take all of it with it: the hourline went blank, every detector's
+rolling window started from nothing, and every device's "first seen"
+date silently became today. Mikroview now writes a small snapshot of
+that derived state every few minutes and puts it back on the next boot.
+
+**On by default.** These are the values in effect if you set nothing:
+
+```yaml
+snapshot:
+  interval: 5m                       # how often one is written; 30s minimum
+  keep: 6                            # generations kept, oldest deleted first
+  dir: /var/lib/mikroview/snapshots   # default: beside the data directory
+```
+
+- `snapshot.interval` — how often a snapshot is written, as a Go
+  duration string. Anything shorter than `30s` is treated as a mistake
+  and the 5m default applied (see [CFG-0070](#cfg-0070)): the write
+  briefly borrows the same goroutine that evaluates events, so
+  snapshotting every second costs more evaluation than the counters it
+  saves are worth. One more is written at shutdown, so a planned restart
+  loses nothing.
+- `snapshot.keep` — how many generations to keep. Older ones are
+  deleted after each write. Below 1 the default is applied (see
+  [CFG-0071](#cfg-0071)), since keeping none would delete the file just
+  written. More than one is kept because the newest file is the one a
+  power cut mid-write can truncate; mikroview then falls through to the
+  next-newest rather than starting cold.
+- `snapshot.dir` — where the files go, as `snapshot-<UTC stamp>.json`,
+  mode 0600 in a 0700 directory. Left empty, mikroview puts them beside
+  its other state.
+
+**What a snapshot holds:** counts, minute stamps, rule and log-prefix
+labels, device ids and names with their first and last seen, and each
+detector's per-source window counts keyed by address. **What it never
+holds:** event lines, packet payloads, or the rule/NAT/DHCP tables your
+routers push. Those stay in memory for the life of the process, which is
+the promise SECURITY.md makes and this feature does not change.
+
+**Encrypted when `history.keyFile` is mounted, memory-only otherwise
+(#853).** Snapshots are sealed under the same key and cipher as the
+on-disk event history below — one key, not two. With no key configured,
+snapshots are not written at all: a restart starts cold, exactly as it
+did before warm restart existed. There is no unencrypted mode: this is
+not a separate setting, only a consequence of whether `history.keyFile`
+is mounted.
+
+**Snapshots are files even on Postgres.** A deployment that has moved
+its stores to Postgres still writes snapshots to `snapshot.dir` on the
+local disk. This is not an oversight: a snapshot is derived, ephemeral
+counters, not custody data. Nothing in it is authoritative, nothing in
+it is unrecoverable, and losing the whole directory costs exactly one
+cold start — so there is no reason to spend a database round trip on it
+every few minutes, and no reason to carry it in a backup.
+
+**It never stops mikroview starting.** If `snapshot.dir` cannot be
+created or written — a read-only mount, a wrong owner after a volume
+move — mikroview says so once in the startup log and runs without
+snapshots. You get the same monitoring, just a cold start after the next
+restart.
+
+**Seeing whether it worked.** `GET /api/stats` reports `liveSince` (when
+this process started) and, only after a warm restart, `restoredTo` (when
+the snapshot it loaded was taken). The UI reads the same pair: for the
+hour after a restart the hourline and the docket say
+`restored to 13:14 · live since 13:18`, or `counting since 13:18 —
+nothing before` if it started cold.
+
+### On-disk event history (optional, off by default)
+
+Everything described so far -- `store.retention`, `store.maxMemory` -- is
+the in-memory ring: a fixed block of memory holding the most recent
+events, gone on restart or once the ring wraps. `history:` is a
+separate, optional feature that writes the same events to one
+encrypted, compressed file per day, so a threshold can be loosened
+against weeks of real traffic instead of whatever the ring still holds.
+These are two different settings answering two different questions:
+`store.retention` is how far back a live query into memory can reach;
+`history.days` is how many days of files exist on disk at all. Neither
+setting changes the other.
+
+**Off by default, and staying off is a first-class choice.** An
+operator who wants nothing about traffic on disk is choosing that, not
+missing a setup step:
+
+```yaml
+history:
+  enabled: false
+  keyFile: ""
+  days: 30
+  maxBytes: 1073741824   # 1 GiB
+  dir: ""
+```
+
+**Three of these five are starting figures, not the last word.**
+`history.enabled`, `history.days` and `history.maxBytes` are the values a
+fresh instance comes up on; from then on they are editable in Settings,
+beside the memory slider, and the figure set there wins on every future
+restart — mikroview names which one it took in the startup log. To go
+back to the file's figures, delete the settings document
+(`store.settingsStorePath`), exactly as for `store.maxMemory` above.
+`history.keyFile` and `history.dir` are **not** editable from the app and
+never will be: one names a mounted secret and the other a filesystem
+path, and neither belongs in the blast radius of a browser session.
+
+- `history.enabled` — the switch, and the initial position of the one in
+  Settings. **Turning it off deletes what was already retained** — off
+  has to mean the history is actually gone, or the setting is a lie.
+  That applies to the control in the app as well: the files are gone
+  before the change is confirmed on screen.
+- `history.keyFile` — path to a master key file that you generate and
+  mount, e.g.:
+
+  ```
+  head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+  ```
+
+  The file must hold at least 32 bytes. This is a path, never the key
+  itself — there is deliberately no environment variable carrying key
+  material; `MIKROVIEW_HISTORY_KEY_FILE` only names the file.
+
+  **It must be mounted outside the data directory.** A key kept beside
+  the files it protects is decoration: whoever copies the directory
+  copies both, and now has everything needed to read it.
+
+  **There is no unencrypted mode.** `history.enabled: true` with no key
+  file set does not mean "retain, unencrypted" — it means nothing is
+  retained at all, and mikroview turns the switch back off and says so
+  (see [CFG-0080](#cfg-0080)). The control in Settings refuses the same
+  request for the same reason, with a 409 and a sentence saying to mount
+  a key.
+- `history.days` — how many days of files to keep, initially. Below 1 the
+  30-day default is applied (see [CFG-0081](#cfg-0081)): zero would drop
+  the day just written on the very next flush, leaving history "on" and
+  holding nothing. Lowering it from Settings drops the surplus days
+  straight away, not at the next flush.
+- `history.maxBytes` — a second cap, applied alongside `days` — whichever
+  is hit first drops the oldest day. Below 1 MiB the 1 GiB default is
+  applied (see [CFG-0082](#cfg-0082)): below about a megabyte the cap is
+  smaller than a single day at any realistic logging rate, so every
+  flush would drop all but the day still being written. Also editable
+  from Settings.
+- `history.dir` — where the daily files live, mode 0600 in a 0700
+  directory. Left empty, mikroview puts them beside the data directory.
+  Config-file only.
+
+**The setting is not the window.** `history.days` says how many days are
+*allowed*; how many are actually on disk is whatever survived the byte
+cap, and after a restart or a fresh install it is however many have been
+collected so far. Settings states the window actually held — the days,
+the oldest date, the bytes — separately from the setting, and
+`GET /api/settings/history` reports both. Turning the history on takes
+what the event buffer already holds as well as everything after it, so
+the first day's file is not empty.
+
+**What encryption buys, and what it doesn't.** Copying the data
+directory, or restoring a backup of it, yields nothing readable without
+the key file — and the key file lives outside that directory, so
+copying one doesn't carry the other. It is not protection against
+everything: root on the running host can still read whatever the
+mikroview process itself can, because the process holds the key to do
+its own reads and writes. The only way to avoid that is not retaining
+history at all, which is why staying off is a real, supported choice
+rather than a lesser one.
+
+### Router backups over SFTP (optional, off by default)
+
+Issue #394: a router's own scheduled script (the setup wizard's step 6
+prints it) pushes two files a night -- the binary `.backup` that
+restores the router whole, and the plain-text `.rsc` export kept for
+reading -- into a small SFTP server mikroview runs for exactly this.
+**Mikroview is the place you turn to when the router is gone**, so the
+copies have to be usable with nothing else in hand.
+
+```yaml
+backup:
+  enabled: false
+  listen: ":47022"
+  vaultDir: ""
+```
+
+- `backup.enabled` — the switch. Off by default: this opens a second
+  listening port, only once you have decided to use it. The wizard's
+  step 6 is what an operator actually flips this from in practice.
+- `backup.listen` — the drop box's bind address. Defaults to `:47022`,
+  a fixed, deliberately unconventional port (not 22 or 2222, which draw
+  scanner traffic) — change it only if you need a different port
+  mapped through a firewall or a container network.
+- `backup.vaultDir` — where encrypted generations live on disk. Left
+  empty, mikroview puts them beside the data directory. Config-file
+  only, same as `history.dir`.
+
+**No key, no backups.** Every pair is encrypted under `history.keyFile`
+(above) — the same key, the same "no key, no storage" rule #853 applies
+to the rest of mikroview's state. With no key configured, the drop box
+refuses every login outright rather than accepting a push it has
+nowhere safe to keep; Settings' `router backups` group says so plainly.
+There is no separate key for this feature and no unencrypted fallback.
+
+**Login is the device, not a new credential.** Username is the router's
+device name, password is that device's ingest token — the very token
+already minted for pushing rule/NAT/address tables (see "Friendly
+names" and the setup wizard). A login can only write into its own
+folder, and cannot list, read, delete, rename or overwrite anything —
+the vault (`internal/backupvault`) commits a generation only when the
+SFTP client's own transfer finishes; an interrupted push commits
+nothing and the router's script sees a failure, exactly as with any
+other push.
+
+**What arrives is checked, not merely stored.** The first bytes of a
+`.backup` upload are checked against RouterOS's own header: `88 ac a1
+b1` (`dont-encrypt=yes`, the restore copy the wizard's script asks for)
+or `ef a8 91 xx` (encrypted with the router's own password — accepted,
+but the app can never open it without that password). Anything else is
+refused and logged, not silently accepted. `.rsc` uploads are read as
+text with no such check. A file over 16 MiB is refused the same way,
+logged rather than silent.
+
+**Retention: 10 generations a router, oldest dropped first.** A
+generation is one script run's pair. The eleventh push does not grow
+the history — it retires the oldest and takes its place. There is no
+undo.
+
+**A missed push is said, not guessed.** Once a router has pushed at
+least twice, mikroview learns its interval from the arrivals
+themselves — not from the scheduler line the wizard printed, which an
+operator could change on the router without mikroview knowing. One
+missed interval is enough for the router's line in Settings to go
+amber with a count of how many pushes have been missed since the last
+one arrived. A router with a single push has no interval yet and shows
+nothing.
+
+**Reading a backup back is audited.** Downloading either file is
+admin-only and session-gated, and every download writes an audit-log
+entry with the admin's name — a download is the router's whole
+configuration, credentials included. Mikroview reads only the header,
+for the label above; it never claims a backup restores, and it never
+connects to a router to apply one. Restoring is the operator's own act
+on the replacement router (`/system backup load`).
+
+**Only on a network you trust.** RouterOS's SFTP client never verifies
+this server's host key (measured on RouterOS 7.23.3) — an attacker on
+the path between the router and mikroview could pose as mikroview and
+receive the pair and the ingest token in plain sight. Run this push
+over a LAN or a VPN you control, never across the open internet. See
+[SECURITY.md](../SECURITY.md) for the full caveat and #955, which tracks
+an HTTPS-based path that does verify, for deployments that cannot
+guarantee a trusted path. The host key itself is generated on first
+start and kept beside the TLS material (`tls.storePath`) — excluded
+from `-backup` for the same reason that directory already is (see
+["Backing up and restoring"](#backing-up-and-restoring)); a restore
+re-presents the CA-trust step ready to paste, and the SFTP host key
+regenerates the same way.
+
+`-backup`/`-restore` carry the vault along with everything else — see
+["Backing up and restoring"](#backing-up-and-restoring).
+
+### The state store: encrypted when a key is mounted, memory-only otherwise, except the hashed stores (#853)
+
+`history.keyFile` does double duty. Everything above is about the event
+*log* specifically, switched on by `history.enabled`. Separately, and
+regardless of that switch, the same key file also decides what happens to
+most of what mikroview persists to a JSON file: flags, entities, the MAC
+registry, rule usage, detector settings, watchlist suggestions and
+definitions — every document the file-backed state store writes, other
+than the three named below.
+
+**No key, no storage — for those.** With no `history.keyFile` mounted,
+none of the list above persists. It stays in memory for as long as the
+process runs and is lost on every restart, exactly like the event log
+with no key. There is no unencrypted mode for these: this build never
+writes any of them to disk in the clear.
+
+**Three stores are the exception (owner decision, #853 rule 6,
+2026-09-05): accounts (plus the create/skip decision), API tokens and
+recovery-key digests.** All three hold only one-way hashes — Argon2id
+password hashes, SHA-256 token hashes, hashed recovery keys — so a
+plaintext copy discloses usernames, roles and token names but nothing
+that lets anyone in. They keep persisting to a plain JSON file with no
+key configured, exactly as every mikroview release before #853, and are
+sealed like everything else once a key is mounted.
+
+**This is a significant change from earlier releases, but a smaller one
+than #853 first proposed.** Before this, none of the state store needed
+a key at all — everything in both lists above persisted to plain JSON
+with no configuration. From this build, flags, entities and the rest of
+the first list survive a restart only if `history.keyFile` is mounted;
+accounts, tokens and recovery keys keep surviving a restart either way,
+so `docker compose up` alone is still enough to keep your admin login. If
+you also want flags, entities, watchlist entries and definitions to
+survive a restart, mount a key (see
+[On-disk event history](#on-disk-event-history-optional-off-by-default)
+above for how to generate one) even if you have no interest in the event
+log itself and leave `history.enabled` off.
+
+**No migration path, for the memory-only stores.** Pre-1.0, there is no
+installed base to protect: a JSON file written before a key was mounted
+is not decrypted back if you add one later, and a document that fails to
+decrypt (the wrong key, or one written with no key at all) is refused the
+same way a corrupt document is — not silently treated as a fresh install.
+
+**`-backup`/`-restore` still work.** Both run with the key available, so
+the backup file itself carries plain, readable JSON either way; `-restore`
+writes each store back encrypted when the deployment it restores into has
+a key configured. Neither the key nor the retained event history travels
+inside a backup — see the note under `history.keyFile` above.
+
+**Postgres is unaffected.** A deployment on Postgres keeps whatever
+protection Postgres itself provides at rest, plus the `sslmode=verify-full`
+connection this project already requires (see [Postgres](#postgres-optional))
+— encrypting a second time on top was not judged to add real value for
+this build. See `docs/decisions/event-retention.md`'s amendment for the
+reasoning.
+
+`GET /api/persistence` (admin-only) reports which of `file`, `postgres` or
+`memory` this deployment's state store actually resolved to (accounts,
+tokens and recovery keys aside, since they always persist); Settings'
+persistence row shows the same thing in plain words.
 
 ### Running behind a reverse proxy
 
@@ -479,6 +856,122 @@ oidc:
   issuerUrl: "https://id.example.com"
 ```
 
+#### CFG-0070
+
+`snapshot.interval` is shorter than the 30s minimum. The 5m default is
+applied instead. A snapshot write briefly borrows the goroutine that
+evaluates events, so a very short cadence spends the process's time
+describing itself rather than watching traffic. See
+[Warm restart](#warm-restart-what-survives-a-restart).
+
+```yaml
+snapshot:
+  interval: 5m   # 30s or longer
+```
+
+#### CFG-0071
+
+`snapshot.keep` is below 1, which would delete the snapshot just
+written and silently turn warm restart off. The default of 6 is applied.
+
+```yaml
+snapshot:
+  keep: 6
+```
+
+#### CFG-0080
+
+`history.enabled` is on but `history.keyFile` is empty. There is no
+unencrypted mode, so nothing would be retained — mikroview turns
+retention back off rather than write anything unprotected. See
+[On-disk event history](#on-disk-event-history-optional-off-by-default).
+
+```yaml
+history:
+  enabled: true
+  keyFile: /run/secrets/mikroview-history.key   # outside the data directory
+```
+
+#### CFG-0081
+
+`history.days` is below 1, which would drop the day just written on the
+next flush — history would report itself as on while holding nothing.
+The 30-day default is applied instead.
+
+```yaml
+history:
+  days: 30
+```
+
+#### CFG-0082
+
+`history.maxBytes` is below 1 MiB, the minimum. Below about a megabyte
+the cap is smaller than a single day at any realistic logging rate, so
+every flush would drop all but the day still open. The 1 GiB default is
+applied instead.
+
+```yaml
+history:
+  maxBytes: 1073741824   # 1 GiB
+```
+
+#### CFG-0090
+
+`baseline.days` is zero, negative, or greater than `baseline.of`. A line
+cannot be seen on more days than the window holds, and a threshold of
+zero or less would make every line established the moment it appeared.
+See [Baseline line register](#baseline-line-register-issue-1016-optional).
+Clamped to the default of 3, or to `baseline.of` if that is smaller.
+
+```yaml
+baseline:
+  days: 3
+  of: 14
+```
+
+#### CFG-0091
+
+`baseline.of` is zero, negative, or greater than 32. 32 is the width of
+the per-line recurrence bitmap, so a longer window is refused rather
+than silently truncated. See [Baseline line
+register](#baseline-line-register-issue-1016-optional). Clamped to the
+default of 14.
+
+```yaml
+baseline:
+  days: 3
+  of: 14  # at most 32: the per-line recurrence bitmap is 32 bits wide
+```
+
+#### CFG-0092
+
+`baseline.hostQuietAfter` is zero or negative, which would draw every
+host quiet the instant it was heard from, greying out a working
+network. See [Baseline line
+register](#baseline-line-register-issue-1016-optional). Clamped to the
+default of 24h.
+
+```yaml
+baseline:
+  hostQuietAfter: 24h
+```
+
+#### CFG-0093
+
+`engine.decommissionCleanWindow` is below 1h or above 48h. Too short and
+a retired range could be declared quiet before a straggler could
+plausibly have spoken -- a router pushes its address table only every
+15-30 minutes, so the map would report a clean decommission it never
+actually observed. Too long and it stops being a matter of hours, as the
+name promises. See [Network segment
+decommissioning](#network-segment-decommissioning-issue-460-optional).
+Clamped to the default of 6h.
+
+```yaml
+engine:
+  decommissionCleanWindow: 6h
+```
+
 ## Logging
 
 Mikroview's own server output (not event data -- see `store.retention`
@@ -736,6 +1229,64 @@ and its space is already covered by `x4b_datacenter`.
 Refresh cadence is not configurable, for the same over-polling reason as
 the blocklist.
 
+## MAC vendor lookups (optional, on by default)
+
+Every event from a LAN host carries that host's hardware address, and the
+first three octets of one are an *OUI* -- a block IEEE assigned to a
+named organisation. Looking it up turns `dc:a6:32:...` into "Raspberry Pi
+Trading Ltd", which is usually the single most useful thing you can learn
+about a host you don't recognise. It backs the [device dossier](#device-dossier-issue-410).
+
+```yaml
+oui:
+  enabled: true
+  cachePath: /var/lib/mikroview/oui-registry.json
+```
+
+**No vendor data ships in mikroview.** Your instance fetches IEEE's MA-L
+registry itself, once a day, and caches the parsed result at `cachePath`
+so vendor names are there the moment it restarts rather than a minute
+later. The daily poll is conditional (`If-None-Match`), so an unchanged
+registry costs a few hundred bytes instead of the file's ~4 MB.
+
+On the licensing, because it is the reason for that arrangement: IEEE
+publishes the MA-L listing for direct download, free, without
+registration, and with no licence or usage conditions attached -- so
+fetching it and looking addresses up in it is plainly fine. What nobody
+is granted is permission to *redistribute* it, so shipping a copy inside
+mikroview would be passing on someone else's data without the right to.
+Your own copy, fetched from IEEE, avoids that question entirely and has
+the side benefit of being current rather than as old as your release.
+
+Until the first fetch completes, a dossier says vendor data is not
+available yet -- it never guesses, and it never presents "we haven't
+downloaded the registry" as "this device has no vendor". A registry
+older than 30 days keeps being used and is *labelled* stale rather than
+quietly trusted; a fetch that fails leaves the previous data in place.
+
+Three answers are deliberately not vendor names:
+
+- **Locally administered addresses.** The second-lowest bit of the first
+  octet says "this address was made up locally". No vendor ever
+  registered it, so there is nothing to look up -- and that is the
+  finding, not a failure: it means a virtual machine, a container, or a
+  phone randomising its Wi-Fi address. `02:42:...` is Docker,
+  `52:54:00:...` is KVM/QEMU.
+- **Sub-delegated blocks.** A few hundred OUIs are held by IEEE itself,
+  because they are carved into smaller MA-M/MA-S assignments listed in
+  files mikroview does not fetch. Reporting those devices as made by
+  "IEEE Registration Authority" would be nonsense, so they are reported
+  as sub-delegated with the vendor unknown.
+- **Private listings.** Some assignees pay to have their name withheld.
+  The block is registered; IEEE just won't say to whom.
+
+Set `enabled: false` to switch the feed off entirely -- no fetch, no
+refresh goroutine, and dossiers report vendor lookups as unavailable.
+There is deliberately no source setting: IEEE is the only publisher of
+this registry, and the two feeds above take a vetted menu rather than an
+arbitrary URL for the same reason. Refresh cadence is not configurable
+either, for the same over-polling reason as the blocklist.
+
 ## Port lookup
 
 Clicking the "i" affordance next to a source/destination port shows what
@@ -791,7 +1342,7 @@ different name in mikroview than the RouterOS comment.
 but changing one means editing `config.yaml` and restarting the
 container. **Entities** are the same idea (a label attached to a rule
 label, host IP, or -- issue #109 -- a port number), plus open-ended
-tags, managed live from the UI (**Menu → Entities**, admin-only) with no
+tags, managed live from the UI (**Admin ▸ Entities**, admin-only) with no
 restart needed -- the shared foundation two features build on (a
 mail-sender allowlist, and this IP/port/rule aliasing UI), so the record
 shape is deliberately generic (`type`, `key`, `label`, `tags`) rather
@@ -825,7 +1376,7 @@ only way a port ever gets a friendly name.
 
 Entities are managed via `GET`/`POST`/`DELETE /api/entities`
 (admin-gated the same way `POST /api/auth/users` is -- see
-[API reference](#api-reference)), the **Entities** panel in the menu, or
+[API reference](#api-reference)), **Admin ▸ Entities**, or
 the pencil on any address, port or rule token in the live view -- which
 is usually where you want it, since it puts the naming at the moment you
 recognised what the row was.
@@ -849,6 +1400,246 @@ derived from the events currently loaded in your browser tab, so that
 list is only as complete as what's been seen there so far -- the entity
 itself, once named, is fully persisted regardless.
 
+## Coverage-gap declarations (issue #630/#392, optional)
+
+A "coverage gap" is a boundary-direction pair -- e.g. traffic from
+`ether1` to `bridge1` -- that no detector or expectation has anything to
+say about, because nothing pushed or configured actually watches it.
+Silence there is ambiguous on its own: it might mean "nothing is
+happening," or it might mean "nobody ever pointed a detector at this."
+**Coverage-gap declarations** let an admin say, on the record, which of
+those it is -- a deliberate note that a given pair is *intentionally*
+quiet (a link that legitimately carries nothing worth watching), not an
+unexplained hole.
+
+```yaml
+coverage:
+  # Where declarations are persisted, as a small JSON file. Same
+  # optional-persistence contract as entities.storePath: left unset,
+  # declarations still work, they just don't survive a restart. If you
+  # set this in the container, mount a volume for its parent directory --
+  # see deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/coverage.json"
+```
+
+Declarations are managed via `GET`/`PUT`/`DELETE
+/api/coverage/declarations/{key}` (see [API reference](#api-reference)):
+`GET` is open to any signed-in user, same as `GET /api/definitions` --
+reading why a gap is explained is a viewer-tier read -- while `PUT` and
+`DELETE` are admin-only, since authoring or retracting that explanation
+carries the same weight as an entity label or a definition suppression.
+`key` is the boundary-direction pair itself, an opaque string this store
+does not parse or validate the shape of; `PUT`'s JSON body carries just
+`{"reason": "..."}`, capped at 400 characters, with `declaredBy` and
+`declaredAt` set server-side from the session and the clock rather than
+the request.
+
+## Host presence register (issue #1016, optional)
+
+The map draws the hosts your router's log has actually shown. On its own
+that makes a host's presence a property of the last few thousand events:
+a host that stops talking scrolls out of the buffer and disappears, with
+nothing left to say it was ever there.
+
+The **host presence register** keeps that record. Every event arriving on
+an internal interface from a private address registers that host, with
+when it was first and last seen and how many events it accounts for. A
+host that stops talking is not removed -- it goes quiet, and you can say
+which kind of quiet it is:
+
+- **intended** -- quiet on purpose (a machine powered on twice a month, a
+  spare printer). Needs a reason, and the reason stays said: it survives
+  the host reappearing, the same promise a coverage-gap declaration makes
+  about a quiet boundary.
+- **dismissed** -- take it off the map. No reason needed. Cleared
+  automatically the next time an event from that host arrives, because a
+  host that is back is not dismissed.
+
+mikroview learns all of this from the feed alone. It never probes a host
+to find out whether it is still there -- see the "observes, never scans"
+rule in [AGENTS.md](../AGENTS.md).
+
+```yaml
+hosts:
+  # Where the register is persisted, as a small JSON file. Same
+  # optional-persistence contract as coverage.storePath above: left
+  # unset, the register still works, it just rebuilds itself from the
+  # feed after a restart and your marks are not kept. If you set this in
+  # the container, mount a volume for its parent directory -- see
+  # deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/hosts.json"
+```
+
+The register is bounded at **10,000 hosts**. A source address is
+something an attacker can forge one field at a time, so an unbounded
+list keyed by it would be a way to grow mikroview's memory from the
+outside. At the cap, the host with the oldest last-seen time *that
+carries no mark* is dropped -- your own decisions are the one thing here
+that cannot be rebuilt from the feed, so they are the last thing to go.
+
+Writes go to disk behind the scenes and at most once a second, never on
+the path an event takes through the app: this is updated on every single
+ingested event, unlike the coverage declarations above, which are written
+straight through because they are rare and interactive.
+
+Hosts are read and marked via `GET /api/hosts` and
+`PUT`/`DELETE /api/hosts/{key}/mark` (see [API
+reference](#api-reference)). `key` is the interface and address joined
+with a pipe, e.g. `bridge-lan|10.0.10.5` -- the same key style as a
+coverage declaration. `GET` is open to any signed-in user; the two writes
+are user tier and audit-logged, since saying a silence is deliberate
+carries the same weight as any other authored explanation.
+
+## Device dossier (issue #410)
+
+`GET /api/hosts/{ip}/dossier` answers "what is this thing?" for one
+address, by assembling what mikroview already holds rather than by going
+and looking. It needs no configuration and is on whenever mikroview is,
+though several of its blocks are only as good as what your routers push
+(see [RouterOS setup](routeros-setup.md)).
+
+What it puts in front of you:
+
+- **Traffic fingerprint** -- which hosts it reached, which reached it,
+  the ports involved with their known names, and the cadence: regular,
+  bursty or occasional.
+- **MAC, vendor, and the locally-administered bit.** The vendor comes
+  from [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default).
+  The bit is called out on its own because it is the most useful single
+  line on the card when it is set: no vendor exists, so you are looking
+  at a VM, a container, or a device randomising its address, and the
+  question changes from "what gadget is this" to "which host made it".
+- **Names and where each came from** -- a static DNS entry, a lease
+  hostname, a WireGuard peer comment, your own saved label or a config
+  alias, said in words rather than as a code.
+- **Lease or fixed**, first and last seen, and **which firewall rules
+  its traffic matched**, with the rule's own comment when the router has
+  pushed its rule table.
+- **A suggested identity** with the evidence behind it and a confidence
+  in words: weak, fair or strong.
+
+The suggestion comes from a small explicit table -- MQTT plus a clock
+check plus a couple of fixed endpoints outside the LAN reads IoT-ish;
+SMB with RDP reads Windows-ish; raw printing reads printer, and so on.
+It is a table you can read (`internal/dossier/heuristics.go`), every row
+says what would rule it out, and no row may claim more than its ceiling.
+Evidence drawn from a handful of events over a few minutes lowers the
+confidence a step and the card says why.
+
+**Absence is reported, never filled in.** Each block says what it does
+not know and why, and the card ends with a list of everything it could
+not answer. The sharpest case is lease-versus-fixed: an address is only
+called fixed when a router has actually pushed a DHCP table that does
+not list it. A router that has never pushed one leaves the answer
+unknown, because silence is not evidence. An address nobody has ever
+seen answers 200 with an honest empty card, not a 404 -- "never seen" is
+an answer, and often the one you needed.
+
+**mikroview never touches the host.** The card may print an `nmap`
+command or a browser URL for you to run yourself, built from the ports
+something has actually been seen reaching on that host. mikroview does
+not run it and connects to nothing on your network: an observer that
+starts probing changes character, and starts appearing in other tools'
+logs as a scanner.
+
+The endpoint is open to any signed-in user, and is deliberately not
+reachable with a read-only API token -- it puts one host's traffic,
+peers, ports and hardware address in a single response.
+
+## Baseline line register (issue #1016, optional)
+
+The map draws every **line** the router's log has shown -- a source IP
+→ destination IP · port · protocol combination. On its own that's
+every conversation drawn the same way, so one genuinely unusual line is
+lost among the routes and ports your network talks on every day.
+
+The **baseline line register** tells the two apart by recurrence. A line
+seen on `days` distinct days out of the last `of` is **established**: the
+map draws it thin, dim and without flow. A line off that pattern is
+**off-baseline**: full width, bright, with flow dashes -- the thing worth
+your eye. Nothing is hidden either way; established traffic just recedes
+so off-baseline traffic stands out. You can also mark a line **expected**
+from its card on the map, with a reason: from then on it counts as
+established regardless of how often it recurs, the same kind of
+permanent statement a coverage-gap declaration or a host's "intended"
+mark makes.
+
+mikroview learns all of this from the feed alone -- it never probes a
+line to find out whether it still exists; see the "observes, never
+scans" rule in [AGENTS.md](../AGENTS.md).
+
+```yaml
+baseline:
+  # Where the register is persisted, as a small JSON file. Unlike every
+  # other storePath in this file, leaving this unset is genuinely lossy,
+  # not just less convenient: recurrence is counted in *days*, not
+  # events, so a register that rebuilds from the feed after a restart
+  # sees every line as first seen today, and the map lights up
+  # everything as off-baseline for the first `days` days all over again.
+  # It still works, but it is the wrong picture -- set a path. If you set
+  # this in the container, mount a volume for its parent directory -- see
+  # deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/baseline.json"
+  # How many distinct days a line must be seen on before it counts as
+  # established.
+  days: 3
+  # The window `days` is counted within, in days. Capped at 32, the width
+  # of the per-line recurrence bitmap.
+  of: 14
+  # How long a host may go silent before the map draws it as quiet.
+  # Owner-ratified at 24h (2026-09-07): a host silent for ten minutes
+  # means nothing -- a laptop with its lid shut over lunch has not gone
+  # away.
+  hostQuietAfter: 24h
+```
+
+The register is bounded at **50,000 lines**. A line's key is four
+attacker-influenced fields (source, destination, port, protocol) rather
+than the host register's address alone, so the ceiling matters more, not
+less. At the cap, the line with the oldest last-seen time *that carries
+no expected mark* is evicted -- your own statement that a line is
+expected is the one thing here that cannot be rebuilt from the feed, so
+it is the last thing to go.
+
+Off-baseline lines are read via `GET /api/baseline/off` and marked via
+`PUT`/`DELETE /api/baseline/{key}/expected` (see [API
+reference](#api-reference)). `key` is the four-part line itself, the same
+opaque-string style as a host or coverage key. `GET` is open to any
+signed-in user, same as `GET /api/hosts`; the two writes are user tier
+and audit-logged, since saying a line is expected carries the same
+weight as any other authored explanation.
+
+## Network segment decommissioning (issue #460, optional)
+
+Deleting a subnet from the router does not remove it from mikroview's map
+the moment the config changes -- it is decommissioned when the traffic
+stops, not when the config is deleted. A retiring range enters a
+**draining** watch, and the watch only clears after a **clean window** --
+measured in hours, not days -- during which nothing at all was seen to or
+from the range. Any traffic to or from the range during that window
+restarts the clock.
+
+```yaml
+engine:
+  # Where the decommission watches are persisted: each retiring range,
+  # its clean-window clock, and the names the router last knew inside it.
+  # Same optional-persistence contract as engine.definitionsStorePath
+  # above: left unset, watches still work, they just do not survive a
+  # restart. If you set this in the container, mount a volume for its
+  # parent directory -- see deploy/docker-compose.yml.
+  decommissionStorePath: "/var/lib/mikroview/decommission.json"
+  # How long a retired range must stay completely silent before it
+  # leaves the map. This is the default offered when a watch is
+  # created -- a watch already under way keeps the window it started
+  # with, so changing this does not retune a decommission in progress.
+  # Must be between 1h and 48h (CFG-0093 warns and clamps outside that
+  # range): shorter and a range could be declared quiet before a
+  # straggler had a chance to speak, since a router only pushes its
+  # address table every 15-30 minutes; longer and it stops being a
+  # matter of hours.
+  decommissionCleanWindow: 6h
+```
+
 ## Audit log: admin action accountability (optional)
 
 Every admin-privileged mutation -- creating a user, changing a detector's
@@ -871,22 +1662,27 @@ audit:
   storePath: "/var/lib/mikroview/audit.json"
 ```
 
-Two deliberate scoping decisions, both from issue #112's own explicit
-open question about which flag actions belong here:
+Flag actions are logged even though they are not admin-only, which is a
+deliberate exception to the "log admin actions" rule above:
 
-- **A plain flag clear** (`POST /api/flags/{id}/clear`) is **not**
-  logged -- that endpoint isn't admin-gated at all (any signed-in user
-  can clear a flag), and this is an audit log of *admin* actions.
-- **A permanent flag exclusion** (`POST /api/flags/{id}/clear-permanent`)
-  **is** logged, and is admin-only. It was previously open to any
-  signed-in user and unlogged; that was tightened because an exclusion
-  permanently suppresses detection for that (detector, target) until
-  someone notices and undoes it, which is not something a non-admin --
-  or a single compromised low-privilege credential -- should be able to
-  do silently. Removing an exclusion
-  (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
+- **A verdict** (`POST /api/flags/{id}/verdict`) is logged, carrying the
+  verdict itself as the entry's detail, and **undoing one**
+  (`DELETE /api/flags/verdict/{id}`) is logged too. An `expected`
+  verdict suppresses detection for that (detector, target) pair while
+  it stays within the recorded size, and "who decided this stopped being
+  flagged" has to stay answerable. The admin-only "clear and never flag
+  this again" this replaced was logged for the same reason.
+- **What that verdict wrote to the watchlist** is logged as though you
+  had done it by hand: `definition.create` for an observing entry it
+  created, `definition.promote` for the destinations it permitted, and
+  `definition.unpermit` (plus `definition.delete`) when the verdict is
+  undone. Each names the flag it came from.
+- **Clear all** (`POST /api/flags/clear-all`) is logged once per call --
+  "cleared N flags", not one entry per flag. It records no judgement and
+  no expectation, so a cleared flag raises again on the next matching
+  event.
 
-Reviewed from **Menu → Audit log** (admin-only, matching Entities' own
+Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
 persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
@@ -960,24 +1756,28 @@ Two kinds of entry, chosen per entry, not globally:
   (`includeStructuralNoise` opts back in) since it's rarely what anyone
   means by "did this device misbehave."
 
-Managed from **Menu → Watchlist** (admin-only, matching Entities/Audit's
+Managed from **Expect ▸ Watchlist** (admin-only, matching Entities/Audit's
 gate). Add,
 edit and remove entries there; for an inverted entry, the same page
 shows what's been promoted, what's waiting for review, and a toggle to
 resume or stop observing. An entry with a scoped source can also show
 its own recent matches inline, pulled from the match log below.
 
+Entries also arrive from the flags inbox, without being typed here: an
+`expected` verdict permits what a flag saw on the device's inverted
+entry, creating that entry (observing) if there is none, and a
+`resolved` verdict offers to open this page's own entry form prefilled.
+See [What a verdict writes to the watchlist](#what-a-verdict-writes-to-the-watchlist).
+
+Entries themselves are definitions and live in the definitions store
+(`engine.definitionsStorePath`), alongside every detector.
+
 ```yaml
 watchlist:
-  # Where watchlist entries themselves are persisted, as a small JSON
-  # file. Same optional-persistence contract as entities.storePath: left
-  # unset, entries still work, they just don't survive a restart.
-  storePath: "/var/lib/mikroview/watchlist.json"
-
-  # Where matches are recorded, append-only. Unlike storePath above,
-  # this has NO in-memory-only mode: durability is the entire reason
-  # this store exists (a match must survive a restart), so an empty
-  # value is treated as unusable rather than as an opt-out (CFG-0040).
+  # Where matches are recorded, append-only. This has NO in-memory-only
+  # mode: durability is the entire reason this store exists (a match
+  # must survive a restart), so an empty value is treated as unusable
+  # rather than as an opt-out (CFG-0040).
   matchLogPath: "/var/lib/mikroview/matchlog.jsonl"
 
   # The match log's hard ceiling on distinct records -- once reached, a
@@ -1050,7 +1850,7 @@ devices from your DHCP leases, and ports an existing firewall rule
 already drops or rejects -- so you have something to react to rather
 than something to invent.
 
-Managed from **Menu → Suggestions** (admin-only, same gate as the
+Managed from **Expect ▸ Watchlist ▸ Suggestions** (admin-only, same gate as the
 watchlist itself). Every suggestion is one of three states, never a
 plain accept/reject:
 
@@ -1185,7 +1985,13 @@ flags:
   is how many observations a host needs before a flag can reach full
   confidence (see below) — a brand-new source with almost no history
   can't produce a high-confidence flag no matter how extreme its first
-  few readings look.
+  few readings look. It also keeps a separate baseline for each hour of
+  the day once a host has at least one full prior day's history at that
+  hour (the same per-hour idea off-hours activity uses, below), and that
+  per-hour baseline survives a restart — resuming from what an earlier
+  run had already learned, so the very first event at that hour
+  afterward is judged against it rather than the detector waiting up to
+  a day to notice it again.
 - **Critical-port attempts** — `criticalPortThreshold`+ attempts against
   one of `criticalPorts` within `criticalPortWindow`, from an *external*
   source only (a LAN device reaching your own router's Winbox port is
@@ -1198,7 +2004,11 @@ flags:
   different well-known ports once each is one incident, not five), so
   the alert names every critical port that source touched within the
   window and carries them as evidence — not just the one port that
-  happened to trip the threshold.
+  happened to trip the threshold. It also carries, separately, exactly
+  which (destination host, port) combinations were actually seen
+  together — not every port crossed with every host it touched, which
+  would overstate what happened whenever the source reached more than
+  one internal destination.
 - **Global volume spike** — current events/sec vs. a slow-moving
   baseline of itself (an exponential moving average, not a fixed
   number), so it adapts to your network's real traffic level over time
@@ -1339,7 +2149,7 @@ flags:
   which only fires on distinct-*destination-count* spread over a window
   — a single new SMTP connection to one destination wouldn't trip that.
   If you self-host your own outbound mail server, tag its host entity
-  `trusted-mail-sender` once (**Menu → Entities**, admin-only, or `POST
+  `trusted-mail-sender` once (**Admin ▸ Entities**, admin-only, or `POST
   /api/entities`) and mikroview never flags it for this again. Like
   stale-rule, this doesn't currently support the live enable/scope
   toggle described in [Per-detector
@@ -1530,35 +2340,111 @@ alongside ISP/country whenever present.
 
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
-clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
-already-active-again source re-raises it as a fresh entry rather than
-silently resurrecting the old one.
+judges it. Judging an already-active-again source re-raises it as a
+fresh entry rather than silently resurrecting the old one.
+
+### Verdicts: how a flag ends
+
+Every flag ends one of two ways: either the firewall is improved so the
+traffic you do not want stops arriving, or mikroview is told this
+traffic is acceptable, at these characteristics. There is no third bin
+-- nothing is dismissed without a judgement. The row offers **expected ·
+checked · investigate**, and once something is being investigated,
+**expected · resolved**. All four are available to any signed-in user
+(not a viewer), through `POST /api/flags/{id}/verdict`.
+
+| Verdict | What it means | What it does |
+|---|---|---|
+| `expected` | Normal for this host, at this size | Clears the flag and records an expectation: further firings of that detector on that host are absorbed silently while their size stays within **1.5x** the size of the firing you judged. Above that the flag returns, reading "expected up to 30, saw 120"; saying expected again raises the recorded size |
+| `checked` | Looked suspicious, checked, fine this time | Clears the flag. Suppresses nothing, but is remembered: a later firing of the same pair says "you checked this on 2 Sept and found it fine" |
+| `investigate` | Of concern, being looked at | Leaves the flag open, and switches its row to expected · resolved |
+| `resolved` | Dealt with, normally by a firewall change | Clears the flag, and deliberately does **not** suppress. A line only reaches mikroview if the firewall let it get that far, so a correct fix makes the lines stop; if the same circumstances recur the flag returns, reading "resolved on 2 Sept -- it's back". If what you want is to keep logging those drops, that is an expected verdict at that rate, not a resolved one |
+
+Each detector declares what its "size" is -- usually the measure it
+compares against its threshold (distinct ports for `port_scan`, events
+in the window for `activity_spike`). Six declare none, because they have
+no count to be normal at: `device_silence` (an absence has no
+magnitude), `known_bad_ip`, `unexpected_mail_sender` and `stale_rule`
+(deterministic, no threshold), and `global_spike`/`rule_spike` (a rate
+against a moving baseline). An expected verdict on one of those means
+"ignore this host on this detector" outright.
+
+**Undo** is offered beside the stamp for as long as the flag carries the
+verdict. Undoing an expected verdict withdraws the expectation it
+recorded -- removing it, or putting a raised size back where it was --
+and takes back the permitted destinations it wrote, below.
+
+### What a verdict writes to the watchlist
+
+An `expected` verdict also records what the device was actually seen
+doing, as **permitted destinations** on its own
+[watchlist](#watchlist-optional) entry: each destination the flag saw, with
+the port it was reached on. If the device has no inverted entry, one is
+created **observing** -- it lists where the device goes and fires
+nothing -- so this automatic step can never start a fence firing on its
+own. Undoing the verdict, or changing it to something else, removes
+exactly what that verdict permitted, and removes an entry that existed
+only to hold it. Anything you permitted yourself is left alone.
+
+Only detectors that record destination *pairs* can do this:
+`critical_port`, `outbound_anomaly` and `internal_recon`. A flag's ports
+and hosts are otherwise two separate lists, and permitting every
+combination of them would allow connections the device never made. A
+flag without pairs permits nothing.
+
+A `resolved` verdict offers rather than acts. Its line reads
+**resolved — undo · watch for this**, and taking the offer opens the
+watchlist's own entry form, prefilled with the host (by MAC where the
+evidence carries one, otherwise by address) and the ports it was seen
+reaching. The form says where those values came from: the last firing
+window, how many of how many pairs, and whether the watch is MAC- or
+IP-bound (an IP-bound watch stops matching if the device's lease
+changes). Saving or discarding takes you back to the flags inbox, so
+declining costs nothing -- and the flag stays resolved either way.
+
+Why offer this at all: after a block, the first packet that gets through
+matters more than the detector's threshold being crossed again. The
+detector brings a resolved flag back only when the host re-crosses its
+threshold; a watch fires on the first line that reappears. Where the
+pairs name several destinations, the draft watches those ports toward
+any destination, because one watch scopes one destination -- broader
+than what the flag saw, never narrower, and stated in the form before
+you save it.
 
 A **Clear all** button above the active list (issue #198) clears every
 active flag in one request (`POST /api/flags/clear-all`) -- a click-again
 red "Confirm" is the safeguard against an accidental single click, not a
-modal. It performs regular clears only and never creates a permanent
-exclusion; there is no bulk variant of the action below.
+modal. It records no judgement and no expectation, so everything it
+clears raises again on the next matching event; there is no bulk variant
+that suppresses anything.
 
-Each flag's Clear button is a split control: the main segment is the
-plain Clear above, and its arrow segment opens "Permanently clear"
-(`POST /api/flags/{id}/clear-permanent`, **admin-only** once an account
-exists, and recorded in the audit log) -- for a non-admin the arrow
-segment is hidden entirely, leaving a plain Clear button rather than a
-disabled one that would just advertise an action they can't take.
-"Permanently clear" clears the flag *and* permanently
-excludes that exact (detector, target) pair -- from then on it never
-raises again, silently, until the exclusion is removed. This is
-deliberately permanent rather than a timed snooze: a time-limited mute
-either re-fires once it expires (nothing was solved) or it doesn't
-(permanent exclusion was what was wanted all along), so there's no
-in-between "snooze" option. Because "permanent" shouldn't mean
-"unrecoverable by mistake," every current exclusion is listed (and can
-be removed, re-enabling that pair) on its own **Exclusions** page,
-reachable from the menu -- admin-only, same as every other admin-gated
-endpoint (see [Authentication](#authentication)). It was split out of
-the bottom of the Flags page (issue #207) because reviewing exclusions
-underneath a list of hundreds of active flags was a pain.
+> **Not on screen yet.** The expectations an `expected` verdict records
+> are not listed anywhere in the UI at the moment, so one made by
+> mistake cannot be reviewed or removed from the interface -- only
+> withdrawn by undoing the verdict that made it, while the row is still
+> in front of you. The ledger that lists every expectation with its
+> recorded size, how many firings it has absorbed and since when, and
+> lets you prune them, is the remaining part of issue #640.
+
+### The expectations ledger
+
+Every expectation mikroview has been given -- "this much of this, from
+this host, is normal here" -- is listed on the watchers station, under
+the detector bench (**Settings ▸ detection ▸ tune…**), headed *What it
+has been told to expect*. Each row names the detector and the host, the
+size recorded when the expectation was made ("up to 30", or "any size"
+for a detector that declares no size), how many firings it has absorbed
+since, and when it was made. **Forget** on a row removes it, and that
+(detector, host) pair raises again from its next firing.
+
+The absorbed count is the point of the list: an expectation that has
+absorbed nothing for months is visibly not earning its place.
+
+Backed by `GET /api/flags/expectations` (any signed-in user -- an
+expectation is the reason a flag you would otherwise see is absent) and
+`DELETE /api/flags/expectations/{id}` (user tier, and recorded in the
+audit log as `flag.expectation_forget`: the operator who can call a flag
+expected can take it back). See [API reference](#api-reference).
 
 ## New-device detection (optional, on by default)
 
@@ -1704,14 +2590,8 @@ together:
   whatever it had already accumulated (a half-full counting window is not
   reset by an unrelated edit).
 
-  `detectorSettingsStorePath` is no longer written to. It is still
-  *read*, once, to carry an existing deployment's toggles into the
-  definitions store on first boot after upgrading, and is then inert --
-  leave it configured through one upgrade, and it can be removed after.
-
 ```yaml
 flags:
-  detectorSettingsStorePath: "/var/lib/mikroview/detector-settings.json"
   detectors:
     critical_port:
       enabled: true
@@ -1791,6 +2671,16 @@ auth:
   zero-config case. Mount a volume over `/var/lib/mikroview` if you want
   the decision (and any accounts) to survive container recreation, not
   just process restarts -- see `deploy/docker-compose.yml`.
+
+  **Persists with or without `history.keyFile` (#853 rule 6).** Accounts
+  hold only usernames and Argon2id hashes, never a plaintext password, so
+  this file keeps persisting in plain JSON with no key configured, the
+  same as every mikroview release before #853 -- the choice screen above
+  does not reappear on restart. Most other file-backed stores are
+  memory-only without a key; see
+  [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-except-the-hashed-stores-853).
+  With a key mounted, this file is encrypted the same way the event
+  history is.
 - **`secureCookie`** — sets the session cookie's `Secure` flag. On by
   default, matching [TLS](#tls) being on by default -- there's no other
   kind of connection to have a session on. Only turn this off if you've
@@ -1834,8 +2724,11 @@ mikroview -restore /secure/place/mikroview-backup.json.gz
 
 One gzipped file holding every store: accounts, API tokens, recovery-key
 digests, flags, rule usage, detector settings, entities, the MAC
-registry, the audit log, the watchlist, watchlist suggestions, and the
-watchlist match log.
+registry, the audit log, the event-buffer size an admin set from
+Settings (`store.settingsStorePath`), the watchlist, watchlist
+suggestions, the watchlist match log, and the router-backup vault
+(`backup.vaultDir`, #394) — every generation still encrypted exactly as
+it sits on disk, so a restore never needs the retention key to move it.
 
 Three things are deliberately left out, and always have been:
 
@@ -1872,6 +2765,117 @@ file, where the alternative to "unchanged" is "locked out".
 > database with `pg_dump` or your provider's snapshots — see
 > [CHANGELOG.md](../CHANGELOG.md) and the migration section above.
 
+### Moving the data directory
+
+**Changed your mind about a bind mount versus a named Docker volume?**
+`-migrate-data` copies the data directory to wherever you point it —
+bind mount to volume, or volume to bind mount — so you don't hand-copy
+files and risk getting the ownership wrong.
+
+```sh
+mikroview -migrate-data <destination-directory> [--force]
+```
+
+**Stop mikroview first.** Then run the image with the old location
+mounted where it always is, the new one mounted at
+`/var/lib/mikroview-migrate`, and the config as usual:
+
+```sh
+# Named volume -> bind mount. /path/on/host/new-data must exist and be
+# owned by uid 65532 first -- see "Ownership" below.
+docker run --rm \
+  -v mikroview-data:/var/lib/mikroview \
+  -v /path/on/host/new-data:/var/lib/mikroview-migrate \
+  -v /path/to/config.yaml:/etc/mikroview/config.yaml:ro \
+  -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+  ghcr.io/tomlawesome/mikroview:latest \
+  -migrate-data /var/lib/mikroview-migrate
+
+# Bind mount -> named volume, the other direction. mikroview-data-new
+# does not exist yet; Docker creates it, already owned correctly.
+docker run --rm \
+  -v /path/on/host/data:/var/lib/mikroview \
+  -v mikroview-data-new:/var/lib/mikroview-migrate \
+  -v /path/to/config.yaml:/etc/mikroview/config.yaml:ro \
+  -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+  ghcr.io/tomlawesome/mikroview:latest \
+  -migrate-data /var/lib/mikroview-migrate
+```
+
+**Use `/var/lib/mikroview-migrate`, not a path of your own choosing.**
+The image ships that directory owned by uid 65532 for exactly this job.
+Docker copies a fresh named volume's ownership from whatever the image
+has at the mount point, so a new volume mounted anywhere else — `/mnt`,
+`/data`, anything the image never created — arrives owned by root, and
+mikroview cannot write a single byte into it.
+
+Once the copy is done, the destination becomes the deployment's normal
+`/var/lib/mikroview` mount: change the `volumes:` line in your compose
+file to name the new volume or host directory, and start mikroview
+again. Nothing in the running deployment ever mounts
+`/var/lib/mikroview-migrate`.
+
+**What moves.** Everything under the data directory — the same list as
+[backing up](#backing-up-and-restoring) — plus three things that section
+deliberately leaves out:
+
+- **The TLS store** (`tls.storePath`) — this is the same host keeping
+  the same identity, so there's no reason to make every browser and
+  every router re-trust a new certificate, the way there would be if the
+  data were landing on a different host.
+- **The recovery pepper** (`auth.recoveryPepperPath`) — leaving it
+  behind would silently invalidate every recovery key you've handed out.
+- **The Postgres adoption marker** — without it, a Postgres deployment
+  would come back up reading the empty JSON files and show a first-run
+  setup screen to whoever gets there first.
+
+Backing up excludes these because a backup travels to a different host,
+where the same certificate and pepper are the wrong thing to restore. A
+migration never leaves the host, so carrying them across is exactly
+right.
+
+**Ownership.** mikroview creates every file on the destination itself,
+so the copy ends up owned by the user mikroview runs as (uid `65532` in
+the shipped image) with no `chown` step afterwards. A named volume needs
+nothing — Docker hands it to the container on first use. A bind-mount
+destination on the host has to be writable by that uid *before* you run
+the command, or it refuses before copying anything, naming the uid, the
+directory's current owner, and the exact `chown` to run.
+
+**Nothing is deleted.** This is a copy — the source is untouched until
+you remove it yourself:
+
+1. Check the summary it prints.
+2. Stop mikroview.
+3. Point the deployment's mount at the new location.
+4. Start it, and sign in.
+5. Once you're satisfied, delete the old directory.
+
+The old directory still holds your accounts and recovery-key digests, so
+delete it once the move is confirmed rather than leaving it lying
+around.
+
+**Verification.** Every file is hashed as it's written, then re-read and
+re-hashed off the destination, and each store is opened to prove
+mikroview can actually read and write it there — not just that the bytes
+match. A failure at any point leaves the source untouched.
+
+`-migrate-data` refuses:
+
+- a destination that isn't empty, unless you pass `--force`
+- a destination inside the source directory, or the source inside the
+  destination
+- a symlink or other special file anywhere in the data directory
+- (a warning, not a refusal) a store configured outside the data
+  directory — it's on a different mount, so it is **not** moved, and the
+  new deployment needs it mounted there too
+
+> **Using Postgres?** Unlike `-backup`/`-restore`, this one doesn't
+> refuse. Most of what moves is unused on a Postgres deployment, but
+> it's still worth running for the TLS store, the recovery pepper and
+> the adoption marker, which live on the data directory whatever the
+> backend — the database itself is untouched.
+
 ### Adding and removing people
 
 Open the engine room (Admin group in the navigation rail) and its
@@ -1900,7 +2904,8 @@ deployment or lock you out of it.
 ### Connecting your account to SSO
 
 If your deployment has SSO set up, you can switch your own account over
-to it: **Menu → Connect SSO**. You'll be sent to your identity provider
+to it: open the account menu at the bottom of the rail (click your
+username) and choose **Connect SSO**. You'll be sent to your identity provider
 to sign in, and when you come back the account uses SSO from then on.
 
 **This deletes your MikroView password, and can't be undone from
@@ -2131,9 +3136,11 @@ hostname, or WireGuard peer comment pushed by the router names that
 address everywhere mikroview shows one -- and **RouterOS always wins**
 over a label set in mikroview for the same address, so manage
 router-known hosts in RouterOS; labels for anything the router doesn't
-name are untouched), and the pushed firewall rule and NAT tables,
-served read-only at `GET /api/routeros/{device}/rules` and `.../nat` in
-RouterOS's own display order. Pushed state is held in memory only --
+name are untouched), the pushed firewall rule and NAT tables, served
+read-only at `GET /api/routeros/{device}/rules` and `.../nat` in
+RouterOS's own display order, and the pushed `/ip address` table at
+`.../addresses`, sorted by address. Pushed state is held in memory only
+--
 never written to disk, never in a backup -- and re-arrives with the
 router's next scheduled push, so a mikroview restart costs at most one
 push interval of naming/table enrichment and nothing else. Pushed data
@@ -2381,12 +3388,18 @@ able to reach the port can still connect and inject log lines. Point
 RouterOS at it with:
 
 ```
-/system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls
+/system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls remote-log-format=syslog
 ```
 
 and import mikroview's CA (`GET /ca.crt`) under
 `/certificate import` first, or the router will refuse the connection
 with `SSL: ssl: no trusted CA certificate found`.
+
+`remote-log-format=syslog` puts a standard header (timestamp and topic)
+on every message, which is how mikroview tells one firewall log line
+from the next when several arrive close together -- see
+[routeros-setup.md](routeros-setup.md#1-point-routeros-at-the-container-over-tls)
+for the full reasoning.
 
 ```yaml
 tls:
@@ -2580,14 +3593,15 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL` | `flags.staleRuleCheckInterval` |
 | `MIKROVIEW_FLAGS_VPN_INTERFACES` | `flags.vpnInterfaces` (comma-separated, e.g. `wireguard1,wireguard2`) |
 | `MIKROVIEW_FLAGS_VPN_CONFIDENCE_MULTIPLIER` | `flags.vpnConfidenceMultiplier` |
-| `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
+| `MIKROVIEW_COVERAGE_STORE_PATH` | `coverage.storePath` (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)) |
+| `MIKROVIEW_HOSTS_STORE_PATH` | `hosts.storePath` (see [Host presence register](#host-presence-register-issue-1016-optional)) |
+| `MIKROVIEW_BASELINE_STORE_PATH` | `baseline.storePath` (see [Baseline line register](#baseline-line-register-issue-1016-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
-| `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION` | `watchlist.matchLogRetention` |
@@ -2622,8 +3636,23 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
+| `MIKROVIEW_OUI_ENABLED` | `oui.enabled` -- the IEEE MAC-vendor registry feed (see [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default)) |
+| `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
 | `MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH` | `engine.definitionsStorePath` -- where the definitions store (issue #404) lives: shipped detectors, migrated watchlist expectations, and eventually builder-authored custom definitions, all in one document |
+| `MIKROVIEW_ENGINE_DECOMMISSION_STORE_PATH` | `engine.decommissionStorePath` (see [Network segment decommissioning](#network-segment-decommissioning-issue-460-optional)) |
+| `MIKROVIEW_ENGINE_DECOMMISSION_CLEAN_WINDOW` | `engine.decommissionCleanWindow` (see [Network segment decommissioning](#network-segment-decommissioning-issue-460-optional)) |
+| `MIKROVIEW_SNAPSHOT_INTERVAL` | `snapshot.interval` -- how often a warm-restart snapshot is written (see [Warm restart](#warm-restart-what-survives-a-restart)); anything under 30s falls back to the default |
+| `MIKROVIEW_SNAPSHOT_KEEP` | `snapshot.keep` -- how many snapshot generations to keep; anything under 1 falls back to the default |
+| `MIKROVIEW_SNAPSHOT_DIR` | `snapshot.dir` -- where the snapshot files live. A file path even on a Postgres deployment: a snapshot is derived counters, not custody data |
+| `MIKROVIEW_HISTORY_KEY_FILE` | `history.keyFile` -- path to the master key file, mounted outside the data directory (see [On-disk event history](#on-disk-event-history-optional-off-by-default)); no variable carries the key itself. Also gates the state store and warm-restart snapshots (#853) regardless of `history.enabled` — see [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-except-the-hashed-stores-853) below |
+| `MIKROVIEW_HISTORY_ENABLED` | `history.enabled` |
+| `MIKROVIEW_HISTORY_DAYS` | `history.days` -- below 1 the 30-day default is applied |
+| `MIKROVIEW_HISTORY_MAX_BYTES` | `history.maxBytes` -- below 1 MiB the 1 GiB default is applied |
+| `MIKROVIEW_HISTORY_DIR` | `history.dir` -- where the daily history files live. Left empty, they sit beside the data directory |
+| `MIKROVIEW_BACKUP_ENABLED` | `backup.enabled` -- turns the router-backup SFTP drop box on (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
+| `MIKROVIEW_BACKUP_LISTEN` | `backup.listen` -- the drop box's bind address, default `:47022` |
+| `MIKROVIEW_BACKUP_VAULT_DIR` | `backup.vaultDir` -- where encrypted generations live. Left empty, they sit beside the data directory |
 
 ## Checking your version
 
@@ -2857,54 +3886,92 @@ exits, rather than starting the server. See
 | `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- present whenever mikroview generated its own CA, which it does if `tls.enabled` is true **or** `listen.syslogTls` is non-empty, and never for an operator-supplied cert. With `tls.enabled: false` it is served over plain HTTP, which is the case the reverse-proxy deployment needs; see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
-| `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated |
-| `GET /api/stats` | totals, per-action counts, rolling events/sec |
+| `GET /api/devices/macs` | the persisted MAC-registry history (issue #675): every MAC mikroview has seen, its first/last-seen times, and the IP it was last paired with -- backs the Entities panel's named-host join, same tier as `GET /api/devices` |
+| `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated. Also carries `recordingSince`: when this store started recording, so a client computing "rules seen firing in the last 7 days" can bound that window by what mikroview actually covered instead of claiming a fixed seven days it may not have seen (issue #701) |
+| `GET /api/stats` | totals, per-action counts, rolling events/sec, and a `memory` object naming the event buffer's current budget, the range it may be moved within, and what it's actually costing the host (see [How events are stored](#how-events-are-stored)). Also `liveSince` (RFC 3339 UTC, when this process started observing) and, only after a warm restart, `restoredTo` (when the snapshot it loaded was taken) -- absent rather than null on a cold start, see [Warm restart](#warm-restart-what-survives-a-restart) |
+| `GET /api/stats/tops` | per-minute top-port/top-talker breakdown of the last hour, same tier as `GET /api/stats` -- feeds the Metrics page |
+| `POST /api/syslog/loss/clear` | user tier: zeroes the four monotonic ingest-loss counters `GET /api/stats`' `syslog.loss` field is built from, so a transient loss the operator has already seen stops permanently marking the instance (issue #1015). Audit-logged once per call, carrying the totals cleared. Same tier as `POST /api/flags/clear-all` |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
-| `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
-| `POST /api/flags/{id}/clear` | mark one flag as cleared |
-| `POST /api/flags/clear-all` | clear every currently-active flag in one request -- regular clears only, never creates an exclusion. Audit-logged once per call |
-| `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
-| `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
-| `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
+| `GET /api/routeros/{device}/rules` | the pushed firewall filter table for one router, in RouterOS's own display order (#186) -- read from mikroview's own stored state, never a live call to the router |
+| `GET /api/routeros/{device}/nat` | the pushed NAT table for one router, same shape and tier as the rules table above |
+| `GET /api/routeros/{device}/addresses` | the pushed `/ip/address` table for one router (#627) -- an interface's own configured address, distinct from the ARP/DHCP tables' observed-elsewhere addresses |
+| `GET /api/routeros/{device}/wireguard` | the pushed WireGuard interface and peer tables for one router, with per-tunnel up/down state derived from each peer's last handshake (issue #874) -- same tier and read-only shape as the three routeros routes above |
+| `GET /api/routeros/{device}/ppp-active` | the pushed `/ppp/active` table for one router -- the state source for L2TP, PPTP, SSTP and OVPN tunnels alike, all surfaced through the same RouterOS menu (issue #874). Same tier and read-only shape as the routeros routes above |
+| `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart), plus `baselinesWarming`: whether any enabled detector is still warming up, which the learning shelf turns into words. The field is omitted altogether when this server cannot say (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
+| `POST /api/flags/clear-all` | user tier: clear every currently-active flag in one request -- records no judgement and no expectation. Audit-logged once per call. Tightened from viewer tier by #653 |
+| `GET /api/flags/expectations` | open to any signed-in user: every expectation recorded on this instance -- (detector, target) plus the recorded size, how many firings it has absorbed and when it was made (see [The expectations ledger](#the-expectations-ledger)) |
+| `DELETE /api/flags/expectations/{id}` | user tier: forget one expectation, so that pair raises again from its next firing. 204 on success, 404 if no expectation has that id. Audit-logged |
+| `POST /api/flags/{id}/verdict` | user tier: judge one flag: `expected`, `checked`, `investigate` or `resolved` (see [Verdicts](#verdicts-how-a-flag-ends)). Everything but `investigate` clears it; `expected` also records the sized expectation, and permits the flag's own destination pairs on the device's inverted watchlist entry (see [What a verdict writes to the watchlist](#what-a-verdict-writes-to-the-watchlist)). Audit-logged. Tightened from viewer tier by #653 |
+| `DELETE /api/flags/verdict/{id}` | user tier: undo a verdict: re-opens the flag if that verdict is what cleared it, withdraws the expectation an `expected` verdict recorded, and takes back the destinations it permitted. Audit-logged. Tightened from viewer tier by #653, same reasoning as judging in the first place |
 | `GET /api/definitions` | open to any signed-in user, not admin-gated (#490 -- the engine room's watchers station reads it, and a non-admin can read the room): every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
-| `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. `intent: "detection"` is refused too, for now: a custom detector's match conditions have nowhere on the envelope to be stored yet, so accepting one would create a definition that lists and evaluates nothing. Only expectation definitions can be created here today; custom detector authoring is tracked in issue #502 |
-| `GET /api/definitions/schema` | admin-only: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
-| `GET /api/definitions/{id}` | admin-only: one definition |
-| `PUT /api/definitions/{id}` | admin-only: change any of `enabled`, `scope`, `params`, `suppressions`, `name`/`expectation` (expectations only). An absent field is left alone; a param outside its declared bounds is a 400, never a stored zero. Takes effect on the next ingested event |
-| `DELETE /api/definitions/{id}` | admin-only: remove a custom definition. A shipped one is refused with a 409 -- shipped definitions are disabled, never deleted |
-| `POST /api/definitions/{id}/clone` | admin-only: copy an expectation into a new definition with its own id. Refused for a shipped detector, whose logic is keyed by its own id and would evaluate nothing in a copy |
-| `POST /api/definitions/{id}/reset` | admin-only: discard every param override, putting a shipped definition back to what it shipped with |
-| `POST /api/definitions/{id}/replay` | admin-only: re-run one definition over the stored event corpus with candidate params, returning a receipt (emission count, evidence sample, and the window it actually covered) or a stated decline. A definition that can never answer honestly declines with its reason rather than reporting a misleading zero |
-| `POST /api/definitions/{id}/promote` | admin-only: move one or more observed destinations into an inverted expectation's permitted set |
-| `POST /api/definitions/{id}/observing` | admin-only: turn an inverted expectation's observe mode on or off |
-| `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
-| `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
-| `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
-| `GET /api/naming/provenance` | admin-only: where the name currently shown for one token comes from, given `type` (`host`/`rule`/`port`), `key` (the raw value) and, for a host, `device`. Answers `source` (`none`, `entity`, `config`, or one of `router-dns-static`/`router-dhcp-lease`/`router-wireguard-peer`), the `name` in use, your own saved `label` if any, and `editable` -- false when a router-pushed name would shadow anything saved here, which is what the live view's inline editor checks before offering a field |
+| `POST /api/definitions` | user tier: create a custom definition, either an expectation or (#502) a custom detection, chosen by `intent`. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. An `intent: "detection"` request's `detection` block carries the detector's structure: `conditions` (the match language), `key`/`counting`/`distinctField` (the aggregation around them), and `detailTemplate` (the flag's rendered sentence); `threshold` and `window` ride alongside it but land as ordinary tunable params, not part of the stored block |
+| `GET /api/definitions/schema` | user tier: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
+| `GET /api/definitions/{id}` | user tier: one definition |
+| `PUT /api/definitions/{id}` | user tier: change any of `enabled`, `scope`, `params`, `name`/`expectation` (expectations only). An absent field is left alone; a param outside its declared bounds is a 400, never a stored zero. Takes effect on the next ingested event |
+| `DELETE /api/definitions/{id}` | user tier: remove a custom definition. A shipped one is refused with a 409 -- shipped definitions are disabled, never deleted |
+| `POST /api/definitions/{id}/clone` | user tier: copy a definition that is data all the way down -- an expectation, or a detector you authored (its conditions, aggregation and tuning) -- into a new definition with its own id. A copied detector is created paused, so a half-edited one never runs. Refused for a shipped detector, whose logic is keyed by its own id and would evaluate nothing in a copy (#810) |
+| `POST /api/definitions/{id}/reset` | user tier: discard every param override, putting a shipped definition back to what it shipped with |
+| `POST /api/definitions/{id}/replay` | user tier: re-run one definition over the stored event corpus with candidate params, returning a receipt (emission count, evidence sample, and the window it actually covered) or a stated decline -- a definition that can never answer honestly declines with its reason rather than reporting a misleading zero. When the request carries a candidate, the response also carries a `current` receipt: the same replay run again with the definition's live params, so the candidate's count has something to be compared against |
+| `POST /api/definitions/{id}/promote` | user tier: move one or more observed destinations into an inverted expectation's permitted set |
+| `POST /api/definitions/{id}/observing` | user tier: turn an inverted expectation's observe mode on or off |
+| `GET /api/entities` | user tier (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity. Widened from admin by #653's "watchers" bench ruling |
+| `POST /api/entities` | user tier: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body. Widened from admin by #653 |
+| `DELETE /api/entities` | user tier: remove the entity identified by `(type, key)` in the JSON body. Widened from admin by #653 |
+| `GET /api/coverage/declarations` | open to any signed-in user (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)): every persisted coverage-gap declaration |
+| `PUT /api/coverage/declarations/{key}` | user tier: create or replace (upsert) the declaration at `key`, taking `{"reason": "..."}` in the JSON body. `declaredBy`/`declaredAt` are set server-side. 400 on an empty/oversized key or reason. Widened from admin by #653, following the entity labels it reasons alongside |
+| `DELETE /api/coverage/declarations/{key}` | user tier: remove the declaration at `key`. 404 if none exists there. Widened from admin by #653 |
+| `GET /api/hosts` | open to any signed-in user (see [Host presence register](#host-presence-register-issue-1016-optional)): every host the feed has shown, each with its interface, address, last-seen hostname, first/last seen times, event count and any mark on it. Not reachable with a read-only API token: it is a partial inventory of your private address space |
+| `PUT /api/hosts/{key}/mark` | user tier: say what a quiet host is, taking `{"kind": "intended"\|"dismissed", "reason": "..."}` in the JSON body. `reason` is required for `intended` and optional for `dismissed`; `by`/`at` are set server-side. 400 on an unknown kind or an empty/oversized/control-character key or reason, 404 if no event has ever registered that key. Audit-logged as `hosts.mark` |
+| `DELETE /api/hosts/{key}/mark` | user tier: take the mark off the host at `key`, putting it back to whatever its own last-seen time says it is. 404 if there is no mark there. Audit-logged as `hosts.unmark` |
+| `GET /api/hosts/{ip}/dossier` | open to any signed-in user (see [Device dossier](#device-dossier-issue-410)): everything already known about one address, assembled -- traffic fingerprint, MAC with its vendor and the locally-administered bit, names with their provenance, lease-versus-fixed, first/last seen, matched firewall rules, and a suggested identity with its evidence and a confidence in words. Accepts a bare address or a host-register key (`bridge-lan|10.0.10.5`). 200 with an honest empty card for an address nothing is known about, 400 for something that is not an address. May include a `suggestedProbe` -- a command for *you* to run; mikroview never connects to a host on your network. Not reachable with a read-only API token: it is one host's traffic, peers and hardware address in a single response |
+| `GET /api/baseline/off` | open to any signed-in user (see [Baseline line register](#baseline-line-register-issue-1016-optional)): today's off-baseline lines, the establishment threshold that judged them, and the configured host-quiet window. Not reachable with a read-only API token: it is a partial inventory of your private address space, with destinations and ports attached |
+| `PUT /api/baseline/{key}/expected` | user tier: say the line at `key` is meant to be there, taking `{"reason": "..."}` in the JSON body. `reason` is required; empty is refused. 400 on an invalid key, 404 if no event has ever registered it. Audit-logged as `baseline.expected` |
+| `DELETE /api/baseline/{key}/expected` | user tier: take the mark off the line at `key`, putting it back to whatever its own recurrence says it is. 404 if there is no mark there. Audit-logged as `baseline.unexpected` |
+| `GET /api/decommission` | viewer tier: every pending segment-retirement offer and every live watch over one (see [Network segment decommissioning](#network-segment-decommissioning-issue-460-optional)) -- one response for both, since an offer and a ghost on the map are the same object one decision apart |
+| `POST /api/decommission/watches` | user tier: answer a pending offer with yes, creating a watch that keeps the retiring segment on the map as a ghost until its clean window elapses. Only reachable against a departure mikroview actually observed, never an arbitrary range. Audit-logged |
+| `POST /api/decommission/dismiss` | user tier: answer a pending offer with no -- the segment leaves the map at once and no watch is created. Audit-logged |
+| `POST /api/decommission/watches/{id}/force` | user tier: force-remove a still-active watch from the map immediately while the watch itself keeps running to the same clean window. Requires `{"reason": "..."}` in the body -- a recorded override, never a silent one. Audit-logged |
+| `POST /api/decommission/watches/{id}/undo` | user tier: take a retirement back within the hour after it happened, putting the ghost back on the map. Refused as a conflict if the watch never retired or the window has passed. Audit-logged |
+| `DELETE /api/decommission/watches/{id}` | user tier: abandon a watch outright, forgetting it rather than waiting for it to retire or force-removing it. Optional `{"reason": "..."}` in the body. Audit-logged |
+| `GET /api/ports` | open to any signed-in user: the port filter on the topography map (#1018). Takes `port` (a comma-separated list of ports and ranges, at most 64 once expanded), `proto` (`tcp`/`udp`), `device` and `since` (RFC 3339); answers the ports the window carried or a pushed rule names, and -- once ports are selected -- the boundary directions and hosts that carried them, the counts, and every enabled pushed filter rule whose `dst-port` names them. A malformed `port` or `proto` is a 400, never a silently unfiltered answer. Not reachable with a read-only API token, for the same reason as `GET /api/baseline/off` above |
+| `GET /api/trace` | open to any signed-in user: one logged line's single hop through the router (#1018). Names the line either by `event` (an event id) or by any of `in`/`out`/`port`/`proto`/`src`/`dst`, plus optional `device` and `since`; answers that event, whether the router accepted or refused it, how many more lines like it the window holds, and how many of them were accepted. Answers `{"found": false}` when nothing matches rather than an empty path. Not reachable with a read-only API token |
+| `GET /api/naming/provenance` | user tier: where the name currently shown for one token comes from, given `type` (`host`/`rule`/`port`), `key` (the raw value) and, for a host, `device`. Answers `source` (`none`, `entity`, `config`, or one of `router-dns-static`/`router-dhcp-lease`/`router-wireguard-peer`), the `name` in use, your own saved `label` if any, and `editable` -- false when a router-pushed name would shadow anything saved here, which is what the live view's inline editor checks before offering a field. Widened from admin to user tier by #653, alongside `GET /api/entities` it serves |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/matches` | a windowed query over the persisted match log, in one of two modes -- by device, with `mac` and/or `ip` (at least one required), or across every watchlist entry with `entries=all`, which returns the most recent matches anywhere in the log, newest first. `entries=all` may not be combined with `mac`/`ip`. Both modes take `since`/`until` (RFC 3339) and `limit`, and both are bounded: `limit` defaults to 100 and is capped at 5000 whatever the caller asks for. Open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
-| `GET /api/suggestions` | admin-only: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide` |
-| `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real expectation definition |
-| `POST /api/suggestions/{id}/hide` | admin-only: decline an undecided suggestion |
-| `POST /api/suggestions/{id}/unhide` | admin-only: return a hidden suggestion to undecided |
-| `POST /api/suggestions/reset` | admin-only, destructive: wipes the entire watchlist and regenerates suggestions from scratch -- requires `{"confirm": true}` in the request body |
+| `GET /api/suggestions` | user tier: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide`. Widened from admin by #653, same as the definitions surface |
+| `POST /api/suggestions/{id}/accept` | user tier: accept an undecided suggestion, creating a real expectation definition. Widened from admin by #653 |
+| `POST /api/suggestions/{id}/hide` | user tier: decline an undecided suggestion. Widened from admin by #653 |
+| `POST /api/suggestions/{id}/unhide` | user tier: return a hidden suggestion to undecided. Widened from admin by #653 |
+| `POST /api/suggestions/reset` | user tier, destructive: wipes the entire watchlist and regenerates suggestions from scratch -- requires `{"confirm": true}` in the request body. Widened from admin by #653; the confirm body, not the role gate, is the safeguard against an accidental call |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
+| `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser |
+| `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
+| `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |
 | `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
-| `GET /api/tokens` | open to any signed-in user, not admin-gated (#490 -- the engine room's "which machines may speak" door reads it): list tokens (name/created/last-used, never the value or hash -- a token's raw value appears in the response that mints it and nowhere else, which is what makes widening this safe) |
+| `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash -- a token's raw value appears in the response that mints it and nowhere else). Narrowed back from user tier by #657: the viewer-readable settings page it was widened for (#490) is gone, and issuing keys is treated as a setup task rather than day-to-day product use |
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
 | `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, so the same person can sign in either way -- see [Connecting your account to SSO](#single-sign-on-oidcsso) |
 | `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what mikroview has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
+| `POST /api/setup/commands` | same tier as `GET /api/setup/status` beside it, not admin-gated (#436): renders the RouterOS commands the setup wizard shows -- the dialect table's own bounds, what an operator-picked RouterOS version resolves to, every router whose version is known and where it stands against the table, and the five command blocks themselves |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
+| `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435, "Tune logging"). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
+| `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
+| `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- except accounts, tokens and recovery keys, which keep persisting to a plain file per #853 rule 6) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
+| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's kept generations (arrival times, sizes, `.backup` header), the SFTP drop box's own port, and a missed-push count derived from the learned interval (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
+| `GET /api/router-backups/{device}/{generation}/{kind}` | admin-only: streams one generation's file back decrypted -- `kind` is `backup` or `rsc`. Audit-logged with who, which router, which generation and which half of the pair, since a router's whole configuration (credentials included) is never an unaccountable download |
+| `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
+| `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |
+| `PUT /api/settings/history` | admin-only: turn the on-disk event history on or off and set its two caps. Body `{"enabled": <bool>, "days": <int>, "maxBytes": <bytes>}`, answering with the same shape `GET` returns. Turning it on takes what the event buffer already holds and everything after; **turning it off deletes every retained file before the response is written**. `days` below 1 or `maxBytes` below 1 MiB is refused with a 400; a request to turn it on with no key file mounted is refused with a 409. Audit-logged as `settings.history` |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see

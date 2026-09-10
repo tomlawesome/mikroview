@@ -59,8 +59,8 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
 })
 
-// The bar itself: one button per visible group, in the ratified order,
-// same reserved-slot table lib/navGroups.ts shares with NavRail.
+// The bar itself: one button per visible group, in the ratified order
+// lib/navGroups.ts's reserved-slot table defines.
 describe('BottomBar groups', () => {
   it('renders exactly the five groups for an admin, in order', () => {
     render(BottomBar)
@@ -80,10 +80,14 @@ describe('BottomBar groups', () => {
 // page".
 describe('BottomBar single-page shortcut', () => {
   it('navigates straight to the page for a single-page group, no sheet', () => {
+    // Detect is single-page since #490 folded Detectors into the engine
+    // room (see lib/navGroups.ts) -- Live no longer is, since #616 gave
+    // it a second row (The fall, then Stream), so it moved to its own
+    // half-sheet case below instead of standing in for this one.
     render(BottomBar)
-    screen.getByRole('button', { name: 'Live' }).click()
+    screen.getByRole('button', { name: 'Detect' }).click()
     flushSync()
-    expect(appState.view).toBe('live')
+    expect(appState.view).toBe('flags')
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
@@ -91,7 +95,7 @@ describe('BottomBar single-page shortcut', () => {
     // Investigate is Metrics + admin-only Audit log -- a viewer sees only
     // Metrics, so tapping the group must go straight there rather than
     // raising a one-item sheet.
-    authState.role = 'user'
+    authState.role = 'viewer'
     render(BottomBar)
     screen.getByRole('button', { name: 'Investigate' }).click()
     flushSync()
@@ -101,6 +105,22 @@ describe('BottomBar single-page shortcut', () => {
 })
 
 describe('BottomBar half-sheet', () => {
+  it('raises a half-sheet for Live now that it carries two rows (#616)', () => {
+    render(BottomBar)
+    screen.getByRole('button', { name: 'Live' }).click()
+    flushSync()
+
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'The fall' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Stream' })).toBeTruthy()
+
+    screen.getByRole('button', { name: 'Stream' }).click()
+    flushSync()
+    expect(appState.view).toBe('live')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('raises a half-sheet listing the pages of a multi-page group', () => {
     render(BottomBar)
     screen.getByRole('button', { name: 'Investigate' }).click()
@@ -177,10 +197,10 @@ describe('BottomBar half-sheet', () => {
   })
 })
 
-// #490's absent-never-disabled grammar, carried forward from NavRail.
+// #490's absent-never-disabled grammar, BottomBar's own now.
 describe('BottomBar admin gating (#490)', () => {
   it('keeps admin-only groups/pages absent for a viewer rather than disabled', () => {
-    authState.role = 'user'
+    authState.role = 'viewer'
     render(BottomBar)
 
     // Investigate's only viewer-visible page is Metrics (Audit log is
@@ -191,10 +211,11 @@ describe('BottomBar admin gating (#490)', () => {
     expect(buttons.some((b) => b.hasAttribute('disabled'))).toBe(false)
   })
 
-  it('drops a group entirely once every one of its pages is admin-only', () => {
-    // Expect holds only Watchlist (admin: true) -- a viewer loses the
-    // whole group rather than seeing an empty heading or a disabled row.
-    authState.role = 'user'
+  it('drops a group entirely once every one of its pages is gated away', () => {
+    // Expect holds only Watchlist (edit: true since #653) -- a viewer
+    // loses the whole group rather than seeing an empty heading or a
+    // disabled row. The user tier still has it: see the #653 test below.
+    authState.role = 'viewer'
     render(BottomBar)
     expect(screen.queryByRole('button', { name: 'Expect' })).toBeNull()
   })
@@ -319,7 +340,7 @@ describe('BottomBar broken ring on the group', () => {
 
   it('shows no ring to a viewer, who has no Watchlist page for it to point at', () => {
     breakOne()
-    authState.role = 'user'
+    authState.role = 'viewer'
     const { container } = render(BottomBar)
     expect(screen.queryByRole('button', { name: 'Expect' })).toBeNull()
     expect(container.querySelector('.icon-slot.broken')).toBeNull()

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -88,6 +89,11 @@ type wsEnvelope struct {
 	Type    string        `json:"type"`
 	Events  []store.Event `json:"events,omitempty"`
 	Dropped uint64        `json:"dropped,omitempty"`
+	// Change is set on a "changed" frame and names what changed, never
+	// what it changed to -- see hub.Change. The client refetches through
+	// the ordinary API, so this stream never becomes a second, partial
+	// copy of an endpoint's answer that could drift from it.
+	Change hub.Change `json:"change,omitempty"`
 }
 
 // closeRevoked sends a real WebSocket close frame rather than just
@@ -154,12 +160,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// closes for no stated reason. Each subscriber costs several MiB the
 	// moment it registers (see hub.clientQueueSize), so this is a real
 	// limit rather than a formality.
-	events, dropped, unregister, err := s.Hub.Register()
+	sub, err := s.Hub.Register()
 	if err != nil {
 		http.Error(w, "too many live connections are already open; close another tab and retry", http.StatusServiceUnavailable)
 		return
 	}
-	defer unregister()
+	defer sub.Unregister()
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -201,7 +207,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// Dropped is the cumulative total for this connection, not a delta
 		// -- the client just needs to know "have I ever missed events,"
 		// not track deltas itself.
-		if err := conn.WriteJSON(wsEnvelope{Type: "events", Events: batch, Dropped: dropped()}); err != nil {
+		if err := conn.WriteJSON(wsEnvelope{Type: "events", Events: batch, Dropped: sub.Dropped()}); err != nil {
 			return false
 		}
 		batch = batch[:0]
@@ -212,9 +218,18 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-closed:
 			return
-		case e := <-events:
+		case e := <-sub.Events:
 			batch = append(batch, e)
 			if len(batch) >= wsBatchMaxSize && !flush() {
+				return
+			}
+		case change := <-sub.Notices:
+			// Its own frame rather than a field on the next event batch:
+			// a quiet network produces no batches at all, and a pushed
+			// table arriving on an instance nothing is currently
+			// logging is exactly when the screen most needs telling.
+			conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			if err := conn.WriteJSON(wsEnvelope{Type: "changed", Change: change}); err != nil {
 				return
 			}
 		case <-batchTicker.C:

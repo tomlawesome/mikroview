@@ -6,6 +6,7 @@ import {
   fetchWatchlistEntries,
   fetchWatchlistMatches,
   promoteWatchlistDestinations,
+  setWatchlistEnabled,
   setWatchlistObserving,
   updateWatchlistEntry,
   type WatchlistEntryRequest,
@@ -23,6 +24,12 @@ class WatchlistState {
   // (#274), keyed by entry id. Refreshed with the entries, since it is
   // derived from what routers have pushed rather than stored.
   coverage = $state<Record<string, WatchlistCoverage>>({})
+  // Whether refresh() has ever completed -- see flags.svelte.ts's
+  // `loaded` for why an empty `entries` before this is true must not be
+  // read as "nothing is watched" (#867's watched reading depends on the
+  // distinction; a viewer role that never calls refresh() stays honestly
+  // "not loaded" rather than silently "nothing watched").
+  loaded = $state(false)
 
   // #546's broken ring: how many *enabled* expectations currently answer
   // 'no-logging' -- the operator declared a watch and no pushed firewall
@@ -38,10 +45,19 @@ class WatchlistState {
   // that honesty guarantee for free rather than needing to reimplement it.
   brokenCount = $derived.by(() => this.entries.filter((e) => e.enabled && this.coverage[e.id] === 'no-logging').length)
 
+  // The scene bar's "◉ 7 ○ 1" (#683, ratified round 29): watchers
+  // actually holding, i.e. enabled and not ring-broken -- the same
+  // predicate Watchlist.svelte's own class:watching already uses, so
+  // the bar's count and the page's own per-row marker never disagree.
+  heldCount = $derived.by(
+    () => this.entries.filter((e) => e.enabled && this.coverage[e.id] !== 'no-logging').length,
+  )
+
   async refresh() {
     const { entries, coverage } = await fetchWatchlistEntries()
     this.entries = entries
     this.coverage = coverage
+    this.loaded = true
   }
 
   async create(req: WatchlistEntryRequest): Promise<string | null> {
@@ -78,6 +94,17 @@ class WatchlistState {
     return null
   }
 
+  // Pause/resume (#676's ratified "pause watch"/"resume watch"): the
+  // same enabled flag the broken-ring predicate and stateLabel already
+  // read, flipped from the drawer rather than only from the add/edit
+  // form (which never exposed a plain toggle for it).
+  async setEnabled(id: string, enabled: boolean): Promise<string | null> {
+    const result = await setWatchlistEnabled(id, enabled)
+    if (typeof result === 'string') return result
+    await this.refresh()
+    return null
+  }
+
   // matchesFor is not cached on this class -- unlike entries, matches
   // can be numerous and are viewed per-entry on demand (see
   // Watchlist.svelte), not held as one always-fresh list. mac/ip come
@@ -86,6 +113,18 @@ class WatchlistState {
   // triggered them, which a single mac/ip query cannot enumerate.
   async matchesFor(mac?: string, ip?: string): Promise<WatchlistMatch[]> {
     return fetchWatchlistMatches({ mac, ip, limit: 50 })
+  }
+
+  // #1083: called from both auth.svelte.ts logout paths so the watchlist
+  // doesn't survive into the next person's sign-in on this tab. Every
+  // field here is server-sourced (refresh()'s own doc comment: refreshed
+  // wholesale rather than patched locally), so resetting to the
+  // constructor's initial values is the whole of it -- there is no
+  // connection-level field on this class to leave alone.
+  reset() {
+    this.entries = []
+    this.coverage = {}
+    this.loaded = false
   }
 }
 

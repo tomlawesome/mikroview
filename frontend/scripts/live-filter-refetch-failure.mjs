@@ -13,20 +13,21 @@
 // (LiveTable.svelte.test.ts) drive appState.fetchFailed directly, which
 // proves the rendering logic but not that a real fetch failure actually
 // sets it, propagates through a real debounce, and reaches a real
-// browser's DOM. This scenario reproduces the reach lens's own repro
+// browser's DOM. This scenario reproduces the live view's own repro
 // from the issue: route-intercept /api/events to fail, then narrow a
 // filter so refetchWithFilters() is what has to run to find a genuine
 // server-side match.
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, waitForStreamRows } from './live-browser.mjs'
 
 const MATCHED_RULE = 'refetch-failure-373'
+
+const { page, consoleErrors } = await session()
 
 // Buffered locally so the client-side filter layer alone could, in
 // principle, find these -- the point of the scenario is that the
 // *refetch* fails, not that the buffer is empty to start with.
 feedSyslog(30, MATCHED_RULE)
-
-const { page, consoleErrors } = await session({ waitForEvents: 30 })
+await waitForStreamRows(page, 30)
 
 // The WebSocket stream must stay healthy throughout -- this is
 // specifically the dual-channel failure the issue describes (the query
@@ -39,9 +40,16 @@ await page.route('**/api/events*', (route) => route.fulfill({ status: 503, body:
 // the only way to get a real answer is the server-side refetch -- which
 // is exactly what is now failing.
 await page.fill('input.rule', 'no-such-rule-in-the-local-buffer')
-// FILTER_DEBOUNCE_MS (300ms, App.svelte) plus headroom for the rejected
-// request to actually resolve.
-await page.waitForTimeout(1500)
+// FILTER_DEBOUNCE_MS (300ms, App.svelte) plus the rejected request's own
+// round trip -- wait for the empty-state text to actually carry the
+// failure instead of guessing how long that takes. Non-throwing: a
+// failure to see it is itself the interesting case, caught by the checks
+// below rather than an uncaught timeout with no RESULT line.
+await page
+  .waitForFunction(() => /could not load|failed|error/i.test(document.querySelector('.body .empty')?.textContent ?? ''), null, {
+    timeout: 5000,
+  })
+  .catch(() => {})
 
 const emptyText = await page.textContent('.body .empty')
 check(!!emptyText, 'the empty-state message is shown once the filter narrows to nothing')
@@ -66,7 +74,18 @@ check(!banner, 'the WebSocket connection itself is unaffected by the API-only ou
 // successful refetch, rather than latching forever.
 await page.unroute('**/api/events*')
 await page.fill('input.rule', MATCHED_RULE)
-await page.waitForTimeout(1500)
+// Same FILTER_DEBOUNCE_MS + round-trip headroom as above, but waiting
+// this time for the honest failure message to actually clear.
+await page
+  .waitForFunction(
+    () => {
+      const el = document.querySelector('.body .empty')
+      return !el || !/could not load/i.test(el.textContent ?? '')
+    },
+    null,
+    { timeout: 5000 },
+  )
+  .catch(() => {})
 
 const recoveredText = await page.textContent('.body .empty').catch(() => null)
 check(

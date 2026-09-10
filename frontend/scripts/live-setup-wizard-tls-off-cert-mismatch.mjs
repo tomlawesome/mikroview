@@ -29,9 +29,14 @@
 // mikroview-side misconfiguration never borrows the patient,
 // nothing-is-wrong voice the waiting flavour is required to use.
 
-import { session, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, waitForStreamRows } from './live-browser.mjs'
 
-const { page, consoleErrors } = await session({ waitForEvents: 20 })
+const { page, consoleErrors } = await session()
+
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+feedSyslog(20, 'live-setup-wizard-tls-off-cert-mismatch')
+await waitForStreamRows(page, 20)
 
 // Capture what the real server actually reports before intercepting,
 // so only the fields the bug depends on get overridden.
@@ -47,7 +52,7 @@ await page.route('**/api/setup/status', async (route) => {
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
 })
 
-await page.click('.rail .item:has-text("Run setup…")')
+await goTo(page, 'Run setup…')
 const wizard = page.locator('.setup-wizard')
 await wizard.waitFor({ state: 'visible' })
 

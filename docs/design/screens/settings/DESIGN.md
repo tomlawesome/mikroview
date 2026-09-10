@@ -71,9 +71,12 @@ re-implement.
   disabled ghost; explanations of absent affordances are absent
   too; busy-disabled ("saving…") is the only disabled state and
   never means "not yours".
-- **Viewer (#490):** READ-ONLY — ADMINS EDIT declared once in the
-  header chip; the dashed knob ink and every verb absent; the
-  machine and its live numbers identical — the room at rest.
+- **Viewer (#490, wording since #653):** READ-ONLY declared once in
+  the header chip; the dashed knob ink and every verb absent; the
+  machine and its live numbers identical — the room at rest. Since
+  #653 the chip follows can-edit, not is-admin: a user runs the
+  watchers station here and is not read-only, while the people and
+  machines doors stay owner-level.
 - **API:** every settings write is 403 for non-admins server-side
   regardless of client; the viewer page exists by widening the
   settings GETs (tokens, definitions, setup status) from

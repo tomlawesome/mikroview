@@ -67,6 +67,10 @@ services:
       # the line above and uncomment this one instead (not both) -- see
       # README.md's "Persistent data" section for the permissions step
       # this needs first.
+      # Switching between this and the named volume later, either
+      # direction, is a supported move -- run `mikroview -migrate-data`
+      # rather than hand-copying files. See docs/configuration.md's
+      # "Moving the data directory" section.
       # - ./data:/var/lib/mikroview
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
@@ -74,7 +78,6 @@ services:
       # Only needed to move a store somewhere other than the default
       # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
-      # - MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH=/var/lib/mikroview/detector-settings.json
       # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json
       # - MIKROVIEW_ENTITIES_STORE_PATH=/var/lib/mikroview/entities.json
       # - MIKROVIEW_DEVICE_MAC_STORE_PATH=/var/lib/mikroview/mac-registry.json

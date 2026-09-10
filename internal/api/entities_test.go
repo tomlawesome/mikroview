@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/entities"
+	"github.com/tomlawesome/mikroview/internal/naming"
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // deleteJSON mirrors postJSON (auth_test.go) but for DELETE, which
@@ -213,16 +216,25 @@ func TestDeleteEntitiesUnknownReturnsNotFound(t *testing.T) {
 	}
 }
 
+// TestNonAdminCannotManageEntities pins #653's widening of the entities
+// surface from admin-only to user tier: a viewer is refused all three
+// routes (viewer may not change anything that affects the instance), but
+// a plain user -- the "watchers" bench the owner's ruling granted full
+// access here -- succeeds at all three.
 func TestNonAdminCannotManageEntities(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
 	adminClient := registerAdmin(t, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password456", Role: "viewer"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password789", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password456"}).Body.Close()
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password789"}).Body.Close()
 
 	getResp, err := viewerClient.Get(ts.URL + "/api/entities")
 	if err != nil {
@@ -230,18 +242,112 @@ func TestNonAdminCannotManageEntities(t *testing.T) {
 	}
 	defer getResp.Body.Close()
 	if getResp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected a non-admin GET /api/entities to be forbidden, got %d", getResp.StatusCode)
+		t.Errorf("expected a viewer GET /api/entities to be forbidden, got %d", getResp.StatusCode)
 	}
 
 	postResp := postJSON(t, viewerClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
 	defer postResp.Body.Close()
 	if postResp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected a non-admin POST /api/entities to be forbidden, got %d", postResp.StatusCode)
+		t.Errorf("expected a viewer POST /api/entities to be forbidden, got %d", postResp.StatusCode)
 	}
 
 	delResp := deleteJSON(t, viewerClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
 	defer delResp.Body.Close()
 	if delResp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected a non-admin DELETE /api/entities to be forbidden, got %d", delResp.StatusCode)
+		t.Errorf("expected a viewer DELETE /api/entities to be forbidden, got %d", delResp.StatusCode)
+	}
+
+	userGetResp, err := userClient.Get(ts.URL + "/api/entities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer userGetResp.Body.Close()
+	if userGetResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user GET /api/entities to succeed (#653), got %d", userGetResp.StatusCode)
+	}
+
+	userPostResp := postJSON(t, userClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
+	defer userPostResp.Body.Close()
+	if userPostResp.StatusCode != http.StatusCreated {
+		t.Errorf("expected a user POST /api/entities to succeed (#653), got %d", userPostResp.StatusCode)
+	}
+
+	userDelResp := deleteJSON(t, userClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
+	defer userDelResp.Body.Close()
+	if userDelResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user DELETE /api/entities to succeed (#653), got %d", userDelResp.StatusCode)
+	}
+}
+
+// #993: names are stamped onto events at ingest (main.go) and GET
+// /api/events returns them as stored -- so without a re-stamp, a rename
+// is invisible on every already-buffered event in every later fetch,
+// which is what let a refetch snapshotted before a rename undo it on
+// screen. Upsert and delete now rewrite the affected name fields on the
+// buffered events, one-shot, through the same resolver ingest uses --
+// mirroring the frontend's relabel(), and preserving router-name
+// precedence because the resolution is re-run rather than the label
+// pasted in.
+func TestEntityUpsertAndDeleteRestampBufferedEventNames(t *testing.T) {
+	s := newAuthTestServer(t)
+	// The same wiring main.go uses: one entities store behind both the
+	// handler and the resolver.
+	s.Naming = naming.Resolver{Entities: s.Entities}
+	s.Store.Insert(store.Event{
+		Time: time.Now(), DeviceID: "core",
+		SrcIP: "10.0.0.9", DstIP: "10.0.0.1",
+		SrcPort: 51000, DstPort: 443,
+		RuleLabel: "lan-wan",
+	})
+
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := registerAdmin(t, ts)
+
+	buffered := func() store.Event {
+		t.Helper()
+		got := s.Store.Query(store.Query{Limit: 10}).Events
+		if len(got) != 1 {
+			t.Fatalf("buffered events = %d, want 1", len(got))
+		}
+		return got[0]
+	}
+
+	upsert := func(typ, key, label string) {
+		t.Helper()
+		resp := postJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: typ, Key: key, Label: label})
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+			t.Fatalf("upsert %s:%s status = %d", typ, key, resp.StatusCode)
+		}
+	}
+
+	upsert(entities.TypeHost, "10.0.0.9", "jellyfish")
+	if e := buffered(); e.SrcHostName != "jellyfish" || e.DstHostName != "" {
+		t.Fatalf("after host upsert, SrcHostName = %q, DstHostName = %q; want %q and empty",
+			e.SrcHostName, e.DstHostName, "jellyfish")
+	}
+
+	upsert(entities.TypePort, "443", "web")
+	if e := buffered(); e.DstPortName != "web" || e.SrcPortName != "" {
+		t.Fatalf("after port upsert, DstPortName = %q, SrcPortName = %q; want %q and empty",
+			e.DstPortName, e.SrcPortName, "web")
+	}
+
+	upsert(entities.TypeRule, "lan-wan", "LAN to WAN")
+	if e := buffered(); e.RuleName != "LAN to WAN" {
+		t.Fatalf("after rule upsert, RuleName = %q, want %q", e.RuleName, "LAN to WAN")
+	}
+
+	// Delete re-resolves too: with no config or router fallback wired
+	// here, the name simply goes -- the raw value shows again, matching
+	// what ingest would stamp on the next event.
+	resp := deleteJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "10.0.0.9"})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", resp.StatusCode)
+	}
+	if e := buffered(); e.SrcHostName != "" {
+		t.Fatalf("after host delete, SrcHostName = %q, want empty", e.SrcHostName)
 	}
 }

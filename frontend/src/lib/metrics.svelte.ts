@@ -24,14 +24,17 @@ const STORAGE_KEY = 'mikroview-metrics-view'
 // think seismography wins overall, and should be the default").
 const DEFAULT_VIEW: MetricsView = 'seismograph'
 
+// Lowercase, matching round 30's own switcher (`#mviews`) and the
+// lowercase-sentence style the rest of its scene bar and hourline use
+// throughout (docs/design/concepts/round-30/the-whole.html #s4).
 export const METRICS_VIEWS: { value: MetricsView; label: string; title: string }[] = [
   {
     value: 'seismograph',
-    label: 'Seismograph',
+    label: 'seismograph',
     title: 'Horizon strips on one shared time axis, the brink at the right',
   },
-  { value: 'register', label: 'Register', title: 'Vertical ribbons on shared minute-rows, the brink at the top' },
-  { value: 'table', label: 'Table', title: 'The same hour as sortable, copyable figures' },
+  { value: 'register', label: 'register', title: 'Vertical ribbons on shared minute-rows, the brink at the top' },
+  { value: 'table', label: 'table', title: 'The same hour as sortable, copyable figures' },
 ]
 
 function isView(v: unknown): v is MetricsView {

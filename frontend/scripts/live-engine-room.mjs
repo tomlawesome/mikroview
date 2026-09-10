@@ -1,265 +1,264 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The engine room (#490), driven in a real browser. Settings stopped
-// being filed by noun: one page draws mikroview's own signal path --
-// door, store, watchers, flags desk, heralds -- with two side doors
-// beside it, per docs/design/screens/settings/DESIGN.md.
+// Settings as the shelf (#633, rounds 23-25), driven in a real browser.
+// The five-station signal path (#490) is replaced wholesale: one page,
+// groups reporting live truth. Round 32 (#767) mounted keys (under
+// ingest) and people (under account) directly in the card, in the
+// card's own row grammar, retiring the two side doors that used to
+// carry them below the shelf.
 //
-// Three claims in that record are only true if the running app makes
-// them true, and none of them is visible from the code or from a unit
-// test with a mocked store:
+// The room's claims survive the restyle, and none of them is visible
+// from the code or from a unit test with a mocked store:
 //
-//  1. "Every number on the room is arrived traffic" -- a component test
+//  1. "Every number on the page is arrived traffic" -- a component test
 //     renders whatever number it was handed, so it cannot tell a live
 //     figure from a placeholder. Feeding real syslog and watching the
-//     store's count climb can.
-//  2. "Opening a station zooms, not navigates" -- the page must still be
-//     the engine room afterwards, with the other stations collapsed
-//     rather than unmounted. A router-level test would pass either way.
-//  3. The viewer grammar: chip declared once, affordances absent rather
-//     than disabled, the people door absent entirely -- and, the part no
-//     DOM assertion covers, a viewer's session never even *asks* for the
-//     account list. GET /api/auth/users is admin-only by the owner's
-//     ruling of 2026-08-24, so a viewer issuing it would be a page that
-//     loads and immediately 403s.
+//     memory group's buffer count climb can.
+//  2. "Tuning unfolds, it does not navigate" -- the detector bench opens
+//     from detection's tune row and the page must still be Settings
+//     afterwards, the bench folded in place rather than routed to.
+//  3. The viewer grammar: affordances absent rather than disabled, the
+//     people group absent entirely -- and, the part no DOM assertion
+//     covers, a viewer's session never even *asks* for the account
+//     list. GET /api/auth/users is admin-only (#657), so a viewer
+//     issuing it would be a page that loads and immediately 403s.
 
-import { chromium } from 'playwright'
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, eventsTotal, waitForEventsTotal, waitForStreamRows } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
-const { page, consoleErrors } = await session({ waitForEvents: 40 })
+const { page, consoleErrors } = await session()
 
-const PEOPLE = '.door:has-text("Who may look in")'
-const MACHINES = '.door:has-text("Which machines may speak")'
+// Its own traffic: the instance is reset before every scenario (#1064),
+// so nothing a sibling fed is there to count.
+// Wait for the server's own count, not just the rows: the memory group
+// below reads the polled stats when Settings mounts, and the rows reach
+// the page over the socket well before that count moves.
+const countedBefore = await eventsTotal(page)
+feedSyslog(40, 'live-engine-room')
+await waitForEventsTotal(page, countedBefore + 40)
+await waitForStreamRows(page, 40)
 
-await page.click('.rail .item:has-text("The engine room")')
-await page.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
-  null,
-  { timeout: 5000 },
+const PEOPLE = '#people'
+const MACHINES = '#keys'
+
+// goTo's own wait (SCENES in live-browser.mjs, waiting for the engineroom card to centre) is what proves arrival --
+// this used to also wait for `.page-header h2`, but #700 unmounted PageHeader from EngineRoom.svelte entirely, so
+// that selector no longer exists anywhere on the page (#667 group E).
+await goTo(page, 'Settings')
+
+// --- The page is the groups, with keys and people mounted in place ------
+
+// #394 (round 44) added the router-backups group straight after disk --
+// memory, disk, router backups is the order EngineRoom.svelte's own
+// comment states, and this list is a copy of the DOM order, not an
+// independent decision, so it has to keep up with what the page mounts.
+const GROUP_ORDER = ['ingest', 'keys', 'detection', 'memory', 'disk', 'router backups', 'account', 'people']
+const groupNames = await page.$$eval('.stsection h3', (els) => els.map((e) => e.textContent.trim()))
+check(
+  JSON.stringify(groupNames) === JSON.stringify(GROUP_ORDER),
+  `the groups render in order -- ${GROUP_ORDER.join(', ')} -- got ${JSON.stringify(groupNames)}`,
+)
+check(
+  await page.locator(`${MACHINES} h3`).isVisible(),
+  'the keys group renders for an admin',
+)
+check(
+  await page.locator(`${PEOPLE} h3`).isVisible(),
+  'the people group renders for an admin',
 )
 
-// --- The room is the path, in order, with both doors beside it ----------
-
-const stationNames = await page.$$eval('.path .station .nm', (els) => els.map((e) => e.textContent.trim()))
+// The shelf holds the whole deck, whatever order an earlier scenario
+// left it in, and exactly one card wears the sign-in mark.
+const shelfNames = await page.$$eval('.stshelf .stcard .nm', (els) => els.map((e) => e.textContent.trim()))
+// Seven, not five: #647 (#634 round 23) put Entities and Settings on the
+// deck as its last two cards, and #653 widened both to the user tier
+// (deckCards.ts:34-52 -- `canEdit` carries them, so an admin sees seven).
+// This scenario drives the shelf as an admin, so seven is the whole deck.
+const DECK_CARDS = ['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']
 check(
-  JSON.stringify(stationNames) ===
-    JSON.stringify(['The door', 'The store', 'The watchers', 'The flags desk', 'The heralds']),
-  `the five stations render top to bottom in signal order -- got ${JSON.stringify(stationNames)}`,
+  shelfNames.length === DECK_CARDS.length && DECK_CARDS.every((n) => shelfNames.includes(n)),
+  `the shelf holds all ${DECK_CARDS.length} deck cards -- got ${JSON.stringify(shelfNames)}`,
 )
-const doorNames = await page.$$eval('.doors .door .dname', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(doorNames) === JSON.stringify(['Who may look in', 'Which machines may speak']),
-  `both side doors render for an admin -- got ${JSON.stringify(doorNames)}`,
+  (await page.$$('.stshelf .stcard.first .lands')).length === 1,
+  'exactly one shelf card says sign-in lands on it, and it is the first',
 )
 
 // --- Claim 1: every number is arrived traffic ---------------------------
-// The store's count is the honest one to pin: it is a whole number the
-// server publishes, so a placeholder or a stale render is visible as a
-// number that does not move when 200 more events land.
+// The memory group's buffer count is the honest one to pin: it is a
+// whole number the server publishes, so a placeholder or a stale render
+// is visible as a number that does not move when more events land.
+//
+// The row's first figure is the MiB ceiling (#796, since #823) -- a
+// configured budget, not traffic, so it never moves on its own. The held
+// count (#842) is the live one, and it sits right before " of " ("8 412
+// of ~201 000 events"), so that is what this scenario reads and waits on.
 
-const storeCount = () =>
-  page.$eval('.path .station:has-text("The store") .live', (el) => {
-    const m = el.textContent.replace(/,/g, '').match(/(\d+)/)
-    return m ? Number(m[1]) : null
+const BUFFER_ROW = '.stsection:has(h3:text-is("memory")) .orow:has-text("event buffer") .ov'
+
+const bufferCount = () =>
+  page.$eval(BUFFER_ROW, (el) => {
+    const m = el.textContent.match(/([\d,\s ]+)\s+of\s/)
+    return m ? Number(m[1].replace(/\D/g, '')) : null
   })
 
-const before = await storeCount()
-check(before !== null && before > 0, `the store says how many events it holds (got ${before})`)
+// The row reads the client's polled stats (STATS_REFRESH_MS), which can
+// still be the pre-feed snapshot when Settings mounts -- so wait for the
+// poll to catch up with the count the server already confirmed above,
+// rather than reading the row once and pinning a stale 0 (#1065).
+await page.locator(BUFFER_ROW).filter({ hasText: /[1-9][\d,\s ]*\s+of\s/ }).waitFor({ timeout: 15000 })
+const before = await bufferCount()
+check(before !== null && before > 0, `memory says how many events the buffer holds (got ${before})`)
 
 feedSyslog(60, 'live-engine-room')
 const climbed = await page
   .waitForFunction(
     (was) => {
-      // Deliberately no fallback to "the first .live on the page": that
-      // is the door's events/s, which moves on its own, so a fallback
-      // would let this check pass without ever reading the store.
-      const station = [...document.querySelectorAll('.path .station')].find((s) =>
-        s.querySelector('.nm')?.textContent.trim() === 'The store',
+      // Plain DOM traversal, not BUFFER_ROW: this runs inside the page,
+      // where Playwright's :has-text/:text-is pseudo-selectors do not
+      // exist. And deliberately no fallback to "the first number on the
+      // page": the ingest group's events/s moves on its own, so a
+      // fallback would let this check pass without ever reading the
+      // buffer. Reads the held count before " of ", not the row's first
+      // figure, which has been the MiB ceiling -- a static budget -- since
+      // #823 (#842).
+      const og = [...document.querySelectorAll('.stsection')].find(
+        (g) => g.querySelector('h3')?.textContent.trim() === 'memory',
       )
-      const text = station?.querySelector('.live')?.textContent
-      if (text === undefined || text === null) return false
-      const m = text.replace(/,/g, '').match(/(\d+)/)
-      return m ? Number(m[1]) > was : false
+      const row = og && [...og.querySelectorAll('.orow')].find((r) => r.textContent.includes('event buffer'))
+      const el = row?.querySelector('.ov')
+      if (!el) return false
+      const m = el.textContent.match(/([\d,\s ]+)\s+of\s/)
+      return m ? Number(m[1].replace(/\D/g, '')) > was : false
     },
     before,
     { timeout: 20000 },
   )
   .then(() => true, () => false)
-check(climbed, `the store's count rises as events arrive -- it is live traffic, not a placeholder (was ${before})`)
+check(climbed, `the buffer count rises as events arrive -- it is live traffic, not a placeholder (was ${before})`)
 
-const doorLive = await page.textContent('.path .station:has-text("The door") .live')
+const ingestText = (await page.textContent('.stsection:has(h3:text-is("ingest"))')) ?? ''
 check(
-  /\d/.test(doorLive ?? ''),
-  `the door states a real events/s rate rather than an em-dash placeholder (got "${(doorLive ?? '').trim()}")`,
+  /listening/.test(ingestText),
+  'ingest names the listening port -- the pathway in is a stated fact',
+)
+check(
+  /[\d.]+\s*events\/s arriving now/.test(ingestText),
+  `ingest states a real events/s rate rather than a placeholder`,
 )
 
-// The watchers station's "N of M running" has to agree with the server's
-// own definitions list, whatever an earlier scenario left toggled.
-const watchersLive = (await page.textContent('.path .station:has-text("The watchers") .live'))?.trim() ?? ''
+// The detection group's "N of M on" has to agree with the server's own
+// definitions list, whatever an earlier scenario left toggled.
+//
+// /api/definitions answers every definition mikroview holds, not just
+// detectors -- a watchlist entry is stored as an intent=expectation
+// definition (definitions_convert.go's convertNonInvertedEntry et al),
+// and one can easily still be sitting there from an earlier scenario in
+// this run. detectorSettingsState.refresh() (detectorSettings.svelte.ts)
+// deliberately narrows to intent === 'detection' && available before
+// this page ever sees the list, because those are the only rows the
+// bench can toggle -- so the comparison here has to apply the same
+// narrowing, or it is comparing the bench's count against a bigger,
+// unrelated total.
+const detectorsRow = (await page.textContent('.stsection:has(h3:text-is("detection")) .orow:has-text("detectors")'))?.trim() ?? ''
 const defs = await page.request
   .get(`${URL_BASE}/api/definitions`)
   .then(async (r) => (await r.json()).definitions ?? [])
-const running = defs.filter((d) => d.enabled).length
+const detectors = defs.filter((d) => d.intent === 'detection' && d.available)
+const running = detectors.filter((d) => d.enabled).length
 check(
-  watchersLive.includes(`${running} of ${defs.length} running`),
-  `the watchers station counts what the server actually runs (ui "${watchersLive}", api ${running} of ${defs.length})`,
+  detectorsRow.includes(`${running} of ${detectors.length} on`),
+  `detection counts what the server actually runs (ui "${detectorsRow}", api ${running} of ${detectors.length})`,
 )
 
-// --- Claim 2: opening a station zooms, it does not navigate -------------
+// --- Claim 2: tuning unfolds in place, it does not navigate -------------
 
-await page.click('.path .station:has-text("The watchers") .shead')
-await page.waitForSelector('.path .station.st-open')
+await page.click('.olink:has-text("tune")')
+await page.waitForSelector('.bench .row')
 
-const opened = await page.$eval('.path .station.st-open .nm', (el) => el.textContent.trim())
-check(opened === 'The watchers', `the station clicked is the one that opens (got "${opened}")`)
+// .page-header h2 is gone with #700 (see above); the roll rail's own current-scene marker is what proves the page
+// underneath the unfolded bench is still Settings.
 check(
-  (await page.$$('.path .station.st-collapsed')).length === 4,
-  'the other four stations collapse to slim bars rather than unmounting',
+  (await page
+    .$eval('.roll-rail button.rail-name[aria-current="page"]', (e) => e.textContent.trim())
+    .catch(() => null)) === 'Settings',
+  'the page is still Settings -- the bench unfolded in place, it did not navigate away',
 )
 check(
-  (await page.textContent('.page-header h2'))?.trim() === 'The engine room',
-  'the page is still the engine room -- the station unfolded in place, it did not navigate away',
-)
-check(
-  await page
-    .locator('.st-open .bench .row')
-    .first()
-    .waitFor({ timeout: 5000 })
-    .then(() => true, () => false),
-  'the open watchers station shows the detector bench',
-)
-check(
-  (await page.getAttribute('.path .station:has-text("The watchers") .shead', 'aria-expanded')) === 'true',
-  'the open station says so to a screen reader',
+  (await page.$$('.bench .row')).length > 0,
+  'the open bench shows the detectors',
 )
 
-await page.click('.path .station:has-text("The watchers") .shead')
-await page.waitForSelector('.path .station.st-open', { state: 'detached' })
-check(
-  (await page.$$('.path .station.st-rest')).length === 5,
-  'clicking the open station again returns the whole room to rest',
-)
+await page.click('.olink:has-text("close the bench")')
+await page.waitForSelector('.bench', { state: 'detached' })
+check(true, 'closing the bench folds it away and the page is whole again')
 
 // --- Claim 3: the viewer grammar ----------------------------------------
+// #657 (predating round 32) narrowed GET /api/tokens to admin-only, the
+// same footing GET /api/auth/users was already on -- issuing keys is a
+// setup task, not using the product. So keys and people are both absent
+// for a viewer, not a read-only rendering of either: this used to assert
+// the machines door stayed viewer-readable with its verbs gone, which
+// stopped being true the moment #657 landed. Round 32/#767 keeps both
+// groups on that same admin-only footing (see EngineRoom.svelte's own
+// doc comment on the point).
 
 const VIEWER_USER = 'live-viewer-490'
 const VIEWER_PASS = 'live-viewer-490-password'
 
-// A key for the viewer to read at the machines door. Minted through the
-// API rather than the door's own form on purpose: whether the form works
-// is live-token-ui.mjs's question, and this scenario must not depend on
-// the list happening to be non-empty -- it is not. Every scenario that
-// mints one also revokes it, and this one runs before all of them, so
-// without this the door is legitimately empty and the check below would
-// be asserting on leftovers.
-const minted = await page.request
-  .post(`${URL_BASE}/api/tokens`, {
-    // The same header the app's own writes send -- the server's
-    // cross-origin guard refuses a state-changing request without it.
-    headers: { 'X-Requested-With': 'mikroview' },
-    data: { name: 'engine-room-door-read', kind: 'api' },
-  })
-  .then((r) => (r.ok() ? r.json() : null))
-check(minted !== null, 'a key exists for the viewer to read at the machines door')
-
-await page.click(`${PEOPLE} .footer-action`)
-await page.waitForSelector(`${PEOPLE} .inline-form`)
-await page.fill(`${PEOPLE} .inline-form input[type="text"]`, VIEWER_USER)
-await page.fill(`${PEOPLE} .inline-form input[type="password"]`, VIEWER_PASS)
-await page.click(`${PEOPLE} .inline-form .save`)
-await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`)
-
-const browser = await chromium.launch()
-const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
-const viewerPage = await viewerCtx.newPage()
-
-// Attached before the first navigation, so it sees every request the
-// viewer's session makes from sign-in onwards -- not only the ones after
-// the room opens.
-const viewerRequests = []
-viewerPage.on('request', (r) => viewerRequests.push(r.url()))
-
-await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
-await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
-await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
-await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('.rail .item', { timeout: 15000 })
-
-await viewerPage.click('.rail .item:has-text("The engine room")')
-await viewerPage.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
-  null,
-  { timeout: 5000 },
-)
-check(true, 'a viewer can open the engine room -- the one Admin-group page that is readable')
-
-const chips = await viewerPage.$$eval('.page-header .chip', (els) => els.map((e) => e.textContent.trim()))
+await page.click(`${PEOPLE} .ogfoot .olink`)
+await page.waitForSelector(`${PEOPLE} .pform`)
+await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, VIEWER_USER)
+await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, VIEWER_PASS)
+// #653: the form defaults to a "can change things" account, so the
+// read-only tier this claim is about has to be chosen explicitly --
+// which also drives the selector itself, since without it the viewer
+// tier has no route in from the UI at all.
+await page.click(`${PEOPLE} .pform button:has-text("can only look")`)
+await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
+await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`)
 check(
-  JSON.stringify(chips) === JSON.stringify(['READ-ONLY — ADMINS EDIT']),
-  `read-only is declared exactly once, in the page header -- got ${JSON.stringify(chips)}`,
+  await page.isVisible(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .pr:has-text("can only look")`),
+  'the people group marks the new account as read-only',
 )
 
-const viewerDoors = await viewerPage.$$eval('.doors .door .dname', (els) => els.map((e) => e.textContent.trim()))
-check(
-  JSON.stringify(viewerDoors) === JSON.stringify(['Which machines may speak']),
-  `the people door is absent for a viewer, not read-only and not empty -- got ${JSON.stringify(viewerDoors)}`,
-)
-
-check(
-  !viewerRequests.some((u) => u.includes('/api/auth/users')),
-  'a viewer never even asks for the account list -- the request that would 403 is not issued at all',
-)
-
-// Absent, never disabled: the letter of the grammar. A greyed-out Revoke
-// would satisfy "cannot edit" while breaking the rule the record is
-// actually about.
-check(
-  (await viewerPage.$$(`${MACHINES} .verb`)).length === 0,
-  'Mint and Revoke are absent at the machines door for a viewer',
-)
-const viewerDisabled = await viewerPage.$$eval('.page button, .page input', (els) =>
-  els.filter((e) => e.disabled).length,
-)
-check(viewerDisabled === 0, `nothing in the room is rendered disabled for a viewer -- got ${viewerDisabled}`)
-
-// The facts survive without the handles: a viewer still reads which
-// machines may speak and what every watcher is doing, in words.
-check(
-  await viewerPage
-    .locator(`${MACHINES} .row:has-text("engine-room-door-read")`)
-    .waitFor({ timeout: 10000 })
-    .then(() => true, () => false),
-  'a viewer still reads which machines may speak -- the key is named, with its verbs gone',
-)
-await viewerPage.click('.path .station:has-text("The watchers") .shead')
-await viewerPage.waitForSelector('.st-open .bench .row')
-check((await viewerPage.$$('.st-open .bench .cbx')).length === 0, 'the run/pause checkboxes are absent for a viewer')
-check((await viewerPage.$$('.st-open .bench .scope-knob')).length === 0, 'the scope knobs are absent for a viewer')
-const states = await viewerPage.$$eval('.st-open .bench .state', (els) => els.map((e) => e.textContent.trim()))
-check(
-  states.length > 0 && states.every((s) => s === 'running' || s === 'paused'),
-  `every watcher's state survives as a word for a viewer -- got ${JSON.stringify(states.slice(0, 4))}`,
-)
-const scopeFacts = await viewerPage.$$eval('.st-open .bench .scope-fact', (els) => els.length)
-check(scopeFacts > 0, 'a scope reads as a sentence for a viewer rather than vanishing with its knob')
-
-const viewerConsole = []
-viewerPage.on('console', (m) => m.type() === 'error' && viewerConsole.push(m.text()))
-await browser.close()
+// --- The viewer half of this scenario moved to live-viewer-surfaces.mjs --
+//
+// It used to sign a viewer in here and walk Settings, proving #490's
+// grammar -- rows absent for a tier that cannot use them, never disabled.
+// #657 then ruled Settings out of a viewer's navigation entirely, and a
+// viewer has no other route in: navigation is `appState.view` mutation
+// from the UI only (BottomBar.svelte:174, the roll rail), there are no URL
+// routes, and a viewer's deck carries no `engineroom` card
+// (deckCards.ts:45-50). Asking for it leaves Deck.svelte:48's activeIndex
+// at -1 and nothing mounts, so `goTo(viewerPage, 'Settings')` waits 30s for
+// a rail button that cannot exist and throws, taking the rest of this
+// scenario with it.
+//
+// The coverage was not lost: live-viewer-surfaces.mjs already carries it,
+// against the *user* tier -- who can still open the page, so who the
+// grammar now has to hold for. Its own comment records the move
+// ("live-engine-room.mjs used to assert this against a viewer, whose route
+// into the room #657 removed"), claims 1-3 there. This block was the
+// leftover, live-checking an unreachable state; #706 migrated the
+// assertions and left it standing.
+//
+// What is deliberately *not* migrated: "a viewer never even asks for
+// /api/auth/users or /api/tokens". On a page a viewer cannot open, that is
+// true for free and proves nothing. The server-side gate it was standing in
+// for is pinned directly -- live-viewer-surfaces.mjs claim 4 and
+// internal/api/tokens_test.go.
 
 // --- Clean up: this account should not outlive the scenario -------------
+// Arm-then-confirm (round 28's gesture, retained rather than a confirm()
+// dialog): a click arms remove, a second click on the same button
+// confirms it.
 
-if (minted?.id) {
-  await page.request.delete(`${URL_BASE}/api/tokens/${minted.id}`, {
-    headers: { 'X-Requested-With': 'mikroview' },
-  })
-}
-
-page.on('dialog', (d) => d.accept())
-await page.click(`${PEOPLE} .row:has-text("${VIEWER_USER}") .verb`)
-await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`, { state: 'detached' })
+const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`)
+await remove.click()
+await remove.click()
+await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
 check(true, `the viewer account "${VIEWER_USER}" is removed again`)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)

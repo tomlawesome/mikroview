@@ -2,9 +2,11 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  backupReceipt,
+  backupReceiptForDevice,
+  backupStep,
   buildLedger,
   caStep,
-  caTrustCommands,
   certificateCovers,
   finishHeadline,
   firstOpenStep,
@@ -13,15 +15,21 @@ import {
   nameStep,
   notObserved,
   portOf,
-  pushBlock,
-  pushScript,
   pushStep,
   rulesStep,
   silenceExplanation,
-  syslogCommands,
+  sourceSplitObservation,
+  sourceSplitReceipt,
+  sourceSplits,
+  srcAddressCommand,
+  syslogReceipt,
   syslogStep,
 } from './setupsteps'
-import type { Device, SetupMark, SetupStatus } from './types'
+import type { Device, RouterBackupsResponse, SetupMark, SetupStatus } from './types'
+
+function backups(over: Partial<RouterBackupsResponse> = {}): RouterBackupsResponse {
+  return { enabled: true, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0, ...over }
+}
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
   return {
@@ -87,66 +95,6 @@ describe('certificate cover check', () => {
       instance: { tlsEnabled: false, hosts: ['192.0.2.30'], syslogPort: ':6514', syslogEnabled: true },
     })
     expect(certificateCovers(s, '192.0.2.30:18084')).toBe(true)
-  })
-})
-
-describe('generated commands', () => {
-  // The wizard must never emit a placeholder: a saved script still
-  // containing <mikroview-host> fails much later, somewhere else.
-  const placeholders = /<[a-z-]+>/
-
-  it('fills in the address for the CA fetch', () => {
-    const cmd = caTrustCommands('192.0.2.10:8080')
-    expect(cmd).toContain('https://192.0.2.10:8080/ca.crt')
-    expect(cmd).not.toMatch(placeholders)
-  })
-
-  it('uses the configured syslog port, not an assumed one', () => {
-    expect(syslogCommands('192.0.2.10:8080', ':16514')).toContain('remote-port=16514')
-  })
-
-  it('sends syslog to the host without the web port', () => {
-    const cmd = syslogCommands('192.0.2.10:8080', ':6514')
-    expect(cmd).toContain('remote=192.0.2.10')
-    expect(cmd).not.toContain('remote=192.0.2.10:8080')
-  })
-
-  it('embeds the token in every push block', () => {
-    const script = pushScript('192.0.2.10:8080', 'tok-123', ['filter-rule', 'arp'])
-    expect(script.match(/Bearer tok-123/g)).toHaveLength(2)
-    expect(script).not.toMatch(placeholders)
-  })
-
-  it('renames RouterOS fields to mikroview names', () => {
-    const block = pushBlock('h', 't', 'filter-rule')
-    expect(block).toContain('"logPrefix"=($v->"log-prefix")')
-    expect(block).toContain('"srcAddressList"=($v->"src-address-list")')
-    // #408's fields. connection-state is a set, passed through as the
-    // array RouterOS sends rather than joined by the script.
-    expect(block).toContain('"connectionState"=($v->"connection-state")')
-    expect(block).toContain('"inInterface"=($v->"in-interface")')
-    expect(block).toContain('"outInterface"=($v->"out-interface")')
-    // The wrapping that makes it a list of records rather than one
-    // merged map -- silently wrong without it.
-    expect(block).toContain('{$rec}')
-  })
-
-  it('reports the router version on every block, on the payload not a record', () => {
-    const script = pushScript('h', 't', ['filter-rule', 'arp'])
-    expect(script.match(/"routerosVersion"=\[\/system\/resource get version\]/g)).toHaveLength(2)
-    // On the envelope beside kind/page/pages -- never inside the
-    // per-record map, which describes a rule and not the router.
-    expect(script).not.toContain('"routerosVersion"=[/system/resource get version]; "comment"')
-  })
-
-  it('gives each block its own variables, since they share one script', () => {
-    const script = pushScript('h', 't', ['filter-rule', 'arp'])
-    expect(script).toContain('ruleRecs')
-    expect(script).toContain('arpRecs')
-  })
-
-  it('emits nothing for a kind it does not know', () => {
-    expect(pushBlock('h', 't', 'not-a-kind')).toBe('')
   })
 })
 
@@ -237,14 +185,86 @@ function device(over: Partial<Device> = {}): Device {
   }
 }
 
+// --- The source-address split (#442) -----------------------------------
+//
+// A router declared under one address whose logs arrive from another.
+// The server pairs the silent declared device with every undeclared
+// address that is streaming (Registry.MultihomedCandidates); what is
+// tested here is the wording -- the ratified copy on #442, verbatim.
+
+describe('the source-address split', () => {
+  const declared = device({
+    id: 'office',
+    name: 'office',
+    sourceIp: '192.168.88.1',
+    configured: true,
+    eventCount: 0,
+    status: 'never_seen',
+    multihomedCandidates: ['10.0.20.1'],
+  })
+  const arriving = device({ id: '10.0.20.1', name: '10.0.20.1', sourceIp: '10.0.20.1' })
+  const connected = status({ sources: [{ source: '10.0.20.1', syslogFirstSeenAt: '2026-08-13T00:00:00Z' }] })
+
+  it('reads as partial, in the voice of evidence composed wrongly, never blocked', () => {
+    const s = syslogStep(connected, [declared, arriving])
+    expect(s.state).toBe('partial')
+    expect(s.detail).toBe(
+      "Connected — but from 10.0.20.1, an address you haven't declared, while 192.168.88.1, " +
+        'which you declared in config.yaml, has sent nothing.',
+    )
+  })
+
+  it('carries the split into the step list receipt', () => {
+    expect(syslogReceipt(connected, [declared, arriving])).toBe('syslog from 10.0.20.1 · declared 192.168.88.1 silent')
+    const ledger = buildLedger(connected, [declared, arriving], 'h')
+    expect(ledger[1].status.state).toBe('partial')
+    expect(ledger[1].outcome).toBe('done')
+    expect(ledger[1].receipt).toBe('syslog from 10.0.20.1 · declared 192.168.88.1 silent')
+  })
+
+  // The existing receipt already states a match; no new words.
+  it('says nothing new when the declared device is the one sending', () => {
+    const speaking = device({ ...declared, eventCount: 5, status: 'live', multihomedCandidates: undefined })
+    const s = syslogStep(connected, [speaking])
+    expect(s.state).toBe('done')
+    expect(sourceSplits([speaking])).toEqual([])
+    expect(syslogReceipt(connected, [speaking])).toContain('syslog connected from 10.0.20.1')
+  })
+
+  // The server returns candidates, not a diagnosis, so every arriving
+  // address is listed and none is picked.
+  it('lists every arriving address rather than picking one', () => {
+    const two = device({ ...declared, multihomedCandidates: ['10.0.20.1', '10.0.30.1'] })
+    const splits = sourceSplits([two])
+    expect(sourceSplitObservation(splits)).toBe(
+      "Connected — but from 10.0.20.1 and 10.0.30.1, addresses you haven't declared, while " +
+        '192.168.88.1, which you declared in config.yaml, has sent nothing.',
+    )
+    expect(sourceSplitReceipt(splits)).toBe('syslog from 10.0.20.1, 10.0.30.1 · declared 192.168.88.1 silent')
+  })
+
+  // The remedy keeps the declared address: the command needs only that
+  // one value, and it is printed, never run.
+  it('prints the src-address command with the declared address filled in', () => {
+    expect(srcAddressCommand('192.168.88.1')).toBe('/system logging action set mikroview src-address=192.168.88.1')
+  })
+
+  // Only a declared device with a pairing is a split. An undeclared
+  // device never is, whatever the server sent alongside it.
+  it('ignores undeclared devices and declared ones with no pairing', () => {
+    expect(sourceSplits([arriving, device({ ...declared, multihomedCandidates: [] })])).toEqual([])
+  })
+})
+
 describe('the claim ledger', () => {
-  // The count of five is stable whatever the state: the record is
+  // The count of six is stable whatever the state: the record is
   // explicit that step 5's row always exists, marked "nothing to name"
-  // until a push surfaces an unnamed device. A ledger that grew and
-  // shrank would be a different promise every time it was opened.
-  it('always has exactly five steps', () => {
-    expect(buildLedger(status(), [], 'h').length).toBe(5)
-    expect(buildLedger(status({ sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(5)
+  // until a push surfaces an unnamed device, and step 6 (#394) is the
+  // same kind of always-there row. A ledger that grew and shrank would
+  // be a different promise every time it was opened.
+  it('always has exactly six steps', () => {
+    expect(buildLedger(status(), [], 'h').length).toBe(6)
+    expect(buildLedger(status({ sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(6)
   })
 
   it('reads a step with no evidence and no decision as open, with an honest gap', () => {
@@ -297,10 +317,11 @@ describe('the claim ledger', () => {
 
   // Step 3 counts and can only count upward, and step 5 has nothing to
   // wait for -- Next is always free on both, so neither can raise the
-  // heavy warning.
+  // heavy warning. Step 6 does have a waiting check, the same shape as
+  // step 4's.
   it('marks only the steps with a waiting check as checkable', () => {
     const ledger = buildLedger(status(), [], '192.0.2.10')
-    expect(ledger.map((s) => s.hasCheck)).toEqual([true, true, false, true, false])
+    expect(ledger.map((s) => s.hasCheck)).toEqual([true, true, false, true, false, true])
   })
 
   it('reads a partially tagged rule set as counting, not as half-failed', () => {
@@ -332,6 +353,96 @@ describe('the claim ledger', () => {
   })
 })
 
+// --- Step 6: back up the router (#394, round 45) ------------------------
+
+describe('backupStep', () => {
+  it('reads null (never asked, or a non-admin session) the same as nothing arrived yet -- never as "no key"', () => {
+    const s = backupStep(null)
+    expect(s.state).toBe('waiting')
+    expect(s.detail).not.toContain('key')
+  })
+
+  it('is blocked, in the disabled-step voice, once the server actually says no key is mounted', () => {
+    const s = backupStep(backups({ enabled: false }))
+    expect(s.state).toBe('blocked')
+    expect(s.detail).toContain('none is mounted')
+  })
+
+  it('waits once a key is mounted but nothing has pushed yet', () => {
+    const s = backupStep(backups({ routers: [] }))
+    expect(s.state).toBe('waiting')
+  })
+
+  it('reads done, with the newest pair in the detail, once something has arrived', () => {
+    const b = backups({
+      routers: [
+        {
+          device: 'rb5009',
+          generations: [
+            { id: 'g0', backupArrivedAt: '2026-09-02T03:00:00Z', rscArrivedAt: '2026-09-02T03:00:05Z', backupBytes: 412000, rscBytes: 38000 },
+          ],
+          intervalKnown: false,
+          missed: 0,
+        },
+      ],
+    })
+    const s = backupStep(b)
+    expect(s.state).toBe('done')
+    expect(s.detail).toContain('rb5009.backup')
+    expect(s.detail).toContain('rb5009.rsc')
+  })
+})
+
+describe('backupReceipt', () => {
+  it('is empty with nothing arrived', () => {
+    expect(backupReceipt(null)).toBe('')
+    expect(backupReceipt(backups())).toBe('')
+  })
+
+  it('names the newest pair across every router, not the first', () => {
+    const b = backups({
+      routers: [
+        {
+          device: 'rb5009',
+          generations: [{ id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z', backupBytes: 1000, rscBytes: 100 }],
+          intervalKnown: false,
+          missed: 0,
+        },
+        {
+          device: 'hap-ax2',
+          generations: [{ id: 'g1', backupArrivedAt: '2026-09-02T03:00:00Z', rscArrivedAt: '2026-09-02T03:00:05Z', backupBytes: 2000, rscBytes: 200 }],
+          intervalKnown: false,
+          missed: 0,
+        },
+      ],
+    })
+    const receipt = backupReceipt(b)
+    expect(receipt).toContain('hap-ax2.backup')
+    expect(receipt).toContain('kept under the key')
+    expect(receipt).not.toContain('rb5009')
+  })
+})
+
+describe('backupReceiptForDevice', () => {
+  it('is empty for a router the vault has never heard of', () => {
+    expect(backupReceiptForDevice(backups(), 'rb5009')).toBe('')
+  })
+
+  it('states this one router\'s own kept count, not the fleet total', () => {
+    const b = backups({
+      routers: [
+        {
+          device: 'rb5009',
+          generations: Array.from({ length: 10 }, (_, i) => ({ id: `g${i}`, backupArrivedAt: '2026-09-02T03:00:00Z', rscArrivedAt: '2026-09-02T03:00:05Z' })),
+          intervalKnown: true,
+          missed: 0,
+        },
+      ],
+    })
+    expect(backupReceiptForDevice(b, 'rb5009')).toContain('10 pairs kept')
+  })
+})
+
 describe('reopening the ledger', () => {
   it('lands on the first step still waiting', () => {
     const ledger = buildLedger(
@@ -348,7 +459,7 @@ describe('reopening the ledger', () => {
 
   it('falls back to the first step when nothing is left open', () => {
     const ledger = buildLedger(
-      status({ marks: [1, 2, 3, 4, 5].map((n) => mark(n, 'skipped')) }),
+      status({ marks: [1, 2, 3, 4, 5, 6].map((n) => mark(n, 'skipped')) }),
       [],
       '192.0.2.10',
     )

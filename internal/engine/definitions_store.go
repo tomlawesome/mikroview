@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,24 +22,27 @@ var definitionsLog = logging.New("definitions")
 // version -- the "document version bump" docs/decisions/evaluation-
 // engine.md's Migration section calls for: this is a brand new document
 // (nothing before it shared this shape), versioned from its first byte
-// so a future *structural* change has somewhere to record itself, the
-// same "versioned, forward-growable" contract engine.stateDocument
-// already follows (see state.go's own doc comment).
+// so a future *structural* change has somewhere to record itself.
 const definitionsDocumentVersion = 1
 
 // definitionsDocument is DefinitionsStore's on-disk shape: every
 // definition keyed by its ID, carried as raw JSON rather than decoded
 // into Definition at this layer.
 //
-// That choice is the whole mechanism behind the unavailable-definition
-// guarantee (see StoredDefinition.Available's doc comment, and the
-// decision recorded on issue #404, 2026-08-16): a definition this binary
-// cannot make sense of -- an unrecognized Kind/Intent from a newer
-// version, hit on a downgrade, or a shipped definition this binary has
-// retired -- still round-trips through Load/Save exactly, because this
-// layer never asks json.RawMessage to understand it. Only an entry a
-// caller actually rewrites (DefinitionsStore.Upsert) ever has its bytes
-// replaced; every other entry is carried forward unexamined.
+// That choice backs the unavailable-definition guarantee (see
+// StoredDefinition.Available's doc comment, and the decision recorded on
+// issue #404, 2026-08-16) for a definition whose envelope this binary
+// can parse but cannot otherwise make full sense of: still round-trips
+// through Load/Save exactly, because this layer never asks
+// json.RawMessage to understand it. Only an entry a caller actually
+// rewrites (DefinitionsStore.Upsert) ever has its bytes replaced; every
+// other entry is carried forward unexamined.
+//
+// An unrecognized Kind or Intent is not part of that guarantee: downgrade
+// is not a supported operation pre-1.0 (#873), so
+// OpenDefinitionsStoreWithBackend refuses to load a document containing
+// one at all, naming the offending definition and its unrecognized kind
+// rather than preserving it unevaluated.
 type definitionsDocument struct {
 	Version     int                        `json:"version"`
 	Definitions map[string]json.RawMessage `json:"definitions"`
@@ -80,6 +84,13 @@ type DefinitionsStore struct {
 	// this layer stores bytes rather than decoded Definition values.
 	raw map[string]json.RawMessage
 
+	// watchingSince is when this process opened the store, and so the
+	// earliest watch window it could have observed end to end. Read by
+	// the nightly fill (definitions_nights.go) to keep a night nobody was
+	// running for out of the "empty" bucket -- see
+	// watchlist.Observation.
+	watchingSince time.Time
+
 	// onChange is notified after any change to what this store's
 	// definitions evaluate -- see SetOnChange
 	// (definitions_expectations.go). Guarded by mu for writes, read under
@@ -104,13 +115,11 @@ func OpenDefinitionsStore(path string) (*DefinitionsStore, error) {
 
 // OpenDefinitionsStoreWithBackend is OpenDefinitionsStore against any
 // persist.Backend -- a JSON file by default, or Postgres when
-// configured. Deliberately does not migrate anything: seeding this store
-// from internal/detect's or internal/watchlist's documents is
-// MigrateDefinitions's job (definitions_migrate.go), run once, before
-// this store is ever opened for the first time -- see that function's
-// own doc comment for why the two are kept separate.
+// configured. Deliberately seeds nothing: filling an empty store with
+// this binary's shipped catalogue is SeedShippedDefinitions' job
+// (definitions_convert.go), run on every boot once this store is open.
 func OpenDefinitionsStoreWithBackend(b persist.Backend) (*DefinitionsStore, error) {
-	s := &DefinitionsStore{raw: make(map[string]json.RawMessage)}
+	s := &DefinitionsStore{raw: make(map[string]json.RawMessage), watchingSince: time.Now()}
 
 	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the definitions store", persist.WriteBehindOptions{
 		MinInterval: definitionsPersistMinInterval,
@@ -129,6 +138,20 @@ func OpenDefinitionsStoreWithBackend(b persist.Backend) (*DefinitionsStore, erro
 			// to a nil slice element).
 			if id == "" || len(entry) == 0 {
 				continue
+			}
+			// An entry that decodes into a Definition is checked for a
+			// Kind/Intent this binary recognizes -- see
+			// definitionsDocument's own doc comment for why this is a
+			// hard load failure rather than the preserved-unavailable
+			// treatment the rest of this package gives a definition it
+			// can parse but not otherwise service. An entry that doesn't
+			// even decode this far is left to decodeStored's own
+			// defensive handling at read time, unchanged from before.
+			var d Definition
+			if err := json.Unmarshal(entry, &d); err == nil {
+				if err := refuseUnrecognizedKindIntent(id, d); err != nil {
+					return err
+				}
 			}
 			s.raw[id] = entry
 		}
@@ -164,42 +187,76 @@ func (s *DefinitionsStore) Close(ctx context.Context) error {
 // API: the decoded envelope, plus whether this binary can make sense of
 // it.
 //
-// Available is false when Kind or Intent is not one this binary's
-// engine package recognizes -- the "a stored definition whose id/kind
-// this binary cannot service" case decided on issue #404 (2026-08-16):
-// a downgrade from a version that shipped a Kind this binary predates,
-// or a shipped definition this binary has since retired. Deliberately a
-// *weaker* check than Definition.Validate (which also enforces
-// ParamSchema/Params agreement and the custom-implies-declarative
-// invariant): those are API-boundary concerns for whoever accepts a
-// live edit (#407), not this store's own "can I identify what kind of
-// thing this is" question -- a definition can be fully Available here
-// and still fail Validate if, say, its ParamSchema has drifted from a
-// value it no longer describes, which is a different problem from not
-// knowing what it is at all.
+// Available is false when this binary recognizes what kind of thing the
+// definition is (Kind and Intent both check out -- an unrecognized
+// combination is refused outright at load, see
+// OpenDefinitionsStoreWithBackend and refuseUnrecognizedKindIntent) but
+// still cannot service it: today that means a custom detection whose
+// Detection block names a condition field, an operator or a key mode
+// from a newer build (issue #404, 2026-08-16). Deliberately a *weaker*
+// check than Definition.Validate (which also enforces ParamSchema/Params
+// agreement and the custom-implies-declarative invariant): those are
+// API-boundary concerns for whoever accepts a live edit (#407), not this
+// store's own "can I identify what kind of thing this is" question -- a
+// definition can be fully Available here and still fail Validate if,
+// say, its ParamSchema has drifted from a value it no longer describes,
+// which is a different problem from not knowing what it is at all.
 //
 // An unavailable definition is never evaluated (nothing in this package
-// dispatches on an unrecognized Kind), but it is never dropped either:
-// Get and List still return it, and DefinitionsStore never rewrites or
-// removes its stored bytes except in response to an explicit, targeted
-// mutation of that same ID -- which Upsert/Delete both refuse for an
-// unavailable entry, conservatively, since this binary cannot confirm
-// what replacing or discarding it would actually do. See
-// TestDefinitionsStorePreservesUnknownDefinitionByteForByte.
+// dispatches on a Detection block it could not validate), but it is
+// never dropped either: Get and List still return it, and
+// DefinitionsStore never rewrites or removes its stored bytes except in
+// response to an explicit, targeted mutation of that same ID -- which
+// Upsert/Delete both refuse for an unavailable entry, conservatively,
+// since this binary cannot confirm what replacing or discarding it would
+// actually do.
 type StoredDefinition struct {
 	Definition Definition
 	Available  bool
 }
 
+// refuseUnrecognizedKindIntent reports an error naming id and its
+// unrecognized Kind or Intent when d is not one this binary's engine
+// package can identify at all.
+//
+// Called only from OpenDefinitionsStoreWithBackend's load path (#873):
+// downgrade -- running an older binary against a document a newer one
+// wrote, or one a since-retired build produced -- is not a supported
+// operation pre-1.0, so a definition this binary cannot identify is a
+// hard error at load naming the offending definition and its
+// unrecognized kind, not something preserved unevaluated. That puts the
+// fix in the operator's hands with the data still on disk: delete the
+// one named definition, or restore the binary that understands it.
+func refuseUnrecognizedKindIntent(id string, d Definition) error {
+	switch d.Kind {
+	case KindDeclarative, KindProgrammatic:
+	default:
+		return fmt.Errorf("engine: definition %q: unrecognized kind %q -- downgrade is not supported; delete this definition (its data stays on disk until you do) or restore the binary that wrote it", id, d.Kind)
+	}
+	switch d.Intent {
+	case IntentDetection, IntentExpectation:
+	default:
+		return fmt.Errorf("engine: definition %q: unrecognized intent %q -- downgrade is not supported; delete this definition (its data stays on disk until you do) or restore the binary that wrote it", id, d.Intent)
+	}
+	return nil
+}
+
 // decodeStored decodes one entry's raw bytes and classifies it -- shared
-// by Get, List and the availability checks Upsert/Delete perform. A
-// decode failure here should not happen in practice: the only paths that
-// ever populate s.raw are OpenDefinitionsStoreWithBackend's own decode
-// closure (which already round-tripped this exact JSON once), Upsert
-// (which marshals a value this package produced), and MigrateDefinitions
-// (whose own contract guarantees well-formed JSON) -- but a defensive
-// fallback still classifies as unavailable rather than panicking, should
-// disk-level corruption ever slip past those layers.
+// by Get, List and the availability checks Upsert/Delete perform.
+//
+// Kind and Intent are not re-checked here: OpenDefinitionsStoreWithBackend
+// already refuses to load a document containing an entry with either
+// unrecognized (see refuseUnrecognizedKindIntent), and Upsert only ever
+// writes a value that has passed Definition.Validate, which enforces the
+// same two fields -- so every entry decodeStored is ever handed already
+// carries a recognized Kind and Intent.
+//
+// A decode failure here should not happen in practice: the only paths
+// that ever populate s.raw are that same load closure (which already
+// round-tripped this exact JSON once) and Upsert (which marshals a value
+// this package produced) -- but a defensive fallback still classifies as
+// unavailable rather than panicking, should disk-level corruption ever
+// slip past those layers.
 func decodeStored(id string, entry json.RawMessage) StoredDefinition {
 	var d Definition
 	if err := json.Unmarshal(entry, &d); err != nil {
@@ -207,15 +264,19 @@ func decodeStored(id string, entry json.RawMessage) StoredDefinition {
 		return StoredDefinition{Definition: Definition{ID: id}, Available: false}
 	}
 	available := true
-	switch d.Kind {
-	case KindDeclarative, KindProgrammatic:
-	default:
-		available = false
-	}
-	switch d.Intent {
-	case IntentDetection, IntentExpectation:
-	default:
-		available = false
+	// A custom detection carries its own logic in its Detection block
+	// (issue #502), so "can this binary make sense of it" extends to
+	// that block: a condition field, an operator or a key mode from a
+	// newer build is exactly the kind of thing this binary cannot
+	// service even though it recognizes the envelope around it. Marking
+	// it unavailable shelves the one definition -- preserved byte-for-
+	// byte, listed, never evaluated, and refused for edit or delete --
+	// where leaving it available would instead have it fail to build on
+	// every single sync. Not logged: this runs on every Get and List.
+	if d.Provenance.Origin == ProvenanceCustom && d.Intent == IntentDetection {
+		if err := d.Detection.Validate(); err != nil {
+			available = false
+		}
 	}
 	return StoredDefinition{Definition: d, Available: available}
 }
@@ -289,6 +350,16 @@ func (s *DefinitionsStore) upsertLocking(d Definition) error {
 	}
 	if err := d.Validate(); err != nil {
 		return err
+	}
+	// A stored definition is rebuilt from its bytes alone, so a custom
+	// detection has to carry its own structure: without a Detection
+	// block there is nowhere for its match conditions to live, and it
+	// would store, list and evaluate nothing. Refused here rather than
+	// on the envelope because an in-process definition is handed its
+	// structure directly (see Definition.validateDetectionBlock), and
+	// persistence is what makes the block load-bearing.
+	if d.Provenance.Origin == ProvenanceCustom && d.Intent == IntentDetection && d.Detection == nil {
+		return fmt.Errorf("engine: definition %q: a stored custom detection requires a detection block to carry its match conditions", d.ID)
 	}
 
 	s.mu.Lock()
@@ -369,29 +440,97 @@ func (s *DefinitionsStore) SetParams(id string, params Params) error {
 	})
 }
 
-// SetSuppressions replaces a definition's own scoped exclusions -- see
-// Suppression. Every suppression must name a target; an entry without one
-// would silently exclude nothing while reading, in the UI, as though
-// something were excluded.
-func (s *DefinitionsStore) SetSuppressions(id string, suppressions []Suppression) error {
-	return s.mutate(id, func(d *Definition) error {
-		for i, sup := range suppressions {
-			if sup.Target == "" {
-				return fmt.Errorf("engine: suppression %d has no target", i)
-			}
-			if suppressions[i].ID == "" {
-				suppressions[i].ID = newDefinitionID()
-			}
-		}
-		d.Suppressions = suppressions
-		return nil
-	})
-}
-
 // ErrNoShippedDefaults is returned by ResetParams for a definition with
 // nothing to reset to -- a custom definition, which has no stock to diff
 // against (see Definition.Distance's own doc comment).
 var ErrNoShippedDefaults = errors.New("engine: this definition has no shipped defaults to reset to")
+
+// SetName renames a custom definition.
+//
+// The narrow door for the one field an operator owns on a definition they
+// authored themselves, in the same shape as SetEnabledAndScope: through
+// mutate, so it inherits the unavailable-definition refusal, the
+// identity-change refusal and the validate-before-write round trip rather
+// than re-implementing any of them.
+//
+// Refused for a shipped definition. Its display name is a property of the
+// binary that ships the logic, not of the deployment -- the same reasoning
+// that keeps kind, intent, schema and provenance untouchable there.
+//
+// An expectation has its own rename path (UpdateExpectation), because its
+// name lives on the watchlist entry it converts back to; this is for
+// everything else custom, which since issue #502 means operator-authored
+// detections.
+//
+// Note that renaming rebuilds the definition, so a detector's in-flight
+// counting window starts again: Registry.Sync carries live state forward
+// only for a definition whose stored bytes did not change. That is already
+// true of every other edit, tuning a threshold included.
+func (s *DefinitionsStore) SetName(id, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("engine: definition %q: a name may not be empty", id)
+	}
+	return s.mutate(id, func(d *Definition) error {
+		if d.Provenance.Origin != ProvenanceCustom {
+			return fmt.Errorf("%w: %q is shipped, and its name is a property of this binary rather than of the deployment", ErrDefinitionImmutable, id)
+		}
+		d.Name = name
+		return nil
+	})
+}
+
+// SetFamily files a custom detector under a flag family, or clears the
+// filing when family is empty (#829). Refused for a shipped definition,
+// the same way SetName is and for the same reason: a shipped detector's
+// family belongs to the design record that classifies the built-ins, not
+// to this deployment.
+//
+// Display only. Nothing the engine evaluates reads this -- see Family's
+// own doc comment -- so a re-file changes what the docket, the fall and
+// the map draw and changes nothing about what fires.
+func (s *DefinitionsStore) SetFamily(id string, family Family) error {
+	if err := ValidateFamily(family); err != nil {
+		return err
+	}
+	return s.mutate(id, func(d *Definition) error {
+		if d.Provenance.Origin != ProvenanceCustom {
+			return fmt.Errorf("%w: %q is shipped, and its flag family is the design record's rather than this deployment's", ErrDefinitionImmutable, id)
+		}
+		d.Family = family
+		return nil
+	})
+}
+
+// SetDetection rewrites a custom detection's structure -- its conditions
+// and the aggregation around them (#829's conditions editor).
+//
+// Until the editor existed there was nowhere in the UI to author a
+// condition, so the structure was write-once at create time and this
+// door was deliberately absent (see DetectionSpec's own doc comment on
+// the structure/tunable split). The split has not moved: threshold and
+// window are still ordinary Params behind SetParams, and this changes
+// only what the detector *is*.
+//
+// Rebuilding is the intended consequence, not an accident of it. Registry
+// .Sync byte-compares stored JSON, so a changed spec drops the detector's
+// accumulated window state -- which is the honest outcome, because the
+// counts held in that state were counted against conditions that no
+// longer describe the detector.
+func (s *DefinitionsStore) SetDetection(id string, spec DetectionSpec) error {
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+	return s.mutate(id, func(d *Definition) error {
+		if d.Provenance.Origin != ProvenanceCustom || d.Intent != IntentDetection {
+			return fmt.Errorf("%w: %q is not an operator-authored detector, and its structure is this binary's rather than this deployment's", ErrDefinitionImmutable, id)
+		}
+		copied := spec
+		copied.Conditions = append([]Condition(nil), spec.Conditions...)
+		d.Detection = &copied
+		return nil
+	})
+}
 
 // ResetParams puts a shipped definition's params back to exactly the
 // values it shipped with (Provenance.ShippedParams), which is what makes
@@ -511,6 +650,37 @@ func (s *DefinitionsStore) deleteLocking(id string) (bool, error) {
 	delete(s.raw, id)
 	s.persistLocked()
 	return true, nil
+}
+
+// Reset empties the store completely -- every operator expectation and
+// every shipped definition's stored state alike -- and re-stamps
+// watchingSince, so the nightly fill judges windows from now rather than
+// from a boot the caller has just discarded the evidence of.
+//
+// Written for the test-only POST /api/test/reset (#1064), and the one
+// place in this package that ignores refuseIfImmutable. That guard exists
+// so an operator action cannot discard a shipped or undecodable
+// definition by accident; a caller that has asked for the whole store to
+// be emptied has made no accident, and leaving shipped rows behind would
+// hand the next scenario exactly the tuned or disabled detector the reset
+// was called to get rid of. The caller is expected to re-seed this
+// binary's catalogue immediately afterwards (Server.Reseed in
+// internal/api) -- an empty store evaluates nothing at all.
+func (s *DefinitionsStore) Reset() int {
+	n := s.resetLocking()
+	s.notifyChange()
+	return n
+}
+
+func (s *DefinitionsStore) resetLocking() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n := len(s.raw)
+	s.raw = make(map[string]json.RawMessage)
+	s.watchingSince = time.Now()
+	s.persistLocked()
+	return n
 }
 
 // refuseIfImmutable reports ErrDefinitionImmutable when existing decodes

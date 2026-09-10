@@ -16,7 +16,7 @@
 // joinery.
 //
 // Every scenario in this directory shares one instance, and two that
-// sort earlier (live-router-lookup, live-suggestions) push filter tables
+// sort earlier (live-router-lookup, live-suggestions-matches) push filter tables
 // of their own. So there is no clean slate here, and the "nothing has
 // been pushed" case cannot be tested from this seat -- it lives in
 // TestCoverageSaysNothingWithoutPushedRules instead. Assuming otherwise
@@ -30,7 +30,7 @@
 // re-reads the list and picks the one definition out, rather than
 // indexing a separate map.
 
-import { session, check, done, feedSyslog } from './live-browser.mjs'
+import { session, check, done, feedSyslog, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -60,20 +60,17 @@ const entry = await api('POST', '/api/definitions', {
 check(entry.status === 201, `an entry is created (${entry.status})`)
 const id = entry.body?.id
 
-// The tables the earlier scenarios pushed carry no `log` field at all,
-// so every rule in them is non-logging -- which is itself the answer
-// this starts from, and a fair reproduction of a real deployment whose
-// rules do not log.
+// Nothing has been pushed to this instance yet -- session() resets it
+// (#1064), so the starting answer is the one every deployment that
+// never set up the router push gets: unknown.
 check(
-  (await coverageFor(id)) === 'no-logging',
-  'starting state: tables pushed by earlier scenarios have no logging rules, and mikroview says so',
+  (await coverageFor(id)) === 'unknown',
+  `starting state: no table has been pushed, and mikroview says it cannot know (${await coverageFor(id)})`,
 )
 
 feedSyslog(3, 'coverage-probe')
 const device = (await api('GET', '/api/devices')).body?.devices?.[0]?.id
 check(!!device, `the instance reports a device (${device})`)
-
-// --- Rules that all log, and cover the entry ----------------------------
 
 const token = await api('POST', '/api/tokens', { name: 'coverage', kind: 'ingest', device })
 check(token.status === 201, `an ingest token is issued (${token.status})`)
@@ -86,6 +83,18 @@ async function push(records) {
   })
   return res.status
 }
+
+// A table whose rules carry no `log` field at all, so every rule in it
+// is non-logging -- a fair reproduction of a real deployment whose rules
+// do not log. This scenario pushes it itself rather than reading what a
+// sibling left behind.
+check((await push([{ ordinal: 0, chain: 'forward', action: 'drop' }])) === 200, 'a table with no logging rules is accepted')
+check(
+  (await coverageFor(id)) === 'no-logging',
+  'no rule in the pushed table logs, and mikroview says so',
+)
+
+// --- Rules that all log, and cover the entry ----------------------------
 
 check(
   (await push([{ ordinal: 0, chain: 'forward', action: 'drop', log: true, logPrefix: 'D|any|' }])) === 200,
@@ -176,19 +185,37 @@ check(
 )
 
 async function openMenuView(label) {
-  await page.click(`.rail .item:has-text("${label}")`)
+  await goTo(page, label)
 }
 
 await page.reload({ waitUntil: 'networkidle' })
 await openMenuView('Watchlist')
 await page.waitForSelector('.card', { timeout: 15000 })
 
+// The round-31 rebuild replaced the old .coverage-warning banner with two
+// things: the row's own chip (Watchlist.svelte's watchState, "ring broken
+// — no logging visible") and the fuller story in the row's drawer
+// (watchStory) -- see #871.
+const row = page.locator('.wt-row', { hasText: 'coverage ssh' })
+await row.waitFor({ timeout: 10000 })
 check(
-  await page.isVisible('.coverage-warning'),
+  await row.locator('.wchip2.broken').isVisible(),
   'the entry carries a visible warning that nothing can match it',
 )
 check(
-  await page.isVisible('.coverage-warning:has-text("logging turned on")'),
+  /no logging visible/.test(await row.locator('.wchip2.broken').innerText()),
+  'the chip names the reason: no logging is visible',
+)
+
+await row.locator('td.k').click()
+const drawerStory = page.locator('.wt-drawer .story')
+await drawerStory.waitFor({ timeout: 5000 })
+check(
+  (await drawerStory.locator('b').innerText()) === 'The ring is broken.',
+  'the opened drawer leads with the same headline',
+)
+check(
+  /turns logging on/.test(await drawerStory.innerText()),
   'the warning says what to actually do about it, not just that something is wrong',
 )
 

@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/tomlawesome/mikroview/internal/baseline"
+	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 )
 
@@ -40,6 +42,10 @@ func (c *Config) Validate() Result {
 	c.validateListen(fatal)
 	c.validateStore(fatal, warn)
 	c.validateWatchlist(warn)
+	c.validateBaseline(warn)
+	c.validateEngine(warn)
+	c.validateSnapshot(warn)
+	c.validateHistory(warn)
 	c.validateAuth(fatal)
 	c.validateDevices(fatal)
 	c.validateNotify(warn)
@@ -102,6 +108,20 @@ var examplesByCode = map[string]string{
 	"CFG-0042": `watchlist:
   matchLogRetention: 168h  # 7 days`,
 
+	"CFG-0090": `baseline:
+  days: 3
+  of: 14`,
+
+	"CFG-0091": `baseline:
+  days: 3
+  of: 14  # at most 32: the per-line recurrence bitmap is 32 bits wide`,
+
+	"CFG-0092": `baseline:
+  hostQuietAfter: 24h`,
+
+	"CFG-0093": `engine:
+  decommissionCleanWindow: 6h`,
+
 	"CFG-0020": `auth:
   sessionTTL: 24h`,
 
@@ -159,6 +179,17 @@ auth:
 	"CFG-0062": `oidc:
   # a self-hosted provider, not a multi-tenant one
   issuerUrl: "https://id.example.com"`,
+	"CFG-0070": `snapshot:
+  interval: 5m   # 30s or longer`,
+	"CFG-0071": `snapshot:
+  keep: 6`,
+	"CFG-0080": `history:
+  enabled: true
+  keyFile: /run/secrets/mikroview-retention.key   # outside the data directory`,
+	"CFG-0081": `history:
+  days: 30`,
+	"CFG-0082": `history:
+  maxBytes: 1073741824   # 1 GiB`,
 }
 
 func (c *Config) validateListen(fatal problemFunc) {
@@ -192,6 +223,19 @@ func (c *Config) validateListen(fatal problemFunc) {
 	if _, err := ParseTrustedProxies(c.Listen.TrustedProxies); err != nil {
 		fatal("CFG-0003", "listen.trustedProxies", err.Error(),
 			"list each proxy as an IP or CIDR, or use \"private\" for a proxy on your LAN or docker network")
+	}
+
+	// backup.listen only has to parse once the drop box is actually
+	// turned on -- same reasoning validateHistory gives for checking
+	// history.keyFile only when history.enabled is true: an address
+	// sitting unused in a disabled block is not yet a problem.
+	if c.Backup.Enabled {
+		if c.Backup.Listen == "" {
+			fatal("CFG-0001", "backup.listen", "is empty", "set an address such as \":47022\"")
+		} else if _, _, err := net.SplitHostPort(c.Backup.Listen); err != nil {
+			fatal("CFG-0002", "backup.listen", fmt.Sprintf("%q is not a valid listen address", c.Backup.Listen),
+				"use host:port, or :port to listen on every interface")
+		}
 	}
 }
 
@@ -233,7 +277,7 @@ func (c *Config) validateStore(fatal problemFunc, warn warnFunc) {
 		// No Applied -- nothing is substituted, this only surfaces the
 		// cost. See highMaxMemoryWarnThreshold's doc comment for why a
 		// warning rather than a clamp.
-		resident := ByteSize(float64(c.Store.MaxMemory) * 1.47) // measured ring-to-resident overhead, see #244
+		resident := ByteSize(float64(c.Store.MaxMemory) * ResidentPerRingByte) // measured ring-to-resident overhead, see #244
 		warn("CFG-0012", "store.maxMemory",
 			fmt.Sprintf("%s reserves up to %d events at startup (~%s resident once the Go runtime and process overhead are counted, not just the ring itself) -- confirm this machine has it to spare",
 				c.Store.MaxMemory, c.Store.Capacity(), resident),
@@ -276,6 +320,72 @@ func (c *Config) validateWatchlist(warn warnFunc) {
 			fmt.Sprintf("%s is not a usable retention window -- on Postgres, nothing would be kept", was),
 			c.Watchlist.MatchLogRetention.String(),
 			"set a positive duration such as 168h (7 days)")
+	}
+}
+
+// validateSnapshot clamps the warm-restart cadence and retention rather
+// than refusing them. A bad value here costs a warm restart, not
+// monitoring, so refusing to start over it would trade a small loss for
+// a total one -- the same reasoning validateStore gives for clamping
+// retention.
+//
+// snapshot.dir is not checked here: whether a directory can be created
+// and written is a filesystem question, and Validate is deliberately
+// pure (see its doc comment). main answers it at startup instead, with
+// one log line and no snapshots if the answer is no.
+func (c *Config) validateSnapshot(warn warnFunc) {
+	if c.Snapshot.Interval < MinSnapshotInterval {
+		was := c.Snapshot.Interval
+		c.Snapshot.Interval = defaultSnapshotInterval
+		warn("CFG-0070", "snapshot.interval",
+			fmt.Sprintf("%s is shorter than the %s minimum -- snapshotting that often costs more evaluation than the counters it saves are worth", was, MinSnapshotInterval),
+			c.Snapshot.Interval.String(),
+			fmt.Sprintf("set a duration of %s or longer, such as 5m", MinSnapshotInterval))
+	}
+	if c.Snapshot.Keep < 1 {
+		was := c.Snapshot.Keep
+		c.Snapshot.Keep = defaultSnapshotKeep
+		warn("CFG-0071", "snapshot.keep",
+			fmt.Sprintf("%d generations is not a usable retention -- keeping none would delete the snapshot just written, silently turning warm restart off", was),
+			fmt.Sprintf("%d", c.Snapshot.Keep),
+			"set a positive number of generations to keep, e.g. 6")
+	}
+}
+
+// validateHistory clamps the two caps and catches the one
+// configuration that asks for something impossible: retention on with
+// no key.
+//
+// Whether the key file can actually be read is not checked here.
+// Validate is pure (see its doc comment), and a readable path is a
+// filesystem question; main answers it at startup, and refuses to
+// retain if the answer is no. What can be caught here is the operator
+// who turned the switch on and never named a key, which is otherwise a
+// deployment that believes it is keeping thirty days and is keeping
+// none.
+func (c *Config) validateHistory(warn warnFunc) {
+	if c.History.Enabled && c.History.KeyFile == "" {
+		c.History.Enabled = false
+		warn("CFG-0080", "history.keyFile",
+			"retention is on but no key file is set -- there is no unencrypted mode, so nothing would be retained",
+			"false",
+			"set retention.keyFile to a key mounted outside the data directory, or leave retention off")
+	}
+	if c.History.Days < 1 {
+		was := c.History.Days
+		c.History.Days = defaultRetentionDays
+		warn("CFG-0081", "history.days",
+			fmt.Sprintf("%d days is not a usable history -- the day just written would be dropped on the next flush, leaving retention on and holding nothing", was),
+			fmt.Sprintf("%d", c.History.Days),
+			"set a positive number of days to keep, e.g. 30")
+	}
+	if c.History.MaxBytes < MinRetentionBytes {
+		was := c.History.MaxBytes
+		c.History.MaxBytes = defaultRetentionMaxBytes
+		warn("CFG-0082", "history.maxBytes",
+			fmt.Sprintf("%d bytes is smaller than a single day at any realistic rate, so every flush would drop all but the open day", was),
+			fmt.Sprintf("%d", c.History.MaxBytes),
+			fmt.Sprintf("set a cap of at least %d bytes, e.g. 1073741824 for 1 GiB", MinRetentionBytes))
 	}
 }
 
@@ -445,4 +555,75 @@ var (
 	defaultMatchLogPath      = defaults().Watchlist.MatchLogPath
 	defaultMatchLogCapacity  = defaults().Watchlist.MatchLogCapacity
 	defaultMatchLogRetention = defaults().Watchlist.MatchLogRetention
+	defaultBaselineDays      = defaults().Baseline.Days
+	defaultBaselineOf        = defaults().Baseline.Of
+	defaultHostQuietAfter    = defaults().Baseline.HostQuietAfter
+
+	defaultDecommissionCleanWindow = defaults().Engine.DecommissionCleanWindow
 )
+
+// validateEngine clamps the decommission clean window (#460) to the
+// hours-scale band the owner ruled for on 2026-08-17.
+//
+// Clamped rather than fatal, like every other threshold in this file: a
+// bad number here should not stop the server serving. Both ends matter
+// and for different reasons. Too short and a segment retires before the
+// evidence that would have contradicted it could plausibly have arrived
+// -- a router pushes its tables every 15-30 minutes, and a device that
+// only speaks on an hourly timer would never get the chance to reveal
+// itself, so the map would report a clean decommission it never
+// observed. Too long and the ruling's own words stop being true: hours,
+// not days.
+func (c *Config) validateEngine(warn warnFunc) {
+	if c.Engine.DecommissionCleanWindow < decommission.MinCleanWindow || c.Engine.DecommissionCleanWindow > decommission.MaxCleanWindow {
+		was := c.Engine.DecommissionCleanWindow
+		c.Engine.DecommissionCleanWindow = defaultDecommissionCleanWindow
+		warn("CFG-0093", "engine.decommissionCleanWindow",
+			fmt.Sprintf("%s is not a usable clean window for a retiring segment -- it must be between %s and %s, so a range cannot be declared quiet before a straggler could have spoken, and a decommission still finishes in hours rather than days", was, decommission.MinCleanWindow, decommission.MaxCleanWindow),
+			c.Engine.DecommissionCleanWindow.String(),
+			"set how long a retired range must stay silent before it leaves the map, e.g. 6h")
+	}
+}
+
+// validateBaseline clamps the establishment threshold to something the
+// register can actually answer (issue #1016).
+//
+// Order matters: Of is checked first, because Days is only meaningful
+// relative to it -- asking for 20 days out of 14 is a different mistake
+// depending on which of the two the operator got wrong, and clamping the
+// window first means the second check compares against a sane number
+// rather than compounding the first error.
+func (c *Config) validateBaseline(warn warnFunc) {
+	if c.Baseline.Of <= 0 || c.Baseline.Of > baseline.MaxDays {
+		was := c.Baseline.Of
+		c.Baseline.Of = defaultBaselineOf
+		warn("CFG-0091", "baseline.of",
+			fmt.Sprintf("%d is not a usable baseline window -- it must be between 1 and %d days, the width of the per-line recurrence bitmap", was, baseline.MaxDays),
+			fmt.Sprintf("%d", c.Baseline.Of),
+			fmt.Sprintf("set a window of 1 to %d days, e.g. 14", baseline.MaxDays))
+	}
+	if c.Baseline.Days <= 0 || c.Baseline.Days > c.Baseline.Of {
+		was := c.Baseline.Days
+		c.Baseline.Days = defaultBaselineDays
+		if c.Baseline.Days > c.Baseline.Of {
+			c.Baseline.Days = c.Baseline.Of
+		}
+		warn("CFG-0090", "baseline.days",
+			fmt.Sprintf("%d is not a usable establishment threshold against a %d-day window -- a line cannot be seen on more days than the window holds, and a threshold of zero or less would make every line established the moment it appeared", was, c.Baseline.Of),
+			fmt.Sprintf("%d", c.Baseline.Days),
+			"set how many distinct days a line must be seen on before it counts as established, e.g. 3")
+	}
+	// A non-positive quiet window would call every host quiet the instant
+	// it was heard, which is worse than useless: it would grey out a
+	// working network. Clamped rather than fatal, same as every other
+	// threshold in this file -- a bad number here should not stop the
+	// server serving.
+	if c.Baseline.HostQuietAfter <= 0 {
+		was := c.Baseline.HostQuietAfter
+		c.Baseline.HostQuietAfter = defaultHostQuietAfter
+		warn("CFG-0092", "baseline.hostQuietAfter",
+			fmt.Sprintf("%s is not a usable quiet window -- every host would be drawn quiet the moment it was heard from", was),
+			c.Baseline.HostQuietAfter.String(),
+			"set how long a host may be silent before the map greys it out, e.g. 24h")
+	}
+}

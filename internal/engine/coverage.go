@@ -111,6 +111,16 @@ func coverageForEntry(entry watchlist.Entry, rulesByDevice map[string][]ingest.F
 
 	for _, rules := range rulesByDevice {
 		for _, rule := range rules {
+			// #806: a scoped entry's coverage answer is about its own
+			// boundary, not the estate -- a rule on a different
+			// (chain, inInterface, outInterface) says nothing about it,
+			// and is skipped before it can even count toward "some table
+			// was pushed". This is the same rule the fall's own dark/
+			// observed read of a boundary uses (fall.svelte.ts), so the
+			// two agree by construction once an entry names a boundary.
+			if !entry.Boundary.Empty() && !entry.Boundary.Matches(rule.Chain, rule.InInterface, rule.OutInterface) {
+				continue
+			}
 			sawRule = true
 			// A rule that does not log feeds nothing, whatever else it
 			// matches. This is the check the whole feature turns on, and

@@ -5,6 +5,7 @@ package engine
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -61,6 +62,12 @@ type offHoursDefinition struct {
 	// currently counting and how many events it has seen today -- the
 	// state that is not a baseline. Bounded by Keyed's own cap, the same
 	// way internal/detect's perSource map was bounded by maxTrackedSources.
+	//
+	// Never handed to the StateStore, which holds baselines and nothing
+	// else, but not lost on restart either: issue #795 (owner,
+	// 2026-09-02) carries it across through the periodic snapshot
+	// instead -- see this definition's ExportState/ImportState in
+	// shipped_export.go.
 	days      *Keyed[*offHoursDay]
 	baselines *baselineSet
 }
@@ -184,12 +191,17 @@ func (d *offHoursDefinition) Evaluate(e store.Event) {
 	}
 	confidence := emaConfidence(z, sampleDays, d.minSampleDays)
 
+	// Size is the event count at this hour -- off_hours_activity's
+	// declared size, the measure its minCount param is compared against.
+	// See ShippedSizeMeasure.
+	size := count
 	d.emit(Emission{
 		Target: e.SrcIP,
 		Detail: fmt.Sprintf(
 			"%d events at %02d:00 vs a baseline of %.1f for this host at this hour (%d days of history, %.1fσ above normal)",
 			count, hour, snap.Value, sampleDays, z),
 		Confidence: &confidence,
+		Size:       &size,
 		Country:    e.SrcCountry,
 		SourceIP:   e.SrcIP,
 		EventTime:  now,
@@ -210,6 +222,16 @@ func inOffHoursWindow(hour, start, end int) bool {
 		return hour >= start && hour < end
 	}
 	return hour >= start || hour < end
+}
+
+// Learning satisfies LearningReporter: one baseline per (source, hour)
+// key, so Ready answers how many of those keys have the
+// minSampleDays of same-hour history this definition's floor requires --
+// see baselineSet.learning and learningStateFrom for the shared
+// read/reduce this and every other baseline-backed shipped definition
+// rely on.
+func (d *offHoursDefinition) Learning(now time.Time) (LearningState, bool) {
+	return learningStateFrom(d.baselines.floor, d.baselines.learning(now)), true
 }
 
 // NonReplayableReason satisfies NonReplayable.

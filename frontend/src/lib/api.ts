@@ -1,32 +1,54 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { parseAddress, parseCidr } from './addressMatch'
+import type { OffBaseline } from './baseline'
 import type {
   ApiToken,
   AuditResult,
   AuthSession,
   CoverageEvidence,
+  DecommissionResponse,
+  DecommissionWatch,
   Definition,
-  DefinitionSuppression,
+  DefinitionCondition,
+  DefinitionParamSchema,
   DetectorScope,
   Device,
   Entity,
   EntityType,
+  Exclusion,
   NameProvenance,
   EventsResult,
-  Exclusion,
   Filters,
+  FirewallEvent,
   Flag,
   FlagTimeBucket,
   Healthz,
+  HostDossier,
+  HourTopBucket,
+  MACRegistryEntry,
+  PersistenceInfo,
+  ReplayResult,
   ReputationResult,
+  RouterBackupsResponse,
   RuleUsage,
+  SetupCommandsRequest,
+  SetupCommandsResponse,
   Stats,
+  StoreMemory,
+  HistorySettings,
   SetupMark,
   SetupStatus,
   Suggestion,
   SuggestionStatus,
+  TuneLoggingAnalyseRequest,
+  TuneLoggingAnalyseResponse,
+  TuneLoggingRenderRequest,
+  TuneLoggingRenderResponse,
   UserSummary,
+  Verdict,
+  WatchlistAddressListRef,
+  WatchlistBoundary,
   WatchlistEntry,
   WatchlistCoverage,
   WatchlistIdentity,
@@ -193,11 +215,75 @@ export async function fetchEvents(
   return res.json()
 }
 
+// fetchEventsWindow is fetchEvents' own since/until window (already
+// parsed server-side by internal/api/rest.go's parseQuery -- see
+// store.Query.Since/Until), kept separate from buildQuery/fetchEvents
+// rather than adding since/until to Filters: those params round-trip
+// through the URL for a bookmarked/shared filter set, and a time window
+// is not a filter a person sets and keeps -- it is the fall's (#616) own
+// SPAN control asking for a longer look than the client-buffered events
+// in appState.events cover.
+export async function fetchEventsWindow(params: {
+  since?: string
+  until?: string
+  limit?: number
+}): Promise<EventsResult> {
+  const qs = new URLSearchParams()
+  if (params.since) qs.set('since', params.since)
+  if (params.until) qs.set('until', params.until)
+  if (params.limit) qs.set('limit', String(params.limit))
+  const q = qs.toString()
+  const res = await fetch(`/api/events${q ? `?${q}` : ''}`)
+  if (!res.ok) throw new ApiError(`fetchEventsWindow: ${res.status}`, res.status)
+  return res.json()
+}
+
+// fetchFlagEpisode is the docket drawer's bounded look at a flag's own
+// events (#633): the #29 around+window lookback centred on the flag's
+// lastSeen, narrowed to whatever the flag's target maps onto (ip, port,
+// rule or device -- the same mapping Flags.svelte's open-in-stream
+// uses). global_spike and new_device pass no narrowing at all, which is
+// honest for both: a network-wide surge *is* everything in the window,
+// and a MAC target has no server-side match (see buildQuery's comment).
+export async function fetchFlagEpisode(params: {
+  ip?: string
+  port?: string
+  rule?: string
+  device?: string
+  around: string
+  window: string
+  limit?: number
+}): Promise<EventsResult> {
+  const qs = new URLSearchParams()
+  if (params.ip) qs.set('ip', params.ip)
+  if (params.port) qs.set('port', params.port)
+  if (params.rule) qs.set('rule', params.rule)
+  if (params.device) qs.set('device', params.device)
+  qs.set('around', params.around)
+  qs.set('window', params.window)
+  if (params.limit) qs.set('limit', String(params.limit))
+  const res = await fetch(`/api/events?${qs}`)
+  if (!res.ok) throw new ApiError(`fetchFlagEpisode: ${res.status}`, res.status)
+  return res.json()
+}
+
 export async function fetchDevices(): Promise<Device[]> {
   const res = await fetch('/api/devices')
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
   const body = await res.json()
   return body.devices ?? []
+}
+
+// fetchDeviceMACs serves the persisted MAC-registry history (issue #675:
+// internal/device.MACRegistry via GET /api/devices/macs) -- the source
+// for the Entities page's named-things table's mac/first-seen/last-seen
+// columns, joined client-side against a host entity's own IP key by
+// MACRegistryEntry.lastIp.
+export async function fetchDeviceMACs(): Promise<MACRegistryEntry[]> {
+  const res = await fetch('/api/devices/macs')
+  if (!res.ok) throw new ApiError(`fetchDeviceMACs: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.macs ?? []
 }
 
 // fetchRules serves every rule label mikroview has ever seen fire (issue
@@ -223,6 +309,30 @@ export async function fetchStats(): Promise<Stats> {
   return res.json()
 }
 
+// fetchStatsTops serves #644 round 21's top-port/top-talker table
+// columns (internal/api/rest.go's handleStatsTops) -- deliberately a
+// separate call from fetchStats, not folded into it: see that handler's
+// own doc comment for why. Fetched only by Metrics.svelte, on its own
+// interval scoped to while that page is open, rather than riding
+// App.svelte's global STATS_REFRESH_MS poll that runs regardless of
+// which page is showing.
+export async function fetchStatsTops(): Promise<HourTopBucket[]> {
+  const res = await fetch('/api/stats/tops')
+  if (!res.ok) throw new ApiError(`fetchStatsTops: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.tops ?? []
+}
+
+// The device dossier (#410): everything mikroview already knows about
+// one address, assembled server-side. Never a 404 -- an address nobody
+// has heard of comes back as a dossier that says so, block by block --
+// so any non-2xx here is a real failure and the card offers try again.
+export async function fetchHostDossier(ip: string): Promise<HostDossier> {
+  const res = await fetch(`/api/hosts/${encodeURIComponent(ip)}/dossier`)
+  if (!res.ok) throw new ApiError(`fetchHostDossier: ${res.status}`, res.status)
+  return res.json()
+}
+
 export async function lookupIp(ip: string): Promise<ReputationResult> {
   const res = await fetch(`/api/lookup/ip/${encodeURIComponent(ip)}`)
   if (!res.ok) throw new ApiError(`lookupIp: ${res.status}`, res.status)
@@ -240,13 +350,36 @@ export interface RouterFilterRule {
   action: string
   srcAddressList: string
   logPrefix: string
-  // #408's schema fields. Optional here because a router whose push
-  // script predates them sends nothing, and because nothing in the UI
-  // reads them yet -- typed so the data is not lost on the way in, not
-  // because a component depends on it.
+  // Whether this rule logs at all -- internal/engine/coverage.go's own
+  // "only ever claim a definite answer" truth, reused by the fall (#616)
+  // to tell a dark (unlogged) boundary from a merely quiet one instead of
+  // guessing.
+  log: boolean
+  // #408's schema fields. Optional because a router whose push script
+  // predates them sends nothing. The interfaces and dstPort/protocol
+  // feed the topography's policy edges (#628); the rest is typed so the
+  // data is not lost on the way in.
   connectionState?: string[]
   inInterface?: string
   outInterface?: string
+  // RouterOSPortSpec on the wire: a single port serialises as a JSON
+  // number, a list or range as the string RouterOS prints ("80,443").
+  dstPort?: number | string
+  protocol?: string
+  srcAddress?: string
+  dstAddress?: string
+  // Optional for the same reason as the fields above: a push made before
+  // #701 asked for it sends nothing, and absent must not read as
+  // "disabled". Counting enabled rules therefore tests `=== true`
+  // rather than falsiness.
+  disabled?: boolean
+  // packets/bytes (#435 decision 4, contract §1) are RouterOS's own
+  // counters for this rule -- kept whether or not it logs, which is what
+  // lets Tune logging show "fired N times" as the cost of switching
+  // logging on before it is switched on. Optional for the same reason as
+  // the fields above: a push predating #435 sends nothing.
+  packets?: number
+  bytes?: number
 }
 
 // The NAT record's full rule anatomy (#408) plus the operator-set
@@ -274,6 +407,16 @@ export interface RouterNatRule {
   dynamic?: boolean
 }
 
+// The pushed /ip/address table (issue #627) -- an interface's own
+// configured address, distinct from RouterFilterRule/RouterNatRule and
+// from the ARP/DHCP tables' observed-elsewhere addresses.
+export interface RouterIPAddress {
+  address: string
+  network: string
+  interface: string
+  comment: string
+}
+
 export interface RouterTable<T> {
   available: boolean
   updatedAt?: string
@@ -292,6 +435,92 @@ export async function fetchRouterNat(device: string): Promise<RouterTable<Router
   return res.json()
 }
 
+export async function fetchRouterAddresses(device: string): Promise<RouterTable<RouterIPAddress>> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/addresses`)
+  if (!res.ok) throw new ApiError(`fetchRouterAddresses: ${res.status}`, res.status)
+  return res.json()
+}
+
+// fetchRouterWireguard and fetchRouterPPPActive are #866's own readers
+// of issue #874's ingest: the city's footbridges (lib/tunnels.svelte.ts)
+// are the first caller of either.
+export async function fetchRouterWireguard(device: string): Promise<RouterWireguardTunnels> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/wireguard`)
+  if (!res.ok) throw new ApiError(`fetchRouterWireguard: ${res.status}`, res.status)
+  return res.json()
+}
+
+export async function fetchRouterPPPActive(device: string): Promise<RouterPPPActive> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/ppp-active`)
+  if (!res.ok) throw new ApiError(`fetchRouterPPPActive: ${res.status}`, res.status)
+  return res.json()
+}
+
+// Per-tunnel state derived server-side from the pushed WireGuard tables
+// (issue #874, City 9's ingest side): a peer is "up" when its last
+// handshake was under three minutes old at push time, an interface is
+// "up" if any of its peers is, and "unknown" means the wireguard-peer
+// kind has never been pushed for this device at all -- never a guessed
+// down. A peer belongs to the interface its own pushed "interface"
+// property names; a push script old enough to omit that property leaves
+// every peer unattributed, and the server then lists every peer under
+// every interface rather than none (see the doc comment on
+// wireguardInterfaceView). The city's WireGuard footbridges read this
+// through tunnels.svelte.ts (#866); #877 draws the same state as the
+// topography's tunnel node.
+export interface RouterWireguardPeer {
+  publicKey: string
+  allowedAddress: string[]
+  endpointAddress: string
+  comment: string
+  lastHandshake?: string
+  currentEndpointAddress?: string
+  rx?: number
+  tx?: number
+  disabled?: boolean
+  state: 'up' | 'down'
+  since?: string
+}
+
+export interface RouterWireguardInterface {
+  name: string
+  comment: string
+  publicKey: string
+  listenPort: number
+  state: 'up' | 'down' | 'unknown'
+  peers: RouterWireguardPeer[]
+}
+
+export interface RouterWireguardTunnels {
+  available: boolean
+  updatedAt?: string
+  peersAvailable: boolean
+  peersUpdatedAt?: string
+  interfaces: RouterWireguardInterface[]
+}
+
+// One currently active /ppp/active session (issue #874) -- covers
+// L2TP, PPTP, SSTP and OVPN alike, all surfaced through the same
+// RouterOS menu. A row exists here only while RouterOS considers the
+// session active, so presence in this list is itself the up signal; a
+// tunnel name a caller already knows about from elsewhere that is not
+// present here reads as down.
+export interface RouterPPPSession {
+  name: string
+  service: string
+  address: string
+  callerId: string
+  uptime: string
+  state: 'up'
+  since?: string
+}
+
+export interface RouterPPPActive {
+  available: boolean
+  updatedAt?: string
+  sessions: RouterPPPSession[]
+}
+
 // Mirrors internal/api/flags.go's handleFlagsList response: the flag
 // list plus the last hour of newly-raised-episode counts by type (see
 // FlagTimeBucket) for the metrics page -- one endpoint, same convention
@@ -299,23 +528,31 @@ export async function fetchRouterNat(device: string): Promise<RouterTable<Router
 export interface FlagsResponse {
   flags: Flag[]
   timeSeries: FlagTimeBucket[]
+  // Whether any enabled detection is still warming (#768) -- the
+  // learning shelf's "why is mikroview silent" signal, carried on this
+  // response since the owner moved it off GET /api/definitions
+  // (2026-09-02). undefined means the server could not say (no live
+  // engine wired, or an older build): the shelf then makes no claim
+  // rather than a false one.
+  baselinesWarming?: boolean
 }
 
 export async function fetchFlags(): Promise<FlagsResponse> {
   const res = await fetch('/api/flags')
   if (!res.ok) throw new ApiError(`fetchFlags: ${res.status}`, res.status)
   const body = await res.json()
-  return { flags: body.flags ?? [], timeSeries: body.timeSeries ?? [] }
+  return {
+    flags: body.flags ?? [],
+    timeSeries: body.timeSeries ?? [],
+    // Left undefined unless the server actually sent a boolean --
+    // absence is its own answer here, never coerced to false.
+    baselinesWarming: typeof body.baselinesWarming === 'boolean' ? body.baselinesWarming : undefined,
+  }
 }
 
-export async function clearFlag(id: string): Promise<void> {
-  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear`)
-  if (!res.ok) throw new ApiError(`clearFlag: ${res.status}`, res.status)
-}
-
-// clearAllFlags is clearFlag applied to every currently-active flag in
-// one request (issue #198's "Clear all") -- regular clears only, same as
-// clearFlag; there is no bulk permanent variant (see
+// clearAllFlags clears every currently-active flag in one request
+// (issue #198's "Clear all"). It records no judgement and no
+// expectation, and there is no bulk variant that does (see
 // internal/flags.Store.ClearAll's doc comment for why). Returns how many
 // were actually cleared, so the caller can refresh() rather than guess.
 export async function clearAllFlags(): Promise<number> {
@@ -325,27 +562,69 @@ export async function clearAllFlags(): Promise<number> {
   return body.cleared ?? 0
 }
 
-// clearFlagPermanent is clearFlag plus a permanent exclusion of that
-// flag's (Type, Target) in the same step -- "Clear and never flag this
-// again" (see internal/flags.Store.ClearAndExclude).
-export async function clearFlagPermanent(id: string): Promise<void> {
-  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear-permanent`)
-  if (!res.ok) throw new ApiError(`clearFlagPermanent: ${res.status}`, res.status)
+// clearIngestLoss (#1015) zeroes the four server-side ingest-loss
+// totals, their episodes and lastAt, and both host records -- the
+// drawer's "Clear all". Same role gate and CSRF header as
+// clearAllFlags/postJSON above (internal/api/flags.go:212-217's pattern,
+// reused for internal/api's ingest-loss handler).
+export async function clearIngestLoss(): Promise<void> {
+  const res = await postJSON('/api/syslog/loss/clear')
+  if (!res.ok) throw new ApiError(`clearIngestLoss: ${res.status}`, res.status)
 }
 
-// fetchExclusions/removeExclusion: admin-only (see internal/api's
-// callerIsAdminOrOpen gate on both endpoints) "undo a mistake" surface
-// for permanent exclusions.
-export async function fetchExclusions(): Promise<Exclusion[]> {
-  const res = await fetch('/api/flags/exclusions')
-  if (!res.ok) throw new ApiError(`fetchExclusions: ${res.status}`, res.status)
+// setFlagVerdict (#640) records an operator's judgement, and is the only
+// way one flag leaves the inbox: expected, checked and resolved clear it
+// server-side as part of the same request, investigate does not, and
+// expected additionally records the expectation that suppresses further
+// firings of the pair (see the Verdict type for the semantics). Returns
+// the updated flag so the caller can reconcile its optimistic guess
+// (verdictBy in particular) against the server's canonical value.
+//
+// Sent at once, not deferred behind Undo's window -- see
+// flagsState.judgeAndClear's own doc comment for why an earlier,
+// deferred version of this call lost verdicts silently on a reload.
+export async function setFlagVerdict(id: string, verdict: Verdict): Promise<Flag> {
+  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/verdict`, { verdict })
+  if (!res.ok) throw new ApiError(`setFlagVerdict: ${res.status}`, res.status)
+  return res.json()
+}
+
+// deleteFlagVerdict (#638) is Undo: removes the verdict, un-clears the
+// flag and -- for an expected verdict -- withdraws the expectation it
+// recorded (#640). Same access tier as setFlagVerdict above; 404s on an
+// unknown id, same as every other per-flag endpoint in this file.
+// The path is "verdict/{id}", mirroring definitions/tokens rather than
+// the POST above: net/http.ServeMux refuses to register
+// DELETE /api/flags/{id}/verdict alongside a literal-then-wildcard
+// sibling under /api/flags/, since a path matching both makes neither
+// pattern more specific.
+export async function deleteFlagVerdict(id: string): Promise<Flag> {
+  const res = await deleteJSON(`/api/flags/verdict/${encodeURIComponent(id)}`)
+  if (!res.ok) throw new ApiError(`deleteFlagVerdict: ${res.status}`, res.status)
+  return res.json()
+}
+
+// fetchExpectations/forgetExpectation (#640) back the expectations
+// ledger on the watchers station -- every expectation this deployment
+// has recorded, with its size, absorbed count and age. Viewer-readable
+// and user-writable, because the operator who can say Expected can take
+// it back.
+export async function fetchExpectations(): Promise<Exclusion[]> {
+  const res = await fetch('/api/flags/expectations')
+  if (!res.ok) throw new ApiError(`fetchExpectations: ${res.status}`, res.status)
   const body = await res.json()
-  return body.exclusions ?? []
+  return body.expectations ?? []
 }
 
-export async function removeExclusion(id: string): Promise<void> {
-  const res = await deleteJSON(`/api/flags/exclusions/${encodeURIComponent(id)}`)
-  if (!res.ok) throw new ApiError(`removeExclusion: ${res.status}`, res.status)
+// Returns null on success and the server's own refusal text otherwise,
+// the same convention updateDefinition/resetDefinition use, so the row
+// can show what the server said rather than a status code. 404 is a
+// real answer here (the entry was already forgotten elsewhere), not a
+// silent success -- see internal/api's handleExpectationForget.
+export async function forgetExpectation(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/flags/expectations/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `forgetExpectation: ${res.status}`
 }
 
 export async function fetchAuthSession(): Promise<AuthSession> {
@@ -392,12 +671,26 @@ export async function logout(): Promise<string | null> {
   return (await res.text()) || `logout: ${res.status}`
 }
 
-// No role argument: mikroview has one admin, and the server refuses a
-// request for a second (see auth.ErrSingleAdmin). Moving the role is
-// CLI-only and recovery-key gated (`mikroview -transfer-admin`), so
-// there is nothing for this call to choose between.
-export async function createUser(username: string, password: string): Promise<string | null> {
-  const res = await postJSON('/api/auth/users', { username, password, role: 'user' })
+// signOutEverywhere is #677's sessions row -- ends every session the
+// caller holds, on every device, and the server immediately issues this
+// tab a fresh one (see internal/api.handleAuthLogoutAll), so unlike
+// logout() above this does not leave the caller signed out.
+export async function signOutEverywhere(): Promise<string | null> {
+  const res = await postJSON('/api/auth/logout-all')
+  if (res.ok) return null
+  return (await res.text()) || `signOutEverywhere: ${res.status}`
+}
+
+// role chooses between the two tiers this call can create (#653).
+// Admin is still not among them: mikroview has one, and the server
+// refuses a request for a second (see auth.ErrSingleAdmin). Moving that
+// role is CLI-only and recovery-key gated (`mikroview -transfer-admin`).
+export async function createUser(
+  username: string,
+  password: string,
+  role: 'user' | 'viewer' = 'user',
+): Promise<string | null> {
+  const res = await postJSON('/api/auth/users', { username, password, role })
   if (res.ok) return null
   return (await res.text()) || `createUser: ${res.status}`
 }
@@ -443,8 +736,25 @@ export interface DefinitionUpdate {
   enabled?: boolean
   scope?: DetectorScope
   params?: Record<string, unknown>
-  suppressions?: DefinitionSuppression[]
   expectation?: WatchlistEntryRequest
+  // The flag family a custom detector is filed under (#829); the empty
+  // string clears the filing. Absent leaves it alone, like every other
+  // field here.
+  family?: string
+  // A custom detector's structure -- its conditions and the aggregation
+  // around them -- as the conditions editor saves it (#829). Threshold
+  // and window are deliberately not in here: they are ordinary params
+  // and go up under `params` above, so there is one door onto each value
+  // rather than two.
+  detection?: DefinitionStructureUpdate
+}
+
+export interface DefinitionStructureUpdate {
+  conditions: DefinitionCondition[]
+  key: string
+  counting: string
+  distinctField?: string
+  detailTemplate: string
 }
 
 export async function updateDefinition(id: string, req: DefinitionUpdate): Promise<Definition | string> {
@@ -533,10 +843,23 @@ export async function deleteEntity(type: string, key: string): Promise<string | 
 export interface WatchlistEntryRequest {
   name?: string
   source?: WatchlistIdentity
+  // The router address list this entry is scoped to, if any (#1077,
+  // mirrors internal/watchlist.AddressListRef) -- full-replace like
+  // source/destIp/ports/boundary below, so a caller editing any other
+  // field must read this back off the entry it is editing and resend it
+  // unchanged, or the entry silently loses its list scope. See
+  // WatchlistAddressListRef's own doc comment.
+  sourceList?: WatchlistAddressListRef
   destIp?: string
   ports?: number[]
   invert?: boolean
   includeStructuralNoise?: boolean
+  // The (chain, inInterface, outInterface) boundary this entry is scoped
+  // to, if any (#806, mirrors internal/watchlist.Boundary). Absent or
+  // every field empty means unscoped, full-replace like source/destIp/
+  // ports above -- see internal/api's expectationRequest.Boundary doc
+  // comment for why this is not a leave-alone-on-PUT field like window.
+  boundary?: WatchlistBoundary
 }
 
 // expectationBlock splits a request into the two halves the definitions
@@ -545,10 +868,12 @@ export interface WatchlistEntryRequest {
 function expectationBlock(req: WatchlistEntryRequest) {
   return {
     source: req.source ?? {},
+    sourceList: req.sourceList ?? {},
     destIp: req.destIp ?? '',
     ports: req.ports ?? [],
     invert: req.invert ?? false,
     includeStructuralNoise: req.includeStructuralNoise ?? false,
+    boundary: req.boundary ?? {},
   }
 }
 
@@ -598,6 +923,37 @@ export async function deleteWatchlistEntry(id: string): Promise<string | null> {
   return (await res.text()) || `deleteWatchlistEntry: ${res.status}`
 }
 
+// createCustomDetection creates an operator-authored detector from what
+// the conditions editor has in it (#829). Used where cloning could not
+// be: a shipped detector whose matching is Go carries no conditions to
+// copy, so its copy is written here and created on the first Save rather
+// than existing server-side half-built.
+export async function createCustomDetection(req: {
+  name: string
+  family?: string
+  detection: DefinitionStructureUpdate & { threshold: number; window: string }
+}): Promise<Definition | string> {
+  const res = await postJSON('/api/definitions', {
+    name: req.name,
+    intent: 'detection',
+    kind: 'declarative',
+    family: req.family ?? '',
+    detection: req.detection,
+  })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `createCustomDetection: ${res.status}`
+}
+
+// deleteDefinition removes an operator-authored detector. Shipped
+// definitions are never deleted, only ever paused (engine.Definition's
+// own invariant), and the server refuses one -- so the bench only ever
+// offers this on a custom row.
+export async function deleteDefinition(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/definitions/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteDefinition: ${res.status}`
+}
+
 // definitionEntry pulls the operator-facing entry out of a definition
 // response. The entry is always present for an expectation definition;
 // the fallback exists so a shape change surfaces as an entry with no
@@ -627,6 +983,19 @@ export async function setWatchlistObserving(id: string, observing: boolean): Pro
   const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/observing`, { observing })
   if (res.ok) return definitionEntry(await res.json())
   return (await res.text()) || `setWatchlistObserving: ${res.status}`
+}
+
+// setWatchlistEnabled pauses or resumes a watchlist entry (#676's
+// ratified "pause watch"/"resume watch" drawer actions) -- the
+// definition's own `enabled` flag (already read back as
+// WatchlistEntry.enabled, see its own doc comment), sent through the
+// same generic PUT every other definition edit uses. Unlike Observing,
+// pausing has no entry-specific side effect, so no dedicated route
+// exists or is needed here.
+export async function setWatchlistEnabled(id: string, enabled: boolean): Promise<WatchlistEntry | string> {
+  const result = await updateDefinition(id, { enabled })
+  if (typeof result === 'string') return result
+  return definitionEntry(result)
 }
 
 // fetchWatchlistMatches answers a windowed query over the persisted
@@ -801,6 +1170,33 @@ export async function fetchSetupStatus(): Promise<SetupStatus> {
   return res.json()
 }
 
+// fetchPersistence is #677's settings persistence row: which backend
+// (file directory, or Postgres) this deployment's persisted stores
+// actually use. Admin-gated server-side, same reasoning as
+// /api/config/problems -- a non-admin's 403 surfaces as a thrown
+// ApiError here, same as every other admin-only GET this file wraps
+// (see fetchTokens/fetchUsers above), for the caller to swallow.
+export async function fetchPersistence(): Promise<PersistenceInfo> {
+  const res = await fetch('/api/persistence')
+  if (!res.ok) throw new ApiError(`fetchPersistence: ${res.status}`, res.status)
+  return res.json()
+}
+
+// fetchSetupCommands renders the wizard's RouterOS command blocks
+// server-side (#436) -- selected by the row covering the router's
+// version (derived or picked), so the client never re-derives which
+// dialect applies. address is the only required field; the rest are
+// omitted rather than sent empty (kinds/token before step 4 has
+// anything to embed, version before one is known), matching what
+// JSON.stringify already does with `undefined` properties.
+export async function fetchSetupCommands(
+  req: SetupCommandsRequest,
+): Promise<SetupCommandsResponse | string> {
+  const res = await postJSON('/api/setup/commands', req)
+  if (res.ok) return res.json()
+  return (await res.text()) || `fetchSetupCommands: ${res.status}`
+}
+
 // markSetupStep records that a setup step was skipped or forced past
 // (#487) -- admin-only server-side, matching the modal it is written
 // from.
@@ -818,4 +1214,587 @@ export async function markSetupStep(
   const res = await postJSON('/api/setup/mark', { step, outcome, note })
   if (res.ok) return res.json()
   return (await res.text()) || `markSetupStep: ${res.status}`
+}
+
+// CoverageDeclaration mirrors internal/coverage.Declaration -- an
+// admin's on-record statement that a given boundary-direction pair
+// (`key`, e.g. "ether1|bridge1") is intentionally, not accidentally,
+// quiet (issue #630/#392). `declaredBy`/`declaredAt` are always
+// server-set, never sent by the client.
+export interface CoverageDeclaration {
+  key: string
+  reason: string
+  declaredBy: string
+  declaredAt: string
+}
+
+// fetchCoverageDeclarations/putCoverageDeclaration/deleteCoverageDeclaration:
+// CRUD over internal/coverage's persisted declaration store. Reading is
+// open to any signed-in user (same tier as fetchDefinitions); writing is
+// admin-only server-side, same gate as upsertEntity/deleteEntity above.
+export async function fetchCoverageDeclarations(): Promise<CoverageDeclaration[]> {
+  const res = await fetch('/api/coverage/declarations')
+  if (!res.ok) throw new ApiError(`fetchCoverageDeclarations: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.declarations ?? []
+}
+
+// putCoverageDeclaration creates a new declaration, or replaces an
+// existing one in place, identified by key -- mirroring the server's own
+// single PUT-as-upsert primitive (see internal/api's handleCoveragePut).
+export async function putCoverageDeclaration(
+  key: string,
+  reason: string,
+): Promise<CoverageDeclaration | string> {
+  const res = await putJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`, { reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `putCoverageDeclaration: ${res.status}`
+}
+
+export async function deleteCoverageDeclaration(key: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteCoverageDeclaration: ${res.status}`
+}
+
+// HostMarkKind: what an operator said about a quiet host (#1016).
+// 'intended' means quiet on purpose and stays said; 'dismissed' means
+// take it off the map, and the server clears it by itself the next time
+// that host appears in the feed.
+export type HostMarkKind = 'intended' | 'dismissed'
+
+// HostMark mirrors internal/hosts.Mark. `by`/`at` are always server-set,
+// never sent by the client, same convention as CoverageDeclaration's
+// `declaredBy`/`declaredAt` above.
+export interface HostMark {
+  kind: HostMarkKind
+  reason?: string
+  by: string
+  at: string
+}
+
+// Host mirrors internal/hosts.Host -- one host the syslog feed has
+// shown, keyed `"<iface>|<ip>"`. `lastSeen` is what tells the map how
+// long a host has been quiet; `label` is the last hostname seen for the
+// address and may be absent, because a host nothing names is still a
+// host.
+export interface Host {
+  key: string
+  iface: string
+  ip: string
+  label?: string
+  firstSeen: string
+  lastSeen: string
+  events: number
+  mark?: HostMark
+}
+
+// fetchHosts/putHostMark/deleteHostMark: the host presence register
+// (#1016). Reading is open to any signed-in user, same tier as
+// fetchCoverageDeclarations above; both writes are user tier
+// server-side and audit-logged.
+export async function fetchHosts(): Promise<Host[]> {
+  const res = await fetch('/api/hosts')
+  if (!res.ok) throw new ApiError(`fetchHosts: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.hosts ?? []
+}
+
+// putHostMark creates or replaces the mark on one host, identified by
+// key -- the server's own single PUT-as-upsert primitive (see
+// internal/api's handleHostMarkPut). `reason` is required for
+// 'intended' and optional for 'dismissed'.
+export async function putHostMark(
+  key: string,
+  kind: HostMarkKind,
+  reason = '',
+): Promise<Host | string> {
+  const res = await putJSON(`/api/hosts/${encodeURIComponent(key)}/mark`, { kind, reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `putHostMark: ${res.status}`
+}
+
+export async function deleteHostMark(key: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/hosts/${encodeURIComponent(key)}/mark`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteHostMark: ${res.status}`
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Settings (#796)
+//
+// Appended as its own delimited block at the end of the file, rather
+// than slotted in beside a related function, so this file's other
+// in-flight changes and this one do not land on the same lines.
+// ─────────────────────────────────────────────────────────────────────
+
+// setStoreMaxMemory sets the event buffer's size on the running server:
+// it stores the figure and resizes the ring, oldest events first when
+// the new size is smaller. There is no matching read -- the current
+// figure and its bounds ride GET /api/stats, so the memory group's
+// slider and the count beside it are always one snapshot.
+//
+// Admin-only server-side (internal/api's handleStoreSettingsUpdate); a
+// viewer or user is never offered the drag in the first place, so a 403
+// here means a stale page rather than a normal path.
+//
+// Returns the server's new state on success, or its own words on
+// failure -- the same shape putCoverageDeclaration above uses, so the
+// caller can show the reason it was refused rather than a status code.
+export async function setStoreMaxMemory(bytes: number): Promise<StoreMemory | string> {
+  const res = await putJSON('/api/settings/store', { maxMemory: bytes })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setStoreMaxMemory: ${res.status}`
+}
+
+// fetchHistorySettings reads the on-disk history's switch, window and
+// what is held right now (#910, round 42's disk group). A non-admin's
+// refusal surfaces as a thrown ApiError for the caller to swallow, the
+// same shape as fetchPersistence above.
+export async function fetchHistorySettings(): Promise<HistorySettings> {
+  const res = await fetch('/api/settings/history')
+  if (!res.ok) throw new ApiError(`fetchHistorySettings: ${res.status}`, res.status)
+  return res.json()
+}
+
+// setHistorySettings turns the on-disk history on or off and sets its
+// days and byte cap in one call: the server applies the new window at
+// once, deleting the oldest days it no longer allows, which is why the
+// control only ever calls this from a link that names the deletion.
+//
+// Admin-only server-side. Returns the server's new state on success, or
+// its own words on refusal -- setStoreMaxMemory's shape -- so the group
+// can show why rather than a status code.
+export async function setHistorySettings(body: {
+  enabled: boolean
+  days: number
+  maxBytes: number
+}): Promise<HistorySettings | string> {
+  const res = await putJSON('/api/settings/history', body)
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setHistorySettings: ${res.status}`
+}
+
+// fetchRouterBackups reads Settings' "router backups" group (#394,
+// round 44): what has arrived per router, and the missed-push
+// arithmetic (internal/api's handleRouterBackupsList). Admin-only
+// server-side -- a non-admin's 403 surfaces as a thrown ApiError for
+// the caller to swallow, same shape as fetchPersistence/
+// fetchHistorySettings above.
+export async function fetchRouterBackups(): Promise<RouterBackupsResponse> {
+  const res = await fetch('/api/router-backups')
+  if (!res.ok) throw new ApiError(`fetchRouterBackups: ${res.status}`, res.status)
+  return res.json()
+}
+
+// routerBackupDownloadUrl is the admin download link for one half of a
+// generation's pair -- a plain same-origin GET the browser navigates
+// to, session cookie included automatically, so there is no need to
+// pull the file through this module just to trigger a save. The server
+// (internal/api's handleRouterBackupDownload) writes the audit entry
+// when the request actually lands, not when the link is merely drawn.
+export function routerBackupDownloadUrl(device: string, generation: string, kind: 'backup' | 'rsc'): string {
+  return `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/${kind}`
+}
+
+// ===========================================================================
+// Definitions editor (issues #787, #786)
+//
+// The two reads the watchers station's in-place editing panel needs
+// beyond the list it already fetches, and the replay its Try button
+// asks for (#786) -- a POST that writes nothing. The writes it drives
+// (updateDefinition, resetDefinition, cloneDefinition) are defined
+// further up beside fetchDefinitions and are not duplicated here.
+// ===========================================================================
+
+// fetchDefinitionSchema reads every param schema this deployment's
+// definitions declare, keyed by definition id (GET
+// /api/definitions/schema, internal/api's handleDefinitionsSchema).
+//
+// This is the one source the editor renders its typed threshold/window
+// fields from -- deliberately not the paramSchema copy that also rides on
+// each definition in the list response. Both carry the same server value
+// today, and reading the dedicated endpoint is what keeps that true: a
+// control built from whichever copy happened to be in hand is how two
+// answers to "what does this param accept" start to drift, which is the
+// duplication docs/decisions/evaluation-engine.md section 4 exists to
+// remove.
+export async function fetchDefinitionSchema(): Promise<Record<string, DefinitionParamSchema[]>> {
+  const res = await fetch('/api/definitions/schema')
+  if (!res.ok) throw new ApiError(`fetchDefinitionSchema: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.schemas ?? {}
+}
+
+// getDefinition reads one definition by id, with its provenance and its
+// distance from stock (GET /api/definitions/{id}). Used to re-read a
+// single row after an edit rather than re-listing every definition and
+// recomputing coverage evidence to see one changed threshold.
+export async function getDefinition(id: string): Promise<Definition> {
+  const res = await fetch(`/api/definitions/${encodeURIComponent(id)}`)
+  if (!res.ok) throw new ApiError(`getDefinition: ${res.status}`, res.status)
+  return await res.json()
+}
+
+// replayDefinition re-runs one definition over the retained event corpus
+// with candidate params, and answers what it would have done (POST
+// /api/definitions/{id}/replay, internal/api's handleDefinitionsReplay).
+// Writes nothing: the definition the engine evaluates is untouched.
+//
+// A decline -- "the corpus is shorter than this definition's window, so
+// this question cannot be answered honestly" -- comes back as a *value*
+// on ReplayResult, not as a thrown error and not as a receipt of zero.
+// It is an honest limit of the traffic held, and the one thing a caller
+// must not do is show it as a failure: "it would have fired zero times"
+// and "this cannot be asked yet" are different answers, which is why
+// engine.Result keeps them structurally apart (#403) and why this
+// wrapper does too.
+//
+// A genuine refusal (no corpus, not user-tier, a candidate param this
+// definition's replay does not accept) is still the string every other
+// definitions writer returns, so one `typeof result === 'string'` check
+// separates "the server would not do it" from "here is the answer".
+//
+// Where params carries a candidate, the answer also carries `current`:
+// the same replay over the same corpus with the definition's live params,
+// so a candidate's count can be read against the one it would replace
+// (#786). It is receipt-or-decline like the answer around it, and the
+// server omits it entirely for an empty candidate -- the receipt is then
+// the current number already.
+export async function replayDefinition(
+  id: string,
+  params: Record<string, unknown>,
+): Promise<ReplayResult | string> {
+  const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/replay`, { params })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `replayDefinition: ${res.status}`
+}
+
+// ===========================================================================
+// Tune logging (#435)
+//
+// The upload never leaves this pair of calls: the export text is sent in
+// the request body and nothing else in this file ever holds onto it (see
+// TuneLogging.svelte's own doc comment for how the component honours
+// that). Both endpoints share the fixed contract's shape -- a `rejected`
+// reason is a *value* in a normal 200 response body (see the contract's
+// §3 sample, `"rejected": null // or {"reason": "..."}`), not a thrown
+// error, so callers read it off the response rather than a caught
+// ApiError. The `T | string` convention below is only for the request
+// itself failing (network, body-limit, a non-2xx the parser never got to
+// classify) -- the same convention fetchSetupCommands/markSetupStep use.
+// ===========================================================================
+
+export async function fetchTuneLoggingAnalyse(
+  req: TuneLoggingAnalyseRequest,
+): Promise<TuneLoggingAnalyseResponse | string> {
+  const res = await postJSON('/api/tune-logging/analyse', req)
+  if (res.ok) return res.json()
+  return (await res.text()) || `fetchTuneLoggingAnalyse: ${res.status}`
+}
+
+// fetchTuneLoggingRender asks for the same diff twice over: the
+// annotated export (download first, per the record) and the line-by-line
+// `set` commands, both derived from the same selected rule ids. A 500
+// here (the logging-only check failing server-side) is not expected to
+// happen -- see the contract §4 -- and is surfaced through the same
+// string-error path as any other failure rather than a dedicated shape,
+// since the frontend has no remedy for it beyond reporting it.
+export async function fetchTuneLoggingRender(
+  req: TuneLoggingRenderRequest,
+): Promise<TuneLoggingRenderResponse | string> {
+  const res = await postJSON('/api/tune-logging/render', req)
+  if (res.ok) return res.json()
+  return (await res.text()) || `fetchTuneLoggingRender: ${res.status}`
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Baseline (#1016, round 49)
+//
+// Appended as its own delimited block at the end of the file, for the
+// reason the settings block above gives: this file's other in-flight
+// changes and this one should not land on the same lines.
+// ─────────────────────────────────────────────────────────────────────
+
+// OffBaselineResponse is the wire shape of GET /api/baseline/off: the
+// OffBaseline document the drawing code works with, plus the host quiet
+// window.
+//
+// That window rides along because it is a threshold, not a host: it
+// belongs with the other two this endpoint already carries, and the
+// alternative was a second request on every page load to fetch one
+// number. It is deliberately outside `config`, so a caller reading
+// config.days/config.of sees exactly the two-field object baseline.ts
+// declares.
+export interface OffBaselineResponse extends OffBaseline {
+  hostQuietAfterMs: number
+}
+
+// BaselineLineRecord is the whole stored line, which the expected
+// endpoints echo back on success. Wider than OffBaselineLine: it carries
+// the recurrence bookkeeping the register decides with, which the map
+// does not draw.
+export interface BaselineLineRecord {
+  key: string
+  srcIp: string
+  dstIp: string
+  port?: number
+  proto?: string
+  days: number
+  anchor: number
+  firstSeen: string
+  lastSeen: string
+  countToday: number
+  firstSeenToday?: string
+  outcomeToday?: 'accept' | 'drop'
+  expected?: { reason: string; by: string; at: string }
+}
+
+// fetchOffBaseline reads today's off-baseline lines -- the lines seen
+// today that are not on the established pattern -- with the threshold
+// that judged them and how many there are.
+//
+// There is deliberately no call for the established lines: the server
+// has no endpoint serving them, because on a busy network they are the
+// entire traffic set (see internal/api's handleBaselineOff). Absence
+// from this list is what "established" means on the client.
+//
+// Throws on failure like fetchHosts, rather than returning a string:
+// this is a read the map retries on its own schedule, and the caller
+// that swallows the failure is baselineState.refresh.
+export async function fetchOffBaseline(): Promise<OffBaselineResponse> {
+  const res = await fetch('/api/baseline/off')
+  if (!res.ok) throw new ApiError(`fetchOffBaseline: ${res.status}`, res.status)
+  return res.json()
+}
+
+// putBaselineExpected records that a line is meant to be there, with the
+// reason the operator gave. The server stamps who and when from the
+// session, never from this body, and the line reads established from
+// then on.
+//
+// `reason` is required -- the server refuses an empty one with a 400,
+// which arrives here as the error string.
+export async function putBaselineExpected(
+  key: string,
+  reason: string,
+): Promise<BaselineLineRecord | string> {
+  const res = await putJSON(`/api/baseline/${encodeURIComponent(key)}/expected`, { reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `putBaselineExpected: ${res.status}`
+}
+
+// deleteBaselineExpected withdraws that statement, putting the line back
+// to whatever its own recurrence says it is -- which may well be
+// off-baseline again on the next read.
+export async function deleteBaselineExpected(key: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/baseline/${encodeURIComponent(key)}/expected`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteBaselineExpected: ${res.status}`
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// The two filters on the living topology (#1018, round 53)
+//
+// Appended as its own delimited block for the reason the two blocks
+// above give: this file's other in-flight changes and this one should
+// not land on the same lines.
+// ─────────────────────────────────────────────────────────────────────
+
+// PortCandidate is one chip in the picker. `count` is how many logged
+// lines named the port in the window and `named` whether a pushed
+// filter rule scopes to it -- a port with count 0 and named true is a
+// door nothing has knocked at, which is exactly the thing worth asking
+// about.
+export interface PortCandidate {
+  port: number
+  proto: string
+  count: number
+  named: boolean
+}
+
+// PortRib is one direction of one boundary pair on the selected port.
+// `out` is empty for a line the router logged with no out-interface --
+// the ordinary shape of a forward drop, and the reason the map draws
+// that direction dying at the router rather than reaching anywhere.
+export interface PortRib {
+  in: string
+  out: string
+  events: number
+  accepts: number
+  drops: number
+  refusedBy?: string
+}
+
+export interface PortHost {
+  ip: string
+  name?: string
+  events: number
+  accepts: number
+  drops: number
+}
+
+// PortDoor is a pushed filter rule that *names* the port, seen or not.
+// Policy, never traffic: the map draws it in its own vocabulary (two
+// posts across a rib) so it can never be read as a line that happened.
+export interface PortDoor {
+  device: string
+  label: string
+  ordinal: number
+  action: string
+  chain: string
+  in?: string
+  out?: string
+  dstPort: string
+  who: string
+  comment?: string
+}
+
+export interface PortsResponse {
+  generatedAt: number
+  windowSeconds: number
+  candidates: PortCandidate[]
+  selection?: { ports: number[]; proto: string; label: string }
+  events: number
+  accepts: number
+  drops: number
+  lines: number
+  ribs: PortRib[]
+  hosts: PortHost[]
+  doors: PortDoor[]
+}
+
+// fetchPorts asks where a port is used. With no ports it asks only what
+// the picker should offer, which is the same request the map makes when
+// the pill is first opened.
+export async function fetchPorts(ports: number[], proto: string): Promise<PortsResponse> {
+  const qs = new URLSearchParams()
+  if (ports.length > 0) qs.set('port', ports.join(','))
+  if (proto) qs.set('proto', proto)
+  const res = await fetch(`/api/ports${qs.size > 0 ? `?${qs}` : ''}`)
+  if (!res.ok) throw new ApiError(`fetchPorts: ${res.status}`, res.status)
+  return res.json()
+}
+
+// TraceRequest names the one line to trace. Either form resolves to one
+// event server-side: `event` where the caller holds an id (a stream
+// row), and the pair/port where it does not (the map's own unplanned
+// callout, which is a rolled-up pair rather than a single line).
+export interface TraceRequest {
+  event?: number
+  in?: string
+  out?: string
+  port?: number
+  proto?: string
+  src?: string
+  dst?: string
+  // noOut asks for a line that never reached an out-interface at all --
+  // the ordinary shape of a forward drop. Distinct from leaving `out`
+  // unset, which means "any": a caller tracing the pair a callout names
+  // would otherwise be free to land on a newer line that did leave the
+  // router, and the drawing and the callout would then disagree about
+  // what happened.
+  noOut?: boolean
+}
+
+// TraceResponse is one hop through the router, as the router knows it.
+// `found: false` is an honest miss -- the window holds nothing matching
+// -- and is drawn as words, never as a path that went nowhere.
+export interface TraceResponse {
+  found: boolean
+  verdict?: 'accepted' | 'refused'
+  event?: FirewallEvent
+  like: number
+  srcSeen: number
+  dstReached: number
+  // sameLine is the list's SAME LINE column (round 56, A1): the line's
+  // own events, newest first, the traced one included so it can be
+  // marked, capped at eight.
+  sameLine: FirewallEvent[]
+  // sameMinute is the SAME MINUTE column: the source's other events in
+  // the traced event's own clock minute, excluding anything already in
+  // sameLine, newest first, capped at eight. sameMinuteTotal is the
+  // exact count that is capped from.
+  sameMinute: FirewallEvent[]
+  sameMinuteTotal: number
+}
+
+export async function fetchTrace(req: TraceRequest): Promise<TraceResponse> {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(req)) {
+    if (v === undefined || v === null || v === '' || v === false) continue
+    // A flag travels as `1`, not as the word "true": the server reads
+    // `noOut=1` and nothing else, so String(true) would be silently
+    // ignored rather than refused.
+    qs.set(k, v === true ? '1' : String(v))
+  }
+  const res = await fetch(`/api/trace?${qs}`)
+  if (!res.ok) throw new ApiError(`fetchTrace: ${res.status}`, res.status)
+  return res.json()
+}
+
+// ---------------------------------------------------------------------
+// Decommission watches (#460): the offer, the answers, and the ghost's
+// own actions. One GET for the whole surface -- see DecommissionResponse
+// for why the offers and the watches travel together.
+// ---------------------------------------------------------------------
+
+export async function fetchDecommission(): Promise<DecommissionResponse> {
+  const res = await fetch('/api/decommission')
+  if (!res.ok) throw new ApiError(`fetchDecommission: ${res.status}`, res.status)
+  return res.json()
+}
+
+// The "yes" answer. cleanWindow is a Go duration string and is omitted
+// unless the operator changed it, so the server's configured default
+// stays the one place that number lives.
+export async function createDecommissionWatch(
+  device: string,
+  cidr: string,
+  cleanWindow?: string,
+): Promise<DecommissionWatch | string> {
+  const res = await postJSON('/api/decommission/watches', { device, cidr, cleanWindow })
+  if (res.ok) return res.json()
+  return (await res.text()) || `createDecommissionWatch: ${res.status}`
+}
+
+// The "no" answer: the zone leaves at once and no watch is created.
+export async function dismissDecommissionOffer(device: string, cidr: string): Promise<string | null> {
+  const res = await postJSON('/api/decommission/dismiss', { device, cidr })
+  if (res.ok) return null
+  return (await res.text()) || `dismissDecommissionOffer: ${res.status}`
+}
+
+// Force-remove: the ghost leaves the map now, the watch goes on in the
+// watchlist until it retires. The reason is required by the server (the
+// #385 recorded-override pattern), so an empty one is refused there
+// rather than being quietly padded here.
+export async function forceRemoveDecommissionGhost(
+  id: string,
+  reason: string,
+): Promise<DecommissionWatch | string> {
+  const res = await postJSON(`/api/decommission/watches/${encodeURIComponent(id)}/force`, { reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `forceRemoveDecommissionGhost: ${res.status}`
+}
+
+// Round 55's undo: for the hour after a watch retires by itself, the
+// retirement can be taken back and the ghost returns to the map.
+export async function undoDecommissionRetirement(id: string): Promise<DecommissionWatch | string> {
+  const res = await postJSON(`/api/decommission/watches/${encodeURIComponent(id)}/undo`)
+  if (res.ok) return res.json()
+  return (await res.text()) || `undoDecommissionRetirement: ${res.status}`
+}
+
+// Abandoning a watch outright -- distinct from retirement, which is the
+// watch finishing its job, and from force-remove, which only takes it
+// off the map. This is the "can only be forgotten from there" the card's
+// force-remove warning promises (#1069), so it carries the same #385
+// recorded-override reason force-remove does -- optional on the wire
+// (an older caller with nothing to say still works), but the watchlist
+// page always supplies one.
+export async function deleteDecommissionWatch(id: string, reason?: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/decommission/watches/${encodeURIComponent(id)}`, reason ? { reason } : undefined)
+  if (res.ok) return null
+  return (await res.text()) || `deleteDecommissionWatch: ${res.status}`
 }

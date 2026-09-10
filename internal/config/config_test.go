@@ -5,6 +5,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -509,34 +510,30 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]string{
-		"Flags.StorePath":                 cfg.Flags.StorePath,
-		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
-		"Flags.RuleUsageStorePath":        cfg.Flags.RuleUsageStorePath,
-		"Auth.StorePath":                  cfg.Auth.StorePath,
-		"Entities.StorePath":              cfg.Entities.StorePath,
-		"Audit.StorePath":                 cfg.Audit.StorePath,
-		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
-		"TLS.StorePath":                   cfg.TLS.StorePath,
-		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
-		"Engine.StorePath":                cfg.Engine.StorePath,
-		"Watchlist.StorePath":             cfg.Watchlist.StorePath,
-		"Watchlist.MatchLogPath":          cfg.Watchlist.MatchLogPath,
-		"Watchlist.SuggestionsStorePath":  cfg.Watchlist.SuggestionsStorePath,
+		"Flags.StorePath":                cfg.Flags.StorePath,
+		"Flags.RuleUsageStorePath":       cfg.Flags.RuleUsageStorePath,
+		"Auth.StorePath":                 cfg.Auth.StorePath,
+		"Entities.StorePath":             cfg.Entities.StorePath,
+		"Audit.StorePath":                cfg.Audit.StorePath,
+		"Auth.TokensStorePath":           cfg.Auth.TokensStorePath,
+		"TLS.StorePath":                  cfg.TLS.StorePath,
+		"DeviceMAC.StorePath":            cfg.DeviceMAC.StorePath,
+		"Engine.StorePath":               cfg.Engine.StorePath,
+		"Watchlist.MatchLogPath":         cfg.Watchlist.MatchLogPath,
+		"Watchlist.SuggestionsStorePath": cfg.Watchlist.SuggestionsStorePath,
 	}
 	want := map[string]string{
-		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
-		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
-		"Flags.RuleUsageStorePath":        "/var/lib/mikroview/rule-usage.json",
-		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
-		"Entities.StorePath":              "/var/lib/mikroview/entities.json",
-		"Audit.StorePath":                 "/var/lib/mikroview/audit.json",
-		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
-		"TLS.StorePath":                   "/var/lib/mikroview/tls",
-		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
-		"Engine.StorePath":                "/var/lib/mikroview/engine-state.json",
-		"Watchlist.StorePath":             "/var/lib/mikroview/watchlist.json",
-		"Watchlist.MatchLogPath":          "/var/lib/mikroview/matchlog.jsonl",
-		"Watchlist.SuggestionsStorePath":  "/var/lib/mikroview/suggestions.json",
+		"Flags.StorePath":                "/var/lib/mikroview/flags.json",
+		"Flags.RuleUsageStorePath":       "/var/lib/mikroview/rule-usage.json",
+		"Auth.StorePath":                 "/var/lib/mikroview/users.json",
+		"Entities.StorePath":             "/var/lib/mikroview/entities.json",
+		"Audit.StorePath":                "/var/lib/mikroview/audit.json",
+		"Auth.TokensStorePath":           "/var/lib/mikroview/tokens.json",
+		"TLS.StorePath":                  "/var/lib/mikroview/tls",
+		"DeviceMAC.StorePath":            "/var/lib/mikroview/mac-registry.json",
+		"Engine.StorePath":               "/var/lib/mikroview/engine-state.json",
+		"Watchlist.MatchLogPath":         "/var/lib/mikroview/matchlog.jsonl",
+		"Watchlist.SuggestionsStorePath": "/var/lib/mikroview/suggestions.json",
 	}
 	for field, got := range cases {
 		if got != want[field] {
@@ -599,7 +596,6 @@ func TestAuditEnvVarOverridesDefault(t *testing.T) {
 }
 
 func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
-	t.Setenv("MIKROVIEW_WATCHLIST_STORE_PATH", "/data/watchlist.json")
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH", "/data/matchlog.jsonl")
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY", "50000")
 	t.Setenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH", "/data/suggestions.json")
@@ -608,9 +604,6 @@ func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if cfg.Watchlist.StorePath != "/data/watchlist.json" {
-		t.Errorf("Watchlist.StorePath = %v, want /data/watchlist.json", cfg.Watchlist.StorePath)
 	}
 	if cfg.Watchlist.MatchLogPath != "/data/matchlog.jsonl" {
 		t.Errorf("Watchlist.MatchLogPath = %v, want /data/matchlog.jsonl", cfg.Watchlist.MatchLogPath)
@@ -843,5 +836,188 @@ func TestLoadInvalidFlag(t *testing.T) {
 	_, err := Load("", []string{"-not-a-real-flag"})
 	if err == nil {
 		t.Fatal("expected an error for an unrecognized flag, got nil")
+	}
+}
+
+// The warm-restart snapshot settings (#795) come up on by default, so a
+// deployment that has never heard of them still survives a restart with
+// its counters intact.
+func TestSnapshotDefaults(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Snapshot.Interval != 5*time.Minute {
+		t.Errorf("Snapshot.Interval = %v, want the 5m default", cfg.Snapshot.Interval)
+	}
+	if cfg.Snapshot.Keep != 6 {
+		t.Errorf("Snapshot.Keep = %d, want the default 6", cfg.Snapshot.Keep)
+	}
+	if cfg.Snapshot.Dir != "" {
+		t.Errorf("Snapshot.Dir = %q, want empty so main resolves it beside the data directory", cfg.Snapshot.Dir)
+	}
+}
+
+func TestSnapshotEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_SNAPSHOT_INTERVAL", "90s")
+	t.Setenv("MIKROVIEW_SNAPSHOT_KEEP", "12")
+	t.Setenv("MIKROVIEW_SNAPSHOT_DIR", "/data/snapshots")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Snapshot.Interval != 90*time.Second {
+		t.Errorf("Snapshot.Interval = %v, want the env value 90s", cfg.Snapshot.Interval)
+	}
+	if cfg.Snapshot.Keep != 12 {
+		t.Errorf("Snapshot.Keep = %d, want the env value 12", cfg.Snapshot.Keep)
+	}
+	if cfg.Snapshot.Dir != "/data/snapshots" {
+		t.Errorf("Snapshot.Dir = %q, want the env value /data/snapshots", cfg.Snapshot.Dir)
+	}
+}
+
+func TestSnapshotYAMLOverridesDefaults(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+snapshot:
+  interval: 10m
+  keep: 3
+  dir: /srv/snapshots
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Snapshot.Interval != 10*time.Minute {
+		t.Errorf("Snapshot.Interval = %v, want the yaml value 10m", cfg.Snapshot.Interval)
+	}
+	if cfg.Snapshot.Keep != 3 {
+		t.Errorf("Snapshot.Keep = %d, want the yaml value 3", cfg.Snapshot.Keep)
+	}
+	if cfg.Snapshot.Dir != "/srv/snapshots" {
+		t.Errorf("Snapshot.Dir = %q, want the yaml value /srv/snapshots", cfg.Snapshot.Dir)
+	}
+}
+
+// A snapshot cadence below the minimum, or a retention that keeps
+// nothing, is clamped rather than refused -- a bad value here costs a
+// warm restart, not monitoring.
+func TestSnapshotMinimumsAreClampedNotRefused(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+snapshot:
+  interval: 1s
+  keep: 0
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, result, err := LoadWithProblems(yamlPath, nil)
+	if err != nil {
+		t.Fatalf("a too-short snapshot interval must not stop startup: %v", err)
+	}
+	if cfg.Snapshot.Interval != 5*time.Minute {
+		t.Errorf("Snapshot.Interval = %v, want the default 5m applied in place of 1s", cfg.Snapshot.Interval)
+	}
+	if cfg.Snapshot.Keep != 6 {
+		t.Errorf("Snapshot.Keep = %d, want the default 6 applied in place of 0", cfg.Snapshot.Keep)
+	}
+	for _, code := range []string{"CFG-0070", "CFG-0071"} {
+		found := false
+		for _, p := range result.Warnings {
+			if p.Code == code {
+				found = true
+				if p.Applied == "" {
+					t.Errorf("%s reported no Applied value, so the admin UI cannot say what was substituted", code)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no %s warning for a clamped snapshot setting", code)
+		}
+	}
+}
+
+// Exactly the minimum is a deliberate choice, not a mistake.
+func TestSnapshotIntervalAtTheMinimumIsAccepted(t *testing.T) {
+	t.Setenv("MIKROVIEW_SNAPSHOT_INTERVAL", MinSnapshotInterval.String())
+
+	cfg, result, err := LoadWithProblems("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Snapshot.Interval != MinSnapshotInterval {
+		t.Errorf("Snapshot.Interval = %v, want %v kept as set", cfg.Snapshot.Interval, MinSnapshotInterval)
+	}
+	for _, p := range result.Warnings {
+		if p.Code == "CFG-0070" {
+			t.Errorf("the minimum itself was reported as too short: %+v", p)
+		}
+	}
+}
+
+// The registry's URL is deliberately not a config field: there is one
+// publisher, named by internal/oui.SourceURL, following the vetted-menu
+// pattern Blocklist and NetClass already set. This asserts the absence,
+// so re-adding a URL setting has to be a decision rather than a drift.
+func TestOUIHasNoURLSetting(t *testing.T) {
+	if _, ok := reflect.TypeOf(OUI{}).FieldByName("URL"); ok {
+		t.Error("config.OUI grew a URL field -- the source is internal/oui.SourceURL, not operator input")
+	}
+	t.Setenv("MIKROVIEW_OUI_URL", "https://mirror.example.invalid/oui.csv")
+	if _, err := Load("", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOUIDefaultsToEnabledAgainstTheIEEERegistry(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OUI.Enabled {
+		t.Error("OUI.Enabled = false, want the vendor feed on by default")
+	}
+	if cfg.OUI.CachePath != "/var/lib/mikroview/oui-registry.json" {
+		t.Errorf("OUI.CachePath = %q, want it under the data directory", cfg.OUI.CachePath)
+	}
+}
+
+func TestOUIEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_OUI_ENABLED", "false")
+	t.Setenv("MIKROVIEW_OUI_CACHE_PATH", "/data/oui.json")
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OUI.Enabled {
+		t.Error("MIKROVIEW_OUI_ENABLED=false did not switch the feed off")
+	}
+	if cfg.OUI.CachePath != "/data/oui.json" {
+		t.Errorf("OUI.CachePath = %q, want the override", cfg.OUI.CachePath)
+	}
+}
+
+func TestOUIYAMLCanDisableTheFeed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("oui:\n  enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OUI.Enabled {
+		t.Error("oui.enabled: false in YAML did not switch the feed off")
 	}
 }

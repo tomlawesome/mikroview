@@ -176,3 +176,61 @@ func TestCoverageIgnoresPortsForAnInvertedEntry(t *testing.T) {
 		t.Errorf("source outside every rule = %v, want %v", got, CoverageOutOfScope)
 	}
 }
+
+// --- Boundary scoping (#806) ---------------------------------------------
+
+// A scoped entry's coverage answer is about its own boundary, not the
+// estate. No pushed rule ever references this boundary at all -- so,
+// exactly like the fall's own dark/unknown read of a boundary
+// (fall.svelte.ts: a boundary is only ever 'dark' once some rule
+// actually names it), the honest answer is Unknown, not no-logging: a
+// boundary nothing has ever named is not evidence that nothing logs it,
+// it is the absence of any evidence about it at all.
+func TestCoverageScopedEntryUnknownWhenNothingReferencesItsBoundary(t *testing.T) {
+	entry := watchlist.Entry{
+		ID:       "e",
+		Ports:    []int{22},
+		Boundary: watchlist.Boundary{Chain: "forward", InInterface: "ether1", OutInterface: "bridge1"},
+	}
+	rules := coverageDevice(coverageLogs(ingest.FilterRule{Chain: "forward", InInterface: "ether9", OutInterface: "bridge9"}))
+	if got := coverageForEntry(entry, rules); got != CoverageUnknown {
+		t.Errorf("= %v, want %v -- nothing pushed ever names this boundary", got, CoverageUnknown)
+	}
+}
+
+// Once a rule does reference the entry's own boundary, its own logging
+// answers coverage for that boundary alone: a non-logging rule on it
+// reads no-logging even while another boundary logs plenty, and the two
+// boundaries' own answers do not bleed into each other.
+func TestCoverageScopedEntryNoLoggingOnItsOwnBoundary(t *testing.T) {
+	entry := watchlist.Entry{
+		ID:       "e",
+		Ports:    []int{22},
+		Boundary: watchlist.Boundary{Chain: "forward", InInterface: "ether1", OutInterface: "bridge1"},
+	}
+	rules := coverageDevice(
+		coverageLogs(ingest.FilterRule{Chain: "forward", InInterface: "ether9", OutInterface: "bridge9"}),
+		ingest.FilterRule{Chain: "forward", InInterface: "ether1", OutInterface: "bridge1"}, // references it, does not log
+	)
+	if got := coverageForEntry(entry, rules); got != CoverageNoLogging {
+		t.Errorf("= %v, want %v -- the rule naming this boundary does not log", got, CoverageNoLogging)
+	}
+}
+
+// The same entry, against a rule that does name its own boundary, reads
+// covered -- the fall's own dark/observed read of a boundary and this
+// entry's coverage agree by construction once it names one.
+func TestCoverageScopedEntryCoveredOnItsOwnBoundary(t *testing.T) {
+	entry := watchlist.Entry{
+		ID:       "e",
+		Ports:    []int{22},
+		Boundary: watchlist.Boundary{Chain: "forward", InInterface: "ether1", OutInterface: "bridge1"},
+	}
+	rules := coverageDevice(
+		ingest.FilterRule{Chain: "forward", InInterface: "ether9", OutInterface: "bridge9", Log: true},
+		coverageLogs(ingest.FilterRule{Chain: "forward", InInterface: "ether1", OutInterface: "bridge1"}),
+	)
+	if got := coverageForEntry(entry, rules); got != CoverageOK {
+		t.Errorf("= %v, want %v -- a logging rule on the entry's own boundary covers it", got, CoverageOK)
+	}
+}

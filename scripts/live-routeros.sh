@@ -98,7 +98,13 @@ chr_image() {
     # refused" on the serial port. Observed exactly that, and the real
     # cause (MikroTik's CDN resetting) was four errors up the log with
     # nothing tying them together.
-    if ! curl -fsS --retry 3 --retry-delay 2 -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"; then
+    # -C - and --retry-all-errors: download.mikrotik.com resets the
+    # connection partway through the ~43 MB image rather than refusing
+    # it, which plain --retry does not cover (curl exit 56). The server
+    # answers Range requests, so resuming is the fix. Reasoning in full
+    # on routeros-chr-boot.sh's copy, which this mirrors.
+    if ! curl -fsS -C - --retry 10 --retry-delay 3 --retry-all-errors \
+      -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"; then
       rm -f "$zip"
       log "downloading CHR $CHR_VERSION from $BASE_URL failed -- this fixture needs to reach download.mikrotik.com"
       return 1
@@ -235,7 +241,7 @@ setup() {
   trust "$url" >/dev/null
 
   run \
-    "/system logging action add name=mikroview target=remote remote=$syslog_host remote-port=$syslog_port remote-protocol=tls check-certificate=yes" \
+    "/system logging action add name=mikroview target=remote remote=$syslog_host remote-port=$syslog_port remote-protocol=tls remote-log-format=syslog check-certificate=yes" \
     '/system logging add topics=firewall,info action=mikroview' \
     "/ip firewall filter add chain=input protocol=tcp dst-port=$INPUT_PORT action=accept log=yes log-prefix=\"A|live-in|\"" \
     '/ip firewall filter add chain=forward action=accept log=yes log-prefix="A|lan-wan|"' \

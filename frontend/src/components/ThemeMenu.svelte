@@ -5,17 +5,17 @@
   //
   // This existed before #73 consolidated the toolbar into the nav menu
   // that #544 has since retired, and
-  // burying it there was a regression rather than a tidy-up: theme and
-  // colorway switching is reached for often and wants to be one click
-  // away, not two. Reinstated in the pre-#73 shape, now also carrying
-  // the light/dark/auto mode picker that was split out separately.
+  // burying it there was a regression rather than a tidy-up: colorway
+  // switching is reached for often and wants to be one click away, not
+  // two. Reinstated in the pre-#73 shape. The light/dark/auto mode
+  // picker that used to live alongside it was retired in #708: round 30
+  // is dark throughout, and dark is no longer a preference among others.
   //
   // At mobile widths the dropdown becomes a bottom sheet, for the same
   // reason the retired nav menu's did (issue #85): a right-anchored dropdown assumes
   // the trigger stays at the toolbar's right edge, and a wrapped toolbar
   // can put it anywhere.
   import { COLORWAYS, colorwayState } from '../lib/colorway.svelte'
-  import { themeState, type ThemePref } from '../lib/theme.svelte'
   import { viewportState } from '../lib/viewport.svelte'
 
   let open = $state(false)
@@ -32,9 +32,6 @@
   })
 
   const current = $derived(COLORWAYS.find((c) => c.id === colorwayState.pref) ?? COLORWAYS[0])
-
-  const modeLabels: Record<ThemePref, string> = { system: 'Auto', light: 'Light', dark: 'Dark' }
-  const modeOptions: ThemePref[] = ['system', 'light', 'dark']
 </script>
 
 <div class="theme-menu" bind:this={rootEl}>
@@ -43,7 +40,7 @@
     onclick={() => (open = !open)}
     aria-haspopup="true"
     aria-expanded={open}
-    title="Colour theme and light/dark mode"
+    title="Colour theme"
   >
     <span class="swatch" style="background: {current.swatch}"></span>
     Theme
@@ -71,24 +68,6 @@
         >
           <span class="swatch" style="background: {c.swatch}"></span>
           {c.label}
-        </button>
-      {/each}
-
-      <div class="divider"></div>
-
-      {#each modeOptions as m (m)}
-        <button
-          class="option"
-          class:active={m === themeState.pref}
-          role="menuitemradio"
-          aria-checked={m === themeState.pref}
-          onclick={() => {
-            themeState.pref = m
-            themeState.apply()
-            open = false
-          }}
-        >
-          {modeLabels[m]}
         </button>
       {/each}
     </div>
@@ -171,12 +150,6 @@
     background: var(--border);
     margin: 0 auto 8px;
     flex: none;
-  }
-
-  .divider {
-    height: 1px;
-    background: var(--border);
-    margin: 5px 3px;
   }
 
   .option {
