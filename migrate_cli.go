@@ -124,6 +124,18 @@ func migratedStores(cfg config.Config) []migratedStore {
 		// mounted, so the copy is readable at the destination and the
 		// key is not duplicated into it.
 		migratedStore{Name: "event_history", Path: historyDirectory(cfg), Dir: true},
+		// The router-backup vault (#394), a directory like tls and
+		// event_history above. backupVaultDirectory documents the same
+		// "resolved from the data directory unless overridden" contract
+		// History.Dir uses, so an operator who has pointed it at a
+		// separate mount (the SFTP drop box's realistic deployment) needs
+		// it either carried or, if outside Source, named in plan.Outside
+		// -- left off this list, it was neither: no copy, no warning, and
+		// the vault's encrypted generations were gone the moment the
+		// operator deleted the old data directory per this command's own
+		// instructions (#1071). vaultStoreName, not a new literal, so the
+		// name here and the one -backup/-restore use cannot drift apart.
+		migratedStore{Name: vaultStoreName, Path: backupVaultDirectory(cfg), Dir: true},
 		// Not a config field, so no reflection walk would ever find it;
 		// named here because losing it is the worst outcome of the whole
 		// operation. See this file's header comment.
@@ -158,6 +170,11 @@ var excludedFromMigration = map[string]string{
 	"Postgres.DSNFile": "a mounted secret carrying a database password. It is deliberately not in the " +
 		"data directory (storage.go's readDSNFile explains why it is a file at all), and copying a " +
 		"credential into a freshly created volume during a migration would spread it, not move it.",
+	"Snapshot.Dir": "the rotated warm-restart snapshots (#795), a directory like event_history above " +
+		"but -- unlike it -- deliberately not carried: a snapshot is derived, disposable state (see " +
+		"config.Snapshot's own doc comment) whose loss costs one cold start of re-learning counters, " +
+		"not the operator's custody data event_history holds. Leaving it behind is the same call " +
+		"migratedStores' event_history entry already documents making.",
 }
 
 // migrationPlan is everything the move needs, resolved and checked

@@ -9,14 +9,18 @@ import type { Flag, FlagType, Verdict } from './types'
 // needed here, unlike auth.svelte.test.ts. The judge*/undoVerdict tests
 // below (#638) are the exception: they exercise setFlagVerdict/
 // deleteFlagVerdict directly, so those two functions are mocked rather
-// than the whole module, keeping fetchFlags/setFlagVerdict etc. as the real
+// than the whole module, keeping setFlagVerdict etc. as the real
 // implementations for every other describe block in this file.
+// fetchFlags is mocked too, for the refresh()-vs-mutation race tests
+// (#1074) below -- everywhere else it's given a resolved value that
+// matches whatever .list already holds, so it stays a no-op.
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>()
-  return { ...actual, setFlagVerdict: vi.fn(), deleteFlagVerdict: vi.fn() }
+  return { ...actual, fetchFlags: vi.fn(), setFlagVerdict: vi.fn(), deleteFlagVerdict: vi.fn() }
 })
 
-import { deleteFlagVerdict, setFlagVerdict } from './api'
+import type { FlagsResponse } from './api'
+import { deleteFlagVerdict, fetchFlags, setFlagVerdict } from './api'
 import { buildCampaigns, extractSourceIp, flagsState } from './flags.svelte'
 
 let nextId = 1
@@ -44,6 +48,7 @@ beforeEach(() => {
   nextId = 1
   vi.mocked(setFlagVerdict).mockReset()
   vi.mocked(deleteFlagVerdict).mockReset()
+  vi.mocked(fetchFlags).mockReset()
 })
 
 describe('extractSourceIp', () => {
@@ -310,6 +315,117 @@ describe('FlagsState verdicts (#638, #640)', () => {
 
     expect(flagsState.list[0].verdictBy).toBe('alice')
     expect(setFlagVerdict).not.toHaveBeenCalled()
+  })
+})
+
+// #1074: refresh() replaces .list wholesale with new objects (see its
+// own doc comment on the `generation` field in flags.svelte.ts), while
+// judgeInvestigate/judgeAndClear/undoVerdict/clearAll mutate an object
+// captured from the old list across an await. A refresh already in
+// flight when one of those mutations lands used to be able to resolve
+// afterwards with its pre-mutation snapshot and stomp the optimistic
+// change -- the operator's undo/verdict/clear appeared to revert until
+// the next poll (docs/flakes.md's 'live-verdicts' entry).
+describe('refresh() racing an optimistic mutation (#1074)', () => {
+  function pendingFetch(): { resolve: (res: FlagsResponse) => void } {
+    let resolve!: (res: FlagsResponse) => void
+    vi.mocked(fetchFlags).mockReturnValue(new Promise<FlagsResponse>((r) => (resolve = r)))
+    return { resolve }
+  }
+
+  it('does not let a refresh in flight before the mutation revert it once both settle', async () => {
+    const original = flag('port_scan', '203.0.113.9', {
+      cleared: true,
+      verdict: 'checked',
+      verdictBy: 'alice',
+      verdictAt: 't',
+    })
+    flagsState.list = [original]
+
+    // Poll starts first and hangs -- its eventual response is the
+    // pre-mutation snapshot fetched before undoVerdict ran.
+    const { resolve } = pendingFetch()
+    const refreshPromise = flagsState.refresh()
+
+    vi.mocked(deleteFlagVerdict).mockResolvedValue(flag('port_scan', '203.0.113.9', { id: original.id, cleared: false }))
+    await flagsState.undoVerdict(original.id)
+    expect(flagsState.list[0].verdict).toBeUndefined() // optimistic reopen applied
+
+    resolve({
+      flags: [
+        flag('port_scan', '203.0.113.9', { id: original.id, cleared: true, verdict: 'checked', verdictBy: 'alice', verdictAt: 't' }),
+      ],
+      timeSeries: [],
+      baselinesWarming: undefined,
+    })
+    await refreshPromise
+
+    expect(flagsState.list[0].cleared).toBe(false)
+    expect(flagsState.list[0].verdict).toBeUndefined()
+    expect(flagsState.isUndoable(original.id)).toBe(false)
+  })
+
+  it('still applies a refresh that starts after the mutation has landed', async () => {
+    const original = flag('port_scan', '203.0.113.9', {
+      cleared: true,
+      verdict: 'checked',
+      verdictBy: 'alice',
+      verdictAt: 't',
+    })
+    flagsState.list = [original]
+    vi.mocked(deleteFlagVerdict).mockResolvedValue(flag('port_scan', '203.0.113.9', { id: original.id, cleared: false }))
+    await flagsState.undoVerdict(original.id)
+
+    const fresh = flag('critical_port', '198.51.100.4')
+    vi.mocked(fetchFlags).mockResolvedValue({ flags: [fresh], timeSeries: [], baselinesWarming: true })
+
+    await flagsState.refresh()
+
+    expect(flagsState.list).toEqual([fresh])
+    expect(flagsState.baselinesWarming).toBe(true)
+  })
+
+  // Review finding on the #1074 fix: the generation counter stops a
+  // refresh that *started before* a mutation from overwriting it, but a
+  // refresh that starts *after* the mutation bumped generation (so it
+  // passes its own gen check) and resolves *while the mutation's own
+  // network call is still pending* replaces .list with fresh objects,
+  // detaching the object the mutation captured. The mutation's post-await
+  // write then lands on that detached object, invisible to the UI.
+  it('does not let a refresh during the mutation swallow the mutation`s post-await write', async () => {
+    const original = flag('port_scan', '203.0.113.9', {
+      cleared: true,
+      verdict: 'checked',
+      verdictBy: 'alice',
+      verdictAt: 't',
+    })
+    flagsState.list = [original]
+
+    // undoVerdict's own request hangs...
+    let resolveDelete!: (f: Flag) => void
+    vi.mocked(deleteFlagVerdict).mockReturnValue(new Promise<Flag>((r) => (resolveDelete = r)))
+    const undoPromise = flagsState.undoVerdict(original.id)
+    expect(flagsState.list[0].verdict).toBeUndefined() // optimistic reopen applied
+
+    // ...a refresh starts after undoVerdict bumped generation (so its gen
+    // check passes) and resolves with the pre-undo snapshot before
+    // undoVerdict's own request does.
+    vi.mocked(fetchFlags).mockResolvedValue({
+      flags: [
+        flag('port_scan', '203.0.113.9', { id: original.id, cleared: true, verdict: 'checked', verdictBy: 'alice', verdictAt: 't' }),
+      ],
+      timeSeries: [],
+      baselinesWarming: undefined,
+    })
+    await flagsState.refresh()
+
+    // undoVerdict's request finally resolves with the server-confirmed undo.
+    resolveDelete(flag('port_scan', '203.0.113.9', { id: original.id, cleared: false }))
+    await undoPromise
+
+    const current = flagsState.list.find((f) => f.id === original.id)
+    expect(current?.cleared).toBe(false)
+    expect(current?.verdict).toBeUndefined()
   })
 })
 

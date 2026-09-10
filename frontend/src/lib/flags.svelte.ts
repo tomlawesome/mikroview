@@ -170,6 +170,20 @@ class FlagsState {
   // away and back (to `live`, say) still starts the list over.
   pinnedIds = $state<string[]>([])
 
+  // Bumped by refresh() before its fetch and by every optimistic
+  // mutation below, same requestId idiom as dossier.svelte.ts/
+  // ipLookup.svelte.ts (#1074). refresh() replaces `this.list` wholesale
+  // with new objects (see refresh() below), while judgeInvestigate/
+  // judgeAndClear/undoVerdict/clearAll mutate an object captured from
+  // the *old* list across an await. Without this, a refresh already in
+  // flight when one of those mutations lands can resolve afterwards
+  // with the pre-mutation snapshot it fetched and stomp the optimistic
+  // change -- the operator's undo/verdict/clear appears to revert until
+  // the next poll. refresh() only applies its result if this counter
+  // still reads what it captured before the fetch, so a mutation (or a
+  // newer refresh) landing in between makes it a no-op instead.
+  private generation = 0
+
   pin(id: string) {
     if (!this.pinnedIds.includes(id)) this.pinnedIds = [...this.pinnedIds, id]
   }
@@ -195,7 +209,12 @@ class FlagsState {
   provisionalCount = $derived(this.list.filter((f) => !f.cleared && f.provisional).length)
 
   async refresh() {
+    const gen = ++this.generation
     const res = await fetchFlags()
+    // A mutation (or a newer refresh) landed while this fetch was in
+    // flight -- its snapshot predates that change, so applying it now
+    // would revert it. Drop it; the next poll re-fetches current state.
+    if (gen !== this.generation) return
     this.list = res.flags
     this.timeSeries = res.timeSeries
     this.baselinesWarming = res.baselinesWarming
@@ -219,6 +238,7 @@ class FlagsState {
 
     const snapshot = touched.map((f) => ({ flag: f, clearedAt: f.clearedAt }))
     const now = new Date().toISOString()
+    this.generation++
     for (const f of touched) {
       f.cleared = true
       f.clearedAt = now
@@ -226,10 +246,30 @@ class FlagsState {
 
     try {
       await clearAllFlags()
+      // A refresh that started after the bump above (so it passed its own
+      // gen check) can still resolve while this request is in flight and
+      // replace this.list wholesale -- see the `generation` field's doc
+      // comment. The objects `touched` points at would then be detached
+      // from this.list, so re-find each by id in the *current* list
+      // before writing the confirmed state (a no-op if it's gone), and
+      // bump generation again so a refresh already past its gen check
+      // cannot land on top of this write afterwards.
+      this.generation++
+      for (const { flag } of snapshot) {
+        const current = this.list.find((f) => f.id === flag.id)
+        if (current) {
+          current.cleared = flag.cleared
+          current.clearedAt = flag.clearedAt
+        }
+      }
     } catch (err) {
+      this.generation++
       for (const { flag, clearedAt } of snapshot) {
-        flag.cleared = false
-        flag.clearedAt = clearedAt
+        const current = this.list.find((f) => f.id === flag.id)
+        if (current) {
+          current.cleared = false
+          current.clearedAt = clearedAt
+        }
       }
       throw err
     }
@@ -249,6 +289,23 @@ class FlagsState {
     return !!this.list.find((f) => f.id === id)?.verdict
   }
 
+  // Re-finds `id` in the *current* this.list and applies `fn` to it, or
+  // no-ops if it's gone. Every mutation below calls this right after its
+  // own network call resolves (both on success and on revert), because a
+  // refresh that starts after the mutation's pre-await generation bump
+  // (so it passes refresh()'s own gen check) can still resolve *while
+  // that network call is in flight* and replace this.list wholesale --
+  // see the `generation` field's doc comment. That detaches the object
+  // the mutation captured before its await, so writing straight onto it
+  // afterwards lands on an object the UI no longer shows. Bumping
+  // generation again here also stops a refresh that raced past its own
+  // gen check from landing on top of this write afterwards.
+  private applyToCurrent(id: string, fn: (flag: Flag) => void) {
+    this.generation++
+    const current = this.list.find((f) => f.id === id)
+    if (current) fn(current)
+  }
+
   // 'investigate' (#640): records the verdict without clearing the flag,
   // so it stays open while someone works on it -- optimistic like every
   // other mutation here, but setting the verdict fields instead of
@@ -262,19 +319,24 @@ class FlagsState {
     if (!flag || flag.verdict) return
 
     const prev = { verdict: flag.verdict, verdictBy: flag.verdictBy, verdictAt: flag.verdictAt }
+    this.generation++
     flag.verdict = 'investigate'
     flag.verdictBy = judgedBy
     flag.verdictAt = new Date().toISOString()
 
     try {
       const updated = await setFlagVerdict(id, 'investigate')
-      flag.verdict = updated.verdict
-      flag.verdictBy = updated.verdictBy
-      flag.verdictAt = updated.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.verdict = updated.verdict
+        current.verdictBy = updated.verdictBy
+        current.verdictAt = updated.verdictAt
+      })
     } catch (err) {
-      flag.verdict = prev.verdict
-      flag.verdictBy = prev.verdictBy
-      flag.verdictAt = prev.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.verdict = prev.verdict
+        current.verdictBy = prev.verdictBy
+        current.verdictAt = prev.verdictAt
+      })
       throw err
     }
   }
@@ -314,22 +376,27 @@ class FlagsState {
       verdictBy: flag.verdictBy,
       verdictAt: flag.verdictAt,
     }
+    this.generation++
     flag.cleared = true
     flag.clearedAt = new Date().toISOString()
 
     try {
       const updated = await setFlagVerdict(id, verdict)
-      flag.verdict = updated.verdict
-      flag.verdictBy = updated.verdictBy
-      flag.verdictAt = updated.verdictAt
-      flag.cleared = updated.cleared
-      flag.clearedAt = updated.clearedAt
+      this.applyToCurrent(id, (current) => {
+        current.verdict = updated.verdict
+        current.verdictBy = updated.verdictBy
+        current.verdictAt = updated.verdictAt
+        current.cleared = updated.cleared
+        current.clearedAt = updated.clearedAt
+      })
     } catch (err) {
-      flag.cleared = prev.cleared
-      flag.clearedAt = prev.clearedAt
-      flag.verdict = prev.verdict
-      flag.verdictBy = prev.verdictBy
-      flag.verdictAt = prev.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.cleared = prev.cleared
+        current.clearedAt = prev.clearedAt
+        current.verdict = prev.verdict
+        current.verdictBy = prev.verdictBy
+        current.verdictAt = prev.verdictAt
+      })
       throw err
     }
   }
@@ -355,6 +422,7 @@ class FlagsState {
       verdictBy: flag.verdictBy,
       verdictAt: flag.verdictAt,
     }
+    this.generation++
     flag.cleared = false
     flag.clearedAt = undefined
     flag.verdict = undefined
@@ -363,17 +431,21 @@ class FlagsState {
 
     try {
       const updated = await deleteFlagVerdict(id)
-      flag.cleared = updated.cleared
-      flag.clearedAt = updated.clearedAt
-      flag.verdict = updated.verdict
-      flag.verdictBy = updated.verdictBy
-      flag.verdictAt = updated.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.cleared = updated.cleared
+        current.clearedAt = updated.clearedAt
+        current.verdict = updated.verdict
+        current.verdictBy = updated.verdictBy
+        current.verdictAt = updated.verdictAt
+      })
     } catch (err) {
-      flag.cleared = prev.cleared
-      flag.clearedAt = prev.clearedAt
-      flag.verdict = prev.verdict
-      flag.verdictBy = prev.verdictBy
-      flag.verdictAt = prev.verdictAt
+      this.applyToCurrent(id, (current) => {
+        current.cleared = prev.cleared
+        current.clearedAt = prev.clearedAt
+        current.verdict = prev.verdict
+        current.verdictBy = prev.verdictBy
+        current.verdictAt = prev.verdictAt
+      })
       throw err
     }
   }

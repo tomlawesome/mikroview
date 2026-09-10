@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { compareMetrics, regressed } from './perf-compare.mjs'
+import { deckAvgMs } from './probe-perf.mjs'
 
 const DEFAULT = { pct: 0.3, absMs: 300 }
 const FRAME_P95 = { pct: 0.3, absMs: 8 }
@@ -99,5 +100,40 @@ describe('compareMetrics', () => {
     const { rows, failed } = compareMetrics(baseline, current)
     expect(failed).toBe(false)
     expect(rows.find((r) => r.name === 'longTasks.idle.totalMs').verdict).toBe('new')
+  })
+
+  // #1084: a deck that never renders used to average as NaN (numeric-
+  // only averaging in probe-perf.mjs), which compareMetrics silently
+  // skipped rather than flagging. deckAvgMs() now folds a timed-out
+  // sample in at the timeout ceiling, so the deck's wallAvgMs lands at
+  // the worst possible value and compares as a regression here.
+  it('flags a deck that never rendered (all-timeout) as regressed, not skipped', () => {
+    const current = structuredClone(baseline)
+    current.decks['The fall'].wallAvgMs = deckAvgMs(['>45000', '>45000', '>45000'], 45000)
+    const { rows, failed } = compareMetrics(baseline, current)
+    expect(failed).toBe(true)
+    expect(rows.find((r) => r.name === 'decks.The fall.wallAvgMs').verdict).toBe('regressed')
+  })
+})
+
+// #1084: probe-perf.mjs's per-deck average, exported so a timed-out
+// sample's contribution can be checked without driving a real browser.
+describe('deckAvgMs', () => {
+  it('averages numeric samples the same as before when nothing timed out', () => {
+    expect(deckAvgMs([1000, 900, 1100], 45000)).toBeCloseTo(1000)
+  })
+
+  it('counts a timed-out sample at the ceiling when mixed with numeric samples', () => {
+    // (1000 + 900 + 45000) / 3, not (1000 + 900) / 2 -- the timeout is
+    // not dropped from the average.
+    expect(deckAvgMs([1000, 900, '>45000'], 45000)).toBeCloseTo((1000 + 900 + 45000) / 3)
+  })
+
+  it('averages to the ceiling itself when every sample timed out', () => {
+    expect(deckAvgMs(['>45000', '>45000', '>45000'], 45000)).toBe(45000)
+  })
+
+  it('returns NaN for an empty sample list, same as the old behaviour', () => {
+    expect(Number.isNaN(deckAvgMs([], 45000))).toBe(true)
   })
 })

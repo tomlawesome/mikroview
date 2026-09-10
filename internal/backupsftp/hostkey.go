@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -57,7 +58,7 @@ func LoadOrGenerateHostKey(storeDir string) (ssh.Signer, error) {
 	if err := os.MkdirAll(storeDir, 0o700); err != nil {
 		return nil, fmt.Errorf("backupsftp: creating %s: %w", storeDir, err)
 	}
-	if err := os.WriteFile(path, pem.EncodeToMemory(pemBlock), 0o600); err != nil {
+	if err := persist.WriteFileAtomic(path, pem.EncodeToMemory(pemBlock), 0o600); err != nil {
 		return nil, fmt.Errorf("backupsftp: writing %s: %w", path, err)
 	}
 

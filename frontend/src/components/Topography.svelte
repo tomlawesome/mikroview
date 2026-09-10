@@ -1,3 +1,29 @@
+<script module lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
+  //
+  // #1090: one pass over the event buffer, building every tunnel
+  // interface's own count at once, rather than tunnelCards calling a
+  // per-interface filter (N full scans of the buffer for N tunnels).
+  // Pure and in the module script so it is both the component's own
+  // read and directly unit-testable (Topography.svelte.test.ts) without
+  // a render. An event counts once per interface it touches, matching
+  // the old `e.inInterface === iface || e.outInterface === iface` OR
+  // check: if in and out are the same interface, that is one count.
+  import type { ClientEvent } from '../lib/types'
+
+  export function tunnelEventCounts(events: readonly ClientEvent[]): Map<string, number> {
+    const counts = new Map<string, number>()
+    for (const e of events) {
+      const ifaces = new Set<string | undefined>([e.inInterface, e.outInterface])
+      for (const iface of ifaces) {
+        if (!iface) continue
+        counts.set(iface, (counts.get(iface) ?? 0) + 1)
+      }
+    }
+    return counts
+  }
+</script>
+
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   //
@@ -2850,7 +2876,10 @@
         appState.devices,
         zones,
         appState.events,
-        realityEdges(appState.events, policyState.edges, policyState.anyPushed),
+        // #1090: `observed` (above) already is this same call over the
+        // same three arguments -- reuse it instead of a second full
+        // pass over the buffer on every recompute.
+        observed,
         policyState.edges,
         policyState.anyPushed,
         primaryDevice?.id ?? null,
@@ -3573,11 +3602,11 @@
   // zonesState.tunnelOrder is what the lane row drops.
   const tunnelIfaces = $derived(zonesState.tunnelOrder)
 
-  /** One tunnel's own events in this window: what separates an API `up`
-   * that is carrying traffic from one that is lit and empty. */
-  function tunnelEventsOf(iface: string): number {
-    return appState.events.filter((e) => e.inInterface === iface || e.outInterface === iface).length
-  }
+  /** Every tunnel interface's own event count, in one pass over the
+   * buffer (#1090) -- what separates an API `up` that is carrying
+   * traffic from one that is lit and empty, read per-card below rather
+   * than re-scanned per card. */
+  const tunnelCounts = $derived.by(() => tunnelEventCounts(appState.events))
 
   /**
    * `wg0 · 10.99.0.0/24`, as drawn: the tunnel's own row in the pushed
@@ -3627,7 +3656,7 @@
   const tunnelCards = $derived.by((): TunnelCard[] =>
     tunnelIfaces.map((iface): TunnelCard => {
       const api = tunnelsState.list.find((t) => t.iface === iface) ?? null
-      const events = tunnelEventsOf(iface)
+      const events = tunnelCounts.get(iface) ?? 0
       // 'quiet' is mikroview's own reading on top of the API's
       // vocabulary; the state words themselves are the city's.
       const state = bridgeStateFor(api?.apiState ?? null, events)

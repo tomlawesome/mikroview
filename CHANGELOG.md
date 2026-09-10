@@ -16,6 +16,19 @@ rewritten.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-09-10
+
+The ratified concepts, built. Ten capability milestones since 0.4.0:
+the unified evaluation engine's detector authoring and tuning (M4), the
+topography with logging coverage (M5), the city (M6), RouterOS fidelity
+(M7), deployment and data custody (M8), the ratified surfaces including
+the fall as the landing page (M9), demo and gate reliability (M10),
+round-30 fidelity (M11), device identity and network lifecycle (M12) and
+detector authoring II with the conditions editor (M13). The entries
+below are the operator-visible changes, grouped as usual.
+
 ### Added
 
 - **"What is this thing?" now has an answer built from evidence you
@@ -1070,6 +1083,15 @@ rewritten.
   read even to migrate it -- a browser with an old `mikroview-theme`
   value in local storage now simply has an unread key. The colourway
   picker (Signal/Pulse/Nebula/Frequency/Mono) is unaffected.
+
+### Security
+
+- **Pre-release audit hardening.** The router-backup drop box rejects
+  out-of-range SFTP write offsets and recovers per connection; the
+  root-side quiet-host script caps a hold at one hour whatever the hold
+  file says; `POST /api/setup/commands` validates its fields and quotes
+  every value it templates into a RouterOS string. The audit's coverage
+  is in `docs/reviews/2026-09-10-v0.5.0.md`.
 
 ### Fixed
 

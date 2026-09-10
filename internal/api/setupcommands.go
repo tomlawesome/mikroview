@@ -3,7 +3,10 @@
 package api
 
 import (
+	"errors"
+	"net"
 	"net/http"
+	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/routeros"
 )
@@ -106,6 +109,10 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Address == "" {
 		http.Error(w, "address is required", http.StatusBadRequest)
+		return
+	}
+	if err := validateSetupCommandsRequest(req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -213,6 +220,189 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			BackupSchedule: commandStep{Commands: backupScheduleCommands},
 		},
 	})
+}
+
+// validateSetupCommandsRequest rejects any field whose value could change
+// the structure of the RouterOS commands routeros.CaTrustCommands,
+// SyslogCommands, PushScript/PushBlock and BackupScript assemble from it
+// (#1095): this endpoint is open to any signed-in user, and the rendered
+// commands are meant to be pasted into a router terminal unmodified, so a
+// '"', '\', ';', space or newline reaching one of those templates is
+// never a value worth rendering.
+func validateSetupCommandsRequest(req setupCommandsRequest) error {
+	if !validSetupAddress(req.Address) {
+		return errors.New("address must be a hostname or IP address, optionally with :port")
+	}
+	if !validSetupSyslogPort(req.SyslogPort) {
+		return errors.New("syslogPort must be empty or a number from 1 to 65535")
+	}
+	if !validSetupToken(req.Token) {
+		return errors.New("token must be printable ASCII with no quotes, backslashes or whitespace, up to 256 characters")
+	}
+	if !validSetupDevice(req.Device) {
+		return errors.New("device must be 1 to 64 characters from letters, digits, '.', '_' and '-'")
+	}
+	return nil
+}
+
+// maxSetupDeviceLen mirrors internal/auth/token.go's maxDeviceIDLen --
+// that constant is unexported, so it cannot be reused directly, but
+// nothing legitimate needs a longer device name than an ingest token's
+// own device scope already allows.
+const maxSetupDeviceLen = 64
+
+// validSetupDevice restricts Device to the charset internal/auth/token.go's
+// validDeviceID already accepts in practice for a real device -- letters,
+// digits, dot, underscore, hyphen -- narrower than validDeviceID itself,
+// which exists to police the token store rather than a value that is
+// about to sit bare inside routeros.BackupScript's user=/dst-path=
+// placements (#1095). Empty is fine: Device is optional, and
+// handleSetupCommands already treats "" as "render no backup script."
+func validSetupDevice(device string) bool {
+	if device == "" {
+		return true
+	}
+	if len(device) > maxSetupDeviceLen {
+		return false
+	}
+	// An auto-discovered device's id is its source address
+	// (internal/device.Registry.Resolve), so an IPv6 id carries colons
+	// the charset below does not; an IP literal is safe bare in every
+	// placement the templates use.
+	if net.ParseIP(device) != nil {
+		return true
+	}
+	for i := 0; i < len(device); i++ {
+		c := device[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.' || c == '_' || c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// maxSetupTokenLen caps Token well above anything internal/auth ever
+// issues, while still keeping an absurd value out of the rendered
+// commands (#1095).
+const maxSetupTokenLen = 256
+
+// validSetupToken restricts Token to printable ASCII with no quote,
+// backslash or whitespace -- the charset both places Token reaches in
+// internal/routeros/commands.go need to stay well-formed: BackupScript's
+// password=\"...\" wrapper, and PushBlock's bare Bearer header value.
+func validSetupToken(token string) bool {
+	if token == "" {
+		return true
+	}
+	if len(token) > maxSetupTokenLen {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if c <= ' ' || c >= 0x7f || c == '"' || c == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
+// validSetupPortNumber reports whether s is exactly the digits of a port
+// number from 1 to 65535 -- no sign, no leading/trailing junk.
+func validSetupPortNumber(s string) bool {
+	if s == "" || len(s) > 5 {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n >= 1 && n <= 65535
+}
+
+// validSetupSyslogPort accepts SyslogPort empty (handleSetupCommands
+// falls back to the running configuration), a bare port number, or a
+// listen address whose port is one: GET /api/setup/status's own
+// Instance.SyslogPort -- the value the wizard round-trips back here
+// unless the operator overrides it -- is listen.syslogTls verbatim
+// (":6514" shipped, "127.0.0.1:16823" under scripts/live-env.sh). Only
+// the port reaches a command (routeros.PortOf), so the host part need
+// only be well-formed.
+func validSetupSyslogPort(s string) bool {
+	if s == "" {
+		return true
+	}
+	if host, port, err := net.SplitHostPort(s); err == nil {
+		if host != "" && net.ParseIP(host) == nil && !validSetupHostname(host) {
+			return false
+		}
+		return validSetupPortNumber(port)
+	}
+	return validSetupPortNumber(s)
+}
+
+// validSetupHostLabel reports whether label is a valid hostname label:
+// letters, digits and hyphens, never leading or trailing with one.
+func validSetupHostLabel(label string) bool {
+	if label == "" || len(label) > 63 {
+		return false
+	}
+	if label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(label); i++ {
+		c := label[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validSetupHostname reports whether host is a dot-separated run of
+// validSetupHostLabel labels.
+func validSetupHostname(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !validSetupHostLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+// validSetupAddress reports whether s is a hostname or IP literal,
+// optionally with a :port suffix -- the same address forms
+// routeros.Hostname's own doc comment handles (bare host, host:port,
+// [ipv6]:port, and a bare IPv6 literal with no port and so no brackets).
+// net.SplitHostPort does the bracket/port splitting so this does not
+// have to reimplement it; what is left over is judged as either an IP
+// literal or a hostname.
+func validSetupAddress(s string) bool {
+	if s == "" {
+		return false
+	}
+	host := s
+	if h, port, err := net.SplitHostPort(s); err == nil {
+		if !validSetupPortNumber(port) {
+			return false
+		}
+		host = h
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	return validSetupHostname(host)
 }
 
 // defaultDialect is the dialect used when nothing else picks one -- see

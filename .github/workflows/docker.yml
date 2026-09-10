@@ -3,8 +3,11 @@ name: docker
 # dev deliberately publishes nothing -- keeps dev cheap/fast, and a
 # moving-target image built from unreviewed dev work isn't something
 # worth shipping to the registry. preview publishes the actual release
-# candidate -- see ci.yml's container/security jobs, which both run
-# on preview.
+# candidate -- see .gitlab-ci.yml's test:container job and its
+# security stage (security:semgrep, security:gosec,
+# security:govulncheck, security:fuzz, security:npm-audit,
+# security:licence-policy, security:gitleaks, security:trivy-fs),
+# which carry that work now that ci.yml is retired.
 #
 # main takes one of two paths, chosen by detect-release based on
 # whether VERSION is already tagged:

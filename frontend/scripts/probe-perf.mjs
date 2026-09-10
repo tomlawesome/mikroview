@@ -34,7 +34,14 @@
 
 import fs from 'node:fs'
 import { chromium } from 'playwright'
-import { dismissSetupWizard } from './live-browser.mjs'
+// Dynamic, not a static import: live-browser.mjs has its own
+// unconditional MV_URL check that process.exit(2)s at module load
+// (scripts/live-browser.mjs:25-27). A static import here ran that
+// check the moment anything imported probe-perf.mjs -- including
+// perf-compare.test.mjs importing deckAvgMs, killing the whole test
+// process before a single test ran. Deferred into main() below, where
+// it is actually needed, so importing this file for its exports never
+// touches live-browser.mjs at all.
 
 // Mirrors live-browser.mjs's private SCENES table (rail label -> deck
 // card, plus the docket's tab). Reimplemented locally, not imported,
@@ -82,26 +89,21 @@ async function rollTo(page, label, timeoutMs = 60000) {
   return Date.now() - t0
 }
 
-const URL_BASE = process.env.MV_URL
-const USER = process.env.MV_USER
-const PASS = process.env.MV_PASS
-if (!URL_BASE || !USER || !PASS) {
-  console.error('MV_URL/MV_USER/MV_PASS unset -- source the demo credentials file first.')
-  process.exit(2)
-}
-
-const argv = process.argv.slice(2)
-const jsonFlagIdx = argv.indexOf('--json')
-const JSON_PATH = jsonFlagIdx === -1 ? null : argv[jsonFlagIdx + 1]
-if (jsonFlagIdx !== -1 && !JSON_PATH) {
-  console.error('--json needs a path')
-  process.exit(2)
-}
+// Read at import time only when this file is the entry point, not when
+// perf-compare.test.mjs imports it for deckAvgMs -- a test run has none
+// of MV_URL/MV_USER/MV_PASS set, and the old unconditional checks below
+// used to process.exit(2) on module load before a single test ran.
+let URL_BASE, USER, PASS, JSON_PATH
 
 const ROLL_LABELS = ['The fall', 'Topography', 'Metrics', 'Stream', 'Flags', 'Entities', 'Settings']
 const ROUNDS = 3
 const SCROLL_MS = 3000
 const IDLE_MS = 5000
+// The ceiling a timed-out rollTo() is deemed to have taken. Used both
+// as the per-call Playwright timeout and, per #1084, as the value a
+// timed-out sample contributes to deckAvgMs -- a roll that never
+// settles is the slowest possible outcome, not a missing measurement.
+const ROLL_TIMEOUT_MS = 45000
 
 // Installed before any page script runs (addInitScript), so it survives
 // this SPA's one real navigation and stays available for every phase.
@@ -223,6 +225,20 @@ function summarizeLongTasks(tasks, label) {
   return { total }
 }
 
+// Averages one deck's per-round rollTo() samples. `times` is a mix of
+// numbers (settled, wall-clock ms) and '>${timeoutMs}' strings (rollTo
+// threw -- see the catch in main()'s roll loop). Per #1084, a timed-out
+// sample is not dropped: it counts at timeoutMs, the worst-case bound
+// rollTo was given, so a deck that never renders averages as the
+// slowest possible deck rather than as NaN (numeric-only averaging
+// silently vanished it from perf-compare.mjs's comparison). Exported
+// for perf-compare.test.mjs; empty `times` returns NaN, same as before.
+export function deckAvgMs(times, timeoutMs) {
+  if (!times.length) return NaN
+  const values = times.map((t) => (typeof t === 'number' ? t : timeoutMs))
+  return values.reduce((s, v) => s + v, 0) / values.length
+}
+
 // Sign in, and if the door is not the one this probe expects, say what
 // was on the screen instead of what selector was missing (#1024).
 //
@@ -300,6 +316,7 @@ async function main() {
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
   await page.waitForSelector('#main-content', { timeout: 15000 })
+  const { dismissSetupWizard } = await import('./live-browser.mjs')
   await dismissSetupWizard(page)
   await rollTo(page, 'The fall')
 
@@ -328,13 +345,13 @@ async function main() {
       let elapsed
       let timedOut = false
       try {
-        elapsed = await rollTo(page, label, 45000)
+        elapsed = await rollTo(page, label, ROLL_TIMEOUT_MS)
       } catch (err) {
         // A roll that never settles is itself the finding -- record it
         // as a lower bound rather than aborting the whole probe.
-        elapsed = 45000
+        elapsed = ROLL_TIMEOUT_MS
         timedOut = true
-        console.log(`  !! ${label}: did not settle within 45000ms (${err.message.split('\n')[0]})`)
+        console.log(`  !! ${label}: did not settle within ${ROLL_TIMEOUT_MS}ms (${err.message.split('\n')[0]})`)
       }
       const after = await metricsMap(cdp)
       rollTimes.get(label).push(timedOut ? `>${elapsed}` : elapsed)
@@ -347,12 +364,13 @@ async function main() {
 
   const rollProfile = (await cdp.send('Profiler.stop')).profile
 
-  const deckAvgMs = {}
+  const deckAvg = {}
+  const timedOutDecks = []
   for (const label of ROLL_LABELS) {
     const times = rollTimes.get(label)
-    const numeric = times.filter((t) => typeof t === 'number')
-    const avg = numeric.length ? numeric.reduce((s, v) => s + v, 0) / numeric.length : NaN
-    deckAvgMs[label] = avg
+    const avg = deckAvgMs(times, ROLL_TIMEOUT_MS)
+    deckAvg[label] = avg
+    if (times.length && times.every((t) => typeof t !== 'number')) timedOutDecks.push(label)
     const sums = rollMetricSums.get(label)
     const perRoll = DURATION_METRICS.map((m) => `${m} ${fmt(sums[m] / ROUNDS)}ms`).join(', ')
     console.log(`  ${label.padEnd(12)}: wall ${times.map((t) => t + 'ms').join(', ')} (avg ${fmt(avg)}ms) | ${perRoll}`)
@@ -414,7 +432,7 @@ async function main() {
     const summary = {
       schema: 1,
       commit: mvCommit,
-      decks: Object.fromEntries(ROLL_LABELS.map((label) => [label, { wallAvgMs: deckAvgMs[label] }])),
+      decks: Object.fromEntries(ROLL_LABELS.map((label) => [label, { wallAvgMs: deckAvg[label] }])),
       longTasks: {
         rolls: { totalMs: rollLongTaskStats.total },
         scroll: { totalMs: scrollLongTaskStats.total },
@@ -424,9 +442,41 @@ async function main() {
     }
     fs.writeFileSync(JSON_PATH, JSON.stringify(summary, null, 2) + '\n')
   }
+
+  // A deck that never rendered in any round is a failure, not a
+  // measurement -- deckAvgMs() above already folds it into the average
+  // at the timeout ceiling so perf-compare.mjs sees it as the slowest
+  // possible result, but the probe itself must also refuse to pass
+  // silently (#1084). The JSON is written first so the artifact still
+  // captures what happened.
+  if (timedOutDecks.length) {
+    console.error(`probe-perf: ${timedOutDecks.join(', ')} never rendered within ${ROLL_TIMEOUT_MS}ms in any round -- failing rather than reporting a measurement.`)
+    process.exitCode = 1
+  }
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+// Skipped when imported for its exports (perf-compare.test.mjs does
+// exactly that, for deckAvgMs) -- only runs as a probe when invoked
+// directly as a script, matching perf-compare.mjs's own guard.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  URL_BASE = process.env.MV_URL
+  USER = process.env.MV_USER
+  PASS = process.env.MV_PASS
+  if (!URL_BASE || !USER || !PASS) {
+    console.error('MV_URL/MV_USER/MV_PASS unset -- source the demo credentials file first.')
+    process.exit(2)
+  }
+
+  const argv = process.argv.slice(2)
+  const jsonFlagIdx = argv.indexOf('--json')
+  JSON_PATH = jsonFlagIdx === -1 ? null : argv[jsonFlagIdx + 1]
+  if (jsonFlagIdx !== -1 && !JSON_PATH) {
+    console.error('--json needs a path')
+    process.exit(2)
+  }
+
+  main().catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })
+}
