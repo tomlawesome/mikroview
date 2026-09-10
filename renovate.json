@@ -1,6 +1,10 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
+  "description": [
+    "The dependency dashboard is off (owner, 2026-09-10). It is a bot-written issue with no acceptance criteria that never reaches a done state, so it sits in a milestone that can then never report as finished, and it is stale between runs. Turning it off changes nothing about what Renovate watches or raises: the merge requests still arrive. ai/orbit turned it off on 2026-09-08 for the same reason; this matches it."
+  ],
+  "dependencyDashboard": false,
   "baseBranches": ["dev"],
   "platformAutomerge": false,
   "automerge": false,
