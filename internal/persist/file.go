@@ -178,49 +178,11 @@ func (b *FileBackend) Save(ctx context.Context, payload []byte, expect int64) (i
 	// hypothetical: it is the recovery workflow docs/configuration.md
 	// documents, `docker compose exec ... -recover-admin-account`
 	// against a running server.
-	f, err := os.CreateTemp(dir, filepath.Base(b.path)+".tmp-*")
-	if err != nil {
+	// The dance itself lives in WriteFileAtomic so the vault and the SFTP
+	// host key share it; the unique temp name and the fsync-before-rename
+	// are what the two comments above and in WriteFileAtomic explain.
+	if err := WriteFileAtomic(b.path, payload, 0o600); err != nil {
 		return 0, err
-	}
-	tmp := f.Name()
-	cleanup := func() {
-		f.Close()
-		os.Remove(tmp)
-	}
-	// CreateTemp already uses 0600; being explicit keeps that true if
-	// its documented mode ever changes, since these bytes are secrets.
-	if err := f.Chmod(0o600); err != nil {
-		cleanup()
-		return 0, err
-	}
-	if _, err := f.Write(payload); err != nil {
-		cleanup()
-		return 0, err
-	}
-	// Rename is atomic with respect to *ordering*, not durability: a
-	// crash can leave the new name visible while the payload's blocks
-	// are still only in page cache, which publishes a zero-length or
-	// short document. Syncing the file before the rename, and the
-	// directory after it, is what makes "atomically replaced" true
-	// across a power loss rather than only across a concurrent reader.
-	if err := f.Sync(); err != nil {
-		cleanup()
-		return 0, err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return 0, err
-	}
-	if err := os.Rename(tmp, b.path); err != nil {
-		os.Remove(tmp)
-		return 0, err
-	}
-	if d, err := os.Open(dir); err == nil {
-		// Best effort: some filesystems refuse to sync a directory, and
-		// a failure here costs durability of the rename, not
-		// correctness of the bytes.
-		_ = d.Sync()
-		_ = d.Close()
 	}
 
 	return contentVersion(payload), nil
