@@ -3,6 +3,9 @@ name: live-check image
 # Builds the image the live-check gate runs in on a CI runner, and
 # publishes it to this repo's own package namespace.
 #
+# The gate itself uses the image .gitlab-ci.yml's gate:image job builds
+# from live-check.Dockerfile; this GHCR build is the public mirror copy.
+#
 # Separate from docker.yml on purpose. That workflow publishes the
 # product -- distroless, nonroot, signed, promoted by digest through
 # preview to main. This one publishes a toolchain: Go, Node and
