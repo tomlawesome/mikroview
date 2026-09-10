@@ -3,7 +3,7 @@
 package geoip
 
 import (
-	"net"
+	"net/netip"
 	"testing"
 )
 
@@ -43,9 +43,32 @@ func TestIsPublic(t *testing.T) {
 		{"0.0.0.0", false},
 	}
 	for _, c := range cases {
-		ip := net.ParseIP(c.ip)
+		ip, err := netip.ParseAddr(c.ip)
+		if err != nil {
+			t.Fatalf("netip.ParseAddr(%s): %v", c.ip, err)
+		}
 		if got := isPublic(ip); got != c.want {
 			t.Errorf("isPublic(%s) = %v, want %v", c.ip, got, c.want)
+		}
+	}
+
+	// An IPv4-in-IPv6 address is the same host as its IPv4 form, so it
+	// must classify the same way. netip keeps the two distinct where
+	// net.IP did not, so Country unmaps before asking (#1081).
+	for _, c := range []struct {
+		ip   string
+		want bool
+	}{
+		{"::ffff:8.8.8.8", true},
+		{"::ffff:192.168.1.1", false},
+		{"::ffff:127.0.0.1", false},
+	} {
+		ip, err := netip.ParseAddr(c.ip)
+		if err != nil {
+			t.Fatalf("netip.ParseAddr(%s): %v", c.ip, err)
+		}
+		if got := isPublic(ip.Unmap()); got != c.want {
+			t.Errorf("isPublic(%s unmapped) = %v, want %v", c.ip, got, c.want)
 		}
 	}
 }
