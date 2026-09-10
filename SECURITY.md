@@ -631,7 +631,8 @@ damage a hostile or misbehaving LAN device can do:
 ## Reporting a vulnerability
 
 This is a small, personally-maintained project without a formal
-disclosure program. If you find a security issue, please open a GitHub
-issue describing it — for anything you'd rather not post publicly first,
-open a minimal issue asking for a private contact channel instead of
-including details in it.
+disclosure program. If you find a security issue, report it privately
+through GitHub's vulnerability reporting for this repository:
+<https://github.com/tomlawesome/mikroview/security/advisories/new>.
+Only the maintainer sees it until a fix is out. Please don't post
+details anywhere public first.
