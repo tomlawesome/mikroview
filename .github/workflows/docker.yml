@@ -123,6 +123,12 @@ jobs:
       packages: write
       id-token: write        # keyless signing
       attestations: write
+    env:
+      # The tag reaches every `run:` step through this variable, never as
+      # `${{ github.ref_name }}` inline -- inline, a crafted tag name would
+      # be pasted into the shell as code (semgrep run-shell-injection).
+      VERSION: ${{ github.ref_name }}
+      IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -131,8 +137,8 @@ jobs:
       - name: Check the tag matches VERSION
         run: |
           want="v$(tr -d '[:space:]' < VERSION)"
-          if [ "${{ github.ref_name }}" != "$want" ]; then
-            echo "::error::tag '${{ github.ref_name }}' but VERSION says '$want' -- tag the commit whose VERSION matches, or bump VERSION first"
+          if [ "$VERSION" != "$want" ]; then
+            echo "::error::tag '$VERSION' but VERSION says '$want' -- tag the commit whose VERSION matches, or bump VERSION first"
             exit 1
           fi
 
@@ -166,7 +172,7 @@ jobs:
       # image just built, and before `latest` points at it.
       - name: Smoke-test the image that will become latest
         run: |
-          docker run -d --name release-test             -p 8080:8080             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          docker run -d --name release-test             -p 8080:8080             $IMAGE:$VERSION
           for attempt in $(seq 1 20); do
             if curl -k --fail --silent --show-error https://127.0.0.1:8080/api/healthz >/dev/null; then
               echo "healthy"
@@ -181,8 +187,8 @@ jobs:
 
       - name: Verify the binary reports the release version
         run: |
-          got="$(docker run --rm --entrypoint /mikroview             ghcr.io/${{ github.repository }}:${{ github.ref_name }} -version)"
-          want="${{ github.ref_name }}"
+          got="$(docker run --rm --entrypoint /mikroview             $IMAGE:$VERSION -version)"
+          want="$VERSION"
           echo "binary reports: $got"
           if [ "$got" != "$want" ]; then
             echo "::error::binary reports '$got' but this release is '$want'"
@@ -191,14 +197,14 @@ jobs:
 
       - name: Move latest to the tested release
         run: |
-          src="ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
-          docker buildx imagetools create --tag "ghcr.io/${{ github.repository }}:latest" "$src"
+          src="$IMAGE:$VERSION"
+          docker buildx imagetools create --tag "$IMAGE:latest" "$src"
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign the release
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "ghcr.io/${{ github.repository }}@${DIGEST}"
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
