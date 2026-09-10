@@ -29,7 +29,22 @@
     // internal/naming.Resolver.Host); '' for ports and rules.
     device = '',
     label,
-  }: { type: EditableTokenType; value: string; device?: string; label: string } = $props()
+    // Optional pre-computed nameEditorState.available, so a caller that
+    // already reads it once (EventRow's editAvailable, hoisted for #1070)
+    // can pass the result instead of every instance independently
+    // re-subscribing to the same getter -- up to four per row, times
+    // MAX_RENDERED_ROWS. Omitted for standalone use (EventDetailSheet),
+    // which falls back to reading the store itself, unchanged.
+    available = undefined,
+  }: {
+    type: EditableTokenType
+    value: string
+    device?: string
+    label: string
+    available?: boolean
+  } = $props()
+
+  const shown = $derived(available ?? nameEditorState.available)
 
   // No bind:this / $state for the element: a click handler's own
   // currentTarget already is the button, so capturing it separately
@@ -46,7 +61,7 @@
   }
 </script>
 
-{#if nameEditorState.available}
+{#if shown}
   <button
     type="button"
     class="edit-btn"
