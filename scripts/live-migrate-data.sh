@@ -70,8 +70,14 @@ stop() {
 
 echo "== migrate-data, against a real instance"
 
-( cd frontend && npm run build >/dev/null 2>&1 )
-rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/
+# The embedded frontend only needs to exist for the build; rebuild it
+# only when it's genuinely missing, since run-live-scripts.sh runs these
+# checks alphabetically and live-logspam-check.sh or live-cert-reload.sh
+# may already have built it (#1091).
+if [ ! -f web/dist/index.html ]; then
+  ( cd frontend && npm run build >/dev/null 2>&1 )
+  rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/
+fi
 go build -buildvcs=false -o "$DIR/mikroview" .
 
 mkdir -p "$SRC"
