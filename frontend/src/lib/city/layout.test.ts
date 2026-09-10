@@ -62,6 +62,51 @@ describe('city layout: the ground plan', () => {
     expect(lan.more).toBe(3)
   })
 
+  it('counts the zones a router has beyond its five slots as moreZones, and leaves them off the map (#1073)', () => {
+    const zone = (id: string) => ({
+      id,
+      name: id,
+      cidr: null,
+      hosts: [],
+      hostCount: 0,
+      eventCount: 0,
+      routerId: 'hapax3',
+      coverage: 'dark' as const,
+      dark: true,
+    })
+    const input = mockupEstate()
+    // hapax3 already owns two zones (wlan-wsh, wlan-cams); four more
+    // brings it to six, one past BOROUGH_SLOTS' five.
+    input.zones.push(zone('extra-1'), zone('extra-2'), zone('extra-3'), zone('extra-4'))
+    const g = layoutGround(input)
+    const second = g.boroughs.find((b) => b.routerId === 'hapax3')!
+    expect(second.districtIds).toHaveLength(5)
+    expect(second.moreZones).toBe(1)
+    expect(g.districts.some((d) => d.id === 'extra-4')).toBe(false)
+  })
+
+  it('with exactly five zones, a router places every one and moreZones is 0', () => {
+    const zone = (id: string) => ({
+      id,
+      name: id,
+      cidr: null,
+      hosts: [],
+      hostCount: 0,
+      eventCount: 0,
+      routerId: 'hapax3',
+      coverage: 'dark' as const,
+      dark: true,
+    })
+    const input = mockupEstate()
+    // hapax3 starts with two (wlan-wsh, wlan-cams); three more makes five.
+    input.zones.push(zone('extra-1'), zone('extra-2'), zone('extra-3'))
+    const g = layoutGround(input)
+    const second = g.boroughs.find((b) => b.routerId === 'hapax3')!
+    expect(second.districtIds).toHaveLength(5)
+    expect(second.moreZones).toBe(0)
+    expect(g.districts.some((d) => d.id === 'extra-3')).toBe(true)
+  })
+
   it('puts the second router in its own borough down the map', () => {
     expect(ground.boroughs).toHaveLength(2)
     const [first, second] = ground.boroughs

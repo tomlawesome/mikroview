@@ -147,6 +147,10 @@ export interface Borough {
   districtIds: string[]
   /** Ground bounds of everything the router owns, for framing. */
   bounds: { u0: number; u1: number; v0: number; v1: number }
+  /** Zones this router owns beyond the fixed slots (#1073): the same
+   * convention as a district's own `more` for hosts it could not draw --
+   * counted, never silently dropped. */
+  moreZones: number
 }
 
 /** Road verdict, the mockup's own letters: accept, drop (dies at the
