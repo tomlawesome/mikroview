@@ -38,6 +38,7 @@
   import { zonesState } from '../lib/zones.svelte'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
+  import { ariaSort as sortAriaSort } from '../lib/tableSort'
   import { formatHM, formatRelative } from '../lib/format'
   import { nightlySummary, windowLabel } from '../lib/watchWindow'
   import { topologyNavState, type PendingWatchDraft } from '../lib/topologyNav.svelte'
@@ -876,8 +877,7 @@
   }
 
   function wtAriaSort(key: WatchTableSortKey): 'ascending' | 'descending' | 'none' {
-    if (wtSortKey !== key) return 'none'
-    return wtSortDir === 'asc' ? 'ascending' : 'descending'
+    return sortAriaSort({ key: wtSortKey, dir: wtSortDir }, key)
   }
 
   type WatchRow = {
