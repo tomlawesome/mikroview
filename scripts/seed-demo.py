@@ -1365,6 +1365,30 @@ def cmd_entities(args):
 DEMO_USER_PASSWORD = "atlas-review-user-2026"
 DEMO_VIEWER_PASSWORD = "atlas-review-viewer-2026"
 
+SEEDED_ACCOUNTS_DIR = "/tmp/mikroview-atlas-demo"
+SEEDED_ACCOUNTS_FILE = "seeded-accounts.txt"
+
+
+def _write_seeded_accounts(dir_path=SEEDED_ACCOUNTS_DIR):
+    """Write the demo accounts' passwords to a local, uncommitted reference
+    file next to the admin's own credentials.txt, same convention. Never
+    printed. `dir_path` is a parameter (rather than only the module-level
+    constant) so tests can point it at a throwaway tmp dir instead of the
+    real /tmp target.
+
+    #1072: this used to just `open()` the file directly, but nothing ever
+    created `dir_path`, so the write always raised FileNotFoundError --
+    caught and printed to stderr, then ignored. Create the directory
+    first, and lock both it and the file down since they hold seeded
+    passwords."""
+    os.makedirs(dir_path, exist_ok=True)
+    os.chmod(dir_path, 0o700)
+    ref = os.path.join(dir_path, SEEDED_ACCOUNTS_FILE)
+    with open(ref, "w") as f:
+        f.write(f"reviewer(user)={DEMO_USER_PASSWORD}\nobserver(viewer)={DEMO_VIEWER_PASSWORD}\n")
+    os.chmod(ref, 0o600)
+    return ref
+
 
 def cmd_accounts(args):
     api = API(args.url, args.user, args.password)
@@ -1382,13 +1406,11 @@ def cmd_accounts(args):
             raise RuntimeError(f"create {username}: {r.status_code} {r.text[:300]}")
     # Never printed: written once to a local, uncommitted reference file
     # next to the admin's own credentials.txt, same convention.
-    ref = "/tmp/mikroview-atlas-demo/seeded-accounts.txt"
     try:
-        with open(ref, "w") as f:
-            f.write(f"reviewer(user)={DEMO_USER_PASSWORD}\nobserver(viewer)={DEMO_VIEWER_PASSWORD}\n")
+        ref = _write_seeded_accounts()
         print(f"credentials written to {ref} (not printed, not committed)")
     except OSError as e:
-        print(f"could not write {ref}: {e}", file=sys.stderr)
+        print(f"could not write {SEEDED_ACCOUNTS_DIR}/{SEEDED_ACCOUNTS_FILE}: {e}", file=sys.stderr)
 
 
 def cmd_watchlist(args):
