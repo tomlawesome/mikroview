@@ -236,3 +236,75 @@ func TestBackupScriptEmbedsTheRealDevicePerFile(t *testing.T) {
 		t.Errorf("BackupScript did not use the device name in both destination paths:\n%s", got)
 	}
 }
+
+// TestQuoteEscapesBackslashAndQuote pins quote's own contract: backslash
+// escaped first, then quote -- the order that keeps a value's own
+// backslashes from swallowing the quote-escape that follows them.
+func TestQuoteEscapesBackslashAndQuote(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"plain", "plain"},
+		{`a"b`, `a\"b`},
+		{`a\b`, `a\\b`},
+		{`a\"b`, `a\\\"b`},
+		{`""`, `\"\"`},
+	} {
+		if got := quote(tc.in); got != tc.want {
+			t.Errorf("quote(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// unescapedQuoteCount counts the '"' runes in s that are not part of a
+// \" escape sequence -- the quotes that actually matter to the RouterOS
+// parser reading the surrounding block, as opposed to ones a builder has
+// escaped out of the way. Used below to check that a builder quoting a
+// value never changes how many structurally-significant quotes its
+// output carries, regardless of what the value itself contains.
+func unescapedQuoteCount(s string) int {
+	s = strings.ReplaceAll(s, `\\`, "")
+	s = strings.ReplaceAll(s, `\"`, "")
+	return strings.Count(s, `"`)
+}
+
+// TestCaTrustCommandsEscapesQuotedAddress covers #1095: address lands
+// inside CaTrustCommands' only quoted string (the fetch url=), so a
+// value carrying '"' or '\' must come out escaped rather than closing
+// that string early.
+func TestCaTrustCommandsEscapesQuotedAddress(t *testing.T) {
+	benign := CaTrustCommands("192.0.2.10:8080", "a")
+	tricky := CaTrustCommands(`evil.example"; /system reset\`, "a")
+	if !strings.Contains(tricky, `evil.example\"; /system reset\\`) {
+		t.Errorf("CaTrustCommands did not escape the address:\n%s", tricky)
+	}
+	if got, want := unescapedQuoteCount(tricky), unescapedQuoteCount(benign); got != want {
+		t.Errorf("CaTrustCommands unescaped quote count = %d, want %d (same structure as a benign address):\n%s", got, want, tricky)
+	}
+}
+
+// TestPushBlockEscapesQuotedAddress covers #1095's other quoted-address
+// spot: the /tool fetch url= in the ingest push block.
+func TestPushBlockEscapesQuotedAddress(t *testing.T) {
+	benign := PushBlock("192.0.2.10:8080", "tok", "arp", "a")
+	tricky := PushBlock(`evil.example"; /system reset\`, "tok", "arp", "a")
+	if !strings.Contains(tricky, `evil.example\"; /system reset\\`) {
+		t.Errorf("PushBlock did not escape the address:\n%s", tricky)
+	}
+	if got, want := unescapedQuoteCount(tricky), unescapedQuoteCount(benign); got != want {
+		t.Errorf("PushBlock unescaped quote count = %d, want %d (same structure as a benign address):\n%s", got, want, tricky)
+	}
+}
+
+// TestBackupScriptEscapesQuotedToken covers #1095's password=\"...\"
+// spot: BackupScript's hand-written quote wrapper around token must
+// route through the same escaping quote gives every other quoted value,
+// so a token carrying '"' or '\' cannot break out of it.
+func TestBackupScriptEscapesQuotedToken(t *testing.T) {
+	benign := BackupScript("10.0.40.5", "47022", "rb5009", "tok-123", "a")
+	tricky := BackupScript("10.0.40.5", "47022", "rb5009", `tok"; /system reset\`, "a")
+	if !strings.Contains(tricky, `password=\"tok\"; /system reset\\\"`) {
+		t.Errorf("BackupScript did not escape the token:\n%s", tricky)
+	}
+	if got, want := unescapedQuoteCount(tricky), unescapedQuoteCount(benign); got != want {
+		t.Errorf("BackupScript unescaped quote count = %d, want %d (same structure as a benign token):\n%s", got, want, tricky)
+	}
+}
