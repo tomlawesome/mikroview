@@ -19,7 +19,7 @@ import (
 // Watchlist's three stores missing from every backup, no error, no log
 // line). A list of the same shape has the same failure available to it,
 // so it gets the same guard: walk config.Config by reflection, and
-// require every string field named *Path or *File to be either carried
+// require every string field named *Path, *File, or *Dir to be either carried
 // by migratedStores or listed with a reason on excludedFromMigration.
 //
 // Wider than TestBackupCoversAllConfigPathFields, which walks *Path
@@ -34,7 +34,7 @@ func TestMigrationCoversAllConfigPathFields(t *testing.T) {
 	markers, cfg := markConfigPathFields()
 
 	if len(markers) == 0 {
-		t.Fatal("test setup: reflection found no *Path/*File fields on config.Config -- the walk is broken")
+		t.Fatal("test setup: reflection found no *Path/*File/*Dir fields on config.Config -- the walk is broken")
 	}
 
 	carried := map[string]bool{}
@@ -49,7 +49,7 @@ func TestMigrationCoversAllConfigPathFields(t *testing.T) {
 		if _, ok := excludedFromMigration[name]; ok {
 			continue
 		}
-		t.Errorf("config.%s is a *Path/*File field with no migration decision recorded: it is not "+
+		t.Errorf("config.%s is a *Path/*File/*Dir field with no migration decision recorded: it is not "+
 			"carried by migratedStores and not listed on excludedFromMigration. Add it to one -- with "+
 			"a reason if excluding it. A store left behind by -migrate-data is data the operator "+
 			"believes they moved", name)
@@ -59,7 +59,7 @@ func TestMigrationCoversAllConfigPathFields(t *testing.T) {
 	// stale claim rather than a decision, and reads as coverage.
 	for name := range excludedFromMigration {
 		if _, ok := markers[name]; !ok {
-			t.Errorf("excludedFromMigration lists %q but no such *Path/*File field exists on "+
+			t.Errorf("excludedFromMigration lists %q but no such *Path/*File/*Dir field exists on "+
 				"config.Config -- stale entry, remove it", name)
 		}
 	}
@@ -131,7 +131,7 @@ func uncoveredFields(markers map[string]string, stores []migratedStore, excluded
 	return uncovered
 }
 
-// markConfigPathFields writes a unique marker into every *Path/*File
+// markConfigPathFields writes a unique marker into every *Path/*File/*Dir
 // string field on a zero config.Config and returns the markers by dotted
 // field name, so coverage can be checked by value without migratedStores
 // having to report field names it does not know.
@@ -153,7 +153,17 @@ func markConfigPathFields() (map[string]string, config.Config) {
 			case reflect.Struct:
 				walk(fv, name+".")
 			case reflect.String:
-				if strings.HasSuffix(field.Name, "Path") || strings.HasSuffix(field.Name, "File") {
+				// *Dir fields (#1071) carry the same "resolved from the
+				// data directory unless overridden" contract as *Path/*File
+				// ones -- Backup.VaultDir's own doc comment says so
+				// explicitly -- and #1071 was exactly this guard missing
+				// one because it was named "Dir" rather than "Path": the
+				// router backup vault sat outside migratedStores with no
+				// error and no warning. Walking all three suffixes closes
+				// that gap rather than reopening it the next time a *Dir
+				// field is added.
+				if strings.HasSuffix(field.Name, "Path") || strings.HasSuffix(field.Name, "File") ||
+					strings.HasSuffix(field.Name, "Dir") {
 					marker := "537-marker:" + name
 					fv.SetString(marker)
 					markers[name] = marker
