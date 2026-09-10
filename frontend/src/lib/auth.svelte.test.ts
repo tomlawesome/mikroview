@@ -16,6 +16,10 @@ vi.mock('./api', () => ({
 
 import { fetchAuthSession, login, logout, register, signOutEverywhere } from './api'
 import { authState } from './auth.svelte'
+import { appState } from './state.svelte'
+import { flagsState } from './flags.svelte'
+import { watchlistState } from './watchlist.svelte'
+import { emptyFilters, type Device, type Flag, type Stats, type WatchlistEntry } from './types'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
   return {
@@ -241,6 +245,155 @@ describe('AuthState.handleUnauthorized', () => {
     authState.handleUnauthorized()
 
     expect(authState.state).toBe('setup-required')
+  })
+})
+
+// #1083: signing out (or a 401 bounce) must not leave the previous
+// account's app/flags/watchlist state visible to the next person who
+// signs in on this tab. Populates each store, signs out, and asserts
+// every field named in the issue -- events, filters, devices, stats,
+// the flags list/pins and the watchlist -- is back to empty.
+function fixtureDevice(): Device {
+  return {
+    id: 'core',
+    name: 'core',
+    sourceIp: '10.0.0.1',
+    configured: true,
+    firstSeen: '2026-01-01T00:00:00Z',
+    lastSeen: '2026-01-01T00:00:00Z',
+    eventCount: 1,
+    status: 'live',
+  }
+}
+
+function fixtureStats(): Stats {
+  return {
+    total: 1,
+    byAction: {},
+    topRules: [],
+    timeSeries: [],
+    eventsPerSecond: 0,
+    capacity: 100,
+    count: 1,
+    windowSeconds: 60,
+    oldestHeld: null,
+    connectedClients: 1,
+  }
+}
+
+function fixtureFlag(): Flag {
+  return {
+    id: 'f1',
+    type: 'port_scan',
+    target: '10.0.0.5',
+    detail: '',
+    count: 1,
+    firstSeen: '2026-01-01T00:00:00Z',
+    lastSeen: '2026-01-01T00:00:00Z',
+    cleared: false,
+  }
+}
+
+function fixtureWatchlistEntry(): WatchlistEntry {
+  return { id: 'w1', name: 'watch w1', enabled: true, createdAt: '2026-01-01T00:00:00Z' }
+}
+
+describe('AuthState.logout clears the previous session state (#1083)', () => {
+  beforeEach(() => {
+    vi.mocked(logout).mockResolvedValue(null)
+    authState.state = 'authenticated'
+
+    appState.events = [
+      { id: 1, time: '', deviceId: 'core', sourceIp: '10.0.0.1', action: 'accept', ruleLabel: 'r', chain: 'forward', raw: 'raw', receivedAt: 0 },
+    ]
+    appState.filters = { ...emptyFilters(), rule: 'stale-user-query' }
+    appState.devices = [fixtureDevice()]
+    appState.stats = fixtureStats()
+    appState.initialLoadDone = true
+    appState.fetchFailed = true
+    appState.paused = true
+    appState.pausedAt = 111
+    appState.wipedAt = 222
+    appState.autoscroll = false
+    appState.pendingCount = 3
+
+    flagsState.list = [fixtureFlag()]
+    flagsState.timeSeries = [{ time: '2026-01-01T00:00:00Z', byType: {} }]
+    flagsState.loaded = true
+    flagsState.baselinesWarming = true
+    flagsState.pin('f1')
+
+    watchlistState.entries = [fixtureWatchlistEntry()]
+    watchlistState.coverage = { w1: 'no-logging' }
+    watchlistState.loaded = true
+  })
+
+  it('resets appState to its initial values', async () => {
+    await authState.logout()
+
+    expect(appState.events).toEqual([])
+    expect(appState.filters).toEqual(emptyFilters())
+    expect(appState.devices).toEqual([])
+    expect(appState.stats).toBeNull()
+    expect(appState.initialLoadDone).toBe(false)
+    expect(appState.fetchFailed).toBe(false)
+    expect(appState.paused).toBe(false)
+    expect(appState.pausedAt).toBeNull()
+    expect(appState.wipedAt).toBeNull()
+    expect(appState.autoscroll).toBe(true)
+    expect(appState.pendingCount).toBe(0)
+  })
+
+  it('clears flagsState via its existing public API (no reset() of its own)', async () => {
+    await authState.logout()
+
+    expect(flagsState.list).toEqual([])
+    expect(flagsState.timeSeries).toEqual([])
+    expect(flagsState.loaded).toBe(false)
+    expect(flagsState.baselinesWarming).toBeUndefined()
+    expect(flagsState.pinnedIds).toEqual([])
+  })
+
+  it('resets watchlistState to its initial values', async () => {
+    await authState.logout()
+
+    expect(watchlistState.entries).toEqual([])
+    expect(watchlistState.coverage).toEqual({})
+    expect(watchlistState.loaded).toBe(false)
+  })
+})
+
+describe('AuthState.handleUnauthorized clears the previous session state (#1083)', () => {
+  it('resets every store when it bounces an authenticated session', () => {
+    authState.state = 'authenticated'
+    appState.devices = [fixtureDevice()]
+    appState.stats = fixtureStats()
+    flagsState.list = [fixtureFlag()]
+    flagsState.loaded = true
+    watchlistState.entries = [fixtureWatchlistEntry()]
+    watchlistState.loaded = true
+
+    authState.handleUnauthorized()
+
+    expect(appState.devices).toEqual([])
+    expect(appState.stats).toBeNull()
+    expect(flagsState.list).toEqual([])
+    expect(flagsState.loaded).toBe(false)
+    expect(watchlistState.entries).toEqual([])
+    expect(watchlistState.loaded).toBe(false)
+  })
+
+  it('leaves every store untouched when the session was not authenticated', () => {
+    authState.state = 'setup-required'
+    appState.devices = [fixtureDevice()]
+    flagsState.list = [fixtureFlag()]
+    watchlistState.entries = [fixtureWatchlistEntry()]
+
+    authState.handleUnauthorized()
+
+    expect(appState.devices).toEqual([fixtureDevice()])
+    expect(flagsState.list).toEqual([fixtureFlag()])
+    expect(watchlistState.entries).toEqual([fixtureWatchlistEntry()])
   })
 })
 
