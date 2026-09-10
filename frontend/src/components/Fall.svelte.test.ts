@@ -17,10 +17,13 @@ import { fireEvent } from '@testing-library/dom'
 import { flushSync } from 'svelte'
 import type { ClientEvent, Flag, FlagType } from '../lib/types'
 
-// Fall.svelte reaches the network in three ways: fallState.refresh()
+// Fall.svelte reaches the network in two ways: fallState.refresh()
 // (fetchDevices/fetchRouterRules/fetchRouterNat, #695) on mount, and its
-// own loadWindow() poll (fetchEventsWindow/fetchFlags). AccountMenu
-// (mounted inside the bar) needs
+// own loadWindow() poll (fetchEventsWindow). Flags no longer come from a
+// fetchFlags() call of Fall's own (#1088) -- it reads flagsState.list, the
+// same store App.svelte's shared 5s poll refreshes, so tests seed that
+// directly (see renderFall below) rather than mocking a fetch it no
+// longer makes. AccountMenu (mounted inside the bar) needs
 // fetchAuthSession/login/logout/register mocked the same way
 // AccountMenu.svelte.test.ts already does, or its own mount reaches for
 // the network too.
@@ -33,11 +36,10 @@ vi.mock('../lib/api', () => ({
   fetchRouterRules: vi.fn(async () => ({ available: false, rules: [] })),
   fetchRouterNat: vi.fn(async () => ({ available: false, rules: [] })),
   fetchEventsWindow: vi.fn(async () => ({ events: [], hasMore: false })),
-  fetchFlags: vi.fn(async () => ({ flags: [], timeSeries: [] })),
   fetchWatchlistEntries: vi.fn(async () => ({ entries: [], coverage: {} })),
 }))
 
-import { fetchEventsWindow, fetchFlags } from '../lib/api'
+import { fetchEventsWindow } from '../lib/api'
 import { fallState, type FallBoundary } from '../lib/fall.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { appState } from '../lib/state.svelte'
@@ -165,7 +167,10 @@ async function renderFall(opts: {
     windowStart: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
     serverTime: new Date().toISOString(),
   })
-  vi.mocked(fetchFlags).mockResolvedValue({ flags: opts.flags ?? [], timeSeries: [] })
+  // #1088: Fall reads flagsState.list (App.svelte's shared 5s poll) now,
+  // not its own fetchFlags() call -- seed the store directly rather than
+  // the network mock.
+  flagsState.list = opts.flags ?? []
   const result = render(Fall)
   await waitFor(() => expect(fallState.loading).toBe(false))
   fallState.boundaries = opts.boundaries
@@ -335,7 +340,6 @@ describe('the window-cap chip (#801, round 36 item 6.1)', () => {
       windowStart: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
       serverTime: new Date().toISOString(),
     })
-    vi.mocked(fetchFlags).mockResolvedValue({ flags: [], timeSeries: [] })
     const { container } = render(Fall)
     await waitFor(() => expect(fallState.loading).toBe(false))
     fallState.boundaries = [boundary()]
@@ -582,7 +586,6 @@ function rigSvgWidth(container: HTMLElement): number {
 describe('a failed window load says so, not that nothing happened (#737)', () => {
   it('renders the load error, and not the empty-window wording, when fetchEventsWindow rejects', async () => {
     vi.mocked(fetchEventsWindow).mockRejectedValue(new Error('network unreachable'))
-    vi.mocked(fetchFlags).mockResolvedValue({ flags: [], timeSeries: [] })
     const { container } = render(Fall)
     await waitFor(() => expect(fallState.loading).toBe(false))
     fallState.boundaries = [boundary()]

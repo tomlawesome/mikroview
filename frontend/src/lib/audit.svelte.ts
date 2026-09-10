@@ -11,11 +11,25 @@ import type { AuditEntry } from './types'
 class AuditState {
   list = $state<AuditEntry[]>([])
   hasMore = $state(false)
+  // #1089: false until a fetch resolves (success or failure) -- an empty
+  // `list` before this is true is "not fetched yet", not "no admin
+  // actions recorded", same distinction flagsState.loaded draws for
+  // flags. AuditLog.svelte's empty message reads this so a failed fetch
+  // can no longer render as a quietly empty log.
+  loaded = $state(false)
+  error = $state<string | null>(null)
 
   async refresh() {
-    const res = await fetchAuditLog()
-    this.list = res.entries
-    this.hasMore = res.hasMore
+    try {
+      const res = await fetchAuditLog()
+      this.list = res.entries
+      this.hasMore = res.hasMore
+      this.error = null
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err)
+    } finally {
+      this.loaded = true
+    }
   }
 }
 
