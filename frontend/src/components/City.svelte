@@ -2412,17 +2412,24 @@
           return [p[0] + (dx / m) * 34, p[1] + (dy / m) * 26]
         })
         const d = hull.map((p, i) => (i ? 'L' : 'M') + R2(p[0]) + ' ' + R2(p[1])).join('') + 'Z'
+        // A router with more zones than the ground plan has slots for
+        // loses the rest off the map -- no district, no roads, no signal
+        // -- so the borough's own label says how many, the same
+        // convention a district's plaque follows for hosts beyond its
+        // own cap (#1073).
+        const zoneNote = bo.moreZones > 0 ? ` · +${bo.moreZones} zone${bo.moreZones === 1 ? '' : 's'} not shown` : ''
         rings.push({
           d,
           // A ghost is inside the ring -- it is still a place on the
           // map -- but it is not a district any more, so the label
           // counts the two apart (#460, round 55: "4 districts · 1
           // ghost").
-          label: boroughLabel(
-            bo.name.toUpperCase() + ' BOROUGH',
-            bo.districtIds.filter((id) => !g.districts.find((d) => d.id === id)?.ghost).length,
-            bo.districtIds.filter((id) => g.districts.find((d) => d.id === id)?.ghost).length,
-          ),
+          label:
+            boroughLabel(
+              bo.name.toUpperCase() + ' BOROUGH',
+              bo.districtIds.filter((id) => !g.districts.find((d) => d.id === id)?.ghost).length,
+              bo.districtIds.filter((id) => g.districts.find((d) => d.id === id)?.ghost).length,
+            ) + zoneNote,
           x: R2(Math.max(...hull.map((p) => p[0])) - 60),
           y: R2(Math.min(...hull.map((p) => p[1])) + 10),
         })
