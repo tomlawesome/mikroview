@@ -801,16 +801,21 @@ each piece as a normal HTTPS request to the same address and token step
 
 **Pick SFTP (7c) unless you genuinely cannot open that second port.**
 SFTP sends the whole file in one upload; HTTPS-only sends it in a dozen
-or more separate pieces, which is more moving parts and, unlike the rest
-of this page, has not yet been run end-to-end against a real router — it
-is built from the same 7.23.3 measurements 7c's script rests on, but the
-specific commands that read a request's reply back into the script and
-turn a chunk of the file into text safe to put in a web request have not
-themselves been checked on a router yet. Treat it as the option for
-someone who has no other choice, not the default.
+or more separate pieces, which is more moving parts to go wrong. It has
+been run end-to-end against a real router (RouterOS 7.23.3, 2026-09-10):
+a router made its backup, sent it in pieces, and both files arrived
+whole and unchanged. So it works — it is simply the longer way round.
+
+One thing to know before you rely on it: if the token in step 4b is
+wrong or has been removed, the router does not report "rejected". It
+prints a message about not being able to read the reply, because
+MikroView's refusal does not carry a header RouterOS insists on for that
+case. If a push stops working and the router complains about the reply
+rather than about permission, check the token first.
 
 The wizard does not offer this step yet — 4b's token is still what
-authenticates it once it does. If you want to try it ahead of that,
+authenticates it once it does. Until it does, this is a paste-it-yourself
+step. If you want to set it up now,
 `internal/routeros.BackupPushScript` and
 `BackupPushScheduleCommands` in this repository generate the same shape
 of script as 7c, minus the SFTP-specific `port=`/`user=`/`dst-path=`
