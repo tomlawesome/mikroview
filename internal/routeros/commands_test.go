@@ -254,6 +254,106 @@ func TestQuoteEscapesBackslashAndQuote(t *testing.T) {
 	}
 }
 
+// TestBackupPushScriptSlicesBothFilesThroughTheIngestEndpoint pins the
+// #955 wire contract on the generated script: both files get a "begin"
+// declaring size/slice-count, both loop /file read at the 32768
+// chunk-size ceiling #394 measured, and every POST carries the same
+// Bearer token PushBlock's ingest push already uses.
+func TestBackupPushScriptSlicesBothFilesThroughTheIngestEndpoint(t *testing.T) {
+	script := BackupPushScript("192.0.2.10:8080", "tok-123", "a")
+	for _, want := range []string{
+		`https://192.0.2.10:8080/api/ingest/router-backup`,
+		`"op"="begin"; "kind"="backup"`,
+		`"op"="begin"; "kind"="rsc"`,
+		`chunk-size=$bakTake`,
+		`chunk-size=$rscTake`,
+		`32768`,
+		`"op"="slice"; "transferId"=$bakTransferId; "index"=$bakIndex; "data"=$bakData64`,
+		`"op"="slice"; "transferId"=$rscTransferId; "index"=$rscIndex; "data"=$rscData64`,
+		`/file remove mv-backup.backup`,
+		`/file remove mv-backup.rsc`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("BackupPushScript missing %q:\n%s", want, script)
+		}
+	}
+	if n := strings.Count(script, "Bearer tok-123"); n != 4 {
+		t.Errorf("BackupPushScript embedded the token %d times, want 4 (begin+slice per file): %s", n, script)
+	}
+	// sha256 is never sent -- see BackupPushScript's own doc comment for
+	// why: nothing measured shows RouterOS can hash a file.
+	if strings.Contains(script, "sha256") {
+		t.Errorf("BackupPushScript sent a sha256 field it cannot honestly compute:\n%s", script)
+	}
+	if placeholders.MatchString(script) {
+		t.Errorf("BackupPushScript leaked a placeholder: %s", script)
+	}
+}
+
+// TestBackupPushScriptGivesEachFileItsOwnVariables guards the same trap
+// PushBlock's per-kind varName avoids: pasting the backup block and the
+// rsc block one after the other into the same script must not redeclare
+// a :local name RouterOS would refuse the second time.
+func TestBackupPushScriptGivesEachFileItsOwnVariables(t *testing.T) {
+	script := BackupPushScript("h", "t", "a")
+	for _, v := range []string{"bakSize", "rscSize", "bakTransferId", "rscTransferId"} {
+		if !strings.Contains(script, ":local "+v) {
+			t.Errorf("BackupPushScript did not scope %s as its own :local:\n%s", v, script)
+		}
+	}
+}
+
+// TestBackupPushScheduleCommandsMatchesTheHTTPSIdiom pins
+// BackupPushScheduleCommands' shape: ScheduleCommands' two-step "paste
+// the script above" form (BackupPushScript is not self-contained, see
+// its own doc comment), a name distinct from the SFTP script's
+// mv-backup so both can coexist, and the same nightly 03:00 interval
+// BackupScheduleCommands uses.
+func TestBackupPushScheduleCommandsMatchesTheHTTPSIdiom(t *testing.T) {
+	got := BackupPushScheduleCommands("a")
+	want := "/system script add name=mv-backup-https policy=read,write,test,sensitive source=\"<paste the script above>\"\n" +
+		"/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\"\n" +
+		"/system script run mv-backup-https"
+	if got != want {
+		t.Errorf("BackupPushScheduleCommands =\n%s\nwant\n%s", got, want)
+	}
+	if strings.Contains(got, "name=mv-backup ") || strings.Contains(got, "name=mv-backup\"") {
+		t.Errorf("BackupPushScheduleCommands collided with the SFTP script's mv-backup name: %s", got)
+	}
+}
+
+// TestBackupPushScriptEscapesQuotedHost covers #1095 for the HTTPS
+// variant's own quoted spot: address sits inside /tool fetch's url="...",
+// same as PushBlock's ingest push, so a hostile host must come out
+// escaped rather than closing that string early.
+func TestBackupPushScriptEscapesQuotedHost(t *testing.T) {
+	benign := BackupPushScript("192.0.2.10:8080", "tok", "a")
+	tricky := BackupPushScript(`evil.example"; /system reset\`, "tok", "a")
+	if !strings.Contains(tricky, `evil.example\"; /system reset\\`) {
+		t.Errorf("BackupPushScript did not escape the host:\n%s", tricky)
+	}
+	if got, want := unescapedQuoteCount(tricky), unescapedQuoteCount(benign); got != want {
+		t.Errorf("BackupPushScript unescaped quote count = %d, want %d (same structure as a benign host):\n%s", got, want, tricky)
+	}
+}
+
+// TestBackupPushScriptEscapesQuotedToken is TestBackupPushScriptEscapesQuotedHost's
+// twin for the token: unlike PushBlock's bare Bearer header (which
+// relies on the handler's own Token validation), this function quotes
+// token itself -- AGENTS.md's "validated and quoted, never interpolated
+// raw" rule -- so a hostile token cannot break out of the
+// http-header-field string either.
+func TestBackupPushScriptEscapesQuotedToken(t *testing.T) {
+	benign := BackupPushScript("192.0.2.10:8080", "tok-123", "a")
+	tricky := BackupPushScript("192.0.2.10:8080", `tok"; /system reset\`, "a")
+	if !strings.Contains(tricky, `Bearer tok\"; /system reset\\`) {
+		t.Errorf("BackupPushScript did not escape the token:\n%s", tricky)
+	}
+	if got, want := unescapedQuoteCount(tricky), unescapedQuoteCount(benign); got != want {
+		t.Errorf("BackupPushScript unescaped quote count = %d, want %d (same structure as a benign token):\n%s", got, want, tricky)
+	}
+}
+
 // unescapedQuoteCount counts the '"' runes in s that are not part of a
 // \" escape sequence -- the quotes that actually matter to the RouterOS
 // parser reading the surrounding block, as opposed to ones a builder has

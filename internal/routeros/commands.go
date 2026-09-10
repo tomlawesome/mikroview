@@ -276,6 +276,118 @@ func BackupScheduleCommands(dialect string) string {
 	}, "\n")
 }
 
+// backupPushHTTPSBlock renders one local file's slice-push loop for
+// BackupPushScript: read the file's size, POST a "begin" declaring the
+// transfer, then loop /file read (RouterOS >=7.13, chunk-size capped at
+// 32768 -- both measured #394) slices, each POSTed once the begin
+// response's transfer id is known. v is this block's local-variable
+// prefix (mirrors PushBlock's per-kind varName) so the backup block and
+// the rsc block, pasted one after the other into the same script
+// (BackupPushScript), never redeclare the same :local name.
+//
+// Three RouterOS primitives below are not measured anywhere in #394 or
+// #955 and are this function's biggest open question -- flagged again
+// on BackupPushScript's own doc comment:
+//   - `as-value output=user` on `/tool fetch` to capture the "begin"
+//     POST's response body into a variable. #394 only ever used
+//     `as-value` on `/file read`, and always `output=none` on `/tool
+//     fetch` pushes, since nothing before this needed a response back.
+//   - `:deserialize from=json`, the presumed inverse of the already-used
+//     `:serialize to=json` -- never exercised either.
+//   - `:serialize to="base64"` to turn a `/file read` slice's raw byte
+//     string into the base64 the wire contract's "data" field needs.
+//     #394's own slice measurements never needed this: that design
+//     POSTed the raw bytes as the whole http-data body, not as a JSON
+//     string field.
+func backupPushHTTPSBlock(address, token, localFile, kind, v string) string {
+	url := fmt.Sprintf(`https://%s/api/ingest/router-backup`, quote(address))
+	// token is quoted here even though PushBlock's identical Bearer
+	// header spot leaves it bare (relying on the handler's Token
+	// validation, #1095) -- AGENTS.md's rule that templated command text
+	// must be "validated and quoted, never interpolated raw" is easiest
+	// to just satisfy outright in a function being written fresh, rather
+	// than lean on a validator this package cannot see from here.
+	header := fmt.Sprintf(`http-header-field=("Content-Type: application/json,Authorization: Bearer %s")`, quote(token))
+	return strings.Join([]string{
+		fmt.Sprintf(`:local %sSize [/file get %s size]`, v, localFile),
+		fmt.Sprintf(`:local %sTotalSlices (($%sSize + 32767) / 32768)`, v, v),
+		fmt.Sprintf(`:local %sBegin [:serialize to=json value={"op"="begin"; "kind"="%s"; "totalBytes"=$%sSize; "totalSlices"=$%sTotalSlices}]`, v, kind, v, v),
+		fmt.Sprintf(`:local %sBeginResp [/tool fetch url="%s" http-method=post http-data=$%sBegin %s check-certificate=yes as-value output=user]`, v, url, v, header),
+		fmt.Sprintf(`:local %sTransferId (([:deserialize from=json value=($%sBeginResp->"data")])->"transferId")`, v, v),
+		fmt.Sprintf(`:local %sSent 0`, v),
+		fmt.Sprintf(`:local %sIndex 0`, v),
+		fmt.Sprintf(`:while ($%sSent < $%sSize) do={`, v, v),
+		fmt.Sprintf(`  :local %sTake ($%sSize - $%sSent)`, v, v, v),
+		fmt.Sprintf(`  :if ($%sTake > 32768) do={ :set %sTake 32768 }`, v, v),
+		fmt.Sprintf(`  :local %sChunk [/file read file=%s offset=$%sSent chunk-size=$%sTake as-value]`, v, localFile, v, v),
+		fmt.Sprintf(`  :local %sData64 [:serialize to="base64" value=($%sChunk->"data")]`, v, v),
+		fmt.Sprintf(`  :local %sSlice [:serialize to=json value={"op"="slice"; "transferId"=$%sTransferId; "index"=$%sIndex; "data"=$%sData64}]`, v, v, v, v),
+		fmt.Sprintf(`  /tool fetch url="%s" http-method=post http-data=$%sSlice %s check-certificate=yes output=none`, url, v, header),
+		fmt.Sprintf(`  :set %sSent ($%sSent + $%sTake)`, v, v, v),
+		fmt.Sprintf(`  :set %sIndex ($%sIndex + 1)`, v, v),
+		`}`,
+		fmt.Sprintf(`/file remove %s`, localFile),
+	}, "\n")
+}
+
+// BackupPushScript is the HTTPS-only alternative to BackupScript (#955):
+// for a deployment that can only reach mikroview over HTTPS -- no SFTP
+// port open -- the router reads its own backup and export files in
+// <=32KiB slices with /file read and POSTs each slice as JSON through
+// the same ingest endpoint pattern and bearer token PushBlock already
+// uses, rather than needing a second listener. One refused slice aborts
+// the script (measured #394: a failing /tool fetch aborts at that line,
+// no retry) -- the next scheduled run starts over from the beginning;
+// this deliberately builds no resume logic.
+//
+// Unlike BackupScript, this is not wrapped in its own /system script
+// add: the loop and the JSON-building above make BackupScript's
+// single-line, hand-escaped password=\"...\" style impractical at this
+// size and would multiply that escaping across every quoted value
+// here. Instead this returns the bare script body, meant to be pasted
+// into the RouterOS script editor the same way PushScript's output is
+// -- BackupPushScheduleCommands is ScheduleCommands' "<paste the script
+// above>" idiom, not BackupScheduleCommands' self-contained form.
+//
+// address is mikroview's own host (with port -- the same combined value
+// CaTrustCommands/PushBlock take, not BackupScript's bare-host form);
+// token is the device's ingest token. There is no device or port
+// parameter, unlike BackupScript's SFTP form: the wire protocol
+// identifies the device from the bearer token alone, and mikroview
+// reassembles a transfer by the id its own "begin" response hands back,
+// never by a destination filename.
+//
+// sha256 is deliberately never sent: nothing in #394's measurements or
+// RouterOS's documented scripting primitives shows a way to hash a
+// file's contents from a script, and the wire contract's sha256 field
+// is optional precisely so a script that cannot compute one can omit
+// it rather than fake it.
+func BackupPushScript(address, token, dialect string) string {
+	return strings.Join([]string{
+		`/system backup save name=mv-backup dont-encrypt=yes`,
+		`/export file=mv-backup`,
+		backupPushHTTPSBlock(address, token, "mv-backup.backup", "backup", "bak"),
+		backupPushHTTPSBlock(address, token, "mv-backup.rsc", "rsc", "rsc"),
+	}, "\n\n")
+}
+
+// BackupPushScheduleCommands is BackupPushScript's scheduler entry --
+// ScheduleCommands' two-step "paste the script above" idiom rather than
+// BackupScheduleCommands' single self-contained /system script add,
+// since BackupPushScript does not add the script itself (see its own
+// doc comment for why). Named mv-backup-https, distinct from the SFTP
+// script's mv-backup, so an operator can have both set up without a
+// name collision. Same nightly 03:00 interval as BackupScheduleCommands
+// and the same run-once-now idiom every scheduler helper in this file
+// uses, so the first push does not wait for the interval to pass.
+func BackupPushScheduleCommands(dialect string) string {
+	return strings.Join([]string{
+		fmt.Sprintf(`/system script add name=mv-backup-https policy=%s source="<paste the script above>"`, BackupScriptPolicy),
+		fmt.Sprintf(`/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup-https"`, BackupScriptPolicy),
+		`/system script run mv-backup-https`,
+	}, "\n")
+}
+
 // LogPrefixForAction is the log-prefix convention RuleTaggingCommands'
 // bulk `[find action=...]` commands give a rule, applied to a single
 // action rather than to every rule of that action at once: D|drop|,
