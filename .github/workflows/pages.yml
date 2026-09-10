@@ -16,7 +16,6 @@ on:
     paths:
       - 'site/**'
       - 'docs/screenshots/fall-dark.png'
-      - 'docs/screenshots/fall-light.png'
       - 'docs/screenshots/topography-dark.png'
       - 'docs/screenshots/stream-dark.png'
       - 'brand/logo-mark.svg'
@@ -40,7 +39,7 @@ jobs:
         run: |
           mkdir -p _site/img
           cp -r site/. _site/
-          for shot in fall-dark fall-light topography-dark stream-dark; do
+          for shot in fall-dark topography-dark stream-dark; do
             cp "docs/screenshots/$shot.png" "_site/img/$shot.png"
           done
           cp brand/logo-mark.svg _site/img/logo-mark.svg
