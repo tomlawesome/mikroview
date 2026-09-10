@@ -785,6 +785,53 @@ class AppState {
     this.resetWsDropped()
     await this.refreshDevicesAndStats()
   }
+
+  // #1083: signing out must not leave the next person to sign in on this
+  // tab looking at the previous account's events, filters, devices or
+  // stats -- this is a singleton that survives a logout/login pair, not
+  // a fresh page load. Called from both auth.svelte.ts logout paths.
+  //
+  // Puts every field that holds this account's own data back to exactly
+  // what the constructor/initialisers above set it to -- including the
+  // private, non-reactive buffers (pendingBuffer/incomingBuffer hold
+  // real un-flushed events; matchedPattern/ruleDebounce/holds are
+  // per-session bookkeeping tied to that data), since those are as much
+  // "the previous session's data" as the reactive fields are.
+  //
+  // Deliberately left alone: `view` (which tab is open is navigation,
+  // not this account's data), and the connection-level trio
+  // connState/wsDropped/wsDroppedEpisode (they describe this tab's
+  // socket, not anything scoped to the account that just signed out --
+  // a fresh login over the same socket doesn't need them re-learned).
+  // `matcher` (RuleMatcher) is also left alone: its own doc comment
+  // above states it is deliberately stateless between calls, so there is
+  // nothing on it to leak.
+  reset() {
+    this.events = []
+    this.filters = emptyFilters()
+    this.devices = []
+    this.stats = null
+    this.ruleMatches = null
+    this.ruleMatchStatus = 'idle'
+    this.matchedPattern = ''
+    if (this.ruleDebounce) clearTimeout(this.ruleDebounce)
+    this.ruleDebounce = null
+    this.fetchFailed = false
+    this.initialLoadDone = false
+    this.paused = false
+    this.pendingCount = 0
+    this.autoscroll = true
+    this.pausedAt = null
+    this.wipedAt = null
+    this.holds = 0
+    this.heldOpen = false
+    this.frozenPool = null
+    this.now = Date.now()
+    this.pendingBuffer = []
+    this.incomingBuffer = []
+    this.eventsFetchesInFlight = 0
+    this.midFlightRelabels = []
+  }
 }
 
 // applyFilters runs no regex.
