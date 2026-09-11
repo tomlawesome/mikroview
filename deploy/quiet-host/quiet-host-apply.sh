@@ -29,6 +29,10 @@ CONFIG="${CONFIG:-/etc/gitlab-runner/config.toml}"
 
 HOLD="$QH_DIR/hold"
 ORIG="$QH_STATE/concurrent.orig"
+# When this host first applied the current hold, by its own clock. The
+# cap below counts from here, not from the hold file, because the file
+# is written by an unprivileged job and can be rewritten while held.
+SINCE="$QH_STATE/hold.since"
 APPLIED="$QH_DIR/applied"
 FAILED="$QH_DIR/failed"
 
@@ -44,6 +48,7 @@ apply_hold() {
     value=$(sed -n 's/^concurrent = \(.*\)$/\1/p' "$CONFIG")
     printf '%s\n' "$value" >"$ORIG"
   fi
+  [ -f "$SINCE" ] || printf '%s\n' "$now" >"$SINCE"
   sed -i 's/^concurrent = .*/concurrent = 1/' "$CONFIG"
 
   # #1092: the old `|| true` swallowed a reload failure and wrote APPLIED
@@ -89,7 +94,7 @@ release_hold() {
   value=$(cat "$ORIG")
   sed -i "s/^concurrent = .*/concurrent = $value/" "$CONFIG"
   systemctl kill --kill-whom=main --signal=HUP gitlab-runner 2>/dev/null || true
-  rm -f "$ORIG" "$APPLIED" "$FAILED"
+  rm -f "$ORIG" "$SINCE" "$APPLIED" "$FAILED"
   echo "RELEASE: restored concurrent=$value"
 }
 
@@ -112,9 +117,26 @@ if [ -f "$HOLD" ]; then
   esac
 
   # #1094: the hold file's expires= is written by an unprivileged job and
-  # not otherwise trusted -- cap it at MAX_HOLD_S past the hold's own
-  # started= (or now, if that is missing) regardless of what the file
-  # claims.
+  # not otherwise trusted -- cap it at MAX_HOLD_S past when the hold
+  # began. started= comes from the same file, so on its own it moved the
+  # ceiling with it (a started= in the future, or a file rewritten while
+  # held): the hold begins at the earliest of the file's started= clamped
+  # to now and this host's own record of when it applied the hold.
+  if [ "$flag_started" -gt "$now" ]; then
+    flag_started=$now
+  fi
+  if [ -f "$SINCE" ]; then
+    hold_since=$(cat "$SINCE")
+    case "$hold_since" in
+      ''|*[!0-9]*) hold_since=$now ;;
+    esac
+    if [ "$hold_since" -lt "$flag_started" ]; then
+      flag_started=$hold_since
+    fi
+  elif [ -f "$ORIG" ]; then
+    # A hold applied before this record existed: start its hour now.
+    printf '%s\n' "$now" >"$SINCE"
+  fi
   ceiling=$((flag_started + MAX_HOLD_S))
   if [ "$flag_expires" -gt "$ceiling" ]; then
     echo "hold expiry capped: file requested expires=$flag_expires, capping to $ceiling for job=$flag_job"

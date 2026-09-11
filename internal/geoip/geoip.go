@@ -11,9 +11,9 @@
 package geoip
 
 import (
-	"net"
+	"net/netip"
 
-	"github.com/oschwald/geoip2-golang"
+	"github.com/oschwald/geoip2-golang/v2"
 )
 
 // Lookup wraps an optional MaxMind DB reader. The zero value is a valid,
@@ -41,9 +41,15 @@ func Open(path string) (*Lookup, error) {
 }
 
 // Close releases the underlying database file, if one is open.
+//
+// geoip2 v2's Close returns an error where v1's did not. It is dropped
+// rather than propagated: every caller closes a read-only memory-mapped
+// file at shutdown via defer, there is nothing to do about a failure at
+// that point, and widening this signature would push an unusable error
+// through each of them.
 func (l *Lookup) Close() {
 	if l.db != nil {
-		l.db.Close()
+		_ = l.db.Close()
 	}
 }
 
@@ -56,19 +62,30 @@ func (l *Lookup) Country(ipStr string) (code string, ok bool) {
 	if l.db == nil || ipStr == "" {
 		return "", false
 	}
-	ip := net.ParseIP(ipStr)
-	if ip == nil || !isPublic(ip) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return "", false
+	}
+	// Unmap first: an IPv4-in-IPv6 address such as ::ffff:8.8.8.8 is the
+	// same host as 8.8.8.8, and both the locality checks below and the
+	// database lookup should treat it that way. v1 got this for free
+	// because net.ParseIP produced a 16-byte form either way; netip
+	// keeps the distinction, which is the ambiguity v2's move to
+	// netip.Addr was made to expose rather than hide.
+	ip = ip.Unmap()
+	if !isPublic(ip) {
 		return "", false
 	}
 	rec, err := l.db.Country(ip)
-	if err != nil || rec.Country.IsoCode == "" {
+	if err != nil || rec.Country.ISOCode == "" {
 		return "", false
 	}
-	return rec.Country.IsoCode, true
+	return rec.Country.ISOCode, true
 }
 
-func isPublic(ip net.IP) bool {
-	return !ip.IsPrivate() &&
+func isPublic(ip netip.Addr) bool {
+	return ip.IsValid() &&
+		!ip.IsPrivate() &&
 		!ip.IsLoopback() &&
 		!ip.IsUnspecified() &&
 		!ip.IsLinkLocalUnicast() &&
