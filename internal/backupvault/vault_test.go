@@ -380,3 +380,67 @@ func TestDeviceDirNamesDoNotLeakPathTraversal(t *testing.T) {
 		}
 	}
 }
+
+// TestFailedWriteLeavesTheIndexUnchanged covers #1125's founding
+// defect: the generation used to be added to the in-memory index before
+// the file was written, so a write that failed left a generation with
+// no file behind it. The next successful push persisted that phantom --
+// it counted towards MaxGenerations and evicted a real generation, and
+// a download of it 404ed.
+func TestFailedWriteLeavesTheIndexUnchanged(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a read-only directory would not refuse the write")
+	}
+	dir := t.TempDir()
+	key := testKey(t)
+	v, err := Open(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := v.Store("rb5009", KindBackup, plainBackup(10), now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Take the write away: the router's directory still exists, but
+	// nothing new may be created in it.
+	routerDir := v.routerDir("rb5009")
+	if err := os.Chmod(routerDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(routerDir, 0o700) })
+
+	if err := v.Store("rb5009", KindBackup, plainBackup(20), now.Add(time.Hour)); err == nil {
+		t.Fatal("Store into an unwritable router directory succeeded, want the write to fail")
+	}
+	if got := len(v.Generations("rb5009")); got != 1 {
+		t.Fatalf("after a failed write the vault holds %d generations, want 1 (no phantom)", got)
+	}
+
+	if err := os.Chmod(routerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Store("rb5009", KindBackup, plainBackup(30), now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertEveryGenerationHasItsFile := func(v *Vault, want int) {
+		t.Helper()
+		gens := v.Generations("rb5009")
+		if len(gens) != want {
+			t.Fatalf("got %d generations, want %d", len(gens), want)
+		}
+		for _, g := range gens {
+			if _, err := os.Stat(filepath.Join(routerDir, v.fileName(g.ID, KindBackup))); err != nil {
+				t.Errorf("generation %s is in the index with no file behind it: %v", g.ID, err)
+			}
+		}
+	}
+	assertEveryGenerationHasItsFile(v, 2)
+
+	v2, err := Open(dir, key)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	assertEveryGenerationHasItsFile(v2, 2)
+}
