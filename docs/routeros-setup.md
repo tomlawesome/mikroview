@@ -813,6 +813,13 @@ MikroView's refusal does not carry a header RouterOS insists on for that
 case. If a push stops working and the router complains about the reply
 rather than about permission, check the token first.
 
+**What it counts against.** An ingest token may make 120 requests per
+15 minutes, shared with that router's ordinary `/api/ingest/routeros`
+pushes. A whole backup push costs one of those however many pieces the
+file arrives in, because it is counted when the router announces the
+transfer rather than per piece — so a backup and its export together are
+two, and only a scheduler running this every few minutes can run out.
+
 The wizard does not offer this step yet — 4b's token is still what
 authenticates it once it does. Until it does, this is a paste-it-yourself
 step. If you want to set it up now,

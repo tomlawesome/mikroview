@@ -343,3 +343,90 @@ func TestAVaultFailureIsAServerFaultNotTheDevicesFault(t *testing.T) {
 		t.Fatalf("no ingest.router_backup.failed audit entry, got: %+v", entries)
 	}
 }
+
+// TestABackupOverAHundredAndTwentySlicesLands is #1123: every slice used
+// to spend one of the device's 120 ingest tokens per 15 minutes, so a
+// file needing more than that -- about 3.8MB -- was refused around slice
+// 118 and could never be delivered at all.
+func TestABackupOverAHundredAndTwentySlicesLands(t *testing.T) {
+	ts, s, token := backupIngestServer(t, "rb5009")
+	const sliceSize = 32768
+	// 121 slices: one more than the whole per-window allowance.
+	file := realisticBackup(121*sliceSize/13 + 1)
+	totalSlices := (len(file) + sliceSize - 1) / sliceSize
+	if totalSlices <= ingestLimiterThreshold {
+		t.Fatalf("the test file needs %d slices, which is not over the %d-request allowance", totalSlices, ingestLimiterThreshold)
+	}
+
+	begin := postBackupSlice(t, ts, token, map[string]any{
+		"op": "begin", "kind": backupvault.KindBackup,
+		"totalBytes": len(file), "totalSlices": totalSlices,
+	})
+	if begin.StatusCode != http.StatusOK {
+		t.Fatalf("begin = %d, want 200", begin.StatusCode)
+	}
+	started := decodeSliceResponse(t, begin)
+
+	var last backupSliceResponse
+	for i := 0; i < totalSlices; i++ {
+		end := (i + 1) * sliceSize
+		if end > len(file) {
+			end = len(file)
+		}
+		resp := postBackupSlice(t, ts, token, map[string]any{
+			"op": "slice", "transferId": started.TransferID, "index": i,
+			"data": base64.StdEncoding.EncodeToString(file[i*sliceSize : end]),
+		})
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("slice %d of %d = %d (%s), want 200", i, totalSlices, resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		last = decodeSliceResponse(t, resp)
+	}
+	if !last.Done {
+		t.Fatal("the last slice did not complete the transfer")
+	}
+
+	gens := s.Vault.Generations("rb5009")
+	if len(gens) != 1 {
+		t.Fatalf("the vault holds %d generations, want 1", len(gens))
+	}
+	got, err := s.Vault.Open("rb5009", gens[0].ID, backupvault.KindBackup)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if !bytes.Equal(got, file) {
+		t.Fatal("the reassembled backup does not match what was sent")
+	}
+}
+
+// TestASpentIngestAllowanceRefusesTheTransferNotTheSlice checks what
+// #1123 left standing: the limit is charged once per transfer, so it is
+// a begin that is refused, with a fixed message that tells the router
+// nothing about mikroview's occupancy (#1122).
+func TestASpentIngestAllowanceRefusesTheTransferNotTheSlice(t *testing.T) {
+	ts, _, token := backupIngestServer(t, "rb5009")
+	body := map[string]any{"op": "begin", "kind": backupvault.KindRsc, "totalBytes": 64, "totalSlices": 1}
+
+	for i := 0; i < ingestLimiterThreshold; i++ {
+		resp := postBackupSlice(t, ts, token, body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("begin %d of %d = %d, want 200", i+1, ingestLimiterThreshold, resp.StatusCode)
+		}
+	}
+
+	resp := postBackupSlice(t, ts, token, body)
+	got, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("the begin past the allowance = %d, want 429", resp.StatusCode)
+	}
+	if strings.TrimSpace(string(got)) != backupBusyMessage {
+		t.Fatalf("the reply reads %q, want the fixed %q", strings.TrimSpace(string(got)), backupBusyMessage)
+	}
+}

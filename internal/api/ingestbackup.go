@@ -74,6 +74,13 @@ const backupSinkFailedMessage = "mikroview could not store this backup; try agai
 // lost is still the useful fact.
 const auditActorServer = "system"
 
+// errIngestBudgetSpent is the ingest limiter refusing to start a new
+// transfer. A sentinel of its own so the refusal takes the same path as
+// the receiver's own capacity refusals -- one fixed 429 to the router,
+// the real reason in the audit trail, which is what #1123 had no way of
+// telling an operator.
+var errIngestBudgetSpent = errors.New("the device's ingest allowance for this window is spent")
+
 // handleIngestRouterBackup receives one slice, or the declaration that
 // opens a transfer.
 func (s *Server) handleIngestRouterBackup(w http.ResponseWriter, r *http.Request) {
@@ -92,10 +99,6 @@ func (s *Server) handleIngestRouterBackup(w http.ResponseWriter, r *http.Request
 	}
 
 	now := time.Now()
-	if !s.IngestLimiter.Reserve(tok.ID, now) {
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
 
 	// A transfer whose router stopped mid-loop holds its buffer until
 	// something clears it. The receiver sweeps on its own ticker
@@ -116,6 +119,23 @@ func (s *Server) handleIngestRouterBackup(w http.ResponseWriter, r *http.Request
 
 	switch req.Op {
 	case "begin":
+		// The ingest limiter is charged once per transfer, here, rather
+		// than once per request (#1123). A slice used to spend a token
+		// from the same 120-per-15-minutes allowance as the device's
+		// RouterOS pushes, so anything needing more than 120 slices --
+		// about 3.8MB, an ordinary backup plus its export -- was refused
+		// around slice 118 and could never land, every night, with
+		// nothing but a refusal in the audit log to show for it.
+		//
+		// What bounds the slices that follow is not the limiter: one
+		// transfer per device at a time, 32KiB a slice, a slice count
+		// fixed at begin, and a declared total the receiver refuses to
+		// let the accumulated bytes pass. A token cannot buy more work
+		// here than the one transfer it has just paid for.
+		if !s.IngestLimiter.Reserve(tok.ID, now) {
+			s.refuseBackupSlice(w, tok.Device, errIngestBudgetSpent, now)
+			return
+		}
 		id, err := s.BackupSlices.Begin(tok.Device, backupslice.Begin{
 			Kind:        req.Kind,
 			TotalBytes:  req.TotalBytes,
@@ -179,7 +199,7 @@ func (s *Server) refuseBackupSlice(w http.ResponseWriter, device string, err err
 		s.Audit.Record("device:"+device, "ingest.router_backup.refused", device, err.Error())
 	}
 	switch {
-	case errors.Is(err, backupslice.ErrBusy):
+	case errors.Is(err, backupslice.ErrBusy), errors.Is(err, errIngestBudgetSpent):
 		// Capacity, not a fault in the request: the router's next
 		// scheduled run starts over, which is what it does after any
 		// refusal anyway.
