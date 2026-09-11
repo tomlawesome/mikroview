@@ -1578,6 +1578,10 @@ func main() {
 		"event buffer: adjustable from %s to %s from Settings (%s)",
 		memoryBounds.Min, memoryBounds.Max, memoryBoundsBasis(memoryBounds)))
 	srv.InitMemory(storeMaxMemory, memoryBounds)
+	// The router-backup vault's idle unlock closes on its own (#1120).
+	// Same ticker-and-context shape as the periodic work above; it lives
+	// here because the unlock state belongs to the server this starts.
+	go srv.RunVaultUnlockExpiry(ctx, 0)
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())

@@ -18,6 +18,7 @@ package api
 // that owns it.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -33,8 +34,12 @@ import (
 // convenience: the window in which the private key sits in this
 // process's memory is the whole cost of unlocking, so it closes on its
 // own even when an admin walks away from the tab without locking it.
-// Downloading a backup renews it, so a run of restores is not
-// interrupted half way.
+// Using the unlock -- downloading a backup -- renews it, so a run of
+// restores is not interrupted half way. Asking whether it is still open
+// does not: a settings tab polling the lock status is not an admin at
+// the keyboard, and treating it as one is how an unlock survived a
+// weekend (#1120). RunVaultUnlockExpiry closes the window on time with
+// no requests at all.
 const vaultUnlockIdle = 15 * time.Minute
 
 // vaultUnlockState records which session opened the vault and when it
@@ -62,18 +67,36 @@ func (u *vaultUnlockState) release() {
 }
 
 // heldBy reports whether sessionID still holds a live unlock, renewing
-// it when it does.
+// it when it does. For using the unlock, and nothing else.
 func (u *vaultUnlockState) heldBy(sessionID string, now time.Time) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if u.sessionID == "" || u.sessionID != sessionID {
-		return false
-	}
-	if now.Sub(u.lastUsed) > vaultUnlockIdle {
+	if !u.liveLocked(sessionID, now) {
 		return false
 	}
 	u.lastUsed = now
 	return true
+}
+
+// isLive asks the same question without answering it in a way that
+// changes it.
+//
+// The renewal used to be part of the only test there was, so everything
+// that merely wanted to know -- the expiry sweep, the status the
+// frontend polls -- renewed the very thing it was measuring (#1120). An
+// idle timeout that a status poll resets is not a timeout.
+func (u *vaultUnlockState) isLive(sessionID string, now time.Time) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.liveLocked(sessionID, now)
+}
+
+// liveLocked is the shared test. Call with u.mu held.
+func (u *vaultUnlockState) liveLocked(sessionID string, now time.Time) bool {
+	if u.sessionID == "" || u.sessionID != sessionID {
+		return false
+	}
+	return now.Sub(u.lastUsed) <= vaultUnlockIdle
 }
 
 // holder reports which session holds the unlock, or "" for none.
@@ -124,14 +147,52 @@ func (s *Server) vaultUnlockedFor(r *http.Request, now time.Time) bool {
 func (s *Server) expireVaultUnlock(now time.Time) {
 	holder := s.vaultUnlock.holder()
 	if holder == "" {
+		// A key in memory that no session holds: the residue a
+		// passphrase change that failed part way leaves behind (#1120).
+		// Nothing is ever going to come and claim it, and it used to sit
+		// there until the process restarted.
+		if s.Vault.PassphraseSet() && !s.Vault.Locked() {
+			s.lockVault()
+		}
 		return
 	}
-	if s.vaultUnlock.heldBy(holder, now) {
+	if s.vaultUnlock.isLive(holder, now) {
 		if _, ok := s.Sessions.Validate(holder, now); ok {
 			return
 		}
 	}
 	s.lockVault()
+}
+
+// vaultUnlockSweep is how often the expiry above runs on its own.
+//
+// A minute, which is the resolution the fifteen-minute idle window needs
+// and no finer: the check is a comparison against one timestamp, but an
+// admin who walked away should not have to wait for somebody else's
+// request before the key leaves memory (#1120).
+const vaultUnlockSweep = time.Minute
+
+// RunVaultUnlockExpiry drops an idle unlock with no help from a request.
+//
+// Until this existed the expiry was only ever evaluated from the
+// download handler, so a vault unlocked on a quiet evening stayed
+// unlocked until somebody asked for a file -- which on an instance
+// nobody touches overnight means until morning. Runs until ctx ends;
+// started by main alongside the other periodic work.
+func (s *Server) RunVaultUnlockExpiry(ctx context.Context, every time.Duration) {
+	if every <= 0 {
+		every = vaultUnlockSweep
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.expireVaultUnlock(s.now())
+		}
+	}
 }
 
 // lockVault drops the private key and the unlock together. Safe to call
@@ -187,10 +248,16 @@ func (s *Server) handleRouterBackupUnlock(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := s.Vault.Unlock(req.Passphrase); err != nil {
-		// A refused attempt is audited as well as a successful one:
+		// A wrong passphrase is audited as well as a successful unlock:
 		// somebody guessing at the vault passphrase is exactly what an
-		// operator reading this log later wants to see.
-		s.Audit.Record(auditActor(r), "router_backup.unlock_failed", "vault", "")
+		// operator reading this log later wants to see. Only a wrong
+		// one, though -- recording "no passphrase is set" under the same
+		// action diluted the one entry that means someone is guessing
+		// (#1120), which is the same restriction the remove handler
+		// already applies.
+		if errors.Is(err, backupvault.ErrWrongPassphrase) {
+			s.Audit.Record(auditActor(r), "router_backup.unlock_failed", "vault", "")
+		}
 		writeVaultLockError(w, err)
 		return
 	}
@@ -236,6 +303,19 @@ func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.
 	}
 
 	if err := s.Vault.SetPassphrase(req.Passphrase); err != nil {
+		if errors.Is(err, backupvault.ErrResealIncomplete) {
+			// The passphrase is set and the vault is open. Claim and
+			// audit both, or the key sits in this process's memory with
+			// no session holding it and no record of how it got there
+			// (#1120) -- which is exactly the state the feature promises
+			// never to be in.
+			now := time.Now()
+			s.vaultUnlock.claim(sessionID, now)
+			s.Audit.Record(auditActor(r), "router_backup.passphrase_set", "vault",
+				"not every stored backup was re-sealed -- the vault holds a mix of both schemes")
+			http.Error(w, "the vault passphrase is set and every stored backup is still readable, but not all of them were re-sealed -- the server log names the file that stopped it", http.StatusInternalServerError)
+			return
+		}
 		writeVaultLockError(w, err)
 		return
 	}
@@ -268,8 +348,20 @@ func (s *Server) handleRouterBackupRemovePassphrase(w http.ResponseWriter, r *ht
 		return
 	}
 	if err := s.Vault.RemovePassphrase(req.Passphrase); err != nil {
-		if errors.Is(err, backupvault.ErrWrongPassphrase) {
+		switch {
+		case errors.Is(err, backupvault.ErrWrongPassphrase):
 			s.Audit.Record(auditActor(r), "router_backup.unlock_failed", "vault", "while removing the passphrase")
+		case errors.Is(err, backupvault.ErrResealIncomplete):
+			// Removing unlocks the vault to do its work. The vault has
+			// already put itself back the way it was found; this drops
+			// the key as well if nobody is holding it, and says which
+			// state the vault ended up in rather than leaving the
+			// operator to find out by trying a download (#1120).
+			s.expireVaultUnlock(now)
+			s.Audit.Record(auditActor(r), "router_backup.passphrase_remove_failed", "vault",
+				"not every stored backup could be re-sealed; the passphrase is still set and the vault is "+vaultStateWord(s.Vault.Locked()))
+			http.Error(w, "the vault passphrase was not removed -- not every stored backup could be re-sealed, so it is still needed to read them", http.StatusInternalServerError)
+			return
 		}
 		writeVaultLockError(w, err)
 		return
@@ -302,7 +394,7 @@ func (s *Server) vaultLockStatus(r *http.Request, now time.Time) vaultLockStatus
 	return vaultLockStatusResponse{
 		PassphraseSet:       set,
 		Locked:              s.Vault.Locked(),
-		UnlockedForYou:      set && s.vaultUnlock.heldBy(requestSessionID(r), now),
+		UnlockedForYou:      set && s.vaultUnlock.isLive(requestSessionID(r), now),
 		MinPassphraseLength: backupvault.MinPassphraseRunes,
 		IdleTimeoutSeconds:  int(vaultUnlockIdle.Seconds()),
 	}
@@ -321,9 +413,21 @@ func writeVaultLockError(w http.ResponseWriter, err error) {
 		http.Error(w, "a vault passphrase is already set", http.StatusConflict)
 	case errors.Is(err, backupvault.ErrNoPassphrase):
 		http.Error(w, "no vault passphrase is set", http.StatusConflict)
+	case errors.Is(err, backupvault.ErrPassphraseBusy):
+		http.Error(w, "another vault passphrase change is in progress -- try again when it has finished", http.StatusConflict)
 	case errors.Is(err, backupvault.ErrDisabled):
 		http.Error(w, "the router-backup vault is not enabled", http.StatusConflict)
 	default:
 		http.Error(w, "the vault refused that", http.StatusInternalServerError)
 	}
+}
+
+// vaultStateWord is how an audit entry names the vault's state, so an
+// operator reading back a failed passphrase change can see whether the
+// key was left in memory without going and asking the running process.
+func vaultStateWord(locked bool) string {
+	if locked {
+		return "locked"
+	}
+	return "unlocked"
 }
