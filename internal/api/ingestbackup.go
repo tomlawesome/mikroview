@@ -128,10 +128,12 @@ func (s *Server) handleIngestRouterBackup(w http.ResponseWriter, r *http.Request
 		// nothing but a refusal in the audit log to show for it.
 		//
 		// What bounds the slices that follow is not the limiter: one
-		// transfer per device at a time, 32KiB a slice, a slice count
-		// fixed at begin, and a declared total the receiver refuses to
-		// let the accumulated bytes pass. A token cannot buy more work
-		// here than the one transfer it has just paid for.
+		// transfer per device at a time, 32KiB a slice, a request cap of
+		// the declared slice count plus a few retries, and a declared
+		// total the receiver refuses to let the accumulated bytes pass.
+		// A token cannot buy more work here than the one transfer it has
+		// just paid for -- and a slice that is not part of a transfer in
+		// flight is charged below rather than carried free.
 		if !s.IngestLimiter.Reserve(tok.ID, now) {
 			s.refuseBackupSlice(w, tok.Device, errIngestBudgetSpent, now)
 			return
@@ -150,6 +152,20 @@ func (s *Server) handleIngestRouterBackup(w http.ResponseWriter, r *http.Request
 	case "slice":
 		res, err := s.BackupSlices.Slice(tok.Device, req.TransferID, req.Index, req.Data, now)
 		switch {
+		case errors.Is(err, backupslice.ErrNotFound):
+			// This slice is not part of anything the limiter has been
+			// paid for: the transfer it names has finished, was dropped,
+			// or never existed. Charging it here is what stops a device
+			// token POSTing slices for ever on the strength of one begin
+			// (#1123) -- a decode and a sweep each, small but not free.
+			// A slice of a live transfer stays free, which is the whole
+			// point of charging at begin.
+			if !s.IngestLimiter.Reserve(tok.ID, now) {
+				s.refuseBackupSlice(w, tok.Device, errIngestBudgetSpent, now)
+				return
+			}
+			s.refuseBackupSlice(w, tok.Device, err, now)
+			return
 		case errors.Is(err, backupslice.ErrSink):
 			// mikroview's fault, not the device's: a different status, a
 			// different audit entry, and nothing about this server's
@@ -161,22 +177,25 @@ func (s *Server) handleIngestRouterBackup(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if res.Done {
-			// One audit entry per completed backup, matching what the
-			// SFTP drop box records: a configuration arriving is worth
-			// the same line however it travelled. Kind and size come
-			// from the receiver, which counted the bytes it actually
+			// One audit entry per completed arrival: a nightly push is a
+			// backup and its export, and both are worth a line. The SFTP
+			// drop box has no equivalent entry -- an arrival over that
+			// path is not yet audited at all. Kind and size come from
+			// the receiver, which counted the bytes it actually
 			// reassembled -- the push script sends neither on a slice,
 			// so building this from the request recorded every backup as
 			// "kind= bytes=0" (#1122).
 			//
-			// Through the same gate as the refusal below, and with the
-			// same key, so the trail keeps the shape noteIngest
-			// documents: a device that starts being refused, or
-			// recovers, is on the record either way.
-			if s.noteIngest(tok.Device, "router-backup", true, now) {
-				s.Audit.Record("device:"+tok.Device, "ingest.router_backup", tok.Device,
-					fmt.Sprintf("kind=%s bytes=%d over the ingest channel", res.Kind, res.Bytes))
-			}
+			// noteIngest is called for its effect on the gate, with its
+			// answer deliberately ignored: it keeps the shape the
+			// refusal below relies on, so a device that starts being
+			// refused or recovers is on the record either way. Recording
+			// through that gate instead meant only the first completed
+			// arrival in 24 hours was written down, so the .rsc half of
+			// every nightly push was missing from the trail.
+			s.noteIngest(tok.Device, "router-backup", true, now)
+			s.Audit.Record("device:"+tok.Device, "ingest.router_backup", tok.Device,
+				fmt.Sprintf("kind=%s bytes=%d over the ingest channel", res.Kind, res.Bytes))
 		}
 		writeJSON(w, http.StatusOK, backupSliceResponse{Accepted: true, Done: res.Done})
 	default:
@@ -199,7 +218,8 @@ func (s *Server) refuseBackupSlice(w http.ResponseWriter, device string, err err
 		s.Audit.Record("device:"+device, "ingest.router_backup.refused", device, err.Error())
 	}
 	switch {
-	case errors.Is(err, backupslice.ErrBusy), errors.Is(err, errIngestBudgetSpent):
+	case errors.Is(err, backupslice.ErrBusy), errors.Is(err, backupslice.ErrTooManySlices),
+		errors.Is(err, errIngestBudgetSpent):
 		// Capacity, not a fault in the request: the router's next
 		// scheduled run starts over, which is what it does after any
 		// refusal anyway.
