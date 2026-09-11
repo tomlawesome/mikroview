@@ -19,6 +19,9 @@ func vaultWithOnePush(t *testing.T) *backupvault.Vault {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A roomy fake filesystem, so a test about the list does not
+	// depend on how full the host running it happens to be (#1125).
+	v.SetSpaceProbeForTest(func(string) (int64, int64, error) { return 50 << 30, 100 << 30, nil })
 	backup := append([]byte{0x88, 0xac, 0xa1, 0xb1}, []byte("a backup")...)
 	if err := v.Store("rb5009", backupvault.KindBackup, backup, time.Now()); err != nil {
 		t.Fatal(err)
@@ -222,30 +225,61 @@ func TestRouterBackupDownloadRejectsUnknownKind(t *testing.T) {
 }
 
 // TestRouterBackupsListCarriesTheLowSpaceFlag pins #1125's UI hook: the
-// list always carries `lowSpace`, so Settings can warn that the vault
-// is cycling generations without a second call. What makes it true is
-// tested in internal/backupvault, which owns the measurement.
+// list carries `lowSpace`, and it carries what the vault actually
+// thinks -- true while the disk is under the floor, false once it is
+// back above it -- so Settings can warn without a second call.
 func TestRouterBackupsListCarriesTheLowSpaceFlag(t *testing.T) {
 	s := newAuthTestServer(t)
-	s.Vault = vaultWithOnePush(t)
+	vault := vaultWithOnePush(t)
+	s.Vault = vault
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 	client := setUpAdmin(t, ts)
 
-	resp, err := client.Get(ts.URL + "/api/router-backups")
-	if err != nil {
-		t.Fatal(err)
+	lowSpace := func() bool {
+		t.Helper()
+		resp, err := client.Get(ts.URL + "/api/router-backups")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var raw map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := raw["lowSpace"]
+		if !ok {
+			t.Fatalf("the router-backups list has no lowSpace field: %v", raw)
+		}
+		flag, ok := got.(bool)
+		if !ok {
+			t.Fatalf("lowSpace = %v (%T), want a boolean", got, got)
+		}
+		return flag
 	}
-	defer resp.Body.Close()
-	var raw map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		t.Fatal(err)
+
+	if lowSpace() {
+		t.Fatal("lowSpace = true on a vault that has never seen a full disk")
 	}
-	got, ok := raw["lowSpace"]
-	if !ok {
-		t.Fatalf("the router-backups list has no lowSpace field: %v", raw)
+
+	// A 100GiB filesystem with 1GiB free is under the vault's floor
+	// (5% of the total); 50GiB free is over it with the exit margin to
+	// spare. The push after each change is what makes the vault look.
+	push := func(free int64, n int) {
+		t.Helper()
+		vault.SetSpaceProbeForTest(func(string) (int64, int64, error) { return free, 100 << 30, nil })
+		body := append([]byte{0x88, 0xac, 0xa1, 0xb1}, bytes.Repeat([]byte("x"), n)...)
+		if err := vault.Store("rb5009", backupvault.KindBackup, body, time.Now()); err != nil {
+			t.Fatalf("Store: %v", err)
+		}
 	}
-	if _, ok := got.(bool); !ok {
-		t.Fatalf("lowSpace = %v (%T), want a boolean", got, got)
+
+	push(1<<30, 10)
+	if !lowSpace() {
+		t.Fatal("lowSpace = false with the vault's filesystem under its floor")
+	}
+	push(50<<30, 11)
+	if lowSpace() {
+		t.Fatal("lowSpace = true after the disk recovered, so Settings keeps warning")
 	}
 }
