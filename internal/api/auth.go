@@ -604,8 +604,11 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	// when the *calling* session held it open missed the case the button
 	// is pressed for: the admin changing their password because they
 	// think someone else has their session is the one whose other
-	// session is holding the key.
-	s.lockVault()
+	// session is holding the key. It is this account's unlock that goes,
+	// though, not anyone else's -- this route is open to user-role
+	// accounts, and one of those must not be able to end an admin's
+	// unlock by changing its own password (#1124).
+	s.lockVaultForUser(user.ID)
 
 	s.Audit.Record(user.Username, "account.password_changed", user.Username, "sessions ended: all")
 
@@ -653,8 +656,10 @@ func (s *Server) handleAuthLogoutAll(w http.ResponseWriter, r *http.Request) {
 	// panic button an operator presses on a suspected theft, and leaving
 	// the vault's private key in memory afterwards -- until somebody
 	// happened to request a download -- was the opposite of what it
-	// says.
-	s.lockVault()
+	// says. Everywhere means this account's own sessions, here as in the
+	// revocation above: another account's unlock is not this button's to
+	// end (#1124).
+	s.lockVaultForUser(user.ID)
 	s.Audit.Record(user.Username, "account.sessions_ended", user.Username, "sessions ended: all, via sign out everywhere")
 
 	sess := s.Sessions.Create(user.ID, now)
@@ -854,8 +859,10 @@ func (s *Server) handleAuthDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	s.Sessions.RevokeAllForUser(user.ID)
 	// Whoever is being removed may be the one holding the vault open, and
-	// there is no session left to ask (#1120).
-	s.lockVault()
+	// there is no session left to ask (#1120) -- the unlock records the
+	// account it belongs to for exactly this. An unrelated deletion
+	// leaves another admin's unlock where it is (#1124).
+	s.lockVaultForUser(user.ID)
 	revokedTokens := 0
 	if s.Tokens != nil {
 		revokedTokens = s.Tokens.RevokeAllCreatedBy(user.ID)
