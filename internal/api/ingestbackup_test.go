@@ -6,11 +6,16 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/backupslice"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
@@ -121,6 +126,29 @@ func TestBackupArrivesOverTheIngestChannelInSlices(t *testing.T) {
 	if !bytes.Equal(got, file) {
 		t.Fatal("the reassembled backup does not match what was sent")
 	}
+
+	// And the audit trail says what arrived. The push script sends
+	// neither kind nor size on a slice, so this line used to read
+	// "kind= bytes=0" for every backup that ever completed (#1122).
+	detail, ok := auditDetail(s, "ingest.router_backup")
+	if !ok {
+		t.Fatalf("no ingest.router_backup audit entry, got: %+v", s.Audit.Query(audit.Query{}).Entries)
+	}
+	want := fmt.Sprintf("kind=%s bytes=%d over the ingest channel", backupvault.KindBackup, len(file))
+	if detail != want {
+		t.Fatalf("the completion audit entry reads %q, want %q", detail, want)
+	}
+}
+
+// auditDetail returns the detail of the newest entry with this action.
+func auditDetail(s *Server, action string) (string, bool) {
+	entries := s.Audit.Query(audit.Query{}).Entries
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Action == action {
+			return entries[i].Detail, true
+		}
+	}
+	return "", false
 }
 
 func TestBackupSliceNeedsAnIngestToken(t *testing.T) {
@@ -242,5 +270,76 @@ func TestBackupIngestRefusedWithNoVault(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("a push with no vault = %d, want 503", resp.StatusCode)
+	}
+}
+
+// failingBackupSink is a vault that cannot write -- a full disk, the
+// case #1122 found, whose error names mikroview's own filesystem.
+type failingBackupSink struct{ err error }
+
+func (f failingBackupSink) Store(device, kind string, data []byte, now time.Time) error {
+	return f.err
+}
+
+// TestAVaultFailureIsAServerFaultNotTheDevicesFault: the whole file
+// arrived and verified, so the router did nothing wrong. It used to be
+// answered with the vault's own error text -- absolute paths included --
+// as a 400, and audited as that device's refusal.
+func TestAVaultFailureIsAServerFaultNotTheDevicesFault(t *testing.T) {
+	ts, s, token := backupIngestServer(t, "rb5009")
+	const diskFull = "backupvault: writing /var/lib/mikroview/router-backups/9f2a/3.backup.enc: no space left on device"
+	s.BackupSlices = backupslice.New(failingBackupSink{err: errors.New(diskFull)})
+
+	file := realisticBackup(10) // one slice is enough
+	begin := postBackupSlice(t, ts, token, map[string]any{
+		"op": "begin", "kind": backupvault.KindBackup,
+		"totalBytes": len(file), "totalSlices": 1,
+	})
+	if begin.StatusCode != http.StatusOK {
+		t.Fatalf("begin = %d, want 200", begin.StatusCode)
+	}
+	started := decodeSliceResponse(t, begin)
+
+	resp := postBackupSlice(t, ts, token, map[string]any{
+		"op": "slice", "transferId": started.TransferID, "index": 0,
+		"data": base64.StdEncoding.EncodeToString(file),
+	})
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a vault failure = %d, want 503", resp.StatusCode)
+	}
+	if strings.TrimSpace(string(body)) != backupSinkFailedMessage {
+		t.Fatalf("the reply reads %q, want the fixed %q", strings.TrimSpace(string(body)), backupSinkFailedMessage)
+	}
+	if strings.Contains(string(body), "/var/lib") || strings.Contains(string(body), "no space") {
+		t.Fatalf("the reply echoed the vault's own error to the router: %q", body)
+	}
+
+	entries := s.Audit.Query(audit.Query{}).Entries
+	var found bool
+	for _, e := range entries {
+		if e.Action == "ingest.router_backup.refused" {
+			t.Fatalf("a server fault was audited as the device's refusal: %+v", e)
+		}
+		if e.Action != "ingest.router_backup.failed" {
+			continue
+		}
+		found = true
+		if e.Actor != auditActorServer {
+			t.Errorf("the entry's actor is %q, want %q -- a full disk is not the router's act", e.Actor, auditActorServer)
+		}
+		if e.Target != "rb5009" {
+			t.Errorf("the entry's target is %q, want the device whose backup was lost", e.Target)
+		}
+		if strings.Contains(e.Detail, "/var/lib") {
+			t.Errorf("the audit detail carries the vault's path: %q", e.Detail)
+		}
+	}
+	if !found {
+		t.Fatalf("no ingest.router_backup.failed audit entry, got: %+v", entries)
 	}
 }

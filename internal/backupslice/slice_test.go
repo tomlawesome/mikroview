@@ -64,13 +64,22 @@ func sendAll(t *testing.T, r *Receiver, device string, b Begin, data []byte, now
 	}
 	chunks := sliceUp(data)
 	for i, c := range chunks {
-		done, err := r.Slice(device, id, i, c, now)
+		res, err := r.Slice(device, id, i, c, now)
 		if err != nil {
 			t.Fatalf("Slice %d: %v", i, err)
 		}
 		wantDone := i == len(chunks)-1
-		if done != wantDone {
-			t.Fatalf("Slice %d done = %v, want %v", i, done, wantDone)
+		if res.Done != wantDone {
+			t.Fatalf("Slice %d done = %v, want %v", i, res.Done, wantDone)
+		}
+		if !wantDone {
+			continue
+		}
+		// The completed transfer reports what actually arrived, which is
+		// what the caller audits: the push script sends neither kind nor
+		// size on a slice (#1122).
+		if res.Kind != b.Kind || res.Bytes != int64(len(data)) {
+			t.Fatalf("the final slice reported %+v, want kind %q and %d bytes", res, b.Kind, len(data))
 		}
 	}
 	return id
@@ -444,6 +453,11 @@ func TestSliceReturnsASinkErrorAsIsAndDropsTheTransfer(t *testing.T) {
 	_, err = r.Slice("router-1", id, 0, data, now)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Slice = %v, want %v", err, wantErr)
+	}
+	// ...and marked as the sink's failure rather than the caller's, so
+	// an HTTP caller can answer it as a server fault (#1122).
+	if !errors.Is(err, ErrSink) {
+		t.Fatalf("Slice = %v, want it to wrap ErrSink too", err)
 	}
 	if r.InFlight() != 0 {
 		t.Fatalf("InFlight = %d after a sink error, want 0 (transfer dropped)", r.InFlight())

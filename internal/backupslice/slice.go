@@ -100,10 +100,16 @@ var (
 	// ErrSliceTooLarge is a single slice over maxSliceBytes.
 	ErrSliceTooLarge = errors.New("backupslice: slice exceeds the 32KiB cap")
 	// ErrBadTotalBytes is a Begin whose TotalBytes is not in [1, backupvault.MaxFileBytes].
-	ErrBadTotalBytes = errors.New("backupslice: TotalBytes out of range")
+	//
+	// This text, and ErrBadTotalSlices' below, reach the router that sent
+	// the push, so they name the JSON fields it sent (totalBytes,
+	// totalSlices) rather than this package's own Go field names -- an
+	// operator reading a failure on the router has the request in front
+	// of them, not this struct (#1122).
+	ErrBadTotalBytes = errors.New("backupslice: totalBytes out of range")
 	// ErrBadTotalSlices is a Begin whose TotalSlices does not match
 	// ceil(TotalBytes / maxSliceBytes).
-	ErrBadTotalSlices = errors.New("backupslice: TotalSlices disagrees with TotalBytes")
+	ErrBadTotalSlices = errors.New("backupslice: totalSlices disagrees with totalBytes")
 	// ErrTotalExceeded is a slice that would push the accumulated byte
 	// count past the Begin's declared TotalBytes.
 	ErrTotalExceeded = errors.New("backupslice: accumulated bytes exceed the declared total")
@@ -119,6 +125,14 @@ var (
 	// ErrCorrupt is a completed transfer whose reassembled size or
 	// (if supplied) SHA256 does not match what Begin declared.
 	ErrCorrupt = errors.New("backupslice: reassembled file failed its integrity check")
+	// ErrSink wraps whatever the Sink returned for a file that
+	// reassembled cleanly. It is not a refusal: the caller's request was
+	// valid and mikroview could not keep its side of it, so an HTTP
+	// caller answers a wrapped error as a server fault rather than
+	// echoing the sink's own text -- a vault write failure names
+	// mikroview's filesystem, which is nobody's business at the far end
+	// of an ingest token (#1122).
+	ErrSink = errors.New("backupslice: the sink refused a reassembled file")
 )
 
 // transfer is one device's in-progress reassembly.
@@ -200,14 +214,14 @@ func (r *Receiver) Begin(device string, b Begin, now time.Time) (string, error) 
 		return "", ErrUnknownKind
 	}
 	if b.TotalBytes < 1 || b.TotalBytes > backupvault.MaxFileBytes {
-		log.Warn(fmt.Sprintf("refused a transfer from %s: TotalBytes %d out of range", device, b.TotalBytes))
+		log.Warn(fmt.Sprintf("refused a transfer from %s: totalBytes %d out of range", device, b.TotalBytes))
 		return "", ErrBadTotalBytes
 	}
 	// TotalBytes is already bounded above, so this division cannot
 	// overflow int before the comparison below.
 	wantSlices := int((b.TotalBytes + maxSliceBytes - 1) / maxSliceBytes)
 	if b.TotalSlices != wantSlices {
-		log.Warn(fmt.Sprintf("refused a transfer from %s: TotalSlices %d disagrees with TotalBytes %d (want %d)",
+		log.Warn(fmt.Sprintf("refused a transfer from %s: totalSlices %d disagrees with totalBytes %d (want %d)",
 			device, b.TotalSlices, b.TotalBytes, wantSlices))
 		return "", ErrBadTotalSlices
 	}
@@ -256,10 +270,25 @@ func (r *Receiver) Begin(device string, b Begin, now time.Time) (string, error) 
 	return id, nil
 }
 
-// Slice accepts one slice of an in-progress transfer. done reports
-// whether this was the final slice and the whole file was handed to the
-// sink successfully.
-func (r *Receiver) Slice(device, transferID string, index int, data []byte, now time.Time) (bool, error) {
+// Completed describes a transfer that a Slice call finished: the kind
+// and size of the file that actually reached the sink. The zero value --
+// what every slice but the last returns -- means nothing completed.
+//
+// The caller gets these back rather than reading them off the slice
+// request because the router's push script sends neither on a slice
+// (internal/routeros's backupPushHTTPSBlock), so an audit line built
+// from the request recorded every completed backup as "kind= bytes=0"
+// (#1122).
+type Completed struct {
+	Done  bool
+	Kind  string
+	Bytes int64
+}
+
+// Slice accepts one slice of an in-progress transfer. The returned
+// Completed is non-zero only when this was the final slice and the whole
+// file was handed to the sink successfully.
+func (r *Receiver) Slice(device, transferID string, index int, data []byte, now time.Time) (Completed, error) {
 	// Copied before the lock is taken. The bytes belong to the caller
 	// (an HTTP handler's decoded body, reusable after it returns), so
 	// they have to be copied somewhere -- and doing it here keeps the one
@@ -269,11 +298,11 @@ func (r *Receiver) Slice(device, transferID string, index int, data []byte, now 
 
 	tr, err := r.acceptSlice(device, transferID, index, chunk, now)
 	if err != nil {
-		return false, err
+		return Completed{}, err
 	}
 	if tr == nil {
 		// More slices to come.
-		return false, nil
+		return Completed{}, nil
 	}
 
 	// Everything below runs with r.mu released: acceptSlice took the
@@ -286,7 +315,7 @@ func (r *Receiver) Slice(device, transferID string, index int, data []byte, now 
 	// timeout, which aborts that router's whole transfer (#1121).
 	if tr.received != tr.totalBytes {
 		log.Warn(fmt.Sprintf("refused a transfer from %s: reassembled %d bytes, want %d -- dropping the transfer", device, tr.received, tr.totalBytes))
-		return false, ErrCorrupt
+		return Completed{}, ErrCorrupt
 	}
 	// Exactly one allocation, at the size already proven to equal the
 	// declared total.
@@ -303,7 +332,7 @@ func (r *Receiver) Slice(device, transferID string, index int, data []byte, now 
 		// checking a sender's own integrity claim about its own data.
 		if hex.EncodeToString(sum[:]) != tr.sha256 {
 			log.Warn(fmt.Sprintf("refused a transfer from %s: SHA256 mismatch -- dropping the transfer", device))
-			return false, ErrCorrupt
+			return Completed{}, ErrCorrupt
 		}
 	}
 
@@ -315,9 +344,9 @@ func (r *Receiver) Slice(device, transferID string, index int, data []byte, now 
 		// scheduled run anyway (#955), so keeping the buffer resident
 		// would hold memory for a retry that never comes.
 		log.Warn(fmt.Sprintf("a transfer from %s reassembled but the sink refused it: %v", device, err))
-		return false, err
+		return Completed{}, fmt.Errorf("%w: %w", ErrSink, err)
 	}
-	return true, nil
+	return Completed{Done: true, Kind: tr.kind, Bytes: tr.totalBytes}, nil
 }
 
 // acceptSlice validates one slice and records it against its transfer,
