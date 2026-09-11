@@ -368,9 +368,11 @@
       <p class="hero-sub">
         MikroView turns RouterOS's firewall log into a live picture of your
         network: every boundary the router watches, every connection accepted,
-        dropped or rejected, and which rule decided it. Syslog-based, so there's
-        no API access and no credentials on the router — just
-        <code>docker compose up</code>.
+        dropped or rejected, and which rule decided it. The router pushes;
+        MikroView never logs in to it — no RouterOS credentials, no API
+        access. Start it with <code>docker compose up</code>, paste the setup
+        commands it generates into the router once, and the picture builds
+        itself.
       </p>
       <div class="hero-ctas">
         <a class="btn btn-primary" href="https://github.com/tomlawesome/mikroview">View on GitHub</a>
@@ -419,10 +421,13 @@
       </div>
       <div class="feature-card">
         <h3><span class="chip"></span>Push, not poll</h3>
-        <p>RouterOS forwards firewall log lines over syslog-over-TLS. No API
-        access, no credentials, no polling loop hammering the router — just a
-        stream it was already able to send. One Go binary, UI embedded,
-        distroless image.</p>
+        <p>RouterOS forwards firewall log lines over syslog-over-TLS, and can
+        push its config and encrypted backups the same way. MikroView never
+        connects to the router and holds no RouterOS credentials; the only
+        secret on the router is an ingest token MikroView minted for that
+        device. No polling loop hammering the router — just a stream it was
+        already able to send. One Go binary, UI embedded, distroless
+        image.</p>
       </div>
       <div class="feature-card">
         <h3><span class="chip"></span>Secure by default, on disk by choice</h3>

@@ -10,12 +10,15 @@
 > if you prefer working from documentation, if you are scripting a fleet,
 > or when you want the reasoning behind a step.
 
-MikroView never talks to RouterOS's API and needs no credentials on the
-router. Instead, RouterOS pushes to MikroView: firewall log lines over
-syslog (steps 1–3, required), optionally a copy of its own config for
-host names and rule lookups (step 4), and optionally a nightly config
-backup MikroView keeps encrypted (step 7, issue #394). Either way, the
-router always initiates; MikroView never connects to it. This is a
+MikroView never talks to RouterOS's API and never holds a RouterOS
+credential. Instead, RouterOS pushes to MikroView: firewall log lines
+over syslog (steps 1–3, required), optionally a copy of its own config
+for host names and rule lookups (step 4), and optionally a nightly config
+backup MikroView keeps encrypted (step 7, issue #394). The optional
+pushes carry an ingest token MikroView mints for that device — a
+MikroView credential on the router, never a router credential in
+MikroView. Either way, the router always initiates; MikroView never
+connects to it. This is a
 one-time configuration on each router you want to monitor.
 
 ## 1. Point RouterOS at the container over TLS
