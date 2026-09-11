@@ -276,20 +276,92 @@ func Open(dir string, key *retention.Key) (*Vault, error) {
 	if v.meta.Routers == nil {
 		v.meta.Routers = map[string]*routerMeta{}
 	}
-	v.reconcileOrphans()
+	v.reconcile()
 	return v, nil
 }
 
-// reconcileOrphans deletes files under the vault's router directories
-// that no generation in the index refers to. They are the far side of a
-// crash between writing a generation's file and committing the index
-// that names it (the live paths remove their own, but a killed process
-// cannot), and of a half-written temp file from persist.WriteFileAtomic.
-// Nothing but this package ever reaches into these directories, so an
-// unreferenced file is dead weight -- up to 16MiB a time on the disk
-// whose fullness most likely caused it (#1125). Each removal is logged:
-// deleting a backup silently is not something this package does.
-func (v *Vault) reconcileOrphans() {
+// reconcile puts the index and the directories back into agreement at
+// start-up, both ways round (#1125). The live paths clean up after
+// themselves, but a killed process cannot, so a crash or a failed index
+// write can leave either side holding something the other does not.
+//
+// An index entry whose file is gone is dropped: the vault would
+// otherwise list it, offer it and 404 on the download. A file no
+// generation refers to is deleted: nothing but this package ever
+// reaches into these directories, so it is dead weight -- up to 16MiB
+// a time on the disk whose fullness most likely caused it. Both are
+// logged; deleting or forgetting a backup silently is not something
+// this package does. The repaired index is written once, at the end,
+// and only if something changed.
+func (v *Vault) reconcile() {
+	if v.repairIndexAgainstDisk() {
+		if err := v.persistMetaLocked(); err != nil {
+			v.log.Error(fmt.Sprintf("could not commit the repaired vault index: %v", err))
+		}
+	}
+	v.removeUnreferencedFiles()
+}
+
+// repairIndexAgainstDisk drops generations whose files are not on disk
+// and reports whether it changed anything. Only the halves the index
+// claims arrived are looked for: a generation whose `.rsc` never came
+// is complete as it stands.
+func (v *Vault) repairIndexAgainstDisk() bool {
+	var changed bool
+	for device, rm := range v.meta.Routers {
+		dir := v.routerDir(device)
+		kept := rm.Generations[:0]
+		for _, g := range rm.Generations {
+			missing := ""
+			for kind, arrived := range map[string]time.Time{KindBackup: g.BackupArrivedAt, KindRsc: g.RscArrivedAt} {
+				if arrived.IsZero() {
+					continue
+				}
+				if _, err := os.Stat(filepath.Join(dir, v.fileName(g.ID, kind))); err != nil {
+					missing = kind
+				}
+			}
+			if missing == "" {
+				kept = append(kept, g)
+				continue
+			}
+			changed = true
+			v.log.Warn(fmt.Sprintf("repaired the vault index: dropped %s's generation %s, whose %s file is not on disk",
+				device, g.ID, missing))
+		}
+		rm.Generations = kept
+		if len(rm.Generations) == 0 {
+			// Nothing left to hold: the router should not appear in
+			// Settings' list with an empty strip.
+			delete(v.meta.Routers, device)
+			changed = true
+			continue
+		}
+		if rm.Anchor != "" && !generationsHave(rm.Generations, rm.Anchor) {
+			// The anchor went with a dropped generation. The newest
+			// copy the vault still has becomes the one low-space mode
+			// cycles around.
+			rm.Anchor = rm.Generations[len(rm.Generations)-1].ID
+			changed = true
+		}
+	}
+	return changed
+}
+
+func generationsHave(gens []*generationMeta, id string) bool {
+	for _, g := range gens {
+		if g.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// removeUnreferencedFiles is reconcile's other half: every file under a
+// router directory that no generation in the (already repaired) index
+// refers to, including half-written temp files from a crashed
+// persist.WriteFileAtomic.
+func (v *Vault) removeUnreferencedFiles() {
 	referenced := make(map[string]map[string]bool, len(v.meta.Routers))
 	for device, rm := range v.meta.Routers {
 		names := make(map[string]bool, 2*len(rm.Generations))
