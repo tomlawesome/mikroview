@@ -165,6 +165,11 @@ var (
 	// mikroview's filesystem, which is nobody's business at the far end
 	// of an ingest token (#1122).
 	ErrSink = errors.New("the sink refused a reassembled file")
+	// ErrServer is a failure on mikroview's own side before any file
+	// reached the sink -- the random source for a transfer id, say. Like
+	// ErrSink it is the server's fault, not the router's, and the
+	// handler answers it the same way.
+	ErrServer = errors.New("the server could not start the transfer")
 )
 
 // transfer is one device's in-progress reassembly.
@@ -251,7 +256,7 @@ func New(sink Sink) *Receiver {
 func newTransferID() (string, error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("backupslice: generating a transfer id: %w", err)
+		return "", fmt.Errorf("%w: generating a transfer id: %v", ErrServer, err)
 	}
 	return hex.EncodeToString(raw), nil
 }

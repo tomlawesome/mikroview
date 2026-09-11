@@ -586,7 +586,7 @@ func TestRefusalTextsAreWrittenForTheirReaders(t *testing.T) {
 	for _, err := range []error{
 		ErrNotFound, ErrOutOfOrder, ErrSliceTooLarge, ErrBadTotalBytes,
 		ErrBadTotalSlices, ErrTotalExceeded, ErrUnknownKind, ErrNotABackup,
-		ErrBusy, ErrCorrupt, ErrSink, ErrTooManySlices,
+		ErrBusy, ErrCorrupt, ErrSink, ErrServer, ErrTooManySlices,
 	} {
 		if strings.HasPrefix(err.Error(), "backupslice:") {
 			t.Errorf("%q names this package to whoever reads it", err)
