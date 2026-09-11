@@ -937,3 +937,41 @@ func TestAZeroTotalMeasurementDoesNotEnterLowSpace(t *testing.T) {
 		t.Fatalf("got %d generations, want 2 (normal retention, the measurement said nothing)", got)
 	}
 }
+
+// TestOpenDropsIndexEntriesWhoseFileIsMissing is the other half of the
+// start-up reconcile: an index entry whose file is gone -- the far side
+// of an index write that failed after a generation was cycled out -- is
+// a generation the vault would list, offer and 404 on. The reopen drops
+// it and keeps the repaired index.
+func TestOpenDropsIndexEntriesWhoseFileIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v := openVaultOnDisk(t, dir, key, disk)
+	base := time.Now()
+	mustStore(t, v, "rb5009", 10, base)
+	mustStore(t, v, "rb5009", 11, base.Add(time.Hour))
+	ids := generationIDs(v, "rb5009")
+	if len(ids) != 2 {
+		t.Fatalf("got %v, want two generations to start with", ids)
+	}
+	lost, kept := ids[0], ids[1]
+
+	if err := os.Remove(filepath.Join(v.routerDir("rb5009"), v.fileName(lost, KindBackup))); err != nil {
+		t.Fatal(err)
+	}
+
+	v2 := openVaultOnDisk(t, dir, key, disk)
+	if got := generationIDs(v2, "rb5009"); len(got) != 1 || got[0] != kept {
+		t.Fatalf("the reopened vault lists %v, want only %s -- the other has no file to serve", got, kept)
+	}
+	if got := v2.Stats().Generations; got != 1 {
+		t.Errorf("Stats() counts %d generations, want 1", got)
+	}
+
+	// The repair was persisted, not just made in memory.
+	v3 := openVaultOnDisk(t, dir, key, disk)
+	if got := generationIDs(v3, "rb5009"); len(got) != 1 || got[0] != kept {
+		t.Fatalf("the second reopen lists %v, want the repaired index to have been kept", got)
+	}
+}
