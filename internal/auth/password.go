@@ -129,3 +129,53 @@ func VerifyPassword(password, encodedHash string) bool {
 	release()
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
+
+// KDFParams are the Argon2id cost parameters one derivation was run
+// with. Recorded alongside whatever they protected, for the same reason
+// HashPassword encodes them into its hash string: raising the cost later
+// must not make everything derived under the old cost unopenable.
+type KDFParams struct {
+	Memory  uint32 `json:"memory"` // KiB
+	Time    uint32 `json:"time"`
+	Threads uint8  `json:"threads"`
+}
+
+// DefaultKDFParams is the profile a new derivation uses -- the same
+// RFC 9106 §4 memory-constrained profile HashPassword's constants
+// describe, so there is one Argon2id cost in this codebase rather than a
+// second one that drifts.
+func DefaultKDFParams() KDFParams {
+	return KDFParams{Memory: argon2Memory, Time: argon2Time, Threads: argon2Threads}
+}
+
+// Valid reports whether p is usable. Zero values would silently produce
+// a derivation far weaker than the documented one, so a lock document
+// that arrives with them is refused rather than opened cheaply.
+func (p KDFParams) Valid() bool {
+	return p.Memory >= 8*1024 && p.Time >= 1 && p.Threads >= 1
+}
+
+// DeriveKey turns a passphrase into 32 bytes of key material under p.
+//
+// Exported for the router-backup vault's optional admin passphrase
+// (#956), which needs a *key* rather than a verifier hash and must not
+// grow its own copy of the Argon2id call: sharing this one keeps the
+// cost profile in a single place, and -- because every derivation here
+// takes a slot from the same process-wide semaphore -- a burst of unlock
+// attempts cannot reserve more memory than a burst of logins already
+// could.
+func DeriveKey(passphrase string, salt []byte, p KDFParams) []byte {
+	release := acquireHashSlot()
+	defer release()
+	return argon2.IDKey([]byte(passphrase), salt, p.Time, p.Memory, p.Threads, argon2KeyLen)
+}
+
+// NewKDFSalt returns a fresh random salt of the size this package's
+// derivations use.
+func NewKDFSalt() ([]byte, error) {
+	salt := make([]byte, argon2SaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("generate salt: %w", err)
+	}
+	return salt, nil
+}

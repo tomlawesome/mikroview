@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>MikroView — RouterOS firewall live view</title>
-<meta name="description" content="A real-time RouterOS firewall live view. See every connection accepted, dropped, or rejected, and by which rule. Self-hosted, single container, near-zero load on the router." />
+<meta name="description" content="A live picture of your RouterOS firewall: every boundary the router watches, every connection accepted, dropped or rejected, and by which rule. Self-hosted, single container, near-zero load on the router." />
 <link rel="icon" type="image/svg+xml" href="img/logo-mark.svg" />
 <style>
   :root {
@@ -191,91 +191,27 @@
   }
   .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 56px; }
 
-  /* ---------- live feed demo ---------- */
-  .feed-panel {
-    background: var(--bg-elevated);
+  /* ---------- hero screenshot ---------- */
+  .hero-shot {
     border: 1px solid var(--border);
     border-radius: 10px;
     overflow: hidden;
+    background: var(--bg-elevated);
     box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.5);
   }
-  .feed-chrome {
+  .hero-shot .chrome {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
-  }
-  .feed-dots { display: flex; gap: 6px; }
-  .feed-dots span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
-  .feed-chrome-label {
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--fg-dim);
-    margin-left: 4px;
   }
-  .feed-live {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--accept);
-  }
-  .feed-live .dot {
-    width: 6px; height: 6px; border-radius: 50%; background: var(--accept);
-    box-shadow: 0 0 6px var(--accept);
-    animation: blink 1.6s ease-in-out infinite;
-  }
-  @keyframes blink { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
-
-  .feed-rows {
-    height: 262px;
-    overflow: hidden;
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-  }
-  .feed-row {
-    display: grid;
-    grid-template-columns: 62px 74px 1fr 100px;
-    gap: 10px;
-    align-items: center;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--border);
-    white-space: nowrap;
-    overflow: hidden;
-    animation: feed-in 0.4s ease-out;
-  }
-  @keyframes feed-in {
-    from { opacity: 0; transform: translateY(6px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .feed-row .t { color: var(--fg-dim); }
-  .feed-row .badge {
-    display: inline-block;
-    font-size: 10.5px;
-    font-weight: 700;
-    padding: 2px 7px;
-    border-radius: 4px;
-    text-align: center;
-  }
-  .feed-row .addrs { color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
-  .feed-row .rule { color: var(--fg-muted); text-align: right; overflow: hidden; text-overflow: ellipsis; }
-  .feed-row.accept { background: var(--accept-bg); }
-  .feed-row.accept .badge { color: var(--accept); background: rgba(62, 207, 126, 0.16); }
-  .feed-row.drop { background: var(--drop-bg); }
-  .feed-row.drop .badge { color: var(--drop); background: rgba(245, 166, 35, 0.16); }
-  .feed-row.reject { background: var(--reject-bg); }
-  .feed-row.reject .badge { color: var(--reject); background: rgba(239, 68, 68, 0.16); }
-
-  @media (prefers-reduced-motion: reduce) {
-    .feed-row { animation: none; }
-    .feed-live .dot { animation: none; }
-  }
+  .hero-shot .chrome span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
+  .hero-shot .chrome .label { margin-left: 6px; }
+  .hero-shot img { display: block; width: 100%; height: auto; }
 
   /* ---------- features ---------- */
   .features { padding: 30px 0 76px; }
@@ -309,12 +245,18 @@
   }
   .feature-card p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--fg-muted); }
 
-  /* ---------- screenshot ---------- */
+  /* ---------- screenshots ---------- */
   .proof { padding: 20px 0 40px; }
+  .proof-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 20px;
+  }
   .proof-frame {
     border: 1px solid var(--border);
     border-radius: 12px;
     overflow: hidden;
+    background: var(--bg-elevated);
     box-shadow: 0 40px 100px -40px rgba(0, 0, 0, 0.55);
   }
   .proof-frame .chrome {
@@ -326,13 +268,15 @@
     border-bottom: 1px solid var(--border);
   }
   .proof-frame .chrome span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
-  .proof-frame img[data-theme-img='light'] { display: none; }
-  :root[data-theme='light'] .proof-frame img[data-theme-img='dark'] { display: none; }
-  :root[data-theme='light'] .proof-frame img[data-theme-img='light'] { display: block; }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme='dark']) .proof-frame img[data-theme-img='dark'] { display: none; }
-    :root:not([data-theme='dark']) .proof-frame img[data-theme-img='light'] { display: block; }
+  .proof-frame img { display: block; width: 100%; height: auto; }
+  .proof-frame figcaption {
+    padding: 12px 16px 14px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--fg-muted);
+    border-top: 1px solid var(--border);
   }
+  .proof-frame figcaption strong { color: var(--fg); }
 
   /* ---------- quickstart ---------- */
   .quickstart { padding: 20px 0 84px; }
@@ -393,8 +337,6 @@
 
   @media (max-width: 640px) {
     .hero { padding: 56px 0 40px; }
-    .feed-row { grid-template-columns: 50px 62px 1fr; }
-    .feed-row .rule { display: none; }
   }
 </style>
 </head>
@@ -424,10 +366,11 @@
       <p class="eyebrow">RouterOS · Firewall live view</p>
       <h1>See what your<br/>firewall <span class="accent">just did.</span></h1>
       <p class="hero-sub">
-        MikroView turns RouterOS's firewall log into a real-time, filterable live
-        view. Every connection, accepted, dropped, or rejected, and by which
-        rule. Syslog-based, so there's no API access and no credentials on the
-        router — just <code>docker compose up</code>.
+        MikroView turns RouterOS's firewall log into a live picture of your
+        network: every boundary the router watches, every connection accepted,
+        dropped or rejected, and which rule decided it. Syslog-based, so there's
+        no API access and no credentials on the router — just
+        <code>docker compose up</code>.
       </p>
       <div class="hero-ctas">
         <a class="btn btn-primary" href="https://github.com/tomlawesome/mikroview">View on GitHub</a>
@@ -435,55 +378,58 @@
       </div>
     </div>
 
-    <div class="feed-panel" role="img" aria-label="Animated preview of the MikroView live table">
-      <div class="feed-chrome">
-        <div class="feed-dots"><span></span><span></span><span></span></div>
-        <span class="feed-chrome-label">live view — WAN</span>
-        <span class="feed-live"><span class="dot"></span>LIVE</span>
-      </div>
-      <div class="feed-rows" id="feed-rows"></div>
-    </div>
+    <figure class="hero-shot" style="margin:0">
+      <div class="chrome"><span></span><span></span><span></span><span class="label">the fall — MikroView's landing view</span></div>
+      <img src="img/fall-dark.png" alt="The fall: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top" />
+    </figure>
   </div>
 </section>
 
 <section class="features" id="features">
   <div class="wrap">
-    <p class="section-label">Why syslog, not the API</p>
+    <p class="section-label">What you get</p>
     <div class="feature-grid">
       <div class="feature-card">
+        <h3><span class="chip"></span>The fall</h3>
+        <p>The landing view. One column per boundary your rules mention —
+        guest to internet, LAN to servers — with time pouring down it. A
+        boundary whose rules don't log is drawn as a solid dark stripe, so
+        "switched off" never looks like "quiet".</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="chip"></span>Topography</h3>
+        <p>A map of the place: internet above, the router at the waist, your
+        networks below, drawn from the rule, NAT and address tables the
+        router pushes. It shows where logging is dark, and <em>Tune
+        logging</em> hands back an export with those rules switched on.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="chip"></span>The stream</h3>
+        <p>Row by row, as it happens: accepted, dropped or rejected, and the
+        rule that made the call, decoded from a short log-prefix convention.
+        Filter by device, IP or CIDR, port, protocol, interface or rule —
+        all client-side, all instant.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="chip"></span>Flags and a watchlist</h3>
+        <p>Port scans, activity spikes, repeated hits on critical ports (SSH,
+        RDP, Winbox…) and more raise a flag for a human to review — never an
+        automatic action. The watchlist covers the other direction: what
+        <em>should</em> happen, and what deviated.</p>
+      </div>
+      <div class="feature-card">
         <h3><span class="chip"></span>Push, not poll</h3>
-        <p>RouterOS forwards firewall log lines over syslog. No API access, no
-        credentials, no polling loop hammering the router — just a stream it was
-        already capable of sending.</p>
+        <p>RouterOS forwards firewall log lines over syslog-over-TLS. No API
+        access, no credentials, no polling loop hammering the router — just a
+        stream it was already able to send. One Go binary, UI embedded,
+        distroless image.</p>
       </div>
       <div class="feature-card">
-        <h3><span class="chip"></span>The verdict, not just the packet</h3>
-        <p>Every row is color-coded by what actually happened — accepted, dropped,
-        rejected — and which rule made that call, decoded from a short
-        log-prefix convention.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="chip"></span>One small container</h3>
-        <p>A single Go binary with the UI embedded, shipped in a distroless
-        image under 30MB. <code>docker compose up</code> and you're watching
-        traffic.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="chip"></span>Filter like you mean it</h3>
-        <p>Device, IP or CIDR, port, protocol, interface, rule label — all
-        client-side, all instant, no round-trip to the server.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="chip"></span>Flags, not just logs</h3>
-        <p>Port scans, activity spikes, repeated hits on critical ports
-        (SSH, RDP, Winbox...) and a dozen more detectors raise a flag for a
-        human to review — never an automatic action. A watchlist covers the
-        other direction: what <em>should</em> happen, and what deviated.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="chip"></span>Secure by default</h3>
-        <p>HTTPS out of the box with a self-generated certificate, local
-        accounts or OIDC/SSO sign-in, and no data leaves your network.</p>
+        <h3><span class="chip"></span>Secure by default, on disk by choice</h3>
+        <p>Sign-in is always required, HTTPS is on out of the box, local
+        accounts or OIDC/SSO. Events live in memory unless you opt in to
+        encrypted per-day history files; an optional SFTP drop box keeps
+        your router's own nightly backups for the day the router is gone.</p>
       </div>
     </div>
   </div>
@@ -491,11 +437,18 @@
 
 <section class="proof" id="screenshot">
   <div class="wrap">
-    <p class="section-label">In your browser</p>
-    <div class="proof-frame">
-      <div class="chrome"><span></span><span></span><span></span></div>
-      <img data-theme-img="dark" src="img/live-view-dark.png" alt="MikroView live view, dark theme, showing accepted, dropped, and rejected RouterOS firewall connections" />
-      <img data-theme-img="light" src="img/live-view-light.png" alt="MikroView live view, light theme, showing accepted, dropped, and rejected RouterOS firewall connections" />
+    <p class="section-label">Two more ways to look</p>
+    <div class="proof-grid">
+      <figure class="proof-frame" style="margin:0">
+        <div class="chrome"><span></span><span></span><span></span></div>
+        <img src="img/topography-dark.png" alt="Topography: the internet above, the router at the waist, the LAN, IoT and guest networks below, with boundaries marked where logging is switched off" />
+        <figcaption><strong>Topography.</strong> Where traffic can go, drawn from what the router pushed — and where nothing is being written down.</figcaption>
+      </figure>
+      <figure class="proof-frame" style="margin:0">
+        <div class="chrome"><span></span><span></span><span></span></div>
+        <img src="img/stream-dark.png" alt="The stream: a live table of firewall events, each row coloured by verdict and naming the rule that decided it" />
+        <figcaption><strong>The stream.</strong> Every event as a row: the verdict, the rule, the addresses, filterable in place.</figcaption>
+      </figure>
     </div>
   </div>
 </section>
@@ -512,8 +465,12 @@
     <p class="quickstart-note">
       Then point RouterOS at it — syslog over TLS (RouterOS 7.18+), and the
       built-in guided wizard writes every command with your values already
-      filled in. Reference:
-      <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a>.
+      filled in. <code>latest</code> is the most recent release; each release
+      is also tagged <code>v&lt;version&gt;</code> if you'd rather pin one.
+      Reference:
+      <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a>
+      and
+      <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/reading-the-fall.md">docs/reading-the-fall.md</a>.
     </p>
   </div>
 </section>
@@ -555,53 +512,6 @@
     apply();
   })();
 
-  // ---- animated hero live-feed ----
-  (function () {
-    var container = document.getElementById('feed-rows');
-    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    var sample = [
-      { a: 'accept', chain: 'forward', src: '192.168.88.14:51230', dst: '1.1.1.1:443', rule: 'lan-wan' },
-      { a: 'drop', chain: 'input', src: '185.220.101.4:52301', dst: '203.0.113.9:8291', rule: 'input-def' },
-      { a: 'accept', chain: 'input', src: '192.168.88.10:60112', dst: '192.168.88.1:22', rule: 'mgmt-ssh' },
-      { a: 'drop', chain: 'input', src: '45.148.10.23:33812', dst: '203.0.113.9:3389', rule: 'invalid' },
-      { a: 'reject', chain: 'forward', src: '192.168.88.21:54986', dst: '104.21.5.12:6881', rule: 'no-torrent' },
-      { a: 'accept', chain: 'forward', src: '192.168.88.50:60836', dst: '142.250.187.14:443', rule: 'lan-wan' },
-      { a: 'drop', chain: 'input', src: '196.251.71.9:41902', dst: '203.0.113.9:23', rule: 'input-def' },
-      { a: 'accept', chain: 'forward', src: '192.168.88.33:50230', dst: '1.1.1.1:53', rule: 'lan-dns' },
-      { a: 'drop', chain: 'input', src: '89.248.165.31:19274', dst: '203.0.113.9:5900', rule: 'input-def' },
-      { a: 'accept', chain: 'forward', src: '192.168.88.12:58286', dst: '185.199.108.153:443', rule: 'lan-wan' },
-    ];
-
-    var labels = { accept: 'ACCEPT', drop: 'DROP', reject: 'REJECT' };
-    var MAX_ROWS = 7;
-    var i = 0;
-
-    function now() {
-      var d = new Date();
-      function p(n) { return String(n).padStart(2, '0'); }
-      return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
-    }
-
-    function addRow() {
-      var e = sample[i % sample.length];
-      i++;
-      var row = document.createElement('div');
-      row.className = 'feed-row ' + e.a;
-      row.innerHTML =
-        '<span class="t">' + now() + '</span>' +
-        '<span class="badge">' + labels[e.a] + '</span>' +
-        '<span class="addrs">' + e.src + ' → ' + e.dst + '</span>' +
-        '<span class="rule">' + e.rule + '</span>';
-      container.appendChild(row);
-      while (container.children.length > MAX_ROWS) {
-        container.removeChild(container.firstChild);
-      }
-    }
-
-    for (var n = 0; n < MAX_ROWS; n++) addRow();
-    if (!reduceMotion) setInterval(addRow, 1100);
-  })();
 </script>
 
 </body>

@@ -322,3 +322,10 @@ fidelity:
 	@cd frontend && node tests/fidelity/screens.mjs
 
 .PHONY: fidelity
+
+# release-surfaces: the drift check CI runs on promotion merge requests
+# (policy:release-surfaces), runnable locally before opening one.
+release-surfaces:
+	@scripts/check-release-surfaces.sh
+
+.PHONY: release-surfaces

@@ -511,7 +511,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
 | Listener | Auth | TLS | Notes |
 |---|---|---|---|
-| HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
+| HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above; or an ingest bearer token, scoped to one device, for `POST /api/ingest/routeros` and `POST /api/ingest/router-backup` only — the latter is the sliced HTTPS router-backup push, up to 16MiB reassembled from `<=32KiB` pieces, one transfer per device at a time and 64MiB across every device's transfer combined, spending one ingest-rate-limit reservation per whole transfer rather than per piece); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
 | Syslog TLS | None | Always (mikroview's only syslog listener) | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS buys confidentiality on the wire and mikroview authenticating itself to the router, but not the reverse: RouterOS's logging action has no client-certificate option, so anything able to reach the port can still connect and inject log lines. |
 | WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; blocked entirely while undecided (not in the choice-screen exemption list); open, no origin check, once skipped | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` (undecided or skipped) — moot for "undecided", since `requireAuth` never lets the request reach this handler in that state. See `internal/api/ws.go`. |
 | Router-backup SFTP drop box (`internal/backupsftp`, issue #394) | Username = device name, password = that device's ingest token, checked against the same token store the syslog push uses; write-only, per-device, no listing/reading/deleting/renaming | SSH transport (host key generated on first start), but see the caveat below — **the router never verifies it** | Off by default (`backup.enabled: false`); opens a second listening port only once turned on. Login isolation, write-only scope and header/quota checks are enforced in `internal/backupvault`/`internal/backupsftp`, not by the transport. |
@@ -527,11 +527,12 @@ point of view. This is not a bug to fix in this listener: RouterOS's
 **Run the push only over a network path you trust** — a LAN or a VPN,
 never across the open internet — and treat the port the same way you
 would treat an unauthenticated one, because from the router's side it
-effectively is. Issue #955 tracks an HTTPS-based alternative path that
-does verify (via the CA certificate the wizard already installs) for
-deployments that cannot guarantee a trusted path. See
+effectively is. An HTTPS-based alternative path that does verify (via
+the CA certificate the wizard already installs) shipped in 0.5.1
+alongside SFTP, for deployments that cannot guarantee a trusted path —
+see `POST /api/ingest/router-backup` above. See
 [configuration.md](docs/configuration.md#router-backups-over-sftp-optional-off-by-default)
-and [routeros-setup.md](docs/routeros-setup.md#7-back-up-the-routers-configuration-optional).
+and [routeros-setup.md](docs/routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port).
 
 ## Hardening already in place
 
@@ -631,7 +632,8 @@ damage a hostile or misbehaving LAN device can do:
 ## Reporting a vulnerability
 
 This is a small, personally-maintained project without a formal
-disclosure program. If you find a security issue, please open a GitHub
-issue describing it — for anything you'd rather not post publicly first,
-open a minimal issue asking for a private contact channel instead of
-including details in it.
+disclosure program. If you find a security issue, report it privately
+through GitHub's vulnerability reporting for this repository:
+<https://github.com/tomlawesome/mikroview/security/advisories/new>.
+Only the maintainer sees it until a fix is out. Please don't post
+details anywhere public first.

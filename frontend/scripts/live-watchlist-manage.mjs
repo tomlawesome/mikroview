@@ -213,6 +213,10 @@ check(
   await rowFor(NAME).locator('.wchip2', { hasText: 'fencing' }).isVisible(),
   'fence now turns the chip to fencing',
 )
+// Same trap one line down: the chip and the drawer button read the same
+// state but re-render on their own schedules, and pipeline 975 (job
+// 11537) caught the button one frame behind the chip.
+await openDrawer().getByRole('button', { name: 'learn again' }).waitFor({ timeout: 5000 })
 check(await openDrawer().getByRole('button', { name: 'learn again' }).isVisible(), 'the same button now reads learn again')
 
 // --- Item 5: edit and remove ------------------------------------------

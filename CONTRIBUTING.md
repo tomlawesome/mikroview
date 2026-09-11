@@ -2,7 +2,7 @@
 
 ## Local development
 
-Requires Go 1.26+ and Node 22+.
+Requires Go 1.27+ and Node 22+.
 
 ```sh
 make dev-backend    # go run ., syslog TLS on :6514, https on :8080 (TLS on by default -- see docs/configuration.md#tls)
@@ -61,20 +61,12 @@ or a comment on anyone's code — it's simply that reviewing contributions
 properly takes time this project doesn't have, and reviewing them badly
 would be worse than not reviewing them at all.
 
-**Issues are genuinely welcome** — open one on
-[GitHub](https://github.com/tomlawesome/mikroview/issues). Development
-itself happens on a private GitLab and this repository is its mirror, so
-an issue here is picked up and tracked there. Issues are the right
-channel for everything:
-
-- bug reports, including ones you've already diagnosed
-- feature requests and ideas
-- "this is wrong and here's why", with as much detail as you like
-- questions about how something works
-
-Pointing at the exact line and describing the fix in an issue is useful
-and appreciated. It just gets implemented here rather than merged from
-elsewhere.
+**There is no public bug tracker at present.** Development happens on a
+private GitLab and this repository is its mirror; GitHub Issues are
+switched off. Bug reports, feature requests and questions have nowhere
+to go for now — that may change, and this file will say so when it
+does. Security problems are the exception: report them privately, see
+[SECURITY.md](SECURITY.md#reporting-a-vulnerability).
 
 **You're free to fork.** The AGPL gives you that right and nothing here
 restricts it. If you want your own version, maintain it — you just need
@@ -95,3 +87,13 @@ explicit CVE search and a comparison against known secure and insecure
 implementations. See
 [docs/security-by-design.md](docs/security-by-design.md) for what that
 requires and why.
+
+## Project records
+
+- [docs/quality-strategy.md](docs/quality-strategy.md) — what the
+  review and gate process is
+- [docs/flakes.md](docs/flakes.md) — the flake record: checks that
+  failed and passed again on unchanged code
+- [docs/routeros-chr-exercise.md](docs/routeros-chr-exercise.md) — the
+  RouterOS CHR exercise the pipeline runs
+- [docs/decisions/](docs/decisions/) — design and delivery decisions
