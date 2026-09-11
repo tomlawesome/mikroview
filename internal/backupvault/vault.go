@@ -211,6 +211,11 @@ type Vault struct {
 
 	mu   sync.Mutex
 	meta vaultMeta
+	// spaceUnmeasured is true once a free-space check has come back
+	// unusable and has been logged, so the next hundred pushes on the
+	// same filesystem do not repeat it. Cleared by the first usable
+	// measurement.
+	spaceUnmeasured bool
 
 	// lockMu guards the optional admin passphrase's state (lock.go). Its
 	// own mutex rather than mu: a read path takes mu only to consult the
@@ -271,7 +276,62 @@ func Open(dir string, key *retention.Key) (*Vault, error) {
 	if v.meta.Routers == nil {
 		v.meta.Routers = map[string]*routerMeta{}
 	}
+	v.reconcileOrphans()
 	return v, nil
+}
+
+// reconcileOrphans deletes files under the vault's router directories
+// that no generation in the index refers to. They are the far side of a
+// crash between writing a generation's file and committing the index
+// that names it (the live paths remove their own, but a killed process
+// cannot), and of a half-written temp file from persist.WriteFileAtomic.
+// Nothing but this package ever reaches into these directories, so an
+// unreferenced file is dead weight -- up to 16MiB a time on the disk
+// whose fullness most likely caused it (#1125). Each removal is logged:
+// deleting a backup silently is not something this package does.
+func (v *Vault) reconcileOrphans() {
+	referenced := make(map[string]map[string]bool, len(v.meta.Routers))
+	for device, rm := range v.meta.Routers {
+		names := make(map[string]bool, 2*len(rm.Generations))
+		for _, g := range rm.Generations {
+			names[v.fileName(g.ID, KindBackup)] = true
+			names[v.fileName(g.ID, KindRsc)] = true
+		}
+		referenced[dirNameFor(device)] = names
+	}
+	entries, err := os.ReadDir(v.dir)
+	if err != nil {
+		v.log.Warn(fmt.Sprintf("could not read %s to check for unreferenced files: %v", v.dir, err))
+		return
+	}
+	for _, entry := range entries {
+		// Only the per-router directories: metaFileName and
+		// lockFileName are files, and sit beside them.
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(v.dir, entry.Name())
+		// A directory with no entry in the index at all belongs to a
+		// router the vault no longer holds anything for: all of it is
+		// unreferenced.
+		names := referenced[entry.Name()]
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			v.log.Warn(fmt.Sprintf("could not read %s to check for unreferenced files: %v", dir, err))
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || names[f.Name()] {
+				continue
+			}
+			path := filepath.Join(dir, f.Name())
+			if err := os.Remove(path); err != nil {
+				v.log.Warn(fmt.Sprintf("could not remove the unreferenced file %s: %v", path, err))
+				continue
+			}
+			v.log.Info(fmt.Sprintf("removed %s: no generation in the vault index refers to it", path))
+		}
+	}
 }
 
 // Enabled reports whether a retention key is configured -- whether the
@@ -350,8 +410,12 @@ func (v *Vault) Store(device, kind string, data []byte, now time.Time) error {
 		return ErrUnknownKind
 	}
 
+	// Measured before the lock: statfs is a syscall against a
+	// filesystem that may already be in trouble, and every reader of the
+	// index would queue behind it (#1125).
+	space := v.measureSpace()
 	v.mu.Lock()
-	change, err := v.storeLocked(device, kind, header, data, now)
+	change, err := v.storeLocked(device, kind, header, data, now, space)
 	v.mu.Unlock()
 	if change != nil {
 		v.notifyLowSpace(change.low, change.detail)
@@ -371,8 +435,8 @@ type lowSpaceChange struct {
 // index exactly as it was, rather than keeping a generation with no
 // file behind it that the next successful push would persist, count
 // towards MaxGenerations and 404 on download.
-func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte, now time.Time) (*lowSpaceChange, error) {
-	change := v.updateSpaceModeLocked()
+func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte, now time.Time, space spaceReading) (*lowSpaceChange, error) {
+	change := v.updateSpaceModeLocked(space)
 	// dirty tracks whether the index has already changed independently
 	// of this arrival -- the mode flip, or a generation cycled out to
 	// make room -- so a failed write still persists what did happen.
@@ -404,10 +468,12 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 	}
 
 	// fail reports err after persisting whatever the vault itself
-	// changed. The arrival is not in the index either way: nothing
-	// phantom is kept, and the router is never told its backup was
-	// refused -- a disk this full is mikroview's problem, not the
-	// router's (#1125).
+	// changed. The arrival is not in the index either way, so nothing
+	// phantom is kept. The router does hear about it -- the error
+	// reaches it as a 503 -- but as a fault on mikroview's side, which
+	// is what it is. What the router is never told is that its backup
+	// was refused for want of space: a disk this full is mikroview's
+	// problem, not the router's (#1125).
 	fail := func(err error) (*lowSpaceChange, error) {
 		v.log.Error(fmt.Sprintf("could not keep %s's %s: %v", device, kind, err))
 		if dirty {
@@ -427,27 +493,55 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 		return fail(fmt.Errorf("backupvault: creating %s: %w", dir, err))
 	}
 
-	// In low-space mode the set does not grow: the oldest ordinary
-	// generation goes first, so the replacement lands in room the vault
-	// itself just freed. The anchor is never the one dropped, so every
-	// router keeps the safe copy from before the trouble as well as the
-	// latest. If the anchor is all that is left the arrival is written
-	// beside it -- two files per router is the floor, and the disk is
-	// still not the vault's to refuse.
-	if v.meta.LowSpace && newGen != nil {
+	// In low-space mode the set does not grow: the arrival replaces the
+	// oldest ordinary generation. The anchor is never the one dropped,
+	// so every router keeps the safe copy from before the trouble as
+	// well as the latest. If the anchor is all that is left the arrival
+	// is written beside it -- two files per router is the floor, and
+	// the disk is still not the vault's to refuse.
+	//
+	// The replacement is written before the old generation is dropped.
+	// The other order destroys a generation and then discovers it
+	// cannot store the new one, so a run of failing pushes erodes every
+	// router to its anchor. persist.WriteFileAtomic writes through a
+	// temp file in this same directory, so the room the old generation
+	// would free is not available to it either way.
+	replacing := v.meta.LowSpace && newGen != nil
+	path := filepath.Join(dir, v.fileName(gen.ID, kind))
+	err = v.write(path, sealed, 0o600)
+	if err != nil && replacing && errors.Is(err, unix.ENOSPC) {
+		// Last resort, and only here: the disk genuinely has no room
+		// for the new file beside the old one, so the only way to keep
+		// the router storing anything at all is to free the old one
+		// first and try again. This is the case that can cost a
+		// generation for nothing, which is why it needs the filesystem
+		// itself to have said ENOSPC rather than any write failure.
 		if dropped := v.dropOldestNonAnchorLocked(rm, dir); dropped != nil {
 			dirty = true
-			v.log.Info(fmt.Sprintf("low on disk space: dropped %s's generation %s to make room for %s",
+			replacing = false
+			v.log.Warn(fmt.Sprintf("no space for %s's %s beside its oldest generation: dropped %s and retried",
+				device, newGen.ID, dropped.ID))
+			err = v.write(path, sealed, 0o600)
+		}
+	}
+	if err != nil {
+		return fail(fmt.Errorf("backupvault: writing %s: %w", path, err))
+	}
+
+	// The file is on disk: now the generation it replaces can go.
+	if replacing {
+		if dropped := v.dropOldestNonAnchorLocked(rm, dir); dropped != nil {
+			dirty = true
+			v.log.Info(fmt.Sprintf("low on disk space: dropped %s's generation %s now that %s is written",
 				device, dropped.ID, newGen.ID))
 		}
 	}
 
-	path := filepath.Join(dir, v.fileName(gen.ID, kind))
-	if err := v.write(path, sealed, 0o600); err != nil {
-		return fail(fmt.Errorf("backupvault: writing %s: %w", path, err))
-	}
-
 	// The file is committed: only now does the index learn about it.
+	// prevAnchor and hadRouter are what a failed index write rolls back
+	// to, below.
+	prevAnchor := rm.Anchor
+	_, hadRouter := v.meta.Routers[device]
 	if newGen != nil {
 		rm.Generations = append(rm.Generations, newGen)
 	} else {
@@ -479,6 +573,23 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 	}
 
 	if err := v.persistMetaLocked(); err != nil {
+		// The index write is the likely failure on a disk this full,
+		// and the file it would have named is now referenced by
+		// nothing on disk or in memory -- up to 16MiB of dead weight
+		// per push (#1125). Take the arrival back out and remove it.
+		if newGen != nil {
+			rm.Generations = rm.Generations[:len(rm.Generations)-1]
+		} else if attach != nil {
+			attach.RscArrivedAt = time.Time{}
+			attach.RscSize = 0
+		}
+		rm.Anchor = prevAnchor
+		if !hadRouter && len(rm.Generations) == 0 {
+			delete(v.meta.Routers, device)
+		}
+		if rerr := os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
+			v.log.Error(fmt.Sprintf("could not remove %s after the vault index failed to commit: %v", path, rerr))
+		}
 		return change, err
 	}
 	return change, nil
@@ -582,20 +693,45 @@ func lowSpaceFloor(total int64) int64 {
 	return floor
 }
 
-// updateSpaceModeLocked measures the vault's filesystem before the
-// write and enters or leaves low-space mode. A measurement that fails
-// changes nothing: the vault carries on as it was, because a backup is
-// never lost over the vault's own inability to read a number.
-func (v *Vault) updateSpaceModeLocked() *lowSpaceChange {
+// spaceReading is one free-space measurement of the vault's
+// filesystem, taken before v.mu so a slow or sick filesystem does not
+// hold up every reader of the index (#1125).
+type spaceReading struct {
+	free  int64
+	total int64
+	err   error
+}
+
+// measureSpace reads the filesystem the vault lives on. No lock is
+// held: the probe field is set at wiring time and never afterwards.
+func (v *Vault) measureSpace() spaceReading {
 	measure := v.statfs
 	if measure == nil {
 		measure = statfsBytes
 	}
 	free, total, err := measure(v.dir)
-	if err != nil {
-		v.log.Warn(fmt.Sprintf("could not measure free space on %s: %v -- carrying on unchanged", v.dir, err))
+	return spaceReading{free: free, total: total, err: err}
+}
+
+// updateSpaceModeLocked enters or leaves low-space mode on the strength
+// of a measurement Store already took. A measurement that says nothing
+// changes nothing: the vault carries on as it was, because a backup is
+// never lost over the vault's own inability to read a number.
+func (v *Vault) updateSpaceModeLocked(space spaceReading) *lowSpaceChange {
+	free, total := space.free, space.total
+	switch {
+	case space.err != nil:
+		v.warnUnmeasuredLocked(fmt.Sprintf("could not measure free space on %s: %v -- carrying on unchanged", v.dir, space.err))
+		return nil
+	case total <= 0:
+		// A filesystem claiming no blocks at all has not told us it is
+		// full, it has told us nothing. Believing it would put the
+		// vault in low-space mode for good: free=0 is under every
+		// floor, and it can never climb over the exit margin again.
+		v.warnUnmeasuredLocked(fmt.Sprintf("free-space check on %s reported a total of zero bytes -- carrying on unchanged", v.dir))
 		return nil
 	}
+	v.spaceUnmeasured = false
 	floor := lowSpaceFloor(total)
 	detail := fmt.Sprintf("free=%d floor=%d total=%d", free, floor, total)
 	switch {
@@ -621,6 +757,17 @@ func (v *Vault) updateSpaceModeLocked() *lowSpaceChange {
 		return &lowSpaceChange{low: false, detail: detail}
 	}
 	return nil
+}
+
+// warnUnmeasuredLocked logs the first unusable measurement and stays
+// quiet about those after it: on a filesystem that always answers this
+// way, every push would otherwise repeat the same line.
+func (v *Vault) warnUnmeasuredLocked(msg string) {
+	if v.spaceUnmeasured {
+		return
+	}
+	v.spaceUnmeasured = true
+	v.log.Warn(msg)
 }
 
 func (v *Vault) persistMetaLocked() error {
