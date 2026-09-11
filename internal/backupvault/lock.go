@@ -37,7 +37,9 @@ package backupvault
 // There is no recovery path here on purpose -- one that worked for the
 // operator would work for anyone who reached the disk, which is the
 // property the whole feature exists to provide. The setting is off by
-// default and the unlock screen says so.
+// default, and there is no screen for it yet -- the controls are
+// API-only, so docs/configuration.md is where an operator is told this
+// before they turn it on.
 
 import (
 	"bytes"

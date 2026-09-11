@@ -478,3 +478,44 @@ func TestUnlockRacingRemovePassphraseDoesNotRevive(t *testing.T) {
 		t.Fatal("the removed passphrase came back")
 	}
 }
+
+func TestARemovalThatCannotFinishLeavesTheVaultLocked(t *testing.T) {
+	dir := t.TempDir()
+	v := openVaultAt(t, dir, testKey(t))
+	if err := v.Store("rb5009", KindBackup, plainBackup(64), time.Now()); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := v.SetPassphrase(testPassphrase); err != nil {
+		t.Fatalf("SetPassphrase: %v", err)
+	}
+	v.Lock()
+
+	// One file the conversion cannot open, which is what a half-written
+	// disk or a bad sector looks like from here.
+	gen := v.Generations("rb5009")[0]
+	path := filepath.Join(v.routerDir("rb5009"), v.fileName(gen.ID, KindBackup))
+	sealed, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := hybridHeaderBytes; i < len(sealed); i++ {
+		sealed[i] ^= 0xff
+	}
+	if err := os.WriteFile(path, sealed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = v.RemovePassphrase(testPassphrase)
+	if !errors.Is(err, ErrResealIncomplete) {
+		t.Fatalf("RemovePassphrase over an unreadable file = %v, want ErrResealIncomplete", err)
+	}
+	if !v.PassphraseSet() {
+		t.Fatal("a removal that could not finish took the passphrase off anyway")
+	}
+	// Removing unlocks the vault to do its work. When it cannot finish,
+	// the key has to go back: the vault was locked when this started, and
+	// no admin is holding it open (#1120).
+	if !v.Locked() {
+		t.Fatal("a removal that could not finish left the private key in memory")
+	}
+}

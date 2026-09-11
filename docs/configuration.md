@@ -403,13 +403,18 @@ while it is locked -- the router pushes on its own schedule, and nobody
 is at the keyboard at 3am -- so the only thing the lock stops is reading.
 
 Unlocking lasts for the session that did it: the admin's own other
-sign-ins still see a locked vault, and the key is dropped when they lock
-it, sign out, or leave it alone for fifteen minutes.
+sign-ins still see a locked vault. The key is dropped when that session
+locks the vault or signs out, when anyone signs out everywhere, changes
+a password or deletes an account, and fifteen minutes after the unlock
+was last *used*. Downloading a backup counts as using it; a settings page
+checking whether the vault is open does not, and mikroview drops the key
+on time whether or not anything else is happening.
 
 **If you lose the passphrase, you lose those backups.** There is no
 recovery, deliberately: a way back in for you is a way back in for
 whoever copies the disk, which is the whole point of setting one. It is
-off by default, and the unlock screen says this too. The passphrase must
+off by default, and there is no screen for it yet: setting, unlocking and
+removing a passphrase are API-only for now. The passphrase must
 be at least 12 characters, and it protects a file an attacker could
 carry away and attack at their leisure, so pick accordingly.
 
