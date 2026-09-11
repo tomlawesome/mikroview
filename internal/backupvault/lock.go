@@ -575,29 +575,20 @@ func sealToPublic(pub *ecdh.PublicKey, info string, plain []byte) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	sealed, err := fileKey.SealDocument(hybridInfo(info, eph.PublicKey().Bytes()), plain)
+	// One buffer, the size the finished file will be: the header is
+	// written into it and the ciphertext sealed straight onto the end.
+	// A backup is up to 16MiB, and sealing into a slice of its own and
+	// then copying it in behind a 37-byte header meant every stored file
+	// cost twice its own size in garbage (#1121).
+	ephPub := eph.PublicKey().Bytes()
+	out := make([]byte, 0, hybridHeaderBytes+retention.SealOverheadBytes+len(plain))
+	out = append(out, hybridMagic...)
+	out = append(out, ephPub...)
+	out, err = fileKey.SealDocumentAppend(out, hybridInfo(info, ephPub), plain)
 	if err != nil {
 		return nil, fmt.Errorf("backupvault: sealing to the vault key: %w", err)
 	}
-	return hybridBody(eph.PublicKey().Bytes(), sealed), nil
-}
-
-// hybridBody lays out one sealed file: the magic, the ephemeral public
-// key, then the ciphertext.
-//
-// One allocation, exactly the size of the result, and one copy of the
-// body into it -- a backup can be 16MiB, so an accidental second copy is
-// 16MiB of garbage per stored file (#1121). The copy that remains is the
-// floor for this shape: retention.Key.SealDocument hands back a fresh
-// slice with no room in front of it for a header, and putting one there
-// without moving the bytes would need an append-style API in
-// internal/retention.
-func hybridBody(ephPub, sealed []byte) []byte {
-	out := make([]byte, hybridHeaderBytes+len(sealed))
-	copy(out, hybridMagic)
-	copy(out[len(hybridMagic):], ephPub)
-	copy(out[hybridHeaderBytes:], sealed)
-	return out
+	return out, nil
 }
 
 // openFromPrivate reverses sealToPublic.

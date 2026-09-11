@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // Key.Seal and Key.Open are this package's cipher and key derivation
@@ -36,6 +37,25 @@ const sealVersion = 1
 // magic, a version byte, and the random per-call salt.
 const sealHeaderBytes = len(sealMagic) + 1 + saltBytes
 
+// gcmNonceBytes and gcmTagBytes are AES-GCM's standard nonce and tag
+// sizes, which aeadFromInfo's cipher.NewGCM produces. Named here only so
+// SealOverheadBytes can be a constant; TestSealOverheadMatchesTheCipher
+// checks them against what the cipher actually emits, so they cannot
+// quietly drift.
+const (
+	gcmNonceBytes = 12
+	gcmTagBytes   = 16
+)
+
+// SealOverheadBytes is how much longer a sealed envelope is than the
+// plaintext inside it: the header, the nonce and the authentication tag.
+//
+// Exported for a caller assembling an envelope inside a larger buffer --
+// internal/backupvault puts a 37-byte header of its own in front of one
+// -- so that buffer can be allocated once, at the size it will end up,
+// instead of being grown or copied afterwards.
+const SealOverheadBytes = sealHeaderBytes + gcmNonceBytes + gcmTagBytes
+
 // StateStoreKeyInfo namespaces keys derived for internal/persist's
 // encrypted file backend (#853). See Derive's doc comment: every user of
 // the master key needs its own info string.
@@ -56,6 +76,20 @@ const StateStoreKeyInfo = "mikroview/state-store/v1/"
 // Envelope shape: magic (4 bytes) + version (1 byte) + salt (16 bytes) +
 // nonce (aead.NonceSize() bytes) + ciphertext-with-GCM-tag.
 func (k *Key) Seal(info string, aad, plaintext []byte) ([]byte, error) {
+	return k.SealAppend(nil, info, aad, plaintext)
+}
+
+// SealAppend seals plaintext onto the end of dst and returns the
+// extended slice, leaving what dst already held untouched -- the same
+// dst-first convention cipher.AEAD.Seal itself uses, and dst may be nil.
+//
+// Seal is this with no dst, and the reason both exist is the size of
+// what is being sealed. A router backup is up to 16MiB, and a caller
+// that has to put its own header in front of the envelope was copying
+// the whole ciphertext a second time to do it (#1121). Given a dst with
+// room -- SealOverheadBytes says how much -- the ciphertext is written
+// straight into the caller's buffer and never exists twice.
+func (k *Key) SealAppend(dst []byte, info string, aad, plaintext []byte) ([]byte, error) {
 	if k == nil {
 		return nil, errors.New("retention: Seal called with no key")
 	}
@@ -71,15 +105,16 @@ func (k *Key) Seal(info string, aad, plaintext []byte) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("retention: generating nonce: %w", err)
 	}
-	sealed := aead.Seal(nil, nonce, plaintext, aad)
 
-	out := make([]byte, 0, sealHeaderBytes+len(nonce)+len(sealed))
-	out = append(out, sealMagic...)
-	out = append(out, sealVersion)
-	out = append(out, salt...)
-	out = append(out, nonce...)
-	out = append(out, sealed...)
-	return out, nil
+	// One growth for the whole envelope, so neither the append below nor
+	// the AEAD has to reallocate part-way and copy what is already
+	// there. A dst the caller sized itself is not grown at all.
+	dst = slices.Grow(dst, sealHeaderBytes+len(nonce)+len(plaintext)+aead.Overhead())
+	dst = append(dst, sealMagic...)
+	dst = append(dst, sealVersion)
+	dst = append(dst, salt...)
+	dst = append(dst, nonce...)
+	return aead.Seal(dst, nonce, plaintext, aad), nil
 }
 
 // Open reverses Seal. A failure to open -- wrong key, wrong info, wrong
