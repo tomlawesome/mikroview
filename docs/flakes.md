@@ -60,7 +60,3 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-account-menu: the foot has no uptime segment
 
 - 2026-09-10 · 751acc43 (dev) · pipeline 891, gate:scenarios 1/4, job 10361 · `FAIL the foot carries uptime as days and hours -- got "0.4.0+g751acc43… · AGPL-3.0"`: the line rendered without its `· up N d N h` tail; pipeline 893 on the same commit passed the shard.
-
-## live-device-rename: the config-named refusal text is read empty right after the editor appears
-
-- 2026-09-10 · 992e9da1 (!1025) · pipeline 971, gate:scenarios 1/4, job 11446 · `FAIL the editor says plainly that config.yaml supplies this name` and the `stored and never displayed` grammar check, with the no-field/no-Save checks around them passing; `editor.textContent()` is read straight after `editor.waitFor()` (`live-device-rename.mjs:247`), so a not-yet-rendered refusal reads as empty. The diff (quiet-host script, setup-commands token check, VERSION, changelog) cannot reach the editor; the same scenario passed on 961/963/969 on the same frontend. Branch pushed again and passed as pipeline 975.
