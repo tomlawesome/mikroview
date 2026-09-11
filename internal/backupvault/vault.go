@@ -308,23 +308,31 @@ func (v *Vault) Store(device, kind string, data []byte, now time.Time) error {
 	rm := v.meta.Routers[device]
 	if rm == nil {
 		rm = &routerMeta{}
-		v.meta.Routers[device] = rm
 	}
 
-	var gen *generationMeta
+	// Work out what this arrival is without changing anything yet: the
+	// index learns about a generation only once its file is on disk
+	// (#1125). Appending first meant a failed write left a generation
+	// with no file behind it, which the next successful push then
+	// persisted -- counting towards MaxGenerations, evicting a real
+	// generation, and 404ing on download.
+	var (
+		newGen *generationMeta // a generation to add, nil when completing one
+		attach *generationMeta // the open generation this `.rsc` completes
+	)
 	switch kind {
 	case KindBackup:
-		gen = &generationMeta{ID: v.nextGenerationID(now), BackupArrivedAt: now, BackupSize: int64(len(data)), Header: header}
-		rm.Generations = append(rm.Generations, gen)
+		newGen = &generationMeta{ID: v.nextGenerationID(now), BackupArrivedAt: now, BackupSize: int64(len(data)), Header: header}
 	case KindRsc:
 		if n := len(rm.Generations); n > 0 && rm.Generations[n-1].RscArrivedAt.IsZero() {
-			gen = rm.Generations[n-1]
+			attach = rm.Generations[n-1]
 		} else {
-			gen = &generationMeta{ID: v.nextGenerationID(now)}
-			rm.Generations = append(rm.Generations, gen)
+			newGen = &generationMeta{ID: v.nextGenerationID(now)}
 		}
-		gen.RscArrivedAt = now
-		gen.RscSize = int64(len(data))
+	}
+	gen := newGen
+	if gen == nil {
+		gen = attach
 	}
 
 	sealed, err := v.sealBody(sealInfoPrefix+device+"/"+gen.ID+"/"+kind, data)
@@ -339,6 +347,15 @@ func (v *Vault) Store(device, kind string, data []byte, now time.Time) error {
 	if err := persist.WriteFileAtomic(path, sealed, 0o600); err != nil {
 		return fmt.Errorf("backupvault: writing %s: %w", path, err)
 	}
+
+	// The file is committed: only now does the index learn about it.
+	if newGen != nil {
+		rm.Generations = append(rm.Generations, newGen)
+	} else {
+		attach.RscArrivedAt = now
+		attach.RscSize = int64(len(data))
+	}
+	v.meta.Routers[device] = rm
 
 	// Evict the oldest generations beyond the cap. Their files are
 	// deleted outright -- there is no undo, matching "the eleventh pair
