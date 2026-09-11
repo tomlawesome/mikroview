@@ -220,3 +220,32 @@ func TestRouterBackupDownloadRejectsUnknownKind(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestRouterBackupsListCarriesTheLowSpaceFlag pins #1125's UI hook: the
+// list always carries `lowSpace`, so Settings can warn that the vault
+// is cycling generations without a second call. What makes it true is
+// tested in internal/backupvault, which owns the measurement.
+func TestRouterBackupsListCarriesTheLowSpaceFlag(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Vault = vaultWithOnePush(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := setUpAdmin(t, ts)
+
+	resp, err := client.Get(ts.URL + "/api/router-backups")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var raw map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := raw["lowSpace"]
+	if !ok {
+		t.Fatalf("the router-backups list has no lowSpace field: %v", raw)
+	}
+	if _, ok := got.(bool); !ok {
+		t.Fatalf("lowSpace = %v (%T), want a boolean", got, got)
+	}
+}
