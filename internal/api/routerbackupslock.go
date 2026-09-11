@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/backupvault"
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
 
 // vaultUnlockIdle is how long an unlock survives without being used.
@@ -47,14 +48,22 @@ const vaultUnlockIdle = 15 * time.Minute
 type vaultUnlockState struct {
 	mu        sync.Mutex
 	sessionID string
-	lastUsed  time.Time
+	// userID is the account that session belongs to, recorded here
+	// rather than looked up later because the sessions are often
+	// already gone by the time it is needed: a password change and a
+	// "sign out everywhere" both revoke before they decide what to do
+	// about the vault (#1124).
+	userID   string
+	lastUsed time.Time
 }
 
-// claim records sessionID as the holder of the unlock.
-func (u *vaultUnlockState) claim(sessionID string, now time.Time) {
+// claim records sessionID, belonging to userID, as the holder of the
+// unlock.
+func (u *vaultUnlockState) claim(sessionID, userID string, now time.Time) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.sessionID = sessionID
+	u.userID = userID
 	u.lastUsed = now
 }
 
@@ -63,6 +72,7 @@ func (u *vaultUnlockState) release() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.sessionID = ""
+	u.userID = ""
 	u.lastUsed = time.Time{}
 }
 
@@ -104,6 +114,14 @@ func (u *vaultUnlockState) holder() string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.sessionID
+}
+
+// holding reports the session holding the unlock and the account that
+// session belongs to, both "" when nothing holds it.
+func (u *vaultUnlockState) holding() (sessionID, userID string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.sessionID, u.userID
 }
 
 // requestSessionID is the caller's session cookie value, or "" if there
@@ -190,16 +208,36 @@ func (s *Server) RunVaultUnlockExpiry(ctx context.Context, every time.Duration) 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.expireVaultUnlock(s.now())
+			s.expireUnlockOnceRecovered()
 		}
 	}
 }
 
+// expireUnlockOnceRecovered isolates panic recovery to a single pass
+// rather than the whole loop's lifetime -- a defer in the loop itself
+// would end the sweep for good on the first bad pass, and an unrecovered
+// one takes the process with it. The shape is
+// backupslice.Receiver.sweepOnceRecovered's, for the reason its doc
+// comment gives.
+func (s *Server) expireUnlockOnceRecovered() {
+	defer logging.Recover(apiLog)
+	s.expireVaultUnlock(s.now())
+}
+
 // lockVault drops the private key and the unlock together. Safe to call
 // when nothing is unlocked.
-func (s *Server) lockVault() {
-	s.Vault.Lock()
+//
+// It reports whether the key is gone. The one case where it is not is a
+// passphrase change converting the vault right now: that operation is
+// working with the key, so Vault.Lock refuses and the unlock stays with
+// whoever holds it rather than being released against a vault that is
+// still open (#1124).
+func (s *Server) lockVault() bool {
+	if !s.Vault.Lock() {
+		return false
+	}
 	s.vaultUnlock.release()
+	return true
 }
 
 // lockVaultForSession locks the vault if sessionID is the session
@@ -208,6 +246,42 @@ func (s *Server) lockVaultForSession(sessionID string) {
 	if sessionID != "" && s.vaultUnlock.holder() == sessionID {
 		s.lockVault()
 	}
+}
+
+// lockVaultForUser locks the vault when the unlock belongs to userID --
+// the account changing its password, ending all its sessions, or being
+// deleted.
+//
+// Narrower than locking outright, and the difference is who can reach
+// the routes. A password change and "sign out everywhere" are open to
+// user-role accounts (#653's viewer floor), so locking unconditionally
+// let any account end an admin's unlock by changing its own password
+// (#1124). It still locks the case those buttons are pressed for: an
+// operator acting on a suspected theft ends their *own* other session,
+// which is the one holding the key.
+//
+// A key nobody holds is a different question, and the expiry sweep's:
+// it is the residue a passphrase change that failed part way leaves
+// behind, and it goes whoever asked.
+func (s *Server) lockVaultForUser(userID string) {
+	holder, holderUser := s.vaultUnlock.holding()
+	if holder == "" {
+		s.expireVaultUnlock(s.now())
+		return
+	}
+	if holderUser != "" && holderUser != userID {
+		return
+	}
+	s.lockVault()
+}
+
+// callerUserID is the authenticated account's ID, or "" when auth is
+// inactive. Only ever compared against an account this server knows.
+func callerUserID(r *http.Request) string {
+	if u := userFromContext(r); u != nil {
+		return u.ID
+	}
+	return ""
 }
 
 type vaultPassphraseRequest struct {
@@ -262,7 +336,7 @@ func (s *Server) handleRouterBackupUnlock(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.LoginLimiter.Release(key, now)
-	s.vaultUnlock.claim(sessionID, now)
+	s.vaultUnlock.claim(sessionID, callerUserID(r), now)
 	s.Audit.Record(auditActor(r), "router_backup.unlocked", "vault",
 		fmt.Sprintf("idle timeout=%s", vaultUnlockIdle))
 	writeJSON(w, http.StatusOK, s.vaultLockStatus(r, now))
@@ -280,7 +354,13 @@ func (s *Server) handleRouterBackupLock(w http.ResponseWriter, r *http.Request) 
 		writeVaultLockError(w, backupvault.ErrNoPassphrase)
 		return
 	}
-	s.lockVault()
+	if !s.lockVault() {
+		// A passphrase change is converting the vault with the very key
+		// this would drop. Saying so is the honest answer: the button
+		// works again the moment that finishes.
+		writeVaultLockError(w, backupvault.ErrPassphraseBusy)
+		return
+	}
 	s.Audit.Record(auditActor(r), "router_backup.locked", "vault", "")
 	writeJSON(w, http.StatusOK, s.vaultLockStatus(r, time.Now()))
 }
@@ -310,7 +390,7 @@ func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.
 			// (#1120) -- which is exactly the state the feature promises
 			// never to be in.
 			now := time.Now()
-			s.vaultUnlock.claim(sessionID, now)
+			s.vaultUnlock.claim(sessionID, callerUserID(r), now)
 			s.Audit.Record(auditActor(r), "router_backup.passphrase_set", "vault",
 				"not every stored backup was re-sealed -- the vault holds a mix of both schemes")
 			http.Error(w, "the vault passphrase is set and every stored backup is still readable, but not all of them were re-sealed -- the server log names the file that stopped it", http.StatusInternalServerError)
@@ -322,7 +402,7 @@ func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.
 	// SetPassphrase leaves the vault open; the session that set it holds
 	// that unlock, on the same terms as any other.
 	now := time.Now()
-	s.vaultUnlock.claim(sessionID, now)
+	s.vaultUnlock.claim(sessionID, callerUserID(r), now)
 	s.Audit.Record(auditActor(r), "router_backup.passphrase_set", "vault",
 		"stored backups re-sealed; mikroview can no longer read them unaided")
 	writeJSON(w, http.StatusOK, s.vaultLockStatus(r, now))

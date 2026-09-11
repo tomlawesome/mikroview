@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,18 +65,30 @@ func lockStatus(t *testing.T, client *http.Client, ts *httptest.Server) vaultLoc
 }
 
 func TestVaultLockControlsAreAdminOnly(t *testing.T) {
-	s, ts, admin, _ := vaultLockFixture(t)
-	_ = s
+	_, ts, admin, _ := vaultLockFixture(t)
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 
 	user := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
 
-	for _, path := range []string{"/api/router-backups/unlock", "/api/router-backups/lock", "/api/router-backups/passphrase"} {
-		resp := postJSON(t, user, ts.URL+path, vaultPassphraseRequest{Passphrase: testVaultPassphrase})
+	// Every control, removal included: taking the passphrase off is the
+	// most destructive of the four, so it is the last one that should be
+	// left out of the list that proves they are admin-only.
+	for _, control := range []struct{ method, path string }{
+		{http.MethodPost, "/api/router-backups/unlock"},
+		{http.MethodPost, "/api/router-backups/lock"},
+		{http.MethodPost, "/api/router-backups/passphrase"},
+		{http.MethodDelete, "/api/router-backups/passphrase"},
+	} {
+		body := vaultPassphraseRequest{Passphrase: testVaultPassphrase}
+		send := postJSON
+		if control.method == http.MethodDelete {
+			send = deleteJSON
+		}
+		resp := send(t, user, ts.URL+control.path, body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusForbidden {
-			t.Errorf("POST %s as a non-admin = %d, want 403", path, resp.StatusCode)
+			t.Errorf("%s %s as a non-admin = %d, want 403", control.method, control.path, resp.StatusCode)
 		}
 	}
 }
@@ -272,7 +285,12 @@ func TestSigningOutEverywhereDropsTheVaultKey(t *testing.T) {
 	}
 }
 
-func TestDeletingAUserDropsTheVaultKey(t *testing.T) {
+// TestDeletingTheAccountHoldingTheVaultUnlockDropsTheKey: the deletion
+// drops the key when the account being removed is the one holding the
+// vault open, and leaves it alone when it is not. Locking on every
+// deletion took an unrelated admin's unlock away as a side effect of
+// removing somebody else's account (#1124).
+func TestDeletingTheAccountHoldingTheVaultUnlockDropsTheKey(t *testing.T) {
 	s, ts, admin, _ := vaultLockFixture(t)
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 	list, err := admin.Get(ts.URL + "/api/auth/users")
@@ -295,13 +313,49 @@ func TestDeletingAUserDropsTheVaultKey(t *testing.T) {
 	}
 	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
 
+	// The admin who set the passphrase holds the unlock; the account
+	// being deleted has nothing to do with it.
 	resp := deleteJSON(t, admin, ts.URL+"/api/auth/users/"+id, nil)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("deleting the user = %d, want 200", resp.StatusCode)
 	}
+	if s.Vault.Locked() {
+		t.Fatal("deleting an unrelated account took the admin's own unlock away")
+	}
+
+	// Now the holder is the account being removed. Only the vault
+	// controls can claim an unlock and only an admin can reach them, so
+	// the holder is put in place directly -- what matters here is the
+	// deletion's rule, not how the unlock was made.
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "keyholder", Password: "password456", Role: "user"}).Body.Close()
+	list, err = admin.Get(ts.URL + "/api/auth/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	users = nil
+	if err := json.NewDecoder(list.Body).Decode(&users); err != nil {
+		t.Fatal(err)
+	}
+	list.Body.Close()
+	id = ""
+	for _, u := range users {
+		if u.Username == "keyholder" {
+			id = u.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("the second user just created is not in the account list")
+	}
+	s.vaultUnlock.claim("a-session-of-theirs", id, time.Now())
+
+	resp = deleteJSON(t, admin, ts.URL+"/api/auth/users/"+id, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("deleting the account holding the unlock = %d, want 200", resp.StatusCode)
+	}
 	if !s.Vault.Locked() {
-		t.Fatal("deleting a user left the vault's private key in memory")
+		t.Fatal("deleting the account holding the unlock left the vault's private key in memory")
 	}
 }
 
@@ -409,5 +463,71 @@ func TestUnlockingAVaultWithNoPassphraseIsNotAuditedAsAGuess(t *testing.T) {
 	}
 	if guesses != 1 {
 		t.Fatalf("wrong-passphrase attempts audited = %d, want 1", guesses)
+	}
+}
+
+// #1124: the two routes a user-role account can reach, neither of which
+// may take an admin's unlock away.
+
+func TestAUserRoleAccountCannotDropTheAdminsVaultUnlock(t *testing.T) {
+	s, ts, admin, gen := vaultLockFixture(t)
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+
+	user := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+
+	changed := postJSON(t, user, ts.URL+"/api/auth/password", changePasswordRequest{CurrentPassword: "password456", NewPassword: "password789"})
+	changed.Body.Close()
+	if changed.StatusCode != http.StatusOK {
+		t.Fatalf("the user changing their own password = %d, want 200", changed.StatusCode)
+	}
+	if s.Vault.Locked() {
+		t.Fatal("a user-role account changing its own password dropped the admin's vault unlock")
+	}
+
+	everywhere := postJSON(t, user, ts.URL+"/api/auth/logout-all", nil)
+	everywhere.Body.Close()
+	if everywhere.StatusCode != http.StatusOK {
+		t.Fatalf("the user signing out everywhere = %d, want 200", everywhere.StatusCode)
+	}
+	if s.Vault.Locked() {
+		t.Fatal("a user-role account signing itself out everywhere dropped the admin's vault unlock")
+	}
+	// And the admin's unlock is still usable, not merely still in memory.
+	if got := downloadStatus(t, admin, ts, gen); got != http.StatusOK {
+		t.Fatalf("download by the session holding the unlock = %d, want 200", got)
+	}
+}
+
+// TestTheUnlockSweepSurvivesAPanicInOneTick: without a guard around the
+// tick, one panicking pass ends the sweeper for the life of the process
+// -- and takes every other goroutine with it (internal/logging.Recover's
+// doc comment), so an idle unlock would then never expire.
+func TestTheUnlockSweepSurvivesAPanicInOneTick(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+	if s.Vault.Locked() {
+		t.Fatal("the vault is locked immediately after its passphrase was set")
+	}
+
+	var ticks atomic.Int32
+	s.Now = func() time.Time {
+		if ticks.Add(1) == 1 {
+			panic("the clock fell over")
+		}
+		return time.Now().Add(2 * vaultUnlockIdle)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go s.RunVaultUnlockExpiry(ctx, time.Millisecond)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !s.Vault.Locked() {
+		if time.Now().After(deadline) {
+			t.Fatal("the sweeper never ran again after a tick panicked")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
