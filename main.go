@@ -43,6 +43,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/backupslice"
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
@@ -1520,6 +1521,7 @@ func main() {
 		IngestLimiter:           auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
 		RouterState:             routerState,
 		Vault:                   routerBackupVault,
+		BackupSlices:            backupslice.New(routerBackupVault),
 		SetupInstance: api.SetupInstance{
 			TLSEnabled: cfg.TLS.Enabled,
 			Hosts:      cfg.TLS.Hosts,

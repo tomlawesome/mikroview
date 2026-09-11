@@ -51,7 +51,10 @@ type routerBackupsResponse struct {
 	// by" row), empty when backup.enabled is false -- the same
 	// SetupInstance.BackupPort the wizard's step 6 already reads, not a
 	// second copy of the configured value.
-	Port string `json:"port,omitempty"`
+	// Lock is the optional admin passphrase's state (#956), always
+	// present so the group can render "locked" without a second call.
+	Lock vaultLockStatusResponse `json:"lock"`
+	Port string                  `json:"port,omitempty"`
 }
 
 func toRouterBackupGeneration(g backupvault.Generation) routerBackupGeneration {
@@ -79,6 +82,7 @@ func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request)
 	}
 
 	resp := routerBackupsResponse{Enabled: s.Vault.Enabled(), Routers: []routerBackupRouter{}, Port: s.SetupInstance.BackupPort}
+	resp.Lock = s.vaultLockStatus(r, time.Now())
 	if !s.Vault.Enabled() {
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -130,6 +134,15 @@ func (s *Server) handleRouterBackupDownload(w http.ResponseWriter, r *http.Reque
 	kind := r.PathValue("kind")
 	if kind != backupvault.KindBackup && kind != backupvault.KindRsc {
 		http.Error(w, "kind must be \"backup\" or \"rsc\"", http.StatusBadRequest)
+		return
+	}
+
+	// The passphrase gate sits ahead of the read (#956): with a
+	// passphrase set, only the session that unlocked may download, and
+	// an unlock that has gone idle or lost its session is dropped here
+	// rather than merely refused.
+	if !s.vaultUnlockedFor(r, time.Now()) {
+		http.Error(w, "the vault is locked -- unlock it with the vault passphrase first", http.StatusForbidden)
 		return
 	}
 

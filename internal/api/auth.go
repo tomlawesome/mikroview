@@ -160,6 +160,7 @@ func (s *Server) readOnlyRoutes() http.Handler {
 func (s *Server) ingestRoutes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/ingest/routeros", s.handleIngestRouterOS)
+	mux.HandleFunc("POST /api/ingest/router-backup", s.handleIngestRouterBackup)
 	return mux
 }
 
@@ -599,6 +600,9 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	// them here means they are gone immediately, which is what an
 	// operator acting on a suspected theft is actually asking for.
 	s.Sessions.RevokeAllForUser(user.ID)
+	if cookie, err := r.Cookie(sessionCookieName); err == nil {
+		s.lockVaultForSession(cookie.Value)
+	}
 
 	s.Audit.Record(user.Username, "account.password_changed", user.Username, "sessions ended: all")
 
@@ -610,6 +614,10 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
 		s.Sessions.Revoke(cookie.Value)
+		// Signing out drops the router-backup vault's key if this
+		// session is what was holding it open (#956): the unlock is
+		// scoped to the session, so it cannot outlive it.
+		s.lockVaultForSession(cookie.Value)
 	}
 	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"loggedOut": true})

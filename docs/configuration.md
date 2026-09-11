@@ -394,14 +394,34 @@ for the label above; it never claims a backup restores, and it never
 connects to a router to apply one. Restoring is the operator's own act
 on the replacement router (`/system backup load`).
 
+**A second lock, if you want one (optional, off by default).** An admin
+can set a *vault passphrase* that mikroview itself does not keep. With
+one set, the files already stored are re-encrypted so that mikroview
+cannot read any of them until an admin types the passphrase, and backups
+that arrive afterwards are sealed the same way. Backups keep arriving
+while it is locked -- the router pushes on its own schedule, and nobody
+is at the keyboard at 3am -- so the only thing the lock stops is reading.
+
+Unlocking lasts for the session that did it: the admin's own other
+sign-ins still see a locked vault, and the key is dropped when they lock
+it, sign out, or leave it alone for fifteen minutes.
+
+**If you lose the passphrase, you lose those backups.** There is no
+recovery, deliberately: a way back in for you is a way back in for
+whoever copies the disk, which is the whole point of setting one. It is
+off by default, and the unlock screen says this too. The passphrase must
+be at least 12 characters, and it protects a file an attacker could
+carry away and attack at their leisure, so pick accordingly.
+
 **Only on a network you trust.** RouterOS's SFTP client never verifies
 this server's host key (measured on RouterOS 7.23.3) — an attacker on
 the path between the router and mikroview could pose as mikroview and
 receive the pair and the ingest token in plain sight. Run this push
 over a LAN or a VPN you control, never across the open internet. See
-[SECURITY.md](../SECURITY.md) for the full caveat and #955, which tracks
-an HTTPS-based path that does verify, for deployments that cannot
-guarantee a trusted path. The host key itself is generated on first
+[SECURITY.md](../SECURITY.md) for the full caveat. A router that cannot
+reach an SFTP port can push its backup over the ordinary HTTPS ingest
+channel instead, in slices -- see
+[routeros-setup.md](routeros-setup.md) for that alternative. The host key itself is generated on first
 start and kept beside the TLS material (`tls.storePath`) — excluded
 from `-backup` for the same reason that directory already is (see
 ["Backing up and restoring"](#backing-up-and-restoring)); a restore
