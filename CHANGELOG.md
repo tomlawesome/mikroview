@@ -73,6 +73,11 @@ Nothing yet.
   120-per-15-minute allowance as a router's ordinary pushes, so anything
   larger than about 3.8MB could never fully arrive. The allowance is now
   spent once per whole transfer rather than once per piece (#1123).
+- A backup whose file failed to write (a full disk, for instance) still
+  got an entry in the vault's index, so it counted toward the ten kept
+  per router, could push a real one out, and gave a "not found" on
+  download. The index is now updated only once the file is safely on
+  disk; this affected the SFTP path in 0.5.0 too (#1125).
 
 ### Security
 
