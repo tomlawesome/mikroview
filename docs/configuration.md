@@ -377,6 +377,21 @@ generation is one script run's pair. The eleventh push does not grow
 the history — it retires the oldest and takes its place. There is no
 undo.
 
+**When the disk runs low, the history shortens — nothing is refused.**
+If free space on the filesystem holding the vault falls below its floor
+(2 backups' worth, or 5% of the filesystem, whichever is larger),
+mikroview stops growing the history and starts cycling it: each new
+arrival replaces the oldest kept generation rather than adding one. So
+you may see fewer than ten generations for a router while the disk is
+low. Two copies are always kept for every router: the newest one from
+before the trouble started, and whatever arrived last — a router's push
+is never turned away for want of space, and the newest arrival always
+lands. Settings shows a warning while this is on, and the audit log
+records `router_backup.low_space` when it starts and
+`router_backup.low_space_cleared` when free space recovers and normal
+10-generation retention resumes. The fix is the ordinary one: free disk
+space, or move the data directory to a larger disk.
+
 **A missed push is said, not guessed.** Once a router has pushed at
 least twice, mikroview learns its interval from the arrivals
 themselves — not from the scheduler line the wizard printed, which an
@@ -1723,6 +1738,13 @@ device-attributed exception:
   `router_backup.passphrase_removed`, and
   `router_backup.passphrase_remove_failed` (a removal whose re-seal did
   not finish).
+- The vault running low on disk space logs `router_backup.low_space`,
+  and `router_backup.low_space_cleared` when free space recovers. Both
+  are attributed to `system` against the vault: no admin asked for
+  either, and while the first is in force the history is being cycled
+  rather than grown (see [Router backups over
+  SFTP](#router-backups-over-sftp-optional-off-by-default)). The detail
+  carries the free, floor and total byte counts that made the decision.
 - A backup arriving over the HTTPS ingest channel (`POST
   /api/ingest/router-backup`) is `ingest.router_backup`; a refused push
   is `ingest.router_backup.refused`; a storage fault on mikroview's own
