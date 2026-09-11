@@ -1232,6 +1232,13 @@ func main() {
 	// whole interval away in any case.
 	go runSnapshotWriter(ctx, snapshotLog, snapshotWriter, cfg.Snapshot.Interval)
 	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
+	// The HTTPS backup-push receiver's own sweeper (#1121), same
+	// ticker-owned-by-the-package shape as the sync above. A router that
+	// aborts its push loop mid-file leaves a buffer behind, and the
+	// ingest handler only reclaims it when some router pushes again --
+	// which on a quiet install is the next night.
+	routerBackupSlices := backupslice.New(routerBackupVault)
+	go routerBackupSlices.RunPeriodicSweep(ctx)
 	if matchLogPostgres != nil {
 		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
 	}
@@ -1521,7 +1528,7 @@ func main() {
 		IngestLimiter:           auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
 		RouterState:             routerState,
 		Vault:                   routerBackupVault,
-		BackupSlices:            backupslice.New(routerBackupVault),
+		BackupSlices:            routerBackupSlices,
 		SetupInstance: api.SetupInstance{
 			TLSEnabled: cfg.TLS.Enabled,
 			Hosts:      cfg.TLS.Hosts,
