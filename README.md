@@ -21,9 +21,10 @@ and by which rule — filterable by device, IP/CIDR, port, protocol,
 interface, or rule.
 
 Ships as a single Docker container. RouterOS pushes firewall log lines
-to it over syslog (no API access, no credentials, near-zero load on the
-router); MikroView parses, stores, and streams them to a fast, dark,
-dependency-light web UI.
+to it over syslog (MikroView never connects to the router, uses its API
+or holds its credentials; near-zero load on the router); MikroView
+parses, stores, and streams them to a fast, dark, dependency-light web
+UI.
 
 <p align="center">
   <img src="docs/screenshots/fall-dark.png" alt="The fall, MikroView's landing view: one column per traffic boundary the router watches, with marks pouring down as connections cross it" width="820" />
@@ -201,8 +202,9 @@ every restart) but not fatal.
 
 - **Ingestion**: RouterOS forwards firewall log lines via
   `/system logging` over syslog-over-TLS (`remote-protocol=tls`). No
-  polling, no RouterOS API access, no credentials — push-based and
-  cheap for the router.
+  polling, no RouterOS API access, no RouterOS credentials held by
+  MikroView — push-based and cheap for the router. The optional config
+  and backup pushes carry an ingest token MikroView mints per device.
 - **Parsing**: a RouterOS-specific parser decodes chain, action, rule
   label, interfaces, protocol, addresses/ports, and length from each
   log line. See [docs/routeros-setup.md](docs/routeros-setup.md) for the
