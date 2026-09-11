@@ -18,7 +18,61 @@ rewritten.
 
 Nothing yet.
 
-## [0.5.1] - 2026-09-10
+## [0.5.1] - 2026-09-11
+
+### Added
+
+- **Router-backup custody, a second way in.** A router that cannot open
+  the SFTP drop box's port can now push its backup over the ordinary
+  HTTPS ingest channel instead — the router reads its own backup and
+  export in small pieces with `/tool fetch` and posts them one at a
+  time, no SFTP needed. See [routeros-setup.md](docs/routeros-setup.md)
+  step 7c-ii.
+- **An optional passphrase lock on the vault.** An admin can set a
+  passphrase mikroview itself does not keep; with one set, stored
+  backups are re-encrypted to a generated key pair so mikroview cannot
+  read them until an admin types the passphrase again. Unlocking lasts
+  for the session that did it and expires on its own after fifteen
+  minutes idle. This release is API-only — the settings screen to work
+  it from follows in #1115.
+- **Low-space mode.** When the vault's disk runs low, it stops adding
+  generations and starts replacing the oldest with each new arrival
+  instead — never refusing a backup — while always keeping the last
+  generation that landed before space ran low, so a router always has
+  both a last-known-good copy and its latest (#1125).
+- **Release surfaces kept from drifting again** (#1113): a checklist and
+  an automated check run on every merge toward `preview`/`main`,
+  catching a stale changelog heading, dead issue links, and screenshots
+  that predate the code they show; README, the public site and the
+  screenshots themselves were refreshed to match what 0.5.0 actually
+  shipped, and the site's "Issues" link now goes somewhere real.
+
+### Fixed
+
+- The vault passphrase's set/remove/unlock paths could race a backup
+  arriving, or race each other, and permanently strand a file nobody
+  could reopen; they are now mutually exclusive and a backup that lands
+  mid-change is held back until it finishes (#1119).
+- The vault's private key could keep living in memory in a few cases the
+  feature promises it doesn't — signing everyone out, deleting the admin
+  account, and a status check that was unintentionally keeping an idle
+  unlock alive. All now drop the key the same way locking or signing out
+  does (#1120).
+- A slow disk on one router's backup could stall every other router's
+  push mid-transfer, an abandoned transfer could sit in memory until
+  another router happened to push, and a declared transfer size was
+  fully allocated before any of it had arrived. The write now happens
+  outside the lock, idle transfers are swept on their own timer, and
+  memory grows only as pieces actually arrive (#1121).
+- A storage fault on mikroview's own side during an HTTPS backup push
+  was being reported to the router as the router's own mistake, and a
+  completed push was logged with no size or kind. mikroview's own faults
+  now get a plain retry-later message and their own audit entry; a
+  completed push logs what actually arrived (#1122).
+- A backup and its export pushed over HTTPS shared the same
+  120-per-15-minute allowance as a router's ordinary pushes, so anything
+  larger than about 3.8MB could never fully arrive. The allowance is now
+  spent once per whole transfer rather than once per piece (#1123).
 
 ### Security
 
