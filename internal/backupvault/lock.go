@@ -53,6 +53,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -171,10 +172,21 @@ type lockState struct {
 	// half-way through the pass cannot be stranded by the delete at the
 	// end of it.
 	//
-	// It doubles as the claim that keeps two passphrase operations from
-	// overlapping: a caller that finds it set is refused with
-	// ErrPassphraseBusy rather than queued.
 	changing bool
+	// busy is the claim on the vault itself, and outlives changing: it
+	// is set from the moment a passphrase operation takes the vault
+	// until that operation has finished converting every file.
+	//
+	// Two things rest on it. A second passphrase operation that finds it
+	// set is refused with ErrPassphraseBusy rather than queued, because
+	// a caller waiting behind a whole-vault conversion cannot tell that
+	// from a hang. And Lock refuses while it is set: the conversion is
+	// working with the private key this would drop, and dropping it mid
+	// pass leaves the operation unable to open the next file it comes to
+	// (#1124). The expiry sweep, an admin pressing Lock and a sign-out
+	// all arrive here, and a vault whose re-seal takes longer than the
+	// sweep interval could not otherwise finish one.
+	busy bool
 }
 
 // PassphraseSet reports whether a vault passphrase is configured at all.
@@ -291,13 +303,13 @@ func (v *Vault) SetPassphrase(passphrase string) error {
 	// passphrase costs -- let two callers both pass the test, and the
 	// loser's re-seal then ran against the winner's key, leaving files
 	// nobody could ever open.
-	st := &lockState{pub: priv.PublicKey(), priv: priv, changing: true}
+	st := &lockState{pub: priv.PublicKey(), priv: priv, changing: true, busy: true}
 	v.lockMu.Lock()
 	switch {
 	case v.lock == nil:
 		v.lock = st
 		v.lockMu.Unlock()
-	case v.lock.changing:
+	case v.lock.busy:
 		v.lockMu.Unlock()
 		return ErrPassphraseBusy
 	default:
@@ -338,7 +350,11 @@ func (v *Vault) SetPassphrase(passphrase string) error {
 	st.changing = false
 	v.lockMu.Unlock()
 
-	if err := v.resealAllTo(st.pub); err != nil {
+	// The claim is held across the conversion, so nothing can take the
+	// key back out from under it; it is given up either way below.
+	err = v.resealAllTo(st.pub)
+	v.finishChange(st)
+	if err != nil {
 		// The passphrase is set and recorded; some stored files are
 		// still sealed under the retention key. Every file says for
 		// itself which key seals it, so all of them still open -- but
@@ -380,7 +396,7 @@ func (v *Vault) RemovePassphrase(passphrase string) error {
 	st := v.lock
 	var wasLocked, busy bool
 	if st != nil {
-		wasLocked, busy = st.priv == nil, st.changing
+		wasLocked, busy = st.priv == nil, st.busy
 	}
 	v.lockMu.RUnlock()
 	if st == nil {
@@ -400,11 +416,11 @@ func (v *Vault) RemovePassphrase(passphrase string) error {
 	}
 
 	v.lockMu.Lock()
-	if v.lock != st || st.changing || st.priv == nil {
+	if v.lock != st || st.busy || st.priv == nil {
 		v.lockMu.Unlock()
 		return ErrPassphraseBusy
 	}
-	st.changing = true
+	st.changing, st.busy = true, true
 	v.lockMu.Unlock()
 
 	if err := v.resealAllTo(nil); err != nil {
@@ -434,10 +450,20 @@ func (v *Vault) RemovePassphrase(passphrase string) error {
 // behind.
 func (v *Vault) restoreAfterFailedChange(st *lockState, wasLocked bool) {
 	v.lockMu.Lock()
-	st.changing = false
+	st.changing, st.busy = false, false
 	if wasLocked {
 		st.priv = nil
 	}
+	v.lockMu.Unlock()
+}
+
+// finishChange gives up the claim on the vault, leaving whatever the
+// operation arrived at in place. Called once a conversion pass has
+// finished, succeeded or not -- a claim that outlived its operation
+// would refuse every later Lock (see lockState.busy).
+func (v *Vault) finishChange(st *lockState) {
+	v.lockMu.Lock()
+	st.changing, st.busy = false, false
 	v.lockMu.Unlock()
 }
 
@@ -448,23 +474,32 @@ func (v *Vault) Unlock(passphrase string) error {
 	if v == nil || v.key == nil {
 		return ErrDisabled
 	}
+	// The document is copied out under the lock rather than read through
+	// st field by field: SetPassphrase claims the vault before it has
+	// filled the document in -- it must, or two callers both pass the
+	// test and the loser's re-seal runs against the winner's key -- so
+	// an unsynchronised read here raced that write (#1124).
 	v.lockMu.RLock()
 	st := v.lock
+	var doc lockDoc
+	if st != nil {
+		doc = st.doc
+	}
 	v.lockMu.RUnlock()
 	if st == nil {
 		return ErrNoPassphrase
 	}
-	if st.doc.Version != lockDocVersion {
+	if doc.Version != lockDocVersion {
 		// A passphrase is being set this moment and its document is not
 		// on disk yet. There is nothing here to unlock against.
 		return ErrPassphraseBusy
 	}
 
-	wrapKey, err := wrapKeyFor(passphrase, st.doc.Salt, st.doc.KDF)
+	wrapKey, err := wrapKeyFor(passphrase, doc.Salt, doc.KDF)
 	if err != nil {
 		return err
 	}
-	plain, err := wrapKey.OpenDocument(lockPrivateInfo, st.doc.WrappedPrivate)
+	plain, err := wrapKey.OpenDocument(lockPrivateInfo, doc.WrappedPrivate)
 	if err != nil {
 		// Every failure below the passphrase -- a truncated document, a
 		// tampered one -- arrives here too, and is reported the same way
@@ -504,15 +539,29 @@ func (v *Vault) Unlock(passphrase string) error {
 
 // Lock drops the private key, so reads are refused again. Called when
 // the unlocking admin's session ends and by the explicit lock control.
-func (v *Vault) Lock() {
+//
+// It reports whether the vault is now without a private key, and the
+// one answer that is false is a passphrase change in progress: that
+// operation is converting every stored file with the key this would
+// drop, and taking it away part way through leaves it unable to open
+// the next file it comes to -- which is a retry that fails the same way
+// for as long as the conversion outlasts the caller (#1124). A refusal
+// is not a lock that quietly did nothing: the caller says so, or comes
+// back when the change has finished.
+func (v *Vault) Lock() bool {
 	if v == nil {
-		return
+		return true
 	}
 	v.lockMu.Lock()
-	if v.lock != nil {
-		v.lock.priv = nil
+	defer v.lockMu.Unlock()
+	if v.lock == nil {
+		return true
 	}
-	v.lockMu.Unlock()
+	if v.lock.busy {
+		return false
+	}
+	v.lock.priv = nil
+	return true
 }
 
 // sealBody seals one file body under whichever scheme is in force.
@@ -539,8 +588,15 @@ func (v *Vault) openBody(info string, sealed []byte) ([]byte, error) {
 	if !bytes.HasPrefix(sealed, []byte(hybridMagic)) {
 		return v.key.OpenDocument(info, sealed)
 	}
+	// The private key is read once, under the lock that guards it: an
+	// unlock and a lock both write that field, and reading it outside
+	// was a data race rather than merely a stale answer (#1124).
 	v.lockMu.RLock()
 	st := v.lock
+	var priv *ecdh.PrivateKey
+	if st != nil {
+		priv = st.priv
+	}
 	v.lockMu.RUnlock()
 	if st == nil {
 		// A file sealed to a public key whose lock document is gone.
@@ -548,10 +604,21 @@ func (v *Vault) openBody(info string, sealed []byte) ([]byte, error) {
 		// reporting a decryption failure.
 		return nil, ErrNoPassphrase
 	}
-	if st.priv == nil {
+	return openSealedWith(v.key, priv, info, sealed)
+}
+
+// openSealedWith opens one body with the keys it is handed, rather than
+// with whatever the vault holds at the moment it is called. The
+// conversion pass needs exactly that: it takes its copy of the private
+// key once and converts the whole vault with it.
+func openSealedWith(key *retention.Key, priv *ecdh.PrivateKey, info string, sealed []byte) ([]byte, error) {
+	if !bytes.HasPrefix(sealed, []byte(hybridMagic)) {
+		return key.OpenDocument(info, sealed)
+	}
+	if priv == nil {
 		return nil, ErrLocked
 	}
-	return openFromPrivate(st.priv, info, sealed)
+	return openFromPrivate(priv, info, sealed)
 }
 
 // sealToPublic seals plain so that only the holder of pub's private half
@@ -563,6 +630,13 @@ func (v *Vault) openBody(info string, sealed []byte) ([]byte, error) {
 // be replayed into a different slot or re-headed with another ephemeral
 // key.
 func sealToPublic(pub *ecdh.PublicKey, info string, plain []byte) ([]byte, error) {
+	return sealToPublicAppend(make([]byte, 0, hybridHeaderBytes+retention.SealOverheadBytes+len(plain)), pub, info, plain)
+}
+
+// sealToPublicAppend is sealToPublic onto the end of dst, for the
+// conversion pass -- it carries one buffer from file to file rather
+// than allocating a whole sealed body per file (#1121). dst may be nil.
+func sealToPublicAppend(dst []byte, pub *ecdh.PublicKey, info string, plain []byte) ([]byte, error) {
 	eph, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("backupvault: generating an ephemeral key: %w", err)
@@ -575,20 +649,20 @@ func sealToPublic(pub *ecdh.PublicKey, info string, plain []byte) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	// One buffer, the size the finished file will be: the header is
-	// written into it and the ciphertext sealed straight onto the end.
-	// A backup is up to 16MiB, and sealing into a slice of its own and
-	// then copying it in behind a 37-byte header meant every stored file
-	// cost twice its own size in garbage (#1121).
+	// One buffer, grown once to the size the finished file will be: the
+	// header is written into it and the ciphertext sealed straight onto
+	// the end. A backup is up to 16MiB, and sealing into a slice of its
+	// own and then copying it in behind a 37-byte header meant every
+	// stored file cost twice its own size in garbage (#1121).
 	ephPub := eph.PublicKey().Bytes()
-	out := make([]byte, 0, hybridHeaderBytes+retention.SealOverheadBytes+len(plain))
-	out = append(out, hybridMagic...)
-	out = append(out, ephPub...)
-	out, err = fileKey.SealDocumentAppend(out, hybridInfo(info, ephPub), plain)
+	dst = slices.Grow(dst, hybridHeaderBytes+retention.SealOverheadBytes+len(plain))
+	dst = append(dst, hybridMagic...)
+	dst = append(dst, ephPub...)
+	dst, err = fileKey.SealDocumentAppend(dst, hybridInfo(info, ephPub), plain)
 	if err != nil {
 		return nil, fmt.Errorf("backupvault: sealing to the vault key: %w", err)
 	}
-	return out, nil
+	return dst, nil
 }
 
 // openFromPrivate reverses sealToPublic.
@@ -703,11 +777,23 @@ const resealMaxPasses = 8
 func (v *Vault) resealAllTo(pub *ecdh.PublicKey) error {
 	started := time.Now()
 	seen := map[slot]bool{}
-	// One read buffer for the whole pass rather than one per file:
-	// nothing holds on to a file's sealed bytes once it has been opened,
-	// and at up to MaxFileBytes each that is the largest allocation here
-	// by a wide margin.
-	var buf []byte
+	// The key this pass opens what it finds with, taken once. Reading it
+	// off the vault per file meant a Lock landing mid-pass -- the expiry
+	// sweep, an admin, a sign-out -- stranded the conversion (#1124).
+	// lockState.busy is what stops that key being dropped while this
+	// runs; this is the pass not depending on it either.
+	v.lockMu.RLock()
+	var priv *ecdh.PrivateKey
+	if v.lock != nil {
+		priv = v.lock.priv
+	}
+	v.lockMu.RUnlock()
+
+	// Two buffers for the whole pass rather than two per file: nothing
+	// holds on to a file's sealed bytes once it has been opened, and at
+	// up to MaxFileBytes each these are the largest allocations here by
+	// a wide margin (#1121).
+	var bufs resealBuffers
 	var examined, announced int
 	for pass := 0; pass < resealMaxPasses; pass++ {
 		var pending []slot
@@ -728,8 +814,7 @@ func (v *Vault) resealAllTo(pub *ecdh.PublicKey) error {
 			if resealStep != nil {
 				resealStep()
 			}
-			var err error
-			if buf, err = v.resealSlot(s, pub, buf); err != nil {
+			if err := v.resealSlot(s, pub, priv, &bufs); err != nil {
 				return err
 			}
 			examined++
@@ -744,71 +829,80 @@ func (v *Vault) resealAllTo(pub *ecdh.PublicKey) error {
 	return nil
 }
 
-// resealSlot converts one file, or reports why it could not. buf is the
-// caller's read buffer, returned grown to whatever this file needed so
-// the next one can use it again.
-func (v *Vault) resealSlot(s slot, pub *ecdh.PublicKey, buf []byte) ([]byte, error) {
+// resealBuffers are what a conversion pass carries from file to file:
+// the sealed bytes it reads and the sealed bytes it writes. The
+// plaintext in between is whatever the opening key returned and is not
+// reusable, so it is the one per-file allocation left.
+type resealBuffers struct {
+	read, sealed []byte
+}
+
+// resealSlot converts one file, or reports why it could not, reusing
+// bufs rather than allocating its own.
+func (v *Vault) resealSlot(s slot, pub *ecdh.PublicKey, priv *ecdh.PrivateKey, bufs *resealBuffers) error {
 	path := filepath.Join(v.routerDir(s.device), v.fileName(s.generation, s.kind))
-	sealed, buf, err := readFileInto(path, buf)
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// The index knows of a file the disk does not. Not this
 			// operation's business to repair.
-			return buf, nil
+			return nil
 		}
-		return buf, fmt.Errorf("backupvault: reading %s while re-sealing: %w", path, err)
+		return fmt.Errorf("backupvault: reading %s while re-sealing: %w", path, err)
 	}
-	if bytes.HasPrefix(sealed, []byte(hybridMagic)) == (pub != nil) {
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("backupvault: reading %s while re-sealing: %w", path, err)
+	}
+	size := stat.Size()
+	if size > MaxFileBytes {
+		return fmt.Errorf("backupvault: %s is %d bytes, over the %d-byte cap", path, size, MaxFileBytes)
+	}
+
+	// Which scheme seals this file is the first few bytes of it, so they
+	// are all that is read to find out. A retry after a change that
+	// failed part way walks everything the earlier attempt converted,
+	// and reading each one in full to discover there is nothing to do
+	// cost the whole vault a second time (#1121).
+	var head [hybridHeaderBytes]byte
+	headLen := min(int64(hybridHeaderBytes), size)
+	if _, err := io.ReadFull(f, head[:headLen]); err != nil {
+		return fmt.Errorf("backupvault: reading %s while re-sealing: %w", path, err)
+	}
+	if bytes.HasPrefix(head[:headLen], []byte(hybridMagic)) == (pub != nil) {
 		// Already in the target scheme: a file that arrived after this
 		// operation claimed the vault, or one an interrupted earlier
 		// attempt had already converted. Re-sealing it would be work for
 		// no change.
-		return buf, nil
+		return nil
 	}
-	info := sealInfoPrefix + s.device + "/" + s.generation + "/" + s.kind
-	plain, err := v.openBody(info, sealed)
-	if err != nil {
-		return buf, fmt.Errorf("backupvault: opening %s while re-sealing: %w", path, err)
-	}
-	var next []byte
-	if pub == nil {
-		next, err = v.key.SealDocument(info, plain)
-	} else {
-		next, err = sealToPublic(pub, info, plain)
-	}
-	if err != nil {
-		return buf, fmt.Errorf("backupvault: re-sealing %s: %w", path, err)
-	}
-	if err := persist.WriteFileAtomic(path, next, 0o600); err != nil {
-		return buf, fmt.Errorf("backupvault: writing %s while re-sealing: %w", path, err)
-	}
-	return buf, nil
-}
 
-// readFileInto reads path into buf, growing it when the file does not
-// fit. It returns the file's bytes and the buffer to hand to the next
-// call -- the bytes are a window onto the buffer and stay valid only
-// until then, which is all a conversion pass needs.
-func readFileInto(path string, buf []byte) (data, next []byte, err error) {
-	f, err := os.Open(path)
+	if int64(cap(bufs.read)) < size {
+		bufs.read = make([]byte, size)
+	}
+	sealed := bufs.read[:size]
+	copy(sealed, head[:headLen])
+	if _, err := io.ReadFull(f, sealed[headLen:]); err != nil {
+		return fmt.Errorf("backupvault: reading %s while re-sealing: %w", path, err)
+	}
+
+	info := sealInfoPrefix + s.device + "/" + s.generation + "/" + s.kind
+	plain, err := openSealedWith(v.key, priv, info, sealed)
 	if err != nil {
-		return nil, buf, err
+		return fmt.Errorf("backupvault: opening %s while re-sealing: %w", path, err)
 	}
-	defer f.Close()
-	info, err := f.Stat()
+	bufs.sealed = bufs.sealed[:0]
+	if pub == nil {
+		bufs.sealed, err = v.key.SealDocumentAppend(bufs.sealed, info, plain)
+	} else {
+		bufs.sealed, err = sealToPublicAppend(bufs.sealed, pub, info, plain)
+	}
 	if err != nil {
-		return nil, buf, err
+		return fmt.Errorf("backupvault: re-sealing %s: %w", path, err)
 	}
-	size := info.Size()
-	if size > MaxFileBytes {
-		return nil, buf, fmt.Errorf("backupvault: %s is %d bytes, over the %d-byte cap", path, size, MaxFileBytes)
+	if err := persist.WriteFileAtomic(path, bufs.sealed, 0o600); err != nil {
+		return fmt.Errorf("backupvault: writing %s while re-sealing: %w", path, err)
 	}
-	if int64(cap(buf)) < size {
-		buf = make([]byte, size)
-	}
-	buf = buf[:size]
-	if _, err := io.ReadFull(f, buf); err != nil {
-		return nil, buf, err
-	}
-	return buf, buf, nil
+	return nil
 }
