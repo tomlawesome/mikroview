@@ -13,6 +13,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/backupslice"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/coverage"
@@ -143,6 +144,17 @@ type Server struct {
 	// "learning" field is simply omitted rather than requiring one.
 	Learning interface {
 		Learning(id string, now time.Time) (engine.LearningState, bool)
+	}
+	// Evaluation reports how many events the engine accepted, stored and
+	// broadcast but never evaluated for detection, because its queue was
+	// full when they arrived (#1107). Narrow and purpose-named for the
+	// same reason as Learning above. Nil is valid and common (tests, and
+	// any Server built before the engine exists), and the field is then
+	// omitted rather than reported as zero: zero is a real answer --
+	// "nothing was skipped" -- and a Server with no engine cannot
+	// honestly give it.
+	Evaluation interface {
+		Dropped() uint64
 	}
 	// Suggest is the persisted pool of watchlist entries suggested from
 	// data RouterOS has already pushed (#243 slice 5) -- backing GET/POST
@@ -310,6 +322,13 @@ type Server struct {
 	// drop box (internal/backupsftp) writes to it directly; the HTTP
 	// handlers here only ever read it back and download from it.
 	Vault *backupvault.Vault
+	// BackupSlices reassembles a backup pushed over the ingest channel
+	// in slices (#955). Nil where no vault is configured -- the handler
+	// refuses rather than accepting a file it has nowhere to put.
+	BackupSlices *backupslice.Receiver
+	// vaultUnlock is which session, if any, currently holds the vault's
+	// optional passphrase open (#956, routerbackupslock.go).
+	vaultUnlock vaultUnlockState
 	// IngestLimiter bounds how often one ingest token may call POST
 	// /api/ingest/routeros (issue #186 step 3). Reuses auth.LoginLimiter
 	// rather than a second rate-limiting primitive -- see handleIngest
@@ -618,6 +637,14 @@ func (s *Server) apiRoutes() []route {
 		// download an admin uses to actually restore a dead router.
 		{http.MethodGet, "/api/router-backups", s.handleRouterBackupsList},
 		{http.MethodGet, "/api/router-backups/{device}/{generation}/{kind}", s.handleRouterBackupDownload},
+
+		// The vault's optional admin passphrase (#956). Reading a backup
+		// needs the passphrase once one is set; a backup still arrives
+		// without it.
+		{http.MethodPost, "/api/router-backups/unlock", s.handleRouterBackupUnlock},
+		{http.MethodPost, "/api/router-backups/lock", s.handleRouterBackupLock},
+		{http.MethodPost, "/api/router-backups/passphrase", s.handleRouterBackupSetPassphrase},
+		{http.MethodDelete, "/api/router-backups/passphrase", s.handleRouterBackupRemovePassphrase},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},

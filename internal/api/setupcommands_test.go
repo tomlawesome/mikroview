@@ -271,6 +271,11 @@ func TestHandleSetupCommandsRejectsUnsafeInput(t *testing.T) {
 		{"address with a quote", setupCommandsRequest{Address: `mv.example.com"`}},
 		{"address with a space", setupCommandsRequest{Address: "mv example.com"}},
 		{"address with a semicolon", setupCommandsRequest{Address: "mv.example.com;reboot"}},
+		// RouterOS expands $name inside a double-quoted string, which is
+		// where Token lands twice (#1095 re-check on v0.5.0).
+		{"token with a dollar", setupCommandsRequest{Address: "mv.example.com", Token: "abc$def"}},
+		{"token with a quote", setupCommandsRequest{Address: "mv.example.com", Token: `abc"def`}},
+		{"token with a backslash", setupCommandsRequest{Address: "mv.example.com", Token: `abc\def`}},
 		{"syslogPort non-numeric", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "abc"}},
 		{"syslogPort zero", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "0"}},
 		{"syslogPort out of range", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "70000"}},

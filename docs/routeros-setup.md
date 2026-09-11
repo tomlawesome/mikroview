@@ -786,8 +786,113 @@ RouterOS's SFTP client never verifies MikroView's host key (measured on
 RouterOS 7.23.3) — an attacker on the path between the router and
 MikroView could pose as MikroView and receive the pair and the token in
 plain sight. Run this over a LAN or a VPN you control, never across the
-open internet. See [SECURITY.md](../SECURITY.md) and issue #955, which
-tracks an HTTPS-based path that does verify.
+open internet. See [SECURITY.md](../SECURITY.md) and 7c-ii below, the
+HTTPS-based path that does verify, for a network that cannot guarantee
+that.
+
+### 7c-ii. HTTPS-only alternative, for a deployment with no open SFTP port
+
+Issue #955. If your network path to MikroView is HTTPS only — a reverse
+proxy in front of it, with nothing else reachable — the SFTP push in 7c
+cannot work, because it needs its own port (`backup.listen`, 47022 by
+default) open all the way through. The alternative: the router reads its
+own backup and export files in small pieces (32KB or less) and sends
+each piece as a normal HTTPS request to the same address and token step
+4 already uses, instead of opening a second connection.
+
+**Pick SFTP (7c) unless you genuinely cannot open that second port.**
+SFTP sends the whole file in one upload; HTTPS-only sends it in a dozen
+or more separate pieces, which is more moving parts to go wrong. It has
+been run end-to-end against a real router (RouterOS 7.23.3, 2026-09-10):
+a router made its backup, sent it in pieces, and both files arrived
+whole and unchanged. So it works — it is simply the longer way round.
+
+One thing to know before you rely on it: if the token in step 4b is
+wrong or has been removed, the router does not report "rejected". It
+prints a message about not being able to read the reply, because
+MikroView's refusal does not carry a header RouterOS insists on for that
+case. If a push stops working and the router complains about the reply
+rather than about permission, check the token first.
+
+**What it counts against.** An ingest token may make 120 requests per
+15 minutes, shared with that router's ordinary `/api/ingest/routeros`
+pushes. A whole backup push costs one of those however many pieces the
+file arrives in, because it is counted when the router announces the
+transfer rather than per piece — so a backup and its export together are
+two, and only a scheduler running this every few minutes can run out.
+Each announced transfer then carries at most the number of pieces it
+declared plus eight retries, and is abandoned if more arrive; a piece
+naming a transfer MikroView is not holding — one already finished, given
+up on, or never announced — costs a request like any other push.
+
+The wizard does not offer this step yet — 4b's token is still what
+authenticates it once it does. Until it does, this is a paste-it-yourself
+step:
+
+```
+/system backup save name=mv-backup dont-encrypt=yes
+
+/export file=mv-backup
+
+:local bakSize [/file get mv-backup.backup size]
+:local bakTotalSlices (($bakSize + 32767) / 32768)
+:local bakBegin [:serialize to=json value={"op"="begin"; "kind"="backup"; "totalBytes"=$bakSize; "totalSlices"=$bakTotalSlices}]
+:local bakBeginResp [/tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$bakBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
+:local bakTransferId (([:deserialize from=json ($bakBeginResp->"data")])->"transferId")
+:local bakSent 0
+:local bakIndex 0
+:while ($bakSent < $bakSize) do={
+  :local bakTake ($bakSize - $bakSent)
+  :if ($bakTake > 32768) do={ :set bakTake 32768 }
+  :local bakChunk [/file read file=mv-backup.backup offset=$bakSent chunk-size=$bakTake as-value]
+  :local bakData64 [:convert ($bakChunk->"data") from=raw to=base64]
+  :local bakSlice [:serialize to=json value={"op"="slice"; "transferId"=$bakTransferId; "index"=$bakIndex; "data"=$bakData64}]
+  /tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$bakSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+  :set bakSent ($bakSent + $bakTake)
+  :set bakIndex ($bakIndex + 1)
+}
+/file remove mv-backup.backup
+
+:local rscSize [/file get mv-backup.rsc size]
+:local rscTotalSlices (($rscSize + 32767) / 32768)
+:local rscBegin [:serialize to=json value={"op"="begin"; "kind"="rsc"; "totalBytes"=$rscSize; "totalSlices"=$rscTotalSlices}]
+:local rscBeginResp [/tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
+:local rscTransferId (([:deserialize from=json ($rscBeginResp->"data")])->"transferId")
+:local rscSent 0
+:local rscIndex 0
+:while ($rscSent < $rscSize) do={
+  :local rscTake ($rscSize - $rscSent)
+  :if ($rscTake > 32768) do={ :set rscTake 32768 }
+  :local rscChunk [/file read file=mv-backup.rsc offset=$rscSent chunk-size=$rscTake as-value]
+  :local rscData64 [:convert ($rscChunk->"data") from=raw to=base64]
+  :local rscSlice [:serialize to=json value={"op"="slice"; "transferId"=$rscTransferId; "index"=$rscIndex; "data"=$rscData64}]
+  /tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+  :set rscSent ($rscSent + $rscTake)
+  :set rscIndex ($rscIndex + 1)
+}
+/file remove mv-backup.rsc
+```
+
+```
+/system script add name=mv-backup-https policy=read,write,test,sensitive source="<paste the script above>"
+/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https"
+/system script run mv-backup-https
+```
+
+Same binary/export pair as 7c (unencrypted restore copy, secret-free
+export), just carried by `/tool fetch` POSTs instead of an SFTP upload:
+each file is read back in `<=32KiB` pieces (`/file read`'s own
+`chunk-size` cap), base64-encoded, and sent as its own JSON request --
+one `"op":"begin"` declaring the file's size and slice count, then one
+`"op":"slice"` per piece, to the same address and `<your ingest token>`
+step 4 already uses. `mv-backup-https` is a separate scheduler entry
+from `mv-backup` (7c's SFTP one) so both can exist without a name
+collision; run only the one your network path actually needs.
+
+If you want to generate this yourself rather than pasting it,
+`internal/routeros.BackupPushScript` and `BackupPushScheduleCommands`
+in this repository render the exact script above, minus the SFTP-specific
+`port=`/`user=`/`dst-path=` values 7c's form still has.
 
 ### 7d. Verify
 

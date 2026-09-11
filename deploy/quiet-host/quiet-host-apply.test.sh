@@ -175,4 +175,35 @@ check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 4" "a hold expiry beyon
 [ -f "$QH_DIR/hold" ] && { echo "FAIL - capped-expired hold should be deleted"; fail=1; } || echo "ok - capped-expired hold deleted"
 echo "$out" | grep -q 'capped' && echo "ok - capped expiry logged" || { echo "FAIL - capped expiry not logged: $out"; fail=1; }
 
+# #1094 follow-up: started= is in the same unprivileged file as expires=,
+# so a started= in the future would have pushed the ceiling out with it.
+# The cap must come from the host's own clock: a future started= is
+# clamped to now, so the capped expiry can never exceed now + MAX_HOLD_S.
+rm -f "$QH_DIR/hold" "$QH_STATE/concurrent.orig" "$QH_STATE/hold.since" "$QH_DIR/applied" "$QH_DIR/failed"
+write_config
+t0=$(date +%s)
+printf 'job=777\nurl=https://example.invalid/jobs/777\nstarted=%s\nexpires=%s\n' \
+  "$((t0 + 864000))" "$((t0 + 864000))" >"$QH_DIR/hold"
+out=$("$SCRIPT")
+capped=$(echo "$out" | sed -n 's/.*capping to \([0-9]*\).*/\1/p')
+if [ -n "$capped" ] && [ "$capped" -le $(( $(date +%s) + 3600 )) ]; then
+  echo "ok - a future started= is clamped: capped expiry $capped is within an hour of now"
+else
+  echo "FAIL - a future started= is clamped: got [$out]"; fail=1
+fi
+check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 1" "the clamped hold is still applied for its hour"
+[ -f "$QH_STATE/hold.since" ] && echo "ok - the host recorded when the hold began" || { echo "FAIL - the host recorded when the hold began"; fail=1; }
+
+# The file can be rewritten while a hold is active. The ceiling counts
+# from when the host first applied the hold (hold.since, root-owned),
+# not from whatever the file says now: a hold begun over an hour ago is
+# expired however fresh its started= looks.
+printf '%s\n' "$((t0 - 4000))" >"$QH_STATE/hold.since"
+printf 'job=777\nurl=https://example.invalid/jobs/777\nstarted=%s\nexpires=%s\n' \
+  "$t0" "$((t0 + 300))" >"$QH_DIR/hold"
+out=$("$SCRIPT")
+check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 4" "a rewritten hold file cannot extend a hold past an hour from when the host applied it"
+[ -f "$QH_DIR/hold" ] && { echo "FAIL - the over-age hold should be deleted"; fail=1; } || echo "ok - the over-age hold was deleted"
+[ -f "$QH_STATE/hold.since" ] && { echo "FAIL - release should clear hold.since"; fail=1; } || echo "ok - release cleared hold.since"
+
 exit $fail
