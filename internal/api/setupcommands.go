@@ -290,9 +290,12 @@ func validSetupDevice(device string) bool {
 const maxSetupTokenLen = 256
 
 // validSetupToken restricts Token to printable ASCII with no quote,
-// backslash or whitespace -- the charset both places Token reaches in
-// internal/routeros/commands.go need to stay well-formed: BackupScript's
-// password=\"...\" wrapper, and PushBlock's bare Bearer header value.
+// backslash, dollar or whitespace -- the charset both places Token
+// reaches in internal/routeros/commands.go need to stay well-formed:
+// BackupScript's password=\"...\" wrapper, and PushBlock's bare Bearer
+// header value. Dollar because RouterOS expands $name inside a
+// double-quoted string, so "$x" is not the literal token either. Tokens
+// internal/auth issues are hex, so nothing legitimate is refused.
 func validSetupToken(token string) bool {
 	if token == "" {
 		return true
@@ -302,7 +305,7 @@ func validSetupToken(token string) bool {
 	}
 	for i := 0; i < len(token); i++ {
 		c := token[i]
-		if c <= ' ' || c >= 0x7f || c == '"' || c == '\\' {
+		if c <= ' ' || c >= 0x7f || c == '"' || c == '\\' || c == '$' {
 			return false
 		}
 	}
