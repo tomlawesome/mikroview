@@ -485,8 +485,8 @@ func (r *Receiver) InFlight() int {
 // internal/backupvault/vault.go's classifyBackup magic-byte check (that
 // function is unexported, so it can't be called from here) -- refusing
 // slice 0 of a bad upload here saves the other ~14 POSTs of a 461KB
-// backup the vault would reject anyway (#955's measurement note). Should
-// be unified with classifyBackup when the two packages are next touched.
+// backup the vault would reject anyway (#955's measurement note).
+// Unifying it with classifyBackup is tracked on #1124.
 func looksLikeRouterOSBackup(data []byte) bool {
 	plainMagic := []byte{0x88, 0xac, 0xa1, 0xb1}
 	encryptedMagic := []byte{0xef, 0xa8, 0x91} // 4th byte varies: rc4 vs aes-sha256
