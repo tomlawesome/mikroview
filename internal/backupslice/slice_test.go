@@ -488,11 +488,13 @@ func TestTheByteBudgetIsChargedOnBytesReceivedNotOnDeclarations(t *testing.T) {
 		ids = append(ids, id)
 	}
 
-	// Three of them now actually deliver their 16MiB, which really is
-	// resident and really is charged.
+	// Three of them now deliver all but the last slice of their 16MiB,
+	// so the bytes really are resident and really are charged -- three
+	// quarters of the budget, held by transfers still in flight.
 	for i := 0; i < 3; i++ {
 		device := fmt.Sprintf("rb%d", i)
-		for j, c := range sliceUp(make([]byte, perDevice)) {
+		chunks := sliceUp(make([]byte, perDevice))
+		for j, c := range chunks[:len(chunks)-1] {
 			if _, err := r.Slice(device, ids[i], j, c, now); err != nil {
 				t.Fatalf("%s slice %d = %v, want nil", device, j, err)
 			}
@@ -584,7 +586,7 @@ func TestRefusalTextsAreWrittenForTheirReaders(t *testing.T) {
 	for _, err := range []error{
 		ErrNotFound, ErrOutOfOrder, ErrSliceTooLarge, ErrBadTotalBytes,
 		ErrBadTotalSlices, ErrTotalExceeded, ErrUnknownKind, ErrNotABackup,
-		ErrBusy, ErrCorrupt, ErrSink,
+		ErrBusy, ErrCorrupt, ErrSink, ErrTooManySlices,
 	} {
 		if strings.HasPrefix(err.Error(), "backupslice:") {
 			t.Errorf("%q names this package to whoever reads it", err)
