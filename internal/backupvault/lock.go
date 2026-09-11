@@ -50,8 +50,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"time"
 	"unicode/utf8"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
@@ -577,11 +579,25 @@ func sealToPublic(pub *ecdh.PublicKey, info string, plain []byte) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("backupvault: sealing to the vault key: %w", err)
 	}
-	out := make([]byte, 0, hybridHeaderBytes+len(sealed))
-	out = append(out, hybridMagic...)
-	out = append(out, eph.PublicKey().Bytes()...)
-	out = append(out, sealed...)
-	return out, nil
+	return hybridBody(eph.PublicKey().Bytes(), sealed), nil
+}
+
+// hybridBody lays out one sealed file: the magic, the ephemeral public
+// key, then the ciphertext.
+//
+// One allocation, exactly the size of the result, and one copy of the
+// body into it -- a backup can be 16MiB, so an accidental second copy is
+// 16MiB of garbage per stored file (#1121). The copy that remains is the
+// floor for this shape: retention.Key.SealDocument hands back a fresh
+// slice with no room in front of it for a header, and putting one there
+// without moving the bytes would need an append-style API in
+// internal/retention.
+func hybridBody(ephPub, sealed []byte) []byte {
+	out := make([]byte, hybridHeaderBytes+len(sealed))
+	copy(out, hybridMagic)
+	copy(out[len(hybridMagic):], ephPub)
+	copy(out[hybridHeaderBytes:], sealed)
+	return out
 }
 
 // openFromPrivate reverses sealToPublic.
@@ -662,6 +678,15 @@ func (v *Vault) storedSlots() []slot {
 	return slots
 }
 
+// resealProgressEvery is how often a conversion pass says where it has
+// got to. A whole vault -- fifty routers, ten generations each, two
+// files apiece -- is a thousand files and a couple of thousand fsyncs,
+// which is minutes inside the one request that asked for it (#1121). It
+// stays synchronous, because the handler must not answer before the
+// vault is in one state or the other (#1119), but a log that moves is
+// the difference between "slow" and "hung".
+const resealProgressEvery = 100
+
 // resealMaxPasses bounds the re-scan below. Two is the most that can do
 // any work -- see resealAllTo -- and the rest is headroom, so a busy
 // vault can never turn this into an unbounded loop inside a request.
@@ -685,7 +710,14 @@ const resealMaxPasses = 8
 // arrival into the scheme this is moving to; it is the proof of that,
 // not a substitute for it.
 func (v *Vault) resealAllTo(pub *ecdh.PublicKey) error {
+	started := time.Now()
 	seen := map[slot]bool{}
+	// One read buffer for the whole pass rather than one per file:
+	// nothing holds on to a file's sealed bytes once it has been opened,
+	// and at up to MaxFileBytes each that is the largest allocation here
+	// by a wide margin.
+	var buf []byte
+	var examined, announced int
 	for pass := 0; pass < resealMaxPasses; pass++ {
 		var pending []slot
 		for _, s := range v.storedSlots() {
@@ -695,43 +727,57 @@ func (v *Vault) resealAllTo(pub *ecdh.PublicKey) error {
 			}
 		}
 		if len(pending) == 0 {
-			return nil
+			break
+		}
+		if pass == 0 && len(pending) >= resealProgressEvery {
+			announced = len(pending)
+			v.log.Info(fmt.Sprintf("re-sealing %d stored backup files -- backups keep arriving while this runs", announced))
 		}
 		for _, s := range pending {
 			if resealStep != nil {
 				resealStep()
 			}
-			if err := v.resealSlot(s, pub); err != nil {
+			var err error
+			if buf, err = v.resealSlot(s, pub, buf); err != nil {
 				return err
 			}
+			examined++
+			if announced > 0 && examined%resealProgressEvery == 0 {
+				v.log.Info(fmt.Sprintf("re-sealing stored backup files: %d done", examined))
+			}
 		}
+	}
+	if announced > 0 {
+		v.log.Info(fmt.Sprintf("re-sealed %d stored backup files in %s", examined, time.Since(started).Round(time.Millisecond)))
 	}
 	return nil
 }
 
-// resealSlot converts one file, or reports why it could not.
-func (v *Vault) resealSlot(s slot, pub *ecdh.PublicKey) error {
+// resealSlot converts one file, or reports why it could not. buf is the
+// caller's read buffer, returned grown to whatever this file needed so
+// the next one can use it again.
+func (v *Vault) resealSlot(s slot, pub *ecdh.PublicKey, buf []byte) ([]byte, error) {
 	path := filepath.Join(v.routerDir(s.device), v.fileName(s.generation, s.kind))
-	sealed, err := os.ReadFile(path)
+	sealed, buf, err := readFileInto(path, buf)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// The index knows of a file the disk does not. Not this
 			// operation's business to repair.
-			return nil
+			return buf, nil
 		}
-		return fmt.Errorf("backupvault: reading %s while re-sealing: %w", path, err)
+		return buf, fmt.Errorf("backupvault: reading %s while re-sealing: %w", path, err)
 	}
 	if bytes.HasPrefix(sealed, []byte(hybridMagic)) == (pub != nil) {
 		// Already in the target scheme: a file that arrived after this
 		// operation claimed the vault, or one an interrupted earlier
 		// attempt had already converted. Re-sealing it would be work for
 		// no change.
-		return nil
+		return buf, nil
 	}
 	info := sealInfoPrefix + s.device + "/" + s.generation + "/" + s.kind
 	plain, err := v.openBody(info, sealed)
 	if err != nil {
-		return fmt.Errorf("backupvault: opening %s while re-sealing: %w", path, err)
+		return buf, fmt.Errorf("backupvault: opening %s while re-sealing: %w", path, err)
 	}
 	var next []byte
 	if pub == nil {
@@ -740,10 +786,38 @@ func (v *Vault) resealSlot(s slot, pub *ecdh.PublicKey) error {
 		next, err = sealToPublic(pub, info, plain)
 	}
 	if err != nil {
-		return fmt.Errorf("backupvault: re-sealing %s: %w", path, err)
+		return buf, fmt.Errorf("backupvault: re-sealing %s: %w", path, err)
 	}
 	if err := persist.WriteFileAtomic(path, next, 0o600); err != nil {
-		return fmt.Errorf("backupvault: writing %s while re-sealing: %w", path, err)
+		return buf, fmt.Errorf("backupvault: writing %s while re-sealing: %w", path, err)
 	}
-	return nil
+	return buf, nil
+}
+
+// readFileInto reads path into buf, growing it when the file does not
+// fit. It returns the file's bytes and the buffer to hand to the next
+// call -- the bytes are a window onto the buffer and stay valid only
+// until then, which is all a conversion pass needs.
+func readFileInto(path string, buf []byte) (data, next []byte, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, buf, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, buf, err
+	}
+	size := info.Size()
+	if size > MaxFileBytes {
+		return nil, buf, fmt.Errorf("backupvault: %s is %d bytes, over the %d-byte cap", path, size, MaxFileBytes)
+	}
+	if int64(cap(buf)) < size {
+		buf = make([]byte, size)
+	}
+	buf = buf[:size]
+	if _, err := io.ReadFull(f, buf); err != nil {
+		return nil, buf, err
+	}
+	return buf, buf, nil
 }

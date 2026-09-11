@@ -519,3 +519,24 @@ func TestARemovalThatCannotFinishLeavesTheVaultLocked(t *testing.T) {
 		t.Fatal("a removal that could not finish left the private key in memory")
 	}
 }
+
+// hybridBodySink keeps the compiler from deciding the assembled body is
+// unused and eliding the allocation the test is counting.
+var hybridBodySink []byte
+
+func TestHybridBodyIsOneExactlySizedBuffer(t *testing.T) {
+	eph := bytes.Repeat([]byte{0xab}, 32)
+	sealed := bytes.Repeat([]byte{0x5c}, 4096)
+
+	got := hybridBody(eph, sealed)
+	want := append(append([]byte(hybridMagic), eph...), sealed...)
+	if !bytes.Equal(got, want) {
+		t.Fatal("the assembled body is not magic + ephemeral key + ciphertext")
+	}
+	if len(got) != cap(got) {
+		t.Fatalf("a %d-byte body was assembled in a %d-byte buffer", len(got), cap(got))
+	}
+	if n := testing.AllocsPerRun(20, func() { hybridBodySink = hybridBody(eph, sealed) }); n != 1 {
+		t.Fatalf("assembling a hybrid body allocated %v times, want 1", n)
+	}
+}
