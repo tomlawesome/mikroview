@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
@@ -29,7 +31,78 @@ func openVault(t *testing.T, key *retention.Key) *Vault {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	// A roomy fake disk unless the test says otherwise: a test about
+	// retention or pairing should behave the same whatever the host's
+	// own filesystem happens to be doing (#1125).
+	v.statfs = (&fakeDisk{free: testDiskRoomy, total: testDiskTotal}).statfs
 	return v
+}
+
+// The fake filesystem the low-space tests drive. The floor for a 100GiB
+// filesystem is 5% of it, 5GiB, which is far above 2 x MaxFileBytes;
+// leaving the mode needs 25% more than that again, 6.25GiB.
+const (
+	testDiskTotal = 100 << 30
+	testDiskRoomy = 50 << 30
+	testDiskTight = 1 << 30
+	// testDiskAboveFloor is over the floor but under the exit margin:
+	// the mode should hold rather than flap.
+	testDiskAboveFloor = 5<<30 + 1<<29
+)
+
+// fakeDisk is a free/total pair a test can move under the vault's feet,
+// so low-space mode can be driven without filling a real disk.
+type fakeDisk struct {
+	mu    sync.Mutex
+	free  int64
+	total int64
+}
+
+func (d *fakeDisk) statfs(string) (int64, int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.free, d.total, nil
+}
+
+func (d *fakeDisk) set(free int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.free = free
+}
+
+// openVaultOnDisk opens a vault whose free-space measurement is disk's.
+func openVaultOnDisk(t *testing.T, dir string, key *retention.Key, disk *fakeDisk) *Vault {
+	t.Helper()
+	v, err := Open(dir, key)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	v.statfs = disk.statfs
+	return v
+}
+
+func mustStore(t *testing.T, v *Vault, device string, n int, now time.Time) {
+	t.Helper()
+	if err := v.Store(device, KindBackup, plainBackup(n), now); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+}
+
+func generationIDs(v *Vault, device string) []string {
+	var ids []string
+	for _, g := range v.Generations(device) {
+		ids = append(ids, g.ID)
+	}
+	return ids
+}
+
+func contains(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }
 
 func plainBackup(n int) []byte {
@@ -443,4 +516,241 @@ func TestFailedWriteLeavesTheIndexUnchanged(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	assertEveryGenerationHasItsFile(v2, 2)
+}
+
+// TestLowSpaceKeepsTheAnchorAndTheNewestArrival is #1125's own "done
+// when": with a faked low-space signal the anchor -- the newest
+// generation from before the trouble -- survives three further
+// arrivals, the newest arrival is always present, and the set stops
+// growing instead of the vault refusing anything.
+func TestLowSpaceKeepsTheAnchorAndTheNewestArrival(t *testing.T) {
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v := openVaultOnDisk(t, t.TempDir(), testKey(t), disk)
+	base := time.Now()
+
+	for i := 0; i < 3; i++ {
+		mustStore(t, v, "rb5009", 10+i, base.Add(time.Duration(i)*time.Hour))
+	}
+	before := generationIDs(v, "rb5009")
+	if len(before) != 3 {
+		t.Fatalf("got %d generations before the trouble, want 3", len(before))
+	}
+	anchor := before[2]
+
+	disk.set(testDiskTight)
+	for i := 3; i < 6; i++ {
+		now := base.Add(time.Duration(i) * time.Hour)
+		mustStore(t, v, "rb5009", 10+i, now)
+		if !v.LowSpace() {
+			t.Fatalf("arrival %d: LowSpace() = false on a disk under the floor", i)
+		}
+		ids := generationIDs(v, "rb5009")
+		if len(ids) != 3 {
+			t.Fatalf("arrival %d: the set grew to %d generations, want 3 (replace, not add)", i, len(ids))
+		}
+		if !contains(ids, anchor) {
+			t.Fatalf("arrival %d: the anchor %s was evicted: %v", i, anchor, ids)
+		}
+		newest := v.Generations("rb5009")[len(ids)-1]
+		if newest.BackupSize != int64(len(plainBackup(10+i))) {
+			t.Fatalf("arrival %d: newest generation is not the one that just arrived", i)
+		}
+	}
+
+	// The cycled-out generations left no files behind.
+	routerDir := v.routerDir("rb5009")
+	kept := generationIDs(v, "rb5009")
+	for _, name := range listNames(t, routerDir) {
+		held := false
+		for _, id := range kept {
+			if strings.HasPrefix(name, id+".") {
+				held = true
+				break
+			}
+		}
+		if !held {
+			t.Errorf("file %s is on disk for a generation the vault no longer holds", name)
+		}
+	}
+}
+
+// TestLowSpaceWithOnlyTheAnchorLeftWritesAlongsideIt pins the floor of
+// two files per router: with nothing but the anchor to cycle, the
+// arrival is kept beside it rather than refused.
+func TestLowSpaceWithOnlyTheAnchorLeftWritesAlongsideIt(t *testing.T) {
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v := openVaultOnDisk(t, t.TempDir(), testKey(t), disk)
+	base := time.Now()
+	mustStore(t, v, "rb5009", 10, base)
+	anchor := generationIDs(v, "rb5009")[0]
+
+	disk.set(testDiskTight)
+	mustStore(t, v, "rb5009", 11, base.Add(time.Hour))
+	ids := generationIDs(v, "rb5009")
+	if len(ids) != 2 || !contains(ids, anchor) {
+		t.Fatalf("got %v, want the anchor %s plus the new arrival", ids, anchor)
+	}
+
+	mustStore(t, v, "rb5009", 12, base.Add(2*time.Hour))
+	ids = generationIDs(v, "rb5009")
+	if len(ids) != 2 || !contains(ids, anchor) {
+		t.Fatalf("got %v, want the anchor %s plus the newest arrival only", ids, anchor)
+	}
+}
+
+// TestLeavingLowSpaceClearsAnchorsAndResumesRetention covers the exit:
+// free space back above the floor with margin ends the mode, the
+// anchors go with it, and the set grows again.
+func TestLeavingLowSpaceClearsAnchorsAndResumesRetention(t *testing.T) {
+	disk := &fakeDisk{free: testDiskTight, total: testDiskTotal}
+	v := openVaultOnDisk(t, t.TempDir(), testKey(t), disk)
+	base := time.Now()
+	mustStore(t, v, "rb5009", 10, base)
+	mustStore(t, v, "rb5009", 11, base.Add(time.Hour))
+	if !v.LowSpace() {
+		t.Fatal("LowSpace() = false on a disk under the floor")
+	}
+
+	// Over the floor but inside the exit margin: the mode holds.
+	disk.set(testDiskAboveFloor)
+	mustStore(t, v, "rb5009", 12, base.Add(2*time.Hour))
+	if !v.LowSpace() {
+		t.Fatal("the mode was left inside the exit margin -- it will flap")
+	}
+
+	disk.set(testDiskRoomy)
+	mustStore(t, v, "rb5009", 13, base.Add(3*time.Hour))
+	if v.LowSpace() {
+		t.Fatal("LowSpace() = true with the disk back above the floor and margin")
+	}
+	v.mu.Lock()
+	anchor := v.meta.Routers["rb5009"].Anchor
+	v.mu.Unlock()
+	if anchor != "" {
+		t.Errorf("anchor %q survived the mode it belongs to", anchor)
+	}
+	if got := len(v.Generations("rb5009")); got != 3 {
+		t.Fatalf("got %d generations, want 3 (normal retention grows the set again)", got)
+	}
+}
+
+// TestLowSpaceModeAndAnchorsSurviveAReopen: a restart in the middle of
+// the trouble must not forget which copy was the safe one.
+func TestLowSpaceModeAndAnchorsSurviveAReopen(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskTight, total: testDiskTotal}
+	v1 := openVaultOnDisk(t, dir, key, disk)
+	base := time.Now()
+	mustStore(t, v1, "rb5009", 10, base)
+	mustStore(t, v1, "rb5009", 11, base.Add(time.Hour))
+	anchor := generationIDs(v1, "rb5009")[0]
+
+	v2 := openVaultOnDisk(t, dir, key, disk)
+	if !v2.LowSpace() {
+		t.Fatal("the reopened vault forgot it was in low-space mode")
+	}
+	v2.mu.Lock()
+	got := v2.meta.Routers["rb5009"].Anchor
+	v2.mu.Unlock()
+	if got != anchor {
+		t.Fatalf("reopened anchor = %q, want %q", got, anchor)
+	}
+	mustStore(t, v2, "rb5009", 12, base.Add(2*time.Hour))
+	if ids := generationIDs(v2, "rb5009"); len(ids) != 2 || !contains(ids, anchor) {
+		t.Fatalf("after the reopen the vault holds %v, want the anchor %s plus the newest arrival", ids, anchor)
+	}
+}
+
+// TestLowSpaceChangeIsReportedToTheCaller: the vault has no audit log
+// of its own, so entering and leaving the mode is reported to whoever
+// wired one up.
+func TestLowSpaceChangeIsReportedToTheCaller(t *testing.T) {
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v := openVaultOnDisk(t, t.TempDir(), testKey(t), disk)
+	var changes []bool
+	v.OnLowSpaceChange(func(low bool, detail string) {
+		if detail == "" {
+			t.Error("low-space change reported with no detail to audit")
+		}
+		changes = append(changes, low)
+	})
+
+	base := time.Now()
+	mustStore(t, v, "rb5009", 10, base)
+	disk.set(testDiskTight)
+	mustStore(t, v, "rb5009", 11, base.Add(time.Hour))
+	mustStore(t, v, "rb5009", 12, base.Add(2*time.Hour))
+	disk.set(testDiskRoomy)
+	mustStore(t, v, "rb5009", 13, base.Add(3*time.Hour))
+
+	if len(changes) != 2 || changes[0] != true || changes[1] != false {
+		t.Fatalf("low-space changes reported = %v, want one entry and one exit", changes)
+	}
+}
+
+// TestLowSpaceWriteFailureKeepsTheIndexHonest: if even the
+// replace-oldest write fails, the arrival is not added to the index and
+// the generation whose files were already deleted to make room does not
+// linger in it either.
+func TestLowSpaceWriteFailureKeepsTheIndexHonest(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v := openVaultOnDisk(t, dir, key, disk)
+	base := time.Now()
+	for i := 0; i < 3; i++ {
+		mustStore(t, v, "rb5009", 10+i, base.Add(time.Duration(i)*time.Hour))
+	}
+	before := generationIDs(v, "rb5009")
+	anchor := before[2]
+
+	disk.set(testDiskTight)
+	routerDir := v.routerDir("rb5009")
+	v.writeFile = func(path string, data []byte, perm os.FileMode) error {
+		if strings.HasPrefix(path, routerDir) {
+			return errors.New("no space left on device")
+		}
+		return persist.WriteFileAtomic(path, data, perm)
+	}
+	if err := v.Store("rb5009", KindBackup, plainBackup(99), base.Add(3*time.Hour)); err == nil {
+		t.Fatal("Store with a failing writer succeeded, want the write error")
+	}
+
+	ids := generationIDs(v, "rb5009")
+	if contains(ids, "") || len(ids) != 2 {
+		t.Fatalf("got %v, want the two generations whose files are still there", ids)
+	}
+	if !contains(ids, anchor) {
+		t.Fatalf("got %v, want the anchor %s kept", ids, anchor)
+	}
+	for _, id := range ids {
+		if _, err := os.Stat(filepath.Join(routerDir, v.fileName(id, KindBackup))); err != nil {
+			t.Errorf("generation %s is in the index with no file behind it: %v", id, err)
+		}
+	}
+
+	// The reopened vault agrees: nothing phantom was persisted.
+	v.writeFile = nil
+	v2 := openVaultOnDisk(t, dir, key, disk)
+	if got := generationIDs(v2, "rb5009"); len(got) != len(ids) {
+		t.Fatalf("reopened vault holds %v, want %v", got, ids)
+	}
+}
+
+// TestStatfsBytesReadsTheRealFilesystem covers the measurement the
+// low-space tests fake: on a real directory it reports a plausible
+// free/total pair rather than an error.
+func TestStatfsBytesReadsTheRealFilesystem(t *testing.T) {
+	free, total, err := statfsBytes(t.TempDir())
+	if err != nil {
+		t.Fatalf("statfsBytes: %v", err)
+	}
+	if total <= 0 || free < 0 || free > total {
+		t.Fatalf("statfsBytes = free %d, total %d, which is not a plausible filesystem", free, total)
+	}
+	if got, want := lowSpaceFloor(total), total/100*lowSpaceFloorPercent; got < want {
+		t.Fatalf("lowSpaceFloor(%d) = %d, want at least %d%% of the filesystem (%d)",
+			total, got, lowSpaceFloorPercent, want)
+	}
 }

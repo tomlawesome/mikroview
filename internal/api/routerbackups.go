@@ -47,6 +47,12 @@ type routerBackupsResponse struct {
 	TotalGenerations int                  `json:"totalGenerations"`
 	TotalRouters     int                  `json:"totalRouters"`
 	TotalBytes       int64                `json:"totalBytes"`
+	// LowSpace reports that the vault's filesystem has dropped below
+	// its free-space floor (#1125), so each new arrival now replaces
+	// the oldest ordinary generation instead of adding one. Nothing is
+	// refused while this is true -- it is a warning that older
+	// generations are being cycled out sooner than usual.
+	LowSpace bool `json:"lowSpace"`
 	// Port is the SFTP drop box's own listening port (round 44's "arrive
 	// by" row), empty when backup.enabled is false -- the same
 	// SetupInstance.BackupPort the wizard's step 6 already reads, not a
@@ -81,7 +87,12 @@ func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp := routerBackupsResponse{Enabled: s.Vault.Enabled(), Routers: []routerBackupRouter{}, Port: s.SetupInstance.BackupPort}
+	resp := routerBackupsResponse{
+		Enabled:  s.Vault.Enabled(),
+		Routers:  []routerBackupRouter{},
+		Port:     s.SetupInstance.BackupPort,
+		LowSpace: s.Vault.LowSpace(),
+	}
 	resp.Lock = s.vaultLockStatus(r, time.Now())
 	if !s.Vault.Enabled() {
 		writeJSON(w, http.StatusOK, resp)
