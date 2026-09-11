@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/retention"
 )
@@ -440,8 +442,12 @@ func TestLeftoverCrashTempFileNotTreatedAsGeneration(t *testing.T) {
 	}
 	assertTwoRealGenerations(v2)
 
-	if _, err := os.Stat(filepath.Join(routerDir, strayName)); err != nil {
-		t.Errorf("stray temp file should still be untouched on disk: %v", err)
+	// The reopen reconciles the directory against the index (#1125):
+	// a file no generation refers to -- this half-written temp file, or
+	// a blob whose index write never landed -- is dead weight on a disk
+	// that is probably already full, so it goes.
+	if _, err := os.Stat(filepath.Join(routerDir, strayName)); !os.IsNotExist(err) {
+		t.Errorf("stray temp file survived the reopen, want it removed as unreferenced: %v", err)
 	}
 }
 
@@ -689,11 +695,14 @@ func TestLowSpaceChangeIsReportedToTheCaller(t *testing.T) {
 	}
 }
 
-// TestLowSpaceWriteFailureKeepsTheIndexHonest: if even the
-// replace-oldest write fails, the arrival is not added to the index and
-// the generation whose files were already deleted to make room does not
-// linger in it either.
-func TestLowSpaceWriteFailureKeepsTheIndexHonest(t *testing.T) {
+// TestLowSpaceWriteFailureKeepsEveryGenerationItAlreadyHad: a write
+// that fails for any reason other than a full disk must cost the router
+// nothing. The replacement is written first, so the generation it would
+// have replaced is still there -- index entry and file both -- and the
+// arrival is not in the index. The old order (drop, then write)
+// destroyed a generation and stored nothing, eroding every router to
+// its anchor one failed push at a time.
+func TestLowSpaceWriteFailureKeepsEveryGenerationItAlreadyHad(t *testing.T) {
 	dir := t.TempDir()
 	key := testKey(t)
 	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
@@ -709,7 +718,7 @@ func TestLowSpaceWriteFailureKeepsTheIndexHonest(t *testing.T) {
 	routerDir := v.routerDir("rb5009")
 	v.writeFile = func(path string, data []byte, perm os.FileMode) error {
 		if strings.HasPrefix(path, routerDir) {
-			return errors.New("no space left on device")
+			return errors.New("the disk went away mid-write")
 		}
 		return persist.WriteFileAtomic(path, data, perm)
 	}
@@ -718,8 +727,8 @@ func TestLowSpaceWriteFailureKeepsTheIndexHonest(t *testing.T) {
 	}
 
 	ids := generationIDs(v, "rb5009")
-	if contains(ids, "") || len(ids) != 2 {
-		t.Fatalf("got %v, want the two generations whose files are still there", ids)
+	if contains(ids, "") || len(ids) != len(before) {
+		t.Fatalf("got %v, want the %d generations the vault already had", ids, len(before))
 	}
 	if !contains(ids, anchor) {
 		t.Fatalf("got %v, want the anchor %s kept", ids, anchor)
@@ -752,5 +761,179 @@ func TestStatfsBytesReadsTheRealFilesystem(t *testing.T) {
 	if got, want := lowSpaceFloor(total), total/100*lowSpaceFloorPercent; got < want {
 		t.Fatalf("lowSpaceFloor(%d) = %d, want at least %d%% of the filesystem (%d)",
 			total, got, lowSpaceFloorPercent, want)
+	}
+}
+
+// TestFreeSpaceIsMeasuredWithoutHoldingTheIndexLock: the free-space
+// check is a syscall against a filesystem that may already be sick, and
+// every reader of the index -- the Settings list, a download -- would
+// queue behind it if it ran under v.mu (#1125). It is taken before the
+// lock and handed to the store path.
+func TestFreeSpaceIsMeasuredWithoutHoldingTheIndexLock(t *testing.T) {
+	v, err := Open(t.TempDir(), testKey(t))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var underLock bool
+	v.statfs = func(string) (int64, int64, error) {
+		if v.mu.TryLock() {
+			v.mu.Unlock()
+		} else {
+			underLock = true
+		}
+		return testDiskRoomy, testDiskTotal, nil
+	}
+	mustStore(t, v, "rb5009", 10, time.Now())
+	if underLock {
+		t.Fatal("free space was measured with the vault index lock held")
+	}
+}
+
+// TestLowSpaceFallsBackToDroppingFirstOnlyWhenTheDiskIsFull: the
+// replacement is written before the generation it replaces is dropped,
+// so a write that fails costs nothing. Only a write refused for want of
+// space (ENOSPC) earns the dangerous order -- drop, then retry.
+func TestLowSpaceFallsBackToDroppingFirstOnlyWhenTheDiskIsFull(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v := openVaultOnDisk(t, dir, key, disk)
+	base := time.Now()
+	for i := 0; i < 3; i++ {
+		mustStore(t, v, "rb5009", 10+i, base.Add(time.Duration(i)*time.Hour))
+	}
+	before := generationIDs(v, "rb5009")
+	oldest := before[0]
+
+	disk.set(testDiskTight)
+	routerDir := v.routerDir("rb5009")
+	var attempts int
+	v.writeFile = func(path string, data []byte, perm os.FileMode) error {
+		if strings.HasPrefix(path, routerDir) {
+			attempts++
+			if attempts == 1 {
+				return &os.PathError{Op: "write", Path: path, Err: unix.ENOSPC}
+			}
+		}
+		return persist.WriteFileAtomic(path, data, perm)
+	}
+	if err := v.Store("rb5009", KindBackup, plainBackup(99), base.Add(3*time.Hour)); err != nil {
+		t.Fatalf("Store on a disk that took the file after the drop: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("the vault made %d write attempts, want a write, a drop and a retry", attempts)
+	}
+	ids := generationIDs(v, "rb5009")
+	if len(ids) != 3 {
+		t.Fatalf("got %v, want three generations (the arrival replaced one)", ids)
+	}
+	if contains(ids, oldest) {
+		t.Fatalf("got %v, want the oldest generation %s dropped to make room", ids, oldest)
+	}
+	for _, id := range ids {
+		if _, err := os.Stat(filepath.Join(routerDir, v.fileName(id, KindBackup))); err != nil {
+			t.Errorf("generation %s is in the index with no file behind it: %v", id, err)
+		}
+	}
+}
+
+// TestIndexWriteFailureLeavesNoOrphanFile: the file is written before
+// the index that names it, so an index write that fails -- the likely
+// failure on the full disk that got the vault here -- leaves up to
+// 16MiB nothing will ever reference. It is removed instead (#1125).
+func TestIndexWriteFailureLeavesNoOrphanFile(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	v := openVaultOnDisk(t, dir, key, &fakeDisk{free: testDiskRoomy, total: testDiskTotal})
+	base := time.Now()
+	mustStore(t, v, "rb5009", 10, base)
+	kept := generationIDs(v, "rb5009")[0]
+
+	metaPath := filepath.Join(dir, metaFileName)
+	v.writeFile = func(path string, data []byte, perm os.FileMode) error {
+		if path == metaPath {
+			return errors.New("no space left on device")
+		}
+		return persist.WriteFileAtomic(path, data, perm)
+	}
+	if err := v.Store("rb5009", KindBackup, plainBackup(11), base.Add(time.Hour)); err == nil {
+		t.Fatal("Store whose index write failed succeeded, want the error")
+	}
+	v.writeFile = nil
+
+	routerDir := v.routerDir("rb5009")
+	for _, name := range listNames(t, routerDir) {
+		if !strings.HasPrefix(name, kept+".") {
+			t.Errorf("%s was left behind for a generation the index never learned about", name)
+		}
+	}
+	if ids := generationIDs(v, "rb5009"); len(ids) != 1 || ids[0] != kept {
+		t.Fatalf("after a failed index write the vault holds %v, want only %s", ids, kept)
+	}
+
+	// The next push still works, and everything the index claims has a
+	// file behind it.
+	mustStore(t, v, "rb5009", 12, base.Add(2*time.Hour))
+	for _, id := range generationIDs(v, "rb5009") {
+		if _, err := os.Stat(filepath.Join(routerDir, v.fileName(id, KindBackup))); err != nil {
+			t.Errorf("generation %s is in the index with no file behind it: %v", id, err)
+		}
+	}
+}
+
+// TestOpenRemovesFilesTheIndexDoesNotReference: a process killed
+// between writing a generation's file and committing the index leaves a
+// file nothing refers to. Nothing else ever reaches into these
+// directories, so the reopen cleans them out (#1125).
+func TestOpenRemovesFilesTheIndexDoesNotReference(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v := openVaultOnDisk(t, dir, key, disk)
+	mustStore(t, v, "rb5009", 10, time.Now())
+	routerDir := v.routerDir("rb5009")
+	kept := generationIDs(v, "rb5009")[0]
+
+	orphan := filepath.Join(routerDir, "20260101T000000.000000000Z-000042.backup.enc")
+	if err := os.WriteFile(orphan, []byte("written, never indexed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	strayDir := filepath.Join(dir, dirNameFor("a router the index has forgotten"))
+	if err := os.MkdirAll(strayDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(strayDir, "20260101T000000.000000000Z-000043.rsc.enc")
+	if err := os.WriteFile(stray, []byte("a whole router nothing refers to"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	v2 := openVaultOnDisk(t, dir, key, disk)
+	for _, path := range []string{orphan, stray} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s survived the reopen, want it removed as unreferenced: %v", path, err)
+		}
+	}
+	if ids := generationIDs(v2, "rb5009"); len(ids) != 1 || ids[0] != kept {
+		t.Fatalf("the reopened vault holds %v, want only %s", ids, kept)
+	}
+	if _, err := os.Stat(filepath.Join(routerDir, v2.fileName(kept, KindBackup))); err != nil {
+		t.Errorf("the kept generation's own file was removed: %v", err)
+	}
+}
+
+// TestAZeroTotalMeasurementDoesNotEnterLowSpace: a filesystem reporting
+// no blocks at all is a measurement that means nothing, not a full
+// disk. Believing it would pin the vault in low-space mode for good --
+// free=0 is under every floor and can never climb over the exit margin.
+func TestAZeroTotalMeasurementDoesNotEnterLowSpace(t *testing.T) {
+	v := openVaultOnDisk(t, t.TempDir(), testKey(t), &fakeDisk{free: 0, total: 0})
+	base := time.Now()
+	mustStore(t, v, "rb5009", 10, base)
+	mustStore(t, v, "rb5009", 11, base.Add(time.Hour))
+	if v.LowSpace() {
+		t.Fatal("a filesystem reporting zero total bytes put the vault in low-space mode")
+	}
+	if got := len(v.Generations("rb5009")); got != 2 {
+		t.Fatalf("got %d generations, want 2 (normal retention, the measurement said nothing)", got)
 	}
 }

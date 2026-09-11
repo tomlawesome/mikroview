@@ -547,6 +547,21 @@ func (v *Vault) write(path string, data []byte, perm os.FileMode) error {
 	return persist.WriteFileAtomic(path, data, perm)
 }
 
+// SetSpaceProbeForTest replaces the free-space measurement with one a
+// test controls. It exists because low-space mode (#1125) cannot be
+// driven from outside this package any other way -- no test may fill a
+// real filesystem -- and the flag it sets is reported by
+// internal/api's router-backups list, which has its own tests to write.
+// Production code never calls this, and it must be called before the
+// vault is handed to anything that stores: the probe is read without a
+// lock, exactly as the in-package tests set it.
+func (v *Vault) SetSpaceProbeForTest(measure func(dir string) (free, total int64, err error)) {
+	if v == nil {
+		return
+	}
+	v.statfs = measure
+}
+
 // statfsBytes is the real free/total measurement of the filesystem dir
 // lives on. Bavail rather than Bfree: the blocks an unprivileged
 // process may actually use, which is what the vault has.
