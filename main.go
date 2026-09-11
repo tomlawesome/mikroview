@@ -1237,6 +1237,16 @@ func main() {
 	// aborts its push loop mid-file leaves a buffer behind, and the
 	// ingest handler only reclaims it when some router pushes again --
 	// which on a quiet install is the next night.
+	// Low-space mode (#1125) is a vault-internal state change with no
+	// request behind it, so the vault reports it through a callback and the
+	// audit trail records it as the system's own action.
+	routerBackupVault.OnLowSpaceChange(func(low bool, detail string) {
+		action := "router_backup.low_space"
+		if !low {
+			action = "router_backup.low_space_cleared"
+		}
+		auditStore.Record("system", action, "", detail)
+	})
 	routerBackupSlices := backupslice.New(routerBackupVault)
 	go routerBackupSlices.RunPeriodicSweep(ctx)
 	if matchLogPostgres != nil {
