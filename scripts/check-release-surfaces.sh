@@ -144,6 +144,55 @@ else
   done <"$tmpd/screens"
 fi
 
+# ---------------------------------------------------------------------
+# 7. review records: every release gets one (docs/quality-strategy.md
+#    "Pre-release reviews"), and an older record cannot still be sitting
+#    on a deferred security disclosure once a newer version is cut.
+#    Convention: a review record defers disclosure with the literal
+#    line `<!-- pending-disclosure: #n #m -->`; it must be replaced by
+#    the actual findings before the NEXT release is cut. A record for
+#    the version being checked, or a newer one, may still carry it.
+# ---------------------------------------------------------------------
+
+# version_lt a b -- true (exit 0) if version a is older than version b.
+# Compares the three dot-separated numeric parts field by field; no
+# sort -V dependency (not confirmed present in busybox sort).
+version_lt() {
+  a1=$(echo "$1" | cut -d. -f1); a2=$(echo "$1" | cut -d. -f2); a3=$(echo "$1" | cut -d. -f3)
+  b1=$(echo "$2" | cut -d. -f1); b2=$(echo "$2" | cut -d. -f2); b3=$(echo "$2" | cut -d. -f3)
+  [ "$a1" -lt "$b1" ] && return 0
+  [ "$a1" -gt "$b1" ] && return 1
+  [ "$a2" -lt "$b2" ] && return 0
+  [ "$a2" -gt "$b2" ] && return 1
+  [ "$a3" -lt "$b3" ] && return 0
+  return 1
+}
+
+found_review=0
+for f in docs/reviews/*-v"$version".md; do
+  [ -f "$f" ] || continue
+  found_review=1
+done
+if [ "$found_review" -eq 1 ]; then
+  ok "docs/reviews has a record for v$version"
+else
+  fail "docs/reviews has no record for v$version (docs/quality-strategy.md: every release gets one)"
+fi
+
+pending_fails=0
+for f in docs/reviews/*-v*.md; do
+  [ -f "$f" ] || continue
+  fver=$(echo "$f" | sed -nE 's#^docs/reviews/.*-v([0-9]+\.[0-9]+\.[0-9]+)\.md$#\1#p')
+  [ -n "$fver" ] || continue
+  if version_lt "$fver" "$version" && grep -qF 'pending-disclosure' "$f" 2>/dev/null; then
+    fail "$f -- still carries a pending-disclosure marker from before v$version, replace it with the findings before this release"
+    pending_fails=$((pending_fails + 1))
+  fi
+done
+if [ "$pending_fails" -eq 0 ]; then
+  ok "no older docs/reviews record still has a pending-disclosure marker"
+fi
+
 echo
 if [ "$fails" -gt 0 ]; then
   echo "check-release-surfaces: $fails check(s) failed"
