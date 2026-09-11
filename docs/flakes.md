@@ -41,6 +41,10 @@ each, recorded together because the cause is shared (#831's contention):
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 4/4 · `live-topography-furniture`
 - 2026-09-10 · 5265a1f8 (!1012) · pipeline 881, gate:scenarios 4/4 · `live-watchlist-manage` exited 1 without printing a result; pipelines 879-882 shared the runner
 
+## live-watchlist-manage: the fenced button never reads "learn again"
+
+- 2026-09-10 · 4d37f0cf (!1026) · pipeline 977, gate:scenarios 4/4 · `FAIL the same button now reads learn again` at `live-watchlist-manage.mjs:216`; the preceding check ("fence now turns the chip to fencing") passed, so the fence itself landed and only the button's relabel was missing. Ran three times standalone at the same commit against a fresh instance: passed every time. The batch's diff cannot reach it -- it touches no frontend file at all, and nothing in the watchlist's own request path.
+
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 
 - 2026-09-09 · 4f17d079 (work/460-ui, local, standalone) · `goTo("Stream") timed out waiting for card "live"`, `offsetFromDeckTop: -105` (card mounted, the roll overshot it — #1011's shape) at `live-browser.mjs:444` from the scenario's own `session()` call, before a single check ran; the same command on the same tree passed immediately after, and three further standalone runs passed. Same family as the `live-rule-regex` and `live-settings-doors` entries above: `goTo` never settles, on a host with other work on it.

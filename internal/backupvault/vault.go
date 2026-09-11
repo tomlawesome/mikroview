@@ -184,6 +184,13 @@ type Vault struct {
 
 	mu   sync.Mutex
 	meta vaultMeta
+
+	// lockMu guards the optional admin passphrase's state (lock.go). Its
+	// own mutex rather than mu: a read path takes mu only to consult the
+	// index, then seals or opens outside it, and the lock is consulted in
+	// both halves.
+	lockMu sync.RWMutex
+	lock   *lockState
 	// seq disambiguates two generations opened within the same
 	// nanosecond -- possible on a fast filesystem or in a test driving
 	// the clock by hand.
@@ -203,6 +210,9 @@ func Open(dir string, key *retention.Key) (*Vault, error) {
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("backupvault: creating %s: %w", dir, err)
+	}
+	if err := v.loadLock(); err != nil {
+		return nil, err
 	}
 	sealed, err := os.ReadFile(filepath.Join(dir, metaFileName))
 	if err != nil {
@@ -317,7 +327,7 @@ func (v *Vault) Store(device, kind string, data []byte, now time.Time) error {
 		gen.RscSize = int64(len(data))
 	}
 
-	sealed, err := v.key.SealDocument(sealInfoPrefix+device+"/"+gen.ID+"/"+kind, data)
+	sealed, err := v.sealBody(sealInfoPrefix+device+"/"+gen.ID+"/"+kind, data)
 	if err != nil {
 		return fmt.Errorf("backupvault: sealing %s: %w", kind, err)
 	}
@@ -460,7 +470,7 @@ func (v *Vault) Open(device, generationID, kind string) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("backupvault: reading %s: %w", path, err)
 	}
-	plain, err := v.key.OpenDocument(sealInfoPrefix+device+"/"+generationID+"/"+kind, sealed)
+	plain, err := v.openBody(sealInfoPrefix+device+"/"+generationID+"/"+kind, sealed)
 	if err != nil {
 		return nil, fmt.Errorf("backupvault: opening %s: %w", path, err)
 	}
