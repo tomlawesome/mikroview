@@ -144,6 +144,10 @@ func (s *Server) handleIngestRouterBackup(w http.ResponseWriter, r *http.Request
 			TotalSlices: req.TotalSlices,
 			SHA256:      req.SHA256,
 		}, now)
+		if errors.Is(err, backupslice.ErrServer) {
+			s.failBackupSlice(w, tok.Device, err, now)
+			return
+		}
 		if err != nil {
 			s.refuseBackupSlice(w, tok.Device, err, now)
 			return
