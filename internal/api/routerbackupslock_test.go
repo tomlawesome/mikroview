@@ -3,11 +3,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/audit"
 )
 
 const testVaultPassphrase = "correct horse battery staple"
@@ -235,5 +238,162 @@ func TestRemovePassphraseNeedsTheCurrentOne(t *testing.T) {
 	}
 	if got := downloadStatus(t, admin, ts, gen); got != http.StatusOK {
 		t.Fatalf("download after removing the passphrase = %d, want 200", got)
+	}
+}
+
+// #1120: the four paths where the private key outlived the promise that
+// it exists only while an admin holds a live unlock.
+
+func TestSigningOutEverywhereDropsTheVaultKey(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+
+	resp := postJSON(t, admin, ts.URL+"/api/auth/logout-all", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sign out everywhere = %d, want 200", resp.StatusCode)
+	}
+	if !s.Vault.Locked() {
+		t.Fatal("signing out everywhere left the vault's private key in memory")
+	}
+}
+
+func TestDeletingAUserDropsTheVaultKey(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	list, err := admin.Get(ts.URL + "/api/auth/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var users []userSummary
+	if err := json.NewDecoder(list.Body).Decode(&users); err != nil {
+		t.Fatal(err)
+	}
+	list.Body.Close()
+	var id string
+	for _, u := range users {
+		if u.Username == "viewer" {
+			id = u.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("the user just created is not in the account list")
+	}
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+
+	resp := deleteJSON(t, admin, ts.URL+"/api/auth/users/"+id, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("deleting the user = %d, want 200", resp.StatusCode)
+	}
+	if !s.Vault.Locked() {
+		t.Fatal("deleting a user left the vault's private key in memory")
+	}
+}
+
+func TestChangingAPasswordDropsAnotherSessionsVaultKey(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+
+	// The unlock is held by the first sign-in; the password is changed
+	// from the second. That is the shape an operator acting on a
+	// suspected theft produces, and the old code locked nothing because
+	// the calling session was not the holder.
+	second := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, second, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	resp := postJSON(t, second, ts.URL+"/api/auth/password", changePasswordRequest{CurrentPassword: "password123", NewPassword: "password789"})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("changing the password = %d, want 200", resp.StatusCode)
+	}
+	if !s.Vault.Locked() {
+		t.Fatal("changing the password left another session's vault key in memory")
+	}
+}
+
+func TestAStatusPollDoesNotRenewTheUnlock(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+
+	// Put the unlock most of the way through its idle window, then poll
+	// the status the way an open settings tab does. The poll must read
+	// the clock, not reset it.
+	aged := time.Now().Add(-vaultUnlockIdle + time.Minute)
+	s.vaultUnlock.mu.Lock()
+	s.vaultUnlock.lastUsed = aged
+	s.vaultUnlock.mu.Unlock()
+
+	if status := lockStatus(t, admin, ts); !status.UnlockedForYou {
+		t.Fatal("a still-live unlock is not reported to the session holding it")
+	}
+
+	s.vaultUnlock.mu.Lock()
+	after := s.vaultUnlock.lastUsed
+	s.vaultUnlock.mu.Unlock()
+	if !after.Equal(aged) {
+		t.Fatal("polling the lock status renewed the unlock it was reporting on")
+	}
+}
+
+func TestAnIdleUnlockExpiresWithNoTraffic(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	// The sweeper reads Server.Now, so the fifteen minutes pass without
+	// the test waiting for them.
+	s.Now = func() time.Time { return time.Now().Add(2 * vaultUnlockIdle) }
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+	if s.Vault.Locked() {
+		t.Fatal("the vault is locked immediately after its passphrase was set")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go s.RunVaultUnlockExpiry(ctx, time.Millisecond)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !s.Vault.Locked() {
+		if time.Now().After(deadline) {
+			t.Fatal("an unlock left idle with no requests never expired")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func TestAnUnlockNobodyHoldsIsDropped(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+
+	// What a passphrase change that failed half way leaves behind: the
+	// key in memory, and no session holding it.
+	s.vaultUnlock.release()
+	s.expireVaultUnlock(time.Now())
+	if !s.Vault.Locked() {
+		t.Fatal("a key with no holder was left in memory")
+	}
+}
+
+func TestUnlockingAVaultWithNoPassphraseIsNotAuditedAsAGuess(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	resp := postJSON(t, admin, ts.URL+"/api/router-backups/unlock", vaultPassphraseRequest{Passphrase: testVaultPassphrase})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("unlocking a vault with no passphrase = %d, want 409", resp.StatusCode)
+	}
+	for _, e := range s.Audit.Query(audit.Query{Limit: 100}).Entries {
+		if e.Action == "router_backup.unlock_failed" {
+			t.Fatal("a vault with no passphrase recorded a failed unlock attempt, which is the signal that means someone is guessing")
+		}
+	}
+
+	// The signal itself still fires, on the one case that means it.
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/router-backups/unlock", vaultPassphraseRequest{Passphrase: "not the passphrase"}).Body.Close()
+	var guesses int
+	for _, e := range s.Audit.Query(audit.Query{Limit: 100}).Entries {
+		if e.Action == "router_backup.unlock_failed" {
+			guesses++
+		}
+	}
+	if guesses != 1 {
+		t.Fatalf("wrong-passphrase attempts audited = %d, want 1", guesses)
 	}
 }

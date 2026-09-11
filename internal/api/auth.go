@@ -600,9 +600,12 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	// them here means they are gone immediately, which is what an
 	// operator acting on a suspected theft is actually asking for.
 	s.Sessions.RevokeAllForUser(user.ID)
-	if cookie, err := r.Cookie(sessionCookieName); err == nil {
-		s.lockVaultForSession(cookie.Value)
-	}
+	// And the router-backup vault's key with them (#1120). Locking only
+	// when the *calling* session held it open missed the case the button
+	// is pressed for: the admin changing their password because they
+	// think someone else has their session is the one whose other
+	// session is holding the key.
+	s.lockVault()
 
 	s.Audit.Record(user.Username, "account.password_changed", user.Username, "sessions ended: all")
 
@@ -646,6 +649,12 @@ func (s *Server) handleAuthLogoutAll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Sessions.RevokeAllForUser(user.ID)
+	// "Everywhere" includes the router-backup vault (#1120). This is the
+	// panic button an operator presses on a suspected theft, and leaving
+	// the vault's private key in memory afterwards -- until somebody
+	// happened to request a download -- was the opposite of what it
+	// says.
+	s.lockVault()
 	s.Audit.Record(user.Username, "account.sessions_ended", user.Username, "sessions ended: all, via sign out everywhere")
 
 	sess := s.Sessions.Create(user.ID, now)
@@ -844,6 +853,9 @@ func (s *Server) handleAuthDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Sessions.RevokeAllForUser(user.ID)
+	// Whoever is being removed may be the one holding the vault open, and
+	// there is no session left to ask (#1120).
+	s.lockVault()
 	revokedTokens := 0
 	if s.Tokens != nil {
 		revokedTokens = s.Tokens.RevokeAllCreatedBy(user.ID)
