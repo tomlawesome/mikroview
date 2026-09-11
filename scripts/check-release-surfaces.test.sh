@@ -46,7 +46,7 @@ commit() { # commit <dir> <date> <message>
 new_repo() { # new_repo <dir>
   local dir="$1"
   rm -rf "$dir"
-  mkdir -p "$dir/docs/screenshots" "$dir/site" "$dir/frontend/src" \
+  mkdir -p "$dir/docs/screenshots" "$dir/docs/reviews" "$dir/site" "$dir/frontend/src" \
     "$dir/.github/workflows" "$dir/scripts"
   git -C "$dir" init -q
   git -C "$dir" config user.email "test@example.com"
@@ -99,6 +99,11 @@ name: pages
 on: push
 EOF
   printf 'export const x = 1;\n' >"$dir/frontend/src/app.js"
+  cat >"$dir/docs/reviews/2026-01-01-v0.1.0.md" <<'EOF'
+# Pre-release review: v0.1.0
+
+No findings.
+EOF
 
   commit "$dir" "2026-01-01T00:00:00" "initial"
 }
@@ -196,6 +201,34 @@ run "$shots"
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "a recaptured screenshot passes (rc=$rc)"
 check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/a.png"*) echo true;; *) echo false;; esac)" \
   "and confirms it"
+
+# --- check 7: review records -----------------------------------------------
+
+# no record for VERSION -> FAIL, names the missing version
+c7a="$TMP/case7a-missing-review"
+cp -r "$good" "$c7a"
+rm "$c7a/docs/reviews/2026-01-01-v0.1.0.md"
+run "$c7a"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a missing review record for VERSION fails (rc=$rc)"
+check "$(case "$out" in *"FAIL: docs/reviews has no record for v0.1.0 (docs/quality-strategy.md: every release gets one)"*) echo true;; *) echo false;; esac)" \
+  "and names the missing version"
+
+# an older record still carrying the pending-disclosure marker -> FAIL, names the file
+c7b="$TMP/case7b-pending-older"
+cp -r "$good" "$c7b"
+printf '0.2.0\n' >"$c7b/VERSION"
+printf '\n<!-- pending-disclosure: #1 #2 -->\n' >>"$c7b/docs/reviews/2026-01-01-v0.1.0.md"
+run "$c7b"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "an older review record with a pending-disclosure marker fails (rc=$rc)"
+check "$(case "$out" in *"FAIL: docs/reviews/2026-01-01-v0.1.0.md -- still carries a pending-disclosure marker"*) echo true;; *) echo false;; esac)" \
+  "and names the file"
+
+# the current version's own record may still carry the marker -> passes
+c7c="$TMP/case7c-pending-current"
+cp -r "$good" "$c7c"
+printf '\n<!-- pending-disclosure: #3 -->\n' >>"$c7c/docs/reviews/2026-01-01-v0.1.0.md"
+run "$c7c"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "the current version's own pending-disclosure marker does not fail (rc=$rc)"
 
 echo
 if [ "$fails" -ne 0 ]; then
