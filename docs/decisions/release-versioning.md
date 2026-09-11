@@ -114,4 +114,9 @@ version in CONTRIBUTING that does not match `go.mod`, or a referenced
 screenshot whose last change predates the previous `v*` tag while
 `frontend/src` changed since it. GitHub Pages redeploys only when
 `site/` or the screenshots change, so a release with no such change
-leaves the site as it was, by design.
+leaves the site as it was, by design. It also checks that
+`docs/reviews/` has a record for the version being cut, and that no
+older record still carries the literal marker `<!-- pending-disclosure:
+#n #m -->` -- a review may defer naming its security findings with that
+line, but the line must be replaced by the real findings before the
+next release.
