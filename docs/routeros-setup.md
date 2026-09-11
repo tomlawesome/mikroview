@@ -820,6 +820,10 @@ pushes. A whole backup push costs one of those however many pieces the
 file arrives in, because it is counted when the router announces the
 transfer rather than per piece — so a backup and its export together are
 two, and only a scheduler running this every few minutes can run out.
+Each announced transfer then carries at most the number of pieces it
+declared plus eight retries, and is abandoned if more arrive; a piece
+naming a transfer MikroView is not holding — one already finished, given
+up on, or never announced — costs a request like any other push.
 
 The wizard does not offer this step yet — 4b's token is still what
 authenticates it once it does. Until it does, this is a paste-it-yourself
