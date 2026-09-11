@@ -1707,6 +1707,29 @@ deliberate exception to the "log admin actions" rule above:
   no expectation, so a cleared flag raises again on the next matching
   event.
 
+Router-backup custody is logged too, admin-only actions and one
+device-attributed exception:
+
+- Downloading a stored generation (`GET
+  /api/router-backups/{device}/{generation}/{kind}`) is `router_backup.download`,
+  naming the router, generation and which half of the pair -- a
+  router's whole configuration, credentials included, is never an
+  unaccountable read.
+- The optional vault passphrase lock (see [Router backups over
+  SFTP](#router-backups-over-sftp-optional-off-by-default)) logs each of
+  its own changes: `router_backup.locked`, `router_backup.unlocked`,
+  `router_backup.unlock_failed` (a wrong passphrase, whether unlocking
+  or removing), `router_backup.passphrase_set`,
+  `router_backup.passphrase_removed`, and
+  `router_backup.passphrase_remove_failed` (a removal whose re-seal did
+  not finish).
+- A backup arriving over the HTTPS ingest channel (`POST
+  /api/ingest/router-backup`) is `ingest.router_backup`; a refused push
+  is `ingest.router_backup.refused`; a storage fault on mikroview's own
+  side is `ingest.router_backup.failed`. These three are attributed to
+  the pushing device (`device:<name>`), or to `system` for a fault that
+  was mikroview's own rather than the router's.
+
 Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
 persisted log (see [API reference](#api-reference)) -- the same
@@ -3992,8 +4015,13 @@ exits, rather than starting the server. See
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
 | `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- except accounts, tokens and recovery keys, which keep persisting to a plain file per #853 rule 6) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
-| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's kept generations (arrival times, sizes, `.backup` header), the SFTP drop box's own port, a missed-push count derived from the learned interval, and `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
+| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's kept generations (arrival times, sizes, `.backup` header), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
 | `GET /api/router-backups/{device}/{generation}/{kind}` | admin-only: streams one generation's file back decrypted -- `kind` is `backup` or `rsc`. Audit-logged with who, which router, which generation and which half of the pair, since a router's whole configuration (credentials included) is never an unaccountable download |
+| `POST /api/router-backups/unlock` | admin-only: opens the vault passphrase lock for the calling session, given `{"passphrase": "..."}` -- the unlock belongs to this session/tab, not the account, and lasts until it is locked, the session ends, or fifteen minutes pass with no download. Rate-limited through the same limiter as login. A wrong passphrase is a 403, audited as `router_backup.unlock_failed`; success is audited as `router_backup.unlocked` |
+| `POST /api/router-backups/lock` | admin-only: closes the vault again, from any admin session regardless of who opened it. Audited as `router_backup.locked`; a 409 if no passphrase is set |
+| `POST /api/router-backups/passphrase` | admin-only: turns the lock on, given `{"passphrase": "..."}` (at least 12 characters) -- generates an X25519 key pair, re-seals every stored backup to the public half, and leaves the vault open for the session that set it. Audited as `router_backup.passphrase_set`; a 500 if a file could not be re-sealed, which is still audited and named in the response |
+| `DELETE /api/router-backups/passphrase` | admin-only: turns the lock off, given the current `{"passphrase": "..."}` -- re-seals every backup back to the retention key mikroview holds itself. Rate-limited like unlock. A wrong passphrase is a 403 audited as `router_backup.unlock_failed`; success as `router_backup.passphrase_removed`; a partial re-seal failure as `router_backup.passphrase_remove_failed` |
+| `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or mikroview itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 | `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |
 | `PUT /api/settings/history` | admin-only: turn the on-disk event history on or off and set its two caps. Body `{"enabled": <bool>, "days": <int>, "maxBytes": <bytes>}`, answering with the same shape `GET` returns. Turning it on takes what the event buffer already holds and everything after; **turning it off deletes every retained file before the response is written**. `days` below 1 or `maxBytes` below 1 MiB is refused with a 400; a request to turn it on with no key file mounted is refused with a 409. Audit-logged as `settings.history` |
