@@ -153,7 +153,14 @@ func (s *Server) handleRouterBackupDownload(w http.ResponseWriter, r *http.Reque
 	// an unlock that has gone idle or lost its session is dropped here
 	// rather than merely refused.
 	if !s.vaultUnlockedFor(r, time.Now()) {
-		http.Error(w, "the vault is locked -- unlock it with the vault passphrase first", http.StatusForbidden)
+		// The list reports `locked: false` while another admin's session
+		// holds the unlock, so "the vault is locked" would contradict what
+		// the caller just saw (#1124): say whose unlock it is not.
+		msg := "the vault is locked -- unlock it with the vault passphrase first"
+		if s.vaultUnlock.holder() != "" {
+			msg = "another session holds the vault unlock -- unlock it in this session to download"
+		}
+		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
 

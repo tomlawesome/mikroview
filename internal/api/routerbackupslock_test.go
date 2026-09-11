@@ -5,8 +5,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,6 +142,18 @@ func TestAnotherSessionOfTheSameAdminStillSeesALockedVault(t *testing.T) {
 
 	if got := downloadStatus(t, second, ts, gen); got != http.StatusForbidden {
 		t.Fatalf("download from the admin's other session = %d, want 403", got)
+	}
+	// The list tells the second session `locked: false` (the first one
+	// holds the unlock), so the refusal must not say "the vault is
+	// locked" (#1124): it names the real reason.
+	resp, err := second.Get(ts.URL + "/api/router-backups/rb5009/" + gen + "/backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "another session holds the vault unlock") {
+		t.Errorf("403 body = %q, want it to say another session holds the unlock", body)
 	}
 	status := lockStatus(t, second, ts)
 	if !status.PassphraseSet {
