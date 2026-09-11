@@ -25,7 +25,8 @@
 - [ ] the previous release's review record in `docs/reviews/` lists its deferred security findings with fix commits -- no `pending-disclosure` marker left (`make release-surfaces` checks this)
 - [ ] every operator step named on this promote issue (host scripts, config, secrets) is done and verified
 - [ ] `dev -> preview` merged green, `preview -> main` merged green, tag `v<version>` pushed, GitHub release run green, image pullable
-- [ ] back-merge `main -> dev` opened
+- [ ] back-merge `main -> dev` merged (`main -> preview` is refused by `policy:promotion-hop`; the next `dev -> preview` carries it instead)
+- [ ] this issue and the `v<version>` milestone closed
 
 ## Why
 
