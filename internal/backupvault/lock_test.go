@@ -4,9 +4,12 @@ package backupvault
 
 import (
 	"bytes"
+	"crypto/ecdh"
+	"crypto/rand"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -520,23 +523,55 @@ func TestARemovalThatCannotFinishLeavesTheVaultLocked(t *testing.T) {
 	}
 }
 
-// hybridBodySink keeps the compiler from deciding the assembled body is
-// unused and eliding the allocation the test is counting.
-var hybridBodySink []byte
-
-func TestHybridBodyIsOneExactlySizedBuffer(t *testing.T) {
-	eph := bytes.Repeat([]byte{0xab}, 32)
-	sealed := bytes.Repeat([]byte{0x5c}, 4096)
-
-	got := hybridBody(eph, sealed)
-	want := append(append([]byte(hybridMagic), eph...), sealed...)
-	if !bytes.Equal(got, want) {
-		t.Fatal("the assembled body is not magic + ephemeral key + ciphertext")
+// TestSealingToTheVaultKeyDoesNotCopyTheBody measures bytes rather than
+// counting allocations: the interesting number here is not how many
+// times this path allocates -- key agreement and hashing account for
+// most of that -- but whether a 16MiB backup passes through memory once
+// or twice (#1121).
+func TestSealingToTheVaultKeyDoesNotCopyTheBody(t *testing.T) {
+	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(got) != cap(got) {
-		t.Fatalf("a %d-byte body was assembled in a %d-byte buffer", len(got), cap(got))
+	const info = sealInfoPrefix + "rb5009/gen/backup"
+	plain := bytes.Repeat([]byte("x"), 4<<20)
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	sealed, err := sealToPublic(priv.PublicKey(), info, plain)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("sealToPublic: %v", err)
 	}
-	if n := testing.AllocsPerRun(20, func() { hybridBodySink = hybridBody(eph, sealed) }); n != 1 {
-		t.Fatalf("assembling a hybrid body allocated %v times, want 1", n)
+
+	allocated := after.TotalAlloc - before.TotalAlloc
+	if limit := uint64(len(plain)) * 3 / 2; allocated > limit {
+		t.Fatalf("sealing a %d-byte backup allocated %d bytes, want under %d -- the body is being copied a second time",
+			len(plain), allocated, limit)
+	}
+	if want := hybridHeaderBytes + retention.SealOverheadBytes + len(plain); len(sealed) != want {
+		t.Fatalf("the sealed file is %d bytes, want %d", len(sealed), want)
+	}
+	if len(sealed) != cap(sealed) {
+		t.Fatalf("a %d-byte file was assembled in a %d-byte buffer", len(sealed), cap(sealed))
+	}
+	if !bytes.HasPrefix(sealed, []byte(hybridMagic)) {
+		t.Fatal("the sealed file does not start with the hybrid magic")
+	}
+	ephPub := sealed[len(hybridMagic):hybridHeaderBytes]
+	if _, err := ecdh.X25519().NewPublicKey(ephPub); err != nil {
+		t.Fatalf("the header does not hold a usable ephemeral key: %v", err)
+	}
+	if bytes.Equal(ephPub, priv.PublicKey().Bytes()) {
+		t.Fatal("the header holds the vault's own public key, not a throwaway one")
+	}
+
+	got, err := openFromPrivate(priv, info, sealed)
+	if err != nil {
+		t.Fatalf("openFromPrivate: %v", err)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Fatal("the body did not round-trip")
 	}
 }

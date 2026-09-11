@@ -171,6 +171,12 @@ func (k *Key) SealDocument(info string, plaintext []byte) ([]byte, error) {
 	return k.Seal(keyInfoPrefix+"seal/"+info, []byte(info), plaintext)
 }
 
+// SealDocumentAppend is SealDocument onto the end of dst -- see
+// Key.SealAppend for when that is worth asking for.
+func (k *Key) SealDocumentAppend(dst []byte, info string, plaintext []byte) ([]byte, error) {
+	return k.SealAppend(dst, keyInfoPrefix+"seal/"+info, []byte(info), plaintext)
+}
+
 // OpenDocument reverses SealDocument. info must match what SealDocument
 // was called with -- see its doc comment.
 func (k *Key) OpenDocument(info string, sealed []byte) ([]byte, error) {
