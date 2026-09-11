@@ -245,6 +245,11 @@ check(declaredRow, `a row from the declared router rendered, showing "${declared
 if (declaredRow) {
   await page.locator('.row', { hasText: declared.name }).first().locator('.cell.device .edit-btn').click()
   await editor.waitFor({ timeout: 5000 })
+  // The popover opens loading (NameEditorPopover.svelte's `st.loading`
+  // branch) and only renders `p.refusal` once fetchNameProvenance
+  // resolves -- reading the text before that landed read the loading
+  // copy instead and made the checks below flaky (#1128).
+  await editor.locator('p.refusal').waitFor({ timeout: 5000 })
   const refusal = (await editor.textContent()) ?? ''
 
   // Counting the elements, not reading a `disabled` attribute: a
