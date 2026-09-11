@@ -4,11 +4,14 @@ package backupslice
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,13 +64,22 @@ func sendAll(t *testing.T, r *Receiver, device string, b Begin, data []byte, now
 	}
 	chunks := sliceUp(data)
 	for i, c := range chunks {
-		done, err := r.Slice(device, id, i, c, now)
+		res, err := r.Slice(device, id, i, c, now)
 		if err != nil {
 			t.Fatalf("Slice %d: %v", i, err)
 		}
 		wantDone := i == len(chunks)-1
-		if done != wantDone {
-			t.Fatalf("Slice %d done = %v, want %v", i, done, wantDone)
+		if res.Done != wantDone {
+			t.Fatalf("Slice %d done = %v, want %v", i, res.Done, wantDone)
+		}
+		if !wantDone {
+			continue
+		}
+		// The completed transfer reports what actually arrived, which is
+		// what the caller audits: the push script sends neither kind nor
+		// size on a slice (#1122).
+		if res.Kind != b.Kind || res.Bytes != int64(len(data)) {
+			t.Fatalf("the final slice reported %+v, want kind %q and %d bytes", res, b.Kind, len(data))
 		}
 	}
 	return id
@@ -442,35 +454,280 @@ func TestSliceReturnsASinkErrorAsIsAndDropsTheTransfer(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Slice = %v, want %v", err, wantErr)
 	}
+	// ...and marked as the sink's failure rather than the caller's, so
+	// an HTTP caller can answer it as a server fault (#1122).
+	if !errors.Is(err, ErrSink) {
+		t.Fatalf("Slice = %v, want it to wrap ErrSink too", err)
+	}
 	if r.InFlight() != 0 {
 		t.Fatalf("InFlight = %d after a sink error, want 0 (transfer dropped)", r.InFlight())
 	}
 }
 
-// TestBeginRefusesBeyondTheMemoryBudget covers the bound the device
-// count alone does not give: a handful of devices each declaring a
-// 16MiB file would reserve more than any memory-limited container has,
-// so the budget is counted in declared bytes rather than in routers.
-func TestBeginRefusesBeyondTheMemoryBudget(t *testing.T) {
+// TestTheByteBudgetIsChargedOnBytesReceivedNotOnDeclarations covers both
+// halves of the accounting #1121 got wrong. Begin used to reserve the
+// caller's declared TotalBytes even though it allocates nothing, so four
+// devices declaring 16MiB pinned the whole 64MiB budget for fifteen
+// minutes while holding one slice each -- and nothing at all was charged
+// for the bytes that did arrive.
+func TestTheByteBudgetIsChargedOnBytesReceivedNotOnDeclarations(t *testing.T) {
 	r := New(&fakeSink{})
 	now := time.Now()
-	big := Begin{Kind: backupvault.KindRsc, TotalBytes: backupvault.MaxFileBytes, TotalSlices: backupvault.MaxFileBytes / maxSliceBytes}
+	const perDevice = backupvault.MaxFileBytes
+	big := Begin{Kind: backupvault.KindRsc, TotalBytes: perDevice, TotalSlices: perDevice / maxSliceBytes}
 
-	// Three at the per-file cap: 48MiB of the 64MiB budget.
+	// Five declarations of 16MiB is 80MiB, more than the whole budget.
+	// Every one is admitted: a declaration is not bytes in hand, and a
+	// sender that declares 16MiB may send nothing at all.
+	var ids []string
+	for i := 0; i < 5; i++ {
+		id, err := r.Begin(fmt.Sprintf("rb%d", i), big, now)
+		if err != nil {
+			t.Fatalf("Begin %d = %v, want nil -- a declaration reserves nothing", i, err)
+		}
+		ids = append(ids, id)
+	}
+
+	// Three of them now deliver all but the last slice of their 16MiB,
+	// so the bytes really are resident and really are charged -- three
+	// quarters of the budget, held by transfers still in flight.
 	for i := 0; i < 3; i++ {
-		if _, err := r.Begin(fmt.Sprintf("rb%d", i), big, now); err != nil {
-			t.Fatalf("Begin while the budget has room = %v, want nil", err)
+		device := fmt.Sprintf("rb%d", i)
+		chunks := sliceUp(make([]byte, perDevice))
+		for j, c := range chunks[:len(chunks)-1] {
+			if _, err := r.Slice(device, ids[i], j, c, now); err != nil {
+				t.Fatalf("%s slice %d = %v, want nil", device, j, err)
+			}
 		}
 	}
 
-	// A real backup is well under half a megabyte, so one still fits
-	// alongside them -- the budget refuses sizes, not routers.
-	if _, err := r.Begin("small", Begin{Kind: backupvault.KindRsc, TotalBytes: 1024, TotalSlices: 1}, now); err != nil {
-		t.Fatalf("Begin for a small file = %v, want nil", err)
+	// The fourth is refused part-way, where the bytes in hand fill the
+	// budget -- not at begin, and not never.
+	var accepted int
+	var refusal error
+	for j, c := range sliceUp(make([]byte, perDevice)) {
+		if _, err := r.Slice("rb3", ids[3], j, c, now); err != nil {
+			refusal = err
+			break
+		}
+		accepted++
+	}
+	if !errors.Is(refusal, ErrBusy) {
+		t.Fatalf("the slice past the budget = %v, want ErrBusy", refusal)
+	}
+	if accepted == 0 {
+		t.Fatal("the fourth transfer was refused its first slice -- the budget is still being charged on declarations")
+	}
+	if got := int64(accepted) * maxSliceBytes; got > maxInFlightBytes {
+		t.Fatalf("%d bytes were accepted past the %d-byte budget", got, maxInFlightBytes)
+	}
+}
+
+// TestACompletingTransferKeepsItsSlotUntilTheSinkReturns is the other
+// end of #1121's accounting: a transfer used to leave both maps before
+// Store ran, so the whole file sat in memory charged to nobody while the
+// vault sealed and wrote it, and the device could start another push on
+// top of it immediately.
+func TestACompletingTransferKeepsItsSlotUntilTheSinkReturns(t *testing.T) {
+	sink := &blockingSink{entered: make(chan struct{}), release: make(chan struct{})}
+	r := New(sink)
+	now := time.Now()
+	data := bytes.Repeat([]byte("a"), maxSliceBytes)
+	id, err := r.Begin("router-1", Begin{Kind: backupvault.KindRsc, TotalBytes: int64(len(data)), TotalSlices: 1}, now)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// A fourth at the per-file cap would take the total past the budget.
-	if _, err := r.Begin("one-too-many", big, now); !errors.Is(err, ErrBusy) {
-		t.Fatalf("Begin past the byte budget = %v, want ErrBusy", err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Slice("router-1", id, 0, data, now)
+		done <- err
+	}()
+	<-sink.entered // the file is now inside Store
+
+	if n := r.InFlight(); n != 1 {
+		t.Fatalf("InFlight = %d while the sink still holds the file, want 1 -- its bytes are resident and must stay charged", n)
+	}
+	if _, err := r.Begin("router-1", Begin{Kind: backupvault.KindRsc, TotalBytes: 10, TotalSlices: 1}, now); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Begin while this device's last transfer is in the sink = %v, want ErrBusy", err)
+	}
+	// The per-slice buffers go the moment the whole file exists, so the
+	// two copies are never both resident across the write.
+	r.mu.Lock()
+	tr := r.transfers[id]
+	r.mu.Unlock()
+	if tr == nil {
+		t.Fatal("the completing transfer is not held at all, so nothing is charged for the bytes in the sink")
+	}
+	if tr.chunks != nil {
+		t.Fatalf("the transfer still holds %d slice buffers alongside the reassembled file", len(tr.chunks))
+	}
+	// No further slice belongs to a transfer that is already finished.
+	if _, err := r.Slice("router-1", id, 1, []byte("x"), now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a slice for a transfer already in the sink = %v, want ErrNotFound", err)
+	}
+
+	close(sink.release)
+	if err := <-done; err != nil {
+		t.Fatalf("the completed transfer = %v, want nil", err)
+	}
+	if n := r.InFlight(); n != 0 {
+		t.Fatalf("InFlight = %d once the sink returned, want 0", n)
+	}
+	if _, err := r.Begin("router-1", Begin{Kind: backupvault.KindRsc, TotalBytes: 10, TotalSlices: 1}, now); err != nil {
+		t.Fatalf("Begin once the sink is done = %v, want nil", err)
+	}
+}
+
+// TestRefusalTextsAreWrittenForTheirReaders: every one of these reaches
+// a router (as an HTTP body) or an admin (as an audit detail), and
+// neither can do anything with the name of a Go package (#1122).
+func TestRefusalTextsAreWrittenForTheirReaders(t *testing.T) {
+	for _, err := range []error{
+		ErrNotFound, ErrOutOfOrder, ErrSliceTooLarge, ErrBadTotalBytes,
+		ErrBadTotalSlices, ErrTotalExceeded, ErrUnknownKind, ErrNotABackup,
+		ErrBusy, ErrCorrupt, ErrSink, ErrServer, ErrTooManySlices,
+	} {
+		if strings.HasPrefix(err.Error(), "backupslice:") {
+			t.Errorf("%q names this package to whoever reads it", err)
+		}
+	}
+}
+
+// blockingSink is a vault that takes its time: Store parks until the
+// test lets it go, standing in for the seal-plus-two-atomic-writes a
+// real backupvault.Store performs on a slow disk.
+type blockingSink struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingSink) Store(device, kind string, data []byte, now time.Time) error {
+	b.entered <- struct{}{}
+	<-b.release
+	return nil
+}
+
+// TestASlowSinkDoesNotBlockAnotherDevicesSlice is #1121's first item:
+// the vault write used to run with the receiver lock held, so one
+// router's final slice stalled every other router's POST for the length
+// of a disk write -- and a stalled POST is a /tool fetch timeout, which
+// aborts that router's whole transfer.
+func TestASlowSinkDoesNotBlockAnotherDevicesSlice(t *testing.T) {
+	sink := &blockingSink{entered: make(chan struct{}), release: make(chan struct{})}
+	r := New(sink)
+	now := time.Now()
+
+	slow := []byte("0123456789")
+	slowID, err := r.Begin("router-slow", Begin{Kind: backupvault.KindRsc, TotalBytes: int64(len(slow)), TotalSlices: 1}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fastID, err := r.Begin("router-fast", Begin{Kind: backupvault.KindRsc, TotalBytes: 40000, TotalSlices: 2}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	slowDone := make(chan error, 1)
+	go func() {
+		_, err := r.Slice("router-slow", slowID, 0, slow, now)
+		slowDone <- err
+	}()
+	<-sink.entered // the slow router's file is now inside Store
+
+	fastDone := make(chan error, 1)
+	go func() {
+		_, err := r.Slice("router-fast", fastID, 0, bytes.Repeat([]byte("a"), maxSliceBytes), now)
+		fastDone <- err
+	}()
+	select {
+	case err := <-fastDone:
+		if err != nil {
+			t.Fatalf("the second device's slice = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second device's slice was still blocked two seconds into another device's vault write")
+	}
+
+	close(sink.release)
+	if err := <-slowDone; err != nil {
+		t.Fatalf("the slow transfer = %v, want nil", err)
+	}
+}
+
+// TestRunPeriodicSweepReclaimsAnIdleTransferWithNoIngestTraffic is
+// #1121's second item: sweeping only from the ingest handler meant an
+// abandoned buffer sat there -- holding part of the shared byte budget
+// other devices are refused against -- until some router happened to
+// push again, which on a quiet install is the next night.
+func TestRunPeriodicSweepReclaimsAnIdleTransferWithNoIngestTraffic(t *testing.T) {
+	r := New(&fakeSink{})
+	start := time.Now()
+	var clock atomic.Int64
+	clock.Store(start.UnixNano())
+	r.now = func() time.Time { return time.Unix(0, clock.Load()) }
+
+	if _, err := r.Begin("router-idle", Begin{Kind: backupvault.KindRsc, TotalBytes: 10, TotalSlices: 1}, start); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		r.runPeriodicSweep(ctx, time.Millisecond)
+	}()
+
+	// Nothing pushes anything from here on: only the clock moves.
+	clock.Store(start.Add(idleExpiry + time.Minute).UnixNano())
+	deadline := time.Now().Add(2 * time.Second)
+	for r.InFlight() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the abandoned transfer was still held after the background sweep had two seconds to reclaim it")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the sweep goroutine outlived its context")
+	}
+}
+
+// TestBeginDoesNotAllocateTheDeclaredSizeUpFront is #1121's third item.
+// Begin used to size a buffer from the caller's own declaration, so a
+// token could declare 16MiB, send nothing, and repeat: the allocation
+// below was a gigabyte of churn for a router that never sent a byte.
+func TestBeginDoesNotAllocateTheDeclaredSizeUpFront(t *testing.T) {
+	r := New(&fakeSink{})
+	now := time.Now()
+	declared := Begin{
+		Kind:        backupvault.KindRsc,
+		TotalBytes:  backupvault.MaxFileBytes,
+		TotalSlices: backupvault.MaxFileBytes / maxSliceBytes,
+	}
+
+	const rounds = 64
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := 0; i < rounds; i++ {
+		// The same device each time: rule 6 discards the previous
+		// transfer, which is exactly the loop a router restarting after
+		// a refusal produces.
+		if _, err := r.Begin("router-1", declared, now); err != nil {
+			t.Fatalf("Begin %d: %v", i, err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+
+	// 64 declarations of 16MiB is a gigabyte if each one is allocated up
+	// front. One file's worth is a generous ceiling for what these
+	// begins should cost between them: transfer structs and map entries.
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > backupvault.MaxFileBytes {
+		t.Fatalf("%d begins declaring %d bytes each allocated %d bytes, want well under %d",
+			rounds, declared.TotalBytes, grew, backupvault.MaxFileBytes)
 	}
 }

@@ -3,6 +3,7 @@
 package retention
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -513,5 +514,71 @@ func TestDaysHeldOnAnAbsentDirectory(t *testing.T) {
 	}
 	if len(held) != 0 {
 		t.Errorf("%d days reported from a directory that does not exist", len(held))
+	}
+}
+
+// #1121: Seal and SealAppend are one implementation, and the size a
+// caller allocates from SealOverheadBytes has to be the size that comes
+// back.
+
+func TestSealAppendMatchesSeal(t *testing.T) {
+	k := testKey(t)
+	const info = StateStoreKeyInfo + "seal-append"
+	aad := []byte("a name")
+	plain := []byte("the document body")
+
+	direct, err := k.Seal(info, aad, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended, err := k.SealAppend(nil, info, aad, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The salt and nonce are fresh on every call, so the two envelopes
+	// are not the same bytes -- what must match is their shape and what
+	// comes out of them.
+	if len(direct) != len(appended) {
+		t.Fatalf("Seal produced %d bytes and SealAppend %d", len(direct), len(appended))
+	}
+	for _, sealed := range [][]byte{direct, appended} {
+		got, err := k.Open(info, aad, sealed)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if !bytes.Equal(got, plain) {
+			t.Fatal("the document did not round-trip")
+		}
+	}
+
+	// Onto a buffer that already holds something: the caller's bytes are
+	// left alone and the envelope opens out of the tail.
+	prefix := []byte("a header of the caller's own")
+	out, err := k.SealAppend(append([]byte{}, prefix...), info, aad, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out[:len(prefix)], prefix) {
+		t.Fatal("SealAppend overwrote what the caller had already put in the buffer")
+	}
+	got, err := k.Open(info, aad, out[len(prefix):])
+	if err != nil {
+		t.Fatalf("Open on the appended envelope: %v", err)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Fatal("the appended document did not round-trip")
+	}
+}
+
+func TestSealOverheadMatchesTheCipher(t *testing.T) {
+	k := testKey(t)
+	for _, size := range []int{0, 1, 4096} {
+		sealed, err := k.Seal(StateStoreKeyInfo+"overhead", nil, bytes.Repeat([]byte{0x11}, size))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := size + SealOverheadBytes; len(sealed) != want {
+			t.Fatalf("sealing %d bytes produced %d, want %d -- SealOverheadBytes no longer matches the cipher", size, len(sealed), want)
+		}
 	}
 }

@@ -1232,6 +1232,24 @@ func main() {
 	// whole interval away in any case.
 	go runSnapshotWriter(ctx, snapshotLog, snapshotWriter, cfg.Snapshot.Interval)
 	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
+	// Low-space mode (#1125) is a vault-internal state change with no
+	// request behind it, so the vault reports it through a callback and the
+	// audit trail records it as the system's own action, against the vault
+	// like every other router_backup.* entry.
+	routerBackupVault.OnLowSpaceChange(func(low bool, detail string) {
+		action := "router_backup.low_space"
+		if !low {
+			action = "router_backup.low_space_cleared"
+		}
+		auditStore.Record("system", action, "vault", detail)
+	})
+	routerBackupSlices := backupslice.New(routerBackupVault)
+	// The HTTPS backup-push receiver's own sweeper (#1121), same
+	// ticker-owned-by-the-package shape as the sync above. A router that
+	// aborts its push loop mid-file leaves a buffer behind, and the
+	// ingest handler only reclaims it when some router pushes again --
+	// which on a quiet install is the next night.
+	go routerBackupSlices.RunPeriodicSweep(ctx)
 	if matchLogPostgres != nil {
 		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
 	}
@@ -1521,7 +1539,7 @@ func main() {
 		IngestLimiter:           auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
 		RouterState:             routerState,
 		Vault:                   routerBackupVault,
-		BackupSlices:            backupslice.New(routerBackupVault),
+		BackupSlices:            routerBackupSlices,
 		SetupInstance: api.SetupInstance{
 			TLSEnabled: cfg.TLS.Enabled,
 			Hosts:      cfg.TLS.Hosts,
@@ -1571,6 +1589,10 @@ func main() {
 		"event buffer: adjustable from %s to %s from Settings (%s)",
 		memoryBounds.Min, memoryBounds.Max, memoryBoundsBasis(memoryBounds)))
 	srv.InitMemory(storeMaxMemory, memoryBounds)
+	// The router-backup vault's idle unlock closes on its own (#1120).
+	// Same ticker-and-context shape as the periodic work above; it lives
+	// here because the unlock state belongs to the server this starts.
+	go srv.RunVaultUnlockExpiry(ctx, 0)
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())
