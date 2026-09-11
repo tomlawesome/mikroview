@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -327,5 +328,153 @@ func TestTamperedEphemeralKeyIsRefused(t *testing.T) {
 	}
 	if _, err := v.Open("rb5009", gen.ID, KindBackup); err == nil {
 		t.Fatal("a file with a tampered ephemeral key opened anyway")
+	}
+}
+
+// The three races #1119 found, each driven from inside a re-seal pass
+// through resealStep so the window is hit every run rather than when the
+// scheduler happens to oblige.
+
+func TestABackupArrivingDuringRemovePassphraseStaysReadable(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	v := openVaultAt(t, dir, key)
+	now := time.Now()
+	first := plainBackup(64)
+	if err := v.Store("rb5009", KindBackup, first, now); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := v.SetPassphrase(testPassphrase); err != nil {
+		t.Fatalf("SetPassphrase: %v", err)
+	}
+
+	// The router pushes while the passphrase is being taken off. Nothing
+	// in the vault's API tells it that is happening, which is the point.
+	arrived := plainBackup(128)
+	var once sync.Once
+	var storeErr error
+	resealStep = func() {
+		once.Do(func() { storeErr = v.Store("rb5009", KindBackup, arrived, now.Add(time.Minute)) })
+	}
+	t.Cleanup(func() { resealStep = nil })
+
+	if err := v.RemovePassphrase(testPassphrase); err != nil {
+		t.Fatalf("RemovePassphrase: %v", err)
+	}
+	if storeErr != nil {
+		t.Fatalf("the push that landed mid-removal was refused: %v", storeErr)
+	}
+
+	gens := v.Generations("rb5009")
+	if len(gens) != 2 {
+		t.Fatalf("the vault holds %d generations, want 2", len(gens))
+	}
+	var found bool
+	for _, g := range gens {
+		body, err := v.Open("rb5009", g.ID, KindBackup)
+		if err != nil {
+			t.Fatalf("Open(%s) after the passphrase was removed: %v", g.ID, err)
+		}
+		if bytes.Equal(body, arrived) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the backup that arrived mid-removal did not read back")
+	}
+}
+
+func TestConcurrentSetPassphraseLeavesEveryFileReadable(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	v := openVaultAt(t, dir, key)
+	now := time.Now()
+	bodies := map[string][]byte{}
+	for i := range 3 {
+		body := plainBackup(48 + i)
+		if err := v.Store("rb5009", KindBackup, body, now.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatalf("Store: %v", err)
+		}
+		gens := v.Generations("rb5009")
+		bodies[gens[len(gens)-1].ID] = body
+	}
+
+	phrases := []string{"the first passphrase here", "the second passphrase here"}
+	errs := make([]error, len(phrases))
+	var wg sync.WaitGroup
+	for i, phrase := range phrases {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = v.SetPassphrase(phrase)
+		}()
+	}
+	wg.Wait()
+
+	winner := ""
+	for i, err := range errs {
+		if err == nil {
+			if winner != "" {
+				t.Fatal("both concurrent SetPassphrase calls reported success")
+			}
+			winner = phrases[i]
+			continue
+		}
+		if !errors.Is(err, ErrPassphraseSet) && !errors.Is(err, ErrPassphraseBusy) {
+			t.Fatalf("the losing SetPassphrase returned %v, want ErrPassphraseSet or ErrPassphraseBusy", err)
+		}
+	}
+	if winner == "" {
+		t.Fatal("neither concurrent SetPassphrase call succeeded")
+	}
+
+	// A fresh process, reading only what is on disk: whatever the two
+	// calls did between them, the passphrase that won must open every
+	// file the vault holds.
+	reopened := openVaultAt(t, dir, key)
+	if err := reopened.Unlock(winner); err != nil {
+		t.Fatalf("Unlock with the passphrase that won: %v", err)
+	}
+	for id, want := range bodies {
+		got, err := reopened.Open("rb5009", id, KindBackup)
+		if err != nil {
+			t.Fatalf("Open(%s): %v", id, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s did not round-trip", id)
+		}
+	}
+}
+
+func TestUnlockRacingRemovePassphraseDoesNotRevive(t *testing.T) {
+	dir := t.TempDir()
+	v := openVaultAt(t, dir, testKey(t))
+	if err := v.Store("rb5009", KindBackup, plainBackup(64), time.Now()); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := v.SetPassphrase(testPassphrase); err != nil {
+		t.Fatalf("SetPassphrase: %v", err)
+	}
+	v.Lock()
+
+	// The unlock is started from inside the removal's re-seal pass, so it
+	// is still stretching the passphrase when the lock document goes.
+	unlocked := make(chan error, 1)
+	var once sync.Once
+	resealStep = func() {
+		once.Do(func() {
+			go func() { unlocked <- v.Unlock(testPassphrase) }()
+		})
+	}
+	t.Cleanup(func() { resealStep = nil })
+
+	if err := v.RemovePassphrase(testPassphrase); err != nil {
+		t.Fatalf("RemovePassphrase: %v", err)
+	}
+	if err := <-unlocked; !errors.Is(err, ErrNoPassphrase) {
+		t.Fatalf("an unlock that outlived the lock it read returned %v, want ErrNoPassphrase", err)
+	}
+	if v.PassphraseSet() || v.Locked() {
+		t.Fatal("the removed passphrase came back")
 	}
 }
