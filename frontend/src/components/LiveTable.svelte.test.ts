@@ -20,6 +20,10 @@ import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 // matter what the rule actually said. Reading the source text is the
 // only way to prove the sticky head's supporting CSS, not just assume it.
 import componentSource from './LiveTable.svelte?raw'
+// The row's own half of the same claims -- EventRow has no test file of
+// its own, and its cells share this table's one grid, so the two are
+// read together here (#1150).
+import eventRowSource from './EventRow.svelte?raw'
 
 // jsdom (unlike a real browser) has no window.matchMedia -- LiveTable
 // pulls in lib/viewport.svelte.ts, whose ViewportState singleton calls
@@ -1430,5 +1434,63 @@ describe('LiveTable column chooser rendering (#729)', () => {
     expect(container.querySelectorAll('.header-cell').length).toBe(COLUMNS.length)
     const row = container.querySelector('.row') as HTMLElement
     expect(row.querySelectorAll(':scope > .cell').length).toBe(COLUMNS.length)
+  })
+})
+
+// #1150 piece 1: below ~1500px the right-hand columns fell off the edge
+// with nothing saying they were there -- a 1762px table in a 1308px box
+// at 1366 stopped after Destination, and the pinned Rule column went
+// with it. The scroll box says so always, and Rule stays in view.
+describe('the stream says it scrolls sideways, and keeps Rule in view (#1150)', () => {
+  it('draws the horizontal scrollbar always, not only while the table overflows', () => {
+    const rule = componentSource.match(/\.grid-body\s*\{([^}]*)\}/)
+    expect(rule).toBeTruthy()
+    expect(rule![1]).toMatch(/overflow-x:\s*scroll/)
+
+    const { container } = render(LiveTable, { props: { events: [] } })
+    flushSync()
+    // app.css's own thin bar dress rides on the same element, as the
+    // wizard's script boxes do (#1146).
+    const body = container.querySelector('.body') as HTMLElement
+    expect(body.classList.contains('grid-body')).toBe(true)
+    expect(body.classList.contains('scrollbar')).toBe(true)
+  })
+
+  it('pins the Rule header to the right edge the way Time is pinned to the left', () => {
+    const { container } = render(LiveTable, { props: { events: [makeEvent('pinned-rule', { ruleLabel: 'lan-wan' })] } })
+    flushSync()
+
+    const headers = Array.from(container.querySelectorAll('.header-cell'))
+    const time = headers.find((el) => el.textContent?.trim() === 'Time') as HTMLElement
+    const ruleHead = headers.find((el) => el.textContent?.trim() === 'Rule') as HTMLElement
+    expect(time.classList.contains('sticky-col')).toBe(true)
+    expect(ruleHead.classList.contains('sticky-col-right')).toBe(true)
+    // One end each: neither pinned header borrows the other's edge.
+    expect(time.classList.contains('sticky-col-right')).toBe(false)
+    expect(ruleHead.classList.contains('sticky-col')).toBe(false)
+
+    const right = componentSource.match(/\.sticky-col-right\s*\{([^}]*)\}/)
+    expect(right).toBeTruthy()
+    expect(right![1]).toMatch(/position:\s*sticky/)
+    expect(right![1]).toMatch(/right:\s*0/)
+  })
+
+  // The header can only stay aligned with a cell that is pinned too --
+  // EventRow has no test file of its own, and this is the half of the
+  // claim that lives there (the same pairing .time/.sticky-col already
+  // has).
+  it('pins the rule cell itself, opaque, so scrolled columns do not show through it', () => {
+    const cell = eventRowSource.match(/\.cell\.rule\s*\{([^}]*)\}/)
+    expect(cell).toBeTruthy()
+    expect(cell![1]).toMatch(/position:\s*sticky/)
+    expect(cell![1]).toMatch(/right:\s*0/)
+    expect(cell![1]).toMatch(/background:\s*var\(--bg-elevated\)/)
+
+    // Each row wash needs its own opaque repaint at .row.banded .cell's
+    // specificity, exactly as the time cell has -- otherwise the wash
+    // rule wins and the pinned cell goes translucent again.
+    for (const selector of [/\.row\.banded \.rule\s*\{/, /\.row\.flagged \.rule\s*\{/, /\.row:hover \.rule\s*\{/]) {
+      expect(eventRowSource).toMatch(selector)
+    }
   })
 })
