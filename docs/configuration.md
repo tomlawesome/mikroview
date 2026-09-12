@@ -111,8 +111,8 @@ budget on a machine that genuinely has the memory is a legitimate choice,
 and the warning only makes sure you're making it with the real cost in
 front of you.
 
-**Settings' memory control can override the config file.** Admin ▸
-Settings' memory group carries a slider under the hours bar; dragging it
+**Settings' memory control can override the config file.** Settings'
+memory group carries a slider under the hours bar; dragging it
 only proposes a figure, and nothing changes until you press apply. Once
 you do, mikroview stores that figure and resizes the running buffer
 immediately — growing it keeps every event already held, shrinking it
@@ -2659,9 +2659,9 @@ together:
 
 - **`config.yaml`** sets the *starting point* on boot (`flags.detectors`
   below).
-- **The watchers station** -- part of the engine room, in the navigation
-  rail's Admin group -- lets an admin override that starting point. Any
-  signed-in user can open the engine room and see the watchers station,
+- **The watchers station** -- part of Settings -- lets an admin override
+  that starting point. Any signed-in user can open Settings and see the
+  watchers station,
   with a READ-ONLY marker in the header; the on/off switches and scope
   fields simply aren't there unless you're the admin. A change persists
   to the definitions store (`engine.definitionsStorePath`) and is what
@@ -2962,16 +2962,16 @@ match. A failure at any point leaves the source untouched.
 
 ### Adding and removing people
 
-Open the engine room (Admin group in the navigation rail) and its
+Open **Settings** and its
 **"who may look in"** door. Only the admin sees this door -- it's
 absent entirely for anyone else, not shown read-only.
 
-![The engine room's people door, showing the admin account and one ordinary user](screenshots/engine-room-people-door.png)
+![Settings' people door, showing the admin account and one ordinary user](screenshots/engine-room-people-door.png)
 
 Press **+ Let someone in**, type a username and password, press **Let
 them in**, and the account appears in the list. Everyone added here gets an ordinary account: admin-only
 pages are simply absent from their navigation, with one exception --
-they can open the engine room and read it, but every control there is
+they can open Settings and read it, but every control there is
 missing rather than greyed out, so they still can't change settings,
 manage accounts, or create API tokens.
 
@@ -3165,8 +3165,8 @@ no browser involved -- e.g. a companion OpenCanary-dashboard project
 cross-referencing incidents against mikroview's event/flag history -- a
 session cookie doesn't work: there's no login flow to hold one. API
 tokens are a long-lived bearer credential for exactly that case,
-admin-created from the engine room's **"which machines may speak"**
-door (Admin group in the navigation rail), or directly via the API
+admin-created from Settings' **"which machines may speak"**
+door, or directly via the API
 below.
 
 **Scope is deliberately narrow: read-only, five endpoints, nothing

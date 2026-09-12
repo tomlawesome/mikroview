@@ -999,7 +999,7 @@
                   />
                 </div>
               {/if}
-              <p class="note">Run setup… reopens this any time, from the Admin group.</p>
+              <p class="note">Run setup… reopens this any time, from your account menu.</p>
               <p class="note">
                 <button type="button" class="link" onclick={openLogEveryRule}>Log every rule…</button>
                 turns a dark connection into a watched one once mikroview has been listening a day.
