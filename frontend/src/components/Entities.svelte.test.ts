@@ -232,7 +232,7 @@ describe('Entities router cards (#675)', () => {
     expect(container.textContent).toContain('quiet is a fact, not a fault')
   })
 
-  it('draws the empty berth as one more card at the end of the router row, with no visible label (#718)', async () => {
+  it('draws the empty berth as one more card at the end of the router row, saying what it does (#718, #1168)', async () => {
     appState.devices = [
       { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 3 },
     ] as unknown as (typeof appState)['devices']
@@ -242,7 +242,9 @@ describe('Entities router cards (#675)', () => {
     const cards = [...container.querySelectorAll('.fcards > .fcard')]
     expect(cards.length).toBe(2) // one router card, one berth
     expect(cards.at(-1)?.className).toContain('berth')
-    expect(cards.at(-1)?.textContent?.trim()).toBe('') // the shape is the affordance, no words
+    // #1168: the shape alone was the affordance under #718; at rest it
+    // now says so in words too, here and on first run.
+    expect(cards.at(-1)?.textContent?.trim()).toBe('+ add a router')
   })
 
   it('is the whole row when there are no routers at all -- the correct first-run state (#718)', async () => {
@@ -254,11 +256,14 @@ describe('Entities router cards (#675)', () => {
     expect(cards[0].className).toContain('berth')
   })
 
-  it('names itself to a screen reader even though the visual carries no words (#718)', async () => {
-    const { getByRole } = render(Entities)
+  it('names itself to a screen reader (#718) and on screen at rest (#1168)', async () => {
+    const { container, getByRole } = render(Entities)
     await settle()
 
     expect(getByRole('button', { name: 'Add a router' })).toBeTruthy()
+    // #1168: #718 left the resting state wordless, so with no routers
+    // registered the operator met one blank dashed box.
+    expect(container.querySelector('.berth-trigger')?.textContent?.trim()).toBe('+ add a router')
   })
 
   it('keeps the add-router explanation and commands off the page until the berth is activated (#718)', async () => {
@@ -371,7 +376,29 @@ describe('Entities named-things table (#675)', () => {
     expect(container.textContent).toContain('— click to name —')
   })
 
-  it('elides a known MAC and reads "private" when none is known', async () => {
+  // #1152: the placeholder is one phrase and broke across two lines at
+  // 1100px wide, stranding its closing dash. The nowrap that fixes it
+  // rides on this class so a real host name, which may be long, still
+  // wraps.
+  it('marks the unnamed placeholder so it cannot break mid-phrase, but not a real name', async () => {
+    appState.events = [
+      { srcIp: '10.0.10.9', dstIp: '', time: new Date().toISOString(), receivedAt: Date.now() },
+    ] as unknown as (typeof appState)['events']
+    fetchEntities.mockResolvedValue([{ type: 'host', key: '10.0.10.2', label: 'tom-desktop', tags: [] }])
+    const { container } = render(Entities)
+    await settle()
+
+    const buttons = [...container.querySelectorAll('.etable .rename-btn')]
+    const placeholder = buttons.find((b) => b.textContent?.includes('click to name'))
+    const named = buttons.find((b) => b.textContent?.includes('tom-desktop'))
+    expect(placeholder?.classList.contains('unnamed')).toBe(true)
+    expect(named?.classList.contains('unnamed')).toBe(false)
+  })
+
+  // #1158: an unknown MAC reads as the table's own em dash. It used to
+  // say "private", which on a row for a public address (1.1.1.1) read as
+  // a claim about the address rather than a value nothing here knows.
+  it('elides a known MAC and falls back to the unknown-value dash', async () => {
     const { fetchDeviceMACs } = await import('../lib/api')
     vi.mocked(fetchDeviceMACs).mockResolvedValue([
       { mac: '2c:f0:5d:11:22:8a', firstSeen: '2025-01-01T00:00:00Z', lastSeen: new Date().toISOString(), lastIp: '10.0.10.2' },
@@ -386,8 +413,10 @@ describe('Entities named-things table (#675)', () => {
     const rows = [...container.querySelectorAll('.etable tbody tr')]
     const named = rows.find((tr) => tr.textContent?.includes('tom-desktop'))
     const guest = rows.find((tr) => tr.textContent?.includes('guest-e8b2'))
-    expect(named?.textContent).toContain('2c:f0:5d:…:8a')
-    expect(guest?.textContent).toContain('private')
+    // name · lane · address · mac · first seen · last seen · marks
+    expect(named?.children[3]?.textContent?.trim()).toBe('2c:f0:5d:…:8a')
+    expect(guest?.children[3]?.textContent?.trim()).toBe('—')
+    expect(container.textContent).not.toContain('private')
   })
 
   it('renames inline: click the name, edit, Enter saves', async () => {

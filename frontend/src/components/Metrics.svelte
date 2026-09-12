@@ -190,7 +190,11 @@
       <span class="fact"><b>{hour.eventsInHour}</b> events in the hour</span>
       {#if hour.brink}
         <span class="sep">·</span>
-        <span class="brinkmark">the brink · {formatHM(hour.brink)}</span>
+        <!-- #1167: what "the brink" means, for a reader meeting the word
+             for the first time. -->
+        <span class="brinkmark" title="The brink is the newest minute on this hour's axis"
+          >the brink · {formatHM(hour.brink)}</span
+        >
       {/if}
       <!-- The last fact on the line (#795, round 41 #s4): what the hour
            is an account of, after a restart. A fact, not a control --
@@ -226,7 +230,10 @@
     {:else if metricsPref.view === 'register'}
       <MetricsRegister {hour} {cursor} onselect={select} />
     {:else}
-      <MetricsTable {hour} {cursor} onselect={select} />
+      <!-- #1169: the table prints "—", not "0", for the minutes that
+           ended before this process started counting -- the same fact
+           the hourline's provenance statement above is built from. -->
+      <MetricsTable {hour} {cursor} onselect={select} liveSince={appState.stats?.liveSince ?? null} />
     {/if}
   </div>
 
@@ -246,6 +253,13 @@
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
+    /* #1189: a scroll that runs out here stops here. Without this,
+       over-scrolling the minute table past its last row chained into
+       .deck's own scroll, which snapped the next card into view -- the
+       operator landed on Stream with nothing saying why. The deck
+       already contains its own chaining to the page; this is the same
+       guard one level in. */
+    overscroll-behavior: contain;
     /* The scroll track sits inside this box, so without a right inset the
        content runs under it -- the register's own scroll and the table's
        right-hand column both did (#743). Padding lives on the scrolling

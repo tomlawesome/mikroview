@@ -239,7 +239,11 @@
           <text class="c-now ink-text-{series.ink}" x={cx - HALF} y="82"
             >{series.now}<tspan class="c-unit"> /min</tspan></text
           >
-          <text class="c-scale" x={cx - HALF} y="98">width {series.scale}/min</text>
+          <!-- #1167: "scale", not "width". The figure is what the ribbon
+               is drawn against (metricsSeries.ts's scaleFor, floored at
+               SCALE_FLOOR), so under an empty column "width 12/min" read
+               as a measurement of traffic that was not there. -->
+          <text class="c-scale" x={cx - HALF} y="98">scale {series.scale}/min</text>
           <line class="axis" x1={snapLine(cx, dpr)} x2={snapLine(cx, dpr)} y1={HEADER} y2={height - BOTTOM} />
           <path class="ribbon ink-{series.ink}" d={ribbon(series.values, cx, series.scale)} />
         {/each}

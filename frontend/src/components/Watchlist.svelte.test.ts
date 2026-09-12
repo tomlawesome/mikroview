@@ -240,6 +240,27 @@ describe('The suggestion body under the watches (#771)', () => {
     const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
     expect(heading.textContent).toContain('mikroview suggests · from what rb5009 and hap-ax2 pushed')
     expect(heading.querySelector('b')?.textContent).toBe('2')
+    // #1157: the space before the count's own "·" was written as literal
+    // whitespace at the head of an {#if}, which Svelte trims -- the
+    // heading read "…PUSHED· 2".
+    expect(heading.textContent).toMatch(/pushed · 2$/)
+  })
+
+  // #1160: two drop rules covering the same ports arrive as two
+  // candidates that draw the same row word for word, and the list
+  // printed each of them.
+  it('draws one row where two candidates would read identically, and counts it once', async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([
+      suggestion('s1', 'port', { name: 'port 445', ports: [445] }),
+      suggestion('s2', 'port', { name: 'port 445', ports: [445], routerDevice: 'hap-ax2' }),
+      suggestion('s3', 'port', { name: 'port 139', ports: [139] }),
+    ])
+    await renderWatchlist([])
+
+    const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
+    expect(heading.querySelector('b')?.textContent).toBe('2')
+    const rows = [...watchTable().querySelectorAll('tbody#sugg tr.wt-sugg')]
+    expect(rows.map((r) => r.querySelector('td.k')?.textContent)).toEqual(['port 445', 'port 139'])
   })
 
   it('keeps set-aside suggestions out of the list until "show them" is clicked, and the pill then reads "hide them"', async () => {

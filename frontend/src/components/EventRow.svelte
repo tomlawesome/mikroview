@@ -328,8 +328,13 @@
       <span class="cell addr">—</span>
     {/if}
   {/snippet}
+  <!-- #1149: title on the dim address and MAC cells -- both are fixed-width
+       columns holding content that can overrun them (a 15-character IPv4,
+       a 17-character MAC), and unlike the name column beside them they had
+       nothing to hover when the text was cut. Only where there is a value:
+       a tooltip reading "—" says nothing. -->
   {#snippet sourceIpCell()}
-    <span class="cell ip">{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
+    <span class="cell ip" title={event.srcIp && event.srcHostName ? event.srcIp : undefined}>{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
   {/snippet}
 
   <!-- #717: restored, riding beside Source's own facts (its
@@ -363,7 +368,7 @@
        includes src-mac on some chains/firmwares and not others (see
        internal/routeros/parser.go), never a separate per-row lookup. -->
   {#snippet macCell()}
-    <span class="cell mac">{event.srcMac || '—'}</span>
+    <span class="cell mac" title={event.srcMac || undefined}>{event.srcMac || '—'}</span>
   {/snippet}
 
   {#snippet destAddrCell()}
@@ -390,7 +395,7 @@
     {/if}
   {/snippet}
   {#snippet destIpCell()}
-    <span class="cell ip">{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
+    <span class="cell ip" title={event.dstIp && event.dstHostName ? event.dstIp : undefined}>{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
   {/snippet}
 
   {#snippet protoCell()}
@@ -572,7 +577,7 @@
     {:else}
       <span class="cell addr">—</span>
     {/if}
-    <span class="cell ip">{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
+    <span class="cell ip" title={event.srcIp && event.srcHostName ? event.srcIp : undefined}>{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
 
     {#if event.srcPort}
       <span class="cell port srcport">
@@ -590,7 +595,7 @@
       <span class="cell port srcport">—</span>
     {/if}
 
-    <span class="cell mac">{event.srcMac || '—'}</span>
+    <span class="cell mac" title={event.srcMac || undefined}>{event.srcMac || '—'}</span>
 
     {#if event.dstIp}
       <span class="cell addr">
@@ -613,7 +618,7 @@
     {:else}
       <span class="cell addr">—</span>
     {/if}
-    <span class="cell ip">{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
+    <span class="cell ip" title={event.dstIp && event.dstHostName ? event.dstIp : undefined}>{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
 
     {#if event.protocol}
       <span
@@ -1012,9 +1017,20 @@
     gap: 4px;
   }
 
-  .iface-btn {
-    flex: none;
+  /* #1148: qualified with .cell-btn so it outranks that rule's
+     `width: 100%` below -- at equal specificity the later rule won, and
+     every in-interface token stretched to the whole cell, pushing the
+     arrow and the out-interface out past the cell's clip. Shrinkable
+     (`0 1 auto`) with its own ellipsis so two long interface names
+     degrade the way the rest of the row's tokens do rather than being
+     cut mid-character. */
+  .cell-btn.iface-btn {
+    flex: 0 1 auto;
     width: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .iface-sep {

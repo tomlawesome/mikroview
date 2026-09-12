@@ -963,6 +963,39 @@ describe('LiveTable restored columns (#717)', () => {
     expect(container2.querySelector('.cell.mac')?.textContent?.trim()).toBe('—')
   })
 
+  // #1149: a fixed-width column ellipses what it cannot fit, and the
+  // header and the two plain-text columns had nothing to hover when it
+  // did -- "SRC…" over a 17-character MAC with no way to read either.
+  it('titles every header with its own label, and the ip/MAC cells with their value', () => {
+    const e = makeEvent('title-row', {
+      srcIp: '192.168.100.201',
+      srcHostName: 'workshop-nas',
+      srcMac: 'AA:BB:CC:DD:EE:FF',
+      dstIp: '203.0.113.199',
+      dstHostName: 'updates',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    for (const header of container.querySelectorAll('.header-cell')) {
+      expect(header.getAttribute('title')).toBe(header.textContent?.trim())
+    }
+
+    const ipCells = [...container.querySelectorAll('.cell.ip')]
+    expect(ipCells.map((c) => c.getAttribute('title'))).toEqual(['192.168.100.201', '203.0.113.199'])
+    expect(container.querySelector('.cell.mac')?.getAttribute('title')).toBe('AA:BB:CC:DD:EE:FF')
+  })
+
+  // Nothing to enlarge, so nothing to promise: a tooltip reading "—" is
+  // one more thing to hover for no answer.
+  it('leaves the ip and MAC cells untitled where they hold only an em dash', () => {
+    const { container } = render(LiveTable, { props: { events: [makeEvent('untitled-row', {})] } })
+    flushSync()
+
+    expect(container.querySelector('.cell.ip')?.hasAttribute('title')).toBe(false)
+    expect(container.querySelector('.cell.mac')?.hasAttribute('title')).toBe(false)
+  })
+
   it('shows both interfaces joined by an arrow, and an em dash when neither is set', () => {
     const e = makeEvent('iface-row', { inInterface: 'bridge-iot', outInterface: 'bridge1' })
     const { container } = render(LiveTable, { props: { events: [e] } })

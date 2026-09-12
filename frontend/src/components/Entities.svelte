@@ -690,13 +690,20 @@
               {/if}
             </div>
           {:else}
+            <!-- #1168: the resting state says what it is. #718 asked for
+                 no words at all, on the reading that an empty shape in a
+                 row of full cards is affordance enough -- with no routers
+                 registered there is no row of full cards, and what the
+                 operator met on first run was one blank dashed box.
+                 aria-label stays: it is the same name the panel this
+                 opens already carries. -->
             <button
               type="button"
               class="berth-trigger"
               bind:this={berthTrigger}
               onclick={openBerth}
               aria-label="Add a router"
-            ></button>
+            ><span class="berth-label">+ add a router</span></button>
           {/if}
           </div>
         </div>
@@ -755,7 +762,13 @@
                     disabled={renameSaving}
                   />
                 {:else if canRename}
-                  <button type="button" class="rename-btn" onclick={() => startRename('host', row.key, row.label)} title="Click to rename">
+                  <button
+                    type="button"
+                    class="rename-btn"
+                    class:unnamed={!row.label}
+                    onclick={() => startRename('host', row.key, row.label)}
+                    title="Click to rename"
+                  >
                     {row.label || '— click to name —'}
                   </button>
                 {:else}
@@ -779,7 +792,12 @@
                   onclick={(e) => dossierState.open(row.key, e.currentTarget)}>{row.key}</button
                 ></td
               >
-              <td class="dim">{row.mac ? elideMac(row.mac.mac) : 'private'}</td>
+              <!-- #1158: an em dash, the marker every other column here
+                   uses for a value nothing knows. It read "private"
+                   before, which on a row for 1.1.1.1 or 8.8.8.8 looked
+                   like a claim about the address rather than a MAC the
+                   router never told us. -->
+              <td class="dim">{row.mac ? elideMac(row.mac.mac) : '—'}</td>
               <td class="dim">{firstSeenOf(row)}</td>
               <td>{lastSeenOf(row)}</td>
               <td>
@@ -1027,20 +1045,31 @@
     border-color: var(--accent);
   }
 
-  /* The whole card is the trigger -- no icon, no "+", no label: the
-     empty shape in a row of full ones is the affordance (#718's
-     "Design: the add-router control", Option 1). The accessible name
-     that a sighted operator never sees is set via aria-label in the
-     markup. */
+  /* The whole card is the trigger (#718's "Design: the add-router
+     control", Option 1), now carrying its own resting label (#1168):
+     the empty shape reads as an affordance beside full cards, and on
+     first run there are none to read it against. */
   .berth-trigger {
     all: unset;
     box-sizing: border-box;
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
     height: 100%;
     min-height: inherit;
     cursor: pointer;
     border-radius: inherit;
+  }
+
+  .berth-label {
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+
+  .fcard.berth:hover .berth-label,
+  .fcard.berth:focus-within .berth-label {
+    color: var(--accent);
   }
 
   .berth-trigger:focus-visible {
@@ -1227,6 +1256,14 @@
   .rename-btn:hover {
     border-color: var(--border);
     color: var(--accent);
+  }
+
+  /* #1152: the "— click to name —" placeholder is one phrase, and at
+     1100px wide it broke after "name" and left its closing dash alone on
+     a second line. Only the placeholder -- a real host name may be long
+     enough to want the wrap. */
+  .rename-btn.unnamed {
+    white-space: nowrap;
   }
 
   .dossier-btn {

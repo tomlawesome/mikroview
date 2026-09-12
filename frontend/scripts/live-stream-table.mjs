@@ -29,8 +29,8 @@ const headerLabels = await page.$$eval('.grid .header-cell .label-text', (els) =
 check(
   JSON.stringify(headerLabels) ===
     JSON.stringify([
-      'Time', 'Device', 'Action', 'Chain', 'Source', 'Address', 'Src port', 'MAC',
-      'Destination', 'Address', 'Proto', 'Interfaces', 'Port', 'NAT', 'Rule',
+      'Time', 'Device', 'Action', 'Chain', 'Source', 'Src address', 'Src port', 'MAC',
+      'Destination', 'Dst address', 'Proto', 'Interfaces', 'Dst port', 'NAT', 'Rule',
     ]),
   `the stream table shows exactly the fifteen columns, in order -- got ${JSON.stringify(headerLabels)}`,
 )
