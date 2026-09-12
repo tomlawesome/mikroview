@@ -69,6 +69,17 @@ class RouterLookupState {
   anchor = $state<Anchor | null>(null)
   mode = $state<RouterLookupMode>('rule')
   device = $state('')
+  // #1195: the same router read "NAT rule — live-router" in the desktop
+  // popover's header and "NAT rule — Live Router" in the phone sheet's,
+  // because the sheet was handed the configured display name and the
+  // popover the raw id it was opened with. The friendly name is what the
+  // operator reads on either surface; the id stays where the app already
+  // shows ids (audit rows, keys, and `device` above, which is what every
+  // fetch here is keyed by). Resolved once, here, rather than in each
+  // surface -- two components resolving it independently is how the two
+  // came apart in the first place. Falls back to the id, which is also
+  // what an undeclared device shows everywhere else.
+  deviceName = $derived(appState.devices.find((d) => d.id === this.device)?.name ?? this.device)
   ruleLabel = $state('')
   loading = $state(false)
   error = $state<string | null>(null)

@@ -358,7 +358,13 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
     // #729's "Columns" field is not one of these any more (#710): on the
     // desktop row it is a "columns ▸" toggle beside clear/fold, not an
     // fb-field with its own micro-label -- see the next test.
-    const labels = Array.from(document.querySelectorAll('.fb-label')).map((el) => el.textContent)
+    // Direct children of the strip: #1191 captions the three controls
+    // inside each address group with the same micro-label, and those are
+    // that group's business, not the strip's field order (they have
+    // their own test at the foot of this file).
+    const labels = Array.from(document.querySelectorAll('.bar.thin > .fb-field > .fb-label')).map(
+      (el) => el.textContent,
+    )
     expect(labels).toEqual([
       'Device',
       'Action',
@@ -568,5 +574,34 @@ describe('FilterBar, the column chooser (#729)', () => {
 
     expect(screen.queryByRole('checkbox')).toBeNull()
     expect(screen.getByLabelText('Device')).toBeTruthy()
+  })
+})
+
+// #1191: SOURCE and DESTINATION each carried three unlabelled controls,
+// and the middle one was a bare underline with nothing saying what it
+// took. The aria-labels had said scope/name-IP-or-CIDR/country all
+// along; the owner's ruling makes them visible and keeps the text
+// field's hint on desktop as well as on phones.
+describe('FilterBar, the source and destination captions (#1191)', () => {
+  it('captions the three controls in each address group', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    const groups = Array.from(document.querySelectorAll('.addr-group'))
+    expect(groups.length).toBe(2)
+    for (const group of groups) {
+      const captions = Array.from(group.querySelectorAll('.fb-label')).map((el) => el.textContent?.trim())
+      expect(captions).toEqual(['Scope', 'Name, IP or CIDR', 'Country'])
+    }
+  })
+
+  it('keeps the address query hint on screen at desktop width', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    expect(screen.getByLabelText('Source — name, IP or CIDR').getAttribute('placeholder')).toBe('name, IP or CIDR')
+    expect(screen.getByLabelText('Destination — name, IP or CIDR').getAttribute('placeholder')).toBe(
+      'name, IP or CIDR',
+    )
   })
 })

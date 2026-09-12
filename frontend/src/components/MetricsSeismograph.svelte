@@ -27,11 +27,24 @@
   // one. The SVG is sized in real CSS pixels from the measured box (see
   // lib/pixelGrid.svelte.ts) rather than stretched from a viewBox, which
   // is what the record's "sharp" clause asks for.
-  import { scaleFor, type MetricsHour } from '../lib/metricsSeries'
+  import { beforeCounting, scaleFor, type MetricsHour } from '../lib/metricsSeries'
   import { dprState, snapFill, snapLine } from '../lib/pixelGrid.svelte'
+  import { countingNote } from '../lib/provenance'
   import { formatHM } from '../lib/format'
 
-  let { hour, cursor, onselect }: { hour: MetricsHour; cursor: number; onselect: (index: number) => void } = $props()
+  // liveSince is when this process started counting (GET /api/stats), the
+  // same prop the table takes for its own em dashes (#1169).
+  let {
+    hour,
+    cursor,
+    onselect,
+    liveSince = null,
+  }: {
+    hour: MetricsHour
+    cursor: number
+    onselect: (index: number) => void
+    liveSince?: string | null
+  } = $props()
 
   // The floor that keeps a near-silent minute a visible mark rather than
   // a gap in the paper -- one stroke per minute means every minute draws
@@ -40,10 +53,14 @@
   const MIN_HALF = 3
   const TOP = 34
   const BOTTOM = 26
-  // Left and right plot margins are equal now that no flag column reads
-  // off the left gutter (the ratified drum's own margins, round 20-29,
-  // are symmetric too) -- just enough for the oldest tick's time label.
-  const LEFT = 30
+  // The record's left gutter, which the drum had been drawing empty
+  // (#1192): "series name, now-value and declared scale sit in the left
+  // gutter" -- that is this view's axis and its legend, and why the
+  // record rules out a numbered axis and a colour key. Wide enough for
+  // the widest of the three lines, the declared scale at four figures.
+  const LEFT = 96
+  // The gutter's own left inset -- the text starts here, not at x=0.
+  const GUTTER_X = 2
   // Wide enough for the foot's 'the brink' label, which is centred on
   // the brink edge itself and so needs half its own width of margin
   // beyond it (round 30 leaves the same room: x=1360 in a 1400 box).
@@ -146,6 +163,29 @@
   )
   const scale = $derived(scaleFor(totals))
 
+  // What the gutter prints as "now": the brink minute's own figures, the
+  // same reading the register's column heads carry (RateSeries.now).
+  const trafficNow = $derived(n === 0 ? 0 : totals[n - 1])
+  const refusedNow = $derived(n === 0 ? 0 : refused[n - 1])
+
+  // #1169's rule, on the paper instead of in the table: a minute that
+  // ended before this process began counting is not a minute in which
+  // nothing happened, so the drum leaves it blank rather than drawing it
+  // the stub stroke MIN_HALF gives a genuine zero. The note below says
+  // why the paper is empty there.
+  const counted = $derived(hour.axis.map((t) => !beforeCounting(t, liveSince)))
+  const firstCounted = $derived(counted.indexOf(true))
+  const note = $derived(liveSince && firstCounted > 0 ? countingNote(liveSince) : null)
+  const noteX = $derived(firstCounted > 0 ? xOf(firstCounted) : 0)
+  // Average advance of the foot labels' mono face at 9.5px -- enough to
+  // know which side of the first counted minute the note fits on.
+  const NOTE_CHAR_W = 5.7
+  // Written into the blank paper, ending at the minute counting began,
+  // whenever that stretch is wide enough to hold it clear of the oldest
+  // minute's own label; otherwise it starts there and runs across the
+  // counted paper's foot, which in that case is the wide side.
+  const noteFitsLeft = $derived(note !== null && noteX - plotX0 > note.length * NOTE_CHAR_W + 32)
+
   function halfOf(value: number): number {
     return Math.max(MIN_HALF, (value / scale) * drumHalf)
   }
@@ -180,7 +220,11 @@
   const label = $derived(
     `Seismograph: one stroke per minute, mirrored about the midline, for the hour to ` +
       `${hour.brink ? formatHM(hour.brink) : 'now'} -- the outer half every event, the inner half refused ` +
-      `traffic, newest at the right`,
+      `traffic, newest at the right. Traffic ${trafficNow} a minute now, refused ${refusedNow}, both drawn ` +
+      `against a scale of ${scale} a minute` +
+      // Text inside a role="img" element is not read out, so the note
+      // drawn on the blank paper has to reach a screen-reader user here.
+      `${note ? `. ${note}` : ''}`,
   )
 </script>
 
@@ -200,18 +244,50 @@
       <text class="time" x={plotX0} y={height - BOTTOM + 18}>{oldestLabel}</text>
       <text class="time" x={snapFill(plotX1, dpr)} y={height - BOTTOM + 18} text-anchor="middle">the brink</text>
 
+      <!-- The ratified gutter (#1192): name, now-value and declared
+           scale, per series -- the register's own bracket words and the
+           same three lines its column heads carry. TRAFFIC sits above
+           the midline and REFUSED below it, each beside the half of the
+           paper its ink reaches into first.
+
+           Both declare the same scale because both are drawn against it:
+           refused traffic is a subset of the minute's total, so the
+           inner half reads against the total's ceiling (see `scale`) and
+           never against one of its own. -->
+      <text class="g-name" x={GUTTER_X} y={midlineY - 46}>TRAFFIC</text>
+      <text class="g-now traffic" x={GUTTER_X} y={midlineY - 28}>{trafficNow}<tspan class="g-unit"> /min</tspan></text>
+      <text class="g-scale" x={GUTTER_X} y={midlineY - 14}>scale {scale}/min</text>
+
+      <text class="g-name" x={GUTTER_X} y={midlineY + 24}>REFUSED</text>
+      <text class="g-now refused" x={GUTTER_X} y={midlineY + 42}>{refusedNow}<tspan class="g-unit"> /min</tspan></text>
+      <text class="g-scale" x={GUTTER_X} y={midlineY + 56}>scale {scale}/min</text>
+
       <line class="midline" x1={plotX0} x2={plotX1} y1={snapLine(midlineY, dpr)} y2={snapLine(midlineY, dpr)} />
 
       <!-- one mirrored stroke per minute: the outer half every event
            that minute, the inner half its refused share, both centred
            on the shared midline -->
       {#each hour.axis as axisTime, i (axisTime)}
-        {@const x = snapFill(xOf(i), dpr)}
-        {@const outer = halfOf(totals[i])}
-        {@const inner = halfOf(refused[i])}
-        <line class="stroke outer" x1={x} x2={x} y1={midlineY - outer} y2={midlineY + outer} />
-        <line class="stroke inner" x1={x} x2={x} y1={midlineY - inner} y2={midlineY + inner} />
+        {#if counted[i]}
+          {@const x = snapFill(xOf(i), dpr)}
+          {@const outer = halfOf(totals[i])}
+          {@const inner = halfOf(refused[i])}
+          <line class="stroke outer" x1={x} x2={x} y1={midlineY - outer} y2={midlineY + outer} />
+          <line class="stroke inner" x1={x} x2={x} y1={midlineY - inner} y2={midlineY + inner} />
+        {/if}
       {/each}
+
+      <!-- Blank paper says nothing on its own, so the note says it: the
+           minutes to the left of this one ended before anyone was
+           counting. Anchored at the first counted minute. -->
+      {#if note}
+        <text
+          class="time note"
+          x={noteFitsLeft ? snapFill(noteX - 6, dpr) : snapFill(noteX + 6, dpr)}
+          y={height - BOTTOM + 18}
+          text-anchor={noteFitsLeft ? 'end' : 'start'}>{note}</text
+        >
+      {/if}
 
       <!-- amber is time: the brink edge the paper feeds from -->
       <line class="brink-glow" x1={snapLine(plotX1, dpr)} x2={snapLine(plotX1, dpr)} y1={TOP - 6} y2={height - BOTTOM} />
@@ -285,6 +361,39 @@
 
   .time.brink {
     fill: var(--now);
+  }
+
+  /* The gutter, in the register's own type: the bracket word, the
+     now-value in its ink, the declared scale one step dimmer. */
+  .g-name {
+    fill: var(--fg-dim);
+    font-size: 9px;
+    font-weight: 650;
+    letter-spacing: 0.16em;
+  }
+
+  .g-now {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  /* Identity is the label: traffic's figure is plain ink, and only the
+     refused one is coloured, so the gutter survives greyscale. */
+  .g-now.traffic {
+    fill: var(--fg);
+  }
+
+  .g-now.refused {
+    fill: var(--chart-refused);
+  }
+
+  .g-unit,
+  .g-scale {
+    fill: var(--fg-dim);
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    font-weight: 400;
   }
 
   /* Named so a live-check can find the cursor's own minute label rather
