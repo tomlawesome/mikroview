@@ -1247,6 +1247,10 @@
             <div class="prow">
               <span class="pn">{user.username}</span>
               {#if user.role === 'admin'}<span class="pr admin">admin</span>{/if}
+              <!-- #1171: the user tier was the only one with no pill, so
+                   a row for it said nothing about what the account may
+                   do. The words are the let-someone-in form's own. -->
+              {#if user.role === 'user'}<span class="pr">can change things</span>{/if}
               {#if user.role === 'viewer'}<span class="pr look">can only look</span>{/if}
               {#if user.sso}<span class="pr">sso</span>{/if}
               <span class="pf">
