@@ -230,7 +230,10 @@
     {:else if metricsPref.view === 'register'}
       <MetricsRegister {hour} {cursor} onselect={select} />
     {:else}
-      <MetricsTable {hour} {cursor} onselect={select} />
+      <!-- #1169: the table prints "—", not "0", for the minutes that
+           ended before this process started counting -- the same fact
+           the hourline's provenance statement above is built from. -->
+      <MetricsTable {hour} {cursor} onselect={select} liveSince={appState.stats?.liveSince ?? null} />
     {/if}
   </div>
 

@@ -11,7 +11,7 @@
   // It is also the record's identity-without-colour proof: every column
   // is named in words, so the page still answers every question with the
   // ink switched off entirely.
-  import type { MetricsHour } from '../lib/metricsSeries'
+  import { beforeCounting, type MetricsHour } from '../lib/metricsSeries'
   import { formatHM } from '../lib/format'
   import MetricsTotals from './MetricsTotals.svelte'
   import CustomTopTalkers from './CustomTopTalkers.svelte'
@@ -19,7 +19,20 @@
   import { toastState } from '../lib/toast.svelte'
   import { nextSort, ariaSort as sortAriaSort } from '../lib/tableSort'
 
-  let { hour, cursor, onselect }: { hour: MetricsHour; cursor: number; onselect: (index: number) => void } = $props()
+  // liveSince is when this process started counting (GET /api/stats);
+  // absent on an older server or in a fixture, in which case no minute
+  // is claimed to predate anything. See countCell below.
+  let {
+    hour,
+    cursor,
+    onselect,
+    liveSince = null,
+  }: {
+    hour: MetricsHour
+    cursor: number
+    onselect: (index: number) => void
+    liveSince?: string | null
+  } = $props()
 
   // 'minute' plus one key per series, so a column header sorts the thing
   // it names rather than an index into a parallel array.
@@ -49,6 +62,15 @@
   // GET /api/stats/tops hasn't answered for this minute yet, or the ring
   // buffer no longer holds every event from it (MinuteTop.complete is
   // false) -- see lib/metricsSeries.ts's own doc comment on MinuteTop.
+  // #1169: a minute that ended before this process started counting has
+  // every count at zero because nobody was watching it, not because
+  // nothing happened -- and the table said "0" under Accept, Log, Drop
+  // and the rest while Top port and Top talker on the same row honestly
+  // said "—". Same em dash here, for the same reason.
+  function countCell(index: number, value: number): string {
+    return beforeCounting(hour.axis[index], liveSince) ? '—' : String(value)
+  }
+
   function topCell(index: number, field: 'talker' | 'port'): string {
     const top = hour.tops[index]
     if (!top || !top.complete) return '—'
@@ -86,8 +108,8 @@
       ...order.map((i) =>
         [
           formatHM(hour.axis[i]),
-          ...hour.traffic.map((s) => s.values[i]),
-          hour.episodesPerMinute[i] ?? 0,
+          ...hour.traffic.map((s) => countCell(i, s.values[i])),
+          countCell(i, hour.episodesPerMinute[i] ?? 0),
           topCell(i, 'port'),
           topCell(i, 'talker'),
         ].join('\t'),
@@ -154,9 +176,11 @@
                   <button class="minute" onclick={() => onselect(i)}>{formatHM(hour.axis[i])}</button>
                 </th>
                 {#each hour.traffic as series (series.key)}
-                  <td class:refused={series.ink === 'refused'} class:natted={series.key === 'natted'}>{series.values[i]}</td>
+                  <td class:refused={series.ink === 'refused'} class:natted={series.key === 'natted'}
+                    >{countCell(i, series.values[i])}</td
+                  >
                 {/each}
-                <td>{hour.episodesPerMinute[i] ?? 0}</td>
+                <td>{countCell(i, hour.episodesPerMinute[i] ?? 0)}</td>
                 <td class="top">{topCell(i, 'port')}</td>
                 <td class="top">{topCell(i, 'talker')}</td>
               </tr>

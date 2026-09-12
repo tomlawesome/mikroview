@@ -226,6 +226,28 @@ export function minuteIndexOf(axis: string[], iso: string | null): number {
   return axis.findIndex((t) => minuteKey(t) === want)
 }
 
+/**
+ * True where a minute ended before this process began counting (#1169).
+ *
+ * Those minutes are on the axis with every count at zero, which reads as
+ * "nothing happened" when what it means is "nobody was watching" -- the
+ * same distinction Top port and Top talker already draw by printing an
+ * em dash for a minute they cannot answer for.
+ *
+ * Strictly earlier minutes only: the minute `liveSince` falls inside
+ * holds real, if partial, counts, and a figure that undercounts is still
+ * a figure. Unknown `liveSince` (an older server, a fixture) means no
+ * minute is claimed to predate anything -- the same "never guess a
+ * provenance" rule lib/provenance.ts states for its own sentence.
+ */
+export function beforeCounting(minuteIso: string, liveSince: string | null | undefined): boolean {
+  if (!liveSince) return false
+  const start = minuteKey(liveSince)
+  const minute = minuteKey(minuteIso)
+  if (start === null || minute === null) return false
+  return minute < start
+}
+
 export function buildHour(traffic: TimeBucket[], flags: FlagTimeBucket[], tops: HourTopBucket[] = []): MetricsHour {
   const axis = buildAxis(traffic, flags)
   const slot = new Map<number, number>()
