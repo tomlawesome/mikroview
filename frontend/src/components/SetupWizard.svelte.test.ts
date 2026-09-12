@@ -584,6 +584,69 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
   })
 })
 
+// #1131: step 4 showed a token it never printed, and handed over two
+// boxes -- the script, then a `source="<paste the script above>"` line
+// the operator was expected to fill in from the first clipboard.
+describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () => {
+  function edge1(): Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  beforeEach(() => {
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          push: { commands: 'PUSH_SCRIPT_BODY', note: '' },
+          schedule: { commands: 'SCRIPT_ADD_WITH_THE_BODY_IN_IT', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+  })
+
+  it('shows the minted token in its own copy box', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-edge-1', 'ingest', 'edge-1'))
+    await waitFor(() => expect(container.querySelector('pre.token')?.textContent).toBe('mvt-shown-once'))
+    expect(screen.getByRole('button', { name: 'Copy token' })).toBeTruthy()
+    expect(container.textContent).toContain('This token is shown once.')
+  })
+
+  it('hands over one block, not a script plus a line to paste it into', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('SCRIPT_ADD_WITH_THE_BODY_IN_IT'))
+    // Two boxes on the step, and both are things to copy on their own:
+    // the token, and the block. The bare script body is not one of them.
+    const pres = [...container.querySelectorAll('.body pre')].map((p) => p.textContent)
+    expect(pres).toEqual(['mvt-shown-once', 'SCRIPT_ADD_WITH_THE_BODY_IN_IT'])
+    expect(container.textContent).not.toContain('Then save it and run it once')
+  })
+})
+
 // #394, round 45: the wizard's sixth step, "Back up the router".
 describe('SetupWizard -- step 6, back up the router (#394)', () => {
   function rb5009(): Device {

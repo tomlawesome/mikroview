@@ -97,7 +97,9 @@ for (let step = 1; step <= 5; step++) {
 }
 check(seen.length > 0, 'the wizard renders command blocks')
 
-const withPlaceholders = seen.filter((b) => /<[a-z-]+>/.test(b) && !b.includes('<paste the script above>'))
+// No exemption for "<paste the script above>" any more: #1131 retired
+// the placeholder along with the second box it belonged to.
+const withPlaceholders = seen.filter((b) => /<[a-z-]+>/.test(b))
 check(
   withPlaceholders.length === 0,
   `no block still contains a placeholder (${withPlaceholders.length} did)`,
@@ -403,16 +405,47 @@ if (await page.locator('.setup-wizard .mint select').count()) {
 await page.locator('.setup-wizard pre.script').waitFor({ state: 'visible' })
 const script = (await page.textContent('.setup-wizard pre.script')) ?? ''
 
+// #1131: the token is shown, in its own box above the script, rather
+// than only claimed to be "in the script below".
+const shownToken = ((await page.textContent('.setup-wizard pre.token')) ?? '').trim()
+check(shownToken.length > 0, 'the minted token is shown in its own box')
+check(
+  (await page.locator('.setup-wizard button.copy:has-text("Copy token")').count()) === 1,
+  'and has its own Copy control',
+)
+
+// One block, pastable as it stands: the /system script add that carries
+// the whole push script, the scheduler entry, and the run that makes
+// the first push happen now. No second box, and nothing asking the
+// operator to paste one clipboard inside another.
+check(
+  script.startsWith('/system script add name=mv-push policy=read,test source="'),
+  `the block saves the script itself (${script.slice(0, 60)})`,
+)
+check(!script.includes('<paste the script above>'), 'no placeholder is left for the operator to fill in')
+check(
+  script.includes('/system scheduler add name=mv-push') && script.trimEnd().endsWith('/system script run mv-push'),
+  'the same block schedules it and runs it once',
+)
+check(
+  (await page.locator('.setup-wizard .body pre').count()) === 2,
+  'step 4 hands over exactly two boxes — the token, and the one block',
+)
+
 // Stop at the closing quote: \S+ swallows it, and a token with a
 // trailing " authenticates as nothing (401) -- which looked like a
-// product bug on first run and was this line.
-const tokenMatch = script.match(/Bearer ([^"\s)]+)/)
+// product bug on first run and was this line. The quote is escaped
+// (\") inside the source="..." wrapper since #1131, so the backslash
+// has to be excluded too, for the same reason.
+const tokenMatch = script.match(/Bearer ([^"\s)\\]+)/)
 check(!!tokenMatch, 'the generated script embeds a bearer token')
 const token = tokenMatch?.[1] ?? ''
+check(token === shownToken, 'the token shown is the token the script carries')
 
-// Every kind the server declares must appear in the script.
+// Every kind the server declares must appear in the script -- with its
+// quotes escaped, since the script now sits inside source="...".
 for (const kind of status.pushKinds) {
-  check(script.includes(`"kind"="${kind}"`), `the script pushes ${kind}`)
+  check(script.includes(`\\"kind\\"=\\"${kind}\\"`), `the script pushes ${kind}`)
 }
 
 // The proof: the token the wizard minted, used the way the script uses

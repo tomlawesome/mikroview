@@ -570,9 +570,19 @@ failing (say, a momentary network blip) doesn't stop the others in the
 same run.
 
 ```
-/system script add name=mv-push policy=read,test source="<the filter-rule block from 4c, then the dhcp-lease and arp blocks from 4c-ii, each with your host and token filled in>"
+/system script add name=mv-push policy=read,test source="<the blocks from 4c and 4c-ii, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>"
 /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"
+/system script run mv-push
 ```
+
+The escaping is not optional: inside `source="…"` RouterOS reads `$v`
+as a variable to substitute, so an unescaped script is saved with its
+variables already replaced by nothing. If you would rather not do it
+by hand, MikroView's setup wizard (**Admin ▸ Run setup…**, step 4)
+prints these three lines as one block with your host, your token and
+the escaping already in it — copy, paste, done. WinBox's script dialog
+is the other way out: its **Source** field takes the script body as
+written in 4c, unescaped, because there is no enclosing string there.
 
 `policy=read,test` only — no `write`, no `sensitive`. The scheduler
 entry stores no credential of its own; the only secret involved is the
@@ -877,10 +887,16 @@ step:
 ```
 
 ```
-/system script add name=mv-backup-https policy=read,write,test,sensitive source="<paste the script above>"
+/system script add name=mv-backup-https policy=read,write,test,sensitive source="<the script above, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>"
 /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https"
 /system script run mv-backup-https
 ```
+
+Same escaping rule as step 4e, and for the same reason — this script
+is nothing but `$bakSize`, `$rscSlice` and their kin, and an
+unescaped `source="…"` would save it with every one of them expanded
+away. WinBox's **Source** field takes the script as printed above,
+unescaped.
 
 Same binary/export pair as 7c (unencrypted restore copy, secret-free
 export), just carried by `/tool fetch` POSTs instead of an SFTP upload:

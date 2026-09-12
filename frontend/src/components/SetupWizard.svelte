@@ -666,29 +666,32 @@
                   {/if}
                   {#if tokenError}<p class="load-error">{tokenError}</p>{/if}
                 {:else}
+                  <!-- The token is shown, not merely described (#1131):
+                       it is minted once and never shown again, so a
+                       step that says "the token below" and prints only
+                       a script leaves the operator nothing to keep. -->
                   <p class="note token-note">
-                    The token below is shown once and is already in the script. Anyone who can read
-                    the script on the router can read the token, so it is scoped to that one router.
+                    This token is shown once. Anyone who can read the script on the router can read
+                    it, so it is scoped to that one router.
                   </p>
-                  <pre class="script">{wizardState.commands?.steps.push.commands ?? ''}</pre>
+                  <pre class="token">{token}</pre>
+                  <button type="button" class="copy" onclick={() => copy(token, 'token')}>
+                    {copied === 'token' ? 'Copied' : 'Copy token'}
+                  </button>
+                  <!-- One block, pasted as it stands: the script saved
+                       under its own name, the scheduler entry, and one
+                       run now. It used to be two boxes, the second
+                       carrying `source="<paste the script above>"` --
+                       which asked the operator to nest one clipboard
+                       inside another and to do RouterOS's escaping by
+                       hand (#1131). -->
+                  <pre class="script">{wizardState.commands?.steps.schedule.commands ?? ''}</pre>
                   <button
                     type="button"
                     class="copy"
-                    onclick={() => copy(wizardState.commands?.steps.push.commands ?? '', 'script')}
+                    onclick={() => copy(wizardState.commands?.steps.schedule.commands ?? '', 'script')}
                   >
                     {copied === 'script' ? 'Copied' : 'Copy script'}
-                  </button>
-                  {#if wizardState.commands?.steps.push.note}
-                    <p class="note">{wizardState.commands.steps.push.note}</p>
-                  {/if}
-                  <p class="note">Then save it and run it once:</p>
-                  <pre>{wizardState.commands?.steps.schedule.commands ?? ''}</pre>
-                  <button
-                    type="button"
-                    class="copy"
-                    onclick={() => copy(wizardState.commands?.steps.schedule.commands ?? '', 'sched')}
-                  >
-                    {copied === 'sched' ? 'Copied' : 'Copy'}
                   </button>
                   {#if wizardState.commands?.steps.schedule.note}
                     <p class="note">{wizardState.commands.steps.schedule.note}</p>
@@ -1276,6 +1279,14 @@
   pre.script {
     max-height: 300px;
     overflow-y: auto;
+  }
+
+  /* The token's own box (#1131): one line, and the one thing on this
+     step that is shown once and never again, so it wraps rather than
+     scrolling out of sight on a narrow modal. */
+  pre.token {
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 
   /* Commands come pre-broken to phone width so nothing scrolls sideways;
