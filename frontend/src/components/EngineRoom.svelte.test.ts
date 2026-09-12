@@ -297,6 +297,10 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByText(/this is you/)).toBeTruthy()
     expect(screen.getByText('console-only')).toBeTruthy()
     expect(screen.getByText('kai')).toBeTruthy()
+    // #1171: every tier's row says what that account may do. kai is the
+    // user tier, which used to be the only one with no pill at all.
+    expect(screen.getByText('admin')).toBeTruthy()
+    expect(screen.getByText('can change things')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '+ let someone in' })).toBeTruthy()
   })
