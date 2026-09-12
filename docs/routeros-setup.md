@@ -1,7 +1,7 @@
 # RouterOS setup
 
 > **There is a guided version of this page inside MikroView.** Sign in as
-> an admin and open **Admin ▸ Run setup…**. It generates every
+> an admin and open **your account menu ▸ Run setup…**. It generates every
 > command below with your own address, port and a token it mints for you
 > — nothing to fill in — and tells you as each step lands, because each
 > one ends with your router arriving at MikroView.
@@ -285,7 +285,7 @@ before step 1, go do that CA import now, then come back here.
 
 ### 4b. Mint an ingest token
 
-In MikroView, sign in as an admin, open **Admin ▸ The engine room**,
+In MikroView, sign in as an admin, open **Settings**,
 find "Which machines may speak" among the side doors, set the kind
 dropdown to **Ingest**, and pick the device the token speaks
 for — this is what scopes it. The list offers every router MikroView
@@ -325,7 +325,13 @@ pushes follow that identity, so nothing has to be reissued:
 The alternative is changing `sourceIp` to the arriving address and
 restarting — then reissue any token minted for the old identity.
 
-Or via the API:
+Or via the API. Minting a token is an admin action, so the call has to
+carry an admin's browser session: `<your session cookie>` is the
+`mikroview_session=…` cookie `POST /api/auth/login` sets (see the
+[API reference](configuration.md#api-reference)). Copy it from your
+browser's developer tools, or sign in with curl first and let it keep
+the cookie for you — `curl -k -c jar -X POST …/api/auth/login -d …`,
+then `-b jar` on the call below in place of the placeholder.
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
@@ -578,7 +584,7 @@ same run.
 The escaping is not optional: inside `source="…"` RouterOS reads `$v`
 as a variable to substitute, so an unescaped script is saved with its
 variables already replaced by nothing. If you would rather not do it
-by hand, MikroView's setup wizard (**Admin ▸ Run setup…**, step 4)
+by hand, MikroView's setup wizard (**your account menu ▸ Run setup…**, step 4)
 prints these three lines as one block with your host, your token and
 the escaping already in it — copy, paste, done. WinBox's script dialog
 is the other way out: its **Source** field takes the script body as

@@ -208,6 +208,17 @@ describe('SceneBar (#683, ratified round 30)', () => {
     expect(screen.getByText('○1')).toBeTruthy()
   })
 
+  // #1172: a viewer never reads the watchlist (App.svelte polls it for
+  // canEdit and above), so the marker's 0 was "nothing was read", drawn
+  // as "nothing is watched". The flag marker is unaffected: every tier
+  // reads flags, so its zero is a real one.
+  it('drops the watch marker for a tier that cannot read the watchlist', () => {
+    authState.role = 'viewer'
+    render(SceneBar, { scene: 'metrics' })
+    expect(screen.queryByTitle('0 watchers held')).toBeNull()
+    expect(screen.getByText('⚑ 0')).toBeTruthy()
+  })
+
   it('does not draw the retired uptime counter or per-router chips', () => {
     appState.devices = [
       { id: 'r1', name: 'border', sourceIp: '10.0.0.1', configured: true, firstSeen: '', lastSeen: '', eventCount: 0, status: 'live' } as never,
