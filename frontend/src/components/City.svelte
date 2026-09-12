@@ -35,7 +35,7 @@
   import { markFor, type BuildingMark } from '../lib/city/marks'
   import { buildingDepth, paintOrder, pieceDepth } from '../lib/city/depth'
   import { cityInputFrom, ghostCityZones } from '../lib/city/input'
-  import { layoutGround } from '../lib/city/layout'
+  import { CIDR_FALLBACK, layoutGround, plaqueWidth } from '../lib/city/layout'
   import {
     IK,
     R2,
@@ -50,6 +50,7 @@
     cam,
     cityFitS,
     clampCentre,
+    clampRingX,
     clearDropLabels,
     diamond,
     ease,
@@ -2471,7 +2472,7 @@
     for (const d of g.districts) {
       const x = R2(X(c, d.u))
       const y = R2(Y(c, d.v + d.r) + 5)
-      const w = compact ? d.name.length * 7.2 + 26 : 200
+      const w = compact ? d.name.length * 7.2 + 26 : plaqueWidth(d)
       const h = compact ? 20 : d.rulesPushed ? 28 : 40
       if (!claim(x, y, w, h)) continue
       plaques.push({ d, x, y, w: R2(w), ink: inkOf(d) })
@@ -3428,19 +3429,38 @@
     const g = ground
     const bank = (a: Pt[]) => a.map((p, i) => (i ? 'L' : 'M') + R2(X(mc, p[0])) + ' ' + R2(Y(mc, p[1]))).join('')
     const river = g.river ? bank(g.river.bankN) + bank(g.river.bankF.slice().reverse()).replace('M', 'L') + 'Z' : ''
-    const plates = g.districts.map((d) => ({
-      d: diamond(mc, d.u, d.v, d.r, 0),
-      ink: inkOf(d),
-      fo: d.plateDark ? 0.22 : 0.5,
-      name: d.name,
-      x: R2(X(mc, d.u)),
+    // The same claim-a-rectangle pass the main map runs (#1140): a name
+    // that would land on one already placed is dropped rather than drawn
+    // over it. The panel is 264 wide, so on an estate of similarly-named
+    // VLANs the names printed through each other and through the
+    // diamonds between them -- unreadable, and worse than a plate going
+    // unnamed. Names cannot shrink out of the collision instead: 8px is
+    // the app's legibility floor (#978, owner 2026-09-06). Only the
+    // names claim, exactly as on the main map -- a name is drawn under
+    // its own plate's bottom vertex, so claiming the plates as well
+    // would drop names for touching a neighbouring diamond they sit
+    // clear of on the drawing.
+    const placed: [number, number, number, number][] = []
+    const claim = (x: number, y: number, w: number, h: number) => {
+      const r: [number, number, number, number] = [x - w / 2, y, x + w / 2, y + h]
+      for (const p of placed) if (r[0] < p[2] && r[2] > p[0] && r[1] < p[3] && r[3] > p[1]) return false
+      placed.push(r)
+      return true
+    }
+    const nodes = g.nodes.filter((n) => n.kind !== 'post').map((n) => ({ x: R2(X(mc, n.u)), y: R2(Y(mc, n.v)) }))
+    const plates = g.districts.map((d) => ({ d: diamond(mc, d.u, d.v, d.r, 0), ink: inkOf(d), fo: d.plateDark ? 0.22 : 0.5 }))
+    const names: { name: string; x: number; y: number }[] = []
+    for (const d of g.districts) {
       // The name sits under the plate's bottom vertex (#978), not over
       // the diamond and its device dots -- clamped so a plate at the
       // panel's own bottom edge keeps its name inside the svg.
-      y: R2(Math.min(MINI_H - 3, Y(mc, d.v + d.r) + 8)),
-    }))
-    const nodes = g.nodes.filter((n) => n.kind !== 'post').map((n) => ({ x: R2(X(mc, n.u)), y: R2(Y(mc, n.v)) }))
-    return { river, plates, nodes }
+      const x = R2(X(mc, d.u))
+      const y = R2(Math.min(MINI_H - 3, Y(mc, d.v + d.r) + 8))
+      // 8px monospace: about 4.8 to the character, plus a little air on
+      // either side so two names never sit shoulder to shoulder.
+      if (claim(x, y - 8, d.name.length * 4.8 + 5, 11)) names.push({ name: d.name, x, y })
+    }
+    return { river, plates, names, nodes }
   })
   const miniView = $derived.by(() => {
     const mc = miniCam
@@ -3466,6 +3486,16 @@
     const whole = (b.u1 - b.u0) * (b.v1 - b.v0) || 1
     return Math.round((a / whole) * 100)
   })
+
+  /**
+   * The borough ring labels, each pulled back inside the stage (#1139).
+   * Held apart from `scene` on purpose: the clamp needs the view camera,
+   * and `scene` is built on geomCam alone so that a pan is a transform
+   * on what is already drawn rather than a redraw of all of it.
+   */
+  const ringLabels = $derived(
+    scene.rings.map((r) => ({ ...r, x: R2(clampRingX(r.x, r.label, viewCam.ox, S / Sgeom)) })),
+  )
 
   const tabbable = (id: string) => (focus ? focus.id === id : ground.districts[0]?.id === id) ? 0 : -1
 </script>
@@ -3527,7 +3557,7 @@
             {/each}
           </g>
         {/if}
-        {#each scene.rings as r (r.label)}
+        {#each ringLabels as r (r.label)}
           <path d={r.d} fill="none" stroke="var(--accent)" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="2 6" stroke-linejoin="round" />
         {/each}
         {#each scene.plates as p (p.d.id)}
@@ -3796,7 +3826,7 @@
                 <circle cx={R2(-p.w / 2 + 13)} cy="14" r="3.4" fill={p.ink} />
               {/if}
               <text x={R2(-p.w / 2 + 22)} y="18" class="p-name" class:gname={gs}>{p.d.name}</text>
-              <text x={R2(p.w / 2 - 11)} y="17.5" text-anchor="end" class="p-cidr">{p.d.cidr ?? 'no address pushed'}</text>
+              <text x={R2(p.w / 2 - 11)} y="17.5" text-anchor="end" class="p-cidr">{p.d.cidr ?? CIDR_FALLBACK}</text>
               {#if gs}
                 <text x={R2(-p.w / 2 + 13)} y="32" class="p-note" style:fill={GHOST_INK[gs]}
                   >{ghostNote(gs, ghostWatchFor(p.d.id), ghostOfferFor(p.d.id), nowMs)}</text
@@ -3856,7 +3886,7 @@
             <text x={cx - 141} y={cy + 35} class="chip-t">{call.detail} · open ▸</text>
           </g>
         {/if}
-        {#each scene.rings as r (r.label)}
+        {#each ringLabels as r (r.label)}
           <text x={r.x} y={r.y} text-anchor="middle" class="boro-t">{r.label}</text>
         {/each}
         {#each scene.bridgeChips as ch (ch.t)}
@@ -4637,8 +4667,8 @@
       {#each mini.plates as p, i (i)}
         <path d={p.d} fill={p.ink} fill-opacity={p.fo} />
       {/each}
-      {#each mini.plates as p, i (i)}
-        <text x={p.x} y={p.y} text-anchor="middle" class="mini-name">{p.name}</text>
+      {#each mini.names as n, i (i)}
+        <text x={n.x} y={n.y} text-anchor="middle" class="mini-name">{n.name}</text>
       {/each}
       {#each mini.nodes as n, i (i)}
         <circle cx={n.x} cy={n.y} r="2" fill="var(--accent)" />
@@ -4844,6 +4874,19 @@
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     font: 10.5px var(--font-mono);
     color: var(--fg-muted);
+    /* A card is as tall as what it has to say, up to the stage (#1138):
+       a road with 80 off-baseline lines drew a card 6373px tall, which
+       covered the dials, the borough header and the plaques on the way
+       down and left its own "mark all 80 expected" control off the
+       bottom of the screen with no way to reach it. The content is all
+       still there -- it scrolls inside the card instead. Capped here
+       rather than on the road card alone, so every card in the family
+       is bounded by the same rule; the short ones are unchanged.
+       lib/cardAnchor.ts measures the card it is placing, so the capped
+       height is what the placement fits into the stage. */
+    max-height: calc(100% - 64px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   /* Placed, the card is positioned from its own top-left, so the

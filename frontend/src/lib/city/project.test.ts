@@ -9,6 +9,7 @@ import {
   cam,
   centreOf,
   clampCentre,
+  clampRingX,
   clearDropLabels,
   diamond,
   ease,
@@ -17,6 +18,7 @@ import {
   lerpCam,
   minimapCam,
   panBy,
+  ringHalfW,
   viewportRect,
 } from './project'
 
@@ -119,5 +121,24 @@ describe('city projection', () => {
     const rings = [{ x: 500, y: 500, label: 'HAP-AX3 BOROUGH · 3 DISTRICT' }]
     clearDropLabels(dropLabels, rings)
     expect(dropLabels[0]).toEqual({ x: 0, y: 0, text: 'caught by iot-egress-drop' })
+  })
+
+  it('keeps a borough label inside the stage rather than letting it run off (#1139)', () => {
+    const label = '172.23.0.1 BOROUGH · 5 DISTRICTS'
+    const half = ringHalfW(label)
+    // What the operator saw: at the borough stop (scale 1) the label's
+    // own centre landed at 1392 on a 1400-wide stage, so all but its
+    // first few characters were off the edge.
+    const off = clampRingX(621, label, 771.4, 1)
+    expect(771.4 + off + half).toBeLessThanOrEqual(STAGE_W)
+    expect(771.4 + off - half).toBeGreaterThanOrEqual(0)
+
+    // The same at the far edge, and at a scale where the text shrinks
+    // with the drawing.
+    const left = clampRingX(-900, label, 100, 0.7)
+    expect(100 + left * 0.7 - half * 0.7).toBeGreaterThanOrEqual(0)
+
+    // A label already well inside is not moved.
+    expect(clampRingX(0, label, 700, 1)).toBeCloseTo(0, 5)
   })
 })
