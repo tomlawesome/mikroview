@@ -443,13 +443,13 @@
     if (!e.enabled) {
       return {
         headline: 'Paused.',
-        body: `This watch is turned off, so mikroview is not recording anything for ${sourceLabel(e)} right now.`,
+        body: `This watch is turned off, so MikroView is not recording anything for ${sourceLabel(e)} right now.`,
       }
     }
     if (watchlistState.coverage[e.id] === 'no-logging') {
       return {
         headline: 'The ring is broken.',
-        body: 'No firewall rule mikroview can see is logging this pathway, so nothing here can be recorded until a rule that covers it turns logging on.',
+        body: 'No firewall rule MikroView can see is logging this pathway, so nothing here can be recorded until a rule that covers it turns logging on.',
       }
     }
     if (e.invert && e.observing) {
@@ -468,7 +468,7 @@
       const since = e.ring.since ? ` since ${formatRelative(e.ring.since, appState.now)}` : ''
       return {
         headline: 'The ring is broken.',
-        body: `Nothing has matched inside this watch's window${since}. Nights mikroview could not watch are not counted against it.`,
+        body: `Nothing has matched inside this watch's window${since}. Nights MikroView could not watch are not counted against it.`,
       }
     }
     if (e.invert) {
@@ -1004,8 +1004,8 @@
 
   const suggestHeading = $derived(
     routerNames.length > 0
-      ? `mikroview suggests · from what ${formatList(routerNames)} pushed`
-      : 'mikroview suggests',
+      ? `MikroView suggests · from what ${formatList(routerNames)} pushed`
+      : 'MikroView suggests',
   )
 
   function formatList(names: string[]): string {

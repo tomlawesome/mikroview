@@ -64,7 +64,7 @@ page 4/4  6701 bytes  valid_json=True  rules=50  rule-151..rule-200
 
 Every page is **a complete, valid JSON document containing whole rules**,
 self-describing as `page N of M`, at a tenth of the cap. There is nothing
-to rebuild: mikroview applies whole records as they arrive, so no
+to rebuild: MikroView applies whole records as they arrive, so no
 ordering guarantee is needed and no partial-record state exists.
 
 **Additive-only makes a missing page safe.** Because step 4 forbids
@@ -149,7 +149,7 @@ rejected with `unable to load key file (wrong format or bad passphrase)`.
 *The stored-secret framing separates nothing either way.* A bearer token
 is also a long-lived reusable secret on the router, and finding 5 below
 shows any `read` user can print either one out of the script source.
-#186's objection was to mikroview holding *RouterOS* credentials, which
+#186's objection was to MikroView holding *RouterOS* credentials, which
 neither design does.
 
 **It does not verify the server's host key.** This is what still
@@ -164,14 +164,14 @@ silently, with no warning and no failure:
 -rw-r--r-- 1 mvingest mvingest 300011 /drop/after-keychange.json
 ```
 
-Anyone in the network path can therefore impersonate mikroview and
+Anyone in the network path can therefore impersonate MikroView and
 receive whatever the router uploads. With key auth they cannot walk away
 with a credential, but they do get the payload, and they can return
 whatever they like. There is no host-key pinning to turn on.
 
 The HTTPS path has a real answer to exactly this: after importing
-mikroview's CA, `check-certificate=yes` authenticates the server, so a
-MITM cannot impersonate mikroview at all. That is why #186 refuses to
+MikroView's CA, `check-certificate=yes` authenticates the server, so a
+MITM cannot impersonate MikroView at all. That is why #186 refuses to
 document `check-certificate=no`. SFTP has no `check-certificate=yes`
 equivalent — the difference is now about payload interception rather than
 credential theft, but the asymmetry is real.
@@ -227,7 +227,7 @@ After importing the CA and reconnecting, the message arrives over TLS:
 
 But the action's full property list is `check-certificate, remote,
 remote-log-format, remote-port, remote-protocol, src-address, target,
-vrf` — **no client certificate**. So mikroview could verify nothing about
+vrf` — **no client certificate**. So MikroView could verify nothing about
 who sent the data, and anything able to reach the port could inject. It
 would also need a TLS syslog listener (RFC 5425), which it does not have.
 
@@ -246,15 +246,15 @@ This document spent most of its length comparing how well each transport
 protects its credential, which over-weights that axis considerably.
 
 **To reach either credential, an attacker must already hold the router.**
-At that point they have the source data — mikroview holds what the router
-told it. Reading mikroview gains them nothing they do not already have.
+At that point they have the source data — MikroView holds what the router
+told it. Reading MikroView gains them nothing they do not already have.
 What the credential buys is the ability to *write* router state into
-mikroview, and #186 says so in its own words: "the residual threat is a
+MikroView, and #186 says so in its own words: "the residual threat is a
 stolen ingest token letting an attacker POST false router state — a
 data-integrity attack, bounded, on infrastructure we control."
 
 That is push working as designed. The pull design that #110 dropped would
-have put a *RouterOS* password in mikroview, which is a high-value
+have put a *RouterOS* password in MikroView, which is a high-value
 credential; the push credential is low-value by construction. It is the
 whole reason the design was chosen.
 
@@ -262,7 +262,7 @@ Two things keep it bounded, and both are transport-independent:
 
 - **Per-device scoping** (step 1) stops one compromised router's
   credential becoming a window into another. Worth keeping precisely
-  because mikroview aggregates across routers and holds syslog history,
+  because MikroView aggregates across routers and holds syslog history,
   flags and audit that no single router has.
 - **Additive-only application** (step 4) means the credential cannot be
   used to *hide* anything, only to add noise.
@@ -283,9 +283,9 @@ that matters least, since an attacker holding either credential already
 holds the router.
 
 It costs: no server authentication (a MITM still receives the payload and
-answers for mikroview, with no pinning available); a completeness
+answers for MikroView, with no pinning available); a completeness
 protocol, because failed uploads leave truncated files; an SSH/SFTP
-listener mikroview does not currently have; and rebuilding the per-token
+listener MikroView does not currently have; and rebuilding the per-token
 rate limit, `authzMatrix` row and audit entry — which step 3 requires —
 around a filesystem watcher rather than getting them from an HTTP handler.
 
@@ -314,7 +314,7 @@ effort on that one primitive's limits rather than asking what else can
 push. The survey it should have started with:
 
 **Remote syslog (`/system logging action target=remote`).** The most
-interesting option, because **mikroview already listens on it** — no new
+interesting option, because **MikroView already listens on it** — no new
 endpoint, no new credential, no new listener. `:log info "…"` from a
 script reaches a remote collector, confirmed against a UDP sink.
 
@@ -364,7 +364,7 @@ at it:
 :log info "mv-tls-live-check-1786178557"
 ```
 
-after importing mikroview's CA the same way the HTTPS path above does
+after importing MikroView's CA the same way the HTTPS path above does
 (`/tool fetch .../ca.crt check-certificate=no`, then
 `/certificate import`). Both the rule-creation system log line and the
 marker message arrived intact through `GET /api/events`:
@@ -410,7 +410,7 @@ its narrow scope"; it is now confirmed rather than assumed.
 of one router's token has to stop at that router, because every
 read-capable account on that router can read it.
 
-## 6. RouterOS accepts mikroview's generated CA, and this is the failure text
+## 6. RouterOS accepts MikroView's generated CA, and this is the failure text
 
 Before the import:
 
@@ -593,7 +593,7 @@ received at /q3:
 [mv-read@CHR] >
 
 
-### 6. TLS against mikroview's generated CA
+### 6. TLS against MikroView's generated CA
 
 --- with the CA removed, which is the state an operator starts in
 :put ([/tool fetch url="https://192.0.2.30:19801/api/healthz" check-certificate=yes output=user as-value]->"status")

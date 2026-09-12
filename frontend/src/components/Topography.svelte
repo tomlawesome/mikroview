@@ -6014,7 +6014,7 @@
         <g transform="translate(700 500)">
           <rect class="isl ghost" x="-108" y="0" width="216" height="106" rx="12" />
           <text x="0" y="40" text-anchor="middle" class="n-sub">nothing has arrived yet — waiting for data, not broken</text>
-          <text x="0" y="58" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives; mikroview never draws a guess</text>
+          <text x="0" y="58" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives; MikroView never draws a guess</text>
         </g>
       {/if}
 
@@ -6607,7 +6607,7 @@
         {#if composedCommand}
           <pre class="cmd">{composedCommand}</pre>
           <p class="cmdnote">
-            <b>Paste it in RouterOS yourself — mikroview never touches the router.</b>
+            <b>Paste it in RouterOS yourself — MikroView never touches the router.</b>
             {#if composeMode === 'allow'}
               {composePlaceBefore ? `Placed before ${composePlaceBefore}, logged` : 'Logged'} and named, so the map
               learns it: on the next rule push this strand turns green and the unplanned stamp retires itself.

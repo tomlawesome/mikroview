@@ -446,7 +446,7 @@ func suggest(fp fingerprint, mac macFacts) Identity {
 	if len(hits) == 0 {
 		return Identity{
 			Evidence: evidenceFor(signalList(signals), signals),
-			Note:     "the traffic and hardware address do not match any profile in mikroview's table, so no identity is suggested -- the evidence below is still what was seen",
+			Note:     "the traffic and hardware address do not match any profile in MikroView's table, so no identity is suggested -- the evidence below is still what was seen",
 		}
 	}
 
@@ -471,7 +471,7 @@ func suggest(fp fingerprint, mac macFacts) Identity {
 		id.Confidence = id.Confidence.down()
 		id.Note = "confidence is lowered a step because this rests on only " + plural(fp.events, "event") + " over a short window"
 	} else {
-		id.Note = "a suggestion from mikroview's heuristic table, not a claim -- read the evidence and decide"
+		id.Note = "a suggestion from MikroView's heuristic table, not a claim -- read the evidence and decide"
 	}
 	return id
 }

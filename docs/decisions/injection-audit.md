@@ -2,7 +2,7 @@
 
 Date: 2026-08-07. Re-audited 2026-08-12 (#272 phase 2); see
 "Re-audit, 2026-08-12" at the end. Scope: all untrusted input reaching
-mikroview, and what each one is eventually interpreted as.
+MikroView, and what each one is eventually interpreted as.
 
 Method: map inputs to *sinks* rather than auditing fields in isolation.
 A field is only dangerous where something interprets it — a shell, a

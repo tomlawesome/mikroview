@@ -223,7 +223,7 @@ func (l *sniffingListener) redirect(c net.Conn, br *bufio.Reader) {
 
 	if total, ok := l.gate.Allow(); ok {
 		l.log.Info(fmt.Sprintf(
-			"redirected a plain HTTP request to %s (%d so far) -- mikroview serves HTTPS on this port",
+			"redirected a plain HTTP request to %s (%d so far) -- MikroView serves HTTPS on this port",
 			location, total))
 	}
 
@@ -241,7 +241,7 @@ func (l *sniffingListener) redirect(c net.Conn, br *bufio.Reader) {
 }
 
 func redirectBody(location string) string {
-	return "mikroview serves HTTPS on this port. Redirecting to " + location + "\n"
+	return "MikroView serves HTTPS on this port. Redirecting to " + location + "\n"
 }
 
 func (l *sniffingListener) Accept() (net.Conn, error) {

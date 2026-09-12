@@ -411,7 +411,7 @@ never has to ask you. Leave it out and everything still works — you just
 get no version-mismatch warning later.
 
 `dstPort`/`protocol` were added for issue #243's suggested-watchlist-entries
-feature: without them mikroview has no way to know which ports a rule
+feature: without them MikroView has no way to know which ports a rule
 that's already blocking traffic actually covers. RouterOS's own
 `dst-port` is unset (empty) on most "drop everything on this chain"
 rules and a list or range ("22,23", "1000-2000") on ones that scope by
@@ -924,9 +924,9 @@ in this repository render the exact script above, minus the SFTP-specific
 Settings' `router backups` group (admin-only) lists what has arrived
 per router, with `download .backup` / `.rsc` and a note of when each
 was last seen. A router that has pushed at least twice and then misses
-its usual interval shows an amber receipt there — mikroview learns the
+its usual interval shows an amber receipt there — MikroView learns the
 interval from the pushes themselves, never from this scheduler line,
-since an operator could change that on the router without mikroview
+since an operator could change that on the router without MikroView
 knowing.
 
 Restoring is your own act on the replacement router

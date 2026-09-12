@@ -70,7 +70,7 @@ func openHistory(log *slog.Logger, cfg config.Config) *retention.Store {
 		purgeHistoryIfAny(log, dir)
 		return nil
 	case err != nil:
-		log.Warn("on-disk event history is off: the key file could not be used -- mikroview runs normally and retains nothing", "keyFile", cfg.History.KeyFile, "err", err)
+		log.Warn("on-disk event history is off: the key file could not be used -- MikroView runs normally and retains nothing", "keyFile", cfg.History.KeyFile, "err", err)
 		return nil
 	}
 
@@ -96,7 +96,7 @@ func openHistory(log *slog.Logger, cfg config.Config) *retention.Store {
 		MaxBytes: cfg.History.MaxBytes,
 	})
 	if err != nil {
-		log.Warn("on-disk event history is off: it could not be opened -- mikroview runs normally and retains nothing", "dir", dir, "err", err)
+		log.Warn("on-disk event history is off: it could not be opened -- MikroView runs normally and retains nothing", "dir", dir, "err", err)
 		return nil
 	}
 	log.Info("on-disk event history is on", "dir", dir, "days", cfg.History.Days, "maxBytes", cfg.History.MaxBytes)

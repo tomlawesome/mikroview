@@ -149,7 +149,7 @@ export const navGroups: NavGroup[] = [
         view: 'engineroom',
         edit: true,
         icon: 'engineroom',
-        title: "Mikroview's own signal path, live, with every setting on the station it governs",
+        title: "MikroView's own signal path, live, with every setting on the station it governs",
       },
       {
         label: 'Fleet',

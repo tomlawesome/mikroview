@@ -157,7 +157,7 @@ describe('HostDossier', () => {
     // 4, 5, 6, 7.
     expect(screen.getByTestId('dossier-absent').textContent).toContain('Not available:')
     expect(screen.getByText('nmap -Pn -sV 10.20.0.31')).toBeTruthy()
-    expect(screen.getByText('mikroview never runs this; you would.')).toBeTruthy()
+    expect(screen.getByText('MikroView never runs this; you would.')).toBeTruthy()
     expect(
       screen.getByText(/Nothing here was probed or looked up outside the router's own pushes/),
     ).toBeTruthy()

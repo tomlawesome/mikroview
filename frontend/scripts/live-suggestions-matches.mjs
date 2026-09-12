@@ -360,7 +360,7 @@ check(await visible(sugg), 'the suggestions body renders under the watches, in t
 // The heading says what it is and counts what is open.
 const heading = ((await sugg.locator('.sdl').textContent()) ?? '').trim()
 check(
-  heading.startsWith('mikroview suggests'),
+  heading.startsWith('MikroView suggests'),
   `the suggestions heading reads as drawn (got ${JSON.stringify(heading)})`,
 )
 

@@ -25,7 +25,7 @@
      Svelte trims literal trailing whitespace before a block's close,
      which is how the space in front of AGPL-3.0 went missing once. -->
 {#if uptimeState.seconds !== null}
-  <span class="uptime" title="How long the mikroview server has been running (since its last restart)"
+  <span class="uptime" title="How long the MikroView server has been running (since its last restart)"
     >{' · '}up {formatUptimeDaysHours(uptimeState.seconds)}</span
   >
 {/if}

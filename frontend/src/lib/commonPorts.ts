@@ -62,7 +62,7 @@ const PORTS: Record<number, PortInfo[]> = {
   445: [{ protocol: 'tcp', name: 'SMB', description: 'Windows file sharing / Active Directory', category: 'standard' }],
   465: [{ protocol: 'tcp', name: 'SMTPS', description: 'SMTP submission with implicit TLS', category: 'standard' }],
   500: [{ protocol: 'udp', name: 'IKE', description: 'IPsec VPN key exchange', category: 'vpn' }],
-  514: [{ protocol: 'udp', name: 'Syslog', description: 'System logging -- this is mikroview’s own listener', category: 'standard' }],
+  514: [{ protocol: 'udp', name: 'Syslog', description: 'System logging -- this is MikroView’s own listener', category: 'standard' }],
   515: [{ protocol: 'tcp', name: 'LPD', description: 'Line printer daemon', category: 'standard' }],
   520: [{ protocol: 'udp', name: 'RIP', description: 'Routing Information Protocol', category: 'standard' }],
   587: [{ protocol: 'tcp', name: 'SMTP-Submission', description: 'Mail client submission (STARTTLS)', category: 'standard' }],

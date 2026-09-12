@@ -679,10 +679,10 @@
             <div class="berth-panel" role="group" aria-label="Add a router">
               <button type="button" class="berth-close" use:focusOnOpen onclick={closeBerth} aria-label="Close">✕</button>
               <p>
-                Point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'mikroview’s syslog port'} and
+                Point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'MikroView’s syslog port'} and
                 it appears here.
               </p>
-              <p>Routers push to mikroview — it never connects to them.</p>
+              <p>Routers push to MikroView — it never connects to them.</p>
               {#if berthSyslogCommands}
                 <pre class="paste">{berthSyslogCommands}</pre>
               {:else}

@@ -635,7 +635,7 @@ func main() {
 	case authStore.Count() > 0:
 		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
 	default:
-		authLog.Info("no account yet -- mikroview is showing the create-account screen (see docs/configuration.md)")
+		authLog.Info("no account yet -- MikroView is showing the create-account screen (see docs/configuration.md)")
 	}
 
 	// entities (issue #107): the persisted, admin-manageable (type, key)
@@ -799,7 +799,7 @@ func main() {
 				cfg.Watchlist.MatchLogPath, fi.Size()))
 		}
 	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
-		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and mikroview is restarted", cfg.Watchlist.MatchLogPath, err))
+		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and MikroView is restarted", cfg.Watchlist.MatchLogPath, err))
 	} else {
 		matchLog = ml
 		defer ml.Close()
@@ -1408,7 +1408,7 @@ func main() {
 		// rescuable by configuration -- see oidc.AllowIssuer. Leaving SSO
 		// off is the fail-closed outcome; local login is unaffected.
 		oidcLog.Error(fmt.Sprintf(
-			"%s is a multi-tenant provider and is not supported -- mikroview only supports self-hosted identity providers "+
+			"%s is a multi-tenant provider and is not supported -- MikroView only supports self-hosted identity providers "+
 				"(Authentik, Keycloak, Zitadel, or an Entra single-tenant issuer URL), where the issuer itself restricts who can "+
 				"sign in. SSO login is unavailable; local login is unaffected. See docs/configuration.md",
 			cfg.OIDC.IssuerURL))
@@ -1778,7 +1778,7 @@ func main() {
 			}()
 		}
 	} else {
-		tlsLog.Warn(fmt.Sprintf("disabled (tls.enabled=false) -- mikroview is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP))
+		tlsLog.Warn(fmt.Sprintf("disabled (tls.enabled=false) -- MikroView is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP))
 	}
 	if cfg.Listen.SyslogTLS != "" {
 		// RouterOS's remote-protocol=tls (issue #188), presenting the
@@ -1937,7 +1937,7 @@ func runValidateConfig(args []string) int {
 		// the fix on the end.
 		if len(result.Fatal) > 0 {
 			fmt.Fprint(os.Stderr, config.Report(result.Fatal))
-			fmt.Fprintf(os.Stderr, "\n%d problem(s). mikroview would refuse to start.\n", len(result.Fatal))
+			fmt.Fprintf(os.Stderr, "\n%d problem(s). MikroView would refuse to start.\n", len(result.Fatal))
 			return validateConfigExitProblems
 		}
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -1967,7 +1967,7 @@ func runValidateConfig(args []string) int {
 			fmt.Printf("         %s\n", p.Remediation)
 		}
 	}
-	fmt.Printf("\n%d warning(s). mikroview would start, using the values shown above.\n", len(result.Warnings))
+	fmt.Printf("\n%d warning(s). MikroView would start, using the values shown above.\n", len(result.Warnings))
 	return validateConfigExitProblems
 }
 
@@ -2235,7 +2235,7 @@ func runTransferAdmin(args []string) int {
 		fmt.Println()
 		fmt.Printf("WARNING: %q signs in through your identity provider and has no local\n", next.Username)
 		fmt.Println("password. After this transfer, admin recovery goes through your identity")
-		fmt.Println("provider -- mikroview will not be able to recover that account itself.")
+		fmt.Println("provider -- MikroView will not be able to recover that account itself.")
 		fmt.Println()
 		if !confirmYes(fmt.Sprintf("Transfer admin to %q anyway?", next.Username)) {
 			fmt.Println("Nothing was changed, and your recovery keys are unchanged.")
@@ -2439,7 +2439,7 @@ func runRecoverAdminAccount(args []string) int {
 	// and only then learning it was never going to work.
 	if !admin.LocalPassword() {
 		logger.Error(fmt.Sprintf("%q signs in through your identity provider and has no local password "+
-			"-- mikroview cannot recover it. Reset it at your identity provider, or use "+
+			"-- MikroView cannot recover it. Reset it at your identity provider, or use "+
 			"-transfer-admin to move admin to an account that does have one", logging.Printable(admin.Username)))
 		return 1
 	}
@@ -2742,7 +2742,7 @@ func resolveTransferTarget(store *auth.Store, current *auth.User, target string)
 			// Flagged in the list, not only after choosing, so the
 			// consequence is visible while choosing rather than as a
 			// surprise afterwards.
-			note = "   (signs in via SSO -- mikroview cannot recover this account)"
+			note = "   (signs in via SSO -- MikroView cannot recover this account)"
 		}
 		fmt.Printf("  %2d) %s%s\n", i+1, logging.Printable(u.Username), note)
 	}
@@ -2876,7 +2876,7 @@ func watchForCertificateReload(ctx context.Context, reloader *servertls.Reloader
 			if operatorSupplied {
 				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- new connections to both the https and syslog listeners use it from now on", fingerprint))
 			} else {
-				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- this deployment uses mikroview's own generated certificate, so this only re-reads what is already on disk", fingerprint))
+				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- this deployment uses MikroView's own generated certificate, so this only re-reads what is already on disk", fingerprint))
 			}
 		}
 	}

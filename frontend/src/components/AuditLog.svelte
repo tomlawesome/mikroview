@@ -256,7 +256,7 @@
 <div class="page scrollbar">
   {#if INTRO_ENABLED}
     <p class="intro">
-      Every admin-privileged mutation mikroview has recorded -- who created a user, changed a detector setting,
+      Every admin-privileged mutation MikroView has recorded -- who created a user, changed a detector setting,
       upserted/deleted an entity, minted or revoked a key, or removed a permanent flag exclusion. Read-only
       actions (viewing pages, listing users) are never logged here, only mutations.
       {#if auditState.hasMore}
